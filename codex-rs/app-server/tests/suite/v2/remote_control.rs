@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::time::Duration;
 
 use anyhow::Context;
@@ -11,18 +12,22 @@ use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RemoteControlConnectionStatus;
 use codex_app_server_protocol::RemoteControlDisableResponse;
 use codex_app_server_protocol::RemoteControlEnableResponse;
+use codex_app_server_protocol::RemoteControlPairingStartParams;
+use codex_app_server_protocol::RemoteControlPairingStartResponse;
 use codex_app_server_protocol::RemoteControlStatusReadResponse;
 use codex_app_server_protocol::RequestId;
 use codex_config::types::AuthCredentialsStoreMode;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 use tokio::io::AsyncBufReadExt;
+use tokio::io::AsyncWriteExt;
 use tokio::io::BufReader;
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
+use tokio_tungstenite::accept_hdr_async;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -125,6 +130,192 @@ async fn remote_control_status_read_returns_connecting_status_after_enable() -> 
     Ok(())
 }
 
+#[tokio::test]
+async fn remote_control_pairing_start_returns_pairing_artifacts() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let mut backend = PairingRemoteControlBackend::start(codex_home.path()).await?;
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+    enable_connected_remote_control(&mut mcp, &mut backend).await?;
+
+    let request_id = mcp
+        .send_remote_control_pairing_start_request(RemoteControlPairingStartParams {
+            manual_code: true,
+        })
+        .await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let received: RemoteControlPairingStartResponse = to_response(response)?;
+
+    assert_eq!(
+        received,
+        RemoteControlPairingStartResponse {
+            pairing_code: "pairing-code".to_string(),
+            manual_pairing_code: Some("ABCD-EFGH".to_string()),
+            environment_id: "environment-id".to_string(),
+            expires_at: 33_336_362_096,
+        }
+    );
+    Ok(())
+}
+
+struct PairingRemoteControlBackend {
+    enroll_request_rx: Option<oneshot::Receiver<Result<String>>>,
+    websocket_request_rx: Option<oneshot::Receiver<Result<String>>>,
+    server_task: JoinHandle<()>,
+}
+
+async fn enable_connected_remote_control(
+    mcp: &mut McpProcess,
+    backend: &mut PairingRemoteControlBackend,
+) -> Result<()> {
+    let request_id = mcp.send_remote_control_enable_request().await?;
+    let _: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    assert_eq!(
+        timeout(DEFAULT_TIMEOUT, backend.wait_for_enroll_request()).await??,
+        "POST /backend-api/wham/remote/control/server/enroll HTTP/1.1"
+    );
+    assert_eq!(
+        timeout(DEFAULT_TIMEOUT, backend.wait_for_websocket_request()).await??,
+        "GET /backend-api/wham/remote/control/server HTTP/1.1"
+    );
+    timeout(DEFAULT_TIMEOUT, async {
+        loop {
+            let request_id = mcp.send_remote_control_status_read_request().await?;
+            let response: JSONRPCResponse = mcp
+                .read_stream_until_response_message(RequestId::Integer(request_id))
+                .await?;
+            let received: RemoteControlStatusReadResponse = to_response(response)?;
+            if received.status == RemoteControlConnectionStatus::Connected {
+                return Ok::<(), anyhow::Error>(());
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await?
+}
+
+impl PairingRemoteControlBackend {
+    async fn start(codex_home: &Path) -> Result<Self> {
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let remote_control_url = format!("http://{}/backend-api/", listener.local_addr()?);
+        write_mock_responses_config_toml_with_chatgpt_base_url(
+            codex_home,
+            &remote_control_url,
+            &remote_control_url,
+        )?;
+        write_chatgpt_auth(
+            codex_home,
+            ChatGptAuthFixture::new("chatgpt-token")
+                .account_id("account_id")
+                .chatgpt_account_id("account_id"),
+            AuthCredentialsStoreMode::File,
+        )?;
+
+        let (enroll_request_tx, enroll_request_rx) = oneshot::channel();
+        let (websocket_request_tx, websocket_request_rx) = oneshot::channel();
+        let server_task = tokio::spawn(async move {
+            let mut enroll_request_tx = Some(enroll_request_tx);
+            let mut websocket_request_tx = Some(websocket_request_tx);
+            let result = async {
+                let (enroll_request_line, enroll_reader) = read_enroll_request(&listener).await?;
+                if let Some(enroll_request_tx) = enroll_request_tx.take() {
+                    let _ = enroll_request_tx.send(Ok(enroll_request_line));
+                }
+                respond_with_json(
+                    enroll_reader.into_inner(),
+                    serde_json::json!({
+                        "server_id": "server-id",
+                        "environment_id": "environment-id",
+                        "remote_control_token": "remote-control-token",
+                        "expires_at": "3026-05-22T12:34:56Z",
+                        "scopes": ["remote_control_server_websocket"],
+                    }),
+                )
+                .await?;
+
+                let (websocket_stream, _) = listener.accept().await?;
+                let websocket_request_tx = websocket_request_tx.take();
+                let mut websocket = accept_hdr_async(
+                    websocket_stream,
+                    move |request: &tokio_tungstenite::tungstenite::handshake::server::Request,
+                          response: tokio_tungstenite::tungstenite::handshake::server::Response| {
+                        let method = request.method();
+                        let uri = request.uri();
+                        let request_line = format!("{method} {uri} HTTP/1.1");
+                        if let Some(websocket_request_tx) = websocket_request_tx {
+                            let _ = websocket_request_tx.send(Ok(request_line));
+                        }
+                        Ok(response)
+                    },
+                )
+                .await?;
+
+                let (request_line, request_reader) = read_enroll_request(&listener).await?;
+                if request_line != "POST /backend-api/wham/remote/control/server/pair HTTP/1.1" {
+                    anyhow::bail!("unexpected remote control request: {request_line}");
+                }
+                respond_with_json(
+                    request_reader.into_inner(),
+                    serde_json::json!({
+                        "pairing_code": "pairing-code",
+                        "manual_pairing_code": "ABCD-EFGH",
+                        "server_id": "server-id",
+                        "environment_id": "environment-id",
+                        "expires_at": "3026-05-22T12:34:56Z",
+                    }),
+                )
+                .await?;
+                websocket.close(None).await?;
+                Ok::<(), anyhow::Error>(())
+            }
+            .await;
+
+            if let Err(err) = result {
+                if let Some(enroll_request_tx) = enroll_request_tx {
+                    let _ = enroll_request_tx.send(Err(anyhow::anyhow!(err.to_string())));
+                }
+                if let Some(websocket_request_tx) = websocket_request_tx {
+                    let _ = websocket_request_tx.send(Err(anyhow::anyhow!(err.to_string())));
+                }
+            }
+        });
+
+        Ok(Self {
+            enroll_request_rx: Some(enroll_request_rx),
+            websocket_request_rx: Some(websocket_request_rx),
+            server_task,
+        })
+    }
+
+    async fn wait_for_enroll_request(&mut self) -> Result<String> {
+        self.enroll_request_rx
+            .take()
+            .context("enroll request should only be awaited once")?
+            .await?
+    }
+
+    async fn wait_for_websocket_request(&mut self) -> Result<String> {
+        self.websocket_request_rx
+            .take()
+            .context("websocket request should only be awaited once")?
+            .await?
+    }
+}
+
+impl Drop for PairingRemoteControlBackend {
+    fn drop(&mut self) {
+        self.server_task.abort();
+    }
+}
+
 struct BlockingRemoteControlBackend {
     enroll_request_rx: Option<oneshot::Receiver<Result<String>>>,
     server_task: JoinHandle<()>,
@@ -149,7 +340,7 @@ impl BlockingRemoteControlBackend {
 
         let (enroll_request_tx, enroll_request_rx) = oneshot::channel();
         let server_task = tokio::spawn(async move {
-            match read_enroll_request(listener).await {
+            match read_enroll_request(&listener).await {
                 Ok((request_line, _reader)) => {
                     let _ = enroll_request_tx.send(Ok(request_line));
                     std::future::pending::<()>().await;
@@ -181,7 +372,7 @@ impl Drop for BlockingRemoteControlBackend {
     }
 }
 
-async fn read_enroll_request(listener: TcpListener) -> Result<(String, BufReader<TcpStream>)> {
+async fn read_enroll_request(listener: &TcpListener) -> Result<(String, BufReader<TcpStream>)> {
     let (stream, _) = listener.accept().await?;
     let mut reader = BufReader::new(stream);
 
@@ -197,4 +388,26 @@ async fn read_enroll_request(listener: TcpListener) -> Result<(String, BufReader
     }
 
     Ok((request_line.trim_end().to_string(), reader))
+}
+
+async fn respond_with_json(stream: TcpStream, body: serde_json::Value) -> Result<()> {
+    let body = body.to_string();
+    respond_with_status_and_body(stream, "200 OK", &body).await
+}
+
+async fn respond_with_status_and_body(
+    mut stream: TcpStream,
+    status: &str,
+    body: &str,
+) -> Result<()> {
+    stream
+        .write_all(
+            format!(
+                "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .as_bytes(),
+        )
+        .await?;
+    Ok(())
 }

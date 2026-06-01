@@ -12,6 +12,7 @@ pub(super) struct RemoteControlTarget {
     pub(super) websocket_url: String,
     pub(super) enroll_url: String,
     pub(super) refresh_url: String,
+    pub(super) pair_url: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -35,6 +36,21 @@ pub(super) struct EnrollRemoteServerResponse {
 pub(super) struct RefreshRemoteServerRequest {
     pub(super) server_id: String,
     pub(super) installation_id: String,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct StartRemoteControlPairingRequest {
+    pub(super) manual_code: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct StartRemoteControlPairingResponse {
+    pub(super) pairing_code: String,
+    pub(super) manual_pairing_code: Option<String>,
+    #[serde(rename = "server_id")]
+    pub(super) _server_id: String,
+    pub(super) environment_id: String,
+    pub(super) expires_at: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -189,6 +205,9 @@ pub(super) fn normalize_remote_control_url(
     let refresh_url = remote_control_url
         .join("wham/remote/control/server/refresh")
         .map_err(map_url_parse_error)?;
+    let pair_url = remote_control_url
+        .join("wham/remote/control/server/pair")
+        .map_err(map_url_parse_error)?;
     let mut websocket_url = remote_control_url
         .join("wham/remote/control/server")
         .map_err(map_url_parse_error)?;
@@ -207,6 +226,7 @@ pub(super) fn normalize_remote_control_url(
         websocket_url: websocket_url.to_string(),
         enroll_url: enroll_url.to_string(),
         refresh_url: refresh_url.to_string(),
+        pair_url: pair_url.to_string(),
     })
 }
 
@@ -227,6 +247,8 @@ mod tests {
                     .to_string(),
                 refresh_url: "https://chatgpt.com/backend-api/wham/remote/control/server/refresh"
                     .to_string(),
+                pair_url: "https://chatgpt.com/backend-api/wham/remote/control/server/pair"
+                    .to_string(),
             }
         );
         assert_eq!(
@@ -241,6 +263,9 @@ mod tests {
                         .to_string(),
                 refresh_url:
                     "https://api.chatgpt-staging.com/backend-api/wham/remote/control/server/refresh"
+                        .to_string(),
+                pair_url:
+                    "https://api.chatgpt-staging.com/backend-api/wham/remote/control/server/pair"
                         .to_string(),
             }
         );
@@ -258,6 +283,8 @@ mod tests {
                     .to_string(),
                 refresh_url: "http://localhost:8080/backend-api/wham/remote/control/server/refresh"
                     .to_string(),
+                pair_url: "http://localhost:8080/backend-api/wham/remote/control/server/pair"
+                    .to_string(),
             }
         );
         assert_eq!(
@@ -271,6 +298,8 @@ mod tests {
                 refresh_url:
                     "https://localhost:8443/backend-api/wham/remote/control/server/refresh"
                         .to_string(),
+                pair_url: "https://localhost:8443/backend-api/wham/remote/control/server/pair"
+                    .to_string(),
             }
         );
     }

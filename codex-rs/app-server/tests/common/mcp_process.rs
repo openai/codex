@@ -636,6 +636,16 @@ impl McpProcess {
             .await
     }
 
+    /// Send a `remoteControl/pairing/start` JSON-RPC request.
+    pub async fn send_remote_control_pairing_start_request(
+        &mut self,
+        params: codex_app_server_protocol::RemoteControlPairingStartParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("remoteControl/pairing/start", params)
+            .await
+    }
+
     /// Send a `remoteControl/status/read` JSON-RPC request.
     pub async fn send_remote_control_status_read_request(&mut self) -> anyhow::Result<i64> {
         self.send_request("remoteControl/status/read", /*params*/ None)

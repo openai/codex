@@ -1,9 +1,10 @@
 mod client_tracker;
-mod enroll;
 mod protocol;
 mod segment;
+mod server;
 mod websocket;
 
+use crate::transport::remote_control::server::SharedRemoteControlServer;
 use crate::transport::remote_control::websocket::RemoteControlChannels;
 use crate::transport::remote_control::websocket::RemoteControlStatusPublisher;
 use crate::transport::remote_control::websocket::RemoteControlWebsocket;
@@ -16,6 +17,8 @@ use super::CHANNEL_CAPACITY;
 use super::TransportEvent;
 use super::next_connection_id;
 use codex_app_server_protocol::RemoteControlConnectionStatus;
+use codex_app_server_protocol::RemoteControlPairingStartParams;
+use codex_app_server_protocol::RemoteControlPairingStartResponse;
 use codex_app_server_protocol::RemoteControlStatusChangedNotification;
 use codex_login::AuthManager;
 use codex_state::StateRuntime;
@@ -52,6 +55,7 @@ pub struct RemoteControlHandle {
     enabled_tx: Arc<watch::Sender<bool>>,
     status_tx: Arc<watch::Sender<RemoteControlStatusChangedNotification>>,
     state_db_available: bool,
+    server: SharedRemoteControlServer,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -129,6 +133,16 @@ impl RemoteControlHandle {
         self.status_tx.subscribe()
     }
 
+    pub async fn start_pairing(
+        &self,
+        params: RemoteControlPairingStartParams,
+    ) -> io::Result<RemoteControlPairingStartResponse> {
+        if !*self.enabled_tx.borrow() {
+            return Err(remote_control_pairing_disabled_error());
+        }
+        self.server.start_pairing(params).await
+    }
+
     fn publish_status(
         &self,
         connection_status: RemoteControlConnectionStatus,
@@ -176,6 +190,20 @@ fn remote_control_status_with_connection_status(
     }
 }
 
+pub(super) fn remote_control_pairing_disabled_error() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidInput,
+        "remote control pairing requires remote control to be enabled",
+    )
+}
+
+pub(super) fn remote_control_pairing_unavailable_error() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidInput,
+        "remote control pairing is unavailable until enrollment completes",
+    )
+}
+
 pub async fn start_remote_control(
     config: RemoteControlStartConfig,
     state_db: Option<Arc<StateRuntime>>,
@@ -213,6 +241,13 @@ pub async fn start_remote_control(
     };
     let (status_tx, _status_rx) = watch::channel(initial_status);
     let status_publisher = RemoteControlStatusPublisher::new(status_tx.clone());
+    let server = SharedRemoteControlServer::new(
+        remote_control_url.clone(),
+        installation_id.clone(),
+        server_name.clone(),
+        state_db,
+        auth_manager.clone(),
+    );
     info!(
         remote_control_url = %remote_control_url,
         installation_id = %installation_id,
@@ -225,6 +260,7 @@ pub async fn start_remote_control(
     let installation_id_for_log = installation_id.clone();
     let server_name_for_log = server_name.clone();
     let shutdown_token_for_log = shutdown_token.clone();
+    let server_for_task = server.clone();
     let join_handle = tokio::spawn(async move {
         info!(
             remote_control_url = %remote_control_url_for_log,
@@ -240,12 +276,12 @@ pub async fn start_remote_control(
                 remote_control_target,
                 server_name,
             },
-            state_db,
             auth_manager,
             RemoteControlChannels {
                 transport_event_tx,
                 status_publisher,
             },
+            server_for_task,
             shutdown_token,
             enabled_rx,
         )
@@ -289,6 +325,7 @@ pub async fn start_remote_control(
             enabled_tx: Arc::new(enabled_tx),
             status_tx: Arc::new(status_tx),
             state_db_available,
+            server,
         },
     ))
 }

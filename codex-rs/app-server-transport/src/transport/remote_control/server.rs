@@ -2,8 +2,13 @@ use super::protocol::EnrollRemoteServerRequest;
 use super::protocol::EnrollRemoteServerResponse;
 use super::protocol::RefreshRemoteServerRequest;
 use super::protocol::RemoteControlTarget;
+use super::protocol::StartRemoteControlPairingRequest;
+use super::protocol::StartRemoteControlPairingResponse;
+use super::remote_control_pairing_unavailable_error;
 use axum::http::HeaderMap;
 use codex_api::SharedAuthProvider;
+use codex_app_server_protocol::RemoteControlPairingStartResponse;
+use codex_login::AuthManager;
 use codex_login::default_client::build_reqwest_client;
 use codex_state::RemoteControlEnrollmentRecord;
 use codex_state::StateRuntime;
@@ -11,12 +16,17 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::io;
 use std::io::ErrorKind;
+use std::sync::Arc;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
+use tokio::sync::Mutex;
+use tokio::sync::OwnedSemaphorePermit;
+use tokio::sync::Semaphore;
 use tracing::info;
 use tracing::warn;
 
 const REMOTE_CONTROL_ENROLL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+const REMOTE_CONTROL_PAIRING_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 const REMOTE_CONTROL_RESPONSE_BODY_MAX_BYTES: usize = 4096;
 const REMOTE_CONTROL_SERVER_TOKEN_REFRESH_SKEW_SECS: i64 = 30;
 
@@ -27,7 +37,7 @@ pub(super) const REMOTE_CONTROL_ACCOUNT_ID_HEADER: &str = "chatgpt-account-id";
 pub(super) const REMOTE_CONTROL_INSTALLATION_ID_HEADER: &str = "x-codex-installation-id";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct RemoteControlEnrollment {
+pub(super) struct RemoteControlServer {
     pub(super) account_id: String,
     pub(super) environment_id: String,
     pub(super) server_id: String,
@@ -36,7 +46,7 @@ pub(super) struct RemoteControlEnrollment {
     pub(super) expires_at: Option<OffsetDateTime>,
 }
 
-impl RemoteControlEnrollment {
+impl RemoteControlServer {
     pub(super) fn should_refresh_server_token(&self) -> bool {
         self.remote_control_token.is_none()
             || self.expires_at.is_none_or(|expires_at| {
@@ -62,7 +72,7 @@ pub(super) async fn load_persisted_remote_control_enrollment(
     remote_control_target: &RemoteControlTarget,
     account_id: &str,
     app_server_client_name: Option<&str>,
-) -> io::Result<Option<RemoteControlEnrollment>> {
+) -> io::Result<Option<RemoteControlServer>> {
     let Some(state_db) = state_db else {
         return Err(io::Error::new(
             ErrorKind::NotFound,
@@ -100,7 +110,7 @@ pub(super) async fn load_persisted_remote_control_enrollment(
                 enrollment.server_id,
                 enrollment.environment_id
             );
-            Ok(Some(RemoteControlEnrollment {
+            Ok(Some(RemoteControlServer {
                 account_id: enrollment.account_id,
                 environment_id: enrollment.environment_id,
                 server_id: enrollment.server_id,
@@ -124,7 +134,7 @@ pub(super) async fn update_persisted_remote_control_enrollment(
     remote_control_target: &RemoteControlTarget,
     account_id: &str,
     app_server_client_name: Option<&str>,
-    enrollment: Option<&RemoteControlEnrollment>,
+    enrollment: Option<&RemoteControlServer>,
 ) -> io::Result<()> {
     let Some(state_db) = state_db else {
         return Err(io::Error::new(
@@ -211,8 +221,14 @@ fn redact_remote_control_response_body(body: &str) -> String {
     let Some(body_object) = body_json.as_object_mut() else {
         return body.to_string();
     };
-    if let Some(remote_control_token) = body_object.get_mut("remote_control_token") {
-        *remote_control_token = serde_json::Value::String("<redacted>".to_string());
+    for sensitive_field in [
+        "remote_control_token",
+        "pairing_code",
+        "manual_pairing_code",
+    ] {
+        if let Some(value) = body_object.get_mut(sensitive_field) {
+            *value = serde_json::Value::String("<redacted>".to_string());
+        }
     }
     body_json.to_string()
 }
@@ -230,84 +246,526 @@ pub(crate) fn format_headers(headers: &HeaderMap) -> String {
     format!("request-id: {request_id_str}, cf-ray: {cf_ray_str}")
 }
 
-pub(super) async fn enroll_remote_control_server(
-    remote_control_target: &RemoteControlTarget,
-    auth: &RemoteControlConnectionAuth,
-    installation_id: &str,
-    server_name: &str,
-) -> io::Result<RemoteControlEnrollment> {
-    let enroll_url = &remote_control_target.enroll_url;
-    let request = EnrollRemoteServerRequest {
-        name: server_name.to_string(),
-        os: std::env::consts::OS,
-        arch: std::env::consts::ARCH,
-        app_server_version: env!("CARGO_PKG_VERSION"),
-        installation_id: installation_id.to_string(),
-    };
-    let enrollment_response = send_remote_control_server_request::<_, EnrollRemoteServerResponse>(
-        enroll_url,
-        auth,
-        installation_id,
-        &request,
-        "enroll",
-        "server enrollment",
-    )
-    .await?;
-    let mut enrollment = RemoteControlEnrollment {
-        account_id: auth.account_id.clone(),
-        environment_id: enrollment_response.environment_id,
-        server_id: enrollment_response.server_id,
-        server_name: server_name.to_string(),
-        remote_control_token: None,
-        expires_at: None,
-    };
-    update_remote_control_server_token(
-        &mut enrollment,
-        enroll_url,
-        enrollment_response.remote_control_token,
-        enrollment_response.expires_at,
-    )?;
-    Ok(enrollment)
-}
-
-pub(super) async fn refresh_remote_control_server(
-    remote_control_target: &RemoteControlTarget,
-    auth: &RemoteControlConnectionAuth,
-    installation_id: &str,
-    enrollment: &mut RemoteControlEnrollment,
-) -> io::Result<()> {
-    let refresh_url = &remote_control_target.refresh_url;
-    let request = RefreshRemoteServerRequest {
-        server_id: enrollment.server_id.clone(),
-        installation_id: installation_id.to_string(),
-    };
-    let refreshed = send_remote_control_server_request::<_, EnrollRemoteServerResponse>(
-        refresh_url,
-        auth,
-        installation_id,
-        &request,
-        "refresh",
-        "server refresh",
-    )
-    .await?;
-    if refreshed.server_id != enrollment.server_id
-        || refreshed.environment_id != enrollment.environment_id
-    {
-        return Err(io::Error::other(format!(
-            "remote control server refresh returned mismatched enrollment: expected server_id={}, environment_id={}; got server_id={}, environment_id={}",
-            enrollment.server_id,
-            enrollment.environment_id,
-            refreshed.server_id,
-            refreshed.environment_id
-        )));
+impl RemoteControlServer {
+    pub(super) async fn enroll(
+        remote_control_target: &RemoteControlTarget,
+        auth: &RemoteControlConnectionAuth,
+        installation_id: &str,
+        server_name: &str,
+    ) -> io::Result<Self> {
+        let enroll_url = &remote_control_target.enroll_url;
+        let request = EnrollRemoteServerRequest {
+            name: server_name.to_string(),
+            os: std::env::consts::OS,
+            arch: std::env::consts::ARCH,
+            app_server_version: env!("CARGO_PKG_VERSION"),
+            installation_id: installation_id.to_string(),
+        };
+        let enrollment_response =
+            send_remote_control_server_request::<_, EnrollRemoteServerResponse>(
+                enroll_url,
+                auth,
+                installation_id,
+                &request,
+                "enroll",
+                "server enrollment",
+            )
+            .await?;
+        let mut server = Self {
+            account_id: auth.account_id.clone(),
+            environment_id: enrollment_response.environment_id,
+            server_id: enrollment_response.server_id,
+            server_name: server_name.to_string(),
+            remote_control_token: None,
+            expires_at: None,
+        };
+        update_remote_control_server_token(
+            &mut server,
+            enroll_url,
+            enrollment_response.remote_control_token,
+            enrollment_response.expires_at,
+        )?;
+        Ok(server)
     }
 
-    update_remote_control_server_token(
-        enrollment,
-        refresh_url,
-        refreshed.remote_control_token,
-        refreshed.expires_at,
-    )
+    pub(super) async fn refresh_server_token(
+        &mut self,
+        remote_control_target: &RemoteControlTarget,
+        auth: &RemoteControlConnectionAuth,
+        installation_id: &str,
+    ) -> io::Result<()> {
+        let refresh_url = &remote_control_target.refresh_url;
+        let request = RefreshRemoteServerRequest {
+            server_id: self.server_id.clone(),
+            installation_id: installation_id.to_string(),
+        };
+        let refreshed = send_remote_control_server_request::<_, EnrollRemoteServerResponse>(
+            refresh_url,
+            auth,
+            installation_id,
+            &request,
+            "refresh",
+            "server refresh",
+        )
+        .await?;
+        if refreshed.server_id != self.server_id || refreshed.environment_id != self.environment_id
+        {
+            return Err(io::Error::other(format!(
+                "remote control server refresh returned mismatched enrollment: expected server_id={}, environment_id={}; got server_id={}, environment_id={}",
+                self.server_id, self.environment_id, refreshed.server_id, refreshed.environment_id
+            )));
+        }
+
+        update_remote_control_server_token(
+            self,
+            refresh_url,
+            refreshed.remote_control_token,
+            refreshed.expires_at,
+        )
+    }
+
+    pub(super) async fn start_pairing(
+        &self,
+        remote_control_target: &RemoteControlTarget,
+        request: StartRemoteControlPairingRequest,
+    ) -> io::Result<RemoteControlPairingStartResponse> {
+        let remote_control_token = self
+            .remote_control_token
+            .as_deref()
+            .ok_or_else(remote_control_pairing_unavailable_error)?;
+        let expires_at = self
+            .expires_at
+            .ok_or_else(remote_control_pairing_unavailable_error)?;
+        if expires_at <= OffsetDateTime::now_utc() {
+            return Err(io::Error::new(
+                ErrorKind::InvalidInput,
+                "remote control pairing is unavailable because the server token expired",
+            ));
+        }
+
+        let pairing_url = &remote_control_target.pair_url;
+        let response = build_reqwest_client()
+            .post(pairing_url)
+            .timeout(REMOTE_CONTROL_PAIRING_TIMEOUT)
+            .bearer_auth(remote_control_token)
+            .json(&request)
+            .send()
+            .await
+            .map_err(|err| {
+                io::Error::other(format!(
+                    "failed to start remote control pairing at `{pairing_url}`: {err}"
+                ))
+            })?;
+        let headers = response.headers().clone();
+        let status = response.status();
+        let body = response.bytes().await.map_err(|err| {
+            io::Error::other(format!(
+                "failed to read remote control pairing response from `{pairing_url}`: {err}"
+            ))
+        })?;
+        let body_preview = preview_remote_control_response_body(&body);
+        if !status.is_success() {
+            let error_kind = match status.as_u16() {
+                401 | 403 => ErrorKind::PermissionDenied,
+                404 => ErrorKind::NotFound,
+                _ => ErrorKind::Other,
+            };
+            return Err(io::Error::new(
+                error_kind,
+                format!(
+                    "remote control pairing failed at `{pairing_url}`: HTTP {status}, {}, body: {body_preview}",
+                    format_headers(&headers)
+                ),
+            ));
+        }
+
+        let pairing =
+            serde_json::from_slice::<StartRemoteControlPairingResponse>(&body).map_err(|err| {
+                io::Error::other(format!(
+                    "failed to parse remote control pairing response from `{pairing_url}`: HTTP {status}, {}, body: {body_preview}, decode error: {err}",
+                    format_headers(&headers)
+                ))
+            })?;
+        let StartRemoteControlPairingResponse {
+            pairing_code,
+            manual_pairing_code,
+            _server_id: _,
+            environment_id,
+            expires_at,
+        } = pairing;
+        let expires_at = OffsetDateTime::parse(&expires_at, &Rfc3339)
+            .map_err(|err| {
+                io::Error::new(
+                    ErrorKind::InvalidData,
+                    format!("invalid remote control pairing expires_at: {err}"),
+                )
+            })?
+            .unix_timestamp();
+
+        Ok(RemoteControlPairingStartResponse {
+            pairing_code,
+            manual_pairing_code,
+            environment_id,
+            expires_at,
+        })
+    }
+}
+
+#[derive(Clone)]
+pub(super) struct SharedRemoteControlServer {
+    remote_control_url: String,
+    installation_id: String,
+    server_name: String,
+    state_db: Option<Arc<StateRuntime>>,
+    auth_manager: Arc<AuthManager>,
+    app_server_client_name: Arc<std::sync::Mutex<Option<String>>>,
+    server: Arc<Mutex<Option<RemoteControlServer>>>,
+    server_mutations: Arc<Semaphore>,
+}
+
+impl SharedRemoteControlServer {
+    pub(super) fn new(
+        remote_control_url: String,
+        installation_id: String,
+        server_name: String,
+        state_db: Option<Arc<StateRuntime>>,
+        auth_manager: Arc<AuthManager>,
+    ) -> Self {
+        Self {
+            remote_control_url,
+            installation_id,
+            server_name,
+            state_db,
+            auth_manager,
+            app_server_client_name: Arc::new(std::sync::Mutex::new(None)),
+            server: Arc::new(Mutex::new(None)),
+            server_mutations: Arc::new(Semaphore::new(1)),
+        }
+    }
+
+    pub(super) fn set_app_server_client_name(&self, app_server_client_name: Option<String>) {
+        *self
+            .app_server_client_name
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = app_server_client_name;
+    }
+
+    pub(super) async fn snapshot(&self) -> Option<RemoteControlServer> {
+        self.server.lock().await.clone()
+    }
+
+    pub(super) async fn clear(&self) {
+        let Ok(_server_mutation) = self.server_mutation().await else {
+            return;
+        };
+        *self.server.lock().await = None;
+    }
+
+    #[cfg(test)]
+    pub(super) async fn replace(&self, server: Option<RemoteControlServer>) {
+        let Ok(_server_mutation) = self.server_mutation().await else {
+            return;
+        };
+        *self.server.lock().await = server;
+    }
+
+    pub(super) async fn prepare(
+        &self,
+        auth: &RemoteControlConnectionAuth,
+    ) -> io::Result<(RemoteControlTarget, RemoteControlServer)> {
+        self.prepare_with_environment_updates(auth, |_| {}).await
+    }
+
+    pub(super) async fn prepare_with_environment_updates(
+        &self,
+        auth: &RemoteControlConnectionAuth,
+        mut publish_environment_id: impl FnMut(Option<String>),
+    ) -> io::Result<(RemoteControlTarget, RemoteControlServer)> {
+        let remote_control_target =
+            super::protocol::normalize_remote_control_url(&self.remote_control_url)?;
+        let app_server_client_name = self
+            .app_server_client_name
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        let _server_mutation = self.server_mutation().await?;
+        let Some(state_db) = self.state_db.as_deref() else {
+            *self.server.lock().await = None;
+            return Err(io::Error::new(
+                ErrorKind::NotFound,
+                "remote control requires sqlite state db",
+            ));
+        };
+        let server = self.snapshot().await;
+        let server = prepare_remote_control_server(
+            &RemoteControlServerPrepareContext {
+                state_db,
+                remote_control_target: &remote_control_target,
+                auth,
+                installation_id: &self.installation_id,
+                server_name: &self.server_name,
+                app_server_client_name: app_server_client_name.as_deref(),
+            },
+            server,
+            &mut publish_environment_id,
+        )
+        .await?;
+        *self.server.lock().await = server.clone();
+        Ok((
+            remote_control_target,
+            server
+                .ok_or_else(|| io::Error::other("missing remote control server after prepare"))?,
+        ))
+    }
+
+    pub(super) async fn start_pairing(
+        &self,
+        params: codex_app_server_protocol::RemoteControlPairingStartParams,
+    ) -> io::Result<RemoteControlPairingStartResponse> {
+        let auth_change_rx = self.auth_manager.auth_change_receiver();
+        let auth_change_revision = *auth_change_rx.borrow();
+        let auth = load_remote_control_auth(&self.auth_manager)
+            .await
+            .map_err(|err| {
+                if matches!(
+                    err.kind(),
+                    ErrorKind::PermissionDenied | ErrorKind::WouldBlock
+                ) {
+                    super::remote_control_pairing_unavailable_error()
+                } else {
+                    err
+                }
+            })?;
+        let (remote_control_target, server) = self.prepare(&auth).await?;
+        let pairing_response = server
+            .start_pairing(
+                &remote_control_target,
+                StartRemoteControlPairingRequest {
+                    manual_code: params.manual_code,
+                },
+            )
+            .await;
+        if *auth_change_rx.borrow() != auth_change_revision {
+            return Err(super::remote_control_pairing_unavailable_error());
+        }
+        if pairing_response
+            .as_ref()
+            .is_err_and(|err| err.kind() == ErrorKind::PermissionDenied)
+        {
+            self.clear_server_token_if_current(&server).await;
+        }
+        if pairing_response
+            .as_ref()
+            .is_err_and(|err| err.kind() == ErrorKind::NotFound)
+        {
+            self.clear_server_if_current(&remote_control_target, &server)
+                .await;
+        }
+        pairing_response
+    }
+
+    pub(super) async fn clear_server_token_if_current(
+        &self,
+        expected_server: &RemoteControlServer,
+    ) {
+        let Ok(_server_mutation) = self.server_mutation().await else {
+            return;
+        };
+        let mut server = self.server.lock().await;
+        if server.as_ref() != Some(expected_server) {
+            return;
+        }
+        if let Some(server) = server.as_mut() {
+            server.clear_server_token();
+        }
+    }
+
+    pub(super) async fn clear_server_if_current(
+        &self,
+        remote_control_target: &RemoteControlTarget,
+        expected_server: &RemoteControlServer,
+    ) {
+        let app_server_client_name = self
+            .app_server_client_name
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        let Ok(_server_mutation) = self.server_mutation().await else {
+            return;
+        };
+        if self.snapshot().await.as_ref() != Some(expected_server) {
+            return;
+        }
+        if update_persisted_remote_control_enrollment(
+            self.state_db.as_deref(),
+            remote_control_target,
+            &expected_server.account_id,
+            app_server_client_name.as_deref(),
+            None,
+        )
+        .await
+        .is_ok()
+        {
+            *self.server.lock().await = None;
+        }
+    }
+
+    async fn server_mutation(&self) -> io::Result<OwnedSemaphorePermit> {
+        self.server_mutations
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|_| io::Error::other("remote control server mutation semaphore closed"))
+    }
+}
+
+pub(super) async fn load_remote_control_auth(
+    auth_manager: &AuthManager,
+) -> io::Result<RemoteControlConnectionAuth> {
+    let mut reloaded = false;
+    let auth = loop {
+        let Some(auth) = auth_manager.auth().await else {
+            if reloaded {
+                return Err(io::Error::new(
+                    ErrorKind::PermissionDenied,
+                    "remote control requires ChatGPT authentication",
+                ));
+            }
+            auth_manager.reload().await;
+            reloaded = true;
+            continue;
+        };
+        if !auth.uses_codex_backend() {
+            break auth;
+        }
+        if auth.get_account_id().is_none() && !reloaded {
+            auth_manager.reload().await;
+            reloaded = true;
+            continue;
+        }
+        break auth;
+    };
+
+    if !auth.uses_codex_backend() {
+        return Err(io::Error::new(
+            ErrorKind::PermissionDenied,
+            "remote control requires ChatGPT authentication; API key auth is not supported",
+        ));
+    }
+
+    Ok(RemoteControlConnectionAuth {
+        auth_provider: codex_model_provider::auth_provider_from_auth(&auth),
+        account_id: auth.get_account_id().ok_or_else(|| {
+            io::Error::new(
+                ErrorKind::WouldBlock,
+                "remote control enrollment is waiting for a ChatGPT account id",
+            )
+        })?,
+    })
+}
+
+struct RemoteControlServerPrepareContext<'a> {
+    state_db: &'a StateRuntime,
+    remote_control_target: &'a RemoteControlTarget,
+    auth: &'a RemoteControlConnectionAuth,
+    installation_id: &'a str,
+    server_name: &'a str,
+    app_server_client_name: Option<&'a str>,
+}
+
+async fn prepare_remote_control_server(
+    context: &RemoteControlServerPrepareContext<'_>,
+    mut server: Option<RemoteControlServer>,
+    publish_environment_id: &mut impl FnMut(Option<String>),
+) -> io::Result<Option<RemoteControlServer>> {
+    if server
+        .as_ref()
+        .is_some_and(|server| server.account_id != context.auth.account_id)
+    {
+        server = None;
+        publish_environment_id(None);
+    }
+    if server.is_none() {
+        server = load_persisted_remote_control_enrollment(
+            Some(context.state_db),
+            context.remote_control_target,
+            &context.auth.account_id,
+            context.app_server_client_name,
+        )
+        .await?
+        .map(|mut server| {
+            server.server_name = context.server_name.to_string();
+            server
+        });
+    }
+    if let Some(server) = server.as_ref() {
+        publish_environment_id(Some(server.environment_id.clone()));
+    }
+    if server.is_none() {
+        let new_server = RemoteControlServer::enroll(
+            context.remote_control_target,
+            context.auth,
+            context.installation_id,
+            context.server_name,
+        )
+        .await?;
+        update_persisted_remote_control_enrollment(
+            Some(context.state_db),
+            context.remote_control_target,
+            &context.auth.account_id,
+            context.app_server_client_name,
+            Some(&new_server),
+        )
+        .await?;
+        publish_environment_id(Some(new_server.environment_id.clone()));
+        server = Some(new_server);
+    }
+    if server
+        .as_ref()
+        .is_some_and(RemoteControlServer::should_refresh_server_token)
+    {
+        let refresh_result = server
+            .as_mut()
+            .ok_or_else(|| io::Error::other("missing remote control server before refresh"))?
+            .refresh_server_token(
+                context.remote_control_target,
+                context.auth,
+                context.installation_id,
+            )
+            .await;
+        if let Err(err) = refresh_result {
+            if err.kind() != ErrorKind::NotFound {
+                return Err(err);
+            }
+            update_persisted_remote_control_enrollment(
+                Some(context.state_db),
+                context.remote_control_target,
+                &context.auth.account_id,
+                context.app_server_client_name,
+                None,
+            )
+            .await?;
+            publish_environment_id(None);
+            let new_server = RemoteControlServer::enroll(
+                context.remote_control_target,
+                context.auth,
+                context.installation_id,
+                context.server_name,
+            )
+            .await?;
+            update_persisted_remote_control_enrollment(
+                Some(context.state_db),
+                context.remote_control_target,
+                &context.auth.account_id,
+                context.app_server_client_name,
+                Some(&new_server),
+            )
+            .await?;
+            publish_environment_id(Some(new_server.environment_id.clone()));
+            server = Some(new_server);
+        }
+    }
+    Ok(server)
 }
 
 async fn send_remote_control_server_request<Request, Response>(
@@ -371,7 +829,7 @@ where
 }
 
 fn update_remote_control_server_token(
-    enrollment: &mut RemoteControlEnrollment,
+    server: &mut RemoteControlServer,
     url: &str,
     token: String,
     expires_at: String,
@@ -381,8 +839,8 @@ fn update_remote_control_server_token(
             "failed to parse remote control server token expiry from `{url}`: {err}"
         ))
     })?;
-    enrollment.remote_control_token = Some(token);
-    enrollment.expires_at = Some(expires_at);
+    server.remote_control_token = Some(token);
+    server.expires_at = Some(expires_at);
     Ok(())
 }
 
@@ -411,7 +869,7 @@ mod tests {
 
     #[test]
     fn remote_control_enrollment_refreshes_server_token_before_expiry() {
-        let expires_soon = RemoteControlEnrollment {
+        let expires_soon = RemoteControlServer {
             account_id: "account-a".to_string(),
             environment_id: "env_first".to_string(),
             server_id: "srv_e_first".to_string(),
@@ -419,7 +877,7 @@ mod tests {
             remote_control_token: Some("expires-soon".to_string()),
             expires_at: Some(OffsetDateTime::now_utc() + time::Duration::seconds(29)),
         };
-        let expires_later = RemoteControlEnrollment {
+        let expires_later = RemoteControlServer {
             expires_at: Some(OffsetDateTime::now_utc() + time::Duration::seconds(31)),
             remote_control_token: Some("expires-later".to_string()),
             ..expires_soon.clone()
@@ -443,6 +901,20 @@ mod tests {
         );
     }
 
+    #[test]
+    fn preview_remote_control_response_body_redacts_pairing_codes() {
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&preview_remote_control_response_body(
+                br#"{"pairing_code":"pairing-code","manual_pairing_code":"ABCD-EFGH"}"#
+            ))
+            .expect("redacted response preview should stay valid json"),
+            json!({
+                "pairing_code": "<redacted>",
+                "manual_pairing_code": "<redacted>",
+            })
+        );
+    }
+
     #[tokio::test]
     async fn persisted_remote_control_enrollment_round_trips_by_target_and_account() {
         let codex_home = TempDir::new().expect("temp dir should create");
@@ -452,7 +924,7 @@ mod tests {
         let second_target =
             normalize_remote_control_url("https://api.chatgpt-staging.com/other/control")
                 .expect("second target should parse");
-        let first_enrollment = RemoteControlEnrollment {
+        let first_enrollment = RemoteControlServer {
             account_id: "account-a".to_string(),
             environment_id: "env_first".to_string(),
             server_id: "srv_e_first".to_string(),
@@ -460,7 +932,7 @@ mod tests {
             remote_control_token: None,
             expires_at: None,
         };
-        let second_enrollment = RemoteControlEnrollment {
+        let second_enrollment = RemoteControlServer {
             account_id: "account-a".to_string(),
             environment_id: "env_second".to_string(),
             server_id: "srv_e_second".to_string(),
@@ -532,7 +1004,7 @@ mod tests {
         let second_target =
             normalize_remote_control_url("https://api.chatgpt-staging.com/other/control")
                 .expect("second target should parse");
-        let first_enrollment = RemoteControlEnrollment {
+        let first_enrollment = RemoteControlServer {
             account_id: "account-a".to_string(),
             environment_id: "env_first".to_string(),
             server_id: "srv_e_first".to_string(),
@@ -540,7 +1012,7 @@ mod tests {
             remote_control_token: None,
             expires_at: None,
         };
-        let second_enrollment = RemoteControlEnrollment {
+        let second_enrollment = RemoteControlServer {
             account_id: "account-a".to_string(),
             environment_id: "env_second".to_string(),
             server_id: "srv_e_second".to_string(),
@@ -627,7 +1099,7 @@ mod tests {
             respond_with_json(stream, response_body).await;
         });
 
-        let err = enroll_remote_control_server(
+        let err = RemoteControlServer::enroll(
             &remote_control_target,
             &RemoteControlConnectionAuth {
                 auth_provider: codex_model_provider::unauthenticated_auth_provider(),

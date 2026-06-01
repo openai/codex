@@ -470,6 +470,8 @@ mod mcp_processor;
 mod plugins;
 mod process_exec_processor;
 mod remote_control_processor;
+#[cfg(test)]
+mod remote_control_processor_tests;
 mod search;
 mod thread_processor;
 mod token_usage_replay;
