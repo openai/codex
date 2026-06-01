@@ -39,10 +39,7 @@ def main() -> int:
 def run_sh(command: str, recipe_name: str, recipe_args: list[str]) -> int:
     command = command.replace(ARGS_TOKEN, SH_ARGS)
     command = command.replace(STDERR_NULL_TOKEN, SH_STDERR_NULL)
-    return subprocess.run(
-        ["sh", "-cu", command, recipe_name, *recipe_args],
-        check=False,
-    ).returncode
+    os.execvp("sh", ["sh", "-cu", command, recipe_name, *recipe_args])
 
 
 def run_powershell(command: str, recipe_name: str, recipe_args: list[str]) -> int:
