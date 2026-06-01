@@ -356,7 +356,8 @@ async fn guardian_stays_disabled_when_model_selects_multi_agent_v2() -> Result<(
     let guardian_mock = mount_sse_once_match(
         &server,
         |req: &Request| {
-            body_contains(req, GUARDIAN_REASON) && body_contains(req, ">>> APPROVAL REQUEST START")
+            body_contains(req, GUARDIAN_REASON)
+                && body_contains(req, r#""prompt_cache_key":"guardian:"#)
         },
         sse(vec![
             ev_response_created("resp-guardian"),
