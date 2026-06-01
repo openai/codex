@@ -268,6 +268,7 @@ impl App {
         if chat_widget.last_terminal_title.is_none() {
             chat_widget.last_terminal_title = previous_terminal_title;
         }
+        chat_widget.remote_connection = self.chat_widget.remote_connection.clone();
         for (thread_id, entry) in self.agent_navigation.ordered_threads() {
             chat_widget.set_collab_agent_metadata(
                 thread_id,
@@ -656,7 +657,6 @@ impl App {
     pub(super) fn fresh_session_config(&self) -> Config {
         let mut config = self.config.clone();
         config.service_tier = self.chat_widget.configured_service_tier();
-        config.notices.fast_default_opt_out = self.chat_widget.fast_default_opt_out();
         config
     }
     pub(super) async fn resume_target_session(

@@ -32,8 +32,8 @@ impl ToolExecutor<ToolInvocation> for ReadMcpResourceHandler {
         ToolName::plain("read_mcp_resource")
     }
 
-    fn spec(&self) -> Option<ToolSpec> {
-        Some(create_read_mcp_resource_tool())
+    fn spec(&self) -> ToolSpec {
+        create_read_mcp_resource_tool()
     }
 
     fn supports_parallel_tool_calls(&self) -> bool {
@@ -78,13 +78,7 @@ impl ToolExecutor<ToolInvocation> for ReadMcpResourceHandler {
 
         let payload_result: Result<ReadResourcePayload, FunctionCallError> = async {
             let result = session
-                .read_resource(
-                    &server,
-                    ReadResourceRequestParams {
-                        meta: None,
-                        uri: uri.clone(),
-                    },
-                )
+                .read_resource(&server, ReadResourceRequestParams::new(uri.clone()))
                 .await
                 .map_err(|err| {
                     FunctionCallError::RespondToModel(format!("resources/read failed: {err:#}"))

@@ -100,7 +100,7 @@ jobs:
           Write-Host "Total RAM: $ramGiB GiB"
           Write-Host "Disk usage:"
           Get-PSDrive -PSProvider FileSystem | Format-Table -AutoSize Name, @{Name='Size(GB)';Expression={[math]::Round(($_.Used + $_.Free) / 1GB, 1)}}, @{Name='Free(GB)';Expression={[math]::Round($_.Free / 1GB, 1)}}
-      - uses: dtolnay/rust-toolchain@a0b273b48ed29de4470960879e8381ff45632f26 # 1.93.0
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
         with:
           targets: ${{ matrix.target }}
 
@@ -258,16 +258,12 @@ jobs:
 
           stage_dir="${RUNNER_TEMP}/openai-codex-cli-bin-${{ matrix.target }}"
           wheel_dir="${GITHUB_WORKSPACE}/python-runtime-dist/${{ matrix.target }}"
-          # Keep the helpers next to codex.exe in the runtime wheel so Windows
-          # sandbox/elevation lookup matches the standalone release zip.
           python "${GITHUB_WORKSPACE}/sdk/python/scripts/update_sdk_artifacts.py" \
             stage-runtime \
             "$stage_dir" \
-            "${GITHUB_WORKSPACE}/codex-rs/target/${{ matrix.target }}/release/codex.exe" \
+            "dist/${{ matrix.target }}/codex-package-${{ matrix.target }}.tar.gz" \
             --codex-version "${GITHUB_REF_NAME}" \
-            --platform-tag "$platform_tag" \
-            --resource-binary "${GITHUB_WORKSPACE}/codex-rs/target/${{ matrix.target }}/release/codex-command-runner.exe" \
-            --resource-binary "${GITHUB_WORKSPACE}/codex-rs/target/${{ matrix.target }}/release/codex-windows-sandbox-setup.exe"
+            --platform-tag "$platform_tag"
           "${RUNNER_TEMP}/python-runtime-build-venv/Scripts/python.exe" -m build --wheel --outdir "$wheel_dir" "$stage_dir"
 
       - name: Upload Python runtime wheel

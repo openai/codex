@@ -1,0 +1,2 @@
+DROP TABLE IF EXISTS jobs;
+DROP TABLE IF EXISTS stage1_outputs;

@@ -11,6 +11,7 @@ use crate::legacy_core::config::load_config_as_toml_with_cli_and_load_options;
 use crate::legacy_core::config::resolve_oss_provider;
 use crate::legacy_core::config::resolve_profile_v2_config_path;
 use crate::legacy_core::format_exec_policy_error_with_source;
+#[cfg(target_os = "windows")]
 use crate::legacy_core::windows_sandbox::WindowsSandboxLevelExt;
 use crate::session_resume::ResolveCwdOutcome;
 use crate::session_resume::resolve_cwd_for_resume_or_fork;
@@ -51,6 +52,7 @@ use codex_login::enforce_login_restrictions;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::AltScreenMode;
 use codex_protocol::config_types::SandboxMode;
+#[cfg(target_os = "windows")]
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_rollout::StateDbHandle;
 use codex_rollout::state_db;
@@ -62,6 +64,9 @@ use codex_utils_oss::ensure_oss_provider_ready;
 use codex_utils_oss::get_default_model_for_oss_provider;
 use color_eyre::eyre::WrapErr;
 use cwd_prompt::CwdPromptAction;
+pub use session_archive_commands::SessionArchiveAction;
+pub use session_archive_commands::SessionArchiveCommandOptions;
+pub use session_archive_commands::run_session_archive_command;
 use std::fs::OpenOptions;
 use std::path::Path;
 use std::path::PathBuf;
@@ -164,6 +169,8 @@ mod render;
 mod resize_reflow_cap;
 mod resume_picker;
 mod selection_list;
+mod service_tier_resolution;
+mod session_archive_commands;
 mod session_log;
 mod session_resume;
 mod session_state;
@@ -176,6 +183,7 @@ mod status;
 mod status_indicator_widget;
 mod streaming;
 mod style;
+mod terminal_hyperlinks;
 mod terminal_palette;
 mod terminal_probe;
 mod terminal_title;
@@ -277,6 +285,8 @@ pub use public_widgets::composer_input::ComposerAction;
 pub use public_widgets::composer_input::ComposerInput;
 // (tests access modules directly within the crate)
 
+const TUI_LOG_FILE_NAME: &str = "codex-tui.log";
+
 #[cfg(unix)]
 const AUTO_CONNECT_DAEMON_CONNECT_TIMEOUT: std::time::Duration =
     std::time::Duration::from_millis(50);
@@ -346,6 +356,13 @@ async fn init_state_db_for_app_server_target(
             Ok(state_db::get_state_db(config).await)
         }
     }
+}
+
+// TODO(jif) delete after 22/11/2026.
+fn remove_legacy_tui_log_file(codex_home: &Path) {
+    // Shared append-only TUI logs could grow without bound. Existing processes
+    // may still hold the file open, so startup cleanup is best effort.
+    let _ = std::fs::remove_file(codex_home.join("log").join(TUI_LOG_FILE_NAME));
 }
 
 fn remote_addr_has_explicit_port(addr: &str, parsed: &Url) -> bool {
@@ -641,6 +658,17 @@ fn session_target_from_app_server_thread(
     }
 }
 
+pub(crate) fn resume_source_kinds(include_non_interactive: bool) -> Vec<ThreadSourceKind> {
+    let mut source_kinds = vec![ThreadSourceKind::Cli, ThreadSourceKind::VsCode];
+    if include_non_interactive {
+        // `thread/list` treats omitted and empty `sourceKinds` as interactive-only,
+        // so include-non-interactive has to name the user-resumable non-interactive
+        // sources explicitly until the API grows an unfiltered request.
+        source_kinds.extend([ThreadSourceKind::Exec, ThreadSourceKind::AppServer]);
+    }
+    source_kinds
+}
+
 async fn lookup_session_target_by_name_with_app_server(
     app_server: &mut AppServerSession,
     name: &str,
@@ -746,8 +774,7 @@ fn latest_session_lookup_params(
         } else {
             Some(vec![config.model_provider_id.clone()])
         },
-        source_kinds: (!include_non_interactive)
-            .then_some(vec![ThreadSourceKind::Cli, ThreadSourceKind::VsCode]),
+        source_kinds: Some(resume_source_kinds(include_non_interactive)),
         archived: Some(false),
         cwd: cwd_filter.map(|cwd| ThreadListCwdFilter::One(cwd.to_string_lossy().to_string())),
         use_state_db_only: false,
@@ -992,22 +1019,23 @@ pub async fn run_main(
     )
     .await;
 
+    let mut manually_selected_oss_provider = None;
     let model_provider_override = if cli.oss {
-        let resolved = resolve_oss_provider(
-            cli.oss_provider.as_deref(),
-            &config_toml,
-            cli.config_profile.clone(),
-        );
+        let resolved = resolve_oss_provider(cli.oss_provider.as_deref(), &config_toml);
 
         if let Some(provider) = resolved {
             Some(provider)
         } else {
             // No provider configured, prompt the user
-            let provider = oss_selection::select_oss_provider(&codex_home).await?;
+            let selection = oss_selection::select_oss_provider().await?;
+            let provider = selection.provider;
             if provider == "__CANCELLED__" {
                 return Err(std::io::Error::other(
                     "OSS provider selection was cancelled by user",
                 ));
+            }
+            if selection.manually_selected {
+                manually_selected_oss_provider = Some(provider.clone());
             }
             Some(provider)
         }
@@ -1040,7 +1068,6 @@ pub async fn run_main(
             cwd
         },
         model_provider: model_provider_override.clone(),
-        config_profile: cli.config_profile.clone(),
         codex_self_exe: arg0_paths.codex_self_exe.clone(),
         codex_linux_sandbox_exe: arg0_paths.codex_linux_sandbox_exe.clone(),
         main_execve_wrapper_exe: arg0_paths.main_execve_wrapper_exe.clone(),
@@ -1058,6 +1085,8 @@ pub async fn run_main(
         strict_config,
     )
     .await;
+
+    remove_legacy_tui_log_file(config.codex_home.as_path());
 
     let otel_originator = originator().value;
     let otel = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -1170,46 +1199,39 @@ pub async fn run_main(
         }
     }
 
-    let log_dir = config.log_dir.clone();
-    std::fs::create_dir_all(&log_dir)?;
-    // Open (or create) your log file, appending to it.
-    let mut log_file_opts = OpenOptions::new();
-    log_file_opts.create(true).append(true);
+    let (tui_file_layer, _tui_file_log_guard) = if config_toml.log_dir.is_some() {
+        let log_dir = config.log_dir.clone();
+        std::fs::create_dir_all(&log_dir)?;
+        let mut log_file_opts = OpenOptions::new();
+        log_file_opts.create(true).append(true);
 
-    // Ensure the file is only readable and writable by the current user.
-    // Doing the equivalent to `chmod 600` on Windows is quite a bit more code
-    // and requires the Windows API crates, so we can reconsider that when
-    // Codex CLI is officially supported on Windows.
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        log_file_opts.mode(0o600);
-    }
+        // Ensure the file is only readable and writable by the current user.
+        // Doing the equivalent to `chmod 600` on Windows is quite a bit more
+        // code and requires the Windows API crates.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            log_file_opts.mode(0o600);
+        }
 
-    let log_file = log_file_opts.open(log_dir.join("codex-tui.log"))?;
-
-    // Wrap file in non‑blocking writer.
-    let (non_blocking, _guard) = non_blocking(log_file);
-
-    // use RUST_LOG env var, default to info for codex crates.
-    let env_filter = || {
-        EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+        let log_file = log_file_opts.open(log_dir.join(TUI_LOG_FILE_NAME))?;
+        let (non_blocking, guard) = non_blocking(log_file);
+        let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
             EnvFilter::new("codex_core=info,codex_tui=info,codex_rmcp_client=info")
-        })
+        });
+        let file_layer = tracing_subscriber::fmt::layer()
+            .with_writer(non_blocking)
+            .with_target(true)
+            .with_ansi(false)
+            .with_span_events(
+                tracing_subscriber::fmt::format::FmtSpan::NEW
+                    | tracing_subscriber::fmt::format::FmtSpan::CLOSE,
+            )
+            .with_filter(env_filter);
+        (Some(file_layer), Some(guard))
+    } else {
+        (None, None)
     };
-
-    let file_layer = tracing_subscriber::fmt::layer()
-        .with_writer(non_blocking)
-        // `with_target(true)` is the default, but we previously disabled it for file output.
-        // Keep it enabled so we can selectively enable targets via `RUST_LOG=...` and then
-        // grep for a specific module/target while troubleshooting.
-        .with_target(true)
-        .with_ansi(false)
-        .with_span_events(
-            tracing_subscriber::fmt::format::FmtSpan::NEW
-                | tracing_subscriber::fmt::format::FmtSpan::CLOSE,
-        )
-        .with_filter(env_filter());
 
     let feedback = codex_feedback::CodexFeedback::new();
     let feedback_layer = feedback.logger_layer();
@@ -1240,7 +1262,7 @@ pub async fn run_main(
         .map(|layer| layer.with_filter(Targets::new().with_default(Level::TRACE)));
 
     let _ = tracing_subscriber::registry()
-        .with(file_layer)
+        .with(tui_file_layer)
         .with(feedback_layer)
         .with(feedback_metadata_layer)
         .with(log_db_layer)
@@ -1256,6 +1278,7 @@ pub async fn run_main(
         app_server_target,
         remote_cwd_override,
         config,
+        manually_selected_oss_provider,
         overrides,
         cli_kv_overrides,
         cloud_requirements,
@@ -1277,6 +1300,7 @@ async fn run_ratatui_app(
     app_server_target: AppServerTarget,
     remote_cwd_override: Option<PathBuf>,
     initial_config: Config,
+    manually_selected_oss_provider: Option<String>,
     overrides: ConfigOverrides,
     cli_kv_overrides: Vec<(String, toml::Value)>,
     mut cloud_requirements: CloudRequirementsLoader,
@@ -1305,6 +1329,7 @@ async fn run_ratatui_app(
     let mut tui = Tui::new(
         initialized_terminal.terminal,
         initialized_terminal.enhanced_keys_supported,
+        initialized_terminal.stderr_guard,
     );
     let mut terminal_restore_guard = TerminalRestoreGuard::new();
 
@@ -1356,10 +1381,24 @@ async fn run_ratatui_app(
         }
     }
     .with_remote_cwd_override(remote_cwd_override.clone());
+    if let Some(provider) = manually_selected_oss_provider.as_deref()
+        && let Err(err) = config_update::write_config_batch(
+            app_server_session.request_handle(),
+            vec![config_update::build_oss_provider_edit(provider)],
+        )
+        .await
+    {
+        warn!(
+            %err,
+            provider,
+            "Failed to persist selected OSS provider preference"
+        );
+    }
     let mut app_server = Some(app_server_session);
 
     let should_show_trust_screen_flag =
         !uses_remote_workspace && should_show_trust_screen(&initial_config);
+    #[cfg(target_os = "windows")]
     let mut trust_decision_was_made = false;
     let login_status = if initial_config.model_provider.requires_openai_auth {
         let Some(app_server) = app_server.as_mut() else {
@@ -1405,7 +1444,10 @@ async fn run_ratatui_app(
                 exit_reason: ExitReason::UserRequested,
             });
         }
-        trust_decision_was_made = onboarding_result.directory_trust_decision.is_some();
+        #[cfg(target_os = "windows")]
+        {
+            trust_decision_was_made = onboarding_result.directory_trust_persisted;
+        }
         // If this onboarding run included the login step, always refresh cloud requirements and
         // rebuild config. This avoids missing newly available cloud requirements due to login
         // status detection edge cases.
@@ -1421,7 +1463,7 @@ async fn run_ratatui_app(
 
         // If the user made an explicit trust decision, or we showed the login flow, reload config
         // so current process state reflects persisted trust/auth changes.
-        if onboarding_result.directory_trust_decision.is_some()
+        if onboarding_result.directory_trust_persisted
             || (show_login_screen && !uses_remote_workspace)
         {
             load_config_or_exit(
@@ -1662,11 +1704,27 @@ async fn run_ratatui_app(
     }
 
     set_default_client_residency_requirement(config.enforce_residency.value());
-    let active_profile = config.active_profile.clone();
     let should_show_trust_screen = should_show_trust_screen(&config);
-    let should_prompt_windows_sandbox_nux_at_startup = cfg!(target_os = "windows")
-        && trust_decision_was_made
-        && WindowsSandboxLevel::from_config(&config) == WindowsSandboxLevel::Disabled;
+    #[cfg(target_os = "windows")]
+    let windows_sandbox_level = WindowsSandboxLevel::from_config(&config);
+    #[cfg(target_os = "windows")]
+    let required_elevated_sandbox_needs_setup = windows_sandbox_level
+        == WindowsSandboxLevel::Elevated
+        && config
+            .config_layer_stack
+            .requirements()
+            .windows_sandbox_mode
+            .source
+            .is_some()
+        && !crate::legacy_core::windows_sandbox::sandbox_setup_is_complete(
+            config.codex_home.as_path(),
+        );
+    #[cfg(target_os = "windows")]
+    let should_prompt_windows_sandbox_nux_at_startup = (trust_decision_was_made
+        && windows_sandbox_level == WindowsSandboxLevel::Disabled)
+        || required_elevated_sandbox_needs_setup;
+    #[cfg(not(target_os = "windows"))]
+    let should_prompt_windows_sandbox_nux_at_startup = false;
 
     let Cli {
         prompt,
@@ -1707,11 +1765,25 @@ async fn run_ratatui_app(
         },
     };
 
-    let startup_hooks_browser =
-        match maybe_run_startup_hooks_review(&mut app_server, &mut tui, &config).await? {
-            StartupHooksReviewOutcome::Continue => None,
-            StartupHooksReviewOutcome::OpenHooksBrowser(data) => Some(data),
-        };
+    // Persistent app-server resumes may attach to an already-running thread,
+    // where resume config overrides are ignored.
+    let is_persistent_resume = !matches!(&app_server_target, AppServerTarget::Embedded)
+        && matches!(
+            &session_selection,
+            resume_picker::SessionSelection::Resume(_)
+        );
+    let bypass_hook_trust_for_startup_review = config.bypass_hook_trust && !is_persistent_resume;
+    let startup_hooks_browser = match maybe_run_startup_hooks_review(
+        &mut app_server,
+        &mut tui,
+        &config,
+        bypass_hook_trust_for_startup_review,
+    )
+    .await?
+    {
+        StartupHooksReviewOutcome::Continue => None,
+        StartupHooksReviewOutcome::OpenHooksBrowser(data) => Some(data),
+    };
 
     let app_result = App::run(
         &mut tui,
@@ -1720,7 +1792,6 @@ async fn run_ratatui_app(
         cli_kv_overrides.clone(),
         overrides.clone(),
         loader_overrides.clone(),
-        active_profile,
         prompt,
         images,
         session_selection,
@@ -1919,6 +1990,20 @@ mod tests {
             .codex_home(temp_dir.path().to_path_buf())
             .build()
             .await
+    }
+
+    #[test]
+    fn startup_removes_legacy_tui_log_file() -> std::io::Result<()> {
+        let temp_dir = TempDir::new()?;
+        let legacy_log_dir = temp_dir.path().join("log");
+        std::fs::create_dir_all(&legacy_log_dir)?;
+        let legacy_log = legacy_log_dir.join(TUI_LOG_FILE_NAME);
+        std::fs::write(&legacy_log, "legacy log")?;
+
+        remove_legacy_tui_log_file(temp_dir.path());
+
+        assert!(!legacy_log.exists());
+        Ok(())
     }
 
     async fn start_test_embedded_app_server(
@@ -2249,6 +2334,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn latest_session_lookup_params_can_include_non_interactive_sources()
+    -> std::io::Result<()> {
+        let temp_dir = TempDir::new()?;
+        let config = build_config(&temp_dir).await?;
+
+        let params = latest_session_lookup_params(
+            /*uses_remote_workspace*/ true, &config, /*cwd_filter*/ None,
+            /*include_non_interactive*/ true,
+        );
+
+        assert_eq!(
+            params.source_kinds,
+            Some(vec![
+                ThreadSourceKind::Cli,
+                ThreadSourceKind::VsCode,
+                ThreadSourceKind::Exec,
+                ThreadSourceKind::AppServer,
+            ])
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn latest_session_lookup_params_keep_explicit_cwd_filter_for_remote_sessions()
     -> std::io::Result<()> {
         let temp_dir = TempDir::new()?;
@@ -2370,7 +2478,7 @@ mod tests {
             let updated_at =
                 chrono::DateTime::parse_from_rfc3339(meta_rfc3339)?.with_timezone(&chrono::Utc);
             let times = std::fs::FileTimes::new().set_modified(updated_at.into());
-            OpenOptions::new()
+            std::fs::OpenOptions::new()
                 .append(true)
                 .open(rollout_path)?
                 .set_times(times)?;

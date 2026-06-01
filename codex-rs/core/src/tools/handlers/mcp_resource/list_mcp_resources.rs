@@ -32,8 +32,8 @@ impl ToolExecutor<ToolInvocation> for ListMcpResourcesHandler {
         ToolName::plain("list_mcp_resources")
     }
 
-    fn spec(&self) -> Option<ToolSpec> {
-        Some(create_list_mcp_resources_tool())
+    fn spec(&self) -> ToolSpec {
+        create_list_mcp_resources_tool()
     }
 
     fn supports_parallel_tool_calls(&self) -> bool {
@@ -82,10 +82,9 @@ impl ToolExecutor<ToolInvocation> for ListMcpResourcesHandler {
 
         let payload_result: Result<ListResourcesPayload, FunctionCallError> = async {
             if let Some(server_name) = server.clone() {
-                let params = cursor.clone().map(|value| PaginatedRequestParams {
-                    meta: None,
-                    cursor: Some(value),
-                });
+                let params = cursor
+                    .clone()
+                    .map(|value| PaginatedRequestParams::default().with_cursor(Some(value)));
                 let result = session
                     .list_resources(&server_name, params)
                     .await

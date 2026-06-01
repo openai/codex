@@ -74,14 +74,14 @@ impl ToolExecutor<ToolInvocation> for ExecCommandHandler {
         ToolName::plain("exec_command")
     }
 
-    fn spec(&self) -> Option<ToolSpec> {
-        Some(create_exec_command_tool_with_environment_id(
+    fn spec(&self) -> ToolSpec {
+        create_exec_command_tool_with_environment_id(
             CommandToolOptions {
                 allow_login_shell: self.options.allow_login_shell,
                 exec_permission_approvals_enabled: self.options.exec_permission_approvals_enabled,
             },
             self.options.include_environment_id,
-        ))
+        )
     }
 
     fn supports_parallel_tool_calls(&self) -> bool {

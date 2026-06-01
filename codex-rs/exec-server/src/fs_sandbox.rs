@@ -137,7 +137,7 @@ fn sandbox_cwd(sandbox: &FileSystemSandboxContext) -> Result<AbsolutePathBuf, JS
 fn helper_read_roots(runtime_paths: &ExecServerRuntimePaths) -> Vec<AbsolutePathBuf> {
     let mut roots = Vec::new();
     for path in std::iter::once(runtime_paths.codex_self_exe.as_path())
-        .chain(runtime_paths.codex_linux_sandbox_exe.as_deref().into_iter())
+        .chain(runtime_paths.codex_linux_sandbox_exe.as_deref())
     {
         if let Some(parent) = path.parent()
             && let Ok(root) = AbsolutePathBuf::from_absolute_path(parent)
@@ -230,6 +230,8 @@ fn helper_env_from_vars(
 
 fn helper_env_key_is_allowed(key: &str) -> bool {
     FS_HELPER_ENV_ALLOWLIST.contains(&key)
+        // CoreFoundation consults this before falling back to user lookup during helper startup.
+        || (cfg!(target_os = "macos") && key == "__CF_USER_TEXT_ENCODING")
         || bazel_bwrap_env_key_is_allowed(key)
         || (cfg!(windows) && key.eq_ignore_ascii_case("PATH"))
 }
@@ -298,6 +300,7 @@ fn spawn_command(
     command.stdin(std::process::Stdio::piped());
     command.stdout(std::process::Stdio::piped());
     command.stderr(std::process::Stdio::piped());
+    command.kill_on_drop(true);
     command.spawn().map_err(io_error)
 }
 
@@ -430,6 +433,26 @@ mod tests {
                 ("TMP".to_string(), "/tmp".to_string()),
                 ("TEMP".to_string(), "/tmp".to_string()),
             ])
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn helper_env_preserves_corefoundation_text_encoding() {
+        let env = helper_env_from_vars(
+            [
+                ("__CF_USER_TEXT_ENCODING", "0x1F6:0x0:0x0"),
+                ("HOME", "/Users/test"),
+            ]
+            .map(|(key, value)| (OsString::from(key), OsString::from(value))),
+        );
+
+        assert_eq!(
+            env,
+            HashMap::from([(
+                "__CF_USER_TEXT_ENCODING".to_string(),
+                "0x1F6:0x0:0x0".to_string(),
+            )])
         );
     }
 

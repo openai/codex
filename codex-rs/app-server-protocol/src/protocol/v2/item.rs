@@ -212,7 +212,11 @@ impl CommandAction {
 pub enum ThreadItem {
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
-    UserMessage { id: String, content: Vec<UserInput> },
+    UserMessage {
+        id: String,
+        client_id: Option<String>,
+        content: Vec<UserInput>,
+    },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
     HookPrompt {
@@ -286,6 +290,7 @@ pub enum ThreadItem {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         mcp_app_resource_uri: Option<String>,
+        plugin_id: Option<String>,
         result: Option<Box<McpToolCallResult>>,
         error: Option<McpToolCallError>,
         /// The duration of the MCP tool call in milliseconds.
@@ -775,6 +780,7 @@ impl From<CoreTurnItem> for ThreadItem {
         match value {
             CoreTurnItem::UserMessage(user) => ThreadItem::UserMessage {
                 id: user.id,
+                client_id: user.client_id,
                 content: user.content.into_iter().map(UserInput::from).collect(),
             },
             CoreTurnItem::HookPrompt(hook_prompt) => ThreadItem::HookPrompt {
@@ -846,6 +852,7 @@ impl From<CoreTurnItem> for ThreadItem {
                     status: McpToolCallStatus::from(mcp.status),
                     arguments: mcp.arguments,
                     mcp_app_resource_uri: mcp.mcp_app_resource_uri,
+                    plugin_id: mcp.plugin_id,
                     result: mcp.result.map(McpToolCallResult::from).map(Box::new),
                     error: mcp.error.map(McpToolCallError::from),
                     duration_ms,

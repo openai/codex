@@ -11,7 +11,6 @@ requires-python = ">=3.10"
 license = { text = "Apache-2.0" }
 authors = [{ name = "OpenAI" }]
 classifiers = [
-  "Development Status :: 4 - Beta",
   "Intended Audience :: Developers",
   "License :: OSI Approved :: Apache Software License",
   "Programming Language :: Python :: 3",
@@ -36,7 +35,12 @@ exclude = [
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/codex_cli_bin"]
-include = ["src/codex_cli_bin/bin/**"]
+include = [
+  "src/codex_cli_bin/codex-package.json",
+  "src/codex_cli_bin/bin/**",
+  "src/codex_cli_bin/codex-resources/**",
+  "src/codex_cli_bin/codex-path/**",
+]
 
 [tool.hatch.build.targets.wheel.hooks.custom]
 

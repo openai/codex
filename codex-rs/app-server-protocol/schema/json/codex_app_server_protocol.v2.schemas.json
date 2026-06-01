@@ -164,6 +164,28 @@
       ],
       "type": "string"
     },
+    "AdditionalContextEntry": {
+      "properties": {
+        "kind": {
+          "$ref": "#/definitions/AdditionalContextKind"
+        },
+        "value": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "value"
+      ],
+      "type": "object"
+    },
+    "AdditionalContextKind": {
+      "enum": [
+        "untrusted",
+        "application"
+      ],
+      "type": "string"
+    },
     "AdditionalFileSystemPermissions": {
       "properties": {
         "entries": {
@@ -1105,6 +1127,78 @@
             },
             "method": {
               "enum": [
+                "thread/goal/set"
+              ],
+              "title": "Thread/goal/setRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/ThreadGoalSetParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Thread/goal/setRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "thread/goal/get"
+              ],
+              "title": "Thread/goal/getRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/ThreadGoalGetParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Thread/goal/getRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "thread/goal/clear"
+              ],
+              "title": "Thread/goal/clearRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/ThreadGoalClearParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Thread/goal/clearRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
                 "thread/metadata/update"
               ],
               "title": "Thread/metadata/updateRequestMethod",
@@ -1361,6 +1455,30 @@
             "params"
           ],
           "title": "Skills/listRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "skills/extraRoots/set"
+              ],
+              "title": "Skills/extraRoots/setRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/SkillsExtraRootsSetParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Skills/extraRoots/setRequest",
           "type": "object"
         },
         {
@@ -3658,19 +3776,6 @@
             }
           ]
         },
-        "profile": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "profiles": {
-          "additionalProperties": {
-            "$ref": "#/definitions/ProfileV2"
-          },
-          "default": {},
-          "type": "object"
-        },
         "review_model": {
           "type": [
             "string",
@@ -3868,6 +3973,33 @@
           "type": "object"
         },
         {
+          "description": "Enterprise-managed config layer delivered by the cloud config bundle.",
+          "properties": {
+            "id": {
+              "description": "Stable identifier for the delivered layer.",
+              "type": "string"
+            },
+            "name": {
+              "description": "Admin-facing name for the delivered layer. This is surfaced in diagnostics so users know which cloud layer needs administrator attention.",
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "enterpriseManaged"
+              ],
+              "title": "EnterpriseManagedConfigLayerSourceType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "name",
+            "type"
+          ],
+          "title": "EnterpriseManagedConfigLayerSource",
+          "type": "object"
+        },
+        {
           "description": "User config layer from $CODEX_HOME/config.toml. This layer is special in that it is expected to be: - writable by the user - generally outside the workspace directory",
           "properties": {
             "file": {
@@ -3988,7 +4120,6 @@
           ]
         },
         "includeLayers": {
-          "default": false,
           "type": "boolean"
         }
       },
@@ -4026,6 +4157,12 @@
     },
     "ConfigRequirements": {
       "properties": {
+        "allowAppshots": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "allowManagedHooksOnly": {
           "type": [
             "boolean",
@@ -4035,6 +4172,15 @@
         "allowedApprovalPolicies": {
           "items": {
             "$ref": "#/definitions/AskForApproval"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "allowedPermissions": {
+          "items": {
+            "type": "string"
           },
           "type": [
             "array",
@@ -4053,6 +4199,15 @@
         "allowedWebSearchModes": {
           "items": {
             "$ref": "#/definitions/WebSearchMode"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "allowedWindowsSandboxImplementations": {
+          "items": {
+            "$ref": "#/definitions/WindowsSandboxSetupMode"
           },
           "type": [
             "array",
@@ -4881,8 +5036,7 @@
         }
       },
       "required": [
-        "classification",
-        "includeLogs"
+        "classification"
       ],
       "title": "FeedbackUploadParams",
       "type": "object"
@@ -5769,7 +5923,6 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
         "refreshToken": {
-          "default": false,
           "description": "When `true`, requests a proactive token refresh before returning.\n\nIn managed auth mode this triggers the normal refresh-token flow. In external auth mode this flag is ignored. Clients should refresh tokens themselves and call `account/login/start` with `chatgptAuthTokens`.",
           "type": "boolean"
         }
@@ -6190,6 +6343,7 @@
         "sessionStart",
         "userPromptSubmit",
         "subagentStart",
+        "subagentStop",
         "stop"
       ],
       "type": "string"
@@ -6444,6 +6598,7 @@
         "sessionFlags",
         "plugin",
         "cloudRequirements",
+        "cloudManagedConfig",
         "legacyManagedConfigFile",
         "legacyManagedConfigMdm",
         "unknown"
@@ -6546,6 +6701,8 @@
     },
     "ImageDetail": {
       "enum": [
+        "auto",
+        "low",
         "high",
         "original"
       ],
@@ -6798,6 +6955,12 @@
           "minimum": 0.0,
           "type": [
             "integer",
+            "null"
+          ]
+        },
+        "threadId": {
+          "type": [
+            "string",
             "null"
           ]
         }
@@ -7135,6 +7298,12 @@
           },
           "type": "array"
         },
+        "SubagentStop": {
+          "items": {
+            "$ref": "#/definitions/ConfiguredHookMatcherGroup"
+          },
+          "type": "array"
+        },
         "UserPromptSubmit": {
           "items": {
             "$ref": "#/definitions/ConfiguredHookMatcherGroup"
@@ -7163,6 +7332,7 @@
         "SessionStart",
         "Stop",
         "SubagentStart",
+        "SubagentStop",
         "UserPromptSubmit"
       ],
       "type": "object"
@@ -7384,6 +7554,47 @@
       "title": "McpResourceReadResponse",
       "type": "object"
     },
+    "McpServerInfo": {
+      "description": "Presentation metadata advertised by an initialized MCP server.",
+      "properties": {
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "icons": {
+          "items": true,
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "version": {
+          "type": "string"
+        },
+        "websiteUrl": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "name",
+        "version"
+      ],
+      "type": "object"
+    },
     "McpServerMigration": {
       "properties": {
         "name": {
@@ -7493,6 +7704,16 @@
             "$ref": "#/definitions/Resource"
           },
           "type": "array"
+        },
+        "serverInfo": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/McpServerInfo"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "tools": {
           "additionalProperties": {
@@ -7794,6 +8015,14 @@
         },
         "defaultReasoningEffort": {
           "$ref": "#/definitions/ReasoningEffort"
+        },
+        "defaultServiceTier": {
+          "default": null,
+          "description": "Catalog default service tier id for this model, when one is configured.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "description": {
           "type": "string"
@@ -8206,7 +8435,7 @@
     "NetworkUnixSocketPermission": {
       "enum": [
         "allow",
-        "none"
+        "deny"
       ],
       "type": "string"
     },
@@ -9603,107 +9832,6 @@
         "cols",
         "rows"
       ],
-      "type": "object"
-    },
-    "ProfileV2": {
-      "additionalProperties": true,
-      "properties": {
-        "approval_policy": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/AskForApproval"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "approvals_reviewer": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ApprovalsReviewer"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "[UNSTABLE] Optional profile-level override for where approval requests are routed for review. If omitted, the enclosing config default is used."
-        },
-        "chatgpt_base_url": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "model": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "model_provider": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "model_reasoning_effort": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ReasoningEffort"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "model_reasoning_summary": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ReasoningSummary"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "model_verbosity": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/Verbosity"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "service_tier": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "tools": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/ToolsV2"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "web_search": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/WebSearchMode"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
       "type": "object"
     },
     "RateLimitReachedType": {
@@ -12878,6 +13006,27 @@
       "title": "SkillsConfigWriteResponse",
       "type": "object"
     },
+    "SkillsExtraRootsSetParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "extraRoots": {
+          "items": {
+            "$ref": "#/definitions/AbsolutePathBuf"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "extraRoots"
+      ],
+      "title": "SkillsExtraRootsSetParams",
+      "type": "object"
+    },
+    "SkillsExtraRootsSetResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "SkillsExtraRootsSetResponse",
+      "type": "object"
+    },
     "SkillsListEntry": {
       "properties": {
         "cwd": {
@@ -13570,6 +13719,32 @@
       ],
       "type": "object"
     },
+    "ThreadGoalClearParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "threadId"
+      ],
+      "title": "ThreadGoalClearParams",
+      "type": "object"
+    },
+    "ThreadGoalClearResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "cleared": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "cleared"
+      ],
+      "title": "ThreadGoalClearResponse",
+      "type": "object"
+    },
     "ThreadGoalClearedNotification": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
@@ -13581,6 +13756,85 @@
         "threadId"
       ],
       "title": "ThreadGoalClearedNotification",
+      "type": "object"
+    },
+    "ThreadGoalGetParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "threadId"
+      ],
+      "title": "ThreadGoalGetParams",
+      "type": "object"
+    },
+    "ThreadGoalGetResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "goal": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ThreadGoal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "title": "ThreadGoalGetResponse",
+      "type": "object"
+    },
+    "ThreadGoalSetParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "objective": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ThreadGoalStatus"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "tokenBudget": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "threadId"
+      ],
+      "title": "ThreadGoalSetParams",
+      "type": "object"
+    },
+    "ThreadGoalSetResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "goal": {
+          "$ref": "#/definitions/ThreadGoal"
+        }
+      },
+      "required": [
+        "goal"
+      ],
+      "title": "ThreadGoalSetResponse",
       "type": "object"
     },
     "ThreadGoalStatus": {
@@ -13648,6 +13902,12 @@
       "oneOf": [
         {
           "properties": {
+            "clientId": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "content": {
               "items": {
                 "$ref": "#/definitions/UserInput"
@@ -13945,6 +14205,12 @@
               "type": "string"
             },
             "mcpAppResourceUri": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "pluginId": {
               "type": [
                 "string",
                 "null"
@@ -14581,7 +14847,6 @@
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
         "includeTurns": {
-          "default": false,
           "description": "When true, include turns and their items from rollout history.",
           "type": "boolean"
         },
@@ -14848,6 +15113,42 @@
       "title": "ThreadRealtimeTranscriptDoneNotification",
       "type": "object"
     },
+    "ThreadResumeInitialTurnsPageParams": {
+      "properties": {
+        "itemsView": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/TurnItemsView"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "How much item detail to include for each returned turn; defaults to summary."
+        },
+        "limit": {
+          "description": "Optional turn page size.",
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "sortDirection": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SortDirection"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional turn pagination direction; defaults to descending."
+        }
+      },
+      "type": "object"
+    },
     "ThreadResumeParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "description": "There are three ways to resume a thread: 1. By thread_id: load the thread from disk by thread_id and resume it. 2. By history: instantiate the thread from memory and resume it. 3. By path: load the thread from disk by path and resume it.\n\nFor non-running threads, the precedence is: history > non-empty path > thread_id. If using history or a non-empty path for a non-running thread, the thread_id param will be ignored.\n\nIf thread_id identifies a running thread, app-server rejoins that thread and treats a non-empty path as a consistency check against the active rollout path. Empty string path values are treated as absent.\n\nPrefer using thread_id whenever possible.",
@@ -15054,6 +15355,21 @@
         "thread"
       ],
       "title": "ThreadRollbackResponse",
+      "type": "object"
+    },
+    "ThreadSearchResult": {
+      "properties": {
+        "snippet": {
+          "type": "string"
+        },
+        "thread": {
+          "$ref": "#/definitions/Thread"
+        }
+      },
+      "required": [
+        "snippet",
+        "thread"
+      ],
       "type": "object"
     },
     "ThreadSetNameParams": {
@@ -16009,6 +16325,12 @@
           ],
           "description": "Override where approval requests are routed for review on this turn and subsequent turns."
         },
+        "clientUserMessageId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "cwd": {
           "description": "Override the working directory for this turn and subsequent turns.",
           "type": [
@@ -16136,6 +16458,12 @@
     "TurnSteerParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
+        "clientUserMessageId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "expectedTurnId": {
           "description": "Required active turn id precondition. The request fails when it does not match the currently active turn.",
           "type": "string"
@@ -16169,6 +16497,32 @@
         "turnId"
       ],
       "title": "TurnSteerResponse",
+      "type": "object"
+    },
+    "TurnsPage": {
+      "properties": {
+        "backwardsCursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "data": {
+          "items": {
+            "$ref": "#/definitions/Turn"
+          },
+          "type": "array"
+        },
+        "nextCursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "data"
+      ],
       "type": "object"
     },
     "UserInput": {

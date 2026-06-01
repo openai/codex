@@ -1,0 +1,1124 @@
+{
+  "source": "golden/notion/tools",
+  "tools": [
+    {
+      "name": "create_page",
+      "description": "Create a Notion page.",
+      "input_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "create_page.input",
+        "type": "object",
+        "description": "Input schema for create_page.",
+        "$defs": {
+          "rich_text": {
+            "type": "object",
+            "description": "Notion rich text object. This schema captures the stable high-value fields and permits provider extensions.",
+            "properties": {
+              "type": {
+                "type": "string",
+                "description": "Rich text discriminator such as `text`, `mention`, or `equation`."
+              },
+              "plain_text": {
+                "type": "string",
+                "description": "Flattened plain-text representation."
+              },
+              "href": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Optional hyperlink target when present."
+              },
+              "annotations": {
+                "type": "object",
+                "description": "Text annotations applied to this run.",
+                "properties": {
+                  "bold": {
+                    "type": "boolean"
+                  },
+                  "italic": {
+                    "type": "boolean"
+                  },
+                  "strikethrough": {
+                    "type": "boolean"
+                  },
+                  "underline": {
+                    "type": "boolean"
+                  },
+                  "code": {
+                    "type": "boolean"
+                  },
+                  "color": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": true
+              },
+              "text": {
+                "type": "object",
+                "description": "Text payload for `type=text` entries.",
+                "properties": {
+                  "content": {
+                    "type": "string"
+                  },
+                  "link": {
+                    "anyOf": [
+                      {
+                        "type": "null"
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "url": {
+                            "type": "string",
+                            "format": "uri"
+                          }
+                        },
+                        "required": [
+                          "url"
+                        ],
+                        "additionalProperties": false
+                      }
+                    ]
+                  }
+                },
+                "additionalProperties": true
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "additionalProperties": true
+          },
+          "icon": {
+            "type": "object",
+            "description": "Notion icon union. Keep provider variants explicit and allow future variants.",
+            "properties": {
+              "type": {
+                "type": "string",
+                "description": "Icon discriminator such as `emoji`, `external`, `file_upload`, `custom_emoji`, or `icon`."
+              },
+              "emoji": {
+                "type": "string",
+                "description": "Emoji character for `type=emoji`."
+              },
+              "name": {
+                "type": "string",
+                "description": "Named native icon or custom emoji name when applicable."
+              },
+              "color": {
+                "type": "string",
+                "description": "Optional icon color for native icon variants."
+              },
+              "external": {
+                "type": "object",
+                "properties": {
+                  "url": {
+                    "type": "string",
+                    "format": "uri"
+                  }
+                },
+                "additionalProperties": true
+              },
+              "file_upload": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": true
+              },
+              "custom_emoji": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "url": {
+                    "type": "string",
+                    "format": "uri"
+                  }
+                },
+                "additionalProperties": true
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "additionalProperties": true
+          },
+          "file_ref": {
+            "type": "object",
+            "description": "Notion file union used by cover and attachments.",
+            "properties": {
+              "type": {
+                "type": "string",
+                "description": "File discriminator such as `external`, `file`, or `file_upload`."
+              },
+              "name": {
+                "type": "string"
+              },
+              "external": {
+                "type": "object",
+                "properties": {
+                  "url": {
+                    "type": "string",
+                    "format": "uri"
+                  }
+                },
+                "required": [
+                  "url"
+                ],
+                "additionalProperties": true
+              },
+              "file": {
+                "type": "object",
+                "properties": {
+                  "url": {
+                    "type": "string",
+                    "format": "uri"
+                  },
+                  "expiry_time": {
+                    "type": "string",
+                    "format": "date-time"
+                  }
+                },
+                "additionalProperties": true
+              },
+              "file_upload": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id"
+                ],
+                "additionalProperties": true
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "additionalProperties": true
+          },
+          "parent": {
+            "type": "object",
+            "description": "Notion parent reference. The exact allowed variants depend on the endpoint.",
+            "properties": {
+              "type": {
+                "type": "string",
+                "description": "Parent discriminator such as `page_id`, `data_source_id`, `database_id`, `block_id`, or `workspace`."
+              },
+              "page_id": {
+                "type": "string"
+              },
+              "data_source_id": {
+                "type": "string"
+              },
+              "database_id": {
+                "type": "string"
+              },
+              "block_id": {
+                "type": "string"
+              },
+              "workspace": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "additionalProperties": true
+          },
+          "date_value": {
+            "type": "object",
+            "properties": {
+              "start": {
+                "type": "string",
+                "description": "ISO 8601 date or datetime string."
+              },
+              "end": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "time_zone": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "start"
+            ],
+            "additionalProperties": false
+          },
+          "user": {
+            "type": "object",
+            "description": "Notion user or bot object.",
+            "properties": {
+              "object": {
+                "type": "string",
+                "const": "user"
+              },
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "avatar_url": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "format": "uri"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "person",
+                  "bot"
+                ]
+              },
+              "person": {
+                "type": "object",
+                "properties": {
+                  "email": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "format": "email"
+                  }
+                },
+                "additionalProperties": true
+              },
+              "bot": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            },
+            "required": [
+              "object",
+              "id",
+              "type"
+            ],
+            "additionalProperties": true
+          },
+          "property_value": {
+            "type": "object",
+            "description": "Provider-native page property value object. This schema captures common property families and leaves room for future Notion property variants.",
+            "properties": {
+              "type": {
+                "type": "string"
+              },
+              "title": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/rich_text"
+                }
+              },
+              "rich_text": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/rich_text"
+                }
+              },
+              "number": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "checkbox": {
+                "type": "boolean"
+              },
+              "url": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "format": "uri"
+              },
+              "email": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "format": "email"
+              },
+              "phone_number": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "date": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/date_value"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "select": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "color": {
+                        "type": "string"
+                      }
+                    },
+                    "additionalProperties": true
+                  }
+                ]
+              },
+              "status": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "color": {
+                        "type": "string"
+                      }
+                    },
+                    "additionalProperties": true
+                  }
+                ]
+              },
+              "multi_select": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "color": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": true
+                }
+              },
+              "people": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/user"
+                }
+              },
+              "relation": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "files": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/file_ref"
+                }
+              },
+              "created_time": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "last_edited_time": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "formula": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "rollup": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "verification": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "additionalProperties": true
+          },
+          "page": {
+            "type": "object",
+            "description": "Notion page object, modeled as a practical schema-authoring subset.",
+            "properties": {
+              "object": {
+                "type": "string",
+                "const": "page"
+              },
+              "id": {
+                "type": "string"
+              },
+              "created_time": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "last_edited_time": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "created_by": {
+                "$ref": "#/$defs/user"
+              },
+              "last_edited_by": {
+                "$ref": "#/$defs/user"
+              },
+              "cover": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/file_ref"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "icon": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/icon"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "parent": {
+                "$ref": "#/$defs/parent"
+              },
+              "archived": {
+                "type": "boolean"
+              },
+              "in_trash": {
+                "type": "boolean"
+              },
+              "is_locked": {
+                "type": "boolean"
+              },
+              "url": {
+                "type": "string",
+                "format": "uri"
+              },
+              "properties": {
+                "type": "object",
+                "description": "Page property map keyed by property name.",
+                "additionalProperties": {
+                  "$ref": "#/$defs/property_value"
+                }
+              }
+            },
+            "required": [
+              "object",
+              "id",
+              "parent",
+              "properties"
+            ],
+            "additionalProperties": true
+          },
+          "text_block_payload": {
+            "type": "object",
+            "properties": {
+              "rich_text": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/rich_text"
+                }
+              },
+              "color": {
+                "type": "string"
+              },
+              "children": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/block"
+                }
+              }
+            },
+            "additionalProperties": true
+          },
+          "block": {
+            "type": "object",
+            "description": "Notion block object. The schema preserves the top-level discriminator and important typed payload families while allowing future provider expansion.",
+            "properties": {
+              "object": {
+                "type": "string",
+                "const": "block"
+              },
+              "id": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string"
+              },
+              "has_children": {
+                "type": "boolean"
+              },
+              "archived": {
+                "type": "boolean"
+              },
+              "in_trash": {
+                "type": "boolean"
+              },
+              "created_time": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "last_edited_time": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "created_by": {
+                "$ref": "#/$defs/user"
+              },
+              "last_edited_by": {
+                "$ref": "#/$defs/user"
+              },
+              "parent": {
+                "$ref": "#/$defs/parent"
+              },
+              "paragraph": {
+                "$ref": "#/$defs/text_block_payload"
+              },
+              "heading_1": {
+                "$ref": "#/$defs/text_block_payload"
+              },
+              "heading_2": {
+                "$ref": "#/$defs/text_block_payload"
+              },
+              "heading_3": {
+                "$ref": "#/$defs/text_block_payload"
+              },
+              "heading_4": {
+                "$ref": "#/$defs/text_block_payload"
+              },
+              "bulleted_list_item": {
+                "$ref": "#/$defs/text_block_payload"
+              },
+              "numbered_list_item": {
+                "$ref": "#/$defs/text_block_payload"
+              },
+              "toggle": {
+                "$ref": "#/$defs/text_block_payload"
+              },
+              "to_do": {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/text_block_payload"
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "checked": {
+                        "type": "boolean"
+                      }
+                    },
+                    "additionalProperties": true
+                  }
+                ]
+              },
+              "callout": {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/text_block_payload"
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "icon": {
+                        "anyOf": [
+                          {
+                            "$ref": "#/$defs/icon"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      }
+                    },
+                    "additionalProperties": true
+                  }
+                ]
+              },
+              "code": {
+                "type": "object",
+                "properties": {
+                  "rich_text": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/$defs/rich_text"
+                    }
+                  },
+                  "caption": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/$defs/rich_text"
+                    }
+                  },
+                  "language": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": true
+              },
+              "image": {
+                "type": "object",
+                "properties": {
+                  "caption": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/$defs/rich_text"
+                    }
+                  },
+                  "type": {
+                    "type": "string"
+                  },
+                  "file": {
+                    "$ref": "#/$defs/file_ref"
+                  },
+                  "external": {
+                    "type": "object",
+                    "properties": {
+                      "url": {
+                        "type": "string",
+                        "format": "uri"
+                      }
+                    },
+                    "additionalProperties": true
+                  }
+                },
+                "additionalProperties": true
+              },
+              "tab": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "meeting_notes": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "unsupported": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            },
+            "required": [
+              "object",
+              "id",
+              "type"
+            ],
+            "additionalProperties": true
+          },
+          "property_schema": {
+            "type": "object",
+            "description": "Data source property schema entry.",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "description": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/$defs/rich_text"
+                    }
+                  }
+                ]
+              },
+              "type": {
+                "type": "string"
+              },
+              "number": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "select": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "multi_select": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "status": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "date": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "people": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "files": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "checkbox": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "url": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "email": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "phone_number": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "formula": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "relation": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "rollup": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "created_time": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "last_edited_time": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "created_by": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "last_edited_by": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "verification": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "additionalProperties": true
+          },
+          "data_source": {
+            "type": "object",
+            "description": "Notion data source object representing a table under a database.",
+            "properties": {
+              "object": {
+                "type": "string",
+                "const": "data_source"
+              },
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "title": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/rich_text"
+                }
+              },
+              "icon": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/icon"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "parent": {
+                "$ref": "#/$defs/parent"
+              },
+              "url": {
+                "type": "string",
+                "format": "uri"
+              },
+              "properties": {
+                "type": "object",
+                "description": "Schema map keyed by property name or id.",
+                "additionalProperties": {
+                  "$ref": "#/$defs/property_schema"
+                }
+              },
+              "in_trash": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "object",
+              "id",
+              "parent"
+            ],
+            "additionalProperties": true
+          },
+          "database": {
+            "type": "object",
+            "description": "Notion database container object.",
+            "properties": {
+              "object": {
+                "type": "string",
+                "const": "database"
+              },
+              "id": {
+                "type": "string"
+              },
+              "parent": {
+                "$ref": "#/$defs/parent"
+              },
+              "title": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/rich_text"
+                }
+              },
+              "description": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/rich_text"
+                }
+              },
+              "icon": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/icon"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "cover": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/file_ref"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "is_inline": {
+                "type": "boolean"
+              },
+              "is_locked": {
+                "type": "boolean"
+              },
+              "in_trash": {
+                "type": "boolean"
+              },
+              "url": {
+                "type": "string",
+                "format": "uri"
+              },
+              "data_sources": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "id"
+                  ],
+                  "additionalProperties": true
+                }
+              }
+            },
+            "required": [
+              "object",
+              "id",
+              "parent"
+            ],
+            "additionalProperties": true
+          },
+          "comment": {
+            "type": "object",
+            "description": "Notion comment object.",
+            "properties": {
+              "object": {
+                "type": "string",
+                "const": "comment"
+              },
+              "id": {
+                "type": "string"
+              },
+              "discussion_id": {
+                "type": "string"
+              },
+              "created_time": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "last_edited_time": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "format": "date-time"
+              },
+              "created_by": {
+                "$ref": "#/$defs/user"
+              },
+              "parent": {
+                "$ref": "#/$defs/parent"
+              },
+              "rich_text": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/rich_text"
+                }
+              },
+              "markdown": {
+                "type": "string"
+              },
+              "attachments": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/file_ref"
+                }
+              }
+            },
+            "required": [
+              "object",
+              "id",
+              "discussion_id",
+              "created_by"
+            ],
+            "additionalProperties": true
+          }
+        },
+        "properties": {
+          "parent": {
+            "$ref": "#/$defs/parent",
+            "description": "Request body field. Parent reference controlling whether the page is standalone or a row under a data source."
+          },
+          "properties": {
+            "type": "object",
+            "description": "Request body field. Page property map keyed by property name. Values should follow the target data source schema when the parent is a data source.",
+            "additionalProperties": {
+              "$ref": "#/$defs/property_value"
+            }
+          },
+          "children": {
+            "type": "array",
+            "description": "Request body field. Initial child blocks. Prefer this structured provider-native content form over markdown when exact block structure matters.",
+            "items": {
+              "$ref": "#/$defs/block"
+            }
+          },
+          "icon": {
+            "$ref": "#/$defs/icon",
+            "description": "Request body field. Optional page icon."
+          },
+          "cover": {
+            "$ref": "#/$defs/file_ref",
+            "description": "Request body field. Optional page cover image/file reference."
+          },
+          "template": {
+            "type": "object",
+            "description": "Request body field. Optional template application settings. Template application may be asynchronous.",
+            "additionalProperties": true
+          },
+          "markdown": {
+            "type": "string",
+            "description": "Request body field. Optional provider-supported markdown body. Included because Notion supports it, but block children remain the preferred structural primitive in this package."
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "parent",
+          "properties"
+        ],
+        "not": {
+          "required": [
+            "children",
+            "markdown"
+          ]
+        }
+      }
+    }
+  ]
+}

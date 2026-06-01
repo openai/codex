@@ -1,4 +1,5 @@
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use std::marker::PhantomData;
 
@@ -74,6 +75,19 @@ pub trait ContextualUserFragment {
     {
         ResponseItem::Message {
             id: None,
+            role: Self::role().to_string(),
+            content: vec![ContentItem::InputText {
+                text: self.render(),
+            }],
+            phase: None,
+        }
+    }
+
+    fn into_response_input_item(self) -> ResponseInputItem
+    where
+        Self: Sized,
+    {
+        ResponseInputItem::Message {
             role: Self::role().to_string(),
             content: vec![ContentItem::InputText {
                 text: self.render(),

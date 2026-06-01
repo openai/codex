@@ -77,6 +77,13 @@ fn apply_patch_freeform_is_removed_and_disabled_by_default() {
 }
 
 #[test]
+fn plugin_hooks_is_removed_and_disabled_by_default() {
+    assert_eq!(Feature::PluginHooks.stage(), Stage::Removed);
+    assert_eq!(Feature::PluginHooks.default_enabled(), false);
+    assert_eq!(feature_for_key("plugin_hooks"), Some(Feature::PluginHooks));
+}
+
+#[test]
 fn code_mode_only_requires_code_mode() {
     let mut features = Features::with_defaults();
     features.enable(Feature::CodeModeOnly);
@@ -195,12 +202,6 @@ fn tool_search_is_removed_and_disabled_by_default() {
 }
 
 #[test]
-fn plugin_hooks_are_stable_and_enabled_by_default() {
-    assert_eq!(Feature::PluginHooks.stage(), Stage::Stable);
-    assert_eq!(Feature::PluginHooks.default_enabled(), true);
-}
-
-#[test]
 fn browser_controls_are_stable_and_enabled_by_default() {
     assert_eq!(Feature::InAppBrowser.stage(), Stage::Stable);
     assert_eq!(Feature::InAppBrowser.default_enabled(), true);
@@ -241,6 +242,13 @@ fn use_linux_sandbox_bwrap_is_a_removed_feature_key() {
 fn image_generation_is_stable_and_enabled_by_default() {
     assert_eq!(Feature::ImageGeneration.stage(), Stage::Stable);
     assert_eq!(Feature::ImageGeneration.default_enabled(), true);
+}
+
+#[test]
+fn image_generation_extension_is_under_development_and_disabled_by_default() {
+    assert_eq!(Feature::ImageGenExt.stage(), Stage::UnderDevelopment);
+    assert_eq!(Feature::ImageGenExt.default_enabled(), false);
+    assert_eq!(feature_for_key("imagegenext"), Some(Feature::ImageGenExt));
 }
 
 #[test]
@@ -301,6 +309,13 @@ fn auth_elicitation_is_under_development() {
         feature_for_key("auth_elicitation"),
         Some(Feature::AuthElicitation)
     );
+}
+
+#[test]
+fn mentions_v2_is_under_development_and_disabled_by_default() {
+    assert_eq!(Feature::MentionsV2.stage(), Stage::UnderDevelopment);
+    assert_eq!(Feature::MentionsV2.default_enabled(), false);
+    assert_eq!(feature_for_key("mentions_v2"), Some(Feature::MentionsV2));
 }
 
 #[test]
@@ -486,6 +501,22 @@ fn from_sources_ignores_removed_js_repl_feature_keys() {
 fn from_sources_ignores_removed_apply_patch_freeform_feature_key() {
     let features_toml =
         FeaturesToml::from(BTreeMap::from([("apply_patch_freeform".to_string(), true)]));
+
+    let features = Features::from_sources(
+        FeatureConfigSource {
+            features: Some(&features_toml),
+            ..Default::default()
+        },
+        FeatureConfigSource::default(),
+        FeatureOverrides::default(),
+    );
+
+    assert_eq!(features, Features::with_defaults());
+}
+
+#[test]
+fn from_sources_ignores_removed_plugin_hooks_feature_key() {
+    let features_toml = FeaturesToml::from(BTreeMap::from([("plugin_hooks".to_string(), true)]));
 
     let features = Features::from_sources(
         FeatureConfigSource {

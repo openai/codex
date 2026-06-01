@@ -6,6 +6,7 @@
 use crate::bottom_pane::FeedbackAudience;
 use crate::legacy_core::config::Config;
 use crate::permission_compat::legacy_compatible_permission_profile;
+use crate::service_tier_resolution;
 use crate::session_state::MessageHistoryMetadata;
 use crate::session_state::ThreadSessionState;
 use crate::status::StatusAccountDisplay;
@@ -45,6 +46,8 @@ use codex_app_server_protocol::SkillsListResponse;
 use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadApproveGuardianDeniedActionParams;
 use codex_app_server_protocol::ThreadApproveGuardianDeniedActionResponse;
+use codex_app_server_protocol::ThreadArchiveParams;
+use codex_app_server_protocol::ThreadArchiveResponse;
 use codex_app_server_protocol::ThreadBackgroundTerminalsCleanParams;
 use codex_app_server_protocol::ThreadBackgroundTerminalsCleanResponse;
 use codex_app_server_protocol::ThreadCompactStartParams;
@@ -94,6 +97,8 @@ use codex_app_server_protocol::ThreadSource;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStartSource;
+use codex_app_server_protocol::ThreadUnarchiveParams;
+use codex_app_server_protocol::ThreadUnarchiveResponse;
 use codex_app_server_protocol::ThreadUnsubscribeParams;
 use codex_app_server_protocol::ThreadUnsubscribeResponse;
 use codex_app_server_protocol::Turn;
@@ -107,6 +112,7 @@ use codex_app_server_protocol::UserInput;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::ThreadId;
 use codex_protocol::approvals::GuardianAssessmentEvent;
+use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
 use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseItem;
@@ -164,6 +170,8 @@ pub(crate) struct AppServerSession {
     remote_cwd_override: Option<PathBuf>,
     thread_params_mode: ThreadParamsMode,
     thread_settings_update_supported: bool,
+    default_model: Option<String>,
+    available_models: Vec<ModelPreset>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -205,6 +213,8 @@ impl AppServerSession {
             remote_cwd_override: None,
             thread_params_mode,
             thread_settings_update_supported: true,
+            default_model: None,
+            available_models: Vec::new(),
         }
     }
 
@@ -219,6 +229,13 @@ impl AppServerSession {
 
     pub(crate) fn uses_remote_workspace(&self) -> bool {
         matches!(self.thread_params_mode, ThreadParamsMode::Remote)
+    }
+
+    pub(crate) fn server_version(&self) -> Option<&str> {
+        let AppServerClient::Remote(client) = &self.client else {
+            return None;
+        };
+        client.server_version()
     }
 
     pub(crate) async fn bootstrap(&mut self, config: &Config) -> Result<AppServerBootstrap> {
@@ -254,6 +271,8 @@ impl AppServerSession {
             })
             .or_else(|| available_models.first().map(|model| model.model.clone()))
             .wrap_err("model/list returned no models for TUI bootstrap")?;
+        self.default_model = Some(default_model.clone());
+        self.available_models = available_models.clone();
 
         let (
             account_email,
@@ -365,12 +384,13 @@ impl AppServerSession {
         session_start_source: Option<ThreadStartSource>,
     ) -> Result<AppServerStartedThread> {
         let request_id = self.next_request_id();
+        let session_config = self.session_config_with_effective_service_tier(config);
         let response: ThreadStartResponse = self
             .client
             .request_typed(ClientRequest::ThreadStart {
                 request_id,
                 params: thread_start_params_from_config(
-                    config,
+                    &session_config,
                     self.thread_params_mode(),
                     self.remote_cwd_override.as_deref(),
                     session_start_source,
@@ -389,12 +409,13 @@ impl AppServerSession {
         thread_id: ThreadId,
     ) -> Result<AppServerStartedThread> {
         let request_id = self.next_request_id();
+        let session_config = self.session_config_with_effective_service_tier(&config);
         let response: ThreadResumeResponse = self
             .client
             .request_typed(ClientRequest::ThreadResume {
                 request_id,
                 params: thread_resume_params_from_config(
-                    config.clone(),
+                    session_config,
                     thread_id,
                     self.thread_params_mode(),
                     self.remote_cwd_override.as_deref(),
@@ -420,12 +441,13 @@ impl AppServerSession {
         thread_id: ThreadId,
     ) -> Result<AppServerStartedThread> {
         let request_id = self.next_request_id();
+        let session_config = self.session_config_with_effective_service_tier(&config);
         let response: ThreadForkResponse = self
             .client
             .request_typed(ClientRequest::ThreadFork {
                 request_id,
                 params: thread_fork_params_from_config(
-                    config.clone(),
+                    session_config,
                     thread_id,
                     self.thread_params_mode(),
                     self.remote_cwd_override.as_deref(),
@@ -446,6 +468,32 @@ impl AppServerSession {
 
     pub(crate) fn thread_params_mode(&self) -> ThreadParamsMode {
         self.thread_params_mode
+    }
+
+    fn session_config_with_effective_service_tier(&self, config: &Config) -> Config {
+        let Some(model) = config.model.as_deref().or(self.default_model.as_deref()) else {
+            return config.clone();
+        };
+        let mut session_config = config.clone();
+        match service_tier_resolution::service_tier_update_for_core(
+            config,
+            model,
+            &self.available_models,
+        ) {
+            Some(Some(service_tier)) => {
+                session_config.service_tier = Some(service_tier);
+                session_config.notices.fast_default_opt_out = None;
+            }
+            Some(None) => {
+                session_config.service_tier = Some(SERVICE_TIER_DEFAULT_REQUEST_VALUE.to_string());
+                session_config.notices.fast_default_opt_out = None;
+            }
+            None => {
+                session_config.service_tier = None;
+                session_config.notices.fast_default_opt_out = None;
+            }
+        }
+        session_config
     }
 
     async fn fork_parent_title_from_app_server(
@@ -517,6 +565,36 @@ impl AppServerSession {
             })
             .await
             .wrap_err("thread/read failed during TUI session lookup")?;
+        Ok(response.thread)
+    }
+
+    pub(crate) async fn thread_archive(&mut self, thread_id: ThreadId) -> Result<()> {
+        let request_id = self.next_request_id();
+        let _: ThreadArchiveResponse = self
+            .client
+            .request_typed(ClientRequest::ThreadArchive {
+                request_id,
+                params: ThreadArchiveParams {
+                    thread_id: thread_id.to_string(),
+                },
+            })
+            .await
+            .wrap_err("failed to archive session")?;
+        Ok(())
+    }
+
+    pub(crate) async fn thread_unarchive(&mut self, thread_id: ThreadId) -> Result<Thread> {
+        let request_id = self.next_request_id();
+        let response: ThreadUnarchiveResponse = self
+            .client
+            .request_typed(ClientRequest::ThreadUnarchive {
+                request_id,
+                params: ThreadUnarchiveParams {
+                    thread_id: thread_id.to_string(),
+                },
+            })
+            .await
+            .wrap_err("failed to unarchive session")?;
         Ok(response.thread)
     }
 
@@ -624,8 +702,10 @@ impl AppServerSession {
                 request_id,
                 params: TurnStartParams {
                     thread_id: thread_id.to_string(),
+                    client_user_message_id: None,
                     input: items,
                     responsesapi_client_metadata: None,
+                    additional_context: None,
                     environments: None,
                     cwd: Some(cwd),
                     runtime_workspace_roots: Some(
@@ -687,8 +767,10 @@ impl AppServerSession {
                 request_id,
                 params: TurnSteerParams {
                     thread_id: thread_id.to_string(),
+                    client_user_message_id: None,
                     input: items,
                     responsesapi_client_metadata: None,
+                    additional_context: None,
                     expected_turn_id: turn_id,
                 },
             })
@@ -1159,6 +1241,7 @@ fn model_preset_from_api_model(model: ApiModel) -> ModelPreset {
                 description: service_tier.description,
             })
             .collect(),
+        default_service_tier: model.default_service_tier,
         is_default: model.is_default,
         upgrade,
         show_in_picker: !model.hidden,
@@ -1186,7 +1269,6 @@ fn config_request_overrides_from_config(
             overrides.insert(key.to_string(), serde_json::Value::String(value));
         }
     };
-    insert("profile", config.active_profile.clone());
     insert(
         "model_reasoning_effort",
         config
@@ -1215,15 +1297,17 @@ fn config_request_overrides_from_config(
         "web_search",
         Some(config.web_search_mode.value().to_string()),
     );
+    if config.bypass_hook_trust {
+        overrides.insert("bypass_hook_trust".to_string(), true.into());
+    }
     Some(overrides)
 }
 
 fn service_tier_override_from_config(config: &Config) -> Option<Option<String>> {
-    config
-        .service_tier
-        .clone()
-        .map(Some)
-        .or_else(|| (config.notices.fast_default_opt_out == Some(true)).then_some(None))
+    config.service_tier.clone().map(Some).or_else(|| {
+        (config.notices.fast_default_opt_out == Some(true))
+            .then(|| Some(SERVICE_TIER_DEFAULT_REQUEST_VALUE.to_string()))
+    })
 }
 
 fn sandbox_mode_from_permission_profile(
@@ -2088,7 +2172,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn thread_lifecycle_params_forward_model_reasoning_and_service_tier() {
+    async fn thread_lifecycle_params_forward_config_overrides_and_service_tier() {
         let temp_dir = tempfile::tempdir().expect("tempdir");
         let mut config = build_config(&temp_dir).await;
         config.model_reasoning_effort = Some(ReasoningEffort::High);
@@ -2099,6 +2183,7 @@ mod tests {
             .web_search_mode
             .set(WebSearchMode::Disabled)
             .expect("test web search mode should be allowed");
+        config.bypass_hook_trust = true;
         config.service_tier = Some(ServiceTier::Fast.request_value().to_string());
         let thread_id = ThreadId::new();
 
@@ -2132,6 +2217,7 @@ mod tests {
             ("model_verbosity".to_string(), string("low")),
             ("personality".to_string(), string("pragmatic")),
             ("web_search".to_string(), string("disabled")),
+            ("bypass_hook_trust".to_string(), true.into()),
         ]);
         assert_eq!(start.config, Some(expected_config.clone()));
         assert_eq!(resume.config, Some(expected_config.clone()));
@@ -2214,6 +2300,7 @@ mod tests {
                     items: vec![
                         codex_app_server_protocol::ThreadItem::UserMessage {
                             id: "user-1".to_string(),
+                            client_id: None,
                             content: vec![codex_app_server_protocol::UserInput::Text {
                                 text: "hello from history".to_string(),
                                 text_elements: Vec::new(),
@@ -2250,6 +2337,7 @@ mod tests {
                 .into(),
             active_permission_profile: None,
             reasoning_effort: None,
+            initial_turns_page: None,
         };
 
         let started = started_thread_from_resume_response(

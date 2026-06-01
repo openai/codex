@@ -15,7 +15,7 @@ pub struct ViewImageToolOptions {
 pub fn create_view_image_tool(options: ViewImageToolOptions) -> ToolSpec {
     let mut properties = BTreeMap::from([(
         "path".to_string(),
-        JsonSchema::string(Some("Local filesystem path to an image file".to_string())),
+        JsonSchema::string(Some("Local filesystem path to an image file.".to_string())),
     )]);
     if options.can_request_original_image_detail {
         properties.insert(
@@ -23,7 +23,7 @@ pub fn create_view_image_tool(options: ViewImageToolOptions) -> ToolSpec {
             JsonSchema::string_enum(
                 vec![json!("high"), json!("original")],
                 Some(
-                    "Optional detail override. Supported values are `high` and `original`; omit this field for default high resized behavior. Use `original` to preserve the file's original resolution instead of resizing to fit. This is important when high-fidelity image perception or precise localization is needed, especially for CUA agents.".to_string(),
+                    "Image detail level. Defaults to `high`; use `original` to preserve exact resolution.".to_string(),
                 ),
             ),
         );
@@ -32,7 +32,7 @@ pub fn create_view_image_tool(options: ViewImageToolOptions) -> ToolSpec {
         properties.insert(
             "environment_id".to_string(),
             JsonSchema::string(Some(
-                "Optional selected environment id to target. Omit this to use the primary environment."
+                "Environment id from <environment_context>. Omit to use the primary environment."
                     .to_string(),
             )),
         );
@@ -40,7 +40,7 @@ pub fn create_view_image_tool(options: ViewImageToolOptions) -> ToolSpec {
 
     ToolSpec::Function(ResponsesApiTool {
         name: VIEW_IMAGE_TOOL_NAME.to_string(),
-        description: "View a local image from the filesystem (only use if given a full filepath by the user, and the image isn't already attached to the thread context within <image ...> tags)."
+        description: "View a local image file from the filesystem when visual inspection is needed. Use this for images already available on disk."
             .to_string(),
         strict: false,
         defer_loading: None,

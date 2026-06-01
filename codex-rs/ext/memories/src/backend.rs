@@ -3,13 +3,18 @@ use serde::Deserialize;
 use serde::Serialize;
 use std::future::Future;
 
-/// Storage interface behind the memories MCP tools.
+/// Storage interface behind the memories tools.
 ///
 /// Implementations should return paths relative to the memory store and enforce
 /// their own storage-specific access rules. The local implementation uses the
 /// filesystem today; a later implementation can satisfy the same contract from a
 /// remote backend.
 pub trait MemoriesBackend: Clone + Send + Sync + 'static {
+    fn add_ad_hoc_note(
+        &self,
+        request: AddAdHocMemoryNoteRequest,
+    ) -> impl Future<Output = Result<AddAdHocMemoryNoteResponse, MemoriesBackendError>> + Send;
+
     fn list(
         &self,
         request: ListMemoriesRequest,
@@ -25,6 +30,16 @@ pub trait MemoriesBackend: Clone + Send + Sync + 'static {
         request: SearchMemoriesRequest,
     ) -> impl Future<Output = Result<SearchMemoriesResponse, MemoriesBackendError>> + Send;
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AddAdHocMemoryNoteRequest {
+    pub filename: String,
+    pub note: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct AddAdHocMemoryNoteResponse {}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ListMemoriesRequest {
@@ -119,6 +134,12 @@ pub struct MemorySearchMatch {
 
 #[derive(Debug, thiserror::Error)]
 pub enum MemoriesBackendError {
+    #[error("filename '{filename}' {reason}")]
+    InvalidFilename { filename: String, reason: String },
+    #[error("ad-hoc note must not be empty")]
+    EmptyAdHocNote,
+    #[error("ad-hoc note '{filename}' already exists")]
+    AdHocNoteAlreadyExists { filename: String },
     #[error("path '{path}' {reason}")]
     InvalidPath { path: String, reason: String },
     #[error("cursor '{cursor}' {reason}")]
@@ -142,6 +163,13 @@ pub enum MemoriesBackendError {
 }
 
 impl MemoriesBackendError {
+    pub fn invalid_filename(filename: impl Into<String>, reason: impl Into<String>) -> Self {
+        Self::InvalidFilename {
+            filename: filename.into(),
+            reason: reason.into(),
+        }
+    }
+
     pub fn invalid_path(path: impl Into<String>, reason: impl Into<String>) -> Self {
         Self::InvalidPath {
             path: path.into(),

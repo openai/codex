@@ -61,9 +61,11 @@ fn test_model_info(
         used_fallback_model_metadata: false,
         supports_search_tool: false,
         auto_review_model_override: None,
+        tool_mode: None,
         priority: 1,
         additional_speed_tiers: Vec::new(),
         service_tiers,
+        default_service_tier: None,
         upgrade: None,
         base_instructions: "base instructions".to_string(),
         model_messages: None,
@@ -183,7 +185,7 @@ async fn spawn_agent_description_lists_visible_models_and_reasoning_efforts() ->
     );
     assert!(
         description.contains(
-            "Spawned agents inherit your current model by default. Omit `model` to use that preferred default; set `model` only when an explicit override is needed."
+            "Spawned agents inherit your current model by default. If provided, `model` specifies the model to use for the spawned agent."
         ),
         "expected inherited-model guidance in spawn_agent description: {description:?}"
     );

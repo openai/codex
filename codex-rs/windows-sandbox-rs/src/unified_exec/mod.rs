@@ -10,6 +10,7 @@
 mod backends;
 
 use anyhow::Result;
+use codex_protocol::models::PermissionProfile;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_pty::SpawnedProcess;
 use std::collections::HashMap;
@@ -18,8 +19,8 @@ use std::path::PathBuf;
 
 #[allow(clippy::too_many_arguments)]
 pub async fn spawn_windows_sandbox_session_legacy(
-    policy_json_or_preset: &str,
-    sandbox_policy_cwd: &Path,
+    permission_profile: &PermissionProfile,
+    workspace_roots: &[AbsolutePathBuf],
     codex_home: &Path,
     command: Vec<String>,
     cwd: &Path,
@@ -32,8 +33,8 @@ pub async fn spawn_windows_sandbox_session_legacy(
     use_private_desktop: bool,
 ) -> Result<SpawnedProcess> {
     backends::legacy::spawn_windows_sandbox_session_legacy(
-        policy_json_or_preset,
-        sandbox_policy_cwd,
+        permission_profile,
+        workspace_roots,
         codex_home,
         command,
         cwd,
@@ -49,9 +50,9 @@ pub async fn spawn_windows_sandbox_session_legacy(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub async fn spawn_windows_sandbox_session_elevated(
-    policy_json_or_preset: &str,
-    sandbox_policy_cwd: &Path,
+pub async fn spawn_windows_sandbox_session_elevated_for_permission_profile(
+    permission_profile: &PermissionProfile,
+    workspace_roots: &[AbsolutePathBuf],
     codex_home: &Path,
     command: Vec<String>,
     cwd: &Path,
@@ -66,9 +67,9 @@ pub async fn spawn_windows_sandbox_session_elevated(
     stdin_open: bool,
     use_private_desktop: bool,
 ) -> Result<SpawnedProcess> {
-    backends::elevated::spawn_windows_sandbox_session_elevated(
-        policy_json_or_preset,
-        sandbox_policy_cwd,
+    backends::elevated::spawn_windows_sandbox_session_elevated_for_permission_profile(
+        permission_profile,
+        workspace_roots,
         codex_home,
         command,
         cwd,

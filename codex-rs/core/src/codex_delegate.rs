@@ -86,6 +86,7 @@ pub(crate) async fn run_codex_thread_interactive(
         extensions: Arc::clone(&parent_session.services.extensions),
         conversation_history: initial_history.unwrap_or(InitialHistory::New),
         session_source: SessionSource::SubAgent(subagent_source.clone()),
+        forked_from_thread_id: Some(parent_session.conversation_id),
         thread_source: Some(ThreadSource::Subagent),
         agent_control: parent_session.services.agent_control.clone(),
         dynamic_tools: Vec::new(),
@@ -108,6 +109,7 @@ pub(crate) async fn run_codex_thread_interactive(
     emit_subagent_session_started(
         &parent_session.services.analytics_events_client,
         client_metadata,
+        codex.session.session_id(),
         codex.session.conversation_id,
         Some(parent_session.conversation_id),
         thread_config,
@@ -192,6 +194,7 @@ pub(crate) async fn run_codex_thread_one_shot(
         items: input,
         final_output_json_schema,
         responsesapi_client_metadata: None,
+        additional_context: Default::default(),
         thread_settings: Default::default(),
     })
     .await?;
@@ -215,6 +218,7 @@ pub(crate) async fn run_codex_thread_one_shot(
                     .send(Submission {
                         id: "shutdown".to_string(),
                         op: Op::Shutdown {},
+                        client_user_message_id: None,
                         trace: None,
                     })
                     .await;

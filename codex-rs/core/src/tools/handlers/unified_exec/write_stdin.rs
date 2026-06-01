@@ -5,6 +5,7 @@ use crate::tools::context::boxed_tool_output;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::PostToolUsePayload;
+use crate::tools::registry::PreToolUsePayload;
 use crate::tools::registry::ToolExecutor;
 use crate::unified_exec::WriteStdinRequest;
 use codex_protocol::protocol::EventMsg;
@@ -36,8 +37,8 @@ impl ToolExecutor<ToolInvocation> for WriteStdinHandler {
         ToolName::plain("write_stdin")
     }
 
-    fn spec(&self) -> Option<ToolSpec> {
-        Some(create_write_stdin_tool())
+    fn spec(&self) -> ToolSpec {
+        create_write_stdin_tool()
     }
 
     async fn handle(
@@ -101,11 +102,20 @@ impl CoreToolRuntime for WriteStdinHandler {
         matches!(payload, ToolPayload::Function { .. })
     }
 
+    fn pre_tool_use_payload(&self, _invocation: &ToolInvocation) -> Option<PreToolUsePayload> {
+        // `write_stdin` is transport for an existing exec session. Empty writes
+        // are background polls, and non-empty writes continue a command that
+        // already ran PreToolUse as Bash, so do not emit a second pre hook here.
+        None
+    }
+
     fn post_tool_use_payload(
         &self,
         invocation: &ToolInvocation,
         result: &dyn crate::tools::context::ToolOutput,
     ) -> Option<PostToolUsePayload> {
+        // A `write_stdin` poll can observe final completion for the original
+        // `exec_command`; emit that command's matching Bash PostToolUse.
         post_unified_exec_tool_use_payload(invocation, result)
     }
 }

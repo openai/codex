@@ -2,5 +2,5 @@
 source: tui/src/history_cell.rs
 expression: rendered
 ---
-• Searched example search query with several generic words to
-  exercise wrapping
+• Searched the web for example search query with several generic
+  words to exercise wrapping

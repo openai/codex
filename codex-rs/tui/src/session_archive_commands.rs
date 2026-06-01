@@ -1,0 +1,326 @@
+//! Shared implementation for `codex archive` and `codex unarchive`.
+//!
+//! The CLI commands are thin app-server clients: resolve a user-provided UUID or exact session
+//! name, then call the existing `thread/archive` or `thread/unarchive` RPC.
+
+use std::sync::Arc;
+
+use crate::Cli;
+use crate::app_server_session::AppServerSession;
+use crate::legacy_core::config::ConfigBuilder;
+use crate::legacy_core::config::ConfigOverrides;
+use crate::legacy_core::config::load_config_as_toml_with_cli_and_load_options;
+use crate::legacy_core::config::resolve_oss_provider;
+use crate::legacy_core::config::resolve_profile_v2_config_path;
+use codex_app_server_protocol::Thread as AppServerThread;
+use codex_app_server_protocol::ThreadListParams;
+use codex_app_server_protocol::ThreadSortKey;
+use codex_arg0::Arg0DispatchPaths;
+use codex_cloud_requirements::cloud_requirements_loader_for_storage;
+use codex_config::ConfigLoadOptions;
+use codex_config::LoaderOverrides;
+use codex_exec_server::EnvironmentManager;
+use codex_exec_server::ExecServerRuntimePaths;
+use codex_protocol::ThreadId;
+use codex_utils_cli::CliConfigOverrides;
+use codex_utils_home_dir::find_codex_home;
+use codex_utils_oss::get_default_model_for_oss_provider;
+use color_eyre::eyre::ContextCompat;
+use color_eyre::eyre::Result;
+use color_eyre::eyre::WrapErr;
+use color_eyre::eyre::eyre;
+
+use super::RemoteAppServerEndpoint;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionArchiveAction {
+    Archive,
+    Unarchive,
+}
+
+pub struct SessionArchiveCommandOptions {
+    pub cli: Cli,
+    pub arg0_paths: Arg0DispatchPaths,
+    pub explicit_remote_endpoint: Option<RemoteAppServerEndpoint>,
+}
+
+fn success_message(
+    action: SessionArchiveAction,
+    session_id: ThreadId,
+    session_name: Option<&str>,
+) -> String {
+    let action = match action {
+        SessionArchiveAction::Archive => "Archived",
+        SessionArchiveAction::Unarchive => "Unarchived",
+    };
+    match session_name {
+        Some(name) => format!("{action} session {name} ({session_id})."),
+        None => format!("{action} session {session_id}."),
+    }
+}
+
+struct ResolvedSessionTarget {
+    session_id: ThreadId,
+    session_name: Option<String>,
+}
+
+pub async fn run_session_archive_command(
+    action: SessionArchiveAction,
+    target: String,
+    options: SessionArchiveCommandOptions,
+) -> Result<String> {
+    let mut app_server = start_app_server_for_archive_command(options).await?;
+    run_session_archive_action_with_app_server(&mut app_server, action, &target).await
+}
+
+async fn run_session_archive_action_with_app_server(
+    app_server: &mut AppServerSession,
+    action: SessionArchiveAction,
+    target: &str,
+) -> Result<String> {
+    let resolved = resolve_session_target(app_server, action, target).await?;
+    match action {
+        SessionArchiveAction::Archive => {
+            app_server.thread_archive(resolved.session_id).await?;
+            Ok(success_message(
+                action,
+                resolved.session_id,
+                resolved.session_name.as_deref(),
+            ))
+        }
+        SessionArchiveAction::Unarchive => {
+            let thread = app_server.thread_unarchive(resolved.session_id).await?;
+            let session_name = thread.name.or(resolved.session_name);
+            Ok(success_message(
+                action,
+                resolved.session_id,
+                session_name.as_deref(),
+            ))
+        }
+    }
+}
+
+async fn resolve_session_target(
+    app_server: &mut AppServerSession,
+    action: SessionArchiveAction,
+    target: &str,
+) -> Result<ResolvedSessionTarget> {
+    if let Ok(session_id) = ThreadId::from_string(target) {
+        return Ok(ResolvedSessionTarget {
+            session_id,
+            session_name: None,
+        });
+    }
+
+    let search_scope = match action {
+        SessionArchiveAction::Archive => "active",
+        SessionArchiveAction::Unarchive => "archived",
+    };
+    let resolved = lookup_session_by_exact_name(app_server, action, target)
+        .await?
+        .map(session_target_from_app_server_thread)
+        .transpose()?;
+
+    resolved.with_context(|| format!("No {search_scope} session found matching '{target}'."))
+}
+
+async fn lookup_session_by_exact_name(
+    app_server: &mut AppServerSession,
+    action: SessionArchiveAction,
+    name: &str,
+) -> Result<Option<AppServerThread>> {
+    let mut cursor = None;
+    loop {
+        let response = app_server
+            .thread_list(ThreadListParams {
+                cursor: cursor.clone(),
+                limit: Some(100),
+                sort_key: Some(ThreadSortKey::UpdatedAt),
+                sort_direction: None,
+                model_providers: None,
+                source_kinds: Some(super::resume_source_kinds(
+                    /*include_non_interactive*/ false,
+                )),
+                archived: Some(matches!(action, SessionArchiveAction::Unarchive)),
+                cwd: None,
+                use_state_db_only: false,
+                search_term: Some(name.to_string()),
+            })
+            .await
+            .wrap_err("failed to list sessions while resolving session name")?;
+
+        if let Some(thread) = response
+            .data
+            .into_iter()
+            .find(|thread| thread.name.as_deref() == Some(name))
+        {
+            return Ok(Some(thread));
+        }
+        if response.next_cursor.is_none() {
+            return Ok(None);
+        }
+        cursor = response.next_cursor;
+    }
+}
+
+fn session_target_from_app_server_thread(thread: AppServerThread) -> Result<ResolvedSessionTarget> {
+    let session_id = ThreadId::from_string(&thread.id)
+        .wrap_err_with(|| format!("app server returned invalid session id `{}`", thread.id))?;
+    Ok(ResolvedSessionTarget {
+        session_id,
+        session_name: thread.name,
+    })
+}
+
+async fn start_app_server_for_archive_command(
+    options: SessionArchiveCommandOptions,
+) -> Result<AppServerSession> {
+    let SessionArchiveCommandOptions {
+        cli,
+        arg0_paths,
+        explicit_remote_endpoint,
+    } = options;
+    let loader_overrides = LoaderOverrides::default();
+    let strict_config = cli.strict_config;
+    let raw_overrides = cli.config_overrides.raw_overrides.clone();
+    let overrides_cli = CliConfigOverrides { raw_overrides };
+    let cli_kv_overrides = overrides_cli
+        .parse_overrides()
+        .map_err(|err| eyre!("failed to parse -c overrides: {err}"))?;
+    let codex_home = find_codex_home().wrap_err("failed to find Codex home")?;
+
+    let mut launch_loader_overrides = loader_overrides.clone();
+    if let Some(profile_v2) = cli.config_profile_v2.as_ref() {
+        launch_loader_overrides.user_config_path = Some(resolve_profile_v2_config_path(
+            codex_home.as_path(),
+            profile_v2,
+        ));
+        launch_loader_overrides.user_config_profile = Some(profile_v2.clone());
+    }
+
+    let reuse_implicit_local_daemon = super::can_reuse_implicit_local_daemon(
+        &cli_kv_overrides,
+        &launch_loader_overrides,
+        strict_config,
+        cli.bypass_hook_trust,
+    );
+    let default_daemon = if explicit_remote_endpoint.is_none() && reuse_implicit_local_daemon {
+        super::maybe_probe_default_daemon_socket(codex_home.as_path()).await
+    } else {
+        None
+    };
+    let app_server_target = super::app_server_target_for_launch(
+        explicit_remote_endpoint,
+        default_daemon,
+        reuse_implicit_local_daemon,
+    );
+    let remote_cwd_override = cli
+        .cwd
+        .clone()
+        .filter(|_| app_server_target.uses_remote_workspace());
+
+    let local_runtime_paths = ExecServerRuntimePaths::from_optional_paths(
+        arg0_paths.codex_self_exe.clone(),
+        arg0_paths.codex_linux_sandbox_exe.clone(),
+    )
+    .wrap_err("failed to resolve local runtime paths")?;
+    let environment_manager = EnvironmentManager::from_env(Some(local_runtime_paths))
+        .await
+        .map(Arc::new)
+        .wrap_err("failed to initialize environment manager")?;
+    let config_cwd = super::config_cwd_for_app_server_target(
+        cli.cwd.as_deref(),
+        &app_server_target,
+        &environment_manager,
+    )
+    .wrap_err("failed to resolve config cwd")?;
+
+    let mut loader_overrides = loader_overrides;
+    if let Some(profile_v2) = cli.config_profile_v2.as_ref() {
+        loader_overrides.user_config_path = Some(resolve_profile_v2_config_path(
+            codex_home.as_path(),
+            profile_v2,
+        ));
+        loader_overrides.user_config_profile = Some(profile_v2.clone());
+    }
+
+    let config_toml = load_config_as_toml_with_cli_and_load_options(
+        codex_home.as_path(),
+        config_cwd.as_ref(),
+        cli_kv_overrides.clone(),
+        ConfigLoadOptions {
+            loader_overrides: loader_overrides.clone(),
+            strict_config,
+        },
+    )
+    .await
+    .wrap_err("failed to load config.toml")?;
+    let chatgpt_base_url = config_toml
+        .chatgpt_base_url
+        .clone()
+        .unwrap_or_else(|| "https://chatgpt.com/backend-api/".to_string());
+    let cloud_requirements = cloud_requirements_loader_for_storage(
+        codex_home.to_path_buf(),
+        /*enable_codex_api_key_env*/ false,
+        config_toml.cli_auth_credentials_store.unwrap_or_default(),
+        chatgpt_base_url,
+    )
+    .await;
+
+    let model_provider = if cli.oss {
+        resolve_oss_provider(cli.oss_provider.as_deref(), &config_toml)
+    } else {
+        None
+    };
+    let model = cli.model.clone().or_else(|| {
+        model_provider
+            .as_deref()
+            .and_then(get_default_model_for_oss_provider)
+            .map(ToOwned::to_owned)
+    });
+    let cwd = cli.cwd.clone();
+    let config = ConfigBuilder::default()
+        .cli_overrides(cli_kv_overrides.clone())
+        .harness_overrides(ConfigOverrides {
+            model,
+            cwd: if app_server_target.uses_remote_workspace() {
+                None
+            } else {
+                cwd
+            },
+            model_provider,
+            codex_self_exe: arg0_paths.codex_self_exe.clone(),
+            codex_linux_sandbox_exe: arg0_paths.codex_linux_sandbox_exe.clone(),
+            main_execve_wrapper_exe: arg0_paths.main_execve_wrapper_exe.clone(),
+            show_raw_agent_reasoning: cli.oss.then_some(true),
+            bypass_hook_trust: cli.bypass_hook_trust.then_some(true),
+            ..Default::default()
+        })
+        .loader_overrides(loader_overrides.clone())
+        .strict_config(strict_config)
+        .cloud_requirements(cloud_requirements.clone())
+        .build()
+        .await
+        .wrap_err("failed to load configuration")?;
+    let state_db = super::init_state_db_for_app_server_target(&config, &app_server_target)
+        .await
+        .wrap_err("failed to initialize state database")?;
+    let app_server = super::start_app_server(
+        &app_server_target,
+        arg0_paths,
+        config,
+        cli_kv_overrides,
+        loader_overrides,
+        strict_config,
+        cloud_requirements,
+        codex_feedback::CodexFeedback::new(),
+        /*log_db*/ None,
+        state_db,
+        environment_manager,
+    )
+    .await?;
+    Ok(
+        AppServerSession::new(app_server, app_server_target.thread_params_mode())
+            .with_remote_cwd_override(remote_cwd_override),
+    )
+}

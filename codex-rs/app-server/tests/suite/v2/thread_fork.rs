@@ -405,7 +405,14 @@ async fn thread_fork_tracks_thread_initialized_analytics() -> Result<()> {
 
     let payload = wait_for_analytics_payload(&server, DEFAULT_READ_TIMEOUT).await?;
     let event = thread_initialized_event(&payload)?;
-    assert_basic_thread_initialized_event(event, &thread.id, "mock-model", "forked", "user");
+    assert_basic_thread_initialized_event(
+        event,
+        &thread.id,
+        &thread.session_id,
+        "mock-model",
+        "forked",
+        "user",
+    );
     Ok(())
 }
 
@@ -740,6 +747,7 @@ async fn thread_fork_ephemeral_remains_pathless_and_omits_listing() -> Result<()
     let turn_id = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: fork_thread_id,
+            client_user_message_id: None,
             input: vec![UserInput::Text {
                 text: "continue".to_string(),
                 text_elements: Vec::new(),

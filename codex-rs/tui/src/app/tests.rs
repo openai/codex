@@ -80,6 +80,7 @@ use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Personality;
+use codex_protocol::config_types::SandboxMode;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::Settings;
 use codex_protocol::models::ActivePermissionProfile;
@@ -136,7 +137,7 @@ async fn next_thread_settings_updated(
 }
 
 #[tokio::test]
-async fn handle_mcp_inventory_result_clears_committed_loading_cell() {
+async fn handle_mcp_inventory_result_respects_origin_thread() {
     let mut app = make_test_app().await;
     app.transcript_cells
         .push(Arc::new(history_cell::new_mcp_inventory_loading(
@@ -146,15 +147,31 @@ async fn handle_mcp_inventory_result_clears_committed_loading_cell() {
     app.handle_mcp_inventory_result(
         Ok(vec![McpServerStatus {
             name: "docs".to_string(),
+            server_info: None,
             tools: HashMap::new(),
             resources: Vec::new(),
             resource_templates: Vec::new(),
             auth_status: codex_app_server_protocol::McpAuthStatus::Unsupported,
         }]),
         McpServerStatusDetail::ToolsAndAuthOnly,
+        /*thread_id*/ None,
     );
 
     assert_eq!(app.transcript_cells.len(), 0);
+
+    app.active_thread_id = Some(ThreadId::new());
+    app.transcript_cells
+        .push(Arc::new(history_cell::new_mcp_inventory_loading(
+            /*animations_enabled*/ false,
+        )));
+
+    app.handle_mcp_inventory_result(
+        Ok(Vec::new()),
+        McpServerStatusDetail::ToolsAndAuthOnly,
+        Some(ThreadId::new()),
+    );
+
+    assert_eq!(app.transcript_cells.len(), 1);
 }
 
 #[test]
@@ -322,6 +339,7 @@ async fn enqueue_primary_thread_session_replays_turns_before_initial_prompt_subm
             TurnStatus::Completed,
             vec![ThreadItem::UserMessage {
                 id: "user-1".to_string(),
+                client_id: None,
                 content: vec![AppServerUserInput::Text {
                     text: "earlier prompt".to_string(),
                     text_elements: Vec::new(),
@@ -1628,13 +1646,99 @@ async fn reset_memories_clears_local_memory_directories() -> Result<()> {
 }
 
 #[tokio::test]
+async fn apply_permission_profile_selection_preserves_loader_overrides() -> Result<()> {
+    let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    let codex_home = tempdir()?;
+    let selected_config = codex_home.path().join("work.config.toml");
+    std::fs::write(
+        &selected_config,
+        r#"
+default_permissions = "locked-down"
+
+[permissions.locked-down.filesystem]
+":minimal" = "read"
+"#,
+    )?;
+    app.config.codex_home = codex_home.path().to_path_buf().abs();
+    app.loader_overrides.user_config_path = Some(selected_config.abs());
+    app.harness_overrides.sandbox_mode = Some(SandboxMode::WorkspaceWrite);
+    app.harness_overrides.permission_profile = Some(PermissionProfile::workspace_write());
+
+    assert!(
+        app.apply_permission_profile_selection(PermissionProfileSelection {
+            profile_id: "locked-down".to_string(),
+            approval_policy: None,
+            approvals_reviewer: None,
+            display_label: "locked-down".to_string(),
+        })
+        .await
+    );
+
+    assert_eq!(
+        app.config
+            .permissions
+            .active_permission_profile()
+            .as_ref()
+            .map(|profile| profile.id.as_str()),
+        Some("locked-down")
+    );
+    assert_eq!(
+        app.chat_widget
+            .config_ref()
+            .permissions
+            .active_permission_profile()
+            .as_ref()
+            .map(|profile| profile.id.as_str()),
+        Some("locked-down")
+    );
+    assert_eq!(
+        app.runtime_permission_profile_override,
+        Some(RuntimePermissionProfileOverride::from_config(&app.config))
+    );
+    let op = match app_event_rx.try_recv() {
+        Ok(AppEvent::CodexOp(op)) => op,
+        other => panic!("expected CodexOp event, got {other:?}"),
+    };
+    assert_eq!(
+        op,
+        Op::OverrideTurnContext {
+            cwd: None,
+            approval_policy: None,
+            approvals_reviewer: None,
+            permission_profile: Some(app.config.permissions.permission_profile().clone()),
+            active_permission_profile: app.config.permissions.active_permission_profile(),
+            windows_sandbox_level: None,
+            model: None,
+            effort: None,
+            summary: None,
+            service_tier: None,
+            collaboration_mode: None,
+            personality: None,
+        }
+    );
+    let cell = match app_event_rx.try_recv() {
+        Ok(AppEvent::InsertHistoryCell(cell)) => cell,
+        other => panic!("expected InsertHistoryCell event, got {other:?}"),
+    };
+    let rendered = cell
+        .display_lines(/*width*/ 120)
+        .into_iter()
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(rendered.contains("Permissions updated to locked-down"));
+    Ok(())
+}
+
+#[tokio::test]
 async fn update_feature_flags_enabling_guardian_selects_auto_review() -> Result<()> {
     let (mut app, mut app_event_rx, mut op_rx) = make_test_app_with_channels().await;
     let codex_home = tempdir()?;
     app.config.codex_home = codex_home.path().to_path_buf().abs();
     let auto_review = auto_review_mode();
+    let mut app_server = start_config_write_test_app_server(&app).await?;
 
-    app.update_feature_flags(vec![(Feature::GuardianApproval, true)])
+    app.update_feature_flags(&mut app_server, vec![(Feature::GuardianApproval, true)])
         .await;
 
     assert!(app.config.features.enabled(Feature::GuardianApproval));
@@ -1687,7 +1791,7 @@ async fn update_feature_flags_enabling_guardian_selects_auto_review() -> Result<
     assert_eq!(app.runtime_approval_policy_override, None);
     assert_eq!(
         app.runtime_permission_profile_override,
-        Some(auto_review.permission_profile())
+        Some(RuntimePermissionProfileOverride::from_config(&app.config))
     );
     assert_eq!(
         op_rx.try_recv(),
@@ -1695,6 +1799,7 @@ async fn update_feature_flags_enabling_guardian_selects_auto_review() -> Result<
             cwd: None,
             approval_policy: Some(auto_review.approval_policy),
             approvals_reviewer: Some(auto_review.approvals_reviewer),
+            permission_profile: Some(auto_review.permission_profile()),
             active_permission_profile: Some(auto_review.active_permission_profile.clone()),
             windows_sandbox_level: None,
             model: None,
@@ -1715,13 +1820,14 @@ async fn update_feature_flags_enabling_guardian_selects_auto_review() -> Result<
         .map(|line| line.to_string())
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(rendered.contains("Permissions updated to Auto-review"));
+    assert!(rendered.contains("Permissions updated to Approve for me"));
 
     let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
     assert!(config.contains("guardian_approval = true"));
     assert!(config.contains("approvals_reviewer = \"guardian_subagent\""));
     assert!(config.contains("approval_policy = \"on-request\""));
     assert!(config.contains("sandbox_mode = \"workspace-write\""));
+    app_server.shutdown().await?;
     Ok(())
 }
 
@@ -1760,8 +1866,9 @@ async fn update_feature_flags_disabling_guardian_clears_review_policy_and_restor
         .set_permission_profile_from_session_snapshot(PermissionProfileSnapshot::legacy(
             PermissionProfile::workspace_write(),
         ))?;
+    let mut app_server = start_config_write_test_app_server(&app).await?;
 
-    app.update_feature_flags(vec![(Feature::GuardianApproval, false)])
+    app.update_feature_flags(&mut app_server, vec![(Feature::GuardianApproval, false)])
         .await;
 
     assert!(!app.config.features.enabled(Feature::GuardianApproval));
@@ -1787,6 +1894,7 @@ async fn update_feature_flags_disabling_guardian_clears_review_policy_and_restor
             cwd: None,
             approval_policy: None,
             approvals_reviewer: Some(ApprovalsReviewer::User),
+            permission_profile: None,
             active_permission_profile: None,
             windows_sandbox_level: None,
             model: None,
@@ -1807,13 +1915,14 @@ async fn update_feature_flags_disabling_guardian_clears_review_policy_and_restor
         .map(|line| line.to_string())
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(rendered.contains("Permissions updated to Default"));
+    assert!(rendered.contains("Permissions updated to Ask for approval"));
 
     let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
     assert!(!config.contains("guardian_approval = true"));
     assert!(!config.contains("approvals_reviewer ="));
     assert!(config.contains("approval_policy = \"on-request\""));
     assert!(config.contains("sandbox_mode = \"workspace-write\""));
+    app_server.shutdown().await?;
     Ok(())
 }
 
@@ -1835,8 +1944,9 @@ async fn update_feature_flags_enabling_guardian_overrides_explicit_manual_review
     app.config.approvals_reviewer = ApprovalsReviewer::User;
     app.chat_widget
         .set_approvals_reviewer(ApprovalsReviewer::User);
+    let mut app_server = start_config_write_test_app_server(&app).await?;
 
-    app.update_feature_flags(vec![(Feature::GuardianApproval, true)])
+    app.update_feature_flags(&mut app_server, vec![(Feature::GuardianApproval, true)])
         .await;
 
     assert!(app.config.features.enabled(Feature::GuardianApproval));
@@ -1865,6 +1975,7 @@ async fn update_feature_flags_enabling_guardian_overrides_explicit_manual_review
             cwd: None,
             approval_policy: Some(auto_review.approval_policy),
             approvals_reviewer: Some(auto_review.approvals_reviewer),
+            permission_profile: Some(auto_review.permission_profile()),
             active_permission_profile: Some(auto_review.active_permission_profile.clone()),
             windows_sandbox_level: None,
             model: None,
@@ -1881,6 +1992,7 @@ async fn update_feature_flags_enabling_guardian_overrides_explicit_manual_review
     assert!(config.contains("guardian_approval = true"));
     assert!(config.contains("approval_policy = \"on-request\""));
     assert!(config.contains("sandbox_mode = \"workspace-write\""));
+    app_server.shutdown().await?;
     Ok(())
 }
 
@@ -1906,8 +2018,9 @@ async fn update_feature_flags_disabling_guardian_clears_manual_review_policy_wit
     app.config.approvals_reviewer = ApprovalsReviewer::User;
     app.chat_widget
         .set_approvals_reviewer(ApprovalsReviewer::User);
+    let mut app_server = start_config_write_test_app_server(&app).await?;
 
-    app.update_feature_flags(vec![(Feature::GuardianApproval, false)])
+    app.update_feature_flags(&mut app_server, vec![(Feature::GuardianApproval, false)])
         .await;
 
     assert!(!app.config.features.enabled(Feature::GuardianApproval));
@@ -1922,6 +2035,7 @@ async fn update_feature_flags_disabling_guardian_clears_manual_review_policy_wit
             cwd: None,
             approval_policy: None,
             approvals_reviewer: Some(ApprovalsReviewer::User),
+            permission_profile: None,
             active_permission_profile: None,
             windows_sandbox_level: None,
             model: None,
@@ -1940,231 +2054,7 @@ async fn update_feature_flags_disabling_guardian_clears_manual_review_policy_wit
     let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
     assert!(!config.contains("guardian_approval = true"));
     assert!(!config.contains("approvals_reviewer ="));
-    Ok(())
-}
-
-#[tokio::test]
-async fn update_feature_flags_enabling_guardian_in_profile_sets_profile_auto_review_policy()
--> Result<()> {
-    let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
-    let codex_home = tempdir()?;
-    app.config.codex_home = codex_home.path().to_path_buf().abs();
-    let auto_review = auto_review_mode();
-    app.active_profile = Some("guardian".to_string());
-    let config_toml_path = codex_home.path().join("config.toml").abs();
-    let config_toml = "profile = \"guardian\"\napprovals_reviewer = \"user\"\n";
-    std::fs::write(config_toml_path.as_path(), config_toml)?;
-    let user_config = toml::from_str::<TomlValue>(config_toml)?;
-    app.config.config_layer_stack = app
-        .config
-        .config_layer_stack
-        .with_user_config(&config_toml_path, user_config);
-    app.config.approvals_reviewer = ApprovalsReviewer::User;
-    app.chat_widget
-        .set_approvals_reviewer(ApprovalsReviewer::User);
-
-    app.update_feature_flags(vec![(Feature::GuardianApproval, true)])
-        .await;
-
-    assert!(app.config.features.enabled(Feature::GuardianApproval));
-    assert_eq!(
-        app.config.approvals_reviewer,
-        auto_review.approvals_reviewer
-    );
-    assert_eq!(
-        app.chat_widget.config_ref().approvals_reviewer,
-        auto_review.approvals_reviewer
-    );
-    assert_eq!(
-        op_rx.try_recv(),
-        Ok(Op::OverrideTurnContext {
-            cwd: None,
-            approval_policy: Some(auto_review.approval_policy),
-            approvals_reviewer: Some(auto_review.approvals_reviewer),
-            active_permission_profile: Some(auto_review.active_permission_profile.clone()),
-            windows_sandbox_level: None,
-            model: None,
-            effort: None,
-            summary: None,
-            service_tier: None,
-            collaboration_mode: None,
-            personality: None,
-        })
-    );
-
-    let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
-    let config_value = toml::from_str::<TomlValue>(&config)?;
-    let profile_config = config_value
-        .as_table()
-        .and_then(|table| table.get("profiles"))
-        .and_then(TomlValue::as_table)
-        .and_then(|profiles| profiles.get("guardian"))
-        .and_then(TomlValue::as_table)
-        .expect("guardian profile should exist");
-    assert_eq!(
-        config_value
-            .as_table()
-            .and_then(|table| table.get("approvals_reviewer")),
-        Some(&TomlValue::String("user".to_string()))
-    );
-    assert_eq!(
-        profile_config.get("approvals_reviewer"),
-        Some(&TomlValue::String("guardian_subagent".to_string()))
-    );
-    Ok(())
-}
-
-#[tokio::test]
-async fn update_feature_flags_disabling_guardian_in_profile_allows_inherited_user_reviewer()
--> Result<()> {
-    let (mut app, mut app_event_rx, mut op_rx) = make_test_app_with_channels().await;
-    let codex_home = tempdir()?;
-    app.config.codex_home = codex_home.path().to_path_buf().abs();
-    app.active_profile = Some("guardian".to_string());
-    let config_toml_path = codex_home.path().join("config.toml").abs();
-    let config_toml = r#"
-profile = "guardian"
-approvals_reviewer = "user"
-
-[profiles.guardian]
-approvals_reviewer = "guardian_subagent"
-
-[profiles.guardian.features]
-guardian_approval = true
-"#;
-    std::fs::write(config_toml_path.as_path(), config_toml)?;
-    let user_config = toml::from_str::<TomlValue>(config_toml)?;
-    app.config.config_layer_stack = app
-        .config
-        .config_layer_stack
-        .with_user_config(&config_toml_path, user_config);
-    app.config
-        .features
-        .set_enabled(Feature::GuardianApproval, /*enabled*/ true)?;
-    app.chat_widget
-        .set_feature_enabled(Feature::GuardianApproval, /*enabled*/ true);
-    app.config.approvals_reviewer = ApprovalsReviewer::AutoReview;
-    app.chat_widget
-        .set_approvals_reviewer(ApprovalsReviewer::AutoReview);
-
-    app.update_feature_flags(vec![(Feature::GuardianApproval, false)])
-        .await;
-
-    assert!(!app.config.features.enabled(Feature::GuardianApproval));
-    assert!(
-        !app.chat_widget
-            .config_ref()
-            .features
-            .enabled(Feature::GuardianApproval)
-    );
-    assert_eq!(app.config.approvals_reviewer, ApprovalsReviewer::User);
-    assert_eq!(
-        app.chat_widget.config_ref().approvals_reviewer,
-        ApprovalsReviewer::User
-    );
-    assert_eq!(
-        op_rx.try_recv(),
-        Ok(Op::OverrideTurnContext {
-            cwd: None,
-            approval_policy: None,
-            approvals_reviewer: Some(ApprovalsReviewer::User),
-            active_permission_profile: None,
-            windows_sandbox_level: None,
-            model: None,
-            effort: None,
-            summary: None,
-            service_tier: None,
-            collaboration_mode: None,
-            personality: None,
-        })
-    );
-    let cell = match app_event_rx.try_recv() {
-        Ok(AppEvent::InsertHistoryCell(cell)) => cell,
-        other => panic!("expected InsertHistoryCell event, got {other:?}"),
-    };
-    let rendered = cell
-        .display_lines(/*width*/ 120)
-        .into_iter()
-        .map(|line| line.to_string())
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert!(rendered.contains("Permissions updated to Default"));
-
-    let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
-    assert!(!config.contains("guardian_approval = true"));
-    assert!(!config.contains("guardian_subagent"));
-    assert_eq!(
-        toml::from_str::<TomlValue>(&config)?
-            .as_table()
-            .and_then(|table| table.get("approvals_reviewer")),
-        Some(&TomlValue::String("user".to_string()))
-    );
-    Ok(())
-}
-
-#[tokio::test]
-async fn update_feature_flags_disabling_guardian_in_profile_keeps_inherited_non_user_reviewer_enabled()
--> Result<()> {
-    let (mut app, mut app_event_rx, mut op_rx) = make_test_app_with_channels().await;
-    let codex_home = tempdir()?;
-    app.config.codex_home = codex_home.path().to_path_buf().abs();
-    app.active_profile = Some("guardian".to_string());
-    let config_toml_path = codex_home.path().join("config.toml").abs();
-    let config_toml = "profile = \"guardian\"\napprovals_reviewer = \"guardian_subagent\"\n\n[features]\nguardian_approval = true\n";
-    std::fs::write(config_toml_path.as_path(), config_toml)?;
-    let user_config = toml::from_str::<TomlValue>(config_toml)?;
-    app.config.config_layer_stack = app
-        .config
-        .config_layer_stack
-        .with_user_config(&config_toml_path, user_config);
-    app.config
-        .features
-        .set_enabled(Feature::GuardianApproval, /*enabled*/ true)?;
-    app.chat_widget
-        .set_feature_enabled(Feature::GuardianApproval, /*enabled*/ true);
-    app.config.approvals_reviewer = ApprovalsReviewer::AutoReview;
-    app.chat_widget
-        .set_approvals_reviewer(ApprovalsReviewer::AutoReview);
-
-    app.update_feature_flags(vec![(Feature::GuardianApproval, false)])
-        .await;
-
-    assert!(app.config.features.enabled(Feature::GuardianApproval));
-    assert!(
-        app.chat_widget
-            .config_ref()
-            .features
-            .enabled(Feature::GuardianApproval)
-    );
-    assert_eq!(app.config.approvals_reviewer, ApprovalsReviewer::AutoReview);
-    assert_eq!(
-        app.chat_widget.config_ref().approvals_reviewer,
-        ApprovalsReviewer::AutoReview
-    );
-    assert!(
-        op_rx.try_recv().is_err(),
-        "disabling an inherited non-user reviewer should not patch the active session"
-    );
-    let app_events = std::iter::from_fn(|| app_event_rx.try_recv().ok()).collect::<Vec<_>>();
-    assert!(
-        !app_events.iter().any(|event| match event {
-            AppEvent::InsertHistoryCell(cell) => cell
-                .display_lines(/*width*/ 120)
-                .iter()
-                .any(|line| line.to_string().contains("Permissions updated to")),
-            _ => false,
-        }),
-        "blocking disable with inherited guardian review should not emit a permissions history update: {app_events:?}"
-    );
-
-    let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
-    assert!(config.contains("guardian_approval = true"));
-    assert_eq!(
-        toml::from_str::<TomlValue>(&config)?
-            .as_table()
-            .and_then(|table| table.get("approvals_reviewer")),
-        Some(&TomlValue::String("guardian_subagent".to_string()))
-    );
+    app_server.shutdown().await?;
     Ok(())
 }
 
@@ -3375,6 +3265,7 @@ async fn side_thread_snapshot_hides_forked_parent_transcript() {
         TurnStatus::Completed,
         vec![ThreadItem::UserMessage {
             id: "parent-user".to_string(),
+            client_id: None,
             content: vec![AppServerUserInput::Text {
                 text: "parent prompt should stay hidden".to_string(),
                 text_elements: Vec::new(),
@@ -3873,7 +3764,6 @@ async fn make_test_app() -> App {
         workspace_command_runner: None,
         config,
         state_db: None,
-        active_profile: None,
         cli_kv_overrides: Vec::new(),
         harness_overrides: ConfigOverrides::default(),
         loader_overrides: LoaderOverrides::without_managed_config_for_tests(),
@@ -3937,7 +3827,6 @@ async fn make_test_app_with_channels() -> (
             workspace_command_runner: None,
             config,
             state_db: None,
-            active_profile: None,
             cli_kv_overrides: Vec::new(),
             harness_overrides: ConfigOverrides::default(),
             loader_overrides: LoaderOverrides::without_managed_config_for_tests(),
@@ -4020,8 +3909,9 @@ fn plain_line_cell(text: impl Into<String>) -> Arc<dyn HistoryCell> {
     Arc::new(PlainHistoryCell::new(vec![Line::from(text.into())])) as Arc<dyn HistoryCell>
 }
 
-fn rendered_line_text(line: &Line<'static>) -> String {
-    line.spans
+fn rendered_line_text(line: &crate::terminal_hyperlinks::HyperlinkLine) -> String {
+    line.line
+        .spans
         .iter()
         .map(|span| span.content.as_ref())
         .collect()
@@ -4133,7 +4023,7 @@ async fn initial_replay_buffer_keeps_recent_rows_when_row_cap_present() {
             app.initial_history_replay_buffer
                 .as_mut()
                 .expect("initial replay buffer active"),
-            vec![Line::from(format!("line {index}"))],
+            vec![Line::from(format!("line {index}")).into()],
             /*max_rows*/ 3,
         );
     }
@@ -4482,6 +4372,32 @@ fn active_turn_not_steerable_turn_error_extracts_structured_server_error() {
 }
 
 #[test]
+fn session_start_error_surfaces_archived_guidance_without_rollout_path() {
+    let thread_id =
+        ThreadId::from_string("019e72f4-e09a-70f2-b2c2-a153a57b8cc0").expect("thread id");
+    let target_session = SessionTarget {
+        path: Some(std::path::PathBuf::from(
+            "/Users/me/.codex/archived_sessions/rollout.jsonl",
+        )),
+        thread_id,
+    };
+    let expected = format!(
+        "session {thread_id} is archived. Run `codex unarchive {thread_id}` to unarchive it first."
+    );
+
+    for action in ["resume", "fork"] {
+        let err = color_eyre::eyre::eyre!(
+            "thread/{action} failed during TUI bootstrap: thread/{action} failed: {expected} (code -32600)"
+        );
+
+        assert_eq!(
+            session_start_error(action, &target_session, err).to_string(),
+            expected
+        );
+    }
+}
+
+#[test]
 fn active_turn_steer_race_detects_missing_active_turn() {
     let error = TypedRequestError::Server {
         method: "turn/steer".to_string(),
@@ -4802,6 +4718,7 @@ async fn replay_thread_snapshot_replays_turn_history_in_order() {
                     items_view: codex_app_server_protocol::TurnItemsView::Full,
                     items: vec![ThreadItem::UserMessage {
                         id: "user-1".to_string(),
+                        client_id: None,
                         content: vec![AppServerUserInput::Text {
                             text: "first prompt".to_string(),
                             text_elements: Vec::new(),
@@ -4819,6 +4736,7 @@ async fn replay_thread_snapshot_replays_turn_history_in_order() {
                     items: vec![
                         ThreadItem::UserMessage {
                             id: "user-2".to_string(),
+                            client_id: None,
                             content: vec![AppServerUserInput::Text {
                                 text: "third prompt".to_string(),
                                 text_elements: Vec::new(),
@@ -4966,6 +4884,7 @@ async fn refreshed_snapshot_session_persists_resumed_turns() {
         TurnStatus::Completed,
         vec![ThreadItem::UserMessage {
             id: "user-1".to_string(),
+            client_id: None,
             content: vec![AppServerUserInput::Text {
                 text: "restored prompt".to_string(),
                 text_elements: Vec::new(),
@@ -5039,7 +4958,7 @@ async fn queued_rollback_syncs_overlay_and_clears_deferred_history() {
         app.transcript_cells.clone(),
         app.keymap.pager.clone(),
     ));
-    app.deferred_history_lines = vec![Line::from("stale buffered line")];
+    app.deferred_history_lines = vec![Line::from("stale buffered line").into()];
     app.backtrack.overlay_preview_active = true;
     app.backtrack.nth_user_message = 1;
 
@@ -5276,6 +5195,7 @@ async fn override_turn_context_sends_thread_settings_update() {
             /*cwd*/ None,
             Some(AskForApproval::OnRequest),
             Some(ApprovalsReviewer::AutoReview),
+            /*permission_profile*/ None,
             Some(ActivePermissionProfile::new(
                 codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE,
             )),
@@ -5572,7 +5492,7 @@ async fn clear_only_ui_reset_preserves_chat_session_state() {
         app.transcript_cells.clone(),
         crate::keymap::RuntimeKeymap::defaults().pager,
     ));
-    app.deferred_history_lines = vec![Line::from("stale buffered line")];
+    app.deferred_history_lines = vec![Line::from("stale buffered line").into()];
     app.has_emitted_history_lines = true;
     app.backtrack.primed = true;
     app.backtrack.overlay_preview_active = true;
@@ -5664,4 +5584,7 @@ async fn side_backtrack_rejection_reports_unavailable_message_snapshot() {
         "side_backtrack_rejection_reports_unavailable_message",
         rendered
     );
+}
+async fn start_config_write_test_app_server(app: &App) -> Result<AppServerSession> {
+    Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await
 }

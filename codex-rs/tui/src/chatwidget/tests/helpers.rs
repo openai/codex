@@ -246,15 +246,14 @@ pub(crate) fn set_chatgpt_auth(chat: &mut ChatWidget) {
 }
 
 fn test_model_info(slug: &str, priority: i32, supports_fast_mode: bool) -> ModelInfo {
-    let service_tiers = if supports_fast_mode {
-        vec![json!({
+    let mut service_tiers = Vec::new();
+    if supports_fast_mode {
+        service_tiers.push(json!({
             "id": ServiceTier::Fast.request_value(),
             "name": "fast",
             "description": "Fastest inference with increased plan usage"
-        })]
-    } else {
-        Vec::new()
-    };
+        }));
+    }
     serde_json::from_value(json!({
         "slug": slug,
         "display_name": slug,
@@ -267,6 +266,7 @@ fn test_model_info(slug: &str, priority: i32, supports_fast_mode: bool) -> Model
         "priority": priority,
         "additional_speed_tiers": [],
         "service_tiers": service_tiers,
+        "default_service_tier": null,
         "availability_nux": null,
         "upgrade": null,
         "base_instructions": "base instructions",
@@ -722,6 +722,7 @@ pub(super) fn replay_user_message_inputs(
     chat.replay_thread_item(
         AppServerThreadItem::UserMessage {
             id: item_id.to_string(),
+            client_id: None,
             content,
         },
         "turn-1".to_string(),
@@ -946,6 +947,7 @@ pub(super) fn complete_user_message_for_inputs(
             completed_at_ms: 0,
             item: AppServerThreadItem::UserMessage {
                 id: item_id.to_string(),
+                client_id: None,
                 content,
             },
         }),
@@ -1572,6 +1574,7 @@ fn hook_event_label(event_name: codex_app_server_protocol::HookEventName) -> &'s
         codex_app_server_protocol::HookEventName::SessionStart => "SessionStart",
         codex_app_server_protocol::HookEventName::UserPromptSubmit => "UserPromptSubmit",
         codex_app_server_protocol::HookEventName::SubagentStart => "SubagentStart",
+        codex_app_server_protocol::HookEventName::SubagentStop => "SubagentStop",
         codex_app_server_protocol::HookEventName::Stop => "Stop",
     }
 }

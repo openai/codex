@@ -10,6 +10,7 @@ use crate::app_event::AppEvent;
 use crate::app_event::ExitMode;
 use crate::app_event::FeedbackCategory;
 use crate::app_event::HistoryLookupResponse;
+use crate::app_event::PermissionProfileSelection;
 use crate::app_event::RateLimitRefreshOrigin;
 use crate::app_event::RealtimeAudioDeviceKind;
 #[cfg(target_os = "windows")]
@@ -49,7 +50,6 @@ use crate::legacy_core::config::Config;
 use crate::legacy_core::config::ConfigBuilder;
 use crate::legacy_core::config::ConfigOverrides;
 use crate::legacy_core::config::PermissionProfileSnapshot;
-use crate::legacy_core::config::edit::ConfigEdit;
 use crate::legacy_core::config::edit::ConfigEditsBuilder;
 #[cfg(target_os = "windows")]
 use crate::legacy_core::windows_sandbox::WindowsSandboxLevelExt;
@@ -90,6 +90,7 @@ use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::CodexErrorInfo as AppServerCodexErrorInfo;
 use codex_app_server_protocol::ConfigBatchWriteParams;
 use codex_app_server_protocol::ConfigLayerSource;
+use codex_app_server_protocol::ConfigReadResponse;
 use codex_app_server_protocol::ConfigValueWriteParams;
 use codex_app_server_protocol::ConfigWriteResponse;
 use codex_app_server_protocol::FeedbackUploadParams;
@@ -112,6 +113,7 @@ use codex_app_server_protocol::PluginReadResponse;
 use codex_app_server_protocol::PluginUninstallParams;
 use codex_app_server_protocol::PluginUninstallResponse;
 use codex_app_server_protocol::RateLimitSnapshot;
+use codex_app_server_protocol::SandboxMode as AppServerSandboxMode;
 use codex_app_server_protocol::SendAddCreditsNudgeEmailParams;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
@@ -126,12 +128,17 @@ use codex_app_server_protocol::ThreadStartSource;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnError as AppServerTurnError;
 use codex_app_server_protocol::TurnStatus;
+use codex_app_server_protocol::WriteStatus;
 use codex_config::ConfigLayerStackOrdering;
 use codex_config::LoaderOverrides;
 use codex_config::types::ApprovalsReviewer;
+use codex_config::types::MemoriesToml;
 use codex_config::types::ModelAvailabilityNuxConfig;
+#[cfg(target_os = "windows")]
+use codex_config::types::WindowsToml;
 use codex_exec_server::EnvironmentManager;
 use codex_features::Feature;
+use codex_features::FeaturesToml;
 use codex_model_provider::create_model_provider;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_models_manager::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
@@ -466,7 +473,7 @@ struct SessionSummary {
 
 #[derive(Debug, Default)]
 struct InitialHistoryReplayBuffer {
-    retained_lines: VecDeque<Line<'static>>,
+    retained_lines: VecDeque<crate::terminal_hyperlinks::HyperlinkLine>,
     render_from_transcript_tail: bool,
 }
 
@@ -479,12 +486,11 @@ pub(crate) struct App {
     /// Config is stored here so we can recreate ChatWidgets as needed.
     pub(crate) config: Config,
     pub(crate) state_db: Option<StateDbHandle>,
-    pub(crate) active_profile: Option<String>,
     cli_kv_overrides: Vec<(String, TomlValue)>,
     harness_overrides: ConfigOverrides,
     loader_overrides: LoaderOverrides,
     runtime_approval_policy_override: Option<AskForApproval>,
-    runtime_permission_profile_override: Option<PermissionProfile>,
+    runtime_permission_profile_override: Option<RuntimePermissionProfileOverride>,
 
     pub(crate) file_search: FileSearchManager,
 
@@ -492,7 +498,7 @@ pub(crate) struct App {
 
     // Pager overlay state (Transcript or Static like Diff)
     pub(crate) overlay: Option<Overlay>,
-    pub(crate) deferred_history_lines: Vec<Line<'static>>,
+    pub(crate) deferred_history_lines: Vec<crate::terminal_hyperlinks::HyperlinkLine>,
     has_emitted_history_lines: bool,
     transcript_reflow: TranscriptReflowState,
     initial_history_replay_buffer: Option<InitialHistoryReplayBuffer>,
@@ -552,6 +558,23 @@ pub(crate) struct App {
     // Serialize hook enablement writes per hook so stale completions cannot
     // persist an older toggle after a newer one.
     pending_hook_enabled_writes: HashMap<String, Option<bool>>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct RuntimePermissionProfileOverride {
+    permission_profile: PermissionProfile,
+    active_permission_profile: Option<ActivePermissionProfile>,
+    network: Option<crate::legacy_core::config::NetworkProxySpec>,
+}
+
+impl RuntimePermissionProfileOverride {
+    fn from_config(config: &Config) -> Self {
+        Self {
+            permission_profile: config.permissions.permission_profile().clone(),
+            active_permission_profile: config.permissions.active_permission_profile(),
+            network: config.permissions.network.clone(),
+        }
+    }
 }
 
 fn active_turn_not_steerable_turn_error(error: &TypedRequestError) -> Option<AppServerTurnError> {
@@ -629,6 +652,31 @@ fn active_turn_steer_race(error: &TypedRequestError) -> Option<ActiveTurnSteerRa
     Some(ActiveTurnSteerRace::ExpectedTurnMismatch { actual_turn_id })
 }
 
+fn session_start_error(
+    action: &str,
+    target_session: &SessionTarget,
+    err: color_eyre::eyre::Report,
+) -> color_eyre::eyre::Report {
+    if let Some(message) = archived_session_guidance(&err) {
+        return color_eyre::eyre::eyre!("{message}");
+    }
+
+    let target_label = target_session.display_label();
+    color_eyre::eyre::eyre!("Failed to {action} session from {target_label}: {err}")
+}
+
+fn archived_session_guidance(err: &color_eyre::eyre::Report) -> Option<String> {
+    let err = err.to_string();
+    let message = &err[err.find("session ")?..];
+    if !message.contains(" is archived. Run `codex unarchive ") {
+        return None;
+    }
+    let message = message
+        .split_once(" (code ")
+        .map_or(message, |(message, _)| message);
+    Some(message.to_string())
+}
+
 impl App {
     pub fn chatwidget_init_for_forked_or_resumed_thread(
         &self,
@@ -669,7 +717,6 @@ impl App {
         cli_kv_overrides: Vec<(String, TomlValue)>,
         harness_overrides: ConfigOverrides,
         loader_overrides: LoaderOverrides,
-        active_profile: Option<String>,
         initial_prompt: Option<String>,
         initial_images: Vec<PathBuf>,
         session_selection: SessionSelection,
@@ -732,6 +779,10 @@ impl App {
         let bootstrap_ms = bootstrap_started_at.elapsed().as_millis();
         let mut model = bootstrap.default_model;
         let available_models = bootstrap.available_models;
+        let remote_connection = crate::status::remote_connection::remote_connection_status_value(
+            &app_server_target,
+            app_server.server_version(),
+        );
         let exit_info = handle_model_migration_prompt_if_needed(
             tui,
             &mut config,
@@ -846,10 +897,7 @@ impl App {
                 let resumed = app_server
                     .resume_thread(config.clone(), target_session.thread_id)
                     .await
-                    .wrap_err_with(|| {
-                        let target_label = target_session.display_label();
-                        format!("Failed to resume session from {target_label}")
-                    })?;
+                    .map_err(|err| session_start_error("resume", &target_session, err))?;
                 let init = crate::chatwidget::ChatWidgetInit {
                     config: config.clone(),
                     frame_requester: tui.frame_requester(),
@@ -887,10 +935,7 @@ impl App {
                 let forked = app_server
                     .fork_thread(config.clone(), target_session.thread_id)
                     .await
-                    .wrap_err_with(|| {
-                        let target_label = target_session.display_label();
-                        format!("Failed to fork session from {target_label}")
-                    })?;
+                    .map_err(|err| session_start_error("fork", &target_session, err))?;
                 let init = crate::chatwidget::ChatWidgetInit {
                     config: config.clone(),
                     frame_requester: tui.frame_requester(),
@@ -920,6 +965,7 @@ impl App {
                 (ChatWidget::new_with_app_event(init), Some(forked))
             }
         };
+        chat_widget.remote_connection = remote_connection;
         let thread_and_widget_ms = thread_and_widget_started_at.elapsed().as_millis();
         if let Some(message) = external_agent_config_migration_message {
             chat_widget.add_info_message(message, /*hint*/ None);
@@ -947,7 +993,6 @@ See the Codex keymap documentation for supported actions and examples."
             workspace_command_runner: Some(workspace_command_runner),
             config,
             state_db,
-            active_profile,
             cli_kv_overrides,
             harness_overrides,
             loader_overrides,
@@ -1019,11 +1064,13 @@ See the Codex keymap documentation for supported actions and examples."
                     .unwrap_or(false);
             if should_check {
                 let cwd = app.config.cwd.clone();
+                let workspace_roots = app.config.effective_workspace_roots();
                 let env_map: std::collections::HashMap<String, String> = std::env::vars().collect();
                 let tx = app.app_event_tx.clone();
                 let logs_base_dir = app.config.codex_home.clone();
                 Self::spawn_world_writable_scan(
                     cwd,
+                    workspace_roots,
                     env_map,
                     logs_base_dir,
                     startup_permission_profile,

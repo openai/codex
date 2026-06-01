@@ -97,7 +97,6 @@ fn write_plugin_hook_config(codex_home: &std::path::Path, hooks_json: &str) -> R
         codex_home.join("config.toml"),
         r#"[features]
 plugins = true
-plugin_hooks = true
 hooks = true
 
 [plugins."demo@test"]
@@ -663,6 +662,7 @@ command = "python3 {hook_script_path}"
     let first_turn_id = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
+            client_user_message_id: None,
             input: vec![V2UserInput::Text {
                 text: "first turn".to_string(),
                 text_elements: Vec::new(),
@@ -724,6 +724,7 @@ command = "python3 {hook_script_path}"
     let second_turn_id = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
+            client_user_message_id: None,
             input: vec![V2UserInput::Text {
                 text: "second turn".to_string(),
                 text_elements: Vec::new(),
@@ -793,6 +794,7 @@ command = "python3 {hook_script_path}"
     let third_turn_id = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id,
+            client_user_message_id: None,
             input: vec![V2UserInput::Text {
                 text: "third turn".to_string(),
                 text_elements: Vec::new(),
@@ -933,6 +935,7 @@ command = "python3 {hook_script_path}"
     let first_turn_id = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
+            client_user_message_id: None,
             input: vec![V2UserInput::Text {
                 text: "first turn".to_string(),
                 text_elements: Vec::new(),
@@ -984,6 +987,7 @@ command = "python3 {hook_script_path}"
     let second_turn_id = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id,
+            client_user_message_id: None,
             input: vec![V2UserInput::Text {
                 text: "second turn".to_string(),
                 text_elements: Vec::new(),

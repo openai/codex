@@ -30,6 +30,30 @@ impl ChatWidget {
         Ok(())
     }
 
+    pub(crate) fn set_permission_profile_with_active_profile(
+        &mut self,
+        profile: PermissionProfile,
+        active_permission_profile: Option<ActivePermissionProfile>,
+    ) -> ConstraintResult<()> {
+        self.config
+            .permissions
+            .set_permission_profile_from_session_snapshot(
+                PermissionProfileSnapshot::from_session_snapshot(
+                    profile,
+                    active_permission_profile,
+                ),
+            )?;
+        self.refresh_status_surfaces();
+        Ok(())
+    }
+
+    pub(crate) fn set_permission_network(
+        &mut self,
+        network: Option<crate::legacy_core::config::NetworkProxySpec>,
+    ) {
+        self.config.permissions.network = network;
+    }
+
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     pub(crate) fn set_windows_sandbox_mode(&mut self, mode: Option<WindowsSandboxModeToml>) {
         self.config.permissions.windows_sandbox_mode = mode;
@@ -66,6 +90,7 @@ impl ChatWidget {
             }
         }
         if feature == Feature::FastMode {
+            self.refresh_effective_service_tier();
             self.sync_service_tier_commands();
         }
         if feature == Feature::Personality {
@@ -238,6 +263,7 @@ impl ChatWidget {
         {
             mask.model = Some(model.to_string());
         }
+        self.refresh_effective_service_tier();
         self.refresh_model_dependent_surfaces();
     }
 
@@ -519,6 +545,7 @@ impl ChatWidget {
         settings.collaboration_mode.settings.model = settings.model;
         settings.collaboration_mode.settings.reasoning_effort = settings.effort;
         self.set_effective_collaboration_mode(settings.collaboration_mode);
+        self.refresh_effective_service_tier();
         self.refresh_status_surfaces();
         self.sync_service_tier_commands();
         self.sync_personality_command_enabled();
@@ -734,6 +761,7 @@ impl ChatWidget {
                 /*cwd*/ None,
                 /*approval_policy*/ None,
                 /*approvals_reviewer*/ None,
+                /*permission_profile*/ None,
                 /*active_permission_profile*/ None,
                 /*windows_sandbox_level*/ None,
                 /*model*/ None,

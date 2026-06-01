@@ -591,7 +591,9 @@ impl App {
                     let permissions_override = Self::turn_permissions_override_from_config(
                         config,
                         active_permission_profile.as_ref(),
-                        self.runtime_permission_profile_override.as_ref(),
+                        self.runtime_permission_profile_override
+                            .as_ref()
+                            .map(|profile| &profile.permission_profile),
                     );
                     app_server
                         .turn_start(
@@ -682,7 +684,6 @@ impl App {
             }
             AppCommand::ReloadUserConfig => {
                 app_server.reload_user_config().await?;
-                self.refresh_in_memory_config_from_disk().await?;
                 Ok(true)
             }
             AppCommand::OverrideTurnContext { .. } => {

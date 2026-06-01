@@ -1,3 +1,5 @@
+use super::TASK_COMPACT_METRIC;
+use super::emit_compact_metric;
 use super::emit_turn_memory_metric;
 use super::emit_turn_network_proxy_metric;
 use codex_otel::MetricsClient;
@@ -175,6 +177,48 @@ fn emit_turn_memory_metric_records_config_disabled_without_citations() {
             ("feature_enabled".to_string(), "true".to_string()),
             ("has_citations".to_string(), "false".to_string()),
             ("read_allowed".to_string(), "false".to_string()),
+        ])
+    );
+}
+
+#[test]
+fn emit_compact_metric_records_manual_remote_v2() {
+    let session_telemetry = test_session_telemetry();
+
+    emit_compact_metric(&session_telemetry, "remote_v2", /*manual*/ true);
+
+    let snapshot = session_telemetry
+        .snapshot_metrics()
+        .expect("runtime metrics snapshot");
+    let (attrs, value) = metric_point(&snapshot, TASK_COMPACT_METRIC);
+
+    assert_eq!(value, 1);
+    assert_eq!(
+        attrs,
+        BTreeMap::from([
+            ("manual".to_string(), "true".to_string()),
+            ("type".to_string(), "remote_v2".to_string()),
+        ])
+    );
+}
+
+#[test]
+fn emit_compact_metric_records_auto_local() {
+    let session_telemetry = test_session_telemetry();
+
+    emit_compact_metric(&session_telemetry, "local", /*manual*/ false);
+
+    let snapshot = session_telemetry
+        .snapshot_metrics()
+        .expect("runtime metrics snapshot");
+    let (attrs, value) = metric_point(&snapshot, TASK_COMPACT_METRIC);
+
+    assert_eq!(value, 1);
+    assert_eq!(
+        attrs,
+        BTreeMap::from([
+            ("manual".to_string(), "false".to_string()),
+            ("type".to_string(), "local".to_string()),
         ])
     );
 }

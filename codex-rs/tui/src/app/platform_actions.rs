@@ -16,25 +16,31 @@ impl App {
     #[cfg(target_os = "windows")]
     pub(super) fn spawn_world_writable_scan(
         cwd: AbsolutePathBuf,
+        workspace_roots: Vec<AbsolutePathBuf>,
         env_map: std::collections::HashMap<String, String>,
         logs_base_dir: AbsolutePathBuf,
         permission_profile: PermissionProfile,
         tx: AppEventSender,
     ) {
-        let Ok(sandbox_policy) = permission_profile.to_legacy_sandbox_policy(cwd.as_path()) else {
-            send_world_writable_scan_failed(&tx);
+        let Ok(permissions) =
+            codex_windows_sandbox::ResolvedWindowsSandboxPermissions::try_from_permission_profile_for_workspace_roots(
+                &permission_profile,
+                workspace_roots.as_slice(),
+            )
+        else {
             return;
         };
 
         tokio::task::spawn_blocking(move || {
             let logs_base_dir_path = logs_base_dir.as_path();
-            let result = codex_windows_sandbox::apply_world_writable_scan_and_denies(
-                logs_base_dir_path,
-                cwd.as_path(),
-                &env_map,
-                &sandbox_policy,
-                Some(logs_base_dir_path),
-            );
+            let result =
+                codex_windows_sandbox::apply_world_writable_scan_and_denies_for_permissions(
+                    logs_base_dir_path,
+                    cwd.as_path(),
+                    &env_map,
+                    &permissions,
+                    Some(logs_base_dir_path),
+                );
             if result.is_err() {
                 // Scan failed: warn without examples.
                 send_world_writable_scan_failed(&tx);
@@ -47,6 +53,7 @@ impl App {
 fn send_world_writable_scan_failed(tx: &AppEventSender) {
     tx.send(AppEvent::OpenWorldWritableWarningConfirmation {
         preset: None,
+        profile_selection: None,
         sample_paths: Vec::new(),
         extra_count: 0usize,
         failed_scan: true,

@@ -16,5 +16,5 @@ expression: status_line_popup_snapshot(&mut chat)
   [ ] current-dir           Current working directory
   [ ] project-name          Project name (omitted when unavailable)
 
-  monthly 65% · weekly 50%
+  monthly 65% left · weekly 50% left
   Press space to toggle; ←/→ to move; enter to confirm and close; esc to close

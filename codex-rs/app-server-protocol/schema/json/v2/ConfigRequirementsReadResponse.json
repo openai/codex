@@ -73,6 +73,12 @@
     },
     "ConfigRequirements": {
       "properties": {
+        "allowAppshots": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "allowManagedHooksOnly": {
           "type": [
             "boolean",
@@ -82,6 +88,15 @@
         "allowedApprovalPolicies": {
           "items": {
             "$ref": "#/definitions/AskForApproval"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "allowedPermissions": {
+          "items": {
+            "type": "string"
           },
           "type": [
             "array",
@@ -100,6 +115,15 @@
         "allowedWebSearchModes": {
           "items": {
             "$ref": "#/definitions/WebSearchMode"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "allowedWindowsSandboxImplementations": {
+          "items": {
+            "$ref": "#/definitions/WindowsSandboxSetupMode"
           },
           "type": [
             "array",
@@ -288,6 +312,12 @@
           },
           "type": "array"
         },
+        "SubagentStop": {
+          "items": {
+            "$ref": "#/definitions/ConfiguredHookMatcherGroup"
+          },
+          "type": "array"
+        },
         "UserPromptSubmit": {
           "items": {
             "$ref": "#/definitions/ConfiguredHookMatcherGroup"
@@ -316,6 +346,7 @@
         "SessionStart",
         "Stop",
         "SubagentStart",
+        "SubagentStop",
         "UserPromptSubmit"
       ],
       "type": "object"
@@ -438,7 +469,7 @@
     "NetworkUnixSocketPermission": {
       "enum": [
         "allow",
-        "none"
+        "deny"
       ],
       "type": "string"
     },
@@ -461,6 +492,13 @@
         "disabled",
         "cached",
         "live"
+      ],
+      "type": "string"
+    },
+    "WindowsSandboxSetupMode": {
+      "enum": [
+        "elevated",
+        "unelevated"
       ],
       "type": "string"
     }

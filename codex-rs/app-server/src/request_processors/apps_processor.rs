@@ -171,7 +171,7 @@ impl AppsRequestProcessor {
                 connectors::list_accessible_connectors_from_mcp_tools_with_environment_manager(
                     &accessible_config,
                     force_refetch,
-                    &environment_manager,
+                    Arc::clone(&environment_manager),
                 )
                 .await
                 .map_err(|err| format!("failed to load accessible apps: {err}"));

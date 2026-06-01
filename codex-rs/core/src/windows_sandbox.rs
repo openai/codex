@@ -1,7 +1,6 @@
 use crate::config::Config;
 use crate::config::edit::ConfigEditsBuilder;
 use codex_config::config_toml::ConfigToml;
-use codex_config::profile_toml::ConfigProfile;
 use codex_config::types::WindowsSandboxModeToml;
 use codex_features::Feature;
 use codex_features::Features;
@@ -9,7 +8,8 @@ use codex_features::FeaturesToml;
 use codex_login::default_client::originator;
 use codex_otel::sanitize_metric_tag_value;
 use codex_protocol::config_types::WindowsSandboxLevel;
-use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::models::PermissionProfile;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::path::Path;
@@ -56,45 +56,18 @@ pub fn windows_sandbox_level_from_features(features: &Features) -> WindowsSandbo
     WindowsSandboxLevel::from_features(features)
 }
 
-pub fn resolve_windows_sandbox_mode(
-    cfg: &ConfigToml,
-    profile: &ConfigProfile,
-) -> Option<WindowsSandboxModeToml> {
-    if let Some(mode) = legacy_windows_sandbox_mode(profile.features.as_ref()) {
-        return Some(mode);
-    }
-    if legacy_windows_sandbox_keys_present(profile.features.as_ref()) {
-        return None;
-    }
-
-    profile
-        .windows
+pub fn resolve_windows_sandbox_mode(cfg: &ConfigToml) -> Option<WindowsSandboxModeToml> {
+    cfg.windows
         .as_ref()
         .and_then(|windows| windows.sandbox)
-        .or_else(|| cfg.windows.as_ref().and_then(|windows| windows.sandbox))
         .or_else(|| legacy_windows_sandbox_mode(cfg.features.as_ref()))
 }
 
-pub fn resolve_windows_sandbox_private_desktop(cfg: &ConfigToml, profile: &ConfigProfile) -> bool {
-    profile
-        .windows
+pub fn resolve_windows_sandbox_private_desktop(cfg: &ConfigToml) -> bool {
+    cfg.windows
         .as_ref()
         .and_then(|windows| windows.sandbox_private_desktop)
-        .or_else(|| {
-            cfg.windows
-                .as_ref()
-                .and_then(|windows| windows.sandbox_private_desktop)
-        })
         .unwrap_or(true)
-}
-
-fn legacy_windows_sandbox_keys_present(features: Option<&FeaturesToml>) -> bool {
-    let Some(entries) = features.map(FeaturesToml::entries) else {
-        return false;
-    };
-    entries.contains_key(Feature::WindowsSandboxElevated.key())
-        || entries.contains_key(Feature::WindowsSandbox.key())
-        || entries.contains_key("enable_experimental_windows_sandbox")
 }
 
 pub fn legacy_windows_sandbox_mode(
@@ -173,16 +146,20 @@ pub fn elevated_setup_failure_metric_name(_err: &anyhow::Error) -> &'static str 
 
 #[cfg(target_os = "windows")]
 pub fn run_elevated_setup(
-    policy: &SandboxPolicy,
-    policy_cwd: &Path,
+    permission_profile: &PermissionProfile,
+    workspace_roots: &[AbsolutePathBuf],
     command_cwd: &Path,
     env_map: &HashMap<String, String>,
     codex_home: &Path,
 ) -> anyhow::Result<()> {
+    let permissions =
+        codex_windows_sandbox::ResolvedWindowsSandboxPermissions::try_from_permission_profile_for_workspace_roots(
+            permission_profile,
+            workspace_roots,
+        )?;
     codex_windows_sandbox::run_elevated_setup(
         codex_windows_sandbox::SandboxSetupRequest {
-            policy,
-            policy_cwd,
+            permissions: &permissions,
             command_cwd,
             env_map,
             codex_home,
@@ -192,10 +169,15 @@ pub fn run_elevated_setup(
     )
 }
 
+#[cfg(target_os = "windows")]
+pub fn run_elevated_provisioning_setup(codex_home: &Path, real_user: &str) -> anyhow::Result<()> {
+    codex_windows_sandbox::run_elevated_provisioning_setup(codex_home, real_user)
+}
+
 #[cfg(not(target_os = "windows"))]
 pub fn run_elevated_setup(
-    _policy: &SandboxPolicy,
-    _policy_cwd: &Path,
+    _permission_profile: &PermissionProfile,
+    _workspace_roots: &[AbsolutePathBuf],
     _command_cwd: &Path,
     _env_map: &HashMap<String, String>,
     _codex_home: &Path,
@@ -203,17 +185,22 @@ pub fn run_elevated_setup(
     anyhow::bail!("elevated Windows sandbox setup is only supported on Windows")
 }
 
+#[cfg(not(target_os = "windows"))]
+pub fn run_elevated_provisioning_setup(_codex_home: &Path, _real_user: &str) -> anyhow::Result<()> {
+    anyhow::bail!("elevated Windows sandbox setup is only supported on Windows")
+}
+
 #[cfg(target_os = "windows")]
 pub fn run_legacy_setup_preflight(
-    policy: &SandboxPolicy,
-    policy_cwd: &Path,
+    permission_profile: &PermissionProfile,
+    workspace_roots: &[AbsolutePathBuf],
     command_cwd: &Path,
     env_map: &HashMap<String, String>,
     codex_home: &Path,
 ) -> anyhow::Result<()> {
     codex_windows_sandbox::run_windows_sandbox_legacy_preflight(
-        policy,
-        policy_cwd,
+        permission_profile,
+        workspace_roots,
         codex_home,
         command_cwd,
         env_map,
@@ -222,16 +209,16 @@ pub fn run_legacy_setup_preflight(
 
 #[cfg(target_os = "windows")]
 pub fn run_setup_refresh_with_extra_read_roots(
-    policy: &SandboxPolicy,
-    policy_cwd: &Path,
+    permission_profile: &PermissionProfile,
+    workspace_roots: &[AbsolutePathBuf],
     command_cwd: &Path,
     env_map: &HashMap<String, String>,
     codex_home: &Path,
     extra_read_roots: Vec<PathBuf>,
 ) -> anyhow::Result<()> {
     codex_windows_sandbox::run_setup_refresh_with_extra_read_roots(
-        policy,
-        policy_cwd,
+        permission_profile,
+        workspace_roots,
         command_cwd,
         env_map,
         codex_home,
@@ -242,8 +229,8 @@ pub fn run_setup_refresh_with_extra_read_roots(
 
 #[cfg(not(target_os = "windows"))]
 pub fn run_legacy_setup_preflight(
-    _policy: &SandboxPolicy,
-    _policy_cwd: &Path,
+    _permission_profile: &PermissionProfile,
+    _workspace_roots: &[AbsolutePathBuf],
     _command_cwd: &Path,
     _env_map: &HashMap<String, String>,
     _codex_home: &Path,
@@ -253,8 +240,8 @@ pub fn run_legacy_setup_preflight(
 
 #[cfg(not(target_os = "windows"))]
 pub fn run_setup_refresh_with_extra_read_roots(
-    _policy: &SandboxPolicy,
-    _policy_cwd: &Path,
+    _permission_profile: &PermissionProfile,
+    _workspace_roots: &[AbsolutePathBuf],
     _command_cwd: &Path,
     _env_map: &HashMap<String, String>,
     _codex_home: &Path,
@@ -272,12 +259,11 @@ pub enum WindowsSandboxSetupMode {
 #[derive(Debug, Clone)]
 pub struct WindowsSandboxSetupRequest {
     pub mode: WindowsSandboxSetupMode,
-    pub policy: SandboxPolicy,
-    pub policy_cwd: PathBuf,
+    pub permission_profile: PermissionProfile,
+    pub workspace_roots: Vec<AbsolutePathBuf>,
     pub command_cwd: PathBuf,
     pub env_map: HashMap<String, String>,
     pub codex_home: PathBuf,
-    pub active_profile: Option<String>,
 }
 
 pub async fn run_windows_sandbox_setup(request: WindowsSandboxSetupRequest) -> anyhow::Result<()> {
@@ -311,12 +297,11 @@ async fn run_windows_sandbox_setup_and_persist(
     request: WindowsSandboxSetupRequest,
 ) -> anyhow::Result<()> {
     let mode = request.mode;
-    let policy = request.policy;
-    let policy_cwd = request.policy_cwd;
+    let permission_profile = request.permission_profile;
+    let workspace_roots = request.workspace_roots;
     let command_cwd = request.command_cwd;
     let env_map = request.env_map;
     let codex_home = request.codex_home;
-    let active_profile = request.active_profile;
     let setup_codex_home = codex_home.clone();
 
     let setup_result = tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
@@ -324,8 +309,8 @@ async fn run_windows_sandbox_setup_and_persist(
             WindowsSandboxSetupMode::Elevated => {
                 if !sandbox_setup_is_complete(setup_codex_home.as_path()) {
                     run_elevated_setup(
-                        &policy,
-                        policy_cwd.as_path(),
+                        &permission_profile,
+                        workspace_roots.as_slice(),
                         command_cwd.as_path(),
                         &env_map,
                         setup_codex_home.as_path(),
@@ -334,8 +319,8 @@ async fn run_windows_sandbox_setup_and_persist(
             }
             WindowsSandboxSetupMode::Unelevated => {
                 run_legacy_setup_preflight(
-                    &policy,
-                    policy_cwd.as_path(),
+                    &permission_profile,
+                    workspace_roots.as_slice(),
                     command_cwd.as_path(),
                     &env_map,
                     setup_codex_home.as_path(),
@@ -350,7 +335,6 @@ async fn run_windows_sandbox_setup_and_persist(
     setup_result?;
 
     ConfigEditsBuilder::new(codex_home.as_path())
-        .with_profile(active_profile.as_deref())
         .set_windows_sandbox_mode(windows_sandbox_setup_mode_tag(mode))
         .clear_legacy_windows_sandbox_keys()
         .apply()

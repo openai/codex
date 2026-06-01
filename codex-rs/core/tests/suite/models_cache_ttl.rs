@@ -100,6 +100,7 @@ async fn renews_cache_ttl_on_matching_models_etag() -> Result<()> {
             environments: None,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                 cwd: Some(test.cwd_path().to_path_buf()),
                 approval_policy: Some(codex_protocol::protocol::AskForApproval::Never),
@@ -347,6 +348,7 @@ fn test_remote_model(slug: &str, priority: i32) -> ModelInfo {
         priority,
         additional_speed_tiers: Vec::new(),
         service_tiers: Vec::new(),
+        default_service_tier: None,
         upgrade: None,
         base_instructions: "base instructions".to_string(),
         model_messages: None,
@@ -369,5 +371,6 @@ fn test_remote_model(slug: &str, priority: i32) -> ModelInfo {
         used_fallback_model_metadata: false,
         supports_search_tool: false,
         auto_review_model_override: None,
+        tool_mode: None,
     }
 }
