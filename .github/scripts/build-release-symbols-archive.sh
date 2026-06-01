@@ -8,7 +8,8 @@ Usage: build-release-symbols-archive.sh \
   --artifact-name <artifact-name> \
   --release-dir <dir> \
   --archive-dir <dir> \
-  --binaries "<space-delimited binary basenames>"
+  --binaries "<space-delimited binary basenames>" \
+  [--append]
 EOF
 }
 
@@ -17,6 +18,7 @@ artifact_name=""
 release_dir=""
 archive_dir=""
 binaries=""
+append="false"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -40,6 +42,10 @@ while [[ $# -gt 0 ]]; do
       binaries="${2:?--binaries requires a value}"
       shift 2
       ;;
+    --append)
+      append="true"
+      shift
+      ;;
     -h|--help)
       usage
       exit 0
@@ -60,7 +66,9 @@ fi
 symbols_root="${RUNNER_TEMP:-/tmp}/codex-symbols-${artifact_name}"
 symbols_dir="${symbols_root}/codex-symbols-${artifact_name}"
 archive_path="${archive_dir%/}/codex-symbols-${artifact_name}.tar.gz"
-rm -rf "$symbols_root"
+if [[ "$append" != "true" ]]; then
+  rm -rf "$symbols_root"
+fi
 mkdir -p "$symbols_dir" "$archive_dir"
 read -r -a binary_names <<< "$binaries"
 
