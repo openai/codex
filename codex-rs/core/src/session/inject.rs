@@ -5,6 +5,7 @@ use crate::state::ActiveTurn;
 use crate::state::TurnState;
 use crate::tasks::RegularTask;
 use codex_protocol::models::ResponseItem;
+use std::future::Future;
 use std::sync::Arc;
 
 impl Session {
@@ -37,6 +38,21 @@ impl Session {
         self: &Arc<Self>,
         input: Vec<ResponseItem>,
     ) -> Result<(), Vec<ResponseItem>> {
+        self.try_start_turn_if_idle_if_current(input, || async { true })
+            .await
+    }
+
+    /// Starts a regular turn with the provided items only if the session is idle
+    /// and the caller's validation still says the synthetic work is current.
+    pub(crate) async fn try_start_turn_if_idle_if_current<F, Fut>(
+        self: &Arc<Self>,
+        input: Vec<ResponseItem>,
+        validate: F,
+    ) -> Result<(), Vec<ResponseItem>>
+    where
+        F: FnOnce() -> Fut + Send,
+        Fut: Future<Output = bool> + Send,
+    {
         if input.is_empty() {
             return Ok(());
         }
@@ -56,6 +72,11 @@ impl Session {
         if self.input_queue.has_trigger_turn_mailbox_items().await {
             self.clear_reserved_idle_turn(&turn_state).await;
             self.maybe_start_turn_for_pending_work().await;
+            return Err(input);
+        }
+
+        if !validate().await {
+            self.clear_reserved_idle_turn(&turn_state).await;
             return Err(input);
         }
 

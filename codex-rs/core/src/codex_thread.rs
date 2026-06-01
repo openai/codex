@@ -44,6 +44,7 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use rmcp::model::ReadResourceRequestParams;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::future::Future;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -284,6 +285,23 @@ impl CodexThread {
         items: Vec<ResponseItem>,
     ) -> Result<(), Vec<ResponseItem>> {
         self.codex.session.try_start_turn_if_idle(items).await
+    }
+
+    /// Starts a regular turn with model-visible items only if the thread is idle
+    /// and the caller's validation still says the synthetic work is current.
+    pub async fn try_start_turn_if_idle_if_current<F, Fut>(
+        &self,
+        items: Vec<ResponseItem>,
+        validate: F,
+    ) -> Result<(), Vec<ResponseItem>>
+    where
+        F: FnOnce() -> Fut + Send,
+        Fut: Future<Output = bool> + Send,
+    {
+        self.codex
+            .session
+            .try_start_turn_if_idle_if_current(items, validate)
+            .await
     }
 
     pub async fn set_app_server_client_info(

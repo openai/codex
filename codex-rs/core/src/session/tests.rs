@@ -8449,6 +8449,24 @@ async fn try_start_turn_if_idle_rejects_active_turn_without_injecting() {
 }
 
 #[tokio::test]
+async fn try_start_turn_if_idle_if_current_clears_reservation_when_validation_fails() {
+    let (sess, _tc, _rx) = make_session_and_context_with_rx().await;
+
+    let item = user_message("synthetic idle input");
+    let err = sess
+        .try_start_turn_if_idle_if_current(vec![item.clone()], || async { false })
+        .await
+        .expect_err("stale idle input should be rejected");
+
+    assert_eq!(vec![item], err);
+    assert!(sess.active_turn.lock().await.is_none());
+    assert_eq!(
+        Vec::<TurnInput>::new(),
+        sess.input_queue.get_pending_input(&sess.active_turn).await
+    );
+}
+
+#[tokio::test]
 async fn steer_input_requires_active_turn() {
     let (sess, _tc, _rx) = make_session_and_context_with_rx().await;
     let input = vec![UserInput::Text {
