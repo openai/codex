@@ -38,7 +38,7 @@ use codex_app_server_protocol::ThreadListCwdFilter;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadSortKey as AppServerThreadSortKey;
 use codex_app_server_protocol::ThreadSourceKind;
-use codex_cloud_requirements::cloud_requirements_loader_for_storage;
+use codex_cloud_config::cloud_requirements_loader_for_storage;
 use codex_config::CloudRequirementsLoader;
 use codex_config::ConfigLoadError;
 use codex_config::LoaderOverrides;

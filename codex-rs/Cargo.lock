@@ -1913,7 +1913,7 @@ dependencies = [
  "codex-arg0",
  "codex-backend-client",
  "codex-chatgpt",
- "codex-cloud-requirements",
+ "codex-cloud-config",
  "codex-config",
  "codex-core",
  "codex-core-plugins",
@@ -2344,7 +2344,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "codex-cloud-requirements"
+name = "codex-cloud-config"
 version = "0.0.0"
 dependencies = [
  "async-trait",
@@ -2729,7 +2729,7 @@ dependencies = [
  "codex-app-server-protocol",
  "codex-apply-patch",
  "codex-arg0",
- "codex-cloud-requirements",
+ "codex-cloud-config",
  "codex-config",
  "codex-core",
  "codex-feedback",
@@ -3826,7 +3826,7 @@ dependencies = [
  "codex-app-server-protocol",
  "codex-arg0",
  "codex-cli",
- "codex-cloud-requirements",
+ "codex-cloud-config",
  "codex-config",
  "codex-connectors",
  "codex-core-plugins",
