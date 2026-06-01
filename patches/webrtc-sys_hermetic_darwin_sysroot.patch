@@ -6,6 +6,10 @@ index 3b4a24a..6aa06ff 100644
 -use std::path::Path;
 +use std::fs;
 +use std::path::Path;
+@@ -28,0 +30,3 @@
++    // Keep cxx-build inside Bazel's per-action output tree instead of the
++    // scratch crate's compile-time OUT_DIR from whichever machine built it.
++    env::set_var("CARGO_TARGET_DIR", env::var_os("OUT_DIR").unwrap());
 @@ -118,1 +119,9 @@
 -    println!("cargo:rustc-link-search=native={}", webrtc_lib.to_str().unwrap());
 +    let webrtc_link_lib = if env::var_os("WEBRTC_SYS_LINK_OUT_DIR").is_some() {

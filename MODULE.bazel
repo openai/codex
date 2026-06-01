@@ -396,6 +396,14 @@ crate.annotation(
     ],
 )
 
+crate.annotation(
+    crate = "webrtc-sys-build",
+    patch_args = ["-p1"],
+    patches = [
+        "//patches:webrtc-sys-build_hermetic_scratch.patch",
+    ],
+)
+
 # Fix readme inclusions
 crate.annotation(
     crate = "windows-link",

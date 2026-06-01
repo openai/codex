@@ -1,0 +1,22 @@
+diff --git a/src/lib.rs b/src/lib.rs
+index a240dd6..7dcf631 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -89,7 +89,7 @@ pub fn custom_dir() -> Option<path::PathBuf> {
+ /// across multiple crates without dependencies constraints
+ /// This also has the benefit of not re-downloading the binaries for each crate
+ pub fn prebuilt_dir() -> path::PathBuf {
+-    let target_dir = scratch::path(SCRATH_PATH);
++    let target_dir = PathBuf::from(env::var("OUT_DIR").unwrap()).join(SCRATH_PATH);
+     path::Path::new(&target_dir).join(format!(
+         "livekit/{}-{}/{}",
+         webrtc_triple(),
+@@ -197,7 +197,7 @@ pub fn configure_jni_symbols() -> Result<()> {
+ }
+ 
+ pub fn download_webrtc() -> Result<()> {
+-    let dir = scratch::path(SCRATH_PATH);
++    let dir = PathBuf::from(env::var("OUT_DIR").unwrap()).join(SCRATH_PATH);
+     // temporary fix to avoid github workflow issue
+     fs::create_dir_all(&dir).context("Failed to create scratch_path")?;
+     let flock = File::create(dir.join(".lock"))
