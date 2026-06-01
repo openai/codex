@@ -65,6 +65,8 @@ mod tests {
     use super::*;
     use crate::utils::create_env_for_mcp_server;
     use anyhow::Result;
+    #[cfg(unix)]
+    use std::ffi::OsStr;
     use std::fs;
     use std::path::Path;
     use tempfile::TempDir;
@@ -75,24 +77,7 @@ mod tests {
     #[tokio::test]
     async fn test_unix_executes_script_without_extension() -> Result<()> {
         let env = TestExecutableEnv::new()?;
-        // Linux can transiently report ETXTBSY while the freshly written test
-        // script is becoming executable on the backing filesystem.
-        let mut retries = 0;
-        let output = loop {
-            let mut cmd = Command::new(&env.program_name);
-            cmd.envs(&env.mcp_env);
-
-            let output = cmd.output().await;
-            if !output
-                .as_ref()
-                .is_err_and(|err| err.kind() == std::io::ErrorKind::ExecutableFileBusy)
-                || retries == 2
-            {
-                break output;
-            }
-            retries += 1;
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        };
+        let output = output_with_etxtbsy_retry(OsStr::new(&env.program_name), &env.mcp_env).await;
 
         assert!(
             output.is_ok(),
@@ -145,15 +130,45 @@ mod tests {
         let resolved = resolve(program, &env.mcp_env, std::env::current_dir()?.as_path())?;
 
         // Verify resolved path executes successfully
-        let mut cmd = Command::new(resolved);
-        cmd.envs(&env.mcp_env);
-        let output = cmd.output().await;
+        #[cfg(unix)]
+        let output = output_with_etxtbsy_retry(resolved.as_os_str(), &env.mcp_env).await;
+        #[cfg(windows)]
+        let output = {
+            let mut cmd = Command::new(resolved);
+            cmd.envs(&env.mcp_env);
+            cmd.output().await
+        };
 
         assert!(
             output.is_ok(),
             "Resolved program should execute successfully"
         );
         Ok(())
+    }
+
+    #[cfg(unix)]
+    async fn output_with_etxtbsy_retry(
+        program: &OsStr,
+        mcp_env: &HashMap<OsString, OsString>,
+    ) -> std::io::Result<std::process::Output> {
+        // Linux can transiently report ETXTBSY while the freshly written test
+        // script is becoming executable on the backing filesystem.
+        let mut retries = 0;
+        loop {
+            let mut cmd = Command::new(program);
+            cmd.envs(mcp_env);
+
+            let output = cmd.output().await;
+            if !output
+                .as_ref()
+                .is_err_and(|err| err.kind() == std::io::ErrorKind::ExecutableFileBusy)
+                || retries == 2
+            {
+                return output;
+            }
+            retries += 1;
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
     }
 
     // Test fixture for creating temporary executables in a controlled environment.
