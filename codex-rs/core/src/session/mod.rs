@@ -45,6 +45,7 @@ use chrono::Local;
 use chrono::Utc;
 use codex_analytics::AnalyticsEventsClient;
 use codex_analytics::SubAgentThreadStartedInput;
+use codex_analytics::TurnCodexErrorFact;
 use codex_app_server_protocol::McpServerElicitationRequest;
 use codex_app_server_protocol::McpServerElicitationRequestParams;
 use codex_config::types::OAuthCredentialsStoreMode;
@@ -1632,6 +1633,17 @@ impl Session {
             exec_policy.as_ref(),
             self.features.enabled(Feature::Personality),
         )
+    }
+
+    /// Record a terminal CodexErr before the app-server completion notification is reduced.
+    pub(crate) fn track_turn_codex_error(&self, turn_context: &TurnContext, error: &CodexErr) {
+        self.services
+            .analytics_events_client
+            .track_turn_codex_error(TurnCodexErrorFact::from_codex_err(
+                self.conversation_id.to_string(),
+                turn_context.sub_id.clone(),
+                error,
+            ));
     }
 
     /// Persist the event to rollout and send it to clients.

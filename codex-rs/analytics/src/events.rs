@@ -3,6 +3,7 @@ use std::time::Instant;
 use crate::facts::AcceptedLineFingerprint;
 use crate::facts::AppInvocation;
 use crate::facts::CodexCompactionEvent;
+use crate::facts::CodexErrKind;
 use crate::facts::CompactionImplementation;
 use crate::facts::CompactionPhase;
 use crate::facts::CompactionReason;
@@ -797,6 +798,9 @@ pub(crate) struct CodexTurnEventParams {
     pub(crate) is_first_turn: bool,
     pub(crate) status: Option<TurnStatus>,
     pub(crate) turn_error: Option<CodexErrorInfo>,
+    pub(crate) codex_error_kind: Option<CodexErrKind>,
+    pub(crate) codex_error_subreason: Option<String>,
+    pub(crate) codex_error_http_status_code: Option<u16>,
     pub(crate) steer_count: Option<usize>,
     pub(crate) total_tool_call_count: Option<usize>,
     pub(crate) shell_command_count: Option<usize>,
