@@ -180,6 +180,7 @@ mod tests {
         let state_db = init_state_db(&good_config)
             .await
             .expect("refresh tests require state db");
+        let goal_service = Arc::new(codex_goal_extension::GoalService::new());
         let thread_store = thread_store_from_config(&good_config, Some(state_db.clone()));
         let thread_manager = Arc::new_cyclic(|thread_manager| {
             ThreadManager::new(
@@ -191,6 +192,9 @@ mod tests {
                     guardian_agent_spawner(thread_manager.clone()),
                     Arc::new(NoopExtensionEventSink),
                     auth_manager.clone(),
+                    Some(state_db.clone()),
+                    thread_manager.clone(),
+                    Arc::clone(&goal_service),
                 ),
                 /*analytics_events_client*/ None,
                 Arc::clone(&thread_store),

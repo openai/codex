@@ -12,11 +12,14 @@ use codex_extension_api::AgentSpawner;
 use codex_extension_api::ExtensionEventSink;
 use codex_extension_api::ExtensionRegistry;
 use codex_extension_api::ExtensionRegistryBuilder;
+use codex_features::Feature;
+use codex_goal_extension::GoalService;
 use codex_login::AuthManager;
 use codex_protocol::ThreadId;
 use codex_protocol::error::CodexErr;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
+use codex_rollout::StateDbHandle;
 
 use crate::outgoing_message::OutgoingMessageSender;
 
@@ -24,12 +27,25 @@ pub(crate) fn thread_extensions<S>(
     guardian_agent_spawner: S,
     event_sink: Arc<dyn ExtensionEventSink>,
     auth_manager: Arc<AuthManager>,
+    state_db: Option<StateDbHandle>,
+    thread_manager: Weak<ThreadManager>,
+    goal_service: Arc<GoalService>,
 ) -> Arc<ExtensionRegistry<Config>>
 where
     S: AgentSpawner<StartThreadOptions, Spawned = NewThread, Error = CodexErr> + 'static,
 {
     let mut builder = ExtensionRegistryBuilder::<Config>::with_event_sink(event_sink);
     codex_guardian::install(&mut builder, guardian_agent_spawner);
+    if let Some(state_db) = state_db {
+        codex_goal_extension::install_with_backend(
+            &mut builder,
+            state_db,
+            codex_otel::global(),
+            thread_manager,
+            goal_service,
+            |config: &Config| config.features.enabled(Feature::Goals),
+        );
+    }
     codex_memories_extension::install(&mut builder, codex_otel::global());
     codex_web_search_extension::install(&mut builder, auth_manager.clone());
     codex_image_generation_extension::install(&mut builder, auth_manager);

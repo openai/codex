@@ -1,8 +1,9 @@
 use super::*;
-use codex_goal_extension::GoalApi;
-use codex_goal_extension::GoalApiError;
 use codex_goal_extension::GoalObjectiveUpdate;
+use codex_goal_extension::GoalService;
+use codex_goal_extension::GoalServiceError;
 use codex_goal_extension::GoalSetRequest;
+use codex_goal_extension::GoalThreadAccess;
 use codex_goal_extension::GoalTokenBudgetUpdate;
 
 #[derive(Clone)]
@@ -12,7 +13,7 @@ pub(crate) struct ThreadGoalRequestProcessor {
     config: Arc<Config>,
     thread_state_manager: ThreadStateManager,
     state_db: Option<StateDbHandle>,
-    goal_api: Arc<GoalApi>,
+    goal_service: Arc<GoalService>,
 }
 
 impl ThreadGoalRequestProcessor {
@@ -22,6 +23,7 @@ impl ThreadGoalRequestProcessor {
         config: Arc<Config>,
         thread_state_manager: ThreadStateManager,
         state_db: Option<StateDbHandle>,
+        goal_service: Arc<GoalService>,
     ) -> Self {
         Self {
             thread_manager,
@@ -29,7 +31,7 @@ impl ThreadGoalRequestProcessor {
             config,
             thread_state_manager,
             state_db,
-            goal_api: Arc::new(GoalApi::new()),
+            goal_service,
         }
     }
 
@@ -105,35 +107,11 @@ impl ThreadGoalRequestProcessor {
         }
 
         let thread_id = parse_thread_id_for_request(params.thread_id.as_str())?;
-        let state_db = self.state_db_for_materialized_thread(thread_id).await?;
-        let running_thread = self.thread_manager.get_thread(thread_id).await.ok();
-        let rollout_path = match running_thread.as_ref() {
-            Some(thread) => thread.rollout_path().ok_or_else(|| {
-                invalid_request(format!(
-                    "ephemeral thread does not support goals: {thread_id}"
-                ))
-            })?,
-            None => codex_rollout::find_thread_path_by_id_str(
-                &self.config.codex_home,
-                &thread_id.to_string(),
-                self.state_db.as_deref(),
-            )
+        let state_db = self
+            .goal_service
+            .state_db_for_materialized_thread_mutation(self.goal_thread_access(), thread_id)
             .await
-            .map_err(|err| {
-                internal_error(format!("failed to locate thread id {thread_id}: {err}"))
-            })?
-            .ok_or_else(|| invalid_request(format!("thread not found: {thread_id}")))?,
-        };
-        reconcile_rollout(
-            Some(&state_db),
-            rollout_path.as_path(),
-            self.config.model_provider_id.as_str(),
-            /*builder*/ None,
-            &[],
-            /*archived_only*/ None,
-            /*new_thread_memory_mode*/ None,
-        )
-        .await;
+            .map_err(goal_service_error)?;
 
         let listener_command_tx = {
             let thread_state = self.thread_state_manager.thread_state(thread_id).await;
@@ -141,7 +119,7 @@ impl ThreadGoalRequestProcessor {
             thread_state.listener_command_tx()
         };
         let outcome = self
-            .goal_api
+            .goal_service
             .set_thread_goal(
                 &state_db,
                 GoalSetRequest {
@@ -157,7 +135,7 @@ impl ThreadGoalRequestProcessor {
                 },
             )
             .await
-            .map_err(goal_api_error)?;
+            .map_err(goal_service_error)?;
         let goal: ThreadGoal = outcome.goal.clone().into();
         self.outgoing
             .send_response(
@@ -167,7 +145,7 @@ impl ThreadGoalRequestProcessor {
             .await;
         self.emit_thread_goal_updated_ordered(thread_id, goal, listener_command_tx)
             .await;
-        outcome.apply_runtime_effects(&self.goal_api).await;
+        outcome.apply_runtime_effects(&self.goal_service).await;
         Ok(())
     }
 
@@ -182,10 +160,10 @@ impl ThreadGoalRequestProcessor {
         let thread_id = parse_thread_id_for_request(params.thread_id.as_str())?;
         let state_db = self.state_db_for_materialized_thread(thread_id).await?;
         let goal = self
-            .goal_api
+            .goal_service
             .get_thread_goal(&state_db, thread_id)
             .await
-            .map_err(goal_api_error)?
+            .map_err(goal_service_error)?
             .map(ThreadGoal::from);
         Ok(ThreadGoalGetResponse { goal })
     }
@@ -200,35 +178,11 @@ impl ThreadGoalRequestProcessor {
         }
 
         let thread_id = parse_thread_id_for_request(params.thread_id.as_str())?;
-        let state_db = self.state_db_for_materialized_thread(thread_id).await?;
-        let running_thread = self.thread_manager.get_thread(thread_id).await.ok();
-        let rollout_path = match running_thread.as_ref() {
-            Some(thread) => thread.rollout_path().ok_or_else(|| {
-                invalid_request(format!(
-                    "ephemeral thread does not support goals: {thread_id}"
-                ))
-            })?,
-            None => codex_rollout::find_thread_path_by_id_str(
-                &self.config.codex_home,
-                &thread_id.to_string(),
-                self.state_db.as_deref(),
-            )
+        let state_db = self
+            .goal_service
+            .state_db_for_materialized_thread_mutation(self.goal_thread_access(), thread_id)
             .await
-            .map_err(|err| {
-                internal_error(format!("failed to locate thread id {thread_id}: {err}"))
-            })?
-            .ok_or_else(|| invalid_request(format!("thread not found: {thread_id}")))?,
-        };
-        reconcile_rollout(
-            Some(&state_db),
-            rollout_path.as_path(),
-            self.config.model_provider_id.as_str(),
-            /*builder*/ None,
-            &[],
-            /*archived_only*/ None,
-            /*new_thread_memory_mode*/ None,
-        )
-        .await;
+            .map_err(goal_service_error)?;
 
         let listener_command_tx = {
             let thread_state = self.thread_state_manager.thread_state(thread_id).await;
@@ -236,10 +190,10 @@ impl ThreadGoalRequestProcessor {
             thread_state.listener_command_tx()
         };
         let cleared = self
-            .goal_api
+            .goal_service
             .clear_thread_goal(&state_db, thread_id)
             .await
-            .map_err(goal_api_error)?;
+            .map_err(goal_service_error)?;
 
         self.outgoing
             .send_response(request_id, ThreadGoalClearResponse { cleared })
@@ -255,31 +209,19 @@ impl ThreadGoalRequestProcessor {
         &self,
         thread_id: ThreadId,
     ) -> Result<StateDbHandle, JSONRPCErrorError> {
-        if let Ok(thread) = self.thread_manager.get_thread(thread_id).await {
-            if thread.rollout_path().is_none() {
-                return Err(invalid_request(format!(
-                    "ephemeral thread does not support goals: {thread_id}"
-                )));
-            }
-            if let Some(state_db) = thread.state_db() {
-                return Ok(state_db);
-            }
-        } else {
-            codex_rollout::find_thread_path_by_id_str(
-                &self.config.codex_home,
-                &thread_id.to_string(),
-                self.state_db.as_deref(),
-            )
+        self.goal_service
+            .state_db_for_materialized_thread(self.goal_thread_access(), thread_id)
             .await
-            .map_err(|err| {
-                internal_error(format!("failed to locate thread id {thread_id}: {err}"))
-            })?
-            .ok_or_else(|| invalid_request(format!("thread not found: {thread_id}")))?;
-        }
+            .map_err(goal_service_error)
+    }
 
-        self.state_db
-            .clone()
-            .ok_or_else(|| internal_error("sqlite state db unavailable for thread goals"))
+    fn goal_thread_access(&self) -> GoalThreadAccess<'_> {
+        GoalThreadAccess {
+            thread_manager: self.thread_manager.as_ref(),
+            codex_home: self.config.codex_home.as_path(),
+            model_provider_id: self.config.model_provider_id.as_str(),
+            fallback_state_db: self.state_db.as_ref(),
+        }
     }
 
     async fn emit_thread_goal_snapshot(&self, thread_id: ThreadId) {
@@ -393,9 +335,9 @@ fn parse_thread_id_for_request(thread_id: &str) -> Result<ThreadId, JSONRPCError
         .map_err(|err| invalid_request(format!("invalid thread id: {err}")))
 }
 
-fn goal_api_error(err: GoalApiError) -> JSONRPCErrorError {
+fn goal_service_error(err: GoalServiceError) -> JSONRPCErrorError {
     match err {
-        GoalApiError::InvalidRequest(message) => invalid_request(message),
-        GoalApiError::Internal(message) => internal_error(message),
+        GoalServiceError::InvalidRequest(message) => invalid_request(message),
+        GoalServiceError::Internal(message) => internal_error(message),
     }
 }

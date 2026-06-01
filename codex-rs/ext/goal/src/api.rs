@@ -1,14 +1,20 @@
 use std::collections::HashMap;
 use std::fmt;
+use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::PoisonError;
 use std::sync::Weak;
 
+use codex_core::ThreadManager;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::ThreadGoal;
 use codex_protocol::protocol::ThreadGoalStatus;
 use codex_protocol::protocol::validate_thread_goal_objective;
+use codex_rollout::StateDbHandle;
+use codex_rollout::find_thread_path_by_id_str;
+use codex_rollout::state_db::reconcile_rollout;
 
 use crate::runtime::GoalRuntimeHandle;
 use crate::runtime::PreviousGoalSnapshot;
@@ -53,6 +59,14 @@ pub struct GoalSetRequest<'a> {
     pub token_budget: GoalTokenBudgetUpdate,
 }
 
+#[derive(Clone, Copy)]
+pub struct GoalThreadAccess<'a> {
+    pub thread_manager: &'a ThreadManager,
+    pub codex_home: &'a Path,
+    pub model_provider_id: &'a str,
+    pub fallback_state_db: Option<&'a StateDbHandle>,
+}
+
 #[derive(Clone, Debug)]
 pub struct GoalSetOutcome {
     pub goal: ThreadGoal,
@@ -80,6 +94,35 @@ pub struct GoalService {
 impl GoalService {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub async fn state_db_for_materialized_thread(
+        &self,
+        access: GoalThreadAccess<'_>,
+        thread_id: ThreadId,
+    ) -> Result<StateDbHandle, GoalServiceError> {
+        self.materialized_thread_state(access, thread_id)
+            .await
+            .map(|state| state.state_db)
+    }
+
+    pub async fn state_db_for_materialized_thread_mutation(
+        &self,
+        access: GoalThreadAccess<'_>,
+        thread_id: ThreadId,
+    ) -> Result<StateDbHandle, GoalServiceError> {
+        let state = self.materialized_thread_state(access, thread_id).await?;
+        reconcile_rollout(
+            Some(&state.state_db),
+            state.rollout_path.as_path(),
+            access.model_provider_id,
+            /*builder*/ None,
+            &[],
+            /*archived_only*/ None,
+            /*new_thread_memory_mode*/ None,
+        )
+        .await;
+        Ok(state.state_db)
     }
 
     pub async fn get_thread_goal(
@@ -283,4 +326,62 @@ impl GoalService {
     fn runtimes(&self) -> std::sync::MutexGuard<'_, HashMap<String, Weak<GoalRuntimeHandle>>> {
         self.runtimes.lock().unwrap_or_else(PoisonError::into_inner)
     }
+
+    async fn materialized_thread_state(
+        &self,
+        access: GoalThreadAccess<'_>,
+        thread_id: ThreadId,
+    ) -> Result<MaterializedThreadState, GoalServiceError> {
+        let thread_id_str = thread_id.to_string();
+        let (state_db, rollout_path) = match access.thread_manager.get_thread(thread_id).await {
+            Ok(thread) => {
+                let rollout_path = thread.rollout_path().ok_or_else(|| {
+                    GoalServiceError::InvalidRequest(format!(
+                        "ephemeral thread does not support goals: {thread_id}"
+                    ))
+                })?;
+                let state_db = thread
+                    .state_db()
+                    .or_else(|| access.fallback_state_db.cloned())
+                    .ok_or_else(|| {
+                        GoalServiceError::Internal(
+                            "sqlite state db unavailable for thread goals".to_string(),
+                        )
+                    })?;
+                (state_db, rollout_path)
+            }
+            Err(_) => {
+                let rollout_path = find_thread_path_by_id_str(
+                    access.codex_home,
+                    thread_id_str.as_str(),
+                    access.fallback_state_db.map(Arc::as_ref),
+                )
+                .await
+                .map_err(|err| {
+                    GoalServiceError::Internal(format!(
+                        "failed to locate thread id {thread_id}: {err}"
+                    ))
+                })?
+                .ok_or_else(|| {
+                    GoalServiceError::InvalidRequest(format!("thread not found: {thread_id}"))
+                })?;
+                let state_db = access.fallback_state_db.cloned().ok_or_else(|| {
+                    GoalServiceError::Internal(
+                        "sqlite state db unavailable for thread goals".to_string(),
+                    )
+                })?;
+                (state_db, rollout_path)
+            }
+        };
+
+        Ok(MaterializedThreadState {
+            state_db,
+            rollout_path,
+        })
+    }
+}
+
+struct MaterializedThreadState {
+    state_db: StateDbHandle,
+    rollout_path: PathBuf,
 }
