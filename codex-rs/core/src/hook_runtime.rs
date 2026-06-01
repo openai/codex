@@ -128,9 +128,7 @@ pub(crate) async fn run_pending_session_start_hooks(
             .run_session_start(request, Some(turn_context.sub_id.clone()))
             .await;
         emit_hook_completed_events(sess, turn_context, hook_events).await;
-        if let Some(env) = session_start_env {
-            sess.merge_session_start_env(env);
-        }
+        sess.merge_session_start_env(session_start_env);
         record_additional_contexts(sess, turn_context, additional_contexts).await;
         if should_stop {
             return true;

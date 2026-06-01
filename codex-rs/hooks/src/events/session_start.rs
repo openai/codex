@@ -83,7 +83,7 @@ pub struct SessionStartOutcome {
     pub should_stop: bool,
     pub stop_reason: Option<String>,
     pub additional_contexts: Vec<String>,
-    pub session_start_env: Option<HashMap<String, String>>,
+    pub session_start_env: HashMap<String, String>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -123,7 +123,7 @@ pub(crate) async fn run(
             should_stop: false,
             stop_reason: None,
             additional_contexts: Vec::new(),
-            session_start_env: session_start_env_for_event(event_name),
+            session_start_env: HashMap::new(),
         };
     }
 
@@ -145,7 +145,6 @@ pub(crate) async fn run(
                             turn_id,
                             format!("failed to serialize session start hook input: {error}"),
                         ),
-                        event_name,
                     );
                 }
             };
@@ -176,7 +175,6 @@ pub(crate) async fn run(
                             Some(subagent_turn_id),
                             format!("failed to serialize subagent start hook input: {error}"),
                         ),
-                        event_name,
                     );
                 }
             };
@@ -203,9 +201,8 @@ pub(crate) async fn run(
             .iter()
             .map(|result| result.data.additional_contexts_for_model.as_slice()),
     );
-    let session_start_env = (event_name == HookEventName::SessionStart).then(|| {
-        merge_session_start_env(results.iter().map(|result| &result.data.session_start_env))
-    });
+    let session_start_env =
+        merge_session_start_env(results.iter().map(|result| &result.data.session_start_env));
 
     SessionStartOutcome {
         hook_events: results.into_iter().map(|result| result.completed).collect(),
@@ -353,21 +350,14 @@ fn parse_completed(
     }
 }
 
-fn serialization_failure_outcome(
-    hook_events: Vec<HookCompletedEvent>,
-    event_name: HookEventName,
-) -> SessionStartOutcome {
+fn serialization_failure_outcome(hook_events: Vec<HookCompletedEvent>) -> SessionStartOutcome {
     SessionStartOutcome {
         hook_events,
         should_stop: false,
         stop_reason: None,
         additional_contexts: Vec::new(),
-        session_start_env: session_start_env_for_event(event_name),
+        session_start_env: HashMap::new(),
     }
-}
-
-fn session_start_env_for_event(event_name: HookEventName) -> Option<HashMap<String, String>> {
-    (event_name == HookEventName::SessionStart).then(HashMap::new)
 }
 
 fn merge_session_start_env<'a>(
