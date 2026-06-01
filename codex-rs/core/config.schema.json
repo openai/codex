@@ -473,6 +473,9 @@
             "image_generation": {
               "type": "boolean"
             },
+            "imagegenext": {
+              "type": "boolean"
+            },
             "in_app_browser": {
               "type": "boolean"
             },
@@ -480,6 +483,9 @@
               "type": "boolean"
             },
             "js_repl_tools_only": {
+              "type": "boolean"
+            },
+            "local_thread_store_compression": {
               "type": "boolean"
             },
             "memories": {
@@ -499,6 +505,9 @@
             },
             "network_proxy": {
               "$ref": "#/definitions/FeatureToml_for_NetworkProxyConfigToml"
+            },
+            "non_prefixed_mcp_tool_names": {
+              "type": "boolean"
             },
             "personality": {
               "type": "boolean"
@@ -570,6 +579,9 @@
               "type": "boolean"
             },
             "sqlite": {
+              "type": "boolean"
+            },
+            "standalone_web_search": {
               "type": "boolean"
             },
             "steer": {
@@ -711,14 +723,6 @@
             }
           ],
           "default": null
-        },
-        "zsh_path": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/AbsolutePathBuf"
-            }
-          ],
-          "description": "Optional absolute path to patched zsh used by zsh-exec-bridge-backed shell execution."
         }
       },
       "type": "object"
@@ -758,6 +762,16 @@
       "properties": {
         "config_lockfile": {
           "$ref": "#/definitions/DebugConfigLockToml"
+        }
+      },
+      "type": "object"
+    },
+    "ExperimentalRequestUserInput": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "default": true,
+          "type": "boolean"
         }
       },
       "type": "object"
@@ -1288,6 +1302,10 @@
           "description": "Model used for memory consolidation.",
           "type": "string"
         },
+        "dedicated_tools": {
+          "description": "When `true`, expose dedicated memory tools through the extension tool surface.",
+          "type": "boolean"
+        },
         "disable_on_external_context": {
           "description": "When `true`, external context sources mark the thread `memory_mode` as `\"polluted\"`.",
           "type": "boolean"
@@ -1768,7 +1786,7 @@
     "NetworkProxyUnixSocketPermissionToml": {
       "enum": [
         "allow",
-        "none"
+        "deny"
       ],
       "type": "string"
     },
@@ -1820,7 +1838,7 @@
     "NetworkUnixSocketPermissionToml": {
       "enum": [
         "allow",
-        "none"
+        "deny"
       ],
       "type": "string"
     },
@@ -2707,6 +2725,9 @@
     "ToolsToml": {
       "additionalProperties": false,
       "properties": {
+        "experimental_request_user_input": {
+          "$ref": "#/definitions/ExperimentalRequestUserInput"
+        },
         "web_search": {
           "allOf": [
             {
@@ -2764,7 +2785,8 @@
             "chat": {
               "decrease_reasoning_effort": null,
               "edit_queued_message": null,
-              "increase_reasoning_effort": null
+              "increase_reasoning_effort": null,
+              "interrupt_turn": null
             },
             "composer": {
               "history_search_next": null,
@@ -2832,6 +2854,7 @@
               "append_after_cursor": null,
               "append_line_end": null,
               "cancel_operator": null,
+              "change_to_line_end": null,
               "delete_char": null,
               "delete_to_line_end": null,
               "enter_insert": null,
@@ -2848,8 +2871,10 @@
               "open_line_above": null,
               "open_line_below": null,
               "paste_after": null,
+              "start_change_operator": null,
               "start_delete_operator": null,
               "start_yank_operator": null,
+              "substitute_char": null,
               "yank_line": null
             },
             "vim_operator": {
@@ -2864,7 +2889,20 @@
               "motion_word_backward": null,
               "motion_word_end": null,
               "motion_word_forward": null,
+              "select_around_text_object": null,
+              "select_inner_text_object": null,
               "yank_line": null
+            },
+            "vim_text_object": {
+              "backtick": null,
+              "big_word": null,
+              "braces": null,
+              "brackets": null,
+              "cancel": null,
+              "double_quote": null,
+              "parentheses": null,
+              "single_quote": null,
+              "word": null
             }
           },
           "description": "Keybinding overrides for the TUI.\n\nThis supports rebinding selected actions globally and by context. Context bindings take precedence over `global` bindings."
@@ -3077,6 +3115,14 @@
             }
           ],
           "description": "Increase the active reasoning effort."
+        },
+        "interrupt_turn": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Interrupt the active turn."
         }
       },
       "type": "object"
@@ -3388,7 +3434,8 @@
           "default": {
             "decrease_reasoning_effort": null,
             "edit_queued_message": null,
-            "increase_reasoning_effort": null
+            "increase_reasoning_effort": null,
+            "interrupt_turn": null
           }
         },
         "composer": {
@@ -3498,6 +3545,7 @@
             "append_after_cursor": null,
             "append_line_end": null,
             "cancel_operator": null,
+            "change_to_line_end": null,
             "delete_char": null,
             "delete_to_line_end": null,
             "enter_insert": null,
@@ -3514,8 +3562,10 @@
             "open_line_above": null,
             "open_line_below": null,
             "paste_after": null,
+            "start_change_operator": null,
             "start_delete_operator": null,
             "start_yank_operator": null,
+            "substitute_char": null,
             "yank_line": null
           }
         },
@@ -3537,7 +3587,27 @@
             "motion_word_backward": null,
             "motion_word_end": null,
             "motion_word_forward": null,
+            "select_around_text_object": null,
+            "select_inner_text_object": null,
             "yank_line": null
+          }
+        },
+        "vim_text_object": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/TuiVimTextObjectKeymap"
+            }
+          ],
+          "default": {
+            "backtick": null,
+            "big_word": null,
+            "braces": null,
+            "brackets": null,
+            "cancel": null,
+            "double_quote": null,
+            "parentheses": null,
+            "single_quote": null,
+            "word": null
           }
         }
       },
@@ -3763,6 +3833,14 @@
           ],
           "description": "Cancel a pending operator and return to normal mode."
         },
+        "change_to_line_end": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Change from cursor to end of line and enter insert mode (`C`)."
+        },
         "delete_char": {
           "allOf": [
             {
@@ -3891,6 +3969,14 @@
           ],
           "description": "Paste after cursor (`p`)."
         },
+        "start_change_operator": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Begin change operator; next keys select a text object."
+        },
         "start_delete_operator": {
           "allOf": [
             {
@@ -3906,6 +3992,14 @@
             }
           ],
           "description": "Begin yank operator; next key selects motion (`y`)."
+        },
+        "substitute_char": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Delete character under cursor and enter insert mode (`s`)."
         },
         "yank_line": {
           "allOf": [
@@ -4010,6 +4104,22 @@
           ],
           "description": "Motion: to start of next word (`w`)."
         },
+        "select_around_text_object": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Select an around text object after an operator."
+        },
+        "select_inner_text_object": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Select an inner text object after an operator."
+        },
         "yank_line": {
           "allOf": [
             {
@@ -4017,6 +4127,85 @@
             }
           ],
           "description": "Repeat yank operator to yank the whole line (`yy`)."
+        }
+      },
+      "type": "object"
+    },
+    "TuiVimTextObjectKeymap": {
+      "additionalProperties": false,
+      "description": "Vim text-object keybindings for modal editing inside text areas.",
+      "properties": {
+        "backtick": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Text object: backticks."
+        },
+        "big_word": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Text object: whitespace-delimited WORD."
+        },
+        "braces": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Text object: braces."
+        },
+        "brackets": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Text object: brackets."
+        },
+        "cancel": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Cancel the pending text-object command."
+        },
+        "double_quote": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Text object: double quotes."
+        },
+        "parentheses": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Text object: parentheses."
+        },
+        "single_quote": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Text object: single quotes."
+        },
+        "word": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Text object: word."
         }
       },
       "type": "object"
@@ -4404,6 +4593,9 @@
         "image_generation": {
           "type": "boolean"
         },
+        "imagegenext": {
+          "type": "boolean"
+        },
         "in_app_browser": {
           "type": "boolean"
         },
@@ -4411,6 +4603,9 @@
           "type": "boolean"
         },
         "js_repl_tools_only": {
+          "type": "boolean"
+        },
+        "local_thread_store_compression": {
           "type": "boolean"
         },
         "memories": {
@@ -4430,6 +4625,9 @@
         },
         "network_proxy": {
           "$ref": "#/definitions/FeatureToml_for_NetworkProxyConfigToml"
+        },
+        "non_prefixed_mcp_tool_names": {
+          "type": "boolean"
         },
         "personality": {
           "type": "boolean"
@@ -4501,6 +4699,9 @@
           "type": "boolean"
         },
         "sqlite": {
+          "type": "boolean"
+        },
+        "standalone_web_search": {
           "type": "boolean"
         },
         "steer": {
@@ -4986,14 +5187,6 @@
       ],
       "default": null,
       "description": "Windows-specific configuration."
-    },
-    "zsh_path": {
-      "allOf": [
-        {
-          "$ref": "#/definitions/AbsolutePathBuf"
-        }
-      ],
-      "description": "Optional absolute path to patched zsh used by zsh-exec-bridge-backed shell execution."
     }
   },
   "title": "ConfigToml",

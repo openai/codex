@@ -10,7 +10,7 @@ from .generated.v2_all import (
     ThreadItem,
     ThreadTokenUsage,
     ThreadTokenUsageUpdatedNotification,
-    Turn as AppServerTurn,
+    Turn,
     TurnCompletedNotification,
     TurnError,
     TurnStatus,
@@ -20,6 +20,8 @@ from .models import Notification
 
 @dataclass(slots=True)
 class TurnResult:
+    """Collected result returned after a turn completes."""
+
     id: str
     status: TurnStatus
     error: TurnError | None
@@ -55,7 +57,7 @@ def _final_assistant_response_from_items(items: list[ThreadItem]) -> str | None:
     return last_unknown_phase_response
 
 
-def _raise_for_failed_turn(turn: AppServerTurn) -> None:
+def _raise_for_failed_turn(turn: Turn) -> None:
     if turn.status != TurnStatus.failed:
         return
     if turn.error is not None and turn.error.message:

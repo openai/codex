@@ -37,18 +37,21 @@ use codex_app_server_protocol::ThreadMetadataGitInfoUpdateParams;
 use codex_app_server_protocol::ThreadMetadataUpdateParams;
 use codex_app_server_protocol::ThreadReadParams;
 use codex_app_server_protocol::ThreadReadResponse;
+use codex_app_server_protocol::ThreadResumeInitialTurnsPageParams;
 use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadSource;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStatus;
+use codex_app_server_protocol::ThreadUnsubscribeParams;
 use codex_app_server_protocol::TurnItemsView;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput;
 use codex_config::types::AuthCredentialsStoreMode;
+use codex_core::ARCHIVED_SESSIONS_SUBDIR;
 use codex_login::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::Personality;
@@ -209,6 +212,7 @@ async fn thread_resume_with_empty_path_uses_running_thread_id() -> Result<()> {
     let turn_id = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
+            client_user_message_id: None,
             input: vec![UserInput::Text {
                 text: "materialize rollout".to_string(),
                 text_elements: Vec::new(),
@@ -277,6 +281,7 @@ async fn turn_start_updates_runtime_workspace_roots_for_loaded_thread() -> Resul
     let turn_id = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
+            client_user_message_id: None,
             input: vec![UserInput::Text {
                 text: "Hello".to_string(),
                 text_elements: Vec::new(),
@@ -421,7 +426,14 @@ async fn thread_resume_tracks_thread_initialized_analytics() -> Result<()> {
 
     let payload = wait_for_analytics_payload(&server, DEFAULT_READ_TIMEOUT).await?;
     let event = thread_initialized_event(&payload)?;
-    assert_basic_thread_initialized_event(event, &thread.id, "gpt-5.3-codex", "resumed", "user");
+    assert_basic_thread_initialized_event(
+        event,
+        &thread.id,
+        &thread.session_id,
+        "gpt-5.3-codex",
+        "resumed",
+        "user",
+    );
     assert_eq!(event["event_params"]["thread_source"], "user");
     Ok(())
 }
@@ -522,48 +534,59 @@ async fn thread_resume_returns_rollout_history() -> Result<()> {
 #[tokio::test]
 async fn thread_resume_redacts_payloads_for_chatgpt_remote_clients() -> Result<()> {
     for client_name in ["codex_chatgpt_android_remote", "codex_chatgpt_ios_remote"] {
-        let remote_thread = resume_redaction_fixture(Some(client_name)).await?;
-        let remote_turn = remote_thread
+        let remote_resume = resume_redaction_fixture(Some(client_name)).await?;
+        let remote_turn = remote_resume
+            .thread
             .turns
             .first()
             .expect("remote resume should include a turn");
-        let remote_mcp_item = remote_turn
-            .items
-            .iter()
-            .find(|item| matches!(item, ThreadItem::McpToolCall { .. }))
-            .expect("remote resume should include redacted MCP item");
-        let ThreadItem::McpToolCall {
-            arguments,
-            result,
-            error,
-            ..
-        } = remote_mcp_item
-        else {
-            unreachable!("matched MCP item");
-        };
-        assert_eq!(arguments, &json!("[redacted]"));
-        let result = result.as_ref().expect("redacted MCP result");
-        assert_eq!(
-            result.content,
-            vec![json!({
-                "type": "text",
-                "text": "[redacted]",
-            })]
-        );
-        assert_eq!(result.structured_content, None);
-        assert_eq!(result.meta, None);
-        assert_eq!(error, &None);
-        assert!(
-            !remote_turn
+        let remote_page_turn = remote_resume
+            .initial_turns_page
+            .as_ref()
+            .expect("remote resume should include the requested initial turns page")
+            .data
+            .first()
+            .expect("remote initial turns page should include a turn");
+        for remote_turn in [remote_turn, remote_page_turn] {
+            let remote_mcp_item = remote_turn
                 .items
                 .iter()
-                .any(|item| matches!(item, ThreadItem::ImageGeneration { .. })),
-            "remote resume should drop image generation items for {client_name}"
-        );
+                .find(|item| matches!(item, ThreadItem::McpToolCall { .. }))
+                .expect("remote resume should include redacted MCP item");
+            let ThreadItem::McpToolCall {
+                arguments,
+                result,
+                error,
+                ..
+            } = remote_mcp_item
+            else {
+                unreachable!("matched MCP item");
+            };
+            assert_eq!(arguments, &json!("[redacted]"));
+            let result = result.as_ref().expect("redacted MCP result");
+            assert_eq!(
+                result.content,
+                vec![json!({
+                    "type": "text",
+                    "text": "[redacted]",
+                })]
+            );
+            assert_eq!(result.structured_content, None);
+            assert_eq!(result.meta, None);
+            assert_eq!(error, &None);
+            assert!(
+                !remote_turn
+                    .items
+                    .iter()
+                    .any(|item| matches!(item, ThreadItem::ImageGeneration { .. })),
+                "remote resume should drop image generation items for {client_name}"
+            );
+        }
     }
 
-    let normal_thread = resume_redaction_fixture(Some("some_other_client")).await?;
-    let normal_turn = normal_thread
+    let normal_resume = resume_redaction_fixture(Some("some_other_client")).await?;
+    let normal_turn = normal_resume
+        .thread
         .turns
         .first()
         .expect("normal resume should include a turn");
@@ -608,9 +631,7 @@ async fn thread_resume_redacts_payloads_for_chatgpt_remote_clients() -> Result<(
     Ok(())
 }
 
-async fn resume_redaction_fixture(
-    client_name: Option<&str>,
-) -> Result<codex_app_server_protocol::Thread> {
+async fn resume_redaction_fixture(client_name: Option<&str>) -> Result<ThreadResumeResponse> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
@@ -650,6 +671,11 @@ async fn resume_redaction_fixture(
     let resume_id = mcp
         .send_thread_resume_request(ThreadResumeParams {
             thread_id: conversation_id,
+            initial_turns_page: Some(ThreadResumeInitialTurnsPageParams {
+                limit: None,
+                sort_direction: None,
+                items_view: Some(TurnItemsView::Full),
+            }),
             ..Default::default()
         })
         .await?;
@@ -658,8 +684,7 @@ async fn resume_redaction_fixture(
         mcp.read_stream_until_response_message(RequestId::Integer(resume_id)),
     )
     .await??;
-    let ThreadResumeResponse { thread, .. } = to_response::<ThreadResumeResponse>(resume_resp)?;
-    Ok(thread)
+    to_response::<ThreadResumeResponse>(resume_resp)
 }
 
 fn append_resume_redaction_history(
@@ -757,6 +782,57 @@ async fn thread_resume_can_skip_turns_for_metadata_only_resume() -> Result<()> {
 }
 
 #[tokio::test]
+async fn thread_resume_rejects_archived_session_by_id() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let filename_ts = "2025-01-05T12-00-00";
+    let conversation_id = create_fake_rollout_with_text_elements(
+        codex_home.path(),
+        filename_ts,
+        "2025-01-05T12:00:00Z",
+        "Archived saved user message",
+        Vec::new(),
+        Some("mock_provider"),
+        /*git_info*/ None,
+    )?;
+    let active_rollout_path = rollout_path(codex_home.path(), filename_ts, &conversation_id);
+    let archived_dir = codex_home.path().join(ARCHIVED_SESSIONS_SUBDIR);
+    std::fs::create_dir_all(&archived_dir)?;
+    std::fs::rename(
+        &active_rollout_path,
+        archived_dir.join(active_rollout_path.file_name().expect("rollout file name")),
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let resume_id = mcp
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: conversation_id.clone(),
+            ..Default::default()
+        })
+        .await?;
+    let resume_err: JSONRPCError = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(resume_id)),
+    )
+    .await??;
+
+    let message = resume_err.error.message;
+    assert!(
+        message.contains(&format!("session {conversation_id} is archived"))
+            && message.contains(&format!(
+                "codex unarchive {conversation_id}` to unarchive it first"
+            )),
+        "unexpected resume error: {message}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn thread_resume_keeps_paused_goal_paused() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
@@ -787,6 +863,7 @@ async fn thread_resume_keeps_paused_goal_paused() -> Result<()> {
     let turn_id = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
+            client_user_message_id: None,
             input: vec![UserInput::Text {
                 text: "materialize this thread".to_string(),
                 text_elements: Vec::new(),
@@ -891,6 +968,7 @@ async fn thread_goal_set_preserves_budget_limited_same_objective() -> Result<()>
     let turn_id = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
+            client_user_message_id: None,
             input: vec![UserInput::Text {
                 text: "materialize this thread".to_string(),
                 text_elements: Vec::new(),
@@ -989,6 +1067,7 @@ async fn thread_goal_set_persists_resumable_stopped_statuses() -> Result<()> {
     let turn_id = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
+            client_user_message_id: None,
             input: vec![UserInput::Text {
                 text: "materialize this thread".to_string(),
                 text_elements: Vec::new(),
@@ -1184,6 +1263,7 @@ async fn thread_goal_clear_deletes_goal_and_notifies() -> Result<()> {
     let turn_id = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
+            client_user_message_id: None,
             input: vec![UserInput::Text {
                 text: "materialize this thread".to_string(),
                 text_elements: Vec::new(),
@@ -1711,6 +1791,7 @@ stream_max_retries = 0
     let session_meta = SessionMeta {
         id: conversation_id,
         forked_from_id: None,
+        parent_thread_id: None,
         timestamp: "2025-01-05T12:00:00Z".to_string(),
         cwd: repo_path.clone(),
         originator: "codex".to_string(),
@@ -1929,7 +2010,7 @@ async fn thread_resume_and_read_interrupt_incomplete_rollout_turn_when_thread_is
 }
 
 #[tokio::test]
-async fn thread_resume_without_overrides_does_not_change_updated_at_or_mtime() -> Result<()> {
+async fn thread_resume_defers_updated_at_until_turn_start() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     let rollout = setup_rollout_fixture(codex_home.path(), &server.uri())?;
@@ -1972,6 +2053,33 @@ async fn thread_resume_without_overrides_does_not_change_updated_at_or_mtime() -
 
     let after_modified = std::fs::metadata(&rollout.rollout_file_path)?.modified()?;
     assert_eq!(after_modified, rollout.before_modified);
+
+    let unsubscribe_id = mcp
+        .send_thread_unsubscribe_request(ThreadUnsubscribeParams {
+            thread_id: thread_id.clone(),
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(unsubscribe_id)),
+    )
+    .await??;
+
+    let resume_id = mcp
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: "not-a-valid-thread-id".to_string(),
+            path: Some(normalized_existing_path(&rollout.rollout_file_path)?),
+            cwd: Some(codex_home.path().to_string_lossy().to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let resume_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(resume_id)),
+    )
+    .await??;
+    let ThreadResumeResponse { cwd, .. } = to_response::<ThreadResumeResponse>(resume_resp)?;
+    assert_eq!(cwd, AbsolutePathBuf::from_absolute_path(codex_home.path())?);
 
     let turn_id = mcp
         .send_turn_start_request(TurnStartParams {
@@ -2025,6 +2133,7 @@ async fn thread_resume_keeps_in_flight_turn_streaming() -> Result<()> {
     let seed_turn_id = primary
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
+            client_user_message_id: None,
             input: vec![UserInput::Text {
                 text: "seed history".to_string(),
                 text_elements: Vec::new(),
@@ -2050,6 +2159,7 @@ async fn thread_resume_keeps_in_flight_turn_streaming() -> Result<()> {
     let turn_id = primary
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
+            client_user_message_id: None,
             input: vec![UserInput::Text {
                 text: "respond with docs".to_string(),
                 text_elements: Vec::new(),
@@ -2132,6 +2242,7 @@ async fn thread_resume_rejects_history_when_thread_is_running() -> Result<()> {
     let seed_turn_id = primary
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
+            client_user_message_id: None,
             input: vec![UserInput::Text {
                 text: "seed history".to_string(),
                 text_elements: Vec::new(),
@@ -2155,6 +2266,7 @@ async fn thread_resume_rejects_history_when_thread_is_running() -> Result<()> {
     let running_turn_request_id = primary
         .send_turn_start_request(TurnStartParams {
             thread_id: thread_id.clone(),
+            client_user_message_id: None,
             input: vec![UserInput::Text {
                 text: "keep running".to_string(),
                 text_elements: Vec::new(),
@@ -2248,6 +2360,7 @@ async fn thread_resume_rejects_mismatched_path_for_running_thread_id() -> Result
     let seed_turn_id = primary
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
+            client_user_message_id: None,
             input: vec![UserInput::Text {
                 text: "seed history".to_string(),
                 text_elements: Vec::new(),
@@ -2271,6 +2384,7 @@ async fn thread_resume_rejects_mismatched_path_for_running_thread_id() -> Result
     let running_turn_request_id = primary
         .send_turn_start_request(TurnStartParams {
             thread_id: thread_id.clone(),
+            client_user_message_id: None,
             input: vec![UserInput::Text {
                 text: "keep running".to_string(),
                 text_elements: Vec::new(),
@@ -2291,9 +2405,10 @@ async fn thread_resume_rejects_mismatched_path_for_running_thread_id() -> Result
     )
     .await??;
 
-    let stale_path = rollout_path(codex_home.path(), "2025-01-01T00-00-00", &thread_id);
+    let stale_thread_id = Uuid::new_v4().to_string();
+    let stale_path = rollout_path(codex_home.path(), "2025-01-01T00-00-00", &stale_thread_id);
     std::fs::create_dir_all(stale_path.parent().expect("stale path parent"))?;
-    let thread_uuid = Uuid::parse_str(&thread_id)?;
+    let thread_uuid = Uuid::parse_str(&stale_thread_id)?;
     let mut stale_file = std::fs::File::create(&stale_path)?;
     let stale_meta = json!({
         "timestamp": "2025-01-01T00:00:00Z",
@@ -2383,6 +2498,7 @@ async fn thread_resume_rejoins_running_thread_even_with_override_mismatch() -> R
     let seed_turn_id = primary
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
+            client_user_message_id: None,
             input: vec![UserInput::Text {
                 text: "seed history".to_string(),
                 text_elements: Vec::new(),
@@ -2405,6 +2521,7 @@ async fn thread_resume_rejoins_running_thread_even_with_override_mismatch() -> R
     let running_turn_id = primary
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
+            client_user_message_id: None,
             input: vec![UserInput::Text {
                 text: "keep running".to_string(),
                 text_elements: Vec::new(),
@@ -2412,11 +2529,13 @@ async fn thread_resume_rejoins_running_thread_even_with_override_mismatch() -> R
             ..Default::default()
         })
         .await?;
-    timeout(
+    let running_turn_resp: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
         primary.read_stream_until_response_message(RequestId::Integer(running_turn_id)),
     )
     .await??;
+    let TurnStartResponse { turn: running_turn } =
+        to_response::<TurnStartResponse>(running_turn_resp)?;
     timeout(
         DEFAULT_READ_TIMEOUT,
         primary.read_stream_until_notification_message("turn/started"),
@@ -2428,6 +2547,11 @@ async fn thread_resume_rejoins_running_thread_even_with_override_mismatch() -> R
             thread_id: thread.id.clone(),
             model: Some("not-the-running-model".to_string()),
             cwd: Some("/tmp".to_string()),
+            initial_turns_page: Some(ThreadResumeInitialTurnsPageParams {
+                limit: None,
+                sort_direction: None,
+                items_view: None,
+            }),
             ..Default::default()
         })
         .await?;
@@ -2436,9 +2560,23 @@ async fn thread_resume_rejoins_running_thread_even_with_override_mismatch() -> R
         primary.read_stream_until_response_message(RequestId::Integer(resume_id)),
     )
     .await??;
-    let ThreadResumeResponse { thread, model, .. } =
-        to_response::<ThreadResumeResponse>(resume_resp)?;
+    let ThreadResumeResponse {
+        thread,
+        model,
+        initial_turns_page,
+        ..
+    } = to_response::<ThreadResumeResponse>(resume_resp)?;
     assert_eq!(model, "gpt-5.4");
+    let initial_turns_page = initial_turns_page.expect("resume should include initial turns page");
+    let resumed_running_turn = initial_turns_page
+        .data
+        .first()
+        .expect("resume page should include the running turn");
+    assert_eq!(resumed_running_turn.id, running_turn.id);
+    assert_eq!(resumed_running_turn.items_view, TurnItemsView::Summary);
+    assert_eq!(resumed_running_turn.status, TurnStatus::InProgress);
+    assert!(initial_turns_page.backwards_cursor.is_some());
+    assert_eq!(initial_turns_page.next_cursor, None);
     // The running-thread resume response is queued onto the thread listener task.
     // If the in-flight turn completes before that queued command runs, the response
     // can legitimately observe the thread as idle.
@@ -2491,6 +2629,7 @@ async fn thread_resume_can_skip_turns_when_thread_is_running() -> Result<()> {
     let turn_id = primary
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
+            client_user_message_id: None,
             input: vec![UserInput::Text {
                 text: "seed history".to_string(),
                 text_elements: Vec::new(),
@@ -2574,6 +2713,7 @@ async fn thread_resume_replays_pending_command_execution_request_approval() -> R
     let seed_turn_id = primary
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
+            client_user_message_id: None,
             input: vec![UserInput::Text {
                 text: "seed history".to_string(),
                 text_elements: Vec::new(),
@@ -2596,6 +2736,7 @@ async fn thread_resume_replays_pending_command_execution_request_approval() -> R
     let running_turn_id = primary
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
+            client_user_message_id: None,
             input: vec![UserInput::Text {
                 text: "run command".to_string(),
                 text_elements: Vec::new(),
@@ -2712,6 +2853,7 @@ async fn thread_resume_replays_pending_file_change_request_approval() -> Result<
     let seed_turn_id = primary
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
+            client_user_message_id: None,
             input: vec![UserInput::Text {
                 text: "seed history".to_string(),
                 text_elements: Vec::new(),
@@ -2735,6 +2877,7 @@ async fn thread_resume_replays_pending_file_change_request_approval() -> Result<
     let running_turn_id = primary
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
+            client_user_message_id: None,
             input: vec![UserInput::Text {
                 text: "apply patch".to_string(),
                 text_elements: Vec::new(),
@@ -2879,6 +3022,7 @@ async fn thread_resume_with_overrides_defers_updated_at_until_turn_start() -> Re
     let turn_id = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: resumed_thread.id,
+            client_user_message_id: None,
             input: vec![UserInput::Text {
                 text: "Hello".to_string(),
                 text_elements: Vec::new(),
@@ -3191,6 +3335,7 @@ async fn start_materialized_thread_and_restart(
     let materialize_turn_id = first_mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
+            client_user_message_id: None,
             input: vec![UserInput::Text {
                 text: seed_text.to_string(),
                 text_elements: Vec::new(),
@@ -3280,6 +3425,7 @@ async fn thread_resume_accepts_personality_override() -> Result<()> {
     let materialize_id = primary
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
+            client_user_message_id: None,
             input: vec![UserInput::Text {
                 text: "seed history".to_string(),
                 text_elements: Vec::new(),
@@ -3320,6 +3466,7 @@ async fn thread_resume_accepts_personality_override() -> Result<()> {
     let turn_id = secondary
         .send_turn_start_request(TurnStartParams {
             thread_id: resume.thread.id,
+            client_user_message_id: None,
             input: vec![UserInput::Text {
                 text: "Hello".to_string(),
                 text_elements: Vec::new(),

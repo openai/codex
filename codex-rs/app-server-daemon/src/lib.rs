@@ -74,6 +74,12 @@ pub struct BootstrapOptions {
     pub remote_control_enabled: bool,
 }
 
+/// Passively probes an existing app-server socket and returns its reported
+/// app-server version.
+pub async fn probe_app_server_version(socket_path: &Path) -> Result<String> {
+    Ok(client::probe(socket_path).await?.app_server_version)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum BootstrapStatus {

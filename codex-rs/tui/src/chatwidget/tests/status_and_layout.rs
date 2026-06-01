@@ -393,8 +393,8 @@ async fn completed_plan_table_tail_skips_provisional_history_insert() {
 
     assert!(saw_source_backed_plan, "expected source-backed plan insert");
     assert!(
-        rendered_plan.contains('│') || rendered_plan.contains('┌'),
-        "expected completed plan table to render as a boxed table, got: {rendered_plan:?}"
+        rendered_plan.contains('━'),
+        "expected completed plan table to render with separators, got: {rendered_plan:?}"
     );
     assert!(
         !saw_stream_plan,
@@ -586,7 +586,7 @@ async fn status_line_uses_secondary_fallback_for_unsupported_window() {
 
     assert_eq!(
         chat.status_line_value_for_item(crate::bottom_pane::StatusLineItem::WeeklyLimit),
-        Some("secondary usage 50%".to_string())
+        Some("secondary usage 50% left".to_string())
     );
 }
 
@@ -614,11 +614,11 @@ async fn status_line_legacy_limit_items_prefer_matching_windows() {
 
     assert_eq!(
         chat.status_line_value_for_item(crate::bottom_pane::StatusLineItem::FiveHourLimit),
-        Some("5h 60%".to_string())
+        Some("5h 60% left".to_string())
     );
     assert_eq!(
         chat.status_line_value_for_item(crate::bottom_pane::StatusLineItem::WeeklyLimit),
-        Some("weekly 6%".to_string())
+        Some("weekly 6% left".to_string())
     );
 }
 
@@ -646,11 +646,11 @@ async fn status_line_shows_secondary_non_weekly_when_primary_is_weekly() {
 
     assert_eq!(
         chat.status_line_value_for_item(crate::bottom_pane::StatusLineItem::FiveHourLimit),
-        Some("monthly 65%".to_string())
+        Some("monthly 65% left".to_string())
     );
     assert_eq!(
         chat.status_line_value_for_item(crate::bottom_pane::StatusLineItem::WeeklyLimit),
-        Some("weekly 6%".to_string())
+        Some("weekly 6% left".to_string())
     );
 }
 
@@ -678,7 +678,7 @@ async fn status_line_five_hour_item_omits_weekly_only_limit() {
     );
     assert_eq!(
         chat.status_line_value_for_item(crate::bottom_pane::StatusLineItem::WeeklyLimit),
-        Some("weekly 91%".to_string())
+        Some("weekly 91% left".to_string())
     );
 }
 
@@ -702,7 +702,7 @@ async fn status_line_single_monthly_primary_omits_weekly_limit_item() {
 
     assert_eq!(
         chat.status_line_value_for_item(crate::bottom_pane::StatusLineItem::FiveHourLimit),
-        Some("monthly 65%".to_string())
+        Some("monthly 65% left".to_string())
     );
     assert_eq!(
         chat.status_line_value_for_item(crate::bottom_pane::StatusLineItem::WeeklyLimit),
@@ -734,7 +734,7 @@ async fn status_line_secondary_only_non_weekly_limit_omits_primary_limit_item() 
     );
     assert_eq!(
         chat.status_line_value_for_item(crate::bottom_pane::StatusLineItem::WeeklyLimit),
-        Some("monthly 65%".to_string())
+        Some("monthly 65% left".to_string())
     );
 }
 
@@ -1351,7 +1351,7 @@ async fn streaming_final_answer_keeps_task_running_state() {
 
     chat.handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
     match op_rx.try_recv() {
-        Ok(Op::Interrupt) => {}
+        Ok(Op::Interrupt { .. }) => {}
         other => panic!("expected Op::Interrupt, got {other:?}"),
     }
     assert!(!chat.bottom_pane.quit_shortcut_hint_visible());
@@ -1384,7 +1384,7 @@ async fn ctrl_c_interrupt_pauses_active_goal_turn() {
     chat.handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
 
     match op_rx.try_recv() {
-        Ok(Op::Interrupt) => {}
+        Ok(Op::Interrupt { .. }) => {}
         other => panic!("expected Op::Interrupt, got {other:?}"),
     }
     assert_matches!(
@@ -2206,6 +2206,37 @@ async fn terminal_title_model_updates_on_model_change_without_manual_refresh() {
     chat.set_model("gpt-5.3-codex");
 
     assert_eq!(chat.last_terminal_title, Some("gpt-5.3-codex".to_string()));
+}
+
+#[tokio::test]
+async fn status_line_and_terminal_title_reasoning_render_only_effort() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
+    chat.config.tui_status_line = Some(vec!["reasoning".to_string()]);
+    chat.config.tui_terminal_title = Some(vec!["reasoning".to_string()]);
+    chat.set_reasoning_effort(Some(ReasoningEffortConfig::XHigh));
+    chat.set_service_tier(Some(ServiceTier::Fast.request_value().to_string()));
+
+    chat.refresh_status_line();
+    chat.refresh_terminal_title();
+
+    assert_eq!(status_line_text(&chat), Some("xhigh".to_string()));
+    assert_eq!(chat.last_terminal_title, Some("xhigh".to_string()));
+}
+
+#[tokio::test]
+async fn status_line_reasoning_updates_on_mode_switch_without_manual_refresh() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
+    chat.set_feature_enabled(Feature::CollaborationModes, /*enabled*/ true);
+    chat.config.tui_status_line = Some(vec!["reasoning".to_string()]);
+    chat.set_reasoning_effort(Some(ReasoningEffortConfig::High));
+
+    assert_eq!(status_line_text(&chat), Some("high".to_string()));
+
+    let plan_mask = collaboration_modes::plan_mask(chat.model_catalog.as_ref())
+        .expect("expected plan collaboration mode");
+    chat.set_collaboration_mask(plan_mask);
+
+    assert_eq!(status_line_text(&chat), Some("medium".to_string()));
 }
 
 #[tokio::test]
@@ -3381,7 +3412,7 @@ async fn hook_completed_before_reveal_renders_completed_without_running_flash() 
             codex_app_server_protocol::HookRunStatus::Completed,
             vec![codex_app_server_protocol::HookOutputEntry {
                 kind: codex_app_server_protocol::HookOutputEntryKind::Context,
-                text: "session context".to_string(),
+                text: "session context\nsecond line".to_string(),
             }],
         ),
     );

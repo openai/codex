@@ -5,6 +5,7 @@ use crate::session::tests::make_session_and_context;
 use crate::session::tests::make_session_and_context_with_rx;
 use crate::state::ActiveTurn;
 use crate::test_support::models_manager_with_provider;
+use crate::tools::hook_names::HookToolName;
 use crate::turn_metadata::McpTurnMetadataContext;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::config_toml::ConfigToml;
@@ -55,13 +56,13 @@ fn annotations(
     destructive: Option<bool>,
     open_world: Option<bool>,
 ) -> ToolAnnotations {
-    ToolAnnotations {
-        destructive_hint: destructive,
-        idempotent_hint: None,
-        open_world_hint: open_world,
-        read_only_hint: read_only,
-        title: None,
-    }
+    ToolAnnotations::from_raw(
+        /*title*/ None,
+        read_only,
+        destructive,
+        /*idempotent_hint*/ None,
+        open_world,
+    )
 }
 
 fn approval_metadata(
@@ -1270,6 +1271,7 @@ async fn install_host_owned_codex_apps_manager(session: &Session, turn_context: 
         turn_context.config.codex_home.to_path_buf(),
         codex_mcp::codex_apps_tools_cache_key(auth.as_ref()),
         /*host_owned_codex_apps_enabled*/ true,
+        turn_context.config.prefix_mcp_tool_names(),
         rmcp::model::ElicitationCapability::default(),
         codex_mcp::ToolPluginProvenance::default(),
         auth.as_ref(),
@@ -2293,7 +2295,7 @@ async fn approve_mode_skips_when_annotations_do_not_require_approval() {
         &turn_context,
         "call-1",
         &invocation,
-        "mcp__test__tool",
+        &HookToolName::new("mcp__test__tool"),
         Some(&metadata),
         AppToolApproval::Approve,
     )
@@ -2367,7 +2369,7 @@ async fn guardian_mode_skips_auto_when_annotations_do_not_require_approval() {
         &turn_context,
         "call-guardian",
         &invocation,
-        "mcp__test__tool",
+        &HookToolName::new("mcp__test__tool"),
         Some(&metadata),
         AppToolApproval::Auto,
     )
@@ -2424,7 +2426,7 @@ async fn permission_request_hook_allows_mcp_tool_call() {
         &turn_context,
         "call-mcp-hook",
         &invocation,
-        "mcp__memory__create_entities",
+        &HookToolName::new("mcp__memory__create_entities"),
         Some(&metadata),
         AppToolApproval::Auto,
     )
@@ -2486,7 +2488,7 @@ async fn permission_request_hook_uses_hook_tool_name_without_metadata() {
         &turn_context,
         "call-mcp-hook-no-metadata",
         &invocation,
-        "mcp__memory__create_entities",
+        &HookToolName::new("mcp__memory__create_entities"),
         /*metadata*/ None,
         AppToolApproval::Auto,
     )
@@ -2566,7 +2568,7 @@ async fn permission_request_hook_runs_after_remembered_mcp_approval() {
         &turn_context,
         "call-mcp-remembered",
         &invocation,
-        "mcp__memory__create_entities",
+        &HookToolName::new("mcp__memory__create_entities"),
         Some(&metadata),
         AppToolApproval::Auto,
     )
@@ -2647,7 +2649,7 @@ async fn guardian_mode_mcp_denial_returns_rationale_message() {
         &turn_context,
         "call-guardian-deny",
         &invocation,
-        "mcp__test__tool",
+        &HookToolName::new("mcp__test__tool"),
         Some(&metadata),
         AppToolApproval::Auto,
     )
@@ -2705,7 +2707,7 @@ async fn prompt_mode_waits_for_approval_when_annotations_do_not_require_approval
                 &turn_context,
                 "call-prompt",
                 &invocation,
-                "mcp__test__tool",
+                &HookToolName::new("mcp__test__tool"),
                 Some(&metadata),
                 AppToolApproval::Prompt,
             )
@@ -2761,7 +2763,7 @@ async fn full_access_mode_skips_mcp_tool_approval_for_all_approval_modes() {
             &turn_context,
             "call-2",
             &invocation,
-            "mcp__test__tool",
+            &HookToolName::new("mcp__test__tool"),
             Some(&metadata),
             approval_mode,
         )
@@ -2849,7 +2851,7 @@ async fn approve_mode_skips_guardian_in_every_permission_mode() {
             &turn_context,
             "call-3",
             &invocation,
-            "mcp__test__tool",
+            &HookToolName::new("mcp__test__tool"),
             Some(&metadata),
             AppToolApproval::Approve,
         )

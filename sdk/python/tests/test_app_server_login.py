@@ -5,14 +5,14 @@ import json
 
 from app_server_harness import AppServerHarness
 
-from openai_codex import AppServerConfig, Codex
+from openai_codex import Codex, CodexConfig
 from openai_codex.generated.v2_all import (
     ChatgptAuthTokensLoginAccountParams,
     LoginAccountParams,
 )
 
 
-def _app_server_config(harness: AppServerHarness) -> AppServerConfig:
+def _app_server_config(harness: AppServerHarness) -> CodexConfig:
     """Build an isolated login config without inheriting ambient API-key auth."""
     config = harness.app_server_config()
     config.env = {**(config.env or {}), "OPENAI_API_KEY": ""}

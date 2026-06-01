@@ -30,7 +30,9 @@ enum StatusLineAccent {
 impl StatusLineAccent {
     fn for_item(item: StatusLineItem) -> Self {
         match item {
-            StatusLineItem::ModelName | StatusLineItem::ModelWithReasoning => Self::Model,
+            StatusLineItem::ModelName
+            | StatusLineItem::ModelWithReasoning
+            | StatusLineItem::Reasoning => Self::Model,
             StatusLineItem::CurrentDir | StatusLineItem::ProjectRoot => Self::Path,
             StatusLineItem::GitBranch
             | StatusLineItem::PullRequestNumber

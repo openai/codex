@@ -222,6 +222,128 @@ async fn skills_for_config_reuses_cache_for_same_effective_config() {
 }
 
 #[tokio::test]
+async fn set_extra_roots_replaces_runtime_roots_and_clears_cache() {
+    let codex_home = tempfile::tempdir().expect("tempdir");
+    let cwd = tempfile::tempdir().expect("tempdir");
+    let extra_root = tempfile::tempdir().expect("tempdir");
+    let config_layer_stack = config_stack(&codex_home, "");
+    let skills_manager = SkillsManager::new(
+        codex_home.path().abs(),
+        /*bundled_skills_enabled*/ true,
+    );
+
+    let skills_input = SkillsLoadInput::new(
+        cwd.path().abs(),
+        Vec::new(),
+        config_layer_stack.clone(),
+        bundled_skills_enabled_from_stack(&config_layer_stack),
+    );
+    let empty_outcome = skills_manager
+        .skills_for_cwd(
+            &skills_input,
+            /*force_reload*/ false,
+            Some(Arc::clone(&LOCAL_FS)),
+        )
+        .await;
+    assert!(
+        empty_outcome
+            .skills
+            .iter()
+            .all(|skill| skill.name != "runtime-skill")
+    );
+
+    let extra_skills_root = extra_root.path().join("skills");
+    let skill_dir = extra_skills_root.join("runtime-skill");
+    fs::create_dir_all(&skill_dir).expect("create skill dir");
+    fs::write(
+        skill_dir.join("SKILL.md"),
+        "---\nname: runtime-skill\ndescription: runtime skill\n---\n\n# Body\n",
+    )
+    .expect("write skill");
+    skills_manager.set_extra_roots(vec![extra_skills_root.abs()]);
+
+    let runtime_outcome = skills_manager
+        .skills_for_cwd(
+            &skills_input,
+            /*force_reload*/ false,
+            Some(Arc::clone(&LOCAL_FS)),
+        )
+        .await;
+    assert!(
+        runtime_outcome
+            .skills
+            .iter()
+            .any(|skill| skill.name == "runtime-skill")
+    );
+
+    skills_manager.set_extra_roots(vec![extra_root.path().join("missing-skills").abs()]);
+    let replaced_outcome = skills_manager
+        .skills_for_cwd(
+            &skills_input,
+            /*force_reload*/ false,
+            Some(Arc::clone(&LOCAL_FS)),
+        )
+        .await;
+    assert_eq!(replaced_outcome.errors, Vec::new());
+    assert!(
+        replaced_outcome
+            .skills
+            .iter()
+            .all(|skill| skill.name != "runtime-skill")
+    );
+}
+
+#[tokio::test]
+async fn set_extra_roots_applies_to_config_loads_and_empty_clears() {
+    let codex_home = tempfile::tempdir().expect("tempdir");
+    let cwd = tempfile::tempdir().expect("tempdir");
+    let extra_root = tempfile::tempdir().expect("tempdir");
+    let config_layer_stack = config_stack(&codex_home, "");
+    let skills_manager = SkillsManager::new(
+        codex_home.path().abs(),
+        /*bundled_skills_enabled*/ true,
+    );
+
+    let empty_outcome =
+        skills_for_config_with_stack(&skills_manager, &cwd, &config_layer_stack, &[]).await;
+    assert!(
+        empty_outcome
+            .skills
+            .iter()
+            .all(|skill| skill.name != "runtime-skill")
+    );
+
+    let extra_skills_root = extra_root.path().join("skills");
+    let skill_dir = extra_skills_root.join("runtime-skill");
+    fs::create_dir_all(&skill_dir).expect("create skill dir");
+    fs::write(
+        skill_dir.join("SKILL.md"),
+        "---\nname: runtime-skill\ndescription: runtime skill\n---\n\n# Body\n",
+    )
+    .expect("write skill");
+    skills_manager.set_extra_roots(vec![extra_skills_root.abs()]);
+
+    let runtime_outcome =
+        skills_for_config_with_stack(&skills_manager, &cwd, &config_layer_stack, &[]).await;
+    assert!(
+        runtime_outcome
+            .skills
+            .iter()
+            .any(|skill| skill.name == "runtime-skill")
+    );
+
+    skills_manager.set_extra_roots(Vec::new());
+    let cleared_outcome =
+        skills_for_config_with_stack(&skills_manager, &cwd, &config_layer_stack, &[]).await;
+    assert!(
+        cleared_outcome
+            .skills
+            .iter()
+            .all(|skill| skill.name != "runtime-skill")
+    );
+}
+
+#[tokio::test]
 async fn skills_for_config_disables_plugin_skills_by_name() {
     let codex_home = tempfile::tempdir().expect("tempdir");
     let cwd = tempfile::tempdir().expect("tempdir");

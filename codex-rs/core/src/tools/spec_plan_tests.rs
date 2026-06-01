@@ -13,6 +13,7 @@ use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::openai_models::ApplyPatchToolType;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::InputModality;
+use codex_protocol::openai_models::ToolMode;
 use codex_protocol::openai_models::WebSearchToolType;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
@@ -20,8 +21,11 @@ use codex_tools::DiscoverablePluginInfo;
 use codex_tools::DiscoverableTool;
 use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::ResponsesApiTool;
+use codex_tools::ToolCall as ExtensionToolCall;
+use codex_tools::ToolExecutor;
 use codex_tools::ToolExposure;
 use codex_tools::ToolName;
+use codex_tools::ToolOutput;
 use codex_tools::ToolSpec;
 use pretty_assertions::assert_eq;
 use serde_json::json;
@@ -37,6 +41,7 @@ struct ToolPlanInputs {
     mcp_tools: Option<Vec<ToolInfo>>,
     deferred_mcp_tools: Option<Vec<ToolInfo>>,
     discoverable_tools: Option<Vec<DiscoverableTool>>,
+    extension_tool_executors: Vec<Arc<dyn ToolExecutor<ExtensionToolCall>>>,
     dynamic_tools: Vec<DynamicToolSpec>,
 }
 
@@ -176,7 +181,7 @@ async fn probe_with(
             mcp_tools: inputs.mcp_tools,
             deferred_mcp_tools: inputs.deferred_mcp_tools,
             discoverable_tools: inputs.discoverable_tools,
-            extension_tool_executors: Vec::new(),
+            extension_tool_executors: inputs.extension_tool_executors,
             dynamic_tools: inputs.dynamic_tools.as_slice(),
         },
     );
@@ -211,6 +216,15 @@ fn set_feature(turn: &mut TurnContext, feature: Feature, enabled: bool) {
             .expect("test feature should be disableable in config");
     }
     turn.config = Arc::new(config);
+    turn.tool_mode = turn.model_info.tool_mode.unwrap_or_else(|| {
+        if turn.config.features.enabled(Feature::CodeModeOnly) {
+            ToolMode::CodeModeOnly
+        } else if turn.config.features.enabled(Feature::CodeMode) {
+            ToolMode::CodeMode
+        } else {
+            ToolMode::Direct
+        }
+    });
 }
 
 fn set_features(turn: &mut TurnContext, features: &[Feature]) {
@@ -253,6 +267,37 @@ fn use_bedrock_provider(turn: &mut TurnContext) {
     turn.provider = create_model_provider(provider_info, turn.auth_manager.clone());
 }
 
+struct WebRunExtensionTool;
+
+#[async_trait::async_trait]
+impl ToolExecutor<ExtensionToolCall> for WebRunExtensionTool {
+    fn tool_name(&self) -> ToolName {
+        ToolName::namespaced("web", "run")
+    }
+
+    fn spec(&self) -> ToolSpec {
+        ToolSpec::Namespace(codex_tools::ResponsesApiNamespace {
+            name: "web".to_string(),
+            description: "Test web namespace.".to_string(),
+            tools: vec![ResponsesApiNamespaceTool::Function(ResponsesApiTool {
+                name: "run".to_string(),
+                description: "Test standalone web search tool.".to_string(),
+                strict: false,
+                defer_loading: None,
+                parameters: codex_tools::JsonSchema::default(),
+                output_schema: None,
+            })],
+        })
+    }
+
+    async fn handle(
+        &self,
+        _call: ExtensionToolCall,
+    ) -> Result<Box<dyn ToolOutput>, codex_tools::FunctionCallError> {
+        Ok(Box::new(codex_tools::JsonToolOutput::new(json!({}))))
+    }
+}
+
 fn duplicate_primary_environment(turn: &mut TurnContext) {
     let mut second_environment = turn.environments.turn_environments[0].clone();
     second_environment.environment_id = "secondary".to_string();
@@ -267,21 +312,15 @@ fn mcp_tool(server: &str, namespace: &str, name: &str) -> ToolInfo {
         callable_name: name.to_string(),
         callable_namespace: namespace.to_string(),
         namespace_description: Some(format!("Tools from {server}.")),
-        tool: rmcp::model::Tool {
-            name: name.to_string().into(),
-            title: None,
-            description: Some(format!("{name} test tool").into()),
-            input_schema: Arc::new(rmcp::model::object(json!({
+        tool: rmcp::model::Tool::new(
+            name.to_string(),
+            format!("{name} test tool"),
+            Arc::new(rmcp::model::object(json!({
                 "type": "object",
                 "properties": {},
                 "additionalProperties": false,
             }))),
-            output_schema: None,
-            annotations: None,
-            execution: None,
-            icons: None,
-            meta: None,
-        },
+        ),
         connector_id: None,
         connector_name: None,
         plugin_display_names: Vec::new(),
@@ -336,6 +375,22 @@ fn apply_patch_accepts_environment_id(spec: &ToolSpec) -> bool {
         }
         _ => false,
     }
+}
+
+#[tokio::test]
+async fn request_user_input_tool_respects_experimental_config_gate() {
+    let enabled = probe(|_| {}).await;
+    enabled.assert_visible_contains(&["request_user_input"]);
+    enabled.assert_registered_contains(&["request_user_input"]);
+
+    let disabled = probe(|turn| {
+        update_config(turn, |config| {
+            config.experimental_request_user_input_enabled = false;
+        });
+    })
+    .await;
+    disabled.assert_visible_lacks(&["request_user_input"]);
+    disabled.assert_registered_lacks(&["request_user_input"]);
 }
 
 #[tokio::test]
@@ -447,7 +502,7 @@ async fn mcp_and_tool_search_follow_direct_and_deferred_tool_exposure() {
     let direct_mcp = probe_with(
         |_| {},
         ToolPlanInputs {
-            mcp_tools: Some(vec![mcp_tool("direct", "mcp__direct__", "lookup")]),
+            mcp_tools: Some(vec![mcp_tool("direct", "mcp__direct", "lookup")]),
             ..ToolPlanInputs::default()
         },
     )
@@ -458,12 +513,12 @@ async fn mcp_and_tool_search_follow_direct_and_deferred_tool_exposure() {
         "read_mcp_resource",
     ]);
     assert_eq!(
-        direct_mcp.namespace_function_names("mcp__direct__"),
+        direct_mcp.namespace_function_names("mcp__direct"),
         &["lookup".to_string()]
     );
 
     let searchable_mcp = ToolPlanInputs {
-        deferred_mcp_tools: Some(vec![mcp_tool("searchable", "mcp__searchable__", "lookup")]),
+        deferred_mcp_tools: Some(vec![mcp_tool("searchable", "mcp__searchable", "lookup")]),
         ..ToolPlanInputs::default()
     };
 
@@ -491,7 +546,7 @@ async fn mcp_and_tool_search_follow_direct_and_deferred_tool_exposure() {
         "read_mcp_resource",
     ]);
 
-    let missing_namespace_capability = probe_with(
+    let bedrock_namespace_capability = probe_with(
         |turn| {
             turn.model_info.supports_search_tool = true;
             use_bedrock_provider(turn);
@@ -502,7 +557,7 @@ async fn mcp_and_tool_search_follow_direct_and_deferred_tool_exposure() {
         },
     )
     .await;
-    missing_namespace_capability.assert_visible_lacks(&["tool_search"]);
+    bedrock_namespace_capability.assert_visible_contains(&["tool_search"]);
 
     let enabled = probe_with(
         |turn| {
@@ -512,7 +567,10 @@ async fn mcp_and_tool_search_follow_direct_and_deferred_tool_exposure() {
     )
     .await;
     enabled.assert_visible_contains(&["tool_search"]);
-    enabled.assert_registered_contains(&["tool_search", "mcp__searchable__lookup"]);
+    enabled.assert_registered_contains(&[
+        "tool_search",
+        &ToolName::namespaced("mcp__searchable", "lookup").to_string(),
+    ]);
 }
 
 #[tokio::test]
@@ -520,18 +578,14 @@ async fn invalid_mcp_tools_are_not_registered() {
     let plan = probe_with(
         |_| {},
         ToolPlanInputs {
-            mcp_tools: Some(vec![invalid_mcp_tool(
-                "invalid",
-                "mcp__invalid__",
-                "lookup",
-            )]),
+            mcp_tools: Some(vec![invalid_mcp_tool("invalid", "mcp__invalid", "lookup")]),
             ..ToolPlanInputs::default()
         },
     )
     .await;
 
-    plan.assert_visible_lacks(&["mcp__invalid__"]);
-    plan.assert_registered_lacks(&["mcp__invalid__lookup"]);
+    plan.assert_visible_lacks(&["mcp__invalid"]);
+    plan.assert_registered_lacks(&[&ToolName::namespaced("mcp__invalid", "lookup").to_string()]);
 }
 
 #[tokio::test]
@@ -712,7 +766,7 @@ async fn multi_agent_feature_selects_one_agent_tool_family() {
         "wait_agent",
         "close_agent",
         "send_message",
-        "followup_task",
+        "assign_task",
         "list_agents",
     ]);
     assert_eq!(
@@ -736,7 +790,7 @@ async fn multi_agent_feature_selects_one_agent_tool_family() {
     v2.assert_visible_contains(&[
         "spawn_agent",
         "send_message",
-        "followup_task",
+        "assign_task",
         "wait_agent",
         "close_agent",
         "list_agents",
@@ -767,6 +821,20 @@ async fn multi_agent_feature_selects_one_agent_tool_family() {
         direct_model_only.exposure("spawn_agent"),
         ToolExposure::DirectModelOnly
     );
+}
+
+#[tokio::test]
+async fn tool_mode_selector_overrides_feature_flags() {
+    let direct = probe(|turn| {
+        set_features(turn, &[Feature::CodeMode, Feature::CodeModeOnly]);
+        turn.model_info.tool_mode = Some(ToolMode::Direct);
+        turn.tool_mode = ToolMode::Direct;
+    })
+    .await;
+    direct.assert_visible_lacks(&[
+        codex_code_mode::PUBLIC_TOOL_NAME,
+        codex_code_mode::WAIT_TOOL_NAME,
+    ]);
 }
 
 #[tokio::test]
@@ -827,7 +895,7 @@ async fn multi_agent_v2_can_use_configured_tool_namespace() {
     for tool_name in [
         "spawn_agent",
         "send_message",
-        "followup_task",
+        "assign_task",
         "wait_agent",
         "close_agent",
         "list_agents",
@@ -856,7 +924,7 @@ async fn multi_agent_v2_can_use_configured_tool_namespace() {
 }
 
 #[tokio::test]
-async fn multi_agent_v2_namespace_is_ignored_without_provider_namespace_support() {
+async fn multi_agent_v2_namespace_is_supported_by_bedrock_provider() {
     let plan = probe(|turn| {
         set_feature(turn, Feature::MultiAgentV2, /*enabled*/ true);
         update_config(turn, |config| {
@@ -866,15 +934,15 @@ async fn multi_agent_v2_namespace_is_ignored_without_provider_namespace_support(
     })
     .await;
 
-    plan.assert_visible_contains(&["spawn_agent", "send_message", "list_agents"]);
-    plan.assert_visible_lacks(&["agents"]);
-    assert!(
-        plan.registered_names
-            .contains(&ToolName::plain("spawn_agent").to_string())
-    );
+    plan.assert_visible_contains(&["agents"]);
+    plan.assert_visible_lacks(&["spawn_agent", "send_message", "list_agents"]);
     assert!(
         !plan
             .registered_names
+            .contains(&ToolName::plain("spawn_agent").to_string())
+    );
+    assert!(
+        plan.registered_names
             .contains(&ToolName::namespaced("agents", "spawn_agent").to_string())
     );
 }
@@ -901,7 +969,7 @@ async fn code_mode_only_can_expose_namespaced_multi_agent_v2_as_normal_tools() {
     for tool_name in [
         "spawn_agent",
         "send_message",
-        "followup_task",
+        "assign_task",
         "wait_agent",
         "close_agent",
         "list_agents",
@@ -932,6 +1000,16 @@ async fn hosted_tools_follow_provider_auth_model_and_config_gates() {
     .await;
     image_generation.assert_visible_contains(&["image_generation"]);
 
+    let extension_flag_without_imagegen_tool = probe(|turn| {
+        use_chatgpt_auth(turn);
+        set_feature(turn, Feature::ImageGeneration, /*enabled*/ true);
+        set_feature(turn, Feature::ImageGenExt, /*enabled*/ true);
+        turn.model_info.input_modalities = vec![InputModality::Image];
+    })
+    .await;
+    extension_flag_without_imagegen_tool.assert_visible_contains(&["image_generation"]);
+    extension_flag_without_imagegen_tool.assert_visible_lacks(&["image_gen"]);
+
     let live_web_search = probe(|turn| {
         set_web_search_mode(turn, WebSearchMode::Live);
         turn.model_info.web_search_tool_type = WebSearchToolType::TextAndImage;
@@ -947,6 +1025,26 @@ async fn hosted_tools_follow_provider_auth_model_and_config_gates() {
             search_content_types: Some(vec!["text".to_string(), "image".to_string()]),
         }
     );
+
+    let standalone_web_search_without_web_run = probe(|turn| {
+        set_feature(turn, Feature::StandaloneWebSearch, /*enabled*/ true);
+        set_web_search_mode(turn, WebSearchMode::Live);
+    })
+    .await;
+    standalone_web_search_without_web_run.assert_visible_contains(&["web_search"]);
+
+    let standalone_web_search = probe_with(
+        |turn| {
+            set_feature(turn, Feature::StandaloneWebSearch, /*enabled*/ true);
+            set_web_search_mode(turn, WebSearchMode::Live);
+        },
+        ToolPlanInputs {
+            extension_tool_executors: vec![Arc::new(WebRunExtensionTool)],
+            ..Default::default()
+        },
+    )
+    .await;
+    standalone_web_search.assert_visible_lacks(&["web_search"]);
 
     let unsupported_provider = probe(|turn| {
         set_web_search_mode(turn, WebSearchMode::Live);

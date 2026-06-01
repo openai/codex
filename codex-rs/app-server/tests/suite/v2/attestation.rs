@@ -110,6 +110,7 @@ async fn attestation_generate_round_trip_adds_header_to_responses_websocket_hand
     let turn_request_id = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id,
+            client_user_message_id: None,
             input: vec![V2UserInput::Text {
                 text: "Hello".to_string(),
                 text_elements: Vec::new(),

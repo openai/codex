@@ -638,10 +638,8 @@ async fn snapshot_rollback_followup_turn_trims_context_updates() -> Result<()> {
 
 fn normalize_line_endings(value: &mut Value) {
     match value {
-        Value::String(text) => {
-            if text.contains('\r') {
-                *text = text.replace("\r\n", "\n").replace('\r', "\n");
-            }
+        Value::String(text) if text.contains('\r') => {
+            *text = text.replace("\r\n", "\n").replace('\r', "\n");
         }
         Value::Array(items) => {
             for item in items {
@@ -783,6 +781,7 @@ async fn user_turn(conversation: &Arc<CodexThread>, text: &str) {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         })
         .await

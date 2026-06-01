@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::Duration;
 
 use crate::outgoing_message::OutgoingMessageSender;
@@ -15,6 +16,7 @@ use codex_file_watcher::ThrottledWatchReceiver;
 use codex_file_watcher::WatchPath;
 use codex_file_watcher::WatchRegistration;
 use codex_protocol::protocol::TurnEnvironmentSelection;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use tokio_util::sync::CancellationToken;
 use tokio_util::sync::DropGuard;
 use tracing::warn;
@@ -26,6 +28,7 @@ const WATCHER_THROTTLE_INTERVAL: Duration = Duration::from_millis(50);
 
 pub(crate) struct SkillsWatcher {
     subscriber: FileWatcherSubscriber,
+    runtime_extra_roots_registration: Mutex<WatchRegistration>,
     shutdown_token: CancellationToken,
     _shutdown_drop_guard: DropGuard,
 }
@@ -48,6 +51,7 @@ impl SkillsWatcher {
         Self::spawn_event_loop(rx, skills_manager, outgoing, shutdown_token.child_token());
         Arc::new(Self {
             subscriber,
+            runtime_extra_roots_registration: Mutex::new(WatchRegistration::default()),
             shutdown_token,
             _shutdown_drop_guard: shutdown_drop_guard,
         })
@@ -55,6 +59,22 @@ impl SkillsWatcher {
 
     pub(crate) fn shutdown(&self) {
         self.shutdown_token.cancel();
+    }
+
+    pub(crate) fn register_runtime_extra_roots(&self, extra_roots: &[AbsolutePathBuf]) {
+        let roots = extra_roots
+            .iter()
+            .map(|root| WatchPath {
+                path: root.clone().into_path_buf(),
+                recursive: true,
+            })
+            .collect();
+        let registration = self.subscriber.register_paths(roots);
+        let mut guard = self
+            .runtime_extra_roots_registration
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *guard = registration;
     }
 
     pub(crate) async fn register_thread_config(

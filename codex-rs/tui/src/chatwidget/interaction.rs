@@ -112,8 +112,7 @@ impl ChatWidget {
             return;
         }
 
-        if matches!(key_event.code, KeyCode::Esc)
-            && matches!(key_event.kind, KeyEventKind::Press | KeyEventKind::Repeat)
+        if self.chat_keymap.interrupt_turn.is_pressed(key_event)
             && !self.input_queue.pending_steers.is_empty()
             && self.bottom_pane.is_task_running()
             && self.bottom_pane.no_modal_or_popup_active()
@@ -376,7 +375,7 @@ impl ChatWidget {
                 self.quit_shortcut_key = None;
                 self.bottom_pane.clear_quit_shortcut_hint();
                 self.pause_active_goal_for_interrupt();
-                self.submit_op(AppCommand::interrupt());
+                self.submit_op(AppCommand::interrupt_and_restore_prompt_if_no_output());
             } else {
                 self.request_quit_without_confirmation();
             }
@@ -394,7 +393,7 @@ impl ChatWidget {
 
         if self.is_cancellable_work_active() {
             self.pause_active_goal_for_interrupt();
-            self.submit_op(AppCommand::interrupt());
+            self.submit_op(AppCommand::interrupt_and_restore_prompt_if_no_output());
         }
     }
 

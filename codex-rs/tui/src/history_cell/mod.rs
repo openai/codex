@@ -22,7 +22,6 @@ use crate::exec_command::strip_bash_lc_and_escape;
 use crate::legacy_core::config::Config;
 use crate::live_wrap::take_prefix_by_width;
 use crate::markdown::append_markdown;
-use crate::markdown::append_markdown_agent_with_cwd;
 use crate::motion::MotionMode;
 use crate::motion::ReducedMotionIndicator;
 use crate::motion::activity_indicator;
@@ -33,6 +32,11 @@ use crate::render::renderable::Renderable;
 use crate::session_state::ThreadSessionState;
 use crate::style::proposed_plan_style;
 use crate::style::user_message_style;
+use crate::terminal_hyperlinks::HyperlinkLine;
+use crate::terminal_hyperlinks::mark_buffer_hyperlinks;
+use crate::terminal_hyperlinks::plain_hyperlink_lines;
+use crate::terminal_hyperlinks::prefix_hyperlink_lines;
+use crate::terminal_hyperlinks::visible_lines;
 #[cfg(test)]
 use crate::test_support::PathBufExt;
 #[cfg(test)]
@@ -54,6 +58,7 @@ use codex_app_server_protocol::McpServerStatusDetail;
 use codex_app_server_protocol::ToolRequestUserInputAnswer;
 use codex_app_server_protocol::ToolRequestUserInputQuestion;
 use codex_app_server_protocol::WebSearchAction;
+#[cfg(test)]
 use codex_config::types::McpServerTransportConfig;
 #[cfg(test)]
 use codex_mcp::qualified_mcp_tool_name_prefix;
@@ -75,6 +80,7 @@ use codex_protocol::plan_tool::StepStatus;
 use codex_protocol::plan_tool::UpdatePlanArgs;
 use codex_protocol::user_input::TextElement;
 use codex_utils_absolute_path::AbsolutePathBuf;
+#[cfg(test)]
 use codex_utils_cli::format_env_display;
 use image::DynamicImage;
 use image::ImageReader;
@@ -187,10 +193,26 @@ pub(crate) trait HistoryCell: std::fmt::Debug + Send + Sync + Any {
     /// Returns copy-friendly plain logical lines for raw scrollback mode.
     fn raw_lines(&self) -> Vec<Line<'static>>;
 
+    /// Returns rich visible lines plus terminal hyperlink metadata.
+    fn display_hyperlink_lines(&self, width: u16) -> Vec<HyperlinkLine> {
+        plain_hyperlink_lines(self.display_lines(width))
+    }
+
     fn display_lines_for_mode(&self, width: u16, mode: HistoryRenderMode) -> Vec<Line<'static>> {
         match mode {
-            HistoryRenderMode::Rich => self.display_lines(width),
+            HistoryRenderMode::Rich => visible_lines(self.display_hyperlink_lines(width)),
             HistoryRenderMode::Raw => self.raw_lines(),
+        }
+    }
+
+    fn display_hyperlink_lines_for_mode(
+        &self,
+        width: u16,
+        mode: HistoryRenderMode,
+    ) -> Vec<HyperlinkLine> {
+        match mode {
+            HistoryRenderMode::Rich => self.display_hyperlink_lines(width),
+            HistoryRenderMode::Raw => plain_hyperlink_lines(self.raw_lines()),
         }
     }
 
@@ -222,13 +244,22 @@ pub(crate) trait HistoryCell: std::fmt::Debug + Send + Sync + Any {
         self.display_lines(width)
     }
 
+    /// Returns transcript-overlay lines plus terminal hyperlink metadata.
+    ///
+    /// Defaults to the plain transcript representation because some cells render different
+    /// display and transcript content. Rich cells whose transcript mirrors their display should
+    /// delegate to `display_hyperlink_lines`.
+    fn transcript_hyperlink_lines(&self, width: u16) -> Vec<HyperlinkLine> {
+        plain_hyperlink_lines(self.transcript_lines(width))
+    }
+
     /// Returns the number of viewport rows for the transcript overlay.
     ///
     /// Uses the same `Paragraph::line_count` measurement as
     /// `desired_height`. Contains a workaround for a ratatui bug where
     /// a single whitespace-only line reports 2 rows instead of 1.
     fn desired_transcript_height(&self, width: u16) -> u16 {
-        let lines = self.transcript_lines(width);
+        let lines = visible_lines(self.transcript_hyperlink_lines(width));
         // Workaround: ratatui's line_count returns 2 for a single
         // whitespace-only line. Clamp to 1 in that case.
         if let [line] = &lines[..]
@@ -268,7 +299,8 @@ pub(crate) trait HistoryCell: std::fmt::Debug + Send + Sync + Any {
 
 impl Renderable for Box<dyn HistoryCell> {
     fn render(&self, area: Rect, buf: &mut Buffer) {
-        let lines = self.display_lines(area.width);
+        let hyperlink_lines = self.display_hyperlink_lines(area.width);
+        let lines = visible_lines(hyperlink_lines.clone());
         let paragraph = Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false });
         let y = if area.height == 0 {
             0
@@ -282,6 +314,7 @@ impl Renderable for Box<dyn HistoryCell> {
         // entire draw area first so stale glyphs from previous frames never linger.
         Clear.render(area, buf);
         paragraph.scroll((y, 0)).render(area, buf);
+        mark_buffer_hyperlinks(buf, area, &hyperlink_lines, usize::from(y));
     }
     fn desired_height(&self, width: u16) -> u16 {
         HistoryCell::desired_height(self.as_ref(), width)

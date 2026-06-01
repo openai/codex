@@ -3,6 +3,7 @@ use super::JsonSchema;
 use super::JsonSchemaPrimitiveType;
 use super::JsonSchemaType;
 use super::parse_tool_input_schema;
+use super::parse_tool_input_schema_without_compaction;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
 
@@ -894,8 +895,8 @@ fn many_string_properties(count: usize) -> serde_json::Map<String, serde_json::V
 }
 
 #[test]
-fn parse_large_tool_input_schema_stops_after_descriptions_when_under_budget() {
-    let schema = parse_tool_input_schema(&serde_json::json!({
+fn parse_large_tool_input_schema_compacts_descriptions_only_on_default_path() {
+    let input_schema = serde_json::json!({
         "type": "object",
         "description": "x".repeat(4_500),
         "properties": {
@@ -909,8 +910,8 @@ fn parse_large_tool_input_schema_stops_after_descriptions_when_under_budget() {
                 "description": "Metadata value"
             }
         }
-    }))
-    .expect("parse schema");
+    });
+    let schema = parse_tool_input_schema(&input_schema).expect("parse schema");
 
     assert_eq!(
         serde_json::to_value(schema).expect("serialize schema"),
@@ -924,6 +925,26 @@ fn parse_large_tool_input_schema_stops_after_descriptions_when_under_budget() {
             "$defs": {
                 "metadata": {
                     "type": "string"
+                }
+            }
+        })
+    );
+
+    let schema = parse_tool_input_schema_without_compaction(&input_schema).expect("parse schema");
+    assert_eq!(
+        serde_json::to_value(schema).expect("serialize schema"),
+        serde_json::json!({
+            "type": "object",
+            "description": "x".repeat(4_500),
+            "properties": {
+                "metadata": {
+                    "$ref": "#/$defs/metadata"
+                }
+            },
+            "$defs": {
+                "metadata": {
+                    "type": "string",
+                    "description": "Metadata value"
                 }
             }
         })

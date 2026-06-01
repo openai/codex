@@ -67,6 +67,7 @@ async fn openai_model_header_mismatch_emits_model_rerouted_notification_v2() -> 
     let turn_req = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
+            client_user_message_id: None,
             input: vec![UserInput::Text {
                 text: "trigger safeguard".to_string(),
                 text_elements: Vec::new(),
@@ -133,6 +134,7 @@ async fn cyber_policy_response_emits_typed_error_notification_v2() -> Result<()>
     let turn_req = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
+            client_user_message_id: None,
             input: vec![UserInput::Text {
                 text: "trigger cyber policy error".to_string(),
                 text_elements: Vec::new(),
@@ -209,6 +211,7 @@ async fn response_model_field_mismatch_emits_model_rerouted_notification_v2_when
     let turn_req = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
+            client_user_message_id: None,
             input: vec![UserInput::Text {
                 text: "trigger response model check".to_string(),
                 text_elements: Vec::new(),
@@ -277,6 +280,7 @@ async fn model_verification_emits_typed_notification_and_warning_v2() -> Result<
     let turn_req = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
+            client_user_message_id: None,
             input: vec![UserInput::Text {
                 text: "trigger model verification".to_string(),
                 text_elements: Vec::new(),

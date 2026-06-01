@@ -391,6 +391,7 @@ async fn external_agent_config_import_creates_session_rollouts() -> Result<()> {
     let request_id = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
+            client_user_message_id: None,
             input: vec![UserInput::Text {
                 text: "follow up".to_string(),
                 text_elements: Vec::new(),
@@ -964,6 +965,7 @@ async fn external_agent_config_import_compacts_huge_session_before_first_follow_
     let request_id = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
+            client_user_message_id: None,
             input: vec![UserInput::Text {
                 text: "follow up".to_string(),
                 text_elements: Vec::new(),

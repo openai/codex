@@ -5,6 +5,7 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_extension_api::ExtensionData;
 use codex_protocol::config_types::ModeKind;
+use codex_protocol::items::ImageGenerationItem;
 use codex_protocol::items::TurnItem;
 use codex_utils_stream_parser::strip_citations;
 use tokio_util::sync::CancellationToken;
@@ -125,6 +126,68 @@ async fn save_image_generation_result(
     Ok(path)
 }
 
+pub(crate) async fn persist_image_generation_item(
+    sess: &Session,
+    turn_context: &TurnContext,
+    image_item: &mut ImageGenerationItem,
+) -> Option<AbsolutePathBuf> {
+    let session_id = sess.conversation_id.to_string();
+    match save_image_generation_result(
+        &turn_context.config.codex_home,
+        &session_id,
+        &image_item.id,
+        &image_item.result,
+    )
+    .await
+    {
+        Ok(path) => {
+            image_item.saved_path = Some(path.clone());
+            Some(path)
+        }
+        Err(err) => {
+            let output_path = image_generation_artifact_path(
+                &turn_context.config.codex_home,
+                &session_id,
+                &image_item.id,
+            );
+            let output_dir = output_path
+                .parent()
+                .unwrap_or_else(|| turn_context.config.codex_home.clone());
+            tracing::warn!(
+                call_id = %image_item.id,
+                output_dir = %output_dir.display(),
+                "failed to save generated image: {err}"
+            );
+            None
+        }
+    }
+}
+
+pub(crate) async fn finalize_image_generation_item(
+    sess: &Session,
+    turn_context: &TurnContext,
+    image_item: &mut ImageGenerationItem,
+) {
+    if persist_image_generation_item(sess, turn_context, image_item)
+        .await
+        .is_none()
+    {
+        return;
+    }
+    let session_id = sess.conversation_id.to_string();
+    let image_output_path =
+        image_generation_artifact_path(&turn_context.config.codex_home, &session_id, "<image_id>");
+    let image_output_dir = image_output_path
+        .parent()
+        .unwrap_or_else(|| turn_context.config.codex_home.clone());
+    let message: ResponseItem = ContextualUserFragment::into(ImageGenerationInstructions::new(
+        image_output_dir.display(),
+        image_output_path.display(),
+    ));
+    sess.record_conversation_items(turn_context, &[message])
+        .await;
+}
+
 /// Persist a completed model response item and record any cited memory usage.
 pub(crate) async fn record_completed_response_item(
     sess: &Session,
@@ -233,7 +296,7 @@ async fn record_stage1_output_usage_for_memory_citation(
     }
 
     if let Some(db) = state_db_ctx {
-        let _ = db.record_stage1_output_usage(&thread_ids).await;
+        let _ = db.memories().record_stage1_output_usage(&thread_ids).await;
     }
     true
 }
@@ -487,49 +550,7 @@ pub(crate) async fn handle_non_tool_response_item(
                 }
             }
             if let TurnItem::ImageGeneration(image_item) = &mut turn_item {
-                let session_id = sess.conversation_id.to_string();
-                match save_image_generation_result(
-                    &turn_context.config.codex_home,
-                    &session_id,
-                    &image_item.id,
-                    &image_item.result,
-                )
-                .await
-                {
-                    Ok(path) => {
-                        image_item.saved_path = Some(path);
-                        let image_output_path = image_generation_artifact_path(
-                            &turn_context.config.codex_home,
-                            &session_id,
-                            "<image_id>",
-                        );
-                        let image_output_dir = image_output_path
-                            .parent()
-                            .unwrap_or_else(|| turn_context.config.codex_home.clone());
-                        let message: ResponseItem =
-                            ContextualUserFragment::into(ImageGenerationInstructions::new(
-                                image_output_dir.display(),
-                                image_output_path.display(),
-                            ));
-                        sess.record_conversation_items(turn_context, &[message])
-                            .await;
-                    }
-                    Err(err) => {
-                        let output_path = image_generation_artifact_path(
-                            &turn_context.config.codex_home,
-                            &session_id,
-                            &image_item.id,
-                        );
-                        let output_dir = output_path
-                            .parent()
-                            .unwrap_or_else(|| turn_context.config.codex_home.clone());
-                        tracing::warn!(
-                            call_id = %image_item.id,
-                            output_dir = %output_dir.display(),
-                            "failed to save generated image: {err}"
-                        );
-                    }
-                }
+                finalize_image_generation_item(sess, turn_context, image_item).await;
             }
             Some(turn_item)
         }

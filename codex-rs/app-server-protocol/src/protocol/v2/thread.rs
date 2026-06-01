@@ -397,6 +397,11 @@ pub struct ThreadResumeParams {
     #[experimental("thread/resume.excludeTurns")]
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub exclude_turns: bool,
+    /// When present, include a `thread/turns/list` page in the resume response
+    /// so clients can bootstrap recent turns without a second request.
+    #[experimental("thread/resume.initialTurnsPage")]
+    #[ts(optional = nullable)]
+    pub initial_turns_page: Option<ThreadResumeInitialTurnsPageParams>,
     /// Deprecated and ignored by app-server. Kept only so older clients can
     /// continue sending the field while rollout persistence always uses the
     /// limited history policy.
@@ -435,6 +440,44 @@ pub struct ThreadResumeResponse {
     #[serde(default)]
     pub active_permission_profile: Option<ActivePermissionProfile>,
     pub reasoning_effort: Option<ReasoningEffort>,
+    /// `thread/turns/list` page returned when requested by `initialTurnsPage`.
+    #[experimental("thread/resume.initialTurnsPage")]
+    #[serde(default)]
+    pub initial_turns_page: Option<TurnsPage>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadResumeInitialTurnsPageParams {
+    /// Optional turn page size.
+    #[ts(optional = nullable)]
+    pub limit: Option<u32>,
+    /// Optional turn pagination direction; defaults to descending.
+    #[ts(optional = nullable)]
+    pub sort_direction: Option<SortDirection>,
+    /// How much item detail to include for each returned turn; defaults to summary.
+    #[ts(optional = nullable)]
+    pub items_view: Option<TurnItemsView>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct TurnsPage {
+    pub data: Vec<Turn>,
+    pub next_cursor: Option<String>,
+    pub backwards_cursor: Option<String>,
+}
+
+impl From<ThreadTurnsListResponse> for TurnsPage {
+    fn from(response: ThreadTurnsListResponse) -> Self {
+        Self {
+            data: response.data,
+            next_cursor: response.next_cursor,
+            backwards_cursor: response.backwards_cursor,
+        }
+    }
 }
 
 #[derive(

@@ -477,15 +477,13 @@ impl ConfiguredCaBundle {
                     })?;
                     certificates.push(CertificateDer::from(cert_der.to_vec()));
                 }
-                SectionKind::Crl => {
-                    if !logged_crl_presence {
-                        info!(
-                            source_env = self.source_env,
-                            ca_path = %self.path.display(),
-                            "ignoring X509 CRL entries found in custom CA bundle"
-                        );
-                        logged_crl_presence = true;
-                    }
+                SectionKind::Crl if !logged_crl_presence => {
+                    info!(
+                        source_env = self.source_env,
+                        ca_path = %self.path.display(),
+                        "ignoring X509 CRL entries found in custom CA bundle"
+                    );
+                    logged_crl_presence = true;
                 }
                 _ => {}
             }

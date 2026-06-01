@@ -268,12 +268,20 @@ impl HistoryCell for ReasoningSummaryCell {
 
 #[derive(Debug)]
 pub(crate) struct AgentMessageCell {
-    lines: Vec<Line<'static>>,
+    lines: Vec<HyperlinkLine>,
     is_first_line: bool,
 }
 
 impl AgentMessageCell {
+    #[cfg(test)]
     pub(crate) fn new(lines: Vec<Line<'static>>, is_first_line: bool) -> Self {
+        Self {
+            lines: plain_hyperlink_lines(lines),
+            is_first_line,
+        }
+    }
+
+    pub(crate) fn new_hyperlink_lines(lines: Vec<HyperlinkLine>, is_first_line: bool) -> Self {
         Self {
             lines,
             is_first_line,
@@ -283,20 +291,37 @@ impl AgentMessageCell {
 
 impl HistoryCell for AgentMessageCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        adaptive_wrap_lines(
-            &self.lines,
-            RtOptions::new(width as usize)
-                .initial_indent(if self.is_first_line {
-                    "• ".dim().into()
-                } else {
-                    "  ".into()
-                })
-                .subsequent_indent("  ".into()),
-        )
+        visible_lines(self.display_hyperlink_lines(width))
+    }
+
+    fn display_hyperlink_lines(&self, width: u16) -> Vec<HyperlinkLine> {
+        let mut wrapped = Vec::new();
+        for (index, line) in self.lines.iter().enumerate() {
+            let initial_indent = if index == 0 && self.is_first_line {
+                "• ".dim().into()
+            } else {
+                "  ".into()
+            };
+            let mut subsequent_indent = Line::from("  ");
+            subsequent_indent
+                .spans
+                .extend(crate::insert_history::leading_whitespace_prefix(&line.line).spans);
+            wrapped.extend(crate::terminal_hyperlinks::adaptive_wrap_hyperlink_lines(
+                std::slice::from_ref(line),
+                RtOptions::new(width as usize)
+                    .initial_indent(initial_indent)
+                    .subsequent_indent(subsequent_indent),
+            ));
+        }
+        wrapped
+    }
+
+    fn transcript_hyperlink_lines(&self, width: u16) -> Vec<HyperlinkLine> {
+        self.display_hyperlink_lines(width)
     }
 
     fn raw_lines(&self) -> Vec<Line<'static>> {
-        plain_lines(self.lines.clone())
+        plain_lines(visible_lines(self.lines.clone()))
     }
 
     fn is_stream_continuation(&self) -> bool {
@@ -337,22 +362,32 @@ impl AgentMarkdownCell {
 
 impl HistoryCell for AgentMarkdownCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        visible_lines(self.display_hyperlink_lines(width))
+    }
+
+    fn display_hyperlink_lines(&self, width: u16) -> Vec<HyperlinkLine> {
         let Some(wrap_width) =
             crate::width::usable_content_width_u16(width, /*reserved_cols*/ 2)
         else {
-            return prefix_lines(vec![Line::default()], "• ".dim(), "  ".into());
+            return prefix_hyperlink_lines(
+                vec![HyperlinkLine::new(Line::default())],
+                "• ".dim(),
+                "  ".into(),
+            );
         };
 
-        let mut lines: Vec<Line<'static>> = Vec::new();
         // Re-render markdown from source at the current width. Reserve 2 columns for the "• " /
         // " " prefix prepended below.
-        crate::markdown::append_markdown_agent_with_cwd(
+        let lines = crate::markdown::render_markdown_agent_with_links_and_cwd(
             &self.markdown_source,
             Some(wrap_width),
             Some(self.cwd.as_path()),
-            &mut lines,
         );
-        prefix_lines(lines, "• ".dim(), "  ".into())
+        prefix_hyperlink_lines(lines, "• ".dim(), "  ".into())
+    }
+
+    fn transcript_hyperlink_lines(&self, width: u16) -> Vec<HyperlinkLine> {
+        self.display_hyperlink_lines(width)
     }
 
     fn raw_lines(&self) -> Vec<Line<'static>> {
@@ -367,12 +402,12 @@ impl HistoryCell for AgentMarkdownCell {
 /// every delta and cleared when the stream finalizes.
 #[derive(Debug)]
 pub(crate) struct StreamingAgentTailCell {
-    lines: Vec<Line<'static>>,
+    lines: Vec<HyperlinkLine>,
     is_first_line: bool,
 }
 
 impl StreamingAgentTailCell {
-    pub(crate) fn new(lines: Vec<Line<'static>>, is_first_line: bool) -> Self {
+    pub(crate) fn new(lines: Vec<HyperlinkLine>, is_first_line: bool) -> Self {
         Self {
             lines,
             is_first_line,
@@ -381,10 +416,14 @@ impl StreamingAgentTailCell {
 }
 
 impl HistoryCell for StreamingAgentTailCell {
-    fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        visible_lines(self.display_hyperlink_lines(width))
+    }
+
+    fn display_hyperlink_lines(&self, _width: u16) -> Vec<HyperlinkLine> {
         // Tail lines are already rendered at the controller's current stream width.
         // Re-wrapping them here can split table borders and produce malformed in-flight rows.
-        prefix_lines(
+        prefix_hyperlink_lines(
             self.lines.clone(),
             if self.is_first_line {
                 "• ".dim()
@@ -395,8 +434,12 @@ impl HistoryCell for StreamingAgentTailCell {
         )
     }
 
+    fn transcript_hyperlink_lines(&self, width: u16) -> Vec<HyperlinkLine> {
+        self.display_hyperlink_lines(width)
+    }
+
     fn raw_lines(&self) -> Vec<Line<'static>> {
-        plain_lines(self.display_lines(u16::MAX))
+        plain_lines(self.display_lines(/*width*/ u16::MAX))
     }
 
     fn is_stream_continuation(&self) -> bool {

@@ -2,6 +2,7 @@ use crate::TransportError;
 use crate::error::ApiError;
 use crate::rate_limits::parse_promo_message;
 use crate::rate_limits::parse_rate_limit_for_limit;
+use crate::rate_limits::parse_rate_limit_reached_type;
 use base64::Engine;
 use chrono::DateTime;
 use chrono::Utc;
@@ -85,6 +86,8 @@ pub fn map_api_error(err: ApiError) -> CodexErr {
                                 parse_rate_limit_for_limit(map, limit_id.as_deref())
                             });
                             let promo_message = headers.as_ref().and_then(parse_promo_message);
+                            let rate_limit_reached_type =
+                                headers.as_ref().and_then(parse_rate_limit_reached_type);
                             let resets_at = err
                                 .error
                                 .resets_at
@@ -94,6 +97,7 @@ pub fn map_api_error(err: ApiError) -> CodexErr {
                                 resets_at,
                                 rate_limits: rate_limits.map(Box::new),
                                 promo_message,
+                                rate_limit_reached_type,
                             });
                         } else if err.error.error_type.as_deref() == Some("usage_not_included") {
                             return CodexErr::UsageNotIncluded;

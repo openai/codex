@@ -18,6 +18,7 @@ use serde::Serialize;
 use crate::accounting::BudgetLimitedGoalDisposition;
 use crate::accounting::GoalAccountingState;
 use crate::events::GoalEventEmitter;
+use crate::metrics::GoalMetrics;
 use crate::spec::CREATE_GOAL_TOOL_NAME;
 use crate::spec::GET_GOAL_TOOL_NAME;
 use crate::spec::UPDATE_GOAL_TOOL_NAME;
@@ -32,6 +33,7 @@ pub(crate) struct GoalToolExecutor {
     state_db: Arc<codex_state::StateRuntime>,
     accounting_state: Arc<GoalAccountingState>,
     event_emitter: GoalEventEmitter,
+    metrics: GoalMetrics,
 }
 
 #[derive(Clone, Copy)]
@@ -74,6 +76,7 @@ impl GoalToolExecutor {
         state_db: Arc<codex_state::StateRuntime>,
         accounting_state: Arc<GoalAccountingState>,
         event_emitter: GoalEventEmitter,
+        metrics: GoalMetrics,
     ) -> Self {
         Self {
             kind: GoalToolKind::Get,
@@ -81,6 +84,7 @@ impl GoalToolExecutor {
             state_db,
             accounting_state,
             event_emitter,
+            metrics,
         }
     }
 
@@ -89,6 +93,7 @@ impl GoalToolExecutor {
         state_db: Arc<codex_state::StateRuntime>,
         accounting_state: Arc<GoalAccountingState>,
         event_emitter: GoalEventEmitter,
+        metrics: GoalMetrics,
     ) -> Self {
         Self {
             kind: GoalToolKind::Create,
@@ -96,6 +101,7 @@ impl GoalToolExecutor {
             state_db,
             accounting_state,
             event_emitter,
+            metrics,
         }
     }
 
@@ -104,6 +110,7 @@ impl GoalToolExecutor {
         state_db: Arc<codex_state::StateRuntime>,
         accounting_state: Arc<GoalAccountingState>,
         event_emitter: GoalEventEmitter,
+        metrics: GoalMetrics,
     ) -> Self {
         Self {
             kind: GoalToolKind::Update,
@@ -111,6 +118,7 @@ impl GoalToolExecutor {
             state_db,
             accounting_state,
             event_emitter,
+            metrics,
         }
     }
 }
@@ -191,6 +199,7 @@ impl GoalToolExecutor {
         let turn_id = self
             .accounting_state
             .mark_current_turn_goal_active(goal.goal_id.clone());
+        self.metrics.record_created();
         let goal = protocol_goal_from_state(goal);
         self.emit_goal_updated_from_tool_call(&invocation, turn_id, goal.clone());
         goal_response(Some(goal), CompletionBudgetReport::Omit)
@@ -224,6 +233,9 @@ impl GoalToolExecutor {
             BudgetLimitedGoalDisposition::ClearActive,
         )
         .await?;
+        let previous_status = self
+            .current_goal_status_for_metrics(/*expected_goal_id*/ None)
+            .await?;
         let goal = self
             .state_db
             .thread_goals()
@@ -240,12 +252,14 @@ impl GoalToolExecutor {
             .map_err(|err| {
                 FunctionCallError::RespondToModel(format!("failed to update goal: {err}"))
             })?
-            .map(protocol_goal_from_state)
             .ok_or_else(|| {
                 FunctionCallError::RespondToModel(
                     "cannot update goal because this thread has no goal".to_string(),
                 )
             })?;
+        self.metrics
+            .record_terminal_if_status_changed(previous_status, &goal);
+        let goal = protocol_goal_from_state(goal);
         let turn_id = self.accounting_state.clear_current_turn_goal();
         self.emit_goal_updated_from_tool_call(&invocation, turn_id, goal.clone());
         goal_response(
@@ -280,6 +294,9 @@ impl GoalToolExecutor {
         let Some(snapshot) = self.accounting_state.progress_snapshot(turn_id.as_str()) else {
             return Ok(None);
         };
+        let previous_status = self
+            .current_goal_status_for_metrics(Some(snapshot.expected_goal_id.as_str()))
+            .await?;
         let outcome = self
             .state_db
             .thread_goals()
@@ -296,6 +313,8 @@ impl GoalToolExecutor {
             })?;
         Ok(match outcome {
             codex_state::GoalAccountingOutcome::Updated(goal) => {
+                self.metrics
+                    .record_terminal_if_status_changed(previous_status, &goal);
                 self.accounting_state.mark_progress_accounted_for_status(
                     turn_id.as_str(),
                     &snapshot,
@@ -313,6 +332,27 @@ impl GoalToolExecutor {
             codex_state::GoalAccountingOutcome::Unchanged(_) => None,
         })
     }
+
+    async fn current_goal_status_for_metrics(
+        &self,
+        expected_goal_id: Option<&str>,
+    ) -> Result<Option<codex_state::ThreadGoalStatus>, FunctionCallError> {
+        let goal = self
+            .state_db
+            .thread_goals()
+            .get_thread_goal(self.thread_id)
+            .await
+            .map_err(|err| {
+                FunctionCallError::RespondToModel(format!(
+                    "failed to read goal metrics status: {err}"
+                ))
+            })?;
+        Ok(goal.and_then(|goal| {
+            expected_goal_id
+                .is_none_or(|expected_goal_id| goal.goal_id == expected_goal_id)
+                .then_some(goal.status)
+        }))
+    }
 }
 
 fn parse_arguments<T>(arguments: &str) -> Result<T, FunctionCallError>
@@ -323,7 +363,7 @@ where
         .map_err(|err| FunctionCallError::RespondToModel(err.to_string()))
 }
 
-fn validate_goal_budget(value: Option<i64>) -> Result<(), String> {
+pub(crate) fn validate_goal_budget(value: Option<i64>) -> Result<(), String> {
     if let Some(value) = value
         && value <= 0
     {
@@ -362,7 +402,7 @@ impl GoalToolResponse {
     }
 }
 
-async fn fill_empty_thread_preview_if_possible(
+pub(crate) async fn fill_empty_thread_preview_if_possible(
     state_db: &codex_state::StateRuntime,
     thread_id: ThreadId,
     goal: &codex_state::ThreadGoal,
@@ -401,7 +441,9 @@ fn protocol_status_from_state(status: codex_state::ThreadGoalStatus) -> ThreadGo
     }
 }
 
-fn state_status_from_protocol(status: ThreadGoalStatus) -> codex_state::ThreadGoalStatus {
+pub(crate) fn state_status_from_protocol(
+    status: ThreadGoalStatus,
+) -> codex_state::ThreadGoalStatus {
     match status {
         ThreadGoalStatus::Active => codex_state::ThreadGoalStatus::Active,
         ThreadGoalStatus::Paused => codex_state::ThreadGoalStatus::Paused,

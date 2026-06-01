@@ -58,6 +58,9 @@ use tokio_tungstenite::tungstenite;
 use tokio_util::sync::CancellationToken;
 
 const TEST_INSTALLATION_ID: &str = "11111111-1111-4111-8111-111111111111";
+const TEST_REMOTE_CONTROL_SERVER_TOKEN: &str = "Remote Control Token";
+const TEST_REFRESHED_REMOTE_CONTROL_SERVER_TOKEN: &str = "Refreshed Remote Control Token";
+const TEST_REMOTE_CONTROL_SERVER_TOKEN_EXPIRES_AT: &str = "2999-01-01T00:00:00Z";
 
 fn remote_control_auth_manager() -> Arc<AuthManager> {
     auth_manager_from_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
@@ -123,6 +126,19 @@ fn remote_control_url_for_listener(listener: &TcpListener) -> String {
 
 fn test_server_name() -> String {
     gethostname().to_string_lossy().trim().to_string()
+}
+
+fn remote_control_server_token_response(
+    server_id: &str,
+    environment_id: &str,
+    remote_control_token: &str,
+) -> serde_json::Value {
+    json!({
+        "server_id": server_id,
+        "environment_id": environment_id,
+        "remote_control_token": remote_control_token,
+        "expires_at": TEST_REMOTE_CONTROL_SERVER_TOKEN_EXPIRES_AT,
+    })
 }
 
 async fn expect_remote_control_status(
@@ -203,7 +219,11 @@ async fn remote_control_transport_manages_virtual_clients_and_routes_messages() 
     );
     respond_with_json(
         enroll_request.stream,
-        json!({ "server_id": "srv_e_test", "environment_id": "env_test" }),
+        remote_control_server_token_response(
+            "srv_e_test",
+            "env_test",
+            TEST_REMOTE_CONTROL_SERVER_TOKEN,
+        ),
     )
     .await;
     let mut websocket = accept_remote_control_connection(&listener).await;
@@ -483,17 +503,31 @@ async fn remote_control_transport_reconnects_after_disconnect() {
     );
     respond_with_json(
         enroll_request.stream,
-        json!({ "server_id": "srv_e_test", "environment_id": "env_test" }),
+        remote_control_server_token_response(
+            "srv_e_test",
+            "env_test",
+            TEST_REMOTE_CONTROL_SERVER_TOKEN,
+        ),
     )
     .await;
-    let mut first_websocket = accept_remote_control_connection(&listener).await;
+    let (first_handshake_request, mut first_websocket) =
+        accept_remote_control_backend_connection(&listener).await;
+    assert_eq!(
+        first_handshake_request.headers.get("authorization"),
+        Some(&format!("Bearer {TEST_REMOTE_CONTROL_SERVER_TOKEN}"))
+    );
     first_websocket
         .close(None)
         .await
         .expect("first websocket should close");
     drop(first_websocket);
 
-    let mut second_websocket = accept_remote_control_connection(&listener).await;
+    let (second_handshake_request, mut second_websocket) =
+        accept_remote_control_backend_connection(&listener).await;
+    assert_eq!(
+        second_handshake_request.headers.get("authorization"),
+        Some(&format!("Bearer {TEST_REMOTE_CONTROL_SERVER_TOKEN}"))
+    );
     expect_remote_control_status(
         &mut status_rx,
         /*expected_status*/ None,
@@ -532,6 +566,91 @@ async fn remote_control_transport_reconnects_after_disconnect() {
         TransportEvent::ConnectionOpened { .. } => {}
         other => panic!("expected connection open after reconnect, got {other:?}"),
     }
+
+    shutdown_token.cancel();
+    let _ = remote_task.await;
+}
+
+#[tokio::test]
+async fn remote_control_transport_refreshes_server_token_after_websocket_unauthorized() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("listener should bind");
+    let remote_control_url = remote_control_url_for_listener(&listener);
+    let codex_home = TempDir::new().expect("temp dir should create");
+    let (transport_event_tx, _transport_event_rx) =
+        mpsc::channel::<TransportEvent>(CHANNEL_CAPACITY);
+    let shutdown_token = CancellationToken::new();
+    let (remote_task, remote_handle) = start_remote_control(
+        RemoteControlStartConfig {
+            remote_control_url,
+            installation_id: TEST_INSTALLATION_ID.to_string(),
+        },
+        Some(remote_control_state_runtime(&codex_home).await),
+        remote_control_auth_manager(),
+        transport_event_tx,
+        shutdown_token.clone(),
+        /*app_server_client_name_rx*/ None,
+        /*initial_enabled*/ true,
+    )
+    .await
+    .expect("remote control should start");
+    let mut status_rx = remote_handle.status_receiver();
+
+    let enroll_request = accept_http_request(&listener).await;
+    assert_eq!(
+        enroll_request.request_line,
+        "POST /backend-api/wham/remote/control/server/enroll HTTP/1.1"
+    );
+    respond_with_json(
+        enroll_request.stream,
+        remote_control_server_token_response(
+            "srv_e_test",
+            "env_test",
+            TEST_REMOTE_CONTROL_SERVER_TOKEN,
+        ),
+    )
+    .await;
+
+    let websocket_request = accept_http_request(&listener).await;
+    assert_eq!(
+        websocket_request.request_line,
+        "GET /backend-api/wham/remote/control/server HTTP/1.1"
+    );
+    assert_eq!(
+        websocket_request.headers.get("authorization"),
+        Some(&format!("Bearer {TEST_REMOTE_CONTROL_SERVER_TOKEN}"))
+    );
+    respond_with_status(websocket_request.stream, "401 Unauthorized", "").await;
+
+    let refresh_request = accept_http_request(&listener).await;
+    assert_eq!(
+        refresh_request.request_line,
+        "POST /backend-api/wham/remote/control/server/refresh HTTP/1.1"
+    );
+    respond_with_json(
+        refresh_request.stream,
+        remote_control_server_token_response(
+            "srv_e_test",
+            "env_test",
+            TEST_REFRESHED_REMOTE_CONTROL_SERVER_TOKEN,
+        ),
+    )
+    .await;
+
+    let (handshake_request, _websocket) = accept_remote_control_backend_connection(&listener).await;
+    expect_remote_control_status(
+        &mut status_rx,
+        /*expected_status*/ None,
+        Some("env_test"),
+    )
+    .await;
+    assert_eq!(
+        handshake_request.headers.get("authorization"),
+        Some(&format!(
+            "Bearer {TEST_REFRESHED_REMOTE_CONTROL_SERVER_TOKEN}"
+        ))
+    );
 
     shutdown_token.cancel();
     let _ = remote_task.await;
@@ -696,7 +815,11 @@ async fn remote_control_handle_enable_disable_stops_and_restarts_connections() {
     );
     respond_with_json(
         enroll_request.stream,
-        json!({ "server_id": "srv_e_test", "environment_id": "env_test" }),
+        remote_control_server_token_response(
+            "srv_e_test",
+            "env_test",
+            TEST_REMOTE_CONTROL_SERVER_TOKEN,
+        ),
     )
     .await;
     let mut first_websocket = accept_remote_control_connection(&listener).await;
@@ -801,7 +924,11 @@ async fn remote_control_transport_clears_outgoing_buffer_when_backend_acks() {
     let enroll_request = accept_http_request(&listener).await;
     respond_with_json(
         enroll_request.stream,
-        json!({ "server_id": "srv_e_test", "environment_id": "env_test" }),
+        remote_control_server_token_response(
+            "srv_e_test",
+            "env_test",
+            TEST_REMOTE_CONTROL_SERVER_TOKEN,
+        ),
     )
     .await;
     let mut first_websocket = accept_remote_control_connection(&listener).await;
@@ -1008,7 +1135,11 @@ async fn remote_control_http_mode_enrolls_before_connecting() {
     );
     respond_with_json(
         enroll_request.stream,
-        json!({ "server_id": "srv_e_test", "environment_id": "env_test" }),
+        remote_control_server_token_response(
+            "srv_e_test",
+            "env_test",
+            TEST_REMOTE_CONTROL_SERVER_TOKEN,
+        ),
     )
     .await;
 
@@ -1026,13 +1157,13 @@ async fn remote_control_http_mode_enrolls_before_connecting() {
     );
     assert_eq!(
         handshake_request.headers.get("authorization"),
-        Some(&"Bearer Access Token".to_string())
+        Some(&format!("Bearer {TEST_REMOTE_CONTROL_SERVER_TOKEN}"))
     );
     assert_eq!(
         handshake_request
             .headers
             .get(REMOTE_CONTROL_ACCOUNT_ID_HEADER),
-        Some(&"account_id".to_string())
+        None
     );
     assert_eq!(
         handshake_request
@@ -1172,7 +1303,7 @@ async fn remote_control_http_mode_enrolls_before_connecting() {
 }
 
 #[tokio::test]
-async fn remote_control_http_mode_reuses_persisted_enrollment_before_reenrolling() {
+async fn remote_control_http_mode_refreshes_persisted_enrollment_before_connecting() {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("listener should bind");
@@ -1186,6 +1317,8 @@ async fn remote_control_http_mode_reuses_persisted_enrollment_before_reenrolling
         environment_id: "env_persisted".to_string(),
         server_id: "srv_e_persisted".to_string(),
         server_name: "persisted-server".to_string(),
+        remote_control_token: None,
+        expires_at: None,
     };
     update_persisted_remote_control_enrollment(
         Some(state_db.as_ref()),
@@ -1215,6 +1348,33 @@ async fn remote_control_http_mode_reuses_persisted_enrollment_before_reenrolling
     .await
     .expect("remote control should start");
 
+    let refresh_request = accept_http_request(&listener).await;
+    assert_eq!(
+        refresh_request.request_line,
+        "POST /backend-api/wham/remote/control/server/refresh HTTP/1.1"
+    );
+    assert_eq!(
+        refresh_request.headers.get("authorization"),
+        Some(&"Bearer Access Token".to_string())
+    );
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&refresh_request.body)
+            .expect("refresh body should deserialize"),
+        json!({
+            "server_id": persisted_enrollment.server_id.clone(),
+            "installation_id": TEST_INSTALLATION_ID,
+        })
+    );
+    respond_with_json(
+        refresh_request.stream,
+        remote_control_server_token_response(
+            &persisted_enrollment.server_id,
+            &persisted_enrollment.environment_id,
+            TEST_REFRESHED_REMOTE_CONTROL_SERVER_TOKEN,
+        ),
+    )
+    .await;
+
     let (handshake_request, _websocket) = accept_remote_control_backend_connection(&listener).await;
     assert_eq!(
         handshake_request.path,
@@ -1223,6 +1383,12 @@ async fn remote_control_http_mode_reuses_persisted_enrollment_before_reenrolling
     assert_eq!(
         handshake_request.headers.get("x-codex-server-id"),
         Some(&persisted_enrollment.server_id)
+    );
+    assert_eq!(
+        handshake_request.headers.get("authorization"),
+        Some(&format!(
+            "Bearer {TEST_REFRESHED_REMOTE_CONTROL_SERVER_TOKEN}"
+        ))
     );
     assert_eq!(
         load_persisted_remote_control_enrollment(
@@ -1256,6 +1422,8 @@ async fn remote_control_stdio_mode_waits_for_client_name_before_connecting() {
         environment_id: "env_persisted".to_string(),
         server_id: "srv_e_persisted".to_string(),
         server_name: "persisted-server".to_string(),
+        remote_control_token: None,
+        expires_at: None,
     };
     update_persisted_remote_control_enrollment(
         Some(state_db.as_ref()),
@@ -1291,6 +1459,20 @@ async fn remote_control_stdio_mode_waits_for_client_name_before_connecting() {
         .expect_err("remote control should wait for the stdio client name");
 
     let _ = app_server_client_name_tx.send(app_server_client_name.to_string());
+    let refresh_request = accept_http_request(&listener).await;
+    assert_eq!(
+        refresh_request.request_line,
+        "POST /backend-api/wham/remote/control/server/refresh HTTP/1.1"
+    );
+    respond_with_json(
+        refresh_request.stream,
+        remote_control_server_token_response(
+            &persisted_enrollment.server_id,
+            &persisted_enrollment.environment_id,
+            TEST_REFRESHED_REMOTE_CONTROL_SERVER_TOKEN,
+        ),
+    )
+    .await;
     let (handshake_request, _websocket) = accept_remote_control_backend_connection(&listener).await;
     assert_eq!(
         handshake_request.headers.get("x-codex-server-id"),
@@ -1328,6 +1510,8 @@ async fn remote_control_waits_for_account_id_before_enrolling() {
         environment_id: "env_ready".to_string(),
         server_id: "srv_e_ready".to_string(),
         server_name: expected_server_name,
+        remote_control_token: None,
+        expires_at: None,
     };
 
     let (transport_event_tx, _transport_event_rx) =
@@ -1369,10 +1553,11 @@ async fn remote_control_waits_for_account_id_before_enrolling() {
     );
     respond_with_json(
         enroll_request.stream,
-        json!({
-            "server_id": expected_enrollment.server_id,
-            "environment_id": expected_enrollment.environment_id,
-        }),
+        remote_control_server_token_response(
+            &expected_enrollment.server_id,
+            &expected_enrollment.environment_id,
+            TEST_REMOTE_CONTROL_SERVER_TOKEN,
+        ),
     )
     .await;
 
@@ -1387,7 +1572,7 @@ async fn remote_control_waits_for_account_id_before_enrolling() {
 }
 
 #[tokio::test]
-async fn remote_control_http_mode_clears_stale_persisted_enrollment_after_404() {
+async fn remote_control_http_mode_reenrolls_when_refresh_reports_stale_enrollment() {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("listener should bind");
@@ -1402,12 +1587,16 @@ async fn remote_control_http_mode_clears_stale_persisted_enrollment_after_404() 
         environment_id: "env_stale".to_string(),
         server_id: "srv_e_stale".to_string(),
         server_name: "stale-server".to_string(),
+        remote_control_token: None,
+        expires_at: None,
     };
     let refreshed_enrollment = RemoteControlEnrollment {
         account_id: "account_id".to_string(),
         environment_id: "env_refreshed".to_string(),
         server_id: "srv_e_refreshed".to_string(),
         server_name: expected_server_name,
+        remote_control_token: None,
+        expires_at: None,
     };
     update_persisted_remote_control_enrollment(
         Some(state_db.as_ref()),
@@ -1437,6 +1626,138 @@ async fn remote_control_http_mode_clears_stale_persisted_enrollment_after_404() 
     .await
     .expect("remote control should start");
     let mut status_rx = remote_handle.status_receiver();
+
+    let refresh_request = accept_http_request(&listener).await;
+    assert_eq!(
+        refresh_request.request_line,
+        "POST /backend-api/wham/remote/control/server/refresh HTTP/1.1"
+    );
+    expect_remote_control_status(
+        &mut status_rx,
+        /*expected_status*/ None,
+        Some("env_stale"),
+    )
+    .await;
+    respond_with_status(refresh_request.stream, "404 Not Found", "").await;
+    expect_remote_control_status(
+        &mut status_rx,
+        /*expected_status*/ None,
+        /*expected_environment_id*/ None,
+    )
+    .await;
+
+    let enroll_request = accept_http_request(&listener).await;
+    assert_eq!(
+        enroll_request.request_line,
+        "POST /backend-api/wham/remote/control/server/enroll HTTP/1.1"
+    );
+    respond_with_json(
+        enroll_request.stream,
+        remote_control_server_token_response(
+            &refreshed_enrollment.server_id,
+            &refreshed_enrollment.environment_id,
+            TEST_REMOTE_CONTROL_SERVER_TOKEN,
+        ),
+    )
+    .await;
+
+    let (handshake_request, _websocket) = accept_remote_control_backend_connection(&listener).await;
+    expect_remote_control_status(
+        &mut status_rx,
+        /*expected_status*/ None,
+        Some("env_refreshed"),
+    )
+    .await;
+    assert_eq!(
+        handshake_request.headers.get("x-codex-server-id"),
+        Some(&refreshed_enrollment.server_id)
+    );
+    assert_eq!(
+        load_persisted_remote_control_enrollment(
+            Some(state_db.as_ref()),
+            &remote_control_target,
+            "account_id",
+            /*app_server_client_name*/ None,
+        )
+        .await
+        .expect("refreshed enrollment should load"),
+        Some(refreshed_enrollment)
+    );
+
+    shutdown_token.cancel();
+    let _ = remote_task.await;
+}
+
+#[tokio::test]
+async fn remote_control_http_mode_clears_stale_persisted_enrollment_after_404() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("listener should bind");
+    let remote_control_url = remote_control_url_for_listener(&listener);
+    let codex_home = TempDir::new().expect("temp dir should create");
+    let state_db = remote_control_state_runtime(&codex_home).await;
+    let remote_control_target =
+        normalize_remote_control_url(&remote_control_url).expect("target should parse");
+    let expected_server_name = gethostname().to_string_lossy().trim().to_string();
+    let stale_enrollment = RemoteControlEnrollment {
+        account_id: "account_id".to_string(),
+        environment_id: "env_stale".to_string(),
+        server_id: "srv_e_stale".to_string(),
+        server_name: "stale-server".to_string(),
+        remote_control_token: None,
+        expires_at: None,
+    };
+    let refreshed_enrollment = RemoteControlEnrollment {
+        account_id: "account_id".to_string(),
+        environment_id: "env_refreshed".to_string(),
+        server_id: "srv_e_refreshed".to_string(),
+        server_name: expected_server_name,
+        remote_control_token: None,
+        expires_at: None,
+    };
+    update_persisted_remote_control_enrollment(
+        Some(state_db.as_ref()),
+        &remote_control_target,
+        "account_id",
+        /*app_server_client_name*/ None,
+        Some(&stale_enrollment),
+    )
+    .await
+    .expect("stale enrollment should save");
+
+    let (transport_event_tx, _transport_event_rx) =
+        mpsc::channel::<TransportEvent>(CHANNEL_CAPACITY);
+    let shutdown_token = CancellationToken::new();
+    let (remote_task, remote_handle) = start_remote_control(
+        RemoteControlStartConfig {
+            remote_control_url,
+            installation_id: TEST_INSTALLATION_ID.to_string(),
+        },
+        Some(state_db.clone()),
+        remote_control_auth_manager_with_home(&codex_home),
+        transport_event_tx,
+        shutdown_token.clone(),
+        /*app_server_client_name_rx*/ None,
+        /*initial_enabled*/ true,
+    )
+    .await
+    .expect("remote control should start");
+    let mut status_rx = remote_handle.status_receiver();
+
+    let refresh_request = accept_http_request(&listener).await;
+    assert_eq!(
+        refresh_request.request_line,
+        "POST /backend-api/wham/remote/control/server/refresh HTTP/1.1"
+    );
+    respond_with_json(
+        refresh_request.stream,
+        remote_control_server_token_response(
+            &stale_enrollment.server_id,
+            &stale_enrollment.environment_id,
+            TEST_REFRESHED_REMOTE_CONTROL_SERVER_TOKEN,
+        ),
+    )
+    .await;
 
     let websocket_request = accept_http_request(&listener).await;
     assert_eq!(
@@ -1468,10 +1789,11 @@ async fn remote_control_http_mode_clears_stale_persisted_enrollment_after_404() 
     );
     respond_with_json(
         enroll_request.stream,
-        json!({
-            "server_id": refreshed_enrollment.server_id,
-            "environment_id": refreshed_enrollment.environment_id,
-        }),
+        remote_control_server_token_response(
+            &refreshed_enrollment.server_id,
+            &refreshed_enrollment.environment_id,
+            TEST_REMOTE_CONTROL_SERVER_TOKEN,
+        ),
     )
     .await;
 

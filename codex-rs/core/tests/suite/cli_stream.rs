@@ -68,27 +68,6 @@ async fn responses_mode_stream_cli() {
 
     let request = resp_mock.single_request();
     assert_eq!(request.path(), "/v1/responses");
-
-    // TODO(jif) fix
-    // // Verify a new session rollout was created and is discoverable via list_conversations
-    // let provider_filter = vec!["mock".to_string()];
-    // let page = RolloutRecorder::list_threads(
-    //     home.path(),
-    //     10,
-    //     None,
-    //     codex_core::ThreadSortKey::UpdatedAt,
-    //     &[],
-    //     Some(provider_filter.as_slice()),
-    //     "mock",
-    // )
-    // .await
-    // .expect("list conversations");
-    // assert!(
-    //     !page.items.is_empty(),
-    //     "expected at least one session to be listed"
-    // );
-    // assert!(page.items[0].thread_id.is_some(), "missing thread_id");
-    // assert!(page.items[0].created_at.is_some(), "missing created_at");
 }
 
 /// Ensures `openai_base_url` config override routes built-in openai provider requests.

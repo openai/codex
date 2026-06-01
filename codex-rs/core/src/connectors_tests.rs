@@ -31,13 +31,13 @@ use std::sync::Arc;
 use tempfile::tempdir;
 
 fn annotations(destructive_hint: Option<bool>, open_world_hint: Option<bool>) -> ToolAnnotations {
-    ToolAnnotations {
+    ToolAnnotations::from_raw(
+        /*title*/ None,
+        /*read_only_hint*/ None,
         destructive_hint,
-        idempotent_hint: None,
+        /*idempotent_hint*/ None,
         open_world_hint,
-        read_only_hint: None,
-        title: None,
-    }
+    )
 }
 
 fn app(id: &str) -> AppInfo {
@@ -63,17 +63,7 @@ fn plugin_names(names: &[&str]) -> Vec<String> {
 }
 
 fn test_tool_definition(tool_name: &str) -> Tool {
-    Tool {
-        name: tool_name.to_string().into(),
-        title: None,
-        description: None,
-        input_schema: Arc::new(JsonObject::default()),
-        output_schema: None,
-        annotations: None,
-        execution: None,
-        icons: None,
-        meta: None,
-    }
+    Tool::new_with_raw(tool_name.to_string(), None, Arc::new(JsonObject::default()))
 }
 
 fn codex_app_tool(
@@ -243,17 +233,11 @@ fn accessible_connectors_from_mcp_tools_preserves_description() {
         callable_name: "calendar_create_event".to_string(),
         callable_namespace: "mcp__codex_apps__calendar".to_string(),
         namespace_description: Some("Plan events".to_string()),
-        tool: Tool {
-            name: "calendar_create_event".to_string().into(),
-            title: None,
-            description: Some("Create a calendar event".into()),
-            input_schema: Arc::new(JsonObject::default()),
-            output_schema: None,
-            annotations: None,
-            execution: None,
-            icons: None,
-            meta: None,
-        },
+        tool: Tool::new(
+            "calendar_create_event",
+            "Create a calendar event",
+            Arc::new(JsonObject::default()),
+        ),
         connector_id: Some("calendar".to_string()),
         connector_name: Some("Calendar".to_string()),
         plugin_display_names: Vec::new(),
@@ -1196,7 +1180,7 @@ discoverables = [
         .expect("config should load");
 
     assert_eq!(
-        tool_suggest_connector_ids(&config).await,
+        tool_suggest_connector_ids(&config, &[]),
         HashSet::from(["connector_2128aebfecb84f64a069897515042a44".to_string()])
     );
 }
@@ -1225,7 +1209,7 @@ disabled_tools = [
         .expect("config should load");
 
     assert_eq!(
-        tool_suggest_connector_ids(&config).await,
+        tool_suggest_connector_ids(&config, &[]),
         HashSet::from(["connector_gmail".to_string()])
     );
 }
@@ -1254,7 +1238,7 @@ discoverables = [
     let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
 
     let discoverable_tools =
-        list_tool_suggest_discoverable_tools_with_auth(&config, Some(&auth), &[])
+        list_tool_suggest_discoverable_tools_with_auth(&config, Some(&auth), &[], &[])
             .await
             .expect("discoverable tools should load");
 
@@ -1262,6 +1246,42 @@ discoverables = [
         discoverable_tools,
         vec![DiscoverableTool::from(plugin_connector_to_app_info(
             "connector_gmail".to_string(),
+        ))]
+    );
+}
+
+#[tokio::test]
+async fn tool_suggest_includes_connectors_from_loaded_plugin_apps() {
+    let codex_home = tempdir().expect("tempdir should succeed");
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"
+[features]
+apps = true
+"#,
+    )
+    .expect("write config");
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .build()
+        .await
+        .expect("config should load");
+    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+    let loaded_plugin_app_connector_ids = vec!["asdk_app_databricks_workspace".to_string()];
+
+    let discoverable_tools = list_tool_suggest_discoverable_tools_with_auth(
+        &config,
+        Some(&auth),
+        &[],
+        &loaded_plugin_app_connector_ids,
+    )
+    .await
+    .expect("discoverable tools should load");
+
+    assert_eq!(
+        discoverable_tools,
+        vec![DiscoverableTool::from(plugin_connector_to_app_info(
+            "asdk_app_databricks_workspace".to_string(),
         ))]
     );
 }

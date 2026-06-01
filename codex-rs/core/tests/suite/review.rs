@@ -61,7 +61,7 @@ async fn review_op_emits_lifecycle_and_review_output() {
         "overall_confidence_score": 0.8
     })
     .to_string();
-    let (server, _request_log) = start_responses_server_with_sse(
+    let (server, request_log) = start_responses_server_with_sse(
         assistant_message_sse(&review_json),
         /*expected_requests*/ 1,
     )
@@ -111,11 +111,39 @@ async fn review_op_emits_lifecycle_and_review_output() {
     assert_eq!(expected, review);
     let _complete = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
-    // Also verify that a user message with the header and a formatted finding
-    // was recorded back in the parent session's rollout.
     let path = codex.rollout_path().expect("rollout path");
     let text = std::fs::read_to_string(&path).expect("read rollout file");
+    let parent_thread_id = text
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .find_map(|line| {
+            let rollout_line: RolloutLine = serde_json::from_str(line).expect("rollout line");
+            match rollout_line.item {
+                RolloutItem::SessionMeta(session_meta) => Some(session_meta.meta.id.to_string()),
+                _ => None,
+            }
+        })
+        .expect("parent session meta");
 
+    let request = request_log.single_request();
+    assert_eq!(
+        request.header("x-openai-subagent").as_deref(),
+        Some("review")
+    );
+    let turn_metadata: serde_json::Value = serde_json::from_str(
+        &request
+            .header("x-codex-turn-metadata")
+            .expect("review request turn metadata"),
+    )
+    .expect("review request turn metadata json");
+    assert!(turn_metadata.get("forked_from_thread_id").is_none());
+    assert_eq!(
+        turn_metadata["parent_thread_id"].as_str(),
+        Some(parent_thread_id.as_str())
+    );
+
+    // Also verify that a user message with the header and a formatted finding
+    // was recorded back in the parent session's rollout.
     let mut saw_header = false;
     let mut saw_finding_line = false;
     let expected_assistant_text = render_review_output_text(&expected);
@@ -684,6 +712,7 @@ async fn review_history_surfaces_in_parent_session() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         })
         .await

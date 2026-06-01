@@ -20,25 +20,34 @@
 //!    artifacts of pulldown-cmark's lenient parsing.
 //! 2. **Normalize column counts** -- pad or truncate so every row matches the
 //!    alignment count.
-//! 3. **Compute column widths** -- allocate widths with Narrative/Structured
+//! 3. **Compute column widths** -- allocate widths with content-aware
 //!    priority and iterative shrinking.
-//! 4. **Render box grid** -- Unicode borders (`┌───┬───┐`) or fallback to pipe
-//!    format when the minimum cannot fit.
+//! 4. **Choose presentation** -- render theme-accented row-separated columns
+//!    while values remain scannable, otherwise transpose body rows
+//!    into key/value records separated by muted rules.
 //! 5. **Append spillover** -- extracted spillover rows rendered as plain text
 //!    after the table.
 //!
 //! ## Width allocation
 //!
-//! Columns are classified as Narrative (long prose, >= 4 avg words or >= 28
-//! avg char width) or Structured (short tokens).  The shrink loop removes
-//! one character at a time, preferring Narrative columns, until the total
-//! fits the available width.  A guard cost penalises shrinking below a
-//! column's header token width.  When even 3-char-wide columns cannot fit,
-//! the table falls back to pipe-delimited format.
+//! Columns are classified as Narrative (long prose), TokenHeavy (paths, URLs,
+//! or hashes), or Compact (short values such as counts and status labels).
+//! Token-heavy columns give up excess width before narrative columns so an
+//! oversized path does not collapse readable prose; compact values are
+//! preserved last. When compact values split, token-heavy values collapse into
+//! unusably short chunks, expansive cells form tall narrow strips across enough
+//! body rows, or even 3-char-wide columns cannot fit, body rows render as
+//! key/value records.
 
+use crate::render::highlight::foreground_style_for_scopes;
 use crate::render::highlight::highlight_code_to_lines;
 use crate::render::line_utils::line_to_static;
-use crate::render::line_utils::push_owned_lines;
+use crate::style::table_separator_style;
+use crate::terminal_hyperlinks::HyperlinkLine;
+use crate::terminal_hyperlinks::annotate_web_urls_in_line;
+use crate::terminal_hyperlinks::remap_wrapped_line;
+use crate::terminal_hyperlinks::visible_lines;
+use crate::terminal_hyperlinks::web_destination;
 use crate::wrapping::RtOptions;
 use crate::wrapping::adaptive_wrap_line;
 use crate::wrapping::word_wrap_line;
@@ -63,8 +72,16 @@ use std::ops::Range;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::LazyLock;
+use unicode_width::UnicodeWidthChar;
 use unicode_width::UnicodeWidthStr;
 use url::Url;
+
+mod table_key_value;
+
+const TABLE_COLUMN_GAP: usize = 2;
+const TABLE_CELL_PADDING: usize = 1;
+const TABLE_HEADER_SEPARATOR_CHAR: char = '━';
+const TABLE_BODY_SEPARATOR_CHAR: char = '─';
 
 struct MarkdownStyles {
     h1: Style,
@@ -128,7 +145,7 @@ impl IndentContext {
 /// `lines` are used for final rendering.
 #[derive(Clone, Debug, Default)]
 struct TableCell {
-    lines: Vec<Line<'static>>,
+    lines: Vec<HyperlinkLine>,
 }
 
 // TableCell mutators inlined — called per-span during table event parsing.
@@ -136,7 +153,7 @@ impl TableCell {
     #[inline]
     fn ensure_line(&mut self) {
         if self.lines.is_empty() {
-            self.lines.push(Line::default());
+            self.lines.push(HyperlinkLine::new(Line::default()));
         }
     }
 
@@ -144,13 +161,26 @@ impl TableCell {
     fn push_span(&mut self, span: Span<'static>) {
         self.ensure_line();
         if let Some(line) = self.lines.last_mut() {
-            line.push_span(span);
+            line.line.push_span(span);
+        }
+    }
+
+    fn push_annotated(&mut self, mut appended: HyperlinkLine) {
+        self.ensure_line();
+        if let Some(line) = self.lines.last_mut() {
+            let shift = line.width();
+            line.line.spans.append(&mut appended.line.spans);
+            line.hyperlinks
+                .extend(appended.hyperlinks.into_iter().map(|mut link| {
+                    link.columns = link.columns.start + shift..link.columns.end + shift;
+                    link
+                }));
         }
     }
 
     #[inline]
     fn hard_break(&mut self) {
-        self.lines.push(Line::default());
+        self.lines.push(HyperlinkLine::new(Line::default()));
     }
 
     fn plain_text(&self) -> String {
@@ -160,7 +190,7 @@ impl TableCell {
             if i > 0 {
                 buf.push(' ');
             }
-            for span in &line.spans {
+            for span in &line.line.spans {
                 let _ = write!(buf, "{}", span.content);
             }
         }
@@ -207,30 +237,28 @@ impl TableState {
 
 /// Rendered table output split by wrapping behavior.
 ///
-/// `table_lines` are either prewrapped grid rows (box rendering) or pipe
-/// fallback rows that should still pass through normal wrapping.
+/// `table_lines` are prewrapped aligned rows or key/value records, except
+/// header-only tables may retain pipe fallback rows for normal wrapping.
 /// `spillover_lines` are prose rows extracted from parser artifacts and should
 /// be routed through normal wrapping.
 struct RenderedTableLines {
-    table_lines: Vec<Line<'static>>,
+    table_lines: Vec<HyperlinkLine>,
     table_lines_prewrapped: bool,
-    spillover_lines: Vec<Line<'static>>,
+    spillover_lines: Vec<HyperlinkLine>,
 }
 
 /// Classification of a table column for width-allocation priority.
 ///
-/// Narrative columns (long prose, many words per cell) are shrunk first when the table exceeds
-/// available width.  Structured columns (short tokens like dates, status words, numbers) are
-/// preserved as long as possible to keep their content on a single line.
-///
-/// The heuristic is simple: >= 4 average words per cell OR >= 28 average character width →
-/// Narrative. Everything else → Structured.
+/// Token-heavy columns such as paths and URLs are allowed to wrap before prose becomes unreadable.
+/// Compact columns such as counts or status words resist wrapping so their values stay scannable.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TableColumnKind {
     /// Long-form prose content (>= 4 avg words/cell or >= 28 avg char width).
     Narrative,
-    /// Short, token-like content that should resist wrapping.
-    Structured,
+    /// Content dominated by long tokens, such as paths, URLs, and hashes.
+    TokenHeavy,
+    /// Short values, such as counts and status labels, that should resist wrapping.
+    Compact,
 }
 
 /// Per-column statistics used to drive the width-allocation algorithm.
@@ -245,11 +273,7 @@ struct TableColumnMetrics {
     header_token_width: usize,
     /// Display width of the longest whitespace-delimited token across body rows.
     body_token_width: usize,
-    /// Average number of whitespace-delimited words per non-empty body cell.
-    avg_words_per_cell: f64,
-    /// Average display width of non-empty body cells.
-    avg_cell_width: f64,
-    /// Classification derived from `avg_words_per_cell` and `avg_cell_width`.
+    /// Classification derived from body token density and average cell content.
     kind: TableColumnKind,
 }
 
@@ -265,11 +289,11 @@ pub fn render_markdown_text(input: &str) -> Text<'static> {
 
 /// Render markdown constrained to a known terminal width.
 ///
-/// The renderer preserves table structure when possible and falls back to
-/// pipe-table output when a box table cannot fit the available width. Passing
-/// `None` keeps intrinsic line widths and disables width-driven wrapping in the
-/// markdown writer. Local file links render relative to the current process
-/// working directory.
+/// The renderer preserves columnar table structure while values remain
+/// scannable and falls back to key/value records when body rows cannot fit
+/// readably. Passing `None` keeps intrinsic line widths and disables
+/// width-driven wrapping in the markdown writer. Local file links render
+/// relative to the current process working directory.
 pub(crate) fn render_markdown_text_with_width(input: &str, width: Option<usize>) -> Text<'static> {
     let cwd = std::env::current_dir().ok();
     render_markdown_text_with_width_and_cwd(input, width, cwd.as_deref())
@@ -285,6 +309,16 @@ pub(crate) fn render_markdown_text_with_width_and_cwd(
     width: Option<usize>,
     cwd: Option<&Path>,
 ) -> Text<'static> {
+    Text::from(visible_lines(render_markdown_lines_with_width_and_cwd(
+        input, width, cwd,
+    )))
+}
+
+pub(crate) fn render_markdown_lines_with_width_and_cwd(
+    input: &str,
+    width: Option<usize>,
+    cwd: Option<&Path>,
+) -> Vec<HyperlinkLine> {
     let mut options = Options::empty();
     options.insert(Options::ENABLE_STRIKETHROUGH);
     options.insert(Options::ENABLE_TABLES);
@@ -336,13 +370,13 @@ where
 {
     input: &'a str,
     iter: I,
-    text: Text<'static>,
+    text: Vec<HyperlinkLine>,
     styles: MarkdownStyles,
     inline_styles: Vec<Style>,
     indent_stack: Vec<IndentContext>,
     list_indices: Vec<Option<u64>>,
     list_needs_blank_before_next_item: Vec<bool>,
-    list_item_contains_code_block: Vec<bool>,
+    list_item_start_line_counts: Vec<usize>,
     link: Option<LinkState>,
     needs_newline: bool,
     pending_marker_line: bool,
@@ -354,7 +388,7 @@ where
     cwd: Option<PathBuf>,
     line_ends_with_local_link_target: bool,
     pending_local_link_soft_break: bool,
-    current_line_content: Option<Line<'static>>,
+    current_line_content: Option<HyperlinkLine>,
     current_initial_indent: Vec<Span<'static>>,
     current_subsequent_indent: Vec<Span<'static>>,
     current_line_style: Style,
@@ -370,13 +404,13 @@ where
         Self {
             input,
             iter,
-            text: Text::default(),
+            text: Vec::new(),
             styles: MarkdownStyles::default(),
             inline_styles: Vec::new(),
             indent_stack: Vec::new(),
             list_indices: Vec::new(),
             list_needs_blank_before_next_item: Vec::new(),
-            list_item_contains_code_block: Vec::new(),
+            list_item_start_line_counts: Vec::new(),
             link: None,
             needs_newline: false,
             pending_marker_line: false,
@@ -415,7 +449,7 @@ where
             Event::HardBreak => self.hard_break(),
             Event::Rule => {
                 self.flush_current_line();
-                if !self.text.lines.is_empty() {
+                if !self.text.is_empty() {
                     self.push_blank_line();
                 }
                 self.push_line(Line::from("———"));
@@ -486,7 +520,9 @@ where
             TagEnd::CodeBlock => self.end_codeblock(),
             TagEnd::List(_) => self.end_list(),
             TagEnd::Item => {
-                if self.list_item_contains_code_block.pop().unwrap_or(false)
+                self.flush_current_line();
+                let start_line_count = self.list_item_start_line_counts.pop().unwrap_or_default();
+                if self.text.len().saturating_sub(start_line_count) > 1
                     && let Some(needs_blank) = self.list_needs_blank_before_next_item.last_mut()
                 {
                     *needs_blank = true;
@@ -609,12 +645,11 @@ where
             let has_content = self
                 .current_line_content
                 .as_ref()
-                .map(|line| !line.spans.is_empty())
+                .map(|line| !line.line.spans.is_empty())
                 .unwrap_or_else(|| {
                     self.text
-                        .lines
                         .last()
-                        .map(|line| !line.spans.is_empty())
+                        .map(|line| !line.line.spans.is_empty())
                         .unwrap_or(false)
                 });
             if has_content {
@@ -630,11 +665,8 @@ where
                 self.push_line(Line::default());
             }
             let content = line.to_string();
-            let span = Span::styled(
-                content,
-                self.inline_styles.last().copied().unwrap_or_default(),
-            );
-            self.push_span(span);
+            let style = self.inline_styles.last().copied().unwrap_or_default();
+            self.push_text_spans(&content, style);
         }
         self.needs_newline = false;
     }
@@ -743,8 +775,9 @@ where
         {
             self.push_blank_line();
         }
+        self.flush_current_line();
+        self.list_item_start_line_counts.push(self.text.len());
         self.pending_marker_line = true;
-        self.list_item_contains_code_block.push(false);
         let depth = self.list_indices.len();
         let is_ordered = self
             .list_indices
@@ -784,11 +817,8 @@ where
     }
 
     fn start_codeblock(&mut self, lang: Option<String>, indent: Option<Span<'static>>) {
-        for item_contains_code_block in &mut self.list_item_contains_code_block {
-            *item_contains_code_block = true;
-        }
         self.flush_current_line();
-        if !self.text.lines.is_empty() {
+        if !self.text.is_empty() {
             self.push_blank_line();
         }
         self.in_code_block = true;
@@ -857,14 +887,14 @@ where
             if table_lines_prewrapped {
                 self.push_prewrapped_line(line, pending_marker_line);
             } else {
-                self.push_line(line);
+                self.push_hyperlink_line(line);
                 self.flush_current_line();
             }
             pending_marker_line = false;
         }
         self.pending_marker_line = false;
         for spillover_line in spillover_lines {
-            self.push_line(spillover_line);
+            self.push_hyperlink_line(spillover_line);
             self.flush_current_line();
         }
         self.needs_newline = true;
@@ -984,21 +1014,43 @@ where
             if i > 0 {
                 self.push_table_cell_hard_break();
             }
-            self.push_span_to_table_cell(Span::styled(line.to_string(), style));
+            self.push_text_spans_to_table_cell(line, style);
         }
     }
 
-    /// Convert a completed `TableState` into styled `Line`s with Unicode
-    /// box-drawing borders.
+    fn push_text_spans_to_table_cell(&mut self, text: &str, style: Style) {
+        let span = Span::styled(text.to_string(), style);
+        let destination = self
+            .link
+            .as_ref()
+            .and_then(|link| web_destination(&link.destination));
+        let mut annotated = if let Some(destination) = destination {
+            let mut annotated = HyperlinkLine::new(Line::default());
+            annotated.push_span(span, Some(&destination));
+            annotated
+        } else if self.link.is_some() || self.in_code_block {
+            HyperlinkLine::new(Line::from(span))
+        } else {
+            annotate_web_urls_in_line(Line::from(span))
+        };
+        if let Some(table_state) = self.table_state.as_mut()
+            && let Some(cell) = table_state.current_cell.as_mut()
+        {
+            cell.push_annotated(std::mem::take(&mut annotated));
+        }
+    }
+
+    /// Convert a completed `TableState` into styled table `Line`s.
     ///
     /// Pipeline: filter spillover rows -> normalize column counts -> compute
-    /// column widths -> render box grid (or fall back to pipe format if the
-    /// minimum column widths exceed available terminal width). Spillover rows
-    /// are appended as plain text after the table grid.
+    /// column widths -> render aligned rows or key/value records when values
+    /// systemically lose token readability or expansive cells become tall
+    /// narrow strips. Spillover rows are appended as plain text after the
+    /// table.
     ///
-    /// Falls back to `render_table_pipe_fallback` (raw `| A | B |` format)
-    /// when `compute_column_widths` returns `None` (terminal too narrow for
-    /// even 3-char-wide columns).
+    /// Falls back to key/value records when body rows cannot fit in the aligned
+    /// grid; header-only tables retain raw pipe output because they contain no
+    /// records to transpose.
     fn render_table_lines(&self, mut table_state: TableState) -> RenderedTableLines {
         let column_count = table_state.alignments.len();
         if column_count == 0 {
@@ -1034,15 +1086,35 @@ where
             Self::normalize_row(row, column_count);
         }
 
+        let metrics = Self::collect_table_column_metrics(&header, &rows, column_count);
         let available_width = self.available_table_width(column_count);
         let widths =
             self.compute_column_widths(&header, &rows, &table_state.alignments, available_width);
-        let spillover_lines: Vec<Line<'static>> = spillover_rows
+        let spillover_lines: Vec<HyperlinkLine> = spillover_rows
             .into_iter()
             .flat_map(|spillover| spillover.lines)
             .collect();
+        let header_style =
+            foreground_style_for_scopes(&["entity.name.type", "support.type", "variable"])
+                .unwrap_or(self.styles.strong)
+                .bold();
+        let separator_style = table_separator_style();
 
         let Some(column_widths) = widths else {
+            if !rows.is_empty() {
+                return RenderedTableLines {
+                    table_lines: table_key_value::render_records(
+                        &header,
+                        &rows,
+                        &metrics,
+                        self.available_record_width(),
+                        header_style,
+                        separator_style,
+                    ),
+                    table_lines_prewrapped: true,
+                    spillover_lines,
+                };
+            }
             return RenderedTableLines {
                 table_lines: self.render_table_pipe_fallback(
                     &header,
@@ -1054,25 +1126,48 @@ where
             };
         };
 
-        let border_style = Style::new().dim();
-        let mut out = Vec::with_capacity(3 + rows.len() * 2);
-        out.push(self.render_border_line('┌', '┬', '┐', &column_widths, border_style));
+        if table_key_value::should_render_records(&rows, &column_widths, &metrics) {
+            return RenderedTableLines {
+                table_lines: table_key_value::render_records(
+                    &header,
+                    &rows,
+                    &metrics,
+                    self.available_record_width(),
+                    header_style,
+                    separator_style,
+                ),
+                table_lines_prewrapped: true,
+                spillover_lines,
+            };
+        }
+
+        let mut out = Vec::with_capacity(2 + rows.len() * 2);
         out.extend(self.render_table_row(
             &header,
             &column_widths,
             &table_state.alignments,
-            border_style,
+            header_style,
         ));
-        out.push(self.render_border_line('├', '┼', '┤', &column_widths, border_style));
-        for row in &rows {
+        out.push(Self::render_table_separator(
+            &column_widths,
+            TABLE_HEADER_SEPARATOR_CHAR,
+            separator_style,
+        ));
+        for (row_idx, row) in rows.iter().enumerate() {
             out.extend(self.render_table_row(
                 row,
                 &column_widths,
                 &table_state.alignments,
-                border_style,
+                Style::default(),
             ));
+            if row_idx + 1 < rows.len() {
+                out.push(Self::render_table_separator(
+                    &column_widths,
+                    TABLE_BODY_SEPARATOR_CHAR,
+                    separator_style,
+                ));
+            }
         }
-        out.push(self.render_border_line('└', '┴', '┘', &column_widths, border_style));
         RenderedTableLines {
             table_lines: out,
             table_lines_prewrapped: true,
@@ -1085,23 +1180,34 @@ where
         row.resize(column_count, TableCell::default());
     }
 
-    /// subtracts the space eaten by border characters
+    /// Subtract horizontal gutters and per-cell padding from the content budget.
     fn available_table_width(&self, column_count: usize) -> Option<usize> {
         self.wrap_width.map(|wrap_width| {
             let prefix_width =
                 Self::spans_display_width(&self.prefix_spans(self.pending_marker_line));
-            let reserved = prefix_width + 1 + (column_count * 3);
+            let reserved = prefix_width
+                + (column_count.saturating_sub(1) * TABLE_COLUMN_GAP)
+                + (column_count * TABLE_CELL_PADDING * 2);
             wrap_width.saturating_sub(reserved)
         })
     }
 
-    /// Allocate column widths for box-drawing table rendering.
+    /// Return the full content budget for record fallback rendering.
+    fn available_record_width(&self) -> Option<usize> {
+        self.wrap_width.map(|wrap_width| {
+            let prefix_width =
+                Self::spans_display_width(&self.prefix_spans(self.pending_marker_line));
+            wrap_width.saturating_sub(prefix_width)
+        })
+    }
+
+    /// Allocate column widths for aligned, row-separated table rendering.
     ///
     /// Each column starts at its natural (max cell content) width, then columns
     /// are iteratively shrunk one character at a time until the total fits within
-    /// `available_width`. Narrative columns (long prose) are shrunk before
-    /// Structured columns (short tokens). Returns `None` when even the minimum
-    /// width (3 chars per column) cannot fit.
+    /// `available_width`. Token-heavy columns surrender excess width before
+    /// narrative prose; compact columns are preserved last. Returns `None` when
+    /// even the minimum width (3 chars per column) cannot fit.
     fn compute_column_widths(
         &self,
         header: &[TableCell],
@@ -1130,19 +1236,17 @@ where
             .collect();
         let mut floor_total: usize = floors.iter().sum();
         if floor_total > max_width {
-            // Relax preferred floors (starting with narrative columns) until we can satisfy the
-            // width budget. We still keep hard minimums.
+            // Relax preferred floors in wrapping priority order until the hard width budget fits.
             while floor_total > max_width {
                 let Some((idx, _)) = floors
                     .iter()
                     .enumerate()
                     .filter(|(_, floor)| **floor > min_column_width)
                     .min_by_key(|(idx, floor)| {
-                        let kind_priority = match metrics[*idx].kind {
-                            TableColumnKind::Narrative => 0,
-                            TableColumnKind::Structured => 1,
-                        };
-                        (kind_priority, *floor)
+                        (
+                            Self::column_shrink_priority(metrics[*idx].kind),
+                            usize::MAX.saturating_sub(**floor),
+                        )
                     })
                 else {
                     break;
@@ -1182,6 +1286,8 @@ where
             let header_token_width = Self::longest_token_width(&header_plain);
             let mut max_width = Self::cell_display_width(header_cell);
             let mut body_token_width = 0usize;
+            let mut body_token_count = 0usize;
+            let mut long_body_token_count = 0usize;
             let mut total_words = 0usize;
             let mut total_cells = 0usize;
             let mut total_cell_width = 0usize;
@@ -1193,6 +1299,11 @@ where
                 body_token_width = body_token_width.max(Self::longest_token_width(&plain));
                 let word_count = plain.split_whitespace().count();
                 if word_count > 0 {
+                    body_token_count += word_count;
+                    long_body_token_count += plain
+                        .split_whitespace()
+                        .filter(|token| token.width() >= 20)
+                        .count();
                     total_words += word_count;
                     total_cells += 1;
                     total_cell_width += plain.width();
@@ -1209,22 +1320,20 @@ where
             } else {
                 total_cell_width as f64 / total_cells as f64
             };
-            let kind = if body_token_width >= 20 && avg_words_per_cell <= 2.0 {
-                // URL-like/token-heavy columns should resist collapse even if their
-                // average cell width is high.
-                TableColumnKind::Structured
+            let kind = if long_body_token_count > 0
+                && long_body_token_count >= body_token_count.saturating_sub(long_body_token_count)
+            {
+                TableColumnKind::TokenHeavy
             } else if avg_words_per_cell >= 4.0 || avg_cell_width >= 28.0 {
                 TableColumnKind::Narrative
             } else {
-                TableColumnKind::Structured
+                TableColumnKind::Compact
             };
 
             metrics.push(TableColumnMetrics {
                 max_width,
                 header_token_width,
                 body_token_width,
-                avg_words_per_cell,
-                avg_cell_width,
                 kind,
             });
         }
@@ -1235,13 +1344,13 @@ where
     /// Compute the preferred minimum width for a column before the shrink loop
     /// starts reducing it further.
     ///
-    /// Narrative columns floor at the header's longest token (capped at 10).
-    /// Structured columns floor at the larger of the header and body token widths
+    /// Narrative and token-heavy columns retain a readable 16-cell soft floor.
+    /// Compact columns floor at the larger of the header and body token widths
     /// (body capped at 16). The result is clamped to `[min_column_width, max_width]`.
     fn preferred_column_floor(metrics: &TableColumnMetrics, min_column_width: usize) -> usize {
         let token_target = match metrics.kind {
-            TableColumnKind::Narrative => metrics.header_token_width.min(10),
-            TableColumnKind::Structured => metrics
+            TableColumnKind::Narrative | TableColumnKind::TokenHeavy => 16,
+            TableColumnKind::Compact => metrics
                 .header_token_width
                 .max(metrics.body_token_width.min(16)),
         };
@@ -1250,10 +1359,9 @@ where
 
     /// Pick the next column to shrink by one character during width allocation.
     ///
-    /// Priority: Narrative columns are shrunk before Structured. Within the same
-    /// kind, the column with the most slack above its floor is chosen. A guard
-    /// cost is added when the width would fall below the header's longest token
-    /// (to avoid truncating column headers).
+    /// Priority: TokenHeavy columns are shrunk before Narrative, then Compact.
+    /// Within the same kind, the column with the most slack above its floor is
+    /// chosen so similarly-shaped columns stay balanced.
     fn next_column_to_shrink(
         widths: &[usize],
         floors: &[usize],
@@ -1265,49 +1373,35 @@ where
             .filter(|(idx, width)| **width > floors[*idx])
             .min_by_key(|(idx, width)| {
                 let slack = width.saturating_sub(floors[*idx]);
-                let kind_cost = match metrics[*idx].kind {
-                    TableColumnKind::Narrative => 0i32,
-                    TableColumnKind::Structured => 2i32,
-                };
-                let header_guard = if **width <= metrics[*idx].header_token_width {
-                    3i32
-                } else {
-                    0i32
-                };
-                let density_guard = if metrics[*idx].avg_words_per_cell >= 4.0
-                    || metrics[*idx].avg_cell_width >= 24.0
-                {
-                    0i32
-                } else {
-                    1i32
-                };
                 (
-                    kind_cost + header_guard + density_guard,
+                    Self::column_shrink_priority(metrics[*idx].kind),
                     usize::MAX.saturating_sub(slack),
                 )
             })
             .map(|(idx, _)| idx)
     }
 
-    fn render_border_line(
-        &self,
-        left: char,
-        sep: char,
-        right: char,
-        column_widths: &[usize],
-        style: Style,
-    ) -> Line<'static> {
-        let mut spans = Vec::with_capacity(column_widths.len() * 2 + 1);
-        spans.push(Span::styled(String::from(left), style));
-        for (idx, width) in column_widths.iter().enumerate() {
-            spans.push(Span::styled("─".repeat(*width + 2), style));
-            if idx + 1 == column_widths.len() {
-                spans.push(Span::styled(String::from(right), style));
-            } else {
-                spans.push(Span::styled(String::from(sep), style));
-            }
+    fn column_shrink_priority(kind: TableColumnKind) -> usize {
+        match kind {
+            TableColumnKind::TokenHeavy => 0,
+            TableColumnKind::Narrative => 1,
+            TableColumnKind::Compact => 2,
         }
-        Line::from(spans)
+    }
+
+    fn render_table_separator(
+        column_widths: &[usize],
+        separator_char: char,
+        style: Style,
+    ) -> HyperlinkLine {
+        let segment_char = separator_char.to_string();
+        let gap = " ".repeat(TABLE_COLUMN_GAP);
+        let text = column_widths
+            .iter()
+            .map(|width| segment_char.repeat(*width + (TABLE_CELL_PADDING * 2)))
+            .collect::<Vec<_>>()
+            .join(&gap);
+        HyperlinkLine::new(Line::from(Span::styled(text, style)))
     }
 
     fn render_table_row(
@@ -1315,9 +1409,9 @@ where
         row: &[TableCell],
         column_widths: &[usize],
         alignments: &[Alignment],
-        border_style: Style,
-    ) -> Vec<Line<'static>> {
-        let wrapped_cells: Vec<Vec<Line<'static>>> = row
+        row_style: Style,
+    ) -> Vec<HyperlinkLine> {
+        let wrapped_cells: Vec<Vec<HyperlinkLine>> = row
             .iter()
             .zip(column_widths)
             .map(|(cell, width)| self.wrap_cell(cell, *width))
@@ -1326,15 +1420,26 @@ where
 
         let mut out = Vec::with_capacity(row_height);
         for row_line in 0..row_height {
+            let Some(last_visible_column) = wrapped_cells.iter().rposition(|lines| {
+                lines
+                    .get(row_line)
+                    .is_some_and(|line| Self::line_display_width(&line.line) > 0)
+            }) else {
+                out.push(HyperlinkLine::new(Line::default().style(row_style)));
+                continue;
+            };
             let mut spans = Vec::new();
-            spans.push(Span::styled("│", border_style));
-            for (column, width) in column_widths.iter().enumerate() {
-                spans.push(Span::raw(" "));
-                let line = wrapped_cells[column]
+            for (column, width) in column_widths
+                .iter()
+                .enumerate()
+                .take(last_visible_column + 1)
+            {
+                spans.push(Span::raw(" ".repeat(TABLE_CELL_PADDING)));
+                let mut line = wrapped_cells[column]
                     .get(row_line)
                     .cloned()
                     .unwrap_or_default();
-                let line_width = Self::line_display_width(&line);
+                let line_width = Self::line_display_width(&line.line);
                 let remaining = width.saturating_sub(line_width);
                 let (left_padding, right_padding) = match alignments[column] {
                     Alignment::Left | Alignment::None => (0, remaining),
@@ -1344,49 +1449,113 @@ where
                 if left_padding > 0 {
                     spans.push(Span::raw(" ".repeat(left_padding)));
                 }
-                spans.extend(line.spans);
-                if right_padding > 0 {
+                spans.append(&mut line.line.spans);
+                let is_last_column = column == last_visible_column;
+                if right_padding > 0 && !is_last_column {
                     spans.push(Span::raw(" ".repeat(right_padding)));
                 }
-                spans.push(Span::raw(" "));
-                spans.push(Span::styled("│", border_style));
+                if !is_last_column {
+                    spans.push(Span::raw(" ".repeat(TABLE_CELL_PADDING)));
+                }
+                if !is_last_column {
+                    spans.push(Span::raw(" ".repeat(TABLE_COLUMN_GAP)));
+                }
             }
-            out.push(Line::from(spans));
+            let mut out_line = HyperlinkLine::new(Line::from(spans).style(row_style));
+            let mut column_start = 0usize;
+            for (column, width) in column_widths
+                .iter()
+                .enumerate()
+                .take(last_visible_column + 1)
+            {
+                column_start += TABLE_CELL_PADDING;
+                if let Some(line) = wrapped_cells[column].get(row_line) {
+                    let remaining = width.saturating_sub(Self::line_display_width(&line.line));
+                    let left_padding = match alignments[column] {
+                        Alignment::Left | Alignment::None => 0,
+                        Alignment::Center => remaining / 2,
+                        Alignment::Right => remaining,
+                    };
+                    out_line
+                        .hyperlinks
+                        .extend(line.hyperlinks.iter().cloned().map(|mut link| {
+                            link.columns = link.columns.start + column_start + left_padding
+                                ..link.columns.end + column_start + left_padding;
+                            link
+                        }));
+                }
+                column_start += *width + TABLE_CELL_PADDING + TABLE_COLUMN_GAP;
+            }
+            out.push(out_line);
         }
         out
     }
 
-    /// Render the table as raw pipe-delimited lines (`| A | B |`).
+    /// Render a header-only table as raw pipe-delimited lines (`| A | B |`).
     ///
-    /// Used when `compute_column_widths` returns `None` (terminal too narrow
-    /// for even 3-char-wide columns).  Pipe characters inside cell content are
-    /// escaped as `\|` so downstream parsers keep cell boundaries intact.
+    /// Used when `compute_column_widths` returns `None` and there are no body
+    /// records to transpose. Pipe characters inside cell content are escaped
+    /// as `\|` so downstream parsers keep cell boundaries intact.
     fn render_table_pipe_fallback(
         &self,
         header: &[TableCell],
         rows: &[Vec<TableCell>],
         alignments: &[Alignment],
-    ) -> Vec<Line<'static>> {
+    ) -> Vec<HyperlinkLine> {
         let mut out = Vec::new();
-        out.push(Line::from(Self::row_to_pipe_string(header)));
-        out.push(Line::from(Self::alignments_to_pipe_delimiter(alignments)));
-        out.extend(
-            rows.iter()
-                .map(|row| Line::from(Self::row_to_pipe_string(row))),
-        );
+        out.push(Self::row_to_pipe_line(header));
+        out.push(HyperlinkLine::new(Line::from(
+            Self::alignments_to_pipe_delimiter(alignments),
+        )));
+        out.extend(rows.iter().map(|row| Self::row_to_pipe_line(row)));
         out
     }
 
-    fn row_to_pipe_string(row: &[TableCell]) -> String {
-        let mut out = String::new();
-        out.push('|');
+    fn row_to_pipe_line(row: &[TableCell]) -> HyperlinkLine {
+        let mut out = HyperlinkLine::new(Line::default());
+        out.push_span("|".into(), /*destination*/ None);
         for cell in row {
-            out.push(' ');
-            // Preserve literal `|` inside cell text in markdown fallback mode so
-            // downstream markdown parsers keep the cell content intact.
-            out.push_str(&cell.plain_text().replace('|', "\\|"));
-            out.push(' ');
-            out.push('|');
+            out.push_span(" ".into(), /*destination*/ None);
+            for (index, line) in cell.lines.iter().enumerate() {
+                if index > 0 {
+                    out.push_span(" ".into(), /*destination*/ None);
+                }
+                let text = line
+                    .line
+                    .spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>();
+                let mut column = 0usize;
+                let mut current_destination = None;
+                let mut current_text = String::new();
+                let flush = |out: &mut HyperlinkLine,
+                             current_text: &mut String,
+                             destination: Option<&str>| {
+                    if !current_text.is_empty() {
+                        out.push_span(Span::raw(std::mem::take(current_text)), destination);
+                    }
+                };
+                for ch in text.chars() {
+                    let destination = line
+                        .hyperlinks
+                        .iter()
+                        .find(|link| link.columns.contains(&column))
+                        .map(|link| link.destination.as_str());
+                    if destination != current_destination {
+                        flush(&mut out, &mut current_text, current_destination);
+                        current_destination = destination;
+                    }
+                    if ch == '|' {
+                        current_text.push_str("\\|");
+                    } else {
+                        current_text.push(ch);
+                    }
+                    column += UnicodeWidthChar::width(ch).unwrap_or(/*default*/ 0);
+                }
+                flush(&mut out, &mut current_text, current_destination);
+            }
+            out.push_span(" |".into(), /*destination*/ None);
         }
         out
     }
@@ -1413,21 +1582,25 @@ where
     /// Each logical line within the cell (separated by hard breaks) is wrapped
     /// independently.  Empty cells produce a single blank line so the row grid
     /// stays aligned.
-    fn wrap_cell(&self, cell: &TableCell, width: usize) -> Vec<Line<'static>> {
+    fn wrap_cell(&self, cell: &TableCell, width: usize) -> Vec<HyperlinkLine> {
         if cell.lines.is_empty() {
-            return vec![Line::default()];
+            return vec![HyperlinkLine::new(Line::default())];
         }
         let mut wrapped = Vec::new();
         for source_line in &cell.lines {
-            let rendered = word_wrap_line(source_line, RtOptions::new(width.max(1)));
+            let rendered =
+                word_wrap_line(&source_line.line, RtOptions::new(width.max(/*other*/ 1)))
+                    .into_iter()
+                    .map(|line| line_to_static(&line))
+                    .collect::<Vec<_>>();
             if rendered.is_empty() {
-                wrapped.push(Line::default());
+                wrapped.push(HyperlinkLine::new(Line::default()));
             } else {
-                push_owned_lines(&rendered, &mut wrapped);
+                wrapped.extend(remap_wrapped_line(source_line, rendered));
             };
         }
         if wrapped.is_empty() {
-            wrapped.push(Line::default());
+            wrapped.push(HyperlinkLine::new(Line::default()));
         }
         wrapped
     }
@@ -1539,7 +1712,7 @@ where
     fn cell_display_width(cell: &TableCell) -> usize {
         cell.lines
             .iter()
-            .map(Self::line_display_width)
+            .map(|line| Self::line_display_width(&line.line))
             .max()
             .unwrap_or(0)
     }
@@ -1580,11 +1753,25 @@ where
                 // line to avoid detached url lines.
                 if self.in_table_cell() {
                     self.push_span_to_table_cell(" (".into());
-                    self.push_span_to_table_cell(Span::styled(link.destination, self.styles.link));
+                    let mut destination = HyperlinkLine::new(Line::default());
+                    destination.push_span(
+                        Span::styled(link.destination.clone(), self.styles.link),
+                        web_destination(&link.destination).as_deref(),
+                    );
+                    if let Some(table_state) = self.table_state.as_mut()
+                        && let Some(cell) = table_state.current_cell.as_mut()
+                    {
+                        cell.push_annotated(destination);
+                    }
                     self.push_span_to_table_cell(")".into());
                 } else {
                     self.push_span(" (".into());
-                    self.push_span(Span::styled(link.destination, self.styles.link));
+                    let mut destination = HyperlinkLine::new(Line::default());
+                    destination.push_span(
+                        Span::styled(link.destination.clone(), self.styles.link),
+                        web_destination(&link.destination).as_deref(),
+                    );
+                    self.push_annotated(destination);
                     self.push_span(")".into());
                 }
             } else if let Some(local_target_display) = link.local_target_display {
@@ -1618,7 +1805,7 @@ where
     }
 
     fn flush_current_line(&mut self) {
-        if let Some(line) = self.current_line_content.take() {
+        if let Some(mut line) = self.current_line_content.take() {
             let style = self.current_line_style;
             // NB we don't wrap code in code blocks, in order to preserve whitespace for copy/paste.
             if !self.current_line_in_code_block
@@ -1627,15 +1814,23 @@ where
                 let opts = RtOptions::new(width)
                     .initial_indent(self.current_initial_indent.clone().into())
                     .subsequent_indent(self.current_subsequent_indent.clone().into());
-                for wrapped in adaptive_wrap_line(&line, opts) {
-                    let owned = line_to_static(&wrapped).style(style);
-                    self.push_output_line(owned);
+                let wrapped = adaptive_wrap_line(&line.line, opts)
+                    .into_iter()
+                    .map(|wrapped| line_to_static(&wrapped))
+                    .collect();
+                for wrapped in remap_wrapped_line(&line, wrapped) {
+                    self.push_output_line(wrapped.style(style));
                 }
             } else {
                 let mut spans = self.current_initial_indent.clone();
-                let mut line = line;
-                spans.append(&mut line.spans);
-                self.push_output_line(Line::from_iter(spans).style(style));
+                let shift = spans.iter().map(|span| span.content.width()).sum::<usize>();
+                spans.append(&mut line.line.spans);
+                for hyperlink in &mut line.hyperlinks {
+                    hyperlink.columns =
+                        hyperlink.columns.start + shift..hyperlink.columns.end + shift;
+                }
+                line.line = Line::from_iter(spans);
+                self.push_output_line(line.style(style));
             }
             self.current_initial_indent.clear();
             self.current_subsequent_indent.clear();
@@ -1647,28 +1842,33 @@ where
     /// Push a line that has already been laid out at the correct width, skipping
     /// word wrapping.
     ///
-    /// Table lines are pre-formatted with exact column widths and box-drawing
-    /// borders. Passing them through `word_wrap_line` would break the grid at
+    /// Table lines are pre-formatted with exact column widths and separators.
+    /// Passing them through `word_wrap_line` would break the layout at
     /// arbitrary positions. This method prepends the indent/blockquote prefix
-    /// and pushes directly to `self.text.lines`.
+    /// and pushes directly to `self.text`.
     fn is_blockquote_active(&self) -> bool {
         self.indent_stack
             .iter()
             .any(|ctx| ctx.prefix.iter().any(|p| p.content.contains('>')))
     }
 
-    fn push_prewrapped_line(&mut self, line: Line<'static>, pending_marker_line: bool) {
+    fn push_prewrapped_line(&mut self, mut line: HyperlinkLine, pending_marker_line: bool) {
         self.flush_current_line();
         let blockquote_active = self.is_blockquote_active();
         let style = if blockquote_active {
-            self.styles.blockquote.patch(line.style)
+            self.styles.blockquote.patch(line.line.style)
         } else {
-            line.style
+            line.line.style
         };
 
         let mut spans = self.prefix_spans(pending_marker_line);
-        spans.extend(line.spans);
-        self.push_output_line(Line::from(spans).style(style));
+        let shift = spans.iter().map(|span| span.content.width()).sum::<usize>();
+        spans.append(&mut line.line.spans);
+        for hyperlink in &mut line.hyperlinks {
+            hyperlink.columns = hyperlink.columns.start + shift..hyperlink.columns.end + shift;
+        }
+        line.line = Line::from(spans);
+        self.push_output_line(line.style(style));
     }
 
     fn push_line(&mut self, line: Line<'static>) {
@@ -1684,33 +1884,74 @@ where
         self.current_initial_indent = self.prefix_spans(was_pending);
         self.current_subsequent_indent = self.prefix_spans(/*pending_marker_line*/ false);
         self.current_line_style = style;
-        self.current_line_content = Some(line);
+        self.current_line_content = Some(HyperlinkLine::new(line));
         self.current_line_in_code_block = self.in_code_block;
         self.line_ends_with_local_link_target = false;
 
         self.pending_marker_line = false;
     }
 
+    fn push_hyperlink_line(&mut self, line: HyperlinkLine) {
+        let hyperlinks = line.hyperlinks;
+        self.push_line(line.line);
+        if let Some(current) = self.current_line_content.as_mut() {
+            current.hyperlinks = hyperlinks;
+        }
+    }
+
     fn push_span(&mut self, span: Span<'static>) {
         if let Some(line) = self.current_line_content.as_mut() {
-            line.push_span(span);
+            line.line.push_span(span);
         } else {
             self.push_line(Line::from(vec![span]));
         }
     }
 
+    fn push_annotated(&mut self, mut appended: HyperlinkLine) {
+        if self.current_line_content.is_none() {
+            self.push_line(Line::default());
+        }
+        if let Some(line) = self.current_line_content.as_mut() {
+            let shift = line.width();
+            line.line.spans.append(&mut appended.line.spans);
+            line.hyperlinks
+                .extend(appended.hyperlinks.into_iter().map(|mut link| {
+                    link.columns = link.columns.start + shift..link.columns.end + shift;
+                    link
+                }));
+        }
+    }
+
+    fn push_text_spans(&mut self, text: &str, style: Style) {
+        let span = Span::styled(text.to_string(), style);
+        let destination = self
+            .link
+            .as_ref()
+            .and_then(|link| web_destination(&link.destination));
+        let annotated = if let Some(destination) = destination {
+            let mut annotated = HyperlinkLine::new(Line::default());
+            annotated.push_span(span, Some(&destination));
+            annotated
+        } else if self.link.is_some() || self.in_code_block {
+            HyperlinkLine::new(Line::from(span))
+        } else {
+            annotate_web_urls_in_line(Line::from(span))
+        };
+        self.push_annotated(annotated);
+    }
+
     fn push_blank_line(&mut self) {
         self.flush_current_line();
         if self.indent_stack.iter().all(|ctx| ctx.is_list) {
-            self.push_output_line(Line::default());
+            self.push_output_line(HyperlinkLine::new(Line::default()));
         } else {
             self.push_line(Line::default());
             self.flush_current_line();
         }
     }
 
-    fn push_output_line(&mut self, line: Line<'static>) {
-        self.text.lines.push(line);
+    fn push_output_line(&mut self, line: HyperlinkLine) {
+        self.text.push(line);
     }
 
     fn prefix_spans(&self, pending_marker_line: bool) -> Vec<Span<'static>> {
@@ -2167,7 +2408,8 @@ mod tests {
         let rendered = wrapped
             .iter()
             .map(|line| {
-                line.spans
+                line.line
+                    .spans
                     .iter()
                     .map(|span| span.content.clone())
                     .collect::<String>()
@@ -2203,7 +2445,7 @@ mod tests {
 
     #[test]
     fn column_classification_narrative_by_word_count() {
-        // Col 0: short tokens (1-2 words each) → Structured
+        // Col 0: short tokens (1-2 words each) -> Compact
         // Col 1: prose (≥4 words per cell) → Narrative
         let header = vec![make_cell("ID"), make_cell("Description")];
         let rows = vec![
@@ -2211,72 +2453,87 @@ mod tests {
             vec![make_cell("2"), make_cell("another verbose body cell here")],
         ];
         let metrics = W::collect_table_column_metrics(&header, &rows, /*column_count*/ 2);
-        assert_eq!(metrics[0].kind, TableColumnKind::Structured);
+        assert_eq!(metrics[0].kind, TableColumnKind::Compact);
         assert_eq!(metrics[1].kind, TableColumnKind::Narrative);
     }
 
     #[test]
-    fn column_classification_structured_by_url_like_token() {
-        // Col with short word count but ≥28 avg char width and long tokens → Structured
-        // (URL-like/token-heavy columns resist collapse)
+    fn column_classification_token_heavy_by_url_like_tokens() {
         let header = vec![make_cell("URL")];
         let rows = vec![
             vec![make_cell("https://example.com/very/long/path")],
             vec![make_cell("https://another.example.org/deep")],
         ];
         let metrics = W::collect_table_column_metrics(&header, &rows, /*column_count*/ 1);
-        assert!(metrics[0].avg_cell_width >= 28.0);
-        assert_eq!(metrics[0].kind, TableColumnKind::Structured);
+        assert_eq!(metrics[0].kind, TableColumnKind::TokenHeavy);
     }
 
     #[test]
-    fn column_classification_structured_all_short() {
-        // Both columns short tokens → both Structured
+    fn column_classification_token_heavy_for_local_path_lists() {
+        let header = vec![make_cell("Files")];
+        let rows = vec![
+            vec![make_cell(
+                "codex-rs/core/src/next_prompt_suggestion.rs:1, codex-rs/core/src/next_prompt_suggestion_tests.rs:1",
+            )],
+            vec![make_cell(
+                "codex-rs/core/src/context/next_prompt_suggestion.rs:1, codex-rs/core/src/context/contextual_user_message_tests.rs:1",
+            )],
+        ];
+        let metrics = W::collect_table_column_metrics(&header, &rows, /*column_count*/ 1);
+        assert_eq!(metrics[0].kind, TableColumnKind::TokenHeavy);
+    }
+
+    #[test]
+    fn column_classification_compact_all_short() {
+        // Both columns short tokens -> both Compact
         let header = vec![make_cell("Status"), make_cell("Count")];
         let rows = vec![
             vec![make_cell("ok"), make_cell("42")],
             vec![make_cell("err"), make_cell("7")],
         ];
         let metrics = W::collect_table_column_metrics(&header, &rows, /*column_count*/ 2);
-        assert_eq!(metrics[0].kind, TableColumnKind::Structured);
-        assert_eq!(metrics[1].kind, TableColumnKind::Structured);
+        assert_eq!(metrics[0].kind, TableColumnKind::Compact);
+        assert_eq!(metrics[1].kind, TableColumnKind::Compact);
     }
 
     #[test]
-    fn preferred_floor_narrative_caps_header_at_10() {
-        // Narrative col: header_token_width 15 → floors at 10
+    fn preferred_floor_narrative_retains_readable_width() {
         let m = TableColumnMetrics {
             max_width: 40,
             header_token_width: 15,
             body_token_width: 8,
-            avg_words_per_cell: 5.0,
-            avg_cell_width: 30.0,
             kind: TableColumnKind::Narrative,
         };
-        assert_eq!(W::preferred_column_floor(&m, /*min_column_width*/ 3), 10);
+        assert_eq!(W::preferred_column_floor(&m, /*min_column_width*/ 3), 16);
 
-        // Narrative col: header_token_width 6 → floors at 6 (below cap)
         let m2 = TableColumnMetrics {
-            max_width: 40,
+            max_width: 12,
             header_token_width: 6,
             body_token_width: 8,
-            avg_words_per_cell: 5.0,
-            avg_cell_width: 30.0,
             kind: TableColumnKind::Narrative,
         };
-        assert_eq!(W::preferred_column_floor(&m2, /*min_column_width*/ 3), 6);
+        assert_eq!(W::preferred_column_floor(&m2, /*min_column_width*/ 3), 12);
     }
 
     #[test]
-    fn preferred_floor_structured_uses_body_token() {
-        // Structured: max(header_token_width, body_token_width.min(16))
+    fn preferred_floor_token_heavy_retains_readable_width() {
+        let m = TableColumnMetrics {
+            max_width: 80,
+            header_token_width: 5,
+            body_token_width: 60,
+            kind: TableColumnKind::TokenHeavy,
+        };
+        assert_eq!(W::preferred_column_floor(&m, /*min_column_width*/ 3), 16);
+    }
+
+    #[test]
+    fn preferred_floor_compact_uses_body_token() {
+        // Compact: max(header_token_width, body_token_width.min(16))
         let m = TableColumnMetrics {
             max_width: 30,
             header_token_width: 5,
             body_token_width: 12,
-            avg_words_per_cell: 1.0,
-            avg_cell_width: 10.0,
-            kind: TableColumnKind::Structured,
+            kind: TableColumnKind::Compact,
         };
         // max(5, min(12, 16)) = max(5, 12) = 12
         assert_eq!(W::preferred_column_floor(&m, /*min_column_width*/ 3), 12);
@@ -2286,40 +2543,46 @@ mod tests {
             max_width: 30,
             header_token_width: 5,
             body_token_width: 20,
-            avg_words_per_cell: 1.0,
-            avg_cell_width: 10.0,
-            kind: TableColumnKind::Structured,
+            kind: TableColumnKind::Compact,
         };
         // max(5, min(20, 16)) = max(5, 16) = 16
         assert_eq!(W::preferred_column_floor(&m2, /*min_column_width*/ 3), 16);
     }
 
     #[test]
-    fn next_column_to_shrink_prefers_narrative() {
-        // Two columns: Narrative (col 0) and Structured (col 1), both with slack.
-        // Narrative should be shrunk first.
-        let widths = [20usize, 20];
-        let floors = [8usize, 8];
+    fn next_column_to_shrink_prefers_token_heavy_then_narrative() {
+        let widths = [20usize, 20, 20];
+        let floors = [8usize, 8, 8];
         let metrics = [
             TableColumnMetrics {
                 max_width: 30,
                 header_token_width: 8,
                 body_token_width: 6,
-                avg_words_per_cell: 5.0,
-                avg_cell_width: 30.0,
                 kind: TableColumnKind::Narrative,
             },
             TableColumnMetrics {
                 max_width: 30,
                 header_token_width: 8,
+                body_token_width: 28,
+                kind: TableColumnKind::TokenHeavy,
+            },
+            TableColumnMetrics {
+                max_width: 30,
+                header_token_width: 8,
                 body_token_width: 6,
-                avg_words_per_cell: 1.0,
-                avg_cell_width: 10.0,
-                kind: TableColumnKind::Structured,
+                kind: TableColumnKind::Compact,
             },
         ];
         let idx = W::next_column_to_shrink(&widths, &floors, &metrics);
-        assert_eq!(idx, Some(0), "Narrative column should be shrunk first");
+        assert_eq!(idx, Some(1), "token-heavy column should shrink first");
+
+        let widths = [20usize, 8, 20];
+        let idx = W::next_column_to_shrink(&widths, &floors, &metrics);
+        assert_eq!(
+            idx,
+            Some(0),
+            "narrative column should shrink before compact"
+        );
     }
 
     // ===== Spillover-detection unit tests =====
@@ -2402,5 +2665,106 @@ mod tests {
             /*has_table_pipe_syntax*/ true,
         );
         assert!(!W::is_spillover_row(&row, Some(&next)));
+    }
+
+    #[test]
+    fn annotates_explicit_web_link_label_and_visible_destination() {
+        let lines = render_markdown_lines_with_width_and_cwd(
+            "See [docs](https://example.com/reference).",
+            /*width*/ Some(80),
+            /*cwd*/ None,
+        );
+        let links = lines
+            .iter()
+            .flat_map(|line| line.hyperlinks.iter())
+            .collect::<Vec<_>>();
+
+        assert_eq!(links.len(), 2);
+        assert!(
+            links
+                .iter()
+                .all(|link| link.destination == "https://example.com/reference")
+        );
+    }
+
+    #[test]
+    fn wrapped_table_url_fragments_keep_complete_web_destination() {
+        let destination = "https://example.com/a/very/long/path/to/a/table/artifact";
+        let markdown = format!("| Item | URL |\n| --- | --- |\n| report | {destination} |\n");
+        let lines = render_markdown_lines_with_width_and_cwd(
+            &markdown,
+            /*width*/ Some(32),
+            /*cwd*/ None,
+        );
+        let linked_rows = lines
+            .iter()
+            .filter(|line| !line.hyperlinks.is_empty())
+            .collect::<Vec<_>>();
+
+        assert!(
+            linked_rows.len() > 1,
+            "expected a URL wrapped across table rows"
+        );
+        assert!(linked_rows.iter().all(|line| {
+            line.hyperlinks
+                .iter()
+                .all(|link| link.destination == destination)
+        }));
+    }
+
+    #[test]
+    fn key_value_table_keeps_web_annotations() {
+        let destination = "https://example.com/a/very/long/path";
+        let markdown = format!(
+            "| c1 | c2 | c3 | c4 | c5 | c6 |\n| --- | --- | --- | --- | --- | --- |\n| {destination} | 2 | 3 | 4 | 5 | 6 |\n"
+        );
+        let lines = render_markdown_lines_with_width_and_cwd(
+            &markdown,
+            /*width*/ Some(20),
+            /*cwd*/ None,
+        );
+        let destinations = lines
+            .iter()
+            .flat_map(|line| line.hyperlinks.iter().map(|link| link.destination.as_str()))
+            .collect::<Vec<_>>();
+
+        assert!(!destinations.is_empty());
+        assert!(destinations.iter().all(|link| *link == destination));
+    }
+
+    #[test]
+    fn does_not_annotate_code_or_non_web_markdown_links() {
+        let markdown = "`https://example.com/inline`\n\n```text\nhttps://example.com/block\n```\n\n[mail](mailto:test@example.com)\n\n[https://example.com/label](mailto:test@example.com)\n\n| Target |\n| --- |\n| [https://example.com/table-label](mailto:test@example.com) |";
+        let lines = render_markdown_lines_with_width_and_cwd(
+            markdown,
+            /*width*/ Some(80),
+            /*cwd*/ None,
+        );
+
+        assert!(lines.iter().all(|line| line.hyperlinks.is_empty()));
+    }
+
+    #[test]
+    fn pipe_table_fallback_keeps_web_annotations() {
+        let destination = "https://example.com/a/long/path";
+        let target = "https://target.example/path";
+        let code_url = "https://code.example/not-a-link";
+        let markdown = format!(
+            "| URL | Code | Label |\n| --- | --- | --- |\n| {destination} | `{code_url}` | [https://shown.example]({target}) |\n"
+        );
+        let lines = render_markdown_lines_with_width_and_cwd(
+            &markdown,
+            /*width*/ Some(5),
+            /*cwd*/ None,
+        );
+        let destinations = lines
+            .iter()
+            .flat_map(|line| line.hyperlinks.iter().map(|link| link.destination.as_str()))
+            .collect::<Vec<_>>();
+
+        assert!(destinations.contains(&destination));
+        assert!(destinations.contains(&target));
+        assert!(!destinations.contains(&code_url));
+        assert!(!destinations.contains(&"https://shown.example"));
     }
 }
