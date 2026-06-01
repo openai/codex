@@ -1288,7 +1288,7 @@ impl Config {
         } else if self.features.enabled(Feature::Collab) {
             Some(MultiAgentVersion::V1)
         } else {
-            None
+            Some(MultiAgentVersion::Disabled)
         }
     }
 
@@ -1310,7 +1310,7 @@ impl Config {
                         .saturating_sub(1),
                 ))
             }
-            None | Some(MultiAgentVersion::V1) => {
+            None | Some(MultiAgentVersion::Disabled | MultiAgentVersion::V1) => {
                 Ok(self.agent_max_threads.or(DEFAULT_AGENT_MAX_THREADS))
             }
         }

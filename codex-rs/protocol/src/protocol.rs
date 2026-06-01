@@ -2752,6 +2752,7 @@ fn multi_agent_version_from_items(
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum MultiAgentVersion {
+    Disabled,
     V1,
     V2,
 }

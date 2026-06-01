@@ -294,7 +294,7 @@ fn multi_agent_v2_enabled(turn_context: &TurnContext) -> bool {
 
 fn collab_tools_enabled(turn_context: &TurnContext) -> bool {
     match turn_context.multi_agent_version {
-        None => false,
+        None | Some(MultiAgentVersion::Disabled) => false,
         Some(MultiAgentVersion::V1) => !exceeds_thread_spawn_depth_limit(
             next_thread_spawn_depth(&turn_context.session_source),
             turn_context.config.agent_max_depth,
@@ -312,12 +312,7 @@ fn goal_tools_enabled(turn_context: &TurnContext) -> bool {
 }
 
 fn agent_jobs_tools_enabled(turn_context: &TurnContext) -> bool {
-    turn_context.features.get().enabled(Feature::SpawnCsv)
-        && turn_context.multi_agent_version.is_some()
-        && !exceeds_thread_spawn_depth_limit(
-            next_thread_spawn_depth(&turn_context.session_source),
-            turn_context.config.agent_max_depth,
-        )
+    turn_context.features.get().enabled(Feature::SpawnCsv) && collab_tools_enabled(turn_context)
 }
 
 fn agent_jobs_worker_tools_enabled(turn_context: &TurnContext) -> bool {

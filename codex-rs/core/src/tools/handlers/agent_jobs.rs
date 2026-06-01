@@ -113,19 +113,26 @@ async fn build_runner_options(
     turn: &Arc<TurnContext>,
     requested_concurrency: Option<usize>,
 ) -> Result<JobRunnerOptions, FunctionCallError> {
-    let session_source = turn.session_source.clone();
-    let child_depth = next_thread_spawn_depth(&session_source);
-    let max_depth = turn.config.agent_max_depth;
-    if exceeds_thread_spawn_depth_limit(child_depth, max_depth) {
-        return Err(FunctionCallError::RespondToModel(
-            "agent depth limit reached; this session cannot spawn more subagents".to_string(),
-        ));
-    }
     let multi_agent_version = turn.multi_agent_version.ok_or_else(|| {
         FunctionCallError::RespondToModel(
             "multi-agent version is unresolved; this session cannot spawn workers".to_string(),
         )
     })?;
+    if multi_agent_version == MultiAgentVersion::Disabled {
+        return Err(FunctionCallError::RespondToModel(
+            "multi-agent runtime is disabled; this session cannot spawn workers".to_string(),
+        ));
+    }
+    let session_source = turn.session_source.clone();
+    let child_depth = next_thread_spawn_depth(&session_source);
+    let max_depth = turn.config.agent_max_depth;
+    if multi_agent_version == MultiAgentVersion::V1
+        && exceeds_thread_spawn_depth_limit(child_depth, max_depth)
+    {
+        return Err(FunctionCallError::RespondToModel(
+            "agent depth limit reached; this session cannot spawn more subagents".to_string(),
+        ));
+    }
     let agent_max_threads = turn
         .config
         .effective_agent_max_threads(Some(multi_agent_version))

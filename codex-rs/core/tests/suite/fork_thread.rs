@@ -44,7 +44,10 @@ async fn legacy_resume_seeds_multi_agent_version_for_later_forks() {
         .build(&server)
         .await
         .expect("create legacy source thread");
-    assert_eq!(initial.codex.multi_agent_version(), None);
+    assert_eq!(
+        initial.codex.multi_agent_version(),
+        Some(MultiAgentVersion::Disabled)
+    );
     initial.codex.ensure_rollout_materialized().await;
     initial
         .codex
@@ -58,6 +61,11 @@ async fn legacy_resume_seeds_multi_agent_version_for_later_forks() {
         .shutdown_and_wait()
         .await
         .expect("shutdown source thread");
+    remove_multi_agent_version(&rollout_path);
+    assert_eq!(
+        latest_multi_agent_version(&rollout_path, source_thread_id),
+        None
+    );
 
     let mut resume_builder = test_codex().with_config(|config| {
         config
@@ -384,4 +392,25 @@ fn latest_multi_agent_version(
             _ => None,
         })
         .flatten()
+}
+
+fn remove_multi_agent_version(path: &std::path::Path) {
+    let text = std::fs::read_to_string(path)
+        .unwrap_or_else(|err| panic!("failed to read rollout file {}: {err}", path.display()));
+    let lines = text
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| {
+            let mut line = serde_json::from_str::<RolloutLine>(line)
+                .unwrap_or_else(|err| panic!("failed to parse rollout line `{line}`: {err}"));
+            if let RolloutItem::SessionMeta(meta_line) = &mut line.item {
+                meta_line.meta.multi_agent_version = None;
+            }
+            serde_json::to_string(&line)
+                .unwrap_or_else(|err| panic!("failed to serialize rollout line: {err}"))
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    std::fs::write(path, format!("{lines}\n"))
+        .unwrap_or_else(|err| panic!("failed to write rollout file {}: {err}", path.display()));
 }
