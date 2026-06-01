@@ -595,11 +595,11 @@ where
         }
         Ok(config) => Ok(config),
         Err(headless_error) if !preserve_headless_approval_policy => {
-            let config = build_without_headless_approval_policy().await?;
-            if config.approvals_reviewer == ApprovalsReviewer::AutoReview {
-                Ok(config)
-            } else {
-                Err(headless_error)
+            match build_without_headless_approval_policy().await {
+                Ok(config) if config.approvals_reviewer == ApprovalsReviewer::AutoReview => {
+                    Ok(config)
+                }
+                Ok(_) | Err(_) => Err(headless_error),
             }
         }
         Err(headless_error) => Err(headless_error),

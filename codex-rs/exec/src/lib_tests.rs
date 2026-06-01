@@ -520,6 +520,31 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
 }
 
 #[tokio::test]
+async fn build_exec_config_preserves_headless_error_when_retry_fails() {
+    let overrides = ConfigOverrides {
+        approval_policy: Some(AskForApproval::Never),
+        ..Default::default()
+    };
+
+    let error = build_exec_config(
+        overrides,
+        /*preserve_headless_approval_policy*/ false,
+        |overrides| async move {
+            let message = if overrides.approval_policy == Some(AskForApproval::Never) {
+                "headless error"
+            } else {
+                "retry error"
+            };
+            Err(std::io::Error::other(message))
+        },
+    )
+    .await
+    .expect_err("failed speculative retry should preserve the original error");
+
+    assert_eq!(error.to_string(), "headless error");
+}
+
+#[tokio::test]
 async fn thread_start_params_include_user_thread_source() {
     let codex_home = tempdir().expect("create temp codex home");
     let cwd = tempdir().expect("create temp cwd");
