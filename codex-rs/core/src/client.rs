@@ -172,8 +172,6 @@ pub(crate) struct CompactConversationRequestSettings {
 struct ModelClientState {
     session_id: SessionId,
     thread_id: ThreadId,
-    // Monotonic context epoch used to avoid reusing remotely cached state after history rewrites.
-    // Forks may inherit a nonzero epoch when their initial history already contains rewrites.
     window_generation: AtomicU64,
     installation_id: String,
     provider: SharedModelProvider,
@@ -187,7 +185,7 @@ struct ModelClientState {
     include_attestation: bool,
     attestation_provider: Option<Arc<dyn AttestationProvider>>,
     disable_websockets: AtomicBool,
-    cached_websocket_session: StdMutex<WebsocketSession>,
+    cached_websocket_session: StdMutex<CachedWebsocketSession>,
 }
 
 /// Resolved API client setup for a single request attempt.
@@ -244,7 +242,7 @@ pub struct ModelClient {
 pub struct ModelClientSession {
     client: ModelClient,
     websocket_session: WebsocketSession,
-    window_generation: u64,
+    websocket_cache_generation: u64,
     /// Turn state for sticky routing.
     ///
     /// This is an `OnceLock` that stores the turn state value received from the server
@@ -271,6 +269,12 @@ struct WebsocketSession {
     last_response_rx: Option<oneshot::Receiver<LastResponse>>,
     last_response_from_untraced_warmup: bool,
     connection_reused: StdMutex<bool>,
+}
+
+#[derive(Debug, Default)]
+struct CachedWebsocketSession {
+    generation: u64,
+    session: WebsocketSession,
 }
 
 impl WebsocketSession {
@@ -361,7 +365,7 @@ impl ModelClient {
                 include_attestation,
                 attestation_provider,
                 disable_websockets: AtomicBool::new(false),
-                cached_websocket_session: StdMutex::new(WebsocketSession::default()),
+                cached_websocket_session: StdMutex::new(CachedWebsocketSession::default()),
             }),
             prompt_cache_key_override: None,
         }
@@ -386,10 +390,11 @@ impl ModelClient {
     /// This constructor does not perform network I/O itself; the session opens a websocket lazily
     /// when the first stream request is issued.
     pub fn new_session(&self) -> ModelClientSession {
+        let (websocket_cache_generation, websocket_session) = self.take_cached_websocket_session();
         ModelClientSession {
             client: self.clone(),
-            websocket_session: self.take_cached_websocket_session(),
-            window_generation: self.state.window_generation.load(Ordering::Relaxed),
+            websocket_session,
+            websocket_cache_generation,
             turn_state: Arc::new(OnceLock::new()),
         }
     }
@@ -402,12 +407,12 @@ impl ModelClient {
         self.state
             .window_generation
             .store(window_generation, Ordering::Relaxed);
-        self.store_cached_websocket_session(WebsocketSession::default());
+        self.invalidate_cached_websocket_session();
     }
 
     pub(crate) fn advance_window_generation(&self) {
         self.state.window_generation.fetch_add(1, Ordering::Relaxed);
-        self.store_cached_websocket_session(WebsocketSession::default());
+        self.invalidate_cached_websocket_session();
     }
 
     pub(crate) fn current_window_id(&self) -> String {
@@ -416,21 +421,36 @@ impl ModelClient {
         format!("{thread_id}:{window_generation}")
     }
 
-    fn take_cached_websocket_session(&self) -> WebsocketSession {
+    pub(crate) fn invalidate_cached_websocket_session(&self) {
         let mut cached_websocket_session = self
             .state
             .cached_websocket_session
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        std::mem::take(&mut *cached_websocket_session)
+        cached_websocket_session.generation = cached_websocket_session.generation.saturating_add(1);
+        cached_websocket_session.session = WebsocketSession::default();
     }
 
-    fn store_cached_websocket_session(&self, websocket_session: WebsocketSession) {
-        *self
+    fn take_cached_websocket_session(&self) -> (u64, WebsocketSession) {
+        let mut cached_websocket_session = self
             .state
             .cached_websocket_session
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = websocket_session;
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let generation = cached_websocket_session.generation;
+        let session = std::mem::take(&mut cached_websocket_session.session);
+        (generation, session)
+    }
+
+    fn store_cached_websocket_session(&self, generation: u64, websocket_session: WebsocketSession) {
+        let mut cached_websocket_session = self
+            .state
+            .cached_websocket_session
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if cached_websocket_session.generation == generation {
+            cached_websocket_session.session = websocket_session;
+        }
     }
 
     pub(crate) fn force_http_fallback(
@@ -450,7 +470,7 @@ impl ModelClient {
             );
         }
 
-        self.store_cached_websocket_session(WebsocketSession::default());
+        self.invalidate_cached_websocket_session();
         activated
     }
 
@@ -979,13 +999,9 @@ impl ModelClient {
 
 impl Drop for ModelClientSession {
     fn drop(&mut self) {
-        // A history invalidation may advance the generation before an older turn session drops.
-        if self.window_generation != self.client.state.window_generation.load(Ordering::Relaxed) {
-            return;
-        }
         let websocket_session = std::mem::take(&mut self.websocket_session);
         self.client
-            .store_cached_websocket_session(websocket_session);
+            .store_cached_websocket_session(self.websocket_cache_generation, websocket_session);
     }
 }
 

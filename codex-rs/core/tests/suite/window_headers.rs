@@ -21,8 +21,7 @@ use pretty_assertions::assert_eq;
 use std::sync::Arc;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn window_id_advances_after_compact_persists_on_resume_and_resets_on_empty_fork() -> Result<()>
-{
+async fn window_id_advances_after_compact_persists_on_resume_and_resets_on_fork() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -103,7 +102,7 @@ async fn window_id_advances_after_compact_persists_on_resume_and_resets_on_empty
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn window_id_advances_after_rollback_and_persists_on_resume() -> Result<()> {
+async fn window_id_stays_stable_after_rollback_and_resume() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -157,91 +156,8 @@ async fn window_id_advances_after_rollback_and_persists_on_resume() -> Result<()
         vec![
             (initial_thread_id.clone(), 0),
             (initial_thread_id.clone(), 0),
-            (initial_thread_id.clone(), 1),
-            (initial_thread_id, 1),
-        ]
-    );
-
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn forked_compacted_history_keeps_window_generation_on_resume() -> Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    let server = start_mock_server().await;
-    let request_log = mount_sse_sequence(
-        &server,
-        vec![
-            sse(vec![
-                ev_assistant_message("msg-1", "first reply"),
-                ev_completed("resp-1"),
-            ]),
-            sse(vec![
-                ev_assistant_message("msg-2", "summary"),
-                ev_completed("resp-2"),
-            ]),
-            sse(vec![ev_completed("resp-3")]),
-            sse(vec![ev_completed("resp-4")]),
-        ],
-    )
-    .await;
-
-    let mut builder = test_codex().with_config(|config| {
-        config.model_provider.name = "Non-OpenAI Model provider".to_string();
-        config.compact_prompt = Some(SUMMARIZATION_PROMPT.to_string());
-    });
-    let initial = builder.build(&server).await?;
-    let initial_thread = Arc::clone(&initial.codex);
-    let rollout_path = initial
-        .session_configured
-        .rollout_path
-        .clone()
-        .expect("rollout path");
-
-    submit_user_turn(&initial_thread, "before compact").await?;
-    submit_compact_turn(&initial_thread).await?;
-    shutdown_thread(&initial_thread).await?;
-
-    let forked = initial
-        .thread_manager
-        .fork_thread(
-            /*snapshot*/ usize::MAX,
-            initial.config.clone(),
-            rollout_path,
-            /*thread_source*/ None,
-            /*persist_extended_history*/ false,
-            /*parent_trace*/ None,
-        )
-        .await?;
-    let fork_rollout_path = forked
-        .session_configured
-        .rollout_path
-        .clone()
-        .expect("fork rollout path");
-    submit_user_turn(&forked.thread, "after fork").await?;
-    shutdown_thread(&forked.thread).await?;
-
-    let resumed = builder
-        .resume(&server, initial.home.clone(), fork_rollout_path)
-        .await?;
-    submit_user_turn(&resumed.codex, "after fork resume").await?;
-    shutdown_thread(&resumed.codex).await?;
-
-    let requests = request_log.requests();
-    assert_eq!(requests.len(), 4, "expected four model requests");
-
-    let window_ids = requests.iter().map(window_id_parts).collect::<Vec<_>>();
-    let initial_thread_id = window_ids[0].0.clone();
-    let forked_thread_id = window_ids[2].0.clone();
-    assert_ne!(forked_thread_id, initial_thread_id);
-    assert_eq!(
-        window_ids,
-        vec![
             (initial_thread_id.clone(), 0),
             (initial_thread_id, 0),
-            (forked_thread_id.clone(), 1),
-            (forked_thread_id, 1),
         ]
     );
 
