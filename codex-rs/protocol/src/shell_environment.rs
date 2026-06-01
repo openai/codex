@@ -72,18 +72,20 @@ where
         }
     };
 
-    // Remove RUST_LOG if present.
-    // Harnesses like Codex Desktop and the VS Code extension will
-    // spawn the app-server with `RUST_LOG=warn` by default, which can then cause
-    // unexpected behavior in subprocesses. Users can still explicitly include
-    // it via overrides.
-    env_map.retain(|key, _| !key.eq_ignore_ascii_case("RUST_LOG"));
-
     let matches_any = |name: &str, patterns: &[EnvironmentVariablePattern]| -> bool {
         patterns.iter().any(|pattern| pattern.matches(name))
     };
 
-    // Step 2 - Apply the default exclude if not disabled.
+    // Step 2 - Harnesses like Codex Desktop and the VS Code extension spawn the
+    // app-server with `RUST_LOG=warn` by default. Do not pass that inherited
+    // value to subprocesses unless the user explicitly includes it.
+    let include_inherited_rust_log =
+        !policy.include_only.is_empty() && matches_any("RUST_LOG", &policy.include_only);
+    if !include_inherited_rust_log {
+        env_map.retain(|key, _| !is_rust_log(key));
+    }
+
+    // Step 3 - Apply the default exclude if not disabled.
     if !policy.ignore_default_excludes {
         let default_excludes = vec![
             EnvironmentVariablePattern::new_case_insensitive("*KEY*"),
@@ -93,27 +95,35 @@ where
         env_map.retain(|k, _| !matches_any(k, &default_excludes));
     }
 
-    // Step 3 - Apply custom excludes.
+    // Step 4 - Apply custom excludes.
     if !policy.exclude.is_empty() {
         env_map.retain(|k, _| !matches_any(k, &policy.exclude));
     }
 
-    // Step 4 - Apply user-provided overrides.
+    // Step 5 - Apply user-provided overrides.
     for (key, val) in &policy.r#set {
         env_map.insert(key.clone(), val.clone());
     }
 
-    // Step 5 - If include_only is non-empty, keep only the matching vars.
+    // Step 6 - If include_only is non-empty, keep only the matching vars.
     if !policy.include_only.is_empty() {
         env_map.retain(|k, _| matches_any(k, &policy.include_only));
     }
 
-    // Step 6 - Populate the thread ID environment variable when provided.
+    // Step 7 - Populate the thread ID environment variable when provided.
     if let Some(thread_id) = thread_id {
         env_map.insert(CODEX_THREAD_ID_ENV_VAR.to_string(), thread_id.to_string());
     }
 
     env_map
+}
+
+fn is_rust_log(name: &str) -> bool {
+    if cfg!(target_os = "windows") {
+        name.eq_ignore_ascii_case("RUST_LOG")
+    } else {
+        name == "RUST_LOG"
+    }
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -163,7 +173,7 @@ mod tests {
     fn inherited_rust_log_is_removed() {
         let vars = vec![
             ("PATH".to_string(), "/usr/bin".to_string()),
-            ("rust_log".to_string(), "warn".to_string()),
+            ("RUST_LOG".to_string(), "warn".to_string()),
         ];
 
         let result = populate_env(
@@ -176,6 +186,19 @@ mod tests {
             result,
             HashMap::from([("PATH".to_string(), "/usr/bin".to_string())])
         );
+    }
+
+    #[test]
+    fn explicitly_included_rust_log_is_preserved() {
+        let vars = vec![("RUST_LOG".to_string(), "codex_core=trace".to_string())];
+        let policy = ShellEnvironmentPolicy {
+            include_only: vec![EnvironmentVariablePattern::new_case_insensitive("RUST_LOG")],
+            ..Default::default()
+        };
+
+        let result = populate_env(vars.clone(), &policy, /*thread_id*/ None);
+
+        assert_eq!(result, vars.into_iter().collect());
     }
 
     #[test]
@@ -293,5 +316,18 @@ mod non_windows_tests {
         ]);
 
         assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn similarly_named_unix_env_vars_are_preserved() {
+        let vars = make_vars(&[("rust_log", "warn"), ("Rust_Log", "debug")]);
+
+        let result = populate_env(
+            vars.clone(),
+            &ShellEnvironmentPolicy::default(),
+            /*thread_id*/ None,
+        );
+
+        assert_eq!(result, vars.into_iter().collect());
     }
 }

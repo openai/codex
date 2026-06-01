@@ -148,44 +148,85 @@ fn bash_snapshot_filters_invalid_exports() -> Result<()> {
 }
 
 #[cfg(unix)]
-fn assert_snapshot_filters_rust_log(shell: &str, snapshot_script: String) -> Result<()> {
+fn assert_snapshot_preserves_profile_rust_log(
+    shell: &str,
+    snapshot_script: String,
+    profile_name: &str,
+) -> Result<()> {
     let home = tempdir()?;
-    let output = Command::new(shell)
+    let profile_path = home.path().join(profile_name);
+    std::fs::write(&profile_path, "export RUST_LOG=profile\n")?;
+
+    let mut snapshot = Command::new(shell);
+    snapshot
         .arg("-c")
         .arg(snapshot_script)
         .env("HOME", home.path())
-        .env("BASH_ENV", "/dev/null")
+        .env_remove("BASH_ENV")
         .env_remove("ENV")
         .env("RUST_LOG", "warn")
-        .output()?;
+        .env("RUST_LOG_STYLE", "always");
+    if shell == "/bin/sh" {
+        snapshot.env("ENV", &profile_path);
+    }
+    for name in EXCLUDED_INHERITED_VARS {
+        snapshot.env_remove(name);
+    }
+    let output = snapshot.output()?;
 
     assert!(output.status.success());
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        !stdout.contains("RUST_LOG"),
-        "snapshot should not capture app-server logging configuration"
-    );
+    let snapshot_path = home.path().join("snapshot.sh");
+    std::fs::write(&snapshot_path, &output.stdout)?;
+    let validate = Command::new(shell)
+        .arg("-c")
+        .arg(". \"$1\"; printf '%s' \"$RUST_LOG\"")
+        .arg(shell)
+        .arg(&snapshot_path)
+        .env("HOME", home.path())
+        .env("BASH_ENV", "/dev/null")
+        .env_remove("ENV")
+        .env_remove("RUST_LOG")
+        .output()?;
 
+    assert!(validate.status.success());
+    assert_eq!(String::from_utf8_lossy(&validate.stdout), "profile");
     Ok(())
 }
 
 #[cfg(unix)]
 #[test]
-fn bash_snapshot_filters_rust_log() -> Result<()> {
-    assert_snapshot_filters_rust_log("/bin/bash", bash_snapshot_script())
+fn bash_snapshot_preserves_profile_rust_log() -> Result<()> {
+    assert_snapshot_preserves_profile_rust_log("/bin/bash", bash_snapshot_script(), ".bashrc")
 }
 
 #[cfg(unix)]
 #[test]
-fn sh_snapshot_filters_rust_log() -> Result<()> {
-    assert_snapshot_filters_rust_log("/bin/sh", sh_snapshot_script())
+fn sh_snapshot_preserves_profile_rust_log() -> Result<()> {
+    assert_snapshot_preserves_profile_rust_log("/bin/sh", sh_snapshot_script(), ".profile")
 }
 
 #[cfg(target_os = "macos")]
 #[test]
-fn zsh_snapshot_filters_rust_log() -> Result<()> {
-    assert_snapshot_filters_rust_log("/bin/zsh", zsh_snapshot_script())
+fn zsh_snapshot_preserves_profile_rust_log() -> Result<()> {
+    assert_snapshot_preserves_profile_rust_log("/bin/zsh", zsh_snapshot_script(), ".zshrc")
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn snapshot_shell_does_not_inherit_rust_log() -> Result<()> {
+    let mut command = tokio::process::Command::new("/bin/sh");
+    command
+        .arg("-c")
+        .arg("printf '%s' \"${RUST_LOG-unset}\"")
+        .env("RUST_LOG", "warn");
+    remove_inherited_snapshot_vars(&mut command);
+
+    let output = command.output().await?;
+
+    assert!(output.status.success());
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "unset");
+    Ok(())
 }
 
 #[cfg(unix)]
