@@ -228,10 +228,15 @@ impl<'a> AccountSessionsStore<'a> {
         .await?;
         let client = BackendClient::from_auth(self.chatgpt_base_url, &auth)
             .map_err(std::io::Error::other)?;
+        // Changing only tokens.account_id would update the request header while leaving the
+        // bearer token scoped to the previous workspace. Exchange it first so backend routing
+        // uses the selected workspace from the newly signed token claims.
         let replacement = client
             .switch_workspace_token(account_id)
             .await
             .map_err(std::io::Error::other)?;
+        // The exchange does not return a replacement ID token. Refresh the workspace-specific
+        // plan from the new access token and keep the saved ID token intact.
         let plan = parse_chatgpt_jwt_claims(&replacement.access_token)
             .ok()
             .and_then(|claims| claims.get_chatgpt_plan_type_raw());
@@ -240,6 +245,7 @@ impl<'a> AccountSessionsStore<'a> {
             .as_mut()
             .ok_or_else(|| std::io::Error::other("Saved ChatGPT account session has no tokens"))?;
         tokens.access_token = replacement.access_token;
+        // Refresh-token rotation is optional, so keep the saved token when none is returned.
         if let Some(refresh_token) = replacement.refresh_token {
             tokens.refresh_token = refresh_token;
         }
