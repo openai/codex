@@ -18,12 +18,12 @@ use crate::tool::state_status_from_protocol;
 use crate::tool::validate_goal_budget;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum GoalApiError {
+pub enum GoalServiceError {
     InvalidRequest(String),
     Internal(String),
 }
 
-impl fmt::Display for GoalApiError {
+impl fmt::Display for GoalServiceError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidRequest(message) | Self::Internal(message) => f.write_str(message),
@@ -31,7 +31,7 @@ impl fmt::Display for GoalApiError {
     }
 }
 
-impl std::error::Error for GoalApiError {}
+impl std::error::Error for GoalServiceError {}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GoalObjectiveUpdate<'a> {
@@ -61,8 +61,8 @@ pub struct GoalSetOutcome {
 }
 
 impl GoalSetOutcome {
-    pub async fn apply_runtime_effects(&self, goal_api: &GoalApi) {
-        if let Some(runtime) = goal_api.runtime_for_thread(self.goal.thread_id)
+    pub async fn apply_runtime_effects(&self, goal_service: &GoalService) {
+        if let Some(runtime) = goal_service.runtime_for_thread(self.goal.thread_id)
             && let Err(err) = runtime
                 .apply_external_goal_set(self.state_goal.clone(), self.previous_goal.clone())
                 .await
@@ -73,11 +73,11 @@ impl GoalSetOutcome {
 }
 
 #[derive(Debug, Default)]
-pub struct GoalApi {
+pub struct GoalService {
     runtimes: Mutex<HashMap<String, Weak<GoalRuntimeHandle>>>,
 }
 
-impl GoalApi {
+impl GoalService {
     pub fn new() -> Self {
         Self::default()
     }
@@ -86,20 +86,20 @@ impl GoalApi {
         &self,
         state_db: &codex_state::StateRuntime,
         thread_id: ThreadId,
-    ) -> Result<Option<ThreadGoal>, GoalApiError> {
+    ) -> Result<Option<ThreadGoal>, GoalServiceError> {
         state_db
             .thread_goals()
             .get_thread_goal(thread_id)
             .await
             .map(|goal| goal.map(protocol_goal_from_state))
-            .map_err(|err| GoalApiError::Internal(format!("failed to read thread goal: {err}")))
+            .map_err(|err| GoalServiceError::Internal(format!("failed to read thread goal: {err}")))
     }
 
     pub async fn set_thread_goal(
         &self,
         state_db: &codex_state::StateRuntime,
         request: GoalSetRequest<'_>,
-    ) -> Result<GoalSetOutcome, GoalApiError> {
+    ) -> Result<GoalSetOutcome, GoalServiceError> {
         let GoalSetRequest {
             thread_id,
             objective,
@@ -117,10 +117,11 @@ impl GoalApi {
         };
 
         if let Some(objective) = objective {
-            validate_thread_goal_objective(objective).map_err(GoalApiError::InvalidRequest)?;
+            validate_thread_goal_objective(objective).map_err(GoalServiceError::InvalidRequest)?;
         }
         if objective.is_some() || token_budget.is_some() {
-            validate_goal_budget(token_budget.flatten()).map_err(GoalApiError::InvalidRequest)?;
+            validate_goal_budget(token_budget.flatten())
+                .map_err(GoalServiceError::InvalidRequest)?;
         }
 
         if let Some(runtime) = self.runtime_for_thread(thread_id)
@@ -135,7 +136,7 @@ impl GoalApi {
                 .get_thread_goal(thread_id)
                 .await
                 .map_err(|err| {
-                    GoalApiError::Internal(format!("failed to read thread goal: {err}"))
+                    GoalServiceError::Internal(format!("failed to read thread goal: {err}"))
                 })?;
             if let Some(existing_goal) = existing_goal.as_ref() {
                 let previous_goal = PreviousGoalSnapshot::from(existing_goal);
@@ -152,10 +153,10 @@ impl GoalApi {
                     )
                     .await
                     .map_err(|err| {
-                        GoalApiError::Internal(format!("failed to update thread goal: {err}"))
+                        GoalServiceError::Internal(format!("failed to update thread goal: {err}"))
                     })?
                     .ok_or_else(|| {
-                        GoalApiError::InvalidRequest(format!(
+                        GoalServiceError::InvalidRequest(format!(
                             "cannot update goal for thread {thread_id}: no goal exists"
                         ))
                     })
@@ -171,7 +172,7 @@ impl GoalApi {
                     )
                     .await
                     .map_err(|err| {
-                        GoalApiError::Internal(format!("failed to replace thread goal: {err}"))
+                        GoalServiceError::Internal(format!("failed to replace thread goal: {err}"))
                     })
                     .map(|goal| (goal, None))?
             }
@@ -181,14 +182,15 @@ impl GoalApi {
                 .get_thread_goal(thread_id)
                 .await
                 .map_err(|err| {
-                    GoalApiError::Internal(format!("failed to read thread goal: {err}"))
+                    GoalServiceError::Internal(format!("failed to read thread goal: {err}"))
                 })?
                 .ok_or_else(|| {
-                    GoalApiError::InvalidRequest(format!(
+                    GoalServiceError::InvalidRequest(format!(
                         "cannot update goal for thread {thread_id}: no goal exists"
                     ))
                 })?;
             let previous_goal = PreviousGoalSnapshot::from(&existing_goal);
+            let expected_goal_id = existing_goal.goal_id.clone();
             state_db
                 .thread_goals()
                 .update_thread_goal(
@@ -197,15 +199,15 @@ impl GoalApi {
                         objective: None,
                         status,
                         token_budget,
-                        expected_goal_id: None,
+                        expected_goal_id: Some(expected_goal_id),
                     },
                 )
                 .await
                 .map_err(|err| {
-                    GoalApiError::Internal(format!("failed to update thread goal: {err}"))
+                    GoalServiceError::Internal(format!("failed to update thread goal: {err}"))
                 })?
                 .ok_or_else(|| {
-                    GoalApiError::InvalidRequest(format!(
+                    GoalServiceError::InvalidRequest(format!(
                         "cannot update goal for thread {thread_id}: no goal exists"
                     ))
                 })
@@ -226,7 +228,7 @@ impl GoalApi {
         &self,
         state_db: &codex_state::StateRuntime,
         thread_id: ThreadId,
-    ) -> Result<bool, GoalApiError> {
+    ) -> Result<bool, GoalServiceError> {
         if let Some(runtime) = self.runtime_for_thread(thread_id)
             && let Err(err) = runtime.prepare_external_goal_mutation().await
         {
@@ -237,7 +239,9 @@ impl GoalApi {
             .thread_goals()
             .delete_thread_goal(thread_id)
             .await
-            .map_err(|err| GoalApiError::Internal(format!("failed to clear thread goal: {err}")))?;
+            .map_err(|err| {
+                GoalServiceError::Internal(format!("failed to clear thread goal: {err}"))
+            })?;
 
         if cleared
             && let Some(runtime) = self.runtime_for_thread(thread_id)
@@ -254,11 +258,24 @@ impl GoalApi {
             .insert(runtime.thread_id().to_string(), Arc::downgrade(runtime));
     }
 
+    pub(crate) fn unregister_runtime(&self, runtime: &Arc<GoalRuntimeHandle>) {
+        let key = runtime.thread_id().to_string();
+        let runtime = Arc::downgrade(runtime);
+        let mut runtimes = self.runtimes();
+        if runtimes
+            .get(&key)
+            .is_some_and(|registered| registered.ptr_eq(&runtime))
+        {
+            runtimes.remove(&key);
+        }
+    }
+
     fn runtime_for_thread(&self, thread_id: ThreadId) -> Option<Arc<GoalRuntimeHandle>> {
         let key = thread_id.to_string();
-        let runtime = self.runtimes().get(&key).and_then(Weak::upgrade);
+        let mut runtimes = self.runtimes();
+        let runtime = runtimes.get(&key).and_then(Weak::upgrade);
         if runtime.is_none() {
-            self.runtimes().remove(&key);
+            runtimes.remove(&key);
         }
         runtime
     }
