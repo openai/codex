@@ -902,8 +902,14 @@ impl RuntimeKeymap {
             },
             chat: ChatKeymap {
                 interrupt_turn: default_bindings![plain(KeyCode::Esc)],
-                decrease_reasoning_effort: default_bindings![alt(KeyCode::Char(','))],
-                increase_reasoning_effort: default_bindings![alt(KeyCode::Char('.'))],
+                decrease_reasoning_effort: default_bindings![
+                    alt(KeyCode::Char(',')),
+                    shift(KeyCode::Down)
+                ],
+                increase_reasoning_effort: default_bindings![
+                    alt(KeyCode::Char('.')),
+                    shift(KeyCode::Up)
+                ],
                 edit_queued_message: default_bindings![alt(KeyCode::Up), shift(KeyCode::Left)],
             },
             composer: ComposerKeymap {
@@ -2142,11 +2148,17 @@ mod tests {
         );
         assert_eq!(
             runtime.chat.decrease_reasoning_effort,
-            vec![key_hint::alt(KeyCode::Char(','))]
+            vec![
+                key_hint::alt(KeyCode::Char(',')),
+                key_hint::shift(KeyCode::Down),
+            ]
         );
         assert_eq!(
             runtime.chat.increase_reasoning_effort,
-            vec![key_hint::alt(KeyCode::Char('.'))]
+            vec![
+                key_hint::alt(KeyCode::Char('.')),
+                key_hint::shift(KeyCode::Up),
+            ]
         );
         assert_eq!(
             runtime.chat.edit_queued_message,
