@@ -242,6 +242,13 @@ fn render_debug_config_lines(stack: &ConfigLayerStack) -> Vec<Line<'static>> {
     }
 
     if let Some(filesystem) = requirements.filesystem.as_ref() {
+        if let Some(allow_limited_git_writes) = filesystem.value.allow_limited_git_writes {
+            requirement_lines.push(requirement_line(
+                "permissions.filesystem.allow_limited_git_writes",
+                allow_limited_git_writes.to_string(),
+                Some(&filesystem.source),
+            ));
+        }
         let deny_read = join_or_empty(
             filesystem
                 .value
@@ -689,6 +696,7 @@ mod tests {
             filesystem: Some(Sourced::new(
                 FilesystemConstraints {
                     deny_read: vec![denied_path.clone().into()],
+                    allow_limited_git_writes: Some(true),
                 },
                 RequirementSource::SystemRequirementsToml {
                     file: requirements_file.clone(),
@@ -780,6 +788,15 @@ mod tests {
         assert!(rendered.contains(
             "experimental_network: enabled=true, domains={example.com=allow} (source: cloud requirements)"
         ));
+        assert!(
+            rendered.contains(
+                format!(
+                    "permissions.filesystem.allow_limited_git_writes: true (source: {})",
+                    requirements_file.as_path().display()
+                )
+                .as_str(),
+            )
+        );
         assert!(
             rendered.contains(
                 format!(

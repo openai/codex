@@ -233,6 +233,8 @@ pub struct FilesystemPermissionsToml {
     /// platforms that snapshot glob matches before sandbox startup.
     #[schemars(range(min = 1))]
     pub glob_scan_max_depth: Option<usize>,
+    #[serde(default)]
+    pub allow_git: bool,
     #[serde(flatten)]
     pub entries: BTreeMap<String, FilesystemPermissionToml>,
 }

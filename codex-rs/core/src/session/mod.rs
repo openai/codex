@@ -584,6 +584,7 @@ impl Codex {
             approval_policy: config.permissions.approval_policy.clone(),
             approvals_reviewer: config.approvals_reviewer,
             permission_profile_state: session_permission_profile_state_from_config(&config)?,
+            managed_allow_limited_git_writes: config.managed_allow_limited_git_writes(),
             windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
             cwd: config.cwd.clone(),
             workspace_roots: config.workspace_roots.clone(),

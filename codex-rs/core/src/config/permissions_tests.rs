@@ -543,6 +543,48 @@ fn glob_scan_max_depth_must_be_positive() {
 }
 
 #[test]
+fn workspace_parent_uses_profile_limited_git_write_setting() -> std::io::Result<()> {
+    let cwd = TempDir::new()?;
+    std::fs::create_dir_all(cwd.path().join(".git").join("hooks"))?;
+    let mut startup_warnings = Vec::new();
+    let (file_system_policy, _) = compile_permission_profile(
+        &PermissionsToml {
+            entries: BTreeMap::from([(
+                "workspace".to_string(),
+                PermissionProfileToml {
+                    description: None,
+                    extends: Some(BUILT_IN_WORKSPACE_PROFILE.to_string()),
+                    workspace_roots: None,
+                    filesystem: Some(FilesystemPermissionsToml {
+                        glob_scan_max_depth: None,
+                        allow_limited_git_writes: true,
+                        entries: BTreeMap::new(),
+                    }),
+                    network: None,
+                },
+            )]),
+        },
+        "workspace",
+        cwd.path(),
+        &mut startup_warnings,
+    )?;
+
+    assert!(
+        file_system_policy
+            .can_write_path_with_cwd(&cwd.path().join(".git").join("HEAD"), cwd.path())
+    );
+    assert!(
+        !file_system_policy
+            .can_write_path_with_cwd(&cwd.path().join(".git").join("config"), cwd.path())
+    );
+    assert!(!file_system_policy.can_write_path_with_cwd(
+        &cwd.path().join(".git").join("hooks").join("pre-commit"),
+        cwd.path()
+    ));
+    Ok(())
+}
+
+#[test]
 fn read_write_trailing_glob_suffix_compiles_as_subpath() -> std::io::Result<()> {
     let cwd = TempDir::new()?;
     let mut startup_warnings = Vec::new();

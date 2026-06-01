@@ -70,6 +70,7 @@ pub(crate) struct SessionConfiguration {
     /// active profile id, and profile-defined workspace roots in sync by using
     /// the methods below instead of mutating the fields independently.
     pub(super) permission_profile_state: PermissionProfileState,
+    pub(super) managed_allow_limited_git_writes: Option<bool>,
     pub(super) windows_sandbox_level: WindowsSandboxLevel,
 
     /// Absolute working directory that should be treated as the *root* of the
@@ -169,6 +170,15 @@ impl SessionConfiguration {
         self.permission_profile_state
             .permission_profile()
             .network_sandbox_policy()
+    }
+
+    fn apply_managed_limited_git_write_override(
+        &self,
+        file_system_sandbox_policy: &mut FileSystemSandboxPolicy,
+    ) {
+        if self.managed_allow_limited_git_writes == Some(true) {
+            file_system_sandbox_policy.apply_managed_limited_git_writes(self.cwd.as_path());
+        }
     }
 
     pub(super) fn thread_config_snapshot(&self) -> ThreadConfigSnapshot {
@@ -329,12 +339,14 @@ impl SessionConfiguration {
                 next_configuration.original_config_do_not_use = Arc::new(config);
             }
         } else if let Some(sandbox_policy) = updates.sandbox_policy.clone() {
-            let file_system_sandbox_policy =
+            let mut file_system_sandbox_policy =
                 FileSystemSandboxPolicy::from_legacy_sandbox_policy_preserving_deny_entries(
                     &sandbox_policy,
                     &next_configuration.cwd,
                     &current_file_system_sandbox_policy,
                 );
+            next_configuration
+                .apply_managed_limited_git_write_override(&mut file_system_sandbox_policy);
             let network_sandbox_policy = NetworkSandboxPolicy::from(&sandbox_policy);
             next_configuration
                 .permission_profile_state
@@ -352,12 +364,14 @@ impl SessionConfiguration {
             // Preserve richer split policies across cwd-only updates; only
             // rederive when the session is already using a structurally
             // cwd-bound legacy bridge.
-            let file_system_sandbox_policy =
+            let mut file_system_sandbox_policy =
                 FileSystemSandboxPolicy::from_legacy_sandbox_policy_preserving_deny_entries(
                     &current_sandbox_policy,
                     &next_configuration.cwd,
                     &current_file_system_sandbox_policy,
                 );
+            next_configuration
+                .apply_managed_limited_git_write_override(&mut file_system_sandbox_policy);
             next_configuration
                 .permission_profile_state
                 .set_legacy_permission_profile(
@@ -391,6 +405,7 @@ impl SessionConfiguration {
             file_system_sandbox_policy
                 .preserve_deny_read_restrictions_from(existing_file_system_policy);
         }
+        self.apply_managed_limited_git_write_override(&mut file_system_sandbox_policy);
         let effective_permission_profile =
             PermissionProfile::from_runtime_permissions_with_enforcement(
                 enforcement,

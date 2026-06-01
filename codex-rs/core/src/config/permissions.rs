@@ -250,10 +250,22 @@ pub(crate) fn compile_permission_profile(
         profile,
         inherited_profile_names,
     } = resolve_permission_profile(permissions, profile_name)?;
+    let allow_git = profile
+        .filesystem
+        .as_ref()
+        .is_some_and(|filesystem| filesystem.allow_git);
     let base_permissions = inherited_profile_names.iter().find_map(|name| {
         match name.as_str() {
             BUILT_IN_READ_ONLY_PROFILE => Some(PermissionProfile::read_only()),
-            BUILT_IN_WORKSPACE_PROFILE => Some(PermissionProfile::workspace_write()),
+            BUILT_IN_WORKSPACE_PROFILE => {
+                Some(PermissionProfile::workspace_write_with_limited_git_writes(
+                    &[],
+                    NetworkSandboxPolicy::Restricted,
+                    /*exclude_tmpdir_env_var*/ false,
+                    /*exclude_slash_tmp*/ false,
+                    allow_git,
+                ))
+            }
             _ => None,
         }
         .map(|profile| profile.to_runtime_permissions())
@@ -315,6 +327,9 @@ pub(crate) fn compile_permission_profile(
     )?;
     if let Some(glob_scan_max_depth) = glob_scan_max_depth {
         file_system_sandbox_policy.glob_scan_max_depth = Some(glob_scan_max_depth);
+    }
+    if allow_git {
+        file_system_sandbox_policy.apply_managed_limited_git_writes(policy_cwd);
     }
     let network_sandbox_policy =
         compile_network_sandbox_policy(profile.network.as_ref(), base_network_sandbox_policy);

@@ -2148,7 +2148,11 @@ fn resolve_permission_config_syntax(
 fn apply_managed_filesystem_constraints(
     file_system_sandbox_policy: &mut FileSystemSandboxPolicy,
     filesystem_constraints: &codex_config::FilesystemConstraints,
+    cwd: &Path,
 ) {
+    if filesystem_constraints.allow_limited_git_writes == Some(true) {
+        file_system_sandbox_policy.apply_managed_limited_git_writes(cwd);
+    }
     for deny_read in &filesystem_constraints.deny_read {
         let deny_entry = if deny_read.contains_glob() {
             codex_protocol::permissions::FileSystemSandboxEntry {
@@ -3274,7 +3278,8 @@ impl Config {
             value: filesystem_requirements,
             source: filesystem_requirements_source,
         }) = filesystem_requirements.as_ref()
-            && !filesystem_requirements.deny_read.is_empty()
+            && (!filesystem_requirements.deny_read.is_empty()
+                || filesystem_requirements.allow_limited_git_writes.is_some())
         {
             let requirement_source = filesystem_requirements_source.clone();
             constrained_permission_profile
@@ -3365,6 +3370,7 @@ impl Config {
             apply_managed_filesystem_constraints(
                 &mut effective_file_system_sandbox_policy,
                 filesystem_requirements,
+                resolved_cwd.as_path(),
             );
         }
         let effective_file_system_sandbox_policy = effective_file_system_sandbox_policy
@@ -3685,6 +3691,15 @@ impl Config {
             .requirements_toml()
             .network
             .is_some()
+    }
+
+    /// Global Git metadata write mode configured by filesystem requirements.
+    pub fn managed_allow_limited_git_writes(&self) -> Option<bool> {
+        self.config_layer_stack
+            .requirements()
+            .filesystem
+            .as_ref()
+            .and_then(|filesystem| filesystem.value.allow_limited_git_writes)
     }
 
     pub(crate) fn network_proxy_spec_for_active_permission_profile(

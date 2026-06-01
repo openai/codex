@@ -398,6 +398,72 @@ impl FileSystemSandboxPolicy {
         }
     }
 
+    /// Apply a managed Git metadata write mode while preserving protected
+    /// config and hook paths on an already compiled restricted policy.
+    pub fn apply_managed_limited_git_writes(&mut self, cwd: &Path) {
+        if !matches!(self.kind, FileSystemSandboxKind::Restricted) {
+            return;
+        }
+
+        let writable_root_paths = dedup_absolute_paths(
+            self.resolved_entries_with_cwd(cwd)
+                .into_iter()
+                .filter(|entry| entry.access.can_write())
+                .filter(|entry| self.can_write_path_with_cwd(entry.path.as_path(), cwd))
+                .map(|entry| entry.path)
+                .collect(),
+            /*normalize_effective_paths*/ false,
+        );
+        let linked_gitdirs = pointed_gitdirs_for_writable_roots(&writable_root_paths);
+        let protected_git_subpaths = dedup_absolute_paths(
+            writable_root_paths
+                .iter()
+                .flat_map(|root| managed_git_read_only_subpaths_for_writable_root(root, true))
+                .chain(
+                    linked_gitdirs
+                        .iter()
+                        .flat_map(protected_git_subpaths_when_writable),
+                )
+                .collect(),
+            /*normalize_effective_paths*/ true,
+        );
+        self.entries.retain(|entry| {
+            !entry.access.can_write()
+                || !is_managed_git_protected_write_entry(entry, cwd, &protected_git_subpaths)
+        });
+
+        self.entries.push(FileSystemSandboxEntry {
+            path: FileSystemPath::Special {
+                value: FileSystemSpecialPath::project_roots(Some(PathBuf::from(
+                    PROTECTED_METADATA_GIT_PATH_NAME,
+                ))),
+            },
+            access: FileSystemAccessMode::Write,
+        });
+        for git_root in writable_root_paths
+            .iter()
+            .map(|root| root.join(PROTECTED_METADATA_GIT_PATH_NAME))
+            .chain(linked_gitdirs)
+        {
+            self.entries.push(FileSystemSandboxEntry {
+                path: FileSystemPath::Path { path: git_root },
+                access: FileSystemAccessMode::Write,
+            });
+        }
+
+        append_default_read_only_project_root_subpath_if_no_explicit_rule(
+            &mut self.entries,
+            ".git/config",
+        );
+        append_default_read_only_project_root_subpath_if_no_explicit_rule(
+            &mut self.entries,
+            ".git/hooks",
+        );
+        for git_subpath in protected_git_subpaths {
+            append_default_read_only_path_if_no_explicit_rule(&mut self.entries, git_subpath);
+        }
+    }
+
     fn has_root_access(&self, predicate: impl Fn(FileSystemAccessMode) -> bool) -> bool {
         matches!(self.kind, FileSystemSandboxKind::Restricted)
             && self.entries.iter().any(|entry| {
@@ -1608,6 +1674,29 @@ pub(crate) fn default_read_only_subpaths_for_writable_root(
     protect_missing_dot_codex: bool,
     allow_limited_git_writes: bool,
 ) -> Vec<AbsolutePathBuf> {
+    let mut subpaths =
+        default_git_read_only_subpaths_for_writable_root(writable_root, allow_limited_git_writes);
+    let top_level_agents = writable_root.join(PROTECTED_METADATA_AGENTS_PATH_NAME);
+    if top_level_agents.as_path().is_dir() {
+        subpaths.push(top_level_agents);
+    }
+
+    // Keep top-level project metadata under .codex read-only to the agent by
+    // default. For the workspace root itself, protect it even before the
+    // directory exists so first-time creation still goes through the
+    // protected-path approval flow.
+    let top_level_codex = writable_root.join(PROTECTED_METADATA_CODEX_PATH_NAME);
+    if protect_missing_dot_codex || top_level_codex.as_path().is_dir() {
+        subpaths.push(top_level_codex);
+    }
+
+    dedup_absolute_paths(subpaths, /*normalize_effective_paths*/ false)
+}
+
+fn default_git_read_only_subpaths_for_writable_root(
+    writable_root: &AbsolutePathBuf,
+    allow_limited_git_writes: bool,
+) -> Vec<AbsolutePathBuf> {
     let mut subpaths: Vec<AbsolutePathBuf> = Vec::new();
     let top_level_git = writable_root.join(PROTECTED_METADATA_GIT_PATH_NAME);
     // This applies to typical repos (directory .git), worktrees/submodules
@@ -1636,23 +1725,30 @@ pub(crate) fn default_read_only_subpaths_for_writable_root(
         }
     }
 
-    let top_level_agents = writable_root.join(PROTECTED_METADATA_AGENTS_PATH_NAME);
-    if top_level_agents.as_path().is_dir() {
-        subpaths.push(top_level_agents);
-    }
-
-    // Keep top-level project metadata under .codex read-only to the agent by
-    // default. For the workspace root itself, protect it even before the
-    // directory exists so first-time creation still goes through the
-    // protected-path approval flow.
-    let top_level_codex = writable_root.join(PROTECTED_METADATA_CODEX_PATH_NAME);
-    if protect_missing_dot_codex || top_level_codex.as_path().is_dir() {
-        subpaths.push(top_level_codex);
-    }
-
     dedup_absolute_paths(subpaths, /*normalize_effective_paths*/ false)
 }
 
+fn managed_git_read_only_subpaths_for_writable_root(
+    writable_root: &AbsolutePathBuf,
+    allow_limited_git_writes: bool,
+) -> Vec<AbsolutePathBuf> {
+    let mut subpaths =
+        default_git_read_only_subpaths_for_writable_root(writable_root, allow_limited_git_writes);
+    if !allow_limited_git_writes {
+        subpaths.push(writable_root.join(PROTECTED_METADATA_GIT_PATH_NAME));
+    }
+    dedup_absolute_paths(subpaths, /*normalize_effective_paths*/ false)
+}
+
+fn pointed_gitdirs_for_writable_roots(writable_roots: &[AbsolutePathBuf]) -> Vec<AbsolutePathBuf> {
+    let gitdirs = writable_roots
+        .iter()
+        .filter_map(|writable_root| {
+            resolve_gitdir_from_file(&writable_root.join(PROTECTED_METADATA_GIT_PATH_NAME))
+        })
+        .collect();
+    dedup_absolute_paths(gitdirs, /*normalize_effective_paths*/ true)
+}
 /// Rebuilds the filesystem policy that legacy sandbox runtimes enforce for a
 /// concrete cwd.
 ///
@@ -1779,6 +1875,89 @@ fn append_default_read_only_entry_if_no_explicit_rule(
         path,
         access: FileSystemAccessMode::Read,
     });
+}
+
+fn git_root_protection_children(path: &FileSystemPath) -> Option<[FileSystemPath; 2]> {
+    match path {
+        FileSystemPath::Special {
+            value:
+                FileSystemSpecialPath::ProjectRoots {
+                    subpath: Some(subpath),
+                },
+        } if subpath == Path::new(PROTECTED_METADATA_GIT_PATH_NAME) => Some([
+            FileSystemPath::Special {
+                value: FileSystemSpecialPath::project_roots(Some(subpath.join("config"))),
+            },
+            FileSystemPath::Special {
+                value: FileSystemSpecialPath::project_roots(Some(subpath.join("hooks"))),
+            },
+        ]),
+        FileSystemPath::Path { .. }
+        | FileSystemPath::GlobPattern { .. }
+        | FileSystemPath::Special { .. } => None,
+    }
+}
+
+fn git_child_protection_root(path: &FileSystemPath) -> Option<FileSystemPath> {
+    match path {
+        FileSystemPath::Special {
+            value:
+                FileSystemSpecialPath::ProjectRoots {
+                    subpath: Some(subpath),
+                },
+        } if matches!(
+            subpath.as_path(),
+            path if path == Path::new(".git/config") || path == Path::new(".git/hooks")
+        ) =>
+        {
+            Some(FileSystemPath::Special {
+                value: FileSystemSpecialPath::project_roots(Some(PathBuf::from(
+                    PROTECTED_METADATA_GIT_PATH_NAME,
+                ))),
+            })
+        }
+        FileSystemPath::Path { .. }
+        | FileSystemPath::GlobPattern { .. }
+        | FileSystemPath::Special { .. } => None,
+    }
+}
+
+fn is_managed_git_protected_write_entry(
+    entry: &FileSystemSandboxEntry,
+    cwd: &Path,
+    protected_paths: &[AbsolutePathBuf],
+) -> bool {
+    match &entry.path {
+        FileSystemPath::Path { path } => {
+            let path = normalize_effective_absolute_path(path.clone());
+            protected_paths.iter().any(|protected_path| {
+                path.as_path().starts_with(
+                    normalize_effective_absolute_path(protected_path.clone()).as_path(),
+                )
+            })
+        }
+        FileSystemPath::Special {
+            value:
+                FileSystemSpecialPath::ProjectRoots {
+                    subpath: Some(subpath),
+                },
+        } => [".git/config", ".git/hooks"]
+            .iter()
+            .any(|protected_subpath| subpath.starts_with(Path::new(protected_subpath))),
+        FileSystemPath::Special { .. } => resolve_file_system_path(
+            &entry.path,
+            AbsolutePathBuf::from_absolute_path(cwd).ok().as_ref(),
+        )
+        .is_some_and(|path| {
+            let path = normalize_effective_absolute_path(path);
+            protected_paths.iter().any(|protected_path| {
+                path.as_path().starts_with(
+                    normalize_effective_absolute_path(protected_path.clone()).as_path(),
+                )
+            })
+        }),
+        FileSystemPath::GlobPattern { .. } => false,
+    }
 }
 
 fn has_explicit_resolved_path_entry(
@@ -2232,6 +2411,160 @@ mod tests {
         assert!(!writable_roots[0].is_path_writable(&dot_git_config));
         assert!(!writable_roots[0].is_path_writable(&dot_agents_config));
         assert!(!writable_roots[0].is_path_writable(&dot_codex_config));
+    }
+
+    #[test]
+    fn managed_limited_git_writes_replaces_default_workspace_git_protection() {
+        let cwd = TempDir::new().expect("tempdir");
+        let dot_git_head = cwd.path().join(".git").join("HEAD");
+        let dot_git_config = cwd.path().join(".git").join("config");
+        let dot_git_hook = cwd.path().join(".git").join("hooks").join("pre-commit");
+        let mut policy = FileSystemSandboxPolicy::workspace_write(
+            &[],
+            /*exclude_tmpdir_env_var*/ true,
+            /*exclude_slash_tmp*/ true,
+        );
+
+        policy.apply_managed_limited_git_writes(cwd.path());
+
+        assert!(policy.can_write_path_with_cwd(&dot_git_head, cwd.path()));
+        assert!(!policy.can_write_path_with_cwd(&dot_git_config, cwd.path()));
+        assert!(!policy.can_write_path_with_cwd(&dot_git_hook, cwd.path()));
+    }
+
+    #[test]
+    fn managed_limited_git_writes_replaces_resolved_gitdir_protection() {
+        let temp = TempDir::new().expect("tempdir");
+        let cwd = temp.path().join("worktree");
+        let gitdir_path = temp.path().join("repo/.git/worktrees/feature");
+        std::fs::create_dir_all(&cwd).expect("create worktree");
+        std::fs::create_dir_all(gitdir_path.join("hooks")).expect("create gitdir");
+        std::fs::write(
+            cwd.join(".git"),
+            format!("gitdir: {}\n", gitdir_path.display()),
+        )
+        .expect("write gitdir pointer");
+        let gitdir = normalize_effective_absolute_path(
+            AbsolutePathBuf::from_absolute_path(gitdir_path).expect("absolute gitdir"),
+        );
+        let sandbox_policy = SandboxPolicy::WorkspaceWrite {
+            writable_roots: Vec::new(),
+            network_access: false,
+            allow_limited_git_writes: false,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: true,
+        };
+        let mut policy =
+            FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(&sandbox_policy, &cwd);
+
+        policy.apply_managed_limited_git_writes(&cwd);
+
+        assert!(
+            policy.can_write_path_with_cwd(gitdir.join("HEAD").as_path(), &cwd),
+            "resolved gitdir metadata should be writable in limited mode: {policy:#?}"
+        );
+        assert!(!policy.can_write_path_with_cwd(gitdir.join("config").as_path(), &cwd));
+        assert!(!policy.can_write_path_with_cwd(gitdir.join("hooks/pre-commit").as_path(), &cwd));
+    }
+
+    #[test]
+    fn managed_limited_git_writes_keeps_explicit_nested_git_read_only() {
+        let cwd = TempDir::new().expect("tempdir");
+        let explicit_git = AbsolutePathBuf::from_absolute_path(cwd.path().join("vendor/.git"))
+            .expect("absolute nested git path");
+        let mut policy = FileSystemSandboxPolicy::workspace_write(
+            &[],
+            /*exclude_tmpdir_env_var*/ true,
+            /*exclude_slash_tmp*/ true,
+        );
+        policy.entries.push(FileSystemSandboxEntry {
+            path: FileSystemPath::Path {
+                path: explicit_git.clone(),
+            },
+            access: FileSystemAccessMode::Read,
+        });
+
+        policy.apply_managed_limited_git_writes(cwd.path());
+
+        assert!(!policy.can_write_path_with_cwd(explicit_git.join("HEAD").as_path(), cwd.path()));
+    }
+
+    #[test]
+    fn managed_limited_git_writes_override_conflicting_profile_writes() {
+        let cwd = TempDir::new().expect("tempdir");
+        let mut policy = FileSystemSandboxPolicy::workspace_write(
+            &[],
+            /*exclude_tmpdir_env_var*/ true,
+            /*exclude_slash_tmp*/ true,
+        );
+        policy.entries.extend([
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::project_roots(Some(PathBuf::from(".git/config"))),
+                },
+                access: FileSystemAccessMode::Write,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::project_roots(Some(PathBuf::from(
+                        ".git/hooks/pre-commit",
+                    ))),
+                },
+                access: FileSystemAccessMode::Write,
+            },
+        ]);
+
+        policy.apply_managed_limited_git_writes(cwd.path());
+
+        assert!(policy.can_write_path_with_cwd(&cwd.path().join(".git/HEAD"), cwd.path()));
+        assert!(!policy.can_write_path_with_cwd(&cwd.path().join(".git/config"), cwd.path()));
+        assert!(
+            !policy.can_write_path_with_cwd(&cwd.path().join(".git/hooks/pre-commit"), cwd.path())
+        );
+
+        policy.entries.push(FileSystemSandboxEntry {
+            path: FileSystemPath::Path {
+                path: AbsolutePathBuf::from_absolute_path(cwd.path().join(".git/HEAD"))
+                    .expect("absolute git HEAD"),
+            },
+            access: FileSystemAccessMode::Write,
+        });
+        policy.apply_managed_limited_git_writes(cwd.path());
+
+        assert!(policy.can_write_path_with_cwd(&cwd.path().join(".git/HEAD"), cwd.path()));
+    }
+
+    #[test]
+    fn limited_git_writes_export_linked_worktree_gitdir_root() {
+        let temp = TempDir::new().expect("tempdir");
+        let cwd = temp.path().join("worktree");
+        let gitdir_path =
+            AbsolutePathBuf::from_absolute_path(temp.path().join("repo/.git/worktrees/feature"))
+                .expect("absolute gitdir");
+        std::fs::create_dir_all(&cwd).expect("create worktree");
+        std::fs::create_dir_all(gitdir_path.join("hooks").as_path()).expect("create gitdir");
+        std::fs::write(
+            cwd.join(".git"),
+            format!("gitdir: {}\n", gitdir_path.as_path().display()),
+        )
+        .expect("write gitdir pointer");
+        let gitdir = normalize_effective_absolute_path(gitdir_path);
+        let mut policy = FileSystemSandboxPolicy::workspace_write(
+            &[],
+            /*exclude_tmpdir_env_var*/ true,
+            /*exclude_slash_tmp*/ true,
+        );
+        policy.apply_managed_limited_git_writes(&cwd);
+
+        let gitdir_root = policy
+            .get_writable_roots_with_cwd(&cwd)
+            .into_iter()
+            .find(|root| root.root == gitdir)
+            .expect("linked gitdir should be an exported writable root");
+
+        assert!(gitdir_root.is_path_writable(gitdir.join("HEAD").as_path()));
+        assert!(!gitdir_root.is_path_writable(gitdir.join("config").as_path()));
+        assert!(!gitdir_root.is_path_writable(gitdir.join("hooks/pre-commit").as_path()));
     }
 
     #[test]

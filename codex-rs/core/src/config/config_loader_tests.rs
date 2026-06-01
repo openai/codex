@@ -1473,6 +1473,267 @@ extends = ":workspace"
     Ok(())
 }
 
+async fn load_config_with_system_filesystem_requirements(
+    tmp: &Path,
+    cwd: &Path,
+    user_config: &str,
+    requirements: &str,
+    permission_profile: Option<PermissionProfile>,
+) -> anyhow::Result<crate::config::Config> {
+    let codex_home = tmp.join("home");
+    tokio::fs::create_dir_all(&codex_home).await?;
+    tokio::fs::write(codex_home.join(CONFIG_TOML_FILE), user_config).await?;
+    let requirements_path = tmp.join("requirements.toml");
+    tokio::fs::write(&requirements_path, requirements).await?;
+    let cwd = AbsolutePathBuf::from_absolute_path(cwd)?;
+    let mut overrides = LoaderOverrides::without_managed_config_for_tests();
+    overrides.system_requirements_path = Some(requirements_path);
+    Ok(ConfigBuilder::default()
+        .codex_home(codex_home)
+        .fallback_cwd(Some(cwd.to_path_buf()))
+        .harness_overrides(ConfigOverrides {
+            permission_profile,
+            ..Default::default()
+        })
+        .loader_overrides(overrides)
+        .build()
+        .await?)
+}
+
+#[tokio::test]
+async fn system_filesystem_requirements_enable_limited_git_writes_for_all_profile_sources()
+-> anyhow::Result<()> {
+    for (source, user_config, permission_profile, managed_profile) in [
+        (
+            ":workspace",
+            r#"default_permissions = ":workspace""#,
+            None,
+            "",
+        ),
+        (
+            "local",
+            r#"
+default_permissions = "local"
+
+[permissions.local]
+extends = ":workspace"
+"#,
+            None,
+            "",
+        ),
+        (
+            "managed-standard",
+            r#"default_permissions = "managed-standard""#,
+            None,
+            r#"
+[permissions.managed-standard]
+extends = ":workspace"
+"#,
+        ),
+        (
+            "legacy workspace-write",
+            r#"sandbox_mode = "workspace-write""#,
+            None,
+            "",
+        ),
+        (
+            "permission profile override",
+            "",
+            Some(PermissionProfile::workspace_write()),
+            "",
+        ),
+    ] {
+        let tmp = tempdir()?;
+        tokio::fs::create_dir_all(tmp.path().join(".git").join("hooks")).await?;
+        let requirements = format!(
+            r#"
+[permissions.filesystem]
+allow_limited_git_writes = true
+
+{managed_profile}"#
+        );
+        let config = load_config_with_system_filesystem_requirements(
+            tmp.path(),
+            tmp.path(),
+            user_config,
+            &requirements,
+            permission_profile,
+        )
+        .await?;
+
+        let policy = config.permissions.file_system_sandbox_policy();
+        assert!(
+            policy.allow_limited_git_writes,
+            "expected system requirements to enable limited git writes for `{source}`"
+        );
+        assert!(
+            policy.can_write_path_with_cwd(&tmp.path().join(".git").join("HEAD"), tmp.path()),
+            "expected system requirements to permit Git metadata writes for `{source}`"
+        );
+        assert!(
+            !policy.can_write_path_with_cwd(&tmp.path().join(".git").join("config"), tmp.path()),
+            "expected Git config to remain protected for `{source}`"
+        );
+        assert!(
+            !policy.can_write_path_with_cwd(
+                &tmp.path().join(".git").join("hooks").join("pre-commit"),
+                tmp.path(),
+            ),
+            "expected Git hooks to remain protected for `{source}`"
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn system_filesystem_requirements_can_disable_profile_limited_git_writes()
+-> anyhow::Result<()> {
+    let tmp = tempdir()?;
+    tokio::fs::create_dir_all(tmp.path().join(".git").join("hooks")).await?;
+    let config = load_config_with_system_filesystem_requirements(
+        tmp.path(),
+        tmp.path(),
+        r#"
+default_permissions = "local"
+
+[permissions.local]
+extends = ":workspace"
+
+[permissions.local.filesystem]
+allow_limited_git_writes = true
+"#,
+        r#"
+[permissions.filesystem]
+allow_limited_git_writes = false
+"#,
+        None,
+    )
+    .await?;
+
+    let policy = config.permissions.file_system_sandbox_policy();
+    assert!(
+        !policy.allow_limited_git_writes,
+        "expected system requirements to override local limited git write opt-in"
+    );
+    assert!(
+        !policy.can_write_path_with_cwd(&tmp.path().join(".git").join("HEAD"), tmp.path()),
+        "expected the disabled managed setting to protect Git metadata"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn system_filesystem_requirements_override_conflicting_profile_git_writes()
+-> anyhow::Result<()> {
+    let tmp = tempdir()?;
+    tokio::fs::create_dir_all(tmp.path().join(".git").join("hooks")).await?;
+    let config = load_config_with_system_filesystem_requirements(
+        tmp.path(),
+        tmp.path(),
+        r#"
+default_permissions = "local"
+
+[permissions.local]
+extends = ":workspace"
+
+[permissions.local.filesystem.":workspace_roots"]
+".git/config" = "write"
+".git/hooks/pre-commit" = "write"
+"#,
+        r#"
+[permissions.filesystem]
+allow_limited_git_writes = true
+"#,
+        None,
+    )
+    .await?;
+
+    let policy = config.permissions.file_system_sandbox_policy();
+    assert!(policy.can_write_path_with_cwd(&tmp.path().join(".git/HEAD"), tmp.path()));
+    assert!(!policy.can_write_path_with_cwd(&tmp.path().join(".git/config"), tmp.path()));
+    assert!(
+        !policy.can_write_path_with_cwd(&tmp.path().join(".git/hooks/pre-commit"), tmp.path(),)
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn system_filesystem_requirements_enable_linked_worktree_gitdir_writes() -> anyhow::Result<()>
+{
+    let tmp = tempdir()?;
+    let cwd = tmp.path().join("worktree");
+    let gitdir = tmp.path().join("repo/.git/worktrees/feature");
+    tokio::fs::create_dir_all(gitdir.join("hooks")).await?;
+    tokio::fs::create_dir_all(&cwd).await?;
+    tokio::fs::write(cwd.join(".git"), format!("gitdir: {}\n", gitdir.display())).await?;
+    let config = load_config_with_system_filesystem_requirements(
+        tmp.path(),
+        &cwd,
+        r#"
+sandbox_mode = "workspace-write"
+
+[sandbox_workspace_write]
+exclude_tmpdir_env_var = true
+exclude_slash_tmp = true
+"#,
+        r#"
+[permissions.filesystem]
+allow_limited_git_writes = true
+"#,
+        None,
+    )
+    .await?;
+
+    let cwd = AbsolutePathBuf::from_absolute_path(&cwd)?;
+    let gitdir = AbsolutePathBuf::from_absolute_path(gitdir.canonicalize()?)?;
+
+    let policy = config.permissions.file_system_sandbox_policy();
+    assert!(
+        policy.can_write_path_with_cwd(gitdir.join("HEAD").as_path(), cwd.as_path()),
+        "expected linked gitdir metadata to be writable: {policy:#?}"
+    );
+    assert!(!policy.can_write_path_with_cwd(gitdir.join("config").as_path(), cwd.as_path()));
+    assert!(
+        !policy.can_write_path_with_cwd(gitdir.join("hooks/pre-commit").as_path(), cwd.as_path(),)
+    );
+    let gitdir_root = policy
+        .get_writable_roots_with_cwd(cwd.as_path())
+        .into_iter()
+        .find(|root| root.root == gitdir)
+        .expect("linked gitdir should be exported as writable");
+    assert!(!gitdir_root.is_path_writable(gitdir.join("config").as_path()));
+    assert!(!gitdir_root.is_path_writable(gitdir.join("hooks/pre-commit").as_path()));
+    Ok(())
+}
+
+#[tokio::test]
+async fn system_filesystem_requirements_reject_unrestricted_profile_selection() -> anyhow::Result<()>
+{
+    let tmp = tempdir()?;
+    let config = load_config_with_system_filesystem_requirements(
+        tmp.path(),
+        tmp.path(),
+        r#"sandbox_mode = "danger-full-access""#,
+        r#"
+[permissions.filesystem]
+allow_limited_git_writes = true
+"#,
+        None,
+    )
+    .await?;
+
+    assert!(
+        !config
+            .permissions
+            .file_system_sandbox_policy()
+            .has_full_disk_write_access()
+    );
+    assert!(config.startup_warnings.iter().any(|warning| {
+        warning.contains("Configured value for `permission_profile` is disallowed by requirements")
+    }));
+    Ok(())
+}
+
 #[tokio::test]
 async fn system_allowed_permissions_keep_builtin_permission_fallbacks() -> anyhow::Result<()> {
     for (trust_level, expected_profile) in [

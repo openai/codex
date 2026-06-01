@@ -83,6 +83,7 @@ pub use crate::permissions::FileSystemSandboxKind;
 pub use crate::permissions::FileSystemSandboxPolicy;
 pub use crate::permissions::FileSystemSpecialPath;
 pub use crate::permissions::NetworkSandboxPolicy;
+use crate::permissions::add_limited_git_writable_roots;
 use crate::permissions::default_read_only_subpaths_for_writable_root;
 pub use crate::request_permissions::RequestPermissionsArgs;
 pub use crate::request_user_input::RequestUserInputEvent;
@@ -1128,7 +1129,7 @@ impl SandboxPolicy {
 
                 // For each root, compute subpaths that should remain read-only.
                 let cwd_root = AbsolutePathBuf::from_absolute_path(cwd).ok();
-                roots
+                let mut roots = roots
                     .into_iter()
                     .map(|writable_root| {
                         let protect_missing_dot_codex = cwd_root
@@ -1144,7 +1145,11 @@ impl SandboxPolicy {
                             root: writable_root,
                         }
                     })
-                    .collect()
+                    .collect::<Vec<_>>();
+                if *allow_limited_git_writes {
+                    add_limited_git_writable_roots(&mut roots);
+                }
+                roots
             }
         }
     }
@@ -4429,6 +4434,52 @@ mod tests {
                 .iter()
                 .any(|path| path.as_path() == expected_codex.as_path())
         );
+    }
+
+    #[test]
+    fn workspace_write_limited_git_writes_export_linked_gitdir_root() {
+        let temp = TempDir::new().expect("tempdir");
+        let cwd = temp.path().join("worktree");
+        let gitdir_path =
+            AbsolutePathBuf::from_absolute_path(temp.path().join("repo/.git/worktrees/feature"))
+                .expect("absolute gitdir");
+        std::fs::create_dir_all(&cwd).expect("create worktree");
+        std::fs::create_dir_all(gitdir_path.join("hooks").as_path()).expect("create gitdir");
+        std::fs::write(
+            cwd.join(".git"),
+            format!("gitdir: {}\n", gitdir_path.as_path().display()),
+        )
+        .expect("write gitdir pointer");
+        let gitdir = AbsolutePathBuf::from_absolute_path(
+            gitdir_path
+                .as_path()
+                .canonicalize()
+                .expect("canonicalize gitdir"),
+        )
+        .expect("absolute canonical gitdir");
+        let policy = SandboxPolicy::WorkspaceWrite {
+            writable_roots: Vec::new(),
+            network_access: false,
+            allow_limited_git_writes: true,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: true,
+        };
+
+        assert!(sandbox_policy_allows_write(
+            &policy,
+            gitdir.join("HEAD").as_path(),
+            &cwd,
+        ));
+        assert!(!sandbox_policy_allows_write(
+            &policy,
+            gitdir.join("config").as_path(),
+            &cwd,
+        ));
+        assert!(!sandbox_policy_allows_write(
+            &policy,
+            gitdir.join("hooks/pre-commit").as_path(),
+            &cwd,
+        ));
     }
 
     #[test]
