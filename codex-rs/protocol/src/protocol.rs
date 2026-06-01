@@ -2727,7 +2727,7 @@ fn multi_agent_version_from_items(
     items: &[RolloutItem],
     thread_id: Option<ThreadId>,
 ) -> Option<MultiAgentVersion> {
-    items
+    let session_meta_version = items
         .iter()
         .rev()
         .find_map(|item| match item {
@@ -2738,11 +2738,22 @@ fn multi_agent_version_from_items(
             }
             _ => None,
         })
-        .and_then(|meta_line| meta_line.meta.multi_agent_version)
+        .and_then(|meta_line| meta_line.meta.multi_agent_version);
+
+    session_meta_version.or_else(|| {
+        items.iter().rev().find_map(|item| match item {
+            RolloutItem::TurnContext(turn_context) => turn_context.multi_agent_version,
+            RolloutItem::SessionMeta(_)
+            | RolloutItem::ResponseItem(_)
+            | RolloutItem::Compacted(_)
+            | RolloutItem::EventMsg(_) => None,
+        })
+    })
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
 pub enum MultiAgentVersion {
     Disabled,
     V1,
@@ -2890,6 +2901,8 @@ pub struct TurnContextItem {
     pub personality: Option<Personality>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub collaboration_mode: Option<CollaborationMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub multi_agent_version: Option<MultiAgentVersion>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub realtime_active: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -5338,6 +5351,7 @@ mod tests {
             model: "gpt-5".to_string(),
             personality: None,
             collaboration_mode: None,
+            multi_agent_version: None,
             realtime_active: None,
             effort: None,
             summary: ReasoningSummaryConfig::Auto,

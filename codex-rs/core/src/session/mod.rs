@@ -138,7 +138,6 @@ use codex_thread_store::LiveThreadInitGuard;
 use codex_thread_store::LocalThreadStore;
 use codex_thread_store::ReadThreadParams;
 use codex_thread_store::ResumeThreadParams;
-use codex_thread_store::SetMultiAgentVersionIfUnsetParams;
 use codex_thread_store::ThreadEventPersistenceMode;
 use codex_thread_store::ThreadPersistenceMetadata;
 use codex_thread_store::ThreadStore;
@@ -1670,7 +1669,7 @@ impl Session {
         turn_context: &TurnContext,
         msg: &EventMsg,
     ) {
-        if turn_context.multi_agent_version != Some(MultiAgentVersion::V2) {
+        if turn_context.multi_agent_version != MultiAgentVersion::V2 {
             return;
         }
 
@@ -2652,7 +2651,7 @@ impl Session {
         *self.multi_agent_version.get_or_init(|| multi_agent_version)
     }
 
-    pub(crate) async fn resolve_multi_agent_version_for_model(
+    pub(crate) fn resolve_multi_agent_version_for_model(
         &self,
         model_info: &ModelInfo,
         config: &Config,
@@ -2665,30 +2664,7 @@ impl Session {
             .multi_agent_version
             .unwrap_or_else(|| config.multi_agent_version_from_features());
 
-        let stored = if config.ephemeral {
-            selected
-        } else {
-            match self
-                .services
-                .thread_store
-                .set_multi_agent_version_if_unset(SetMultiAgentVersionIfUnsetParams {
-                    thread_id: self.thread_id(),
-                    multi_agent_version: selected,
-                })
-                .await
-            {
-                Ok(multi_agent_version) => multi_agent_version,
-                Err(err) => {
-                    warn!(
-                        "failed to set multi-agent version for thread {}: {err}",
-                        self.thread_id()
-                    );
-                    selected
-                }
-            }
-        };
-
-        self.set_multi_agent_version_if_unset(stored)
+        self.set_multi_agent_version_if_unset(selected)
     }
 
     async fn send_raw_response_items(&self, turn_context: &TurnContext, items: &[ResponseItem]) {

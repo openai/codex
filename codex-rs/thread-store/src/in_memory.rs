@@ -10,7 +10,6 @@ use chrono::Utc;
 use codex_protocol::ThreadId;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
-use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionMeta;
 use codex_protocol::protocol::SessionMetaLine;
@@ -24,7 +23,6 @@ use crate::LoadThreadHistoryParams;
 use crate::ReadThreadByRolloutPathParams;
 use crate::ReadThreadParams;
 use crate::ResumeThreadParams;
-use crate::SetMultiAgentVersionIfUnsetParams;
 use crate::StoredThread;
 use crate::StoredThreadHistory;
 use crate::ThreadMetadataPatch;
@@ -210,39 +208,6 @@ impl ThreadStore for InMemoryThreadStore {
             state.rollout_paths.insert(rollout_path, params.thread_id);
         }
         Ok(())
-    }
-
-    async fn set_multi_agent_version_if_unset(
-        &self,
-        params: SetMultiAgentVersionIfUnsetParams,
-    ) -> ThreadStoreResult<MultiAgentVersion> {
-        let mut state = self.state.lock().await;
-        let history =
-            state
-                .histories
-                .get_mut(&params.thread_id)
-                .ok_or(ThreadStoreError::ThreadNotFound {
-                    thread_id: params.thread_id,
-                })?;
-        let mut session_meta = history
-            .iter()
-            .rev()
-            .find_map(|item| match item {
-                RolloutItem::SessionMeta(meta_line) if meta_line.meta.id == params.thread_id => {
-                    Some(meta_line.clone())
-                }
-                _ => None,
-            })
-            .ok_or_else(|| ThreadStoreError::InvalidRequest {
-                message: format!("thread {} does not have session metadata", params.thread_id),
-            })?;
-        if let Some(multi_agent_version) = session_meta.meta.multi_agent_version {
-            return Ok(multi_agent_version);
-        }
-        session_meta.git = None;
-        session_meta.meta.multi_agent_version = Some(params.multi_agent_version);
-        history.push(RolloutItem::SessionMeta(session_meta));
-        Ok(params.multi_agent_version)
     }
 
     async fn append_items(&self, params: AppendThreadItemsParams) -> ThreadStoreResult<()> {

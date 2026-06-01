@@ -80,7 +80,7 @@ pub struct TurnContext {
     pub(crate) compact_prompt: Option<String>,
     pub(crate) user_instructions: Option<String>,
     pub(crate) collaboration_mode: CollaborationMode,
-    pub(crate) multi_agent_version: Option<MultiAgentVersion>,
+    pub(crate) multi_agent_version: MultiAgentVersion,
     pub(crate) personality: Option<Personality>,
     pub(crate) approval_policy: Constrained<AskForApproval>,
     pub(crate) permission_profile: PermissionProfile,
@@ -106,8 +106,8 @@ pub struct TurnContext {
 }
 
 enum TurnMultiAgentRuntime {
-    Resolve,
-    Unset,
+    ResolveAndStore,
+    Preview,
 }
 
 impl TurnContext {
@@ -363,6 +363,7 @@ impl TurnContext {
             model: self.model_info.slug.clone(),
             personality: self.personality,
             collaboration_mode: Some(self.collaboration_mode.clone()),
+            multi_agent_version: Some(self.multi_agent_version),
             realtime_active: Some(self.realtime_active),
             effort: self.reasoning_effort,
             summary: ReasoningSummaryConfig::Auto,
@@ -464,7 +465,7 @@ impl Session {
         session_telemetry: &SessionTelemetry,
         provider: ModelProviderInfo,
         session_configuration: &SessionConfiguration,
-        multi_agent_version: Option<MultiAgentVersion>,
+        multi_agent_version: MultiAgentVersion,
         user_shell: &shell::Shell,
         shell_zsh_path: Option<&PathBuf>,
         main_execve_wrapper_exe: Option<&PathBuf>,
@@ -701,7 +702,7 @@ impl Session {
             session_configuration,
             final_output_json_schema,
             turn_environments,
-            TurnMultiAgentRuntime::Resolve,
+            TurnMultiAgentRuntime::ResolveAndStore,
         )
         .await
     }
@@ -717,7 +718,7 @@ impl Session {
             session_configuration,
             /*final_output_json_schema*/ None,
             turn_environments,
-            TurnMultiAgentRuntime::Unset,
+            TurnMultiAgentRuntime::Preview,
         )
         .await
     }
@@ -753,11 +754,12 @@ impl Session {
             .await;
 
         let multi_agent_version = match multi_agent_runtime {
-            TurnMultiAgentRuntime::Resolve => Some(
+            TurnMultiAgentRuntime::ResolveAndStore => {
                 self.resolve_multi_agent_version_for_model(&model_info, &per_turn_config)
-                    .await,
-            ),
-            TurnMultiAgentRuntime::Unset => None,
+            }
+            TurnMultiAgentRuntime::Preview => model_info
+                .multi_agent_version
+                .unwrap_or_else(|| per_turn_config.multi_agent_version_from_features()),
         };
         let plugin_outcome = self
             .services

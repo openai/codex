@@ -111,11 +111,7 @@ async fn build_runner_options(
     turn: &Arc<TurnContext>,
     requested_concurrency: Option<usize>,
 ) -> Result<JobRunnerOptions, FunctionCallError> {
-    let multi_agent_version = turn.multi_agent_version.ok_or_else(|| {
-        FunctionCallError::RespondToModel(
-            "multi-agent version is unresolved; this session cannot spawn workers".to_string(),
-        )
-    })?;
+    let multi_agent_version = turn.multi_agent_version;
     if multi_agent_version == MultiAgentVersion::Disabled {
         return Err(FunctionCallError::RespondToModel(
             "multi-agent runtime is disabled; this session cannot spawn workers".to_string(),

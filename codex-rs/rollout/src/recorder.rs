@@ -1534,6 +1534,16 @@ impl RolloutWriterState {
     }
 
     async fn write_session_meta_if_needed(&mut self) -> std::io::Result<()> {
+        if let Some(session_meta) = self.meta.as_mut()
+            && session_meta.multi_agent_version.is_none()
+        {
+            session_meta.multi_agent_version = self.pending_items.iter().find_map(|item| {
+                let RolloutItem::TurnContext(turn_context) = item else {
+                    return None;
+                };
+                turn_context.multi_agent_version
+            });
+        }
         let Some(session_meta) = self.meta.as_ref().cloned() else {
             return Ok(());
         };

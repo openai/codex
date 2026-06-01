@@ -664,7 +664,7 @@ impl ThreadManager {
             history,
             InterruptedTurnHistoryMarker::from_config_and_version(
                 &options.config,
-                Some(inherited_multi_agent_version),
+                inherited_multi_agent_version,
             ),
         );
         self.start_thread_with_options_and_fork_source(
@@ -942,7 +942,8 @@ impl ThreadManager {
         };
         let interrupted_marker = InterruptedTurnHistoryMarker::from_config_and_version(
             &config,
-            resolve_multi_agent_version(&history, /*inherited_multi_agent_version*/ None),
+            resolve_multi_agent_version(&history, /*inherited_multi_agent_version*/ None)
+                .unwrap_or(MultiAgentVersion::V1),
         );
         let history = fork_history_from_snapshot(snapshot, history, interrupted_marker);
         let environments = default_thread_environment_selections(

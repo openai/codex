@@ -108,9 +108,7 @@ async fn handle_spawn_agent(
     )
     .await?;
     apply_spawn_agent_runtime_overrides(&mut config, turn.as_ref())?;
-    let multi_agent_version = turn
-        .multi_agent_version
-        .ok_or_else(|| FunctionCallError::Fatal("multi-agent version is unresolved".to_string()))?;
+    let multi_agent_version = turn.multi_agent_version;
 
     let spawn_source = thread_spawn_source(
         session.conversation_id,

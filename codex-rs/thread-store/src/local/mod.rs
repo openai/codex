@@ -5,7 +5,6 @@ mod list_threads;
 mod live_writer;
 mod read_thread;
 mod search_threads;
-mod set_multi_agent_version_if_unset;
 mod unarchive_thread;
 mod update_thread_metadata;
 
@@ -21,7 +20,6 @@ use std::collections::hash_map::Entry;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tokio::sync::Semaphore;
 
 use crate::AppendThreadItemsParams;
 use crate::ArchiveThreadParams;
@@ -32,7 +30,6 @@ use crate::ReadThreadByRolloutPathParams;
 use crate::ReadThreadParams;
 use crate::ResumeThreadParams;
 use crate::SearchThreadsParams;
-use crate::SetMultiAgentVersionIfUnsetParams;
 use crate::StoredThread;
 use crate::StoredThreadHistory;
 use crate::ThreadPage;
@@ -41,7 +38,6 @@ use crate::ThreadStore;
 use crate::ThreadStoreError;
 use crate::ThreadStoreResult;
 use crate::UpdateThreadMetadataParams;
-use codex_protocol::protocol::MultiAgentVersion;
 
 /// Local filesystem/SQLite-backed implementation of [`ThreadStore`].
 ///
@@ -60,7 +56,6 @@ use codex_protocol::protocol::MultiAgentVersion;
 pub struct LocalThreadStore {
     pub(super) config: LocalThreadStoreConfig,
     live_recorders: Arc<Mutex<HashMap<ThreadId, RolloutRecorder>>>,
-    multi_agent_version_update_gate: Arc<Semaphore>,
     state_db: Option<StateDbHandle>,
 }
 
@@ -100,7 +95,6 @@ impl LocalThreadStore {
         Self {
             config,
             live_recorders: Arc::new(Mutex::new(HashMap::new())),
-            multi_agent_version_update_gate: Arc::new(Semaphore::new(1)),
             state_db,
         }
     }
@@ -184,13 +178,6 @@ impl ThreadStore for LocalThreadStore {
 
     async fn resume_thread(&self, params: ResumeThreadParams) -> ThreadStoreResult<()> {
         live_writer::resume_thread(self, params).await
-    }
-
-    async fn set_multi_agent_version_if_unset(
-        &self,
-        params: SetMultiAgentVersionIfUnsetParams,
-    ) -> ThreadStoreResult<MultiAgentVersion> {
-        set_multi_agent_version_if_unset::set_multi_agent_version_if_unset(self, params).await
     }
 
     async fn append_items(&self, params: AppendThreadItemsParams) -> ThreadStoreResult<()> {
@@ -774,44 +761,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn set_multi_agent_version_if_unset_appends_once_and_returns_existing_value() {
-        let home = TempDir::new().expect("temp dir");
-        let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
-        let thread_id = ThreadId::default();
-
-        store
-            .create_thread(create_thread_params(thread_id))
-            .await
-            .expect("create thread");
-
-        let first = store
-            .set_multi_agent_version_if_unset(SetMultiAgentVersionIfUnsetParams {
-                thread_id,
-                multi_agent_version: MultiAgentVersion::V2,
-            })
-            .await
-            .expect("set missing runtime");
-        assert_eq!(first, MultiAgentVersion::V2);
-        assert_eq!(
-            session_meta_versions(&store, thread_id).await,
-            vec![None, Some(MultiAgentVersion::V2)]
-        );
-
-        let second = store
-            .set_multi_agent_version_if_unset(SetMultiAgentVersionIfUnsetParams {
-                thread_id,
-                multi_agent_version: MultiAgentVersion::V1,
-            })
-            .await
-            .expect("return existing runtime");
-        assert_eq!(second, MultiAgentVersion::V2);
-        assert_eq!(
-            session_meta_versions(&store, thread_id).await,
-            vec![None, Some(MultiAgentVersion::V2)]
-        );
-    }
-
-    #[tokio::test]
     async fn resume_thread_rejects_duplicate_live_writer() {
         let home = TempDir::new().expect("temp dir");
         let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
@@ -1102,28 +1051,6 @@ mod tests {
             text_elements: Vec::new(),
             ..Default::default()
         }))
-    }
-
-    async fn session_meta_versions(
-        store: &LocalThreadStore,
-        thread_id: ThreadId,
-    ) -> Vec<Option<MultiAgentVersion>> {
-        store
-            .load_history(LoadThreadHistoryParams {
-                thread_id,
-                include_archived: true,
-            })
-            .await
-            .expect("load history")
-            .items
-            .into_iter()
-            .filter_map(|item| match item {
-                RolloutItem::SessionMeta(meta_line) if meta_line.meta.id == thread_id => {
-                    Some(meta_line.meta.multi_agent_version)
-                }
-                _ => None,
-            })
-            .collect()
     }
 
     async fn assert_rollout_contains_message(path: &std::path::Path, expected: &str) {

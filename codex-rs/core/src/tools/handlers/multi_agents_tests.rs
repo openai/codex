@@ -135,7 +135,7 @@ model_reasoning_effort = "minimal"
 }
 
 fn set_turn_config(turn: &mut TurnContext, config: crate::config::Config) {
-    turn.multi_agent_version = Some(config.multi_agent_version_from_features());
+    turn.multi_agent_version = config.multi_agent_version_from_features();
     turn.config = Arc::new(config);
 }
 

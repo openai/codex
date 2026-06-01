@@ -7,7 +7,7 @@ pub(super) fn usage_hint_text<'a>(
     turn_context: &'a TurnContext,
     session_source: &SessionSource,
 ) -> Option<&'a str> {
-    if turn_context.multi_agent_version != Some(MultiAgentVersion::V2) {
+    if turn_context.multi_agent_version != MultiAgentVersion::V2 {
         return None;
     }
 

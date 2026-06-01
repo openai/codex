@@ -66,15 +66,6 @@ pub struct ThreadPersistenceMetadata {
     pub memory_mode: MemoryMode,
 }
 
-/// Parameters for setting a thread's multi-agent runtime when it has not been recorded yet.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SetMultiAgentVersionIfUnsetParams {
-    /// Thread id whose metadata should be initialized.
-    pub thread_id: ThreadId,
-    /// Version to persist if the thread does not already have one.
-    pub multi_agent_version: MultiAgentVersion,
-}
-
 /// Parameters required to create a persisted thread.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CreateThreadParams {
