@@ -7,7 +7,7 @@
 // network access are required the first time the artifact is fetched.
 
 use anyhow::Result;
-use app_test_support::McpProcess;
+use app_test_support::AppServer;
 use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_responses_server_sequence;
 use app_test_support::create_mock_responses_server_sequence_unchecked;
@@ -743,10 +743,10 @@ async fn create_zsh_test_mcp_process(
     codex_home: &Path,
     zdotdir: &Path,
     zsh_path: &Path,
-) -> Result<McpProcess> {
+) -> Result<AppServer> {
     let app_server = create_test_package_app_server(codex_home, zsh_path)?;
     let zdotdir = zdotdir.to_string_lossy().into_owned();
-    McpProcess::new_with_program_and_env(
+    AppServer::new_with_program_and_env(
         codex_home,
         &app_server,
         &[("ZDOTDIR", Some(zdotdir.as_str()))],

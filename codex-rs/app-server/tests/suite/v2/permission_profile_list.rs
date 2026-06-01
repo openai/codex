@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use anyhow::Result;
-use app_test_support::McpProcess;
+use app_test_support::AppServer;
 use app_test_support::to_response;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::PermissionProfileListParams;
@@ -41,7 +41,7 @@ description = "Inspect without writes."
 "#,
     )?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = AppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -108,7 +108,7 @@ description = "Project-scoped profile."
     )?;
     set_project_trust_level(codex_home.path(), workspace.path(), TrustLevel::Trusted)?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = AppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let first_request_id = mcp
@@ -181,7 +181,7 @@ description = "Project-scoped profile."
     )?;
     set_project_trust_level(codex_home.path(), workspace.path(), TrustLevel::Trusted)?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = AppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -221,7 +221,7 @@ description = "Project-scoped profile."
 }
 
 async fn read_response<T: serde::de::DeserializeOwned>(
-    mcp: &mut McpProcess,
+    mcp: &mut AppServer,
     request_id: i64,
 ) -> Result<T> {
     let response: JSONRPCResponse = timeout(
