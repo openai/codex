@@ -2727,14 +2727,18 @@ fn multi_agent_version_from_items(
     items: &[RolloutItem],
     thread_id: Option<ThreadId>,
 ) -> Option<MultiAgentVersion> {
-    items.iter().rev().find_map(|item| match item {
-        RolloutItem::SessionMeta(meta_line)
-            if thread_id.is_none_or(|thread_id| meta_line.meta.id == thread_id) =>
-        {
-            meta_line.meta.multi_agent_version
-        }
-        _ => None,
-    })
+    items
+        .iter()
+        .rev()
+        .find_map(|item| match item {
+            RolloutItem::SessionMeta(meta_line)
+                if thread_id.is_none_or(|thread_id| meta_line.meta.id == thread_id) =>
+            {
+                Some(meta_line)
+            }
+            _ => None,
+        })
+        .and_then(|meta_line| meta_line.meta.multi_agent_version)
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, JsonSchema, TS)]

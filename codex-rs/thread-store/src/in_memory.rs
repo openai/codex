@@ -220,16 +220,9 @@ impl ThreadStore for InMemoryThreadStore {
                 .ok_or(ThreadStoreError::ThreadNotFound {
                     thread_id: params.thread_id,
                 })?;
-        if let Some(multi_agent_version) = history.iter().rev().find_map(|item| match item {
-            RolloutItem::SessionMeta(meta_line) if meta_line.meta.id == params.thread_id => {
-                meta_line.meta.multi_agent_version
-            }
-            _ => None,
-        }) {
-            return Ok(multi_agent_version);
-        }
         let mut session_meta = history
             .iter()
+            .rev()
             .find_map(|item| match item {
                 RolloutItem::SessionMeta(meta_line) if meta_line.meta.id == params.thread_id => {
                     Some(meta_line.clone())
@@ -239,6 +232,9 @@ impl ThreadStore for InMemoryThreadStore {
             .ok_or_else(|| ThreadStoreError::InvalidRequest {
                 message: format!("thread {} does not have session metadata", params.thread_id),
             })?;
+        if let Some(multi_agent_version) = session_meta.meta.multi_agent_version {
+            return Ok(multi_agent_version);
+        }
         session_meta.git = None;
         session_meta.meta.multi_agent_version = Some(params.multi_agent_version);
         history.push(RolloutItem::SessionMeta(session_meta));

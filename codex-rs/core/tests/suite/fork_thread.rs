@@ -19,6 +19,7 @@ use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
+use std::io::Write;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::ResponseTemplate;
@@ -61,10 +62,10 @@ async fn legacy_resume_seeds_multi_agent_version_for_later_forks() {
         .shutdown_and_wait()
         .await
         .expect("shutdown source thread");
-    remove_multi_agent_version(&rollout_path);
+    append_unresolved_multi_agent_version(&rollout_path, source_thread_id);
     assert_eq!(
-        latest_multi_agent_version(&rollout_path, source_thread_id),
-        None
+        latest_session_metadata(&rollout_path, source_thread_id),
+        (None, Some("polluted".to_string()))
     );
 
     let mut resume_builder = test_codex().with_config(|config| {
@@ -91,8 +92,8 @@ async fn legacy_resume_seeds_multi_agent_version_for_later_forks() {
         .await
         .expect("flush resumed rollout");
     assert_eq!(
-        latest_multi_agent_version(&rollout_path, source_thread_id),
-        Some(MultiAgentVersion::V1)
+        latest_session_metadata(&rollout_path, source_thread_id),
+        (Some(MultiAgentVersion::V1), Some("polluted".to_string()))
     );
     resumed
         .codex
@@ -376,6 +377,13 @@ fn latest_multi_agent_version(
     path: &std::path::Path,
     thread_id: ThreadId,
 ) -> Option<MultiAgentVersion> {
+    latest_session_metadata(path, thread_id).0
+}
+
+fn latest_session_metadata(
+    path: &std::path::Path,
+    thread_id: ThreadId,
+) -> (Option<MultiAgentVersion>, Option<String>) {
     std::fs::read_to_string(path)
         .unwrap_or_else(|err| panic!("failed to read rollout file {}: {err}", path.display()))
         .lines()
@@ -386,31 +394,43 @@ fn latest_multi_agent_version(
                 .unwrap_or_else(|err| panic!("failed to parse rollout line `{line}`: {err}"))
         })
         .find_map(|line| match line.item {
-            RolloutItem::SessionMeta(meta_line) if meta_line.meta.id == thread_id => {
-                Some(meta_line.meta.multi_agent_version)
-            }
+            RolloutItem::SessionMeta(meta_line) if meta_line.meta.id == thread_id => Some((
+                meta_line.meta.multi_agent_version,
+                meta_line.meta.memory_mode,
+            )),
             _ => None,
         })
-        .flatten()
+        .unwrap_or_default()
 }
 
-fn remove_multi_agent_version(path: &std::path::Path) {
+fn append_unresolved_multi_agent_version(path: &std::path::Path, thread_id: ThreadId) {
     let text = std::fs::read_to_string(path)
         .unwrap_or_else(|err| panic!("failed to read rollout file {}: {err}", path.display()));
-    let lines = text
+    let mut line = text
         .lines()
+        .rev()
         .filter(|line| !line.trim().is_empty())
         .map(|line| {
-            let mut line = serde_json::from_str::<RolloutLine>(line)
-                .unwrap_or_else(|err| panic!("failed to parse rollout line `{line}`: {err}"));
-            if let RolloutItem::SessionMeta(meta_line) = &mut line.item {
-                meta_line.meta.multi_agent_version = None;
-            }
-            serde_json::to_string(&line)
-                .unwrap_or_else(|err| panic!("failed to serialize rollout line: {err}"))
+            serde_json::from_str::<RolloutLine>(line)
+                .unwrap_or_else(|err| panic!("failed to parse rollout line `{line}`: {err}"))
         })
-        .collect::<Vec<_>>()
-        .join("\n");
-    std::fs::write(path, format!("{lines}\n"))
-        .unwrap_or_else(|err| panic!("failed to write rollout file {}: {err}", path.display()));
+        .find(|line| {
+            matches!(
+                &line.item,
+                RolloutItem::SessionMeta(meta_line) if meta_line.meta.id == thread_id
+            )
+        })
+        .unwrap_or_else(|| panic!("failed to find session metadata for thread {thread_id}"));
+    if let RolloutItem::SessionMeta(meta_line) = &mut line.item {
+        meta_line.meta.multi_agent_version = None;
+        meta_line.meta.memory_mode = Some("polluted".to_string());
+    }
+    let line = serde_json::to_string(&line)
+        .unwrap_or_else(|err| panic!("failed to serialize rollout line: {err}"));
+    let mut file = std::fs::OpenOptions::new()
+        .append(true)
+        .open(path)
+        .unwrap_or_else(|err| panic!("failed to open rollout file {}: {err}", path.display()));
+    writeln!(file, "{line}")
+        .unwrap_or_else(|err| panic!("failed to append rollout file {}: {err}", path.display()));
 }

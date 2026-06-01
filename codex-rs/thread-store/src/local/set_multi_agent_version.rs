@@ -1,7 +1,6 @@
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::RolloutItem;
 use codex_rollout::append_rollout_item_to_path;
-use codex_rollout::read_session_meta_line;
 
 use super::LocalThreadStore;
 use super::live_writer;
@@ -48,21 +47,23 @@ pub(super) async fn set_multi_agent_version_if_unset(
     let history = thread.history.ok_or_else(|| ThreadStoreError::Internal {
         message: format!("failed to load history for thread {}", params.thread_id),
     })?;
-    if let Some(multi_agent_version) = history.items.iter().rev().find_map(|item| match item {
-        RolloutItem::SessionMeta(meta_line) if meta_line.meta.id == params.thread_id => {
-            meta_line.meta.multi_agent_version
-        }
-        _ => None,
-    }) {
+    let mut session_meta = history
+        .items
+        .iter()
+        .rev()
+        .find_map(|item| match item {
+            RolloutItem::SessionMeta(meta_line) if meta_line.meta.id == params.thread_id => {
+                Some(meta_line.clone())
+            }
+            _ => None,
+        })
+        .ok_or_else(|| ThreadStoreError::InvalidRequest {
+            message: format!("thread {} does not have session metadata", params.thread_id),
+        })?;
+    if let Some(multi_agent_version) = session_meta.meta.multi_agent_version {
         return Ok(multi_agent_version);
     }
 
-    let mut session_meta =
-        read_session_meta_line(&rollout_path)
-            .await
-            .map_err(|err| ThreadStoreError::Internal {
-                message: format!("failed to set thread multi-agent version: {err}"),
-            })?;
     session_meta.git = None;
     session_meta.meta.multi_agent_version = Some(params.multi_agent_version);
     let item = RolloutItem::SessionMeta(session_meta);
