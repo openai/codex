@@ -21,22 +21,27 @@ pub struct EnvironmentPathRef {
 }
 
 impl EnvironmentPathRef {
+    /// Creates a path ref bound to the filesystem that owns `path`.
     pub fn new(file_system: Arc<dyn ExecutorFileSystem>, path: AbsolutePathBuf) -> Self {
         Self { file_system, path }
     }
 
+    /// Creates a path ref bound to the shared unsandboxed local filesystem.
     pub fn local(path: AbsolutePathBuf) -> Self {
         Self::new(Arc::clone(&LOCAL_FS), path)
     }
 
+    /// Returns the absolute path held by this ref.
     pub fn path(&self) -> &AbsolutePathBuf {
         &self.path
     }
 
+    /// Returns the filesystem that owns this path.
     pub fn file_system(&self) -> Arc<dyn ExecutorFileSystem> {
         Arc::clone(&self.file_system)
     }
 
+    /// Reads this path as UTF-8 text through its bound filesystem.
     pub async fn read_to_string(
         &self,
         sandbox: Option<&FileSystemSandboxContext>,
@@ -44,6 +49,7 @@ impl EnvironmentPathRef {
         self.file_system.read_file_text(&self.path, sandbox).await
     }
 
+    /// Reads metadata for this path through its bound filesystem.
     pub async fn metadata(
         &self,
         sandbox: Option<&FileSystemSandboxContext>,
@@ -51,6 +57,7 @@ impl EnvironmentPathRef {
         self.file_system.get_metadata(&self.path, sandbox).await
     }
 
+    /// Reads directory entries for this path through its bound filesystem.
     pub async fn read_directory(
         &self,
         sandbox: Option<&FileSystemSandboxContext>,
@@ -58,10 +65,12 @@ impl EnvironmentPathRef {
         self.file_system.read_directory(&self.path, sandbox).await
     }
 
+    /// Returns a ref with the same filesystem and a replacement path.
     pub fn with_path(&self, path: AbsolutePathBuf) -> Self {
         Self::new(Arc::clone(&self.file_system), path)
     }
 
+    /// Lexically joins `path` onto this path through its bound filesystem.
     pub async fn join<P: AsRef<Path>>(&self, path: P) -> io::Result<Self> {
         self.file_system
             .join(&self.path, path.as_ref())
@@ -69,6 +78,7 @@ impl EnvironmentPathRef {
             .map(|path| self.with_path(path))
     }
 
+    /// Returns the parent of this path through its bound filesystem.
     pub async fn parent(&self) -> io::Result<Option<Self>> {
         self.file_system
             .parent(&self.path)
@@ -76,6 +86,7 @@ impl EnvironmentPathRef {
             .map(|path| path.map(|path| self.with_path(path)))
     }
 
+    /// Canonicalizes this path through its bound filesystem.
     pub async fn canonicalize(
         &self,
         sandbox: Option<&FileSystemSandboxContext>,
