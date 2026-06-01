@@ -248,6 +248,11 @@ pub struct AccountUpdatedNotification {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+/// Sparse rolling rate-limit update.
+///
+/// Clients should merge available values into the most recent `account/rateLimits/read` response
+/// or refetch that snapshot. Nullable account metadata may be unavailable in a rolling update and
+/// does not clear a previously observed value.
 pub struct AccountRateLimitsUpdatedNotification {
     pub rate_limits: RateLimitSnapshot,
 }

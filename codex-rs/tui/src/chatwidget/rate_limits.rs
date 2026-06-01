@@ -162,6 +162,7 @@ impl ChatWidget {
     }
 
     pub(crate) fn on_rolling_rate_limit_snapshot(&mut self, snapshot: RateLimitSnapshot) {
+        // Rolling app-server notifications are sparse. Preserve metadata learned from the full read.
         self.on_rate_limit_snapshot_from(Some(snapshot), RateLimitSnapshotSource::RollingUpdate);
     }
 

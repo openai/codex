@@ -1761,7 +1761,7 @@ Codex supports these authentication modes. The current mode is surfaced in `acco
 - `account/logout` — sign out; triggers `account/updated`.
 - `account/updated` (notify) — emitted whenever auth mode changes (`authMode`: `apikey`, `chatgpt`, or `null`) and includes the current ChatGPT `planType` when available.
 - `account/rateLimits/read` — fetch ChatGPT rate limits and an optional effective monthly credit limit; updates arrive via `account/rateLimits/updated` (notify).
-- `account/rateLimits/updated` (notify) — emitted whenever a user's ChatGPT rate limits change.
+- `account/rateLimits/updated` (notify) — emitted whenever a user's ChatGPT rate limits change. This is a sparse rolling update; merge available values into the most recent `account/rateLimits/read` response or refetch that snapshot.
 - `account/sendAddCreditsNudgeEmail` — ask ChatGPT to email the workspace owner about depleted credits or a reached usage limit.
 - `mcpServer/oauthLogin/completed` (notify) — emitted after a `mcpServer/oauth/login` flow finishes for a server; payload includes `{ name, success, error? }`.
 - `mcpServer/startupStatus/updated` (notify) — emitted when a configured MCP server's startup status changes for a loaded thread; payload includes `{ name, status, error }` where `status` is `starting`, `ready`, `failed`, or `cancelled`.
@@ -1865,7 +1865,7 @@ Field notes:
 - `windowDurationMins` is the quota window length.
 - `resetsAt` is a Unix timestamp (seconds) for the next reset.
 - `rateLimitReachedType` identifies the backend-classified limit state when one has been reached.
-- `individualLimit` describes the effective monthly credit limit when available. It is `null` when no monthly limit is available.
+- `individualLimit` describes the effective monthly credit limit when available. In an `account/rateLimits/read` response, `null` means no monthly limit is available. In a sparse `account/rateLimits/updated` notification, nullable account metadata may be unavailable and does not clear a previously observed value.
 
 ### 8) Notify a workspace owner about a limit
 
