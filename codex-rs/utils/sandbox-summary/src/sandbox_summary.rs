@@ -25,6 +25,7 @@ pub fn summarize_sandbox_policy(sandbox_policy: &SandboxPolicy) -> String {
             network_access,
             exclude_tmpdir_env_var,
             exclude_slash_tmp,
+            ..
         } => {
             let mut summary = "workspace-write".to_string();
 
