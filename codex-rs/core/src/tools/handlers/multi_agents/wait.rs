@@ -37,6 +37,13 @@ impl ToolExecutor<ToolInvocation> for Handler {
         create_wait_agent_tool_v1(self.options)
     }
 
+    fn search_info(&self) -> Option<ToolSearchInfo> {
+        multi_agent_tool_search_info(
+            "wait_agent wait agent subagent status final result complete timeout targets",
+            self.spec(),
+        )
+    }
+
     async fn handle(
         &self,
         invocation: ToolInvocation,
@@ -203,13 +210,6 @@ impl ToolExecutor<ToolInvocation> for Handler {
 }
 
 impl CoreToolRuntime for Handler {
-    fn search_info(&self) -> Option<ToolSearchInfo> {
-        multi_agent_tool_search_info(
-            "wait_agent wait agent subagent status final result complete timeout targets",
-            self.spec(),
-        )
-    }
-
     fn matches_kind(&self, payload: &ToolPayload) -> bool {
         matches!(payload, ToolPayload::Function { .. })
     }

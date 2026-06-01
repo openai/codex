@@ -298,6 +298,44 @@ impl ToolExecutor<ExtensionToolCall> for WebRunExtensionTool {
     }
 }
 
+struct DeferredExtensionTool;
+
+#[async_trait::async_trait]
+impl ToolExecutor<ExtensionToolCall> for DeferredExtensionTool {
+    fn tool_name(&self) -> ToolName {
+        ToolName::plain("extension_echo")
+    }
+
+    fn spec(&self) -> ToolSpec {
+        ToolSpec::Function(ResponsesApiTool {
+            name: "extension_echo".to_string(),
+            description: "Echoes arguments through an extension tool.".to_string(),
+            strict: true,
+            defer_loading: None,
+            parameters: codex_tools::JsonSchema::object(
+                BTreeMap::from([(
+                    "message".to_string(),
+                    codex_tools::JsonSchema::string(/*description*/ None),
+                )]),
+                Some(vec!["message".to_string()]),
+                Some(false.into()),
+            ),
+            output_schema: None,
+        })
+    }
+
+    fn exposure(&self) -> ToolExposure {
+        ToolExposure::Deferred
+    }
+
+    async fn handle(
+        &self,
+        _call: ExtensionToolCall,
+    ) -> Result<Box<dyn ToolOutput>, codex_tools::FunctionCallError> {
+        panic!("spec planning should not execute extension tools")
+    }
+}
+
 fn duplicate_primary_environment(turn: &mut TurnContext) {
     let mut second_environment = turn.environments.turn_environments[0].clone();
     second_environment.environment_id = "secondary".to_string();
@@ -611,6 +649,25 @@ async fn mcp_and_tool_search_follow_direct_and_deferred_tool_exposure() {
         "tool_search",
         &ToolName::namespaced("mcp__searchable", "lookup").to_string(),
     ]);
+}
+
+#[tokio::test]
+async fn deferred_extension_tools_are_discoverable_with_tool_search() {
+    let plan = probe_with(
+        |turn| {
+            turn.model_info.supports_search_tool = true;
+        },
+        ToolPlanInputs {
+            extension_tool_executors: vec![Arc::new(DeferredExtensionTool)],
+            ..ToolPlanInputs::default()
+        },
+    )
+    .await;
+
+    plan.assert_visible_contains(&["tool_search"]);
+    plan.assert_visible_lacks(&["extension_echo"]);
+    plan.assert_registered_contains(&["extension_echo"]);
+    assert_eq!(plan.exposure("extension_echo"), ToolExposure::Deferred);
 }
 
 #[tokio::test]
