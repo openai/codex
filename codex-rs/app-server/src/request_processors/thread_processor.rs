@@ -2789,7 +2789,7 @@ impl ThreadRequestProcessor {
                 .as_ref()
                 .or(source_thread.rollout_path.as_ref());
             if let (Some(requested_path), Some(active_path)) = (params.path.as_ref(), active_path)
-                && requested_path != active_path
+                && !path_utils::paths_match_after_normalization(requested_path, active_path)
             {
                 return Err(invalid_request(format!(
                     "cannot resume running thread {existing_thread_id} with stale path: requested `{}`, active `{}`",
