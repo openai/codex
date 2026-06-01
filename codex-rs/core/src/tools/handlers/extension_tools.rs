@@ -116,6 +116,7 @@ async fn to_extension_call(invocation: &ToolInvocation) -> ExtensionToolCall {
     let conversation_history =
         ConversationHistory::new(invocation.session.clone_history().await.into_raw_items());
     ExtensionToolCall {
+        thread_id: invocation.session.conversation_id.to_string(),
         turn_id: invocation.turn.sub_id.clone(),
         call_id: invocation.call_id.clone(),
         tool_name: invocation.tool_name.clone(),
@@ -284,6 +285,7 @@ mod tests {
         let (session, turn, rx) = crate::session::tests::make_session_and_context_with_rx().await;
         let weak_session = Arc::downgrade(&session);
         let weak_turn = Arc::downgrade(&turn);
+        let thread_id = session.conversation_id.to_string();
         let turn_id = turn.sub_id.clone();
         let model = turn.model_info.slug.clone();
         let truncation_policy = turn.truncation_policy;
@@ -323,6 +325,7 @@ mod tests {
         let captured_call = captured_call.lock().await.clone().expect("captured call");
         assert!(weak_session.upgrade().is_none());
         assert!(weak_turn.upgrade().is_none());
+        assert_eq!(captured_call.thread_id, thread_id);
         assert_eq!(captured_call.turn_id, turn_id);
         assert_eq!(captured_call.call_id, "call-extension");
         assert_eq!(
