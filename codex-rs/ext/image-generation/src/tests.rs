@@ -3,7 +3,6 @@ use codex_api::ImageEditRequest;
 use codex_api::ImageGenerationRequest;
 use codex_api::ImageQuality;
 use codex_api::ImageUrl;
-use codex_core::context::image_generation_output_hint;
 use codex_extension_api::ToolOutput;
 use codex_extension_api::ToolPayload;
 use codex_extension_api::ToolSpec;
@@ -55,11 +54,9 @@ fn generate_uses_fixed_request_defaults() {
 }
 
 #[test]
-fn generated_output_returns_image_input_and_output_hint() {
-    let output_hint = image_generation_output_hint("/tmp", "/tmp/call-1.png");
+fn generated_output_returns_image_input() {
     let output = GeneratedImageOutput {
         result: RESULT.to_string(),
-        output_hint: output_hint.clone(),
     };
 
     let ResponseInputItem::FunctionCallOutput {
@@ -74,13 +71,10 @@ fn generated_output_returns_image_input_and_output_hint() {
     };
     assert_eq!(
         content_items,
-        vec![
-            FunctionCallOutputContentItem::InputImage {
-                image_url: format!("data:image/png;base64,{RESULT}"),
-                detail: Some(DEFAULT_IMAGE_DETAIL),
-            },
-            FunctionCallOutputContentItem::InputText { text: output_hint },
-        ]
+        vec![FunctionCallOutputContentItem::InputImage {
+            image_url: format!("data:image/png;base64,{RESULT}"),
+            detail: Some(DEFAULT_IMAGE_DETAIL),
+        }]
     );
 }
 

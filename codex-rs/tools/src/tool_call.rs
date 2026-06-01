@@ -66,7 +66,6 @@ impl TurnItemEmitter for NoopTurnItemEmitter {
 // TODO: this is temporary and will disappear in the next PR (as we make codex-extension-api generic on Invocation.
 #[derive(Clone)]
 pub struct ToolCall {
-    pub thread_id: String,
     pub turn_id: String,
     pub call_id: String,
     pub tool_name: ToolName,
@@ -79,7 +78,6 @@ pub struct ToolCall {
 impl std::fmt::Debug for ToolCall {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ToolCall")
-            .field("thread_id", &self.thread_id)
             .field("turn_id", &self.turn_id)
             .field("call_id", &self.call_id)
             .field("tool_name", &self.tool_name)

@@ -38,8 +38,7 @@ use tracing::warn;
 
 const GENERATED_IMAGE_ARTIFACTS_DIR: &str = "generated_images";
 
-/// Returns the host-owned default artifact path for a generated image.
-pub fn image_generation_artifact_path(
+pub(crate) fn image_generation_artifact_path(
     codex_home: &AbsolutePathBuf,
     session_id: &str,
     call_id: &str,
