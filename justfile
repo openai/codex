@@ -6,6 +6,8 @@ set windows-shell := ["python", "-c", 'import os, runpy; runpy.run_path(os.envir
 
 rust_min_stack := "8388608" # 8 MiB
 python := if os_family() == "windows" { "python" } else { "python3" }
+# Linux SDK runtime wheels target musllinux, including on glibc development hosts.
+sdk_python_platform := if os() == "linux" { "--python-platform " + arch() + "-unknown-linux-musl" } else { "" }
 
 # Display help
 help:
@@ -38,18 +40,18 @@ app-server-test-client *args:
 
 # Format the justfile, Rust, Python SDK code, and Python scripts.
 fmt:
-    just --fmt
+    just --unstable --fmt
     cargo fmt -- --config imports_granularity=Item {stderr-null}
-    # Python formatting uses the scripts project's locked Ruff environment.
-    uv run --frozen --project ../scripts ruff check --fix --fix-only ../sdk/python
-    uv run --frozen --project ../scripts ruff format ../sdk/python
+    # The SDK and internal scripts use separate project roots for their Ruff environments.
+    uv run --frozen --project ../sdk/python --extra dev {{ sdk_python_platform }} ruff check --fix --fix-only ../sdk/python
+    uv run --frozen --project ../sdk/python --extra dev {{ sdk_python_platform }} ruff format ../sdk/python
     uv run --frozen --project ../scripts ruff format ../scripts
 
 fmt-check:
-    just --fmt --check
+    just --unstable --fmt --check
     cargo fmt -- --config imports_granularity=Item --check {stderr-null}
-    uv run --frozen --project ../scripts ruff check ../sdk/python
-    uv run --frozen --project ../scripts ruff format --check ../sdk/python
+    uv run --frozen --project ../sdk/python --extra dev {{ sdk_python_platform }} ruff check ../sdk/python
+    uv run --frozen --project ../sdk/python --extra dev {{ sdk_python_platform }} ruff format --check ../sdk/python
     uv run --frozen --project ../scripts ruff format --check ../scripts
 
 fix *args:
