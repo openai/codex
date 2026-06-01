@@ -116,10 +116,11 @@ pub(super) fn stored_thread_from_rollout_item(
         .clone()
         .or_else(|| item.first_user_message.clone())
         .unwrap_or_default();
+    let rollout_path = codex_rollout::plain_rollout_path(item.path.as_path());
 
     Some(StoredThread {
         thread_id,
-        rollout_path: Some(item.path),
+        rollout_path: Some(rollout_path),
         forked_from_id: None,
         preview,
         name: None,
@@ -197,4 +198,37 @@ fn thread_id_from_rollout_path(path: &Path) -> Option<ThreadId> {
         return None;
     }
     ThreadId::from_string(&stem[uuid_start..]).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use codex_rollout::ThreadItem;
+    use pretty_assertions::assert_eq;
+    use uuid::Uuid;
+
+    use super::*;
+
+    #[test]
+    fn stored_thread_from_rollout_item_returns_logical_rollout_path() {
+        let uuid = Uuid::from_u128(1);
+        let compressed_path = PathBuf::from(format!(
+            "/tmp/sessions/2025/01/03/rollout-2025-01-03T12-00-00-{uuid}.jsonl.zst"
+        ));
+        let thread = stored_thread_from_rollout_item(
+            ThreadItem {
+                path: compressed_path.clone(),
+                ..Default::default()
+            },
+            /*archived*/ false,
+            "test-provider",
+        )
+        .expect("stored thread");
+
+        assert_eq!(
+            thread.rollout_path,
+            Some(
+                compressed_path.with_file_name(format!("rollout-2025-01-03T12-00-00-{uuid}.jsonl"))
+            )
+        );
+    }
 }
