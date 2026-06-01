@@ -474,6 +474,108 @@ approvals_reviewer = "user"
     );
 }
 
+#[tokio::test]
+async fn app_approvals_reviewer_uses_first_resolved_app_requirement_when_constraints_conflict() {
+    let codex_home = tempdir().expect("tempdir should succeed");
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"
+approvals_reviewer = "user"
+"#,
+    )
+    .expect("write config");
+    let requirements = ConfigRequirementsToml {
+        allowed_approvals_reviewers: Some(vec![ApprovalsReviewer::User]),
+        apps: Some(AppsRequirementsToml {
+            apps: BTreeMap::from([(
+                "calendar".to_string(),
+                AppRequirementToml {
+                    allowed_approvals_reviewers: Some(vec![ApprovalsReviewer::AutoReview]),
+                    ..Default::default()
+                },
+            )]),
+        }),
+        ..Default::default()
+    };
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .cloud_requirements(CloudRequirementsLoader::new(async move {
+            Ok(Some(requirements))
+        }))
+        .build()
+        .await
+        .expect("config should build");
+
+    assert_eq!(
+        mcp_approvals_reviewer(&config, CODEX_APPS_MCP_SERVER_NAME, Some("calendar")),
+        ApprovalsReviewer::AutoReview
+    );
+}
+
+#[tokio::test]
+async fn app_approvals_reviewer_respects_app_reviewer_requirements() {
+    for (global, allowed, expected_global, expected_app) in [
+        (
+            "auto_review",
+            vec![ApprovalsReviewer::User],
+            ApprovalsReviewer::AutoReview,
+            ApprovalsReviewer::User,
+        ),
+        (
+            "user",
+            vec![ApprovalsReviewer::AutoReview],
+            ApprovalsReviewer::User,
+            ApprovalsReviewer::AutoReview,
+        ),
+        (
+            "auto_review",
+            Vec::new(),
+            ApprovalsReviewer::AutoReview,
+            ApprovalsReviewer::User,
+        ),
+    ] {
+        let codex_home = tempdir().expect("tempdir should succeed");
+        std::fs::write(
+            codex_home.path().join(CONFIG_TOML_FILE),
+            format!(
+                r#"
+approvals_reviewer = "{global}"
+"#
+            ),
+        )
+        .expect("write config");
+        let requirements = ConfigRequirementsToml {
+            apps: Some(AppsRequirementsToml {
+                apps: BTreeMap::from([(
+                    "calendar".to_string(),
+                    AppRequirementToml {
+                        allowed_approvals_reviewers: Some(allowed),
+                        ..Default::default()
+                    },
+                )]),
+            }),
+            ..Default::default()
+        };
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .cloud_requirements(CloudRequirementsLoader::new(async move {
+                Ok(Some(requirements))
+            }))
+            .build()
+            .await
+            .expect("config should build");
+
+        assert_eq!(
+            mcp_approvals_reviewer(&config, CODEX_APPS_MCP_SERVER_NAME, Some("calendar")),
+            expected_app
+        );
+        assert_eq!(
+            mcp_approvals_reviewer(&config, CODEX_APPS_MCP_SERVER_NAME, Some("drive")),
+            expected_global
+        );
+    }
+}
+
 #[test]
 fn requirements_disabled_connector_overrides_enabled_connector() {
     let mut effective_apps = AppsConfigToml {
@@ -491,7 +593,7 @@ fn requirements_disabled_connector_overrides_enabled_connector() {
             "connector_123123".to_string(),
             AppRequirementToml {
                 enabled: Some(false),
-                tools: None,
+                ..Default::default()
             },
         )]),
     };
@@ -524,7 +626,7 @@ fn requirements_enabled_does_not_override_disabled_connector() {
             "connector_123123".to_string(),
             AppRequirementToml {
                 enabled: Some(true),
-                tools: None,
+                ..Default::default()
             },
         )]),
     };
@@ -558,7 +660,7 @@ enabled = true
                 "connector_123123".to_string(),
                 AppRequirementToml {
                     enabled: Some(false),
-                    tools: None,
+                    ..Default::default()
                 },
             )]),
         }),
@@ -602,7 +704,7 @@ async fn cloud_requirements_disable_connector_applies_without_user_apps_table() 
                 "connector_123123".to_string(),
                 AppRequirementToml {
                     enabled: Some(false),
-                    tools: None,
+                    ..Default::default()
                 },
             )]),
         }),
@@ -653,7 +755,7 @@ async fn local_requirements_disable_connector_overrides_user_apps_config() {
                 "connector_123123".to_string(),
                 AppRequirementToml {
                     enabled: Some(false),
-                    tools: None,
+                    ..Default::default()
                 },
             )]),
         }),
@@ -705,7 +807,7 @@ async fn local_requirements_disable_connector_applies_without_user_apps_table() 
                 "connector_123123".to_string(),
                 AppRequirementToml {
                     enabled: Some(false),
-                    tools: None,
+                    ..Default::default()
                 },
             )]),
         }),
@@ -747,7 +849,7 @@ async fn with_app_enabled_state_preserves_unrelated_disabled_connector() {
                 "connector_drive".to_string(),
                 AppRequirementToml {
                     enabled: Some(false),
-                    tools: None,
+                    ..Default::default()
                 },
             )]),
         }),
@@ -829,7 +931,6 @@ fn app_tool_requirements(
         apps: BTreeMap::from([(
             app_id.to_string(),
             AppRequirementToml {
-                enabled: None,
                 tools: Some(AppToolsRequirementsToml {
                     tools: BTreeMap::from([(
                         tool_name.to_string(),
@@ -838,6 +939,7 @@ fn app_tool_requirements(
                         },
                     )]),
                 }),
+                ..Default::default()
             },
         )]),
     }

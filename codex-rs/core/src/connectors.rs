@@ -24,6 +24,7 @@ use crate::config::Config;
 use crate::mcp::McpManager;
 use crate::plugins::list_tool_suggest_discoverable_plugins;
 use crate::session::INITIAL_SUBMIT_ID;
+use codex_config::AppRequirementToml;
 use codex_config::AppsRequirementsToml;
 use codex_config::types::AppToolApproval;
 use codex_config::types::ApprovalsReviewer;
@@ -577,28 +578,53 @@ pub(crate) fn mcp_approvals_reviewer(
     server_name: &str,
     connector_id: Option<&str>,
 ) -> ApprovalsReviewer {
-    let app_reviewer = if server_name == CODEX_APPS_MCP_SERVER_NAME {
-        read_user_apps_config(config).and_then(|apps_config| {
-            connector_id
-                .and_then(|connector_id| apps_config.apps.get(connector_id))
-                .and_then(|app| app.approvals_reviewer)
-        })
-    } else {
-        None
-    };
-
-    if let Some(reviewer) = app_reviewer
-        && config
-            .config_layer_stack
-            .requirements()
-            .approvals_reviewer
-            .can_set(&reviewer)
-            .is_ok()
-    {
-        return reviewer;
+    if server_name != CODEX_APPS_MCP_SERVER_NAME {
+        return config.approvals_reviewer;
     }
 
-    config.approvals_reviewer
+    let app_reviewer = read_user_apps_config(config).and_then(|apps_config| {
+        connector_id
+            .and_then(|connector_id| apps_config.apps.get(connector_id))
+            .and_then(|app| app.approvals_reviewer)
+    });
+    let app_requirement = config
+        .config_layer_stack
+        .requirements_toml()
+        .apps
+        .as_ref()
+        .and_then(|apps| connector_id.and_then(|connector_id| apps.apps.get(connector_id)));
+
+    app_approvals_reviewer(config, app_reviewer, app_requirement)
+}
+
+fn app_approvals_reviewer(
+    config: &Config,
+    configured: Option<ApprovalsReviewer>,
+    requirement: Option<&AppRequirementToml>,
+) -> ApprovalsReviewer {
+    let resolved_app_allowed =
+        requirement.and_then(|requirement| requirement.allowed_approvals_reviewers.as_deref());
+
+    if let Some(resolved_app_allowed) = resolved_app_allowed {
+        return configured
+            .into_iter()
+            .chain([config.approvals_reviewer])
+            .find(|reviewer| resolved_app_allowed.contains(reviewer))
+            .or_else(|| resolved_app_allowed.first().copied())
+            // An empty managed allow-list must not route through Guardian.
+            .unwrap_or(ApprovalsReviewer::User);
+    }
+
+    configured
+        .filter(|reviewer| {
+            config
+                .config_layer_stack
+                .requirements()
+                .approvals_reviewer
+                .can_set(reviewer)
+                .is_ok()
+        })
+        .unwrap_or(config.approvals_reviewer)
 }
 
 fn read_apps_config(config: &Config) -> Option<AppsConfigToml> {
@@ -648,14 +674,12 @@ fn managed_app_tool_approval(
     tool_name: &str,
 ) -> Option<AppToolApproval> {
     let connector_id = connector_id?;
-    requirements_apps_config?
-        .apps
-        .get(connector_id)?
+    let requirement = requirements_apps_config?.apps.get(connector_id)?;
+    requirement
         .tools
-        .as_ref()?
-        .tools
-        .get(tool_name)?
-        .approval_mode
+        .as_ref()
+        .and_then(|tools| tools.tools.get(tool_name))
+        .and_then(|tool| tool.approval_mode)
 }
 
 fn app_is_enabled(apps_config: &AppsConfigToml, connector_id: Option<&str>) -> bool {

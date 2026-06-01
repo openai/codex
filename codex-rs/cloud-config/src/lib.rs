@@ -1452,6 +1452,7 @@ deny_read = [{deny_read:?}]
             r#"
 [apps.connector_5f3c8c41a1e54ad7a76272c89e2554fa]
 enabled = false
+allowed_approvals_reviewers = ["user"]
 "#,
         ));
 
@@ -1463,7 +1464,10 @@ enabled = false
                         "connector_5f3c8c41a1e54ad7a76272c89e2554fa".to_string(),
                         codex_config::AppRequirementToml {
                             enabled: Some(false),
-                            tools: None,
+                            allowed_approvals_reviewers: Some(vec![
+                                codex_protocol::config_types::ApprovalsReviewer::User,
+                            ]),
+                            ..Default::default()
                         },
                     )]),
                 }),
@@ -1488,7 +1492,6 @@ approval_mode = "approve"
                     apps: BTreeMap::from([(
                         "connector_5f3c8c41a1e54ad7a76272c89e2554fa".to_string(),
                         codex_config::AppRequirementToml {
-                            enabled: None,
                             tools: Some(codex_config::AppToolsRequirementsToml {
                                 tools: BTreeMap::from([(
                                     "calendar/list_events".to_string(),
@@ -1497,6 +1500,7 @@ approval_mode = "approve"
                                     },
                                 )]),
                             }),
+                            ..Default::default()
                         },
                     )]),
                 }),
