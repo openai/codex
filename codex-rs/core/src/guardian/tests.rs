@@ -25,6 +25,8 @@ use codex_model_provider::create_model_provider;
 use codex_model_provider_info::AMAZON_BEDROCK_GPT_5_4_MODEL_ID;
 use codex_model_provider_info::AMAZON_BEDROCK_PROVIDER_ID;
 use codex_model_provider_info::ModelProviderInfo;
+use codex_models_manager::manager::RefreshStrategy;
+use codex_models_manager::model_info::model_info_from_slug;
 use codex_network_proxy::NetworkProxyConfig;
 use codex_protocol::ThreadId;
 use codex_protocol::approvals::NetworkApprovalProtocol;
@@ -32,6 +34,8 @@ use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::openai_models::ModelVisibility;
+use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
@@ -45,6 +49,7 @@ use codex_protocol::protocol::GranularApprovalConfig;
 use codex_protocol::protocol::GuardianAssessmentStatus;
 use codex_protocol::protocol::GuardianRiskLevel;
 use codex_protocol::protocol::GuardianUserAuthorization;
+use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::TurnCompleteEvent;
@@ -55,6 +60,7 @@ use core_test_support::context_snapshot::ContextSnapshotOptions;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_response_created;
+use core_test_support::responses::mount_models_once;
 use core_test_support::responses::mount_response_once;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_sequence;
@@ -67,6 +73,7 @@ use core_test_support::test_path_buf;
 use insta::Settings;
 use insta::assert_snapshot;
 use pretty_assertions::assert_eq;
+use serde_json::Value;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -1373,6 +1380,86 @@ async fn guardian_review_uses_preferred_review_model_without_model_catalog_overr
 
     assert_eq!(request_model, preferred_model);
     assert_ne!(request_model, parent_model);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn guardian_stays_disabled_when_model_selects_multi_agent_v2() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let guardian_model = "guardian-multi-agent-v2";
+    let mut model = model_info_from_slug(guardian_model);
+    model.visibility = ModelVisibility::List;
+    model.used_fallback_model_metadata = false;
+    model.multi_agent_version = Some(MultiAgentVersion::V2);
+    let models_mock = mount_models_once(
+        &server,
+        ModelsResponse {
+            models: vec![model],
+        },
+    )
+    .await;
+    let request_log = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-guardian"),
+            ev_assistant_message("msg-guardian", "{\"outcome\":\"allow\"}"),
+            ev_completed("resp-guardian"),
+        ]),
+    )
+    .await;
+
+    let (session, mut turn) = guardian_test_session_and_turn(&server).await;
+    let _ = session
+        .services
+        .models_manager
+        .list_models(RefreshStrategy::Online)
+        .await;
+    Arc::get_mut(&mut turn)
+        .expect("turn should be unique")
+        .model_info
+        .auto_review_model_override = Some(guardian_model.to_string());
+    seed_guardian_parent_history(&session, &turn).await;
+
+    let outcome = run_guardian_review_session_for_test(
+        Arc::clone(&session),
+        turn,
+        GuardianApprovalRequest::Shell {
+            id: "shell-1".to_string(),
+            command: vec!["git".to_string(), "push".to_string()],
+            cwd: test_path_buf("/repo/codex-rs/core").abs(),
+            sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
+            additional_permissions: None,
+            justification: None,
+        },
+        Some("Sandbox denied outbound git push to github.com.".to_string()),
+        guardian_output_schema(),
+        /*external_cancel*/ None,
+    )
+    .await;
+    let (GuardianReviewOutcome::Completed(_), _) = outcome else {
+        panic!("expected guardian assessment");
+    };
+    let request_body = request_log.single_request().body_json();
+    let has_spawn_agent = request_body
+        .get("tools")
+        .and_then(Value::as_array)
+        .is_some_and(|tools| {
+            tools
+                .iter()
+                .any(|tool| tool.get("name").and_then(Value::as_str) == Some("spawn_agent"))
+        });
+
+    assert_eq!(
+        (
+            models_mock.requests().len(),
+            request_body.get("model").and_then(Value::as_str),
+            has_spawn_agent,
+        ),
+        (1, Some(guardian_model), false)
+    );
 
     Ok(())
 }

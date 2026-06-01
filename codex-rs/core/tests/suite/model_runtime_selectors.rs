@@ -1,20 +1,16 @@
 use anyhow::Result;
 use anyhow::bail;
 use codex_core::config::Config;
-use codex_core::config::Constrained;
-use codex_core::sandboxing::SandboxPermissions;
 use codex_features::Feature;
 use codex_login::CodexAuth;
 use codex_models_manager::manager::RefreshStrategy;
 use codex_models_manager::manager::SharedModelsManager;
 use codex_models_manager::model_info::model_info_from_slug;
-use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelVisibility;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ToolMode;
-use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::Op;
@@ -28,7 +24,6 @@ use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_models_once;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_once_match;
-use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::skip_if_no_network;
 use core_test_support::submit_thread_settings;
@@ -45,8 +40,6 @@ use wiremock::Request;
 
 const CHILD_PROMPT: &str = "inspect the child runtime";
 const CHILD_MODEL: &str = "test-multi-agent-child";
-const GUARDIAN_REASON: &str = "Allow a narrowly scoped network request";
-const GUARDIAN_ROOT_PROMPT: &str = "request an escalated command";
 const ROOT_MODEL: &str = "test-multi-agent-root";
 const ROOT_PROMPT: &str = "spawn a child";
 const SPAWN_CALL_ID: &str = "spawn-call-1";
@@ -318,94 +311,6 @@ async fn remote_multi_agent_selector_overrides_features_and_child_model_info() -
             CHILD_MODEL.to_string(),
             Some(MultiAgentVersion::V2),
         )
-    );
-
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn guardian_stays_disabled_when_model_selects_multi_agent_v2() -> Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    let server = wiremock::MockServer::start().await;
-    let mut model = remote_model(ROOT_MODEL);
-    model.multi_agent_version = Some(MultiAgentVersion::V2);
-    let models_mock = mount_models_once(
-        &server,
-        ModelsResponse {
-            models: vec![model],
-        },
-    )
-    .await;
-    let exec_args = serde_json::to_string(&json!({
-        "cmd": "true",
-        "sandbox_permissions": SandboxPermissions::RequireEscalated,
-        "justification": GUARDIAN_REASON,
-    }))?;
-    let request_log = mount_sse_sequence(
-        &server,
-        vec![
-            sse(vec![
-                ev_response_created("resp-root"),
-                ev_function_call("exec-call", "exec_command", &exec_args),
-                ev_completed("resp-root"),
-            ]),
-            sse(vec![
-                ev_response_created("resp-guardian"),
-                ev_assistant_message(
-                    "msg-guardian",
-                    &json!({
-                        "risk_level": "low",
-                        "user_authorization": "high",
-                        "outcome": "deny",
-                        "rationale": "Keep the test command from executing.",
-                    })
-                    .to_string(),
-                ),
-                ev_completed("resp-guardian"),
-            ]),
-            sse(vec![
-                ev_response_created("resp-root-followup"),
-                ev_completed("resp-root-followup"),
-            ]),
-        ],
-    )
-    .await;
-
-    let mut builder = test_codex()
-        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
-        .with_config(|config| {
-            config.model = Some(ROOT_MODEL.to_string());
-            config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
-            config.approvals_reviewer = ApprovalsReviewer::AutoReview;
-            config
-                .features
-                .disable(Feature::Apps)
-                .expect("test config should allow feature update");
-        });
-    let test = builder.build(&server).await?;
-    test.submit_turn(GUARDIAN_ROOT_PROMPT).await?;
-    wait_for_event(&test.codex, |event| {
-        matches!(event, EventMsg::TurnComplete(_))
-    })
-    .await;
-
-    let requests = request_log.requests();
-    let [root_request, guardian_request, _root_followup_request] = requests.as_slice() else {
-        panic!("expected root, guardian, and root follow-up requests");
-    };
-    assert_eq!(
-        (
-            models_mock.requests().len(),
-            test.codex.multi_agent_version(),
-            tool_names(&root_request.body_json()).contains(&"spawn_agent".to_string()),
-            guardian_request.body_contains_text(GUARDIAN_REASON),
-            guardian_request.body_json()["prompt_cache_key"]
-                .as_str()
-                .is_some_and(|key| key.starts_with("guardian:")),
-            tool_names(&guardian_request.body_json()).contains(&"spawn_agent".to_string()),
-        ),
-        (1, Some(MultiAgentVersion::V2), true, true, true, false)
     );
 
     Ok(())
