@@ -2459,9 +2459,9 @@ impl InitialHistory {
             InitialHistory::Resumed(resumed) => {
                 multi_agent_version_from_items(&resumed.history, Some(resumed.conversation_id))
             }
-            InitialHistory::Forked(items) => {
-                multi_agent_version_from_items(items, /*thread_id*/ None)
-            }
+            InitialHistory::Forked(forked) => forked.source_thread_id.and_then(|thread_id| {
+                multi_agent_version_from_items(&forked.history, Some(thread_id))
+            }),
         }
     }
 
