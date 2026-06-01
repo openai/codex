@@ -2,13 +2,13 @@ use anyhow::Result;
 use anyhow::bail;
 use codex_core::config::Config;
 use codex_core::config::Constrained;
+use codex_core::sandboxing::SandboxPermissions;
 use codex_features::Feature;
 use codex_login::CodexAuth;
 use codex_models_manager::manager::RefreshStrategy;
 use codex_models_manager::manager::SharedModelsManager;
 use codex_models_manager::model_info::model_info_from_slug;
 use codex_protocol::config_types::ApprovalsReviewer;
-use codex_protocol::models::NetworkPermissions;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelVisibility;
@@ -19,7 +19,6 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ThreadSettingsOverrides;
-use codex_protocol::request_permissions::RequestPermissionProfile;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses;
 use core_test_support::responses::ev_assistant_message;
@@ -337,26 +336,17 @@ async fn guardian_stays_disabled_when_model_selects_multi_agent_v2() -> Result<(
         },
     )
     .await;
-    let requested_permissions = RequestPermissionProfile {
-        network: Some(NetworkPermissions {
-            enabled: Some(true),
-        }),
-        ..RequestPermissionProfile::default()
-    };
-    let request_permissions_args = serde_json::to_string(&json!({
-        "reason": GUARDIAN_REASON,
-        "permissions": requested_permissions,
+    let exec_args = serde_json::to_string(&json!({
+        "cmd": "true",
+        "sandbox_permissions": SandboxPermissions::RequireEscalated,
+        "justification": GUARDIAN_REASON,
     }))?;
     let responses = mount_sse_sequence(
         &server,
         vec![
             sse(vec![
                 ev_response_created("resp-root-1"),
-                ev_function_call(
-                    "request-permissions-call",
-                    "request_permissions",
-                    &request_permissions_args,
-                ),
+                ev_function_call("exec-call", "exec_command", &exec_args),
                 ev_completed("resp-root-1"),
             ]),
             sse(vec![
@@ -366,8 +356,8 @@ async fn guardian_stays_disabled_when_model_selects_multi_agent_v2() -> Result<(
                     &json!({
                         "risk_level": "low",
                         "user_authorization": "high",
-                        "outcome": "allow",
-                        "rationale": "The request is narrowly scoped.",
+                        "outcome": "deny",
+                        "rationale": "Keep the test command from executing.",
                     })
                     .to_string(),
                 ),
@@ -388,10 +378,6 @@ async fn guardian_stays_disabled_when_model_selects_multi_agent_v2() -> Result<(
             config.model = Some(ROOT_MODEL.to_string());
             config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
             config.approvals_reviewer = ApprovalsReviewer::AutoReview;
-            config
-                .features
-                .enable(Feature::RequestPermissionsTool)
-                .expect("test config should allow feature update");
             config
                 .features
                 .disable(Feature::Apps)
