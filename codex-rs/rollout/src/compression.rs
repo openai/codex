@@ -235,6 +235,8 @@ mod worker {
     use tracing::info;
     use tracing::warn;
 
+    use tokio::task::JoinSet;
+
     use crate::ARCHIVED_SESSIONS_SUBDIR;
     use crate::SESSIONS_SUBDIR;
 
@@ -248,6 +250,7 @@ mod worker {
     const TEMP_FILE_STALE_AFTER: Duration = GLOBAL_LOCK_STALE_AFTER;
     const WORKER_MAX_RUNTIME: Duration = Duration::from_secs(5 * 60 * 60);
     const LOCK_FILE_NAME: &str = "rollout-compression.lock";
+    const MAX_CONCURRENT_COMPRESSION_JOBS: usize = 2;
 
     #[derive(Default)]
     struct CompressionStats {
@@ -363,6 +366,7 @@ mod worker {
             return Ok(());
         }
         let mut stack = vec![root.to_path_buf()];
+        let mut jobs = JoinSet::new();
         while let Some(dir) = stack.pop() {
             if started_at.elapsed() >= WORKER_MAX_RUNTIME {
                 break;
@@ -377,7 +381,15 @@ mod worker {
                     continue;
                 }
             };
-            while let Some(entry) = read_dir.next_entry().await? {
+            loop {
+                let entry = match read_dir.next_entry().await {
+                    Ok(Some(entry)) => entry,
+                    Ok(None) => break,
+                    Err(err) => {
+                        drain_compression_jobs(&mut jobs, stats).await;
+                        return Err(err);
+                    }
+                };
                 if started_at.elapsed() >= WORKER_MAX_RUNTIME {
                     break;
                 }
@@ -407,24 +419,49 @@ mod worker {
                 }
                 let path = rollout_file.into_path();
                 stats.scanned = stats.scanned.saturating_add(1);
-                match compress_rollout_if_cold(path.as_path()).await {
-                    Ok(true) => stats.compressed = stats.compressed.saturating_add(1),
-                    Ok(false) => stats.skipped = stats.skipped.saturating_add(1),
-                    Err(err) => {
-                        stats.failed = stats.failed.saturating_add(1);
-                        warn!("failed to compress rollout {}: {err}", path.display());
-                    }
+                while jobs.len() >= MAX_CONCURRENT_COMPRESSION_JOBS {
+                    collect_next_compression_job(&mut jobs, stats).await;
                 }
+                jobs.spawn_blocking(move || {
+                    let result = compress_rollout_if_cold_blocking(path.as_path());
+                    (path, result)
+                });
             }
         }
+        drain_compression_jobs(&mut jobs, stats).await;
         Ok(())
     }
 
-    async fn compress_rollout_if_cold(path: &Path) -> io::Result<bool> {
-        let path = path.to_path_buf();
-        tokio::task::spawn_blocking(move || compress_rollout_if_cold_blocking(path.as_path()))
-            .await
-            .map_err(io::Error::other)?
+    type CompressionJobResult = (PathBuf, io::Result<bool>);
+
+    async fn drain_compression_jobs(
+        jobs: &mut JoinSet<CompressionJobResult>,
+        stats: &mut CompressionStats,
+    ) {
+        while !jobs.is_empty() {
+            collect_next_compression_job(jobs, stats).await;
+        }
+    }
+
+    async fn collect_next_compression_job(
+        jobs: &mut JoinSet<CompressionJobResult>,
+        stats: &mut CompressionStats,
+    ) {
+        let Some(result) = jobs.join_next().await else {
+            return;
+        };
+        match result {
+            Ok((_, Ok(true))) => stats.compressed = stats.compressed.saturating_add(1),
+            Ok((_, Ok(false))) => stats.skipped = stats.skipped.saturating_add(1),
+            Ok((path, Err(err))) => {
+                stats.failed = stats.failed.saturating_add(1);
+                warn!("failed to compress rollout {}: {err}", path.display());
+            }
+            Err(err) => {
+                stats.failed = stats.failed.saturating_add(1);
+                warn!("rollout compression task failed: {err}");
+            }
+        }
     }
 
     fn compress_rollout_if_cold_blocking(path: &Path) -> io::Result<bool> {
