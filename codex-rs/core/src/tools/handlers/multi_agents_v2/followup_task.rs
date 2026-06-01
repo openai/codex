@@ -1,8 +1,8 @@
-use super::message_tool::AssignTaskArgs;
+use super::message_tool::FollowupTaskArgs;
 use super::message_tool::MessageDeliveryMode;
 use super::message_tool::handle_message_string_tool;
 use super::*;
-use crate::tools::handlers::multi_agents_spec::create_assign_task_tool;
+use crate::tools::handlers::multi_agents_spec::create_followup_task_tool;
 use codex_tools::ToolSpec;
 
 pub(crate) struct Handler;
@@ -10,11 +10,11 @@ pub(crate) struct Handler;
 #[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for Handler {
     fn tool_name(&self) -> ToolName {
-        ToolName::plain("assign_task")
+        ToolName::plain("followup_task")
     }
 
     fn spec(&self) -> ToolSpec {
-        create_assign_task_tool()
+        create_followup_task_tool()
     }
 
     async fn handle(
@@ -22,7 +22,7 @@ impl ToolExecutor<ToolInvocation> for Handler {
         invocation: ToolInvocation,
     ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
         let arguments = function_arguments(invocation.payload.clone())?;
-        let args: AssignTaskArgs = parse_arguments(&arguments)?;
+        let args: FollowupTaskArgs = parse_arguments(&arguments)?;
         handle_message_string_tool(
             invocation,
             MessageDeliveryMode::TriggerTurn,

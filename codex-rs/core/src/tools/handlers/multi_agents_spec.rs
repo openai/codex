@@ -179,12 +179,13 @@ pub fn create_send_message_tool() -> ToolSpec {
     })
 }
 
-pub fn create_assign_task_tool() -> ToolSpec {
+pub fn create_followup_task_tool() -> ToolSpec {
     let properties = BTreeMap::from([
         (
             "target".to_string(),
             JsonSchema::string(Some(
-                "Agent id or canonical task name to message (from spawn_agent).".to_string(),
+                "Agent id or canonical task name to send a follow-up task to (from spawn_agent)."
+                    .to_string(),
             )),
         ),
         (
@@ -196,8 +197,8 @@ pub fn create_assign_task_tool() -> ToolSpec {
     ]);
 
     ToolSpec::Function(ResponsesApiTool {
-        name: "assign_task".to_string(),
-        description: "Send a message to an existing non-root target agent and trigger a turn in that target. If the target is currently mid-turn, the message is queued and will be used to start the target's next turn, after the current turn completes."
+        name: "followup_task".to_string(),
+        description: "Send a follow-up task to an existing non-root target agent and trigger a turn in that target. If the target is currently mid-turn, the message is queued and will be used to start the target's next turn, after the current turn completes."
             .to_string(),
         strict: false,
         defer_loading: None,
