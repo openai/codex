@@ -271,7 +271,7 @@ fn resize_conpty_handle(hpc: &Arc<StdMutex<Option<HANDLE>>>, size: TerminalSize)
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn spawn_windows_sandbox_session_legacy(
     permission_profile: &PermissionProfile,
-    permission_profile_cwd: &Path,
+    workspace_roots: &[AbsolutePathBuf],
     codex_home: &Path,
     command: Vec<String>,
     cwd: &Path,
@@ -285,7 +285,7 @@ pub(crate) async fn spawn_windows_sandbox_session_legacy(
 ) -> Result<SpawnedProcess> {
     let common = prepare_legacy_spawn_context(
         permission_profile,
-        permission_profile_cwd,
+        workspace_roots,
         codex_home,
         cwd,
         &mut env_map,

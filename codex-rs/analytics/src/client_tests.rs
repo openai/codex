@@ -89,6 +89,7 @@ fn sample_turn_start_request() -> ClientRequest {
         request_id: RequestId::Integer(1),
         params: TurnStartParams {
             thread_id: "thread-1".to_string(),
+            client_user_message_id: None,
             input: Vec::new(),
             ..Default::default()
         },
@@ -101,6 +102,7 @@ fn sample_turn_steer_request() -> ClientRequest {
         params: TurnSteerParams {
             thread_id: "thread-1".to_string(),
             expected_turn_id: "turn-1".to_string(),
+            client_user_message_id: None,
             input: Vec::new(),
             responsesapi_client_metadata: None,
             additional_context: None,
@@ -122,6 +124,7 @@ fn sample_thread(thread_id: &str) -> Thread {
         id: thread_id.to_string(),
         session_id: format!("session-{thread_id}"),
         forked_from_id: None,
+        parent_thread_id: None,
         preview: "first prompt".to_string(),
         ephemeral: false,
         model_provider: "openai".to_string(),
@@ -172,6 +175,7 @@ fn sample_thread_resume_response() -> ClientResponsePayload {
         sandbox: AppServerSandboxPolicy::DangerFullAccess,
         active_permission_profile: None,
         reasoning_effort: None,
+        initial_turns_page: None,
     })
 }
 

@@ -38,8 +38,6 @@ use super::SessionTask;
 use super::SessionTaskContext;
 use crate::session::session::Session;
 use codex_protocol::models::PermissionProfile;
-use codex_protocol::models::ResponseInputItem;
-use codex_protocol::models::ResponseItem;
 
 const USER_SHELL_TIMEOUT_MS: u64 = 60 * 60 * 1000; // 1 hour
 
@@ -193,6 +191,7 @@ pub(crate) async fn execute_user_shell_command(
         capture_policy: ExecCapturePolicy::ShellTool,
         sandbox: SandboxType::None,
         windows_sandbox_policy_cwd: cwd.clone(),
+        windows_sandbox_workspace_roots: turn_context.config.effective_workspace_roots(),
         windows_sandbox_level: turn_context.windows_sandbox_level,
         windows_sandbox_private_desktop: turn_context
             .config
@@ -361,30 +360,7 @@ async fn persist_user_shell_output(
         return;
     }
 
-    let response_input_item = match output_item {
-        ResponseItem::Message {
-            role,
-            content,
-            phase,
-            ..
-        } => ResponseInputItem::Message {
-            role,
-            content,
-            phase,
-        },
-        _ => unreachable!("user shell command output record should always be a message"),
-    };
-
-    if let Err(items) = session
-        .inject_response_items(vec![response_input_item])
-        .await
-    {
-        let response_items = items
-            .into_iter()
-            .map(ResponseItem::from)
-            .collect::<Vec<_>>();
-        session
-            .record_conversation_items(turn_context, &response_items)
-            .await;
-    }
+    session
+        .inject_no_new_turn(vec![output_item], Some(turn_context))
+        .await;
 }

@@ -50,6 +50,8 @@ mod deprecation_notice;
 mod exec;
 mod exec_policy;
 mod fork_thread;
+#[cfg(not(target_os = "windows"))]
+mod guardian_review;
 mod hierarchical_agents;
 #[cfg(not(target_os = "windows"))]
 mod hooks;
@@ -61,6 +63,7 @@ mod json_result;
 mod live_cli;
 mod mcp_turn_metadata;
 mod model_overrides;
+mod model_runtime_selectors;
 mod model_switching;
 mod model_visible_layout;
 mod models_cache_ttl;

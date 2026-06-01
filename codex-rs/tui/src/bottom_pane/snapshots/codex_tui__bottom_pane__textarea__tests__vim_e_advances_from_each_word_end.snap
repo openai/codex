@@ -1,0 +1,12 @@
+---
+source: tui/src/bottom_pane/textarea.rs
+expression: "states.join(\"\\n\\n\")"
+---
+alpha beta gamma
+         ^
+
+alpha beta gamma
+               ^
+
+alpha beta gamma
+               ^

@@ -86,6 +86,62 @@ async fn throttled_receiver_flushes_pending_on_shutdown() {
     assert_eq!(closed, None);
 }
 
+#[tokio::test]
+async fn debounced_receiver_coalesces_each_event_batch() {
+    let (tx, rx) = watch_channel();
+    let mut debounced = DebouncedWatchReceiver::new(rx, TEST_THROTTLE_INTERVAL);
+
+    tx.add_changed_paths(&[path("a")]).await;
+    let first = timeout(TEST_THROTTLE_INTERVAL * 2, debounced.recv())
+        .await
+        .expect("first emit timeout");
+    assert_eq!(
+        first,
+        Some(FileWatcherEvent {
+            paths: vec![path("a")],
+        })
+    );
+
+    tx.add_changed_paths(&[path("c")]).await;
+    let blocked = timeout(TEST_THROTTLE_INTERVAL / 2, debounced.recv()).await;
+    assert_eq!(blocked.is_err(), true);
+
+    tx.add_changed_paths(&[path("d")]).await;
+    let second = timeout(TEST_THROTTLE_INTERVAL * 2, debounced.recv())
+        .await
+        .expect("second emit timeout");
+    assert_eq!(
+        second,
+        Some(FileWatcherEvent {
+            paths: vec![path("c"), path("d")],
+        })
+    );
+}
+
+#[tokio::test]
+async fn debounced_receiver_flushes_pending_on_shutdown() {
+    let (tx, rx) = watch_channel();
+    let mut debounced = DebouncedWatchReceiver::new(rx, TEST_THROTTLE_INTERVAL);
+
+    tx.add_changed_paths(&[path("a")]).await;
+    drop(tx);
+
+    let flushed = timeout(Duration::from_secs(1), debounced.recv())
+        .await
+        .expect("shutdown flush timeout");
+    assert_eq!(
+        flushed,
+        Some(FileWatcherEvent {
+            paths: vec![path("a")],
+        })
+    );
+
+    let closed = timeout(Duration::from_secs(1), debounced.recv())
+        .await
+        .expect("closed recv timeout");
+    assert_eq!(closed, None);
+}
+
 #[test]
 fn is_mutating_event_filters_non_mutating_event_kinds() {
     assert_eq!(

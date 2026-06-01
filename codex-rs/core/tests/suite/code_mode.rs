@@ -18,6 +18,10 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::user_input::UserInput;
 use core_test_support::apps_test_server::AppsTestServer;
+use core_test_support::apps_test_server::AppsTestToolLoading;
+use core_test_support::apps_test_server::DIRECT_CALENDAR_APP_ONLY_TOOL;
+use core_test_support::apps_test_server::recorded_apps_tool_calls;
+use core_test_support::apps_test_server::search_capable_apps_builder;
 use core_test_support::assert_regex_match;
 use core_test_support::responses;
 use core_test_support::responses::ResponseMock;
@@ -34,6 +38,7 @@ use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
+use core_test_support::wait_for_mcp_server;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -279,6 +284,7 @@ async fn run_code_mode_turn_with_rmcp_config(
             .expect("test mcp servers should accept any configuration");
     });
     let test = builder.build(server).await?;
+    wait_for_mcp_server(&test.codex, "rmcp").await?;
 
     responses::mount_sse_once(
         server,
@@ -490,6 +496,92 @@ if (!tool) {
             "isError": false,
             "text": "called calendar_timezone_option_99 for  at  with ",
         })
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn app_only_tools_are_not_visible_or_runnable_by_code_mode_model() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let apps_server =
+        AppsTestServer::mount_with_app_only_tool(&server, AppsTestToolLoading::Searchable).await?;
+    let code = format!(
+        r#"
+const visibleTool = ALL_TOOLS.find(({{ name }}) => name === {visible_tool_name:?});
+const tool = ALL_TOOLS.find(({{ name }}) => name === {tool_name:?});
+let error = null;
+try {{
+  await tools[{tool_name:?}]({{}});
+}} catch (caught) {{
+  error = String(caught);
+}}
+text(JSON.stringify({{
+  visibleListed: visibleTool !== undefined,
+  listed: tool !== undefined,
+  callable: typeof tools[{tool_name:?}] === "function",
+  error,
+}}));
+"#,
+        visible_tool_name = "mcp__codex_apps__calendar_timezone_option_99",
+        tool_name = DIRECT_CALENDAR_APP_ONLY_TOOL,
+    );
+
+    responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_custom_tool_call("call-1", "exec", &code),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let second_mock = responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+
+    let mut builder = search_capable_apps_builder(apps_server.chatgpt_base_url.clone())
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::CodeMode)
+                .expect("test config should allow feature update");
+            config
+                .features
+                .enable(Feature::CodeModeOnly)
+                .expect("test config should allow feature update");
+        });
+    let test = builder.build(&server).await?;
+    test.submit_turn("try to call the app-only calendar tool through exec")
+        .await?;
+
+    let req = second_mock.single_request();
+    let (output, success) = custom_tool_output_body_and_success(&req, "call-1");
+    assert_ne!(
+        success,
+        Some(false),
+        "code mode visibility check should complete successfully: {output}"
+    );
+    let parsed: Value = serde_json::from_str(&output)?;
+    assert_eq!(parsed["visibleListed"], true);
+    assert_eq!(parsed["listed"], false);
+    assert_eq!(parsed["callable"], false);
+    assert!(
+        parsed["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("is not a function")),
+        "app-only code mode call should fail before MCP dispatch: {parsed:?}"
+    );
+    assert!(
+        recorded_apps_tool_calls(&server).await.is_empty(),
+        "app-only code mode call should not reach the MCP server"
     );
 
     Ok(())

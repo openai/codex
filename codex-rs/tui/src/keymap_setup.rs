@@ -33,6 +33,7 @@ pub(crate) use picker::build_keymap_picker_params_with_filter;
 
 use codex_config::types::KeybindingSpec;
 use codex_config::types::KeybindingsSpec;
+use codex_config::types::MAX_FUNCTION_KEY;
 use codex_config::types::TuiKeymap;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -737,11 +738,11 @@ fn key_parts_to_config_key_spec(
         KeyCode::End => "end".to_string(),
         KeyCode::PageUp => "page-up".to_string(),
         KeyCode::PageDown => "page-down".to_string(),
-        KeyCode::F(number) if (1..=12).contains(&number) => format!("f{number}"),
+        KeyCode::F(number) if (1..=MAX_FUNCTION_KEY).contains(&number) => format!("f{number}"),
         KeyCode::F(_) => {
-            return Err(
-                "Only function keys F1 through F12 can be stored in `tui.keymap`.".to_string(),
-            );
+            return Err(format!(
+                "Only function keys F1 through F{MAX_FUNCTION_KEY} can be stored in `tui.keymap`."
+            ));
         }
         KeyCode::Char(' ') => "space".to_string(),
         KeyCode::Char(mut ch) => {
@@ -1009,6 +1010,7 @@ mod tests {
             actions,
             vec![
                 "Composer.submit",
+                "Chat.interrupt_turn",
                 "Editor.insert_newline",
                 "Composer.queue",
                 "Global.open_external_editor",
@@ -1606,6 +1608,22 @@ mod tests {
         assert_eq!(
             key_event_to_config_key_spec(KeyEvent::new(KeyCode::PageDown, KeyModifiers::SHIFT)),
             Ok("shift-page-down".to_string())
+        );
+    }
+
+    #[test]
+    fn key_capture_serializes_function_keys_through_f24() {
+        assert_eq!(
+            key_event_to_config_key_spec(KeyEvent::from(KeyCode::F(13))),
+            Ok("f13".to_string())
+        );
+        assert_eq!(
+            key_event_to_config_key_spec(KeyEvent::from(KeyCode::F(24))),
+            Ok("f24".to_string())
+        );
+        assert_eq!(
+            key_event_to_config_key_spec(KeyEvent::from(KeyCode::F(25))),
+            Err("Only function keys F1 through F24 can be stored in `tui.keymap`.".to_string())
         );
     }
 

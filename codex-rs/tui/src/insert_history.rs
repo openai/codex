@@ -7,6 +7,11 @@ use std::fmt;
 use std::io;
 use std::io::Write;
 
+use crate::render::line_utils::line_to_static;
+use crate::terminal_hyperlinks::HyperlinkLine;
+use crate::terminal_hyperlinks::decorate_spans;
+use crate::terminal_hyperlinks::plain_hyperlink_lines;
+use crate::terminal_hyperlinks::remap_wrapped_line;
 use crate::wrapping::RtOptions;
 use crate::wrapping::adaptive_wrap_line;
 use crate::wrapping::line_contains_url_like;
@@ -88,6 +93,23 @@ pub(crate) fn insert_history_lines_with_mode_and_wrap_policy<B>(
 where
     B: Backend + Write,
 {
+    insert_history_hyperlink_lines_with_mode_and_wrap_policy(
+        terminal,
+        plain_hyperlink_lines(lines.iter().map(line_to_static).collect()),
+        mode,
+        wrap_policy,
+    )
+}
+
+pub(crate) fn insert_history_hyperlink_lines_with_mode_and_wrap_policy<B>(
+    terminal: &mut crate::custom_terminal::Terminal<B>,
+    lines: Vec<HyperlinkLine>,
+    mode: InsertHistoryMode,
+    wrap_policy: HistoryLineWrapPolicy,
+) -> io::Result<()>
+where
+    B: Backend + Write,
+{
     let screen_size = terminal.backend().size().unwrap_or(Size::new(0, 0));
 
     let mut area = terminal.viewport_area;
@@ -113,13 +135,21 @@ where
         let line_wrapped = match wrap_policy {
             HistoryLineWrapPolicy::Terminal => vec![line.clone()],
             HistoryLineWrapPolicy::PreWrap
-                if line_contains_url_like(line) && !line_has_mixed_url_and_non_url_tokens(line) =>
+                if line_contains_url_like(&line.line)
+                    && !line_has_mixed_url_and_non_url_tokens(&line.line) =>
             {
                 vec![line.clone()]
             }
-            HistoryLineWrapPolicy::PreWrap => adaptive_wrap_line(
+            HistoryLineWrapPolicy::PreWrap => remap_wrapped_line(
                 line,
-                RtOptions::new(wrap_width).subsequent_indent(leading_whitespace_prefix(line)),
+                adaptive_wrap_line(
+                    &line.line,
+                    RtOptions::new(wrap_width)
+                        .subsequent_indent(leading_whitespace_prefix(&line.line)),
+                )
+                .into_iter()
+                .map(|line| line_to_static(&line))
+                .collect(),
             ),
         };
         wrapped_rows += line_wrapped
@@ -249,7 +279,11 @@ pub(crate) fn leading_whitespace_prefix(line: &Line<'_>) -> Line<'static> {
 /// Render a single wrapped history line: clear continuation rows for wide lines,
 /// set foreground/background colors, and write styled spans. Caller is responsible
 /// for cursor positioning and any leading `\r\n`.
-fn write_history_line<W: Write>(writer: &mut W, line: &Line, wrap_width: usize) -> io::Result<()> {
+fn write_history_line<W: Write>(
+    writer: &mut W,
+    line: &HyperlinkLine,
+    wrap_width: usize,
+) -> io::Result<()> {
     let physical_rows = line.width().max(1).div_ceil(wrap_width) as u16;
     if physical_rows > 1 {
         queue!(writer, SavePosition)?;
@@ -262,11 +296,13 @@ fn write_history_line<W: Write>(writer: &mut W, line: &Line, wrap_width: usize) 
     queue!(
         writer,
         SetColors(Colors::new(
-            line.style
+            line.line
+                .style
                 .fg
                 .map(std::convert::Into::into)
                 .unwrap_or(CColor::Reset),
-            line.style
+            line.line
+                .style
                 .bg
                 .map(std::convert::Into::into)
                 .unwrap_or(CColor::Reset)
@@ -276,14 +312,20 @@ fn write_history_line<W: Write>(writer: &mut W, line: &Line, wrap_width: usize) 
     // Merge line-level style into each span so that ANSI colors reflect
     // line styles (e.g., blockquotes with green fg).
     let merged_spans: Vec<Span> = line
+        .line
         .spans
         .iter()
         .map(|s| Span {
-            style: s.style.patch(line.style),
+            style: s.style.patch(line.line.style),
             content: s.content.clone(),
         })
         .collect();
-    write_spans(writer, merged_spans.iter())
+    let merged_line = HyperlinkLine {
+        line: Line::from(merged_spans),
+        hyperlinks: line.hyperlinks.clone(),
+    };
+    let decorated = decorate_spans(&merged_line);
+    write_spans(writer, decorated.iter())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -468,6 +510,19 @@ mod tests {
             String::from_utf8(actual).unwrap(),
             String::from_utf8(expected).unwrap()
         );
+    }
+
+    #[test]
+    fn writes_semantic_web_link_without_changing_visible_text() {
+        let destination = "https://example.com/long/path";
+        let line = crate::terminal_hyperlinks::annotate_web_urls_in_line(Line::from(destination));
+        let mut actual = Vec::new();
+
+        write_history_line(&mut actual, &line, /*wrap_width*/ 80).expect("write history line");
+
+        let output = String::from_utf8(actual).expect("UTF-8 terminal output");
+        assert!(output.contains("\x1b]8;;https://example.com/long/path\x07"));
+        assert_eq!(line.line.spans[0].content, destination);
     }
 
     #[test]

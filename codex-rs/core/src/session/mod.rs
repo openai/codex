@@ -196,6 +196,7 @@ use codex_protocol::exec_output::StreamOutput;
 
 mod config_lock;
 mod handlers;
+mod inject;
 mod input_queue;
 mod mcp;
 mod multi_agents;
@@ -324,7 +325,6 @@ use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::config_types::WindowsSandboxLevel;
-use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
@@ -402,6 +402,7 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) conversation_history: InitialHistory,
     pub(crate) session_source: SessionSource,
     pub(crate) forked_from_thread_id: Option<ThreadId>,
+    pub(crate) parent_thread_id: Option<ThreadId>,
     pub(crate) thread_source: Option<ThreadSource>,
     pub(crate) agent_control: AgentControl,
     pub(crate) dynamic_tools: Vec<DynamicToolSpec>,
@@ -467,6 +468,7 @@ impl Codex {
             conversation_history,
             session_source,
             forked_from_thread_id,
+            parent_thread_id,
             thread_source,
             agent_control,
             dynamic_tools,
@@ -549,37 +551,9 @@ impl Codex {
             .or_else(|| conversation_history.get_base_instructions().map(|s| s.text))
             .unwrap_or_else(|| model_info.get_model_instructions(config.personality));
 
-        // Respect thread-start tools. When missing (resumed/forked threads), read from the db
-        // first, then fall back to rollout-file tools.
-        let persisted_tools = if dynamic_tools.is_empty() {
-            let thread_id = match &conversation_history {
-                InitialHistory::Resumed(resumed) => Some(resumed.conversation_id),
-                InitialHistory::Forked(_) => conversation_history.forked_from_id(),
-                InitialHistory::New | InitialHistory::Cleared => None,
-            };
-            match thread_id {
-                Some(thread_id) => {
-                    let state_db_ctx = if config.ephemeral {
-                        None
-                    } else if let Some(local_store) =
-                        thread_store.as_any().downcast_ref::<LocalThreadStore>()
-                    {
-                        local_store.state_db().await
-                    } else {
-                        None
-                    };
-                    state_db::get_dynamic_tools(state_db_ctx.as_deref(), thread_id, "codex_spawn")
-                        .await
-                }
-                None => None,
-            }
-        } else {
-            None
-        };
+        // Dynamic tools are defined at thread start and persisted in rollout session metadata.
         let dynamic_tools = if dynamic_tools.is_empty() {
-            persisted_tools
-                .or_else(|| conversation_history.get_dynamic_tools())
-                .unwrap_or_default()
+            conversation_history.get_dynamic_tools().unwrap_or_default()
         } else {
             dynamic_tools
         };
@@ -623,6 +597,7 @@ impl Codex {
             app_server_client_version: None,
             session_source,
             forked_from_thread_id,
+            parent_thread_id,
             thread_source,
             dynamic_tools,
             persist_extended_history,
@@ -695,6 +670,25 @@ impl Codex {
         let sub = Submission {
             id: id.clone(),
             op,
+            client_user_message_id: None,
+            trace,
+        };
+        self.submit_with_id(sub).await?;
+        Ok(id)
+    }
+
+    pub async fn submit_user_input_with_client_user_message_id(
+        &self,
+        op: Op,
+        trace: Option<W3cTraceContext>,
+        client_user_message_id: Option<String>,
+    ) -> CodexResult<String> {
+        debug_assert!(matches!(op, Op::UserInput { .. }));
+        let id = Uuid::now_v7().to_string();
+        let sub = Submission {
+            id: id.clone(),
+            op,
+            client_user_message_id,
             trace,
         };
         self.submit_with_id(sub).await?;
@@ -750,6 +744,7 @@ impl Codex {
         input: Vec<UserInput>,
         additional_context: BTreeMap<String, AdditionalContextEntry>,
         expected_turn_id: Option<&str>,
+        client_user_message_id: Option<String>,
         responsesapi_client_metadata: Option<HashMap<String, String>>,
     ) -> Result<String, SteerInputError> {
         self.session
@@ -757,6 +752,7 @@ impl Codex {
                 input,
                 additional_context,
                 expected_turn_id,
+                client_user_message_id,
                 responsesapi_client_metadata,
             )
             .await
@@ -1107,6 +1103,7 @@ impl Session {
                 thread_settings: Default::default(),
             },
             /*mirror_user_text_to_realtime*/ None,
+            /*client_user_message_id*/ None,
         )
         .await;
     }
@@ -1875,27 +1872,11 @@ impl Session {
             warn!("execpolicy amendment for {sub_id} had no command prefix");
             return;
         };
-        let fragment = ApprovedCommandPrefixSaved::new(prefixes);
-        let text = fragment.render();
-        let message: ResponseItem = ContextualUserFragment::into(fragment);
-
-        if let Some(turn_context) = self.turn_context_for_sub_id(sub_id).await {
-            self.record_conversation_items(&turn_context, std::slice::from_ref(&message))
-                .await;
-            return;
-        }
-
-        if self
-            .inject_response_items(vec![ResponseInputItem::Message {
-                role: "developer".to_string(),
-                content: vec![ContentItem::InputText { text }],
-                phase: None,
-            }])
-            .await
-            .is_err()
-        {
-            warn!("no active turn found to record execpolicy amendment message for {sub_id}");
-        }
+        let message: ResponseItem =
+            ContextualUserFragment::into(ApprovedCommandPrefixSaved::new(prefixes));
+        let turn_context = self.turn_context_for_sub_id(sub_id).await;
+        self.inject_no_new_turn(vec![message], turn_context.as_deref())
+            .await;
     }
 
     pub(crate) async fn persist_network_policy_amendment(
@@ -1972,27 +1953,10 @@ impl Session {
         sub_id: &str,
         amendment: &NetworkPolicyAmendment,
     ) {
-        let fragment = NetworkRuleSaved::new(amendment);
-        let text = fragment.render();
-        let message: ResponseItem = ContextualUserFragment::into(fragment);
-
-        if let Some(turn_context) = self.turn_context_for_sub_id(sub_id).await {
-            self.record_conversation_items(&turn_context, std::slice::from_ref(&message))
-                .await;
-            return;
-        }
-
-        if self
-            .inject_response_items(vec![ResponseInputItem::Message {
-                role: "developer".to_string(),
-                content: vec![ContentItem::InputText { text }],
-                phase: None,
-            }])
-            .await
-            .is_err()
-        {
-            warn!("no active turn found to record network policy amendment message for {sub_id}");
-        }
+        let message: ResponseItem = ContextualUserFragment::into(NetworkRuleSaved::new(amendment));
+        let turn_context = self.turn_context_for_sub_id(sub_id).await;
+        self.inject_no_new_turn(vec![message], turn_context.as_deref())
+            .await;
     }
 
     /// Emit an exec approval request event and await the user's decision.
@@ -2543,26 +2507,19 @@ impl Session {
         }
     }
 
-    /// Records input items: always append to conversation history and
-    /// persist these response items to rollout.
+    /// Records conversation items: append to history, persist to rollout, and
+    /// notify clients observing raw response items.
     pub(crate) async fn record_conversation_items(
         &self,
         turn_context: &TurnContext,
         items: &[ResponseItem],
     ) {
-        self.record_into_history(items, turn_context).await;
+        {
+            let mut state = self.state.lock().await;
+            state.record_items(items.iter(), turn_context.truncation_policy);
+        }
         self.persist_rollout_response_items(items).await;
         self.send_raw_response_items(turn_context, items).await;
-    }
-
-    /// Append ResponseItems to the in-memory conversation history only.
-    pub(crate) async fn record_into_history(
-        &self,
-        items: &[ResponseItem],
-        turn_context: &TurnContext,
-    ) {
-        let mut state = self.state.lock().await;
-        state.record_items(items.iter(), turn_context.truncation_policy);
     }
 
     async fn maybe_warn_on_server_model_mismatch(
@@ -3129,6 +3086,7 @@ impl Session {
         &self,
         turn_context: &TurnContext,
         input: &[UserInput],
+        client_id: Option<String>,
     ) {
         // Persist the user message to history, but emit the turn item from `UserInput` so
         // UI-only `text_elements` are preserved. `ResponseItem::Message` does not carry
@@ -3136,7 +3094,9 @@ impl Session {
         let response_item = ResponseItem::from(ResponseInputItem::from(input.to_vec()));
         self.record_conversation_items(turn_context, std::slice::from_ref(&response_item))
             .await;
-        let turn_item = TurnItem::UserMessage(UserMessageItem::new(input));
+        let mut user_message_item = UserMessageItem::new(input);
+        user_message_item.client_id = client_id;
+        let turn_item = TurnItem::UserMessage(user_message_item);
         self.emit_turn_item_started(turn_context, &turn_item).await;
         self.emit_turn_item_completed(turn_context, turn_item).await;
         self.ensure_rollout_materialized().await;
@@ -3172,6 +3132,7 @@ impl Session {
         input: Vec<UserInput>,
         additional_context: BTreeMap<String, AdditionalContextEntry>,
         expected_turn_id: Option<&str>,
+        client_user_message_id: Option<String>,
         responsesapi_client_metadata: Option<HashMap<String, String>>,
     ) -> Result<String, SteerInputError> {
         let mut active = self.active_turn.lock().await;
@@ -3225,9 +3186,13 @@ impl Session {
 
         let mut pending_input = additional_context_input
             .into_iter()
-            .map(TurnInput::ResponseInputItem)
+            .map(ResponseItem::from)
+            .map(TurnInput::ResponseItem)
             .collect::<Vec<_>>();
-        pending_input.push(TurnInput::UserInput(input));
+        pending_input.push(TurnInput::UserInput {
+            content: input,
+            client_id: client_user_message_id,
+        });
         self.input_queue
             .extend_pending_input_and_accept_mailbox_delivery_for_turn_state(
                 active_turn.turn_state.as_ref(),
@@ -3235,16 +3200,6 @@ impl Session {
             )
             .await;
         Ok(active_turn_id.clone())
-    }
-
-    /// Returns the input if there was no task running to inject into.
-    pub async fn inject_response_items(
-        &self,
-        input: Vec<ResponseInputItem>,
-    ) -> Result<(), Vec<ResponseInputItem>> {
-        self.input_queue
-            .inject_response_items(&self.active_turn, input)
-            .await
     }
 
     pub(crate) async fn record_memory_citation_for_turn(&self, sub_id: &str) {

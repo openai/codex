@@ -1,5 +1,6 @@
 use anyhow::Result;
 use app_test_support::McpProcess;
+use app_test_support::create_fake_parented_rollout_with_source;
 use app_test_support::create_fake_rollout;
 use app_test_support::to_response;
 use codex_app_server_protocol::JSONRPCResponse;
@@ -8,8 +9,11 @@ use codex_app_server_protocol::ReviewDelivery;
 use codex_app_server_protocol::ReviewStartParams;
 use codex_app_server_protocol::ReviewStartResponse;
 use codex_app_server_protocol::ReviewTarget;
+use codex_app_server_protocol::SessionSource as ApiSessionSource;
 use codex_app_server_protocol::ThreadForkParams;
 use codex_app_server_protocol::ThreadForkResponse;
+use codex_app_server_protocol::ThreadResumeParams;
+use codex_app_server_protocol::ThreadResumeResponse;
 use codex_app_server_protocol::ThreadSource;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
@@ -18,6 +22,9 @@ use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnSteerParams;
 use codex_app_server_protocol::TurnSteerResponse;
 use codex_app_server_protocol::UserInput as V2UserInput;
+use codex_protocol::ThreadId as CoreThreadId;
+use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SubAgentSource;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
@@ -73,6 +80,7 @@ async fn turn_start_forwards_client_metadata_to_responses_request_v2() -> Result
     let turn_req = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id,
+            client_user_message_id: None,
             input: vec![V2UserInput::Text {
                 text: "Hello".to_string(),
                 text_elements: Vec::new(),
@@ -105,6 +113,10 @@ async fn turn_start_forwards_client_metadata_to_responses_request_v2() -> Result
     assert_eq!(metadata["thread_source"].as_str(), Some("client-supplied"));
     assert_eq!(metadata["turn_id"].as_str(), Some(turn.id.as_str()));
     assert!(metadata.get("session_id").is_some());
+    assert_eq!(
+        metadata["window_id"].as_str(),
+        request.header("x-codex-window-id").as_deref()
+    );
 
     Ok(())
 }
@@ -149,6 +161,7 @@ async fn turn_start_sends_fork_lineage_in_turn_metadata_for_thread_fork_v2() -> 
     let turn_req = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
+            client_user_message_id: None,
             input: vec![V2UserInput::Text {
                 text: "Continue".to_string(),
                 text_elements: Vec::new(),
@@ -186,7 +199,7 @@ async fn turn_start_sends_fork_lineage_in_turn_metadata_for_thread_fork_v2() -> 
 }
 
 #[tokio::test]
-async fn review_start_sends_fork_lineage_in_turn_metadata_for_thread_fork_v2() -> Result<()> {
+async fn review_start_sends_parent_lineage_in_turn_metadata_for_thread_fork_v2() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let review_payload = serde_json::json!({
@@ -264,8 +277,9 @@ async fn review_start_sends_fork_lineage_in_turn_metadata_for_thread_fork_v2() -
         request.header("x-openai-subagent").as_deref(),
         Some("review")
     );
+    assert!(metadata.get("forked_from_thread_id").is_none());
     assert_eq!(
-        metadata["forked_from_thread_id"].as_str(),
+        metadata["parent_thread_id"].as_str(),
         Some(review_thread_id.as_str())
     );
     let review_request_thread_id = metadata["thread_id"]
@@ -280,6 +294,104 @@ async fn review_start_sends_fork_lineage_in_turn_metadata_for_thread_fork_v2() -
         Some(review_request_thread_id)
     );
     assert!(metadata["turn_id"].as_str().is_some());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn turn_start_sends_other_subagent_lineage_after_cold_thread_resume_v2() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let response_mock = responses::mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_response_created("resp-1"),
+            responses::ev_assistant_message("msg-1", "Done"),
+            responses::ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml(
+        codex_home.path(),
+        &server.uri(),
+        /*supports_websockets*/ false,
+    )?;
+
+    let parent_thread_id = CoreThreadId::new();
+    let parent_thread_id_str = parent_thread_id.to_string();
+    let subagent_thread_id = create_fake_parented_rollout_with_source(
+        codex_home.path(),
+        "2025-01-05T12-00-00",
+        "2025-01-05T12:00:00Z",
+        "Saved subagent message",
+        Some("mock_provider"),
+        /*git_info*/ None,
+        SessionSource::SubAgent(SubAgentSource::Other("guardian".to_string())),
+        parent_thread_id,
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let resume_req = mcp
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: subagent_thread_id.clone(),
+            ..Default::default()
+        })
+        .await?;
+    let resume_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(resume_req)),
+    )
+    .await??;
+    let ThreadResumeResponse { thread, .. } = to_response::<ThreadResumeResponse>(resume_resp)?;
+    assert_eq!(thread.id, subagent_thread_id);
+    assert_eq!(thread.parent_thread_id, Some(parent_thread_id_str.clone()));
+    assert_eq!(
+        thread.source,
+        ApiSessionSource::SubAgent(SubAgentSource::Other("guardian".to_string()))
+    );
+
+    let turn_req = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![V2UserInput::Text {
+                text: "Continue".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    let turn_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_req)),
+    )
+    .await??;
+    let TurnStartResponse { turn } = to_response::<TurnStartResponse>(turn_resp)?;
+
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let request = response_mock.single_request();
+    let metadata = request
+        .header("x-codex-turn-metadata")
+        .as_deref()
+        .map(parse_json_header)
+        .unwrap_or_else(|| panic!("missing x-codex-turn-metadata header"));
+    assert_eq!(
+        metadata["parent_thread_id"].as_str(),
+        Some(parent_thread_id_str.as_str())
+    );
+    assert_eq!(metadata["subagent_kind"].as_str(), Some("guardian"));
+    assert_eq!(metadata["thread_id"].as_str(), Some(thread.id.as_str()));
+    assert_eq!(metadata["turn_id"].as_str(), Some(turn.id.as_str()));
+    assert!(metadata.get("forked_from_thread_id").is_none());
 
     Ok(())
 }
@@ -329,6 +441,7 @@ async fn turn_steer_updates_client_metadata_on_follow_up_responses_request_v2() 
     let turn_req = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
+            client_user_message_id: None,
             input: vec![V2UserInput::Text {
                 text: "Run sleep".to_string(),
                 text_elements: Vec::new(),
@@ -359,6 +472,7 @@ async fn turn_steer_updates_client_metadata_on_follow_up_responses_request_v2() 
     let steer_req = mcp
         .send_turn_steer_request(TurnSteerParams {
             thread_id: thread.id.clone(),
+            client_user_message_id: None,
             input: vec![V2UserInput::Text {
                 text: "Focus on the failure".to_string(),
                 text_elements: Vec::new(),
@@ -454,6 +568,7 @@ async fn turn_start_forwards_client_metadata_to_responses_websocket_request_body
     let turn_req = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id,
+            client_user_message_id: None,
             input: vec![V2UserInput::Text {
                 text: "Hello".to_string(),
                 text_elements: Vec::new(),
@@ -497,6 +612,10 @@ async fn turn_start_forwards_client_metadata_to_responses_websocket_request_body
     assert_eq!(metadata["origin"].as_str(), Some("gaas"));
     assert_eq!(metadata["turn_id"].as_str(), Some(turn.id.as_str()));
     assert!(metadata.get("session_id").is_some());
+    assert_eq!(
+        metadata["window_id"].as_str(),
+        request["client_metadata"]["x-codex-window-id"].as_str()
+    );
 
     websocket_server.shutdown().await;
     Ok(())

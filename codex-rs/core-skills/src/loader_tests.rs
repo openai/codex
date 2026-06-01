@@ -1900,6 +1900,7 @@ async fn skill_roots_include_admin_with_lowest_priority() {
         &cfg.config_layer_stack,
         &cfg.cwd,
         Vec::new(),
+        Vec::new(),
     )
     .await
     .into_iter()

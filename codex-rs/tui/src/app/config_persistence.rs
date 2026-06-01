@@ -8,6 +8,12 @@ use super::*;
 #[cfg(target_os = "windows")]
 use codex_utils_approval_presets::ApprovalPreset;
 
+#[cfg(target_os = "windows")]
+pub(super) struct WindowsSetupPermissions {
+    pub(super) permission_profile: PermissionProfile,
+    pub(super) workspace_roots: Vec<AbsolutePathBuf>,
+}
+
 impl App {
     pub(super) async fn rebuild_config_for_cwd(&self, cwd: PathBuf) -> Result<Config> {
         let mut overrides = self.harness_overrides.clone();
@@ -45,19 +51,25 @@ impl App {
     }
 
     #[cfg(target_os = "windows")]
-    pub(super) async fn permission_profile_for_windows_setup(
+    pub(super) async fn windows_setup_permissions(
         &self,
         preset: &ApprovalPreset,
         profile_selection: Option<&PermissionProfileSelection>,
-    ) -> Result<PermissionProfile> {
+    ) -> Result<WindowsSetupPermissions> {
         match profile_selection {
-            Some(selection) => Ok(self
-                .rebuild_config_for_permission_profile(selection.profile_id.as_str())
-                .await?
-                .permissions
-                .permission_profile()
-                .clone()),
-            None => Ok(preset.permission_profile.clone()),
+            Some(selection) => {
+                let selected_config = self
+                    .rebuild_config_for_permission_profile(selection.profile_id.as_str())
+                    .await?;
+                Ok(WindowsSetupPermissions {
+                    permission_profile: selected_config.permissions.permission_profile().clone(),
+                    workspace_roots: selected_config.effective_workspace_roots(),
+                })
+            }
+            None => Ok(WindowsSetupPermissions {
+                permission_profile: preset.permission_profile.clone(),
+                workspace_roots: self.config.effective_workspace_roots(),
+            }),
         }
     }
 
@@ -386,7 +398,7 @@ impl App {
                         serde_json::json!(auto_review_preset.approvals_reviewer.to_string()),
                     ));
                     if previous_approvals_reviewer != auto_review_preset.approvals_reviewer {
-                        permissions_history_label = Some("Auto-review");
+                        permissions_history_label = Some("Approve for me");
                     }
                 } else if !effective_enabled {
                     feature_edits.push(crate::config_update::clear_config_value(
@@ -394,7 +406,7 @@ impl App {
                     ));
                     feature_config.approvals_reviewer = ApprovalsReviewer::User;
                     if previous_approvals_reviewer != ApprovalsReviewer::User {
-                        permissions_history_label = Some("Default");
+                        permissions_history_label = Some("Ask for approval");
                     }
                 }
                 approvals_reviewer_override = Some(feature_config.approvals_reviewer);
@@ -407,7 +419,7 @@ impl App {
                 if !self.try_set_approval_policy_on_config(
                     &mut feature_config,
                     auto_review_preset.approval_policy,
-                    "Failed to enable Auto-review",
+                    "Failed to enable Approve for me",
                     "failed to set auto-review approval policy on staged config",
                 ) {
                     continue;
@@ -416,7 +428,7 @@ impl App {
                     .try_set_builtin_active_permission_profile_on_config(
                         &mut feature_config,
                         auto_review_preset.active_permission_profile.clone(),
-                        "Failed to enable Auto-review",
+                        "Failed to enable Approve for me",
                         "failed to set auto-review permission profile on staged config",
                     )
                 else {
@@ -534,7 +546,7 @@ impl App {
                 "failed to set auto-review permission profile on chat config"
             );
             self.chat_widget
-                .add_error_message(format!("Failed to enable Auto-review: {err}"));
+                .add_error_message(format!("Failed to enable Approve for me: {err}"));
         }
         if permission_profile_override.is_some() {
             self.runtime_permission_profile_override =
@@ -806,7 +818,7 @@ impl App {
                     "failed to sync effective approval policy after an overridden write"
                 );
                 self.chat_widget.add_error_message(format!(
-                    "Failed to refresh overridden Auto-review settings: {err}"
+                    "Failed to refresh overridden Approve for me settings: {err}"
                 ));
             } else {
                 self.chat_widget.set_approval_policy(policy);
@@ -834,7 +846,7 @@ impl App {
         let Some(permission_profile) = self.try_set_builtin_active_permission_profile_on_config(
             &mut config,
             auto_review_preset.active_permission_profile.clone(),
-            "Failed to refresh overridden Auto-review settings",
+            "Failed to refresh overridden Approve for me settings",
             "failed to sync overridden Auto-review permission profile",
         ) else {
             return;
@@ -852,7 +864,7 @@ impl App {
                 "failed to sync overridden Auto-review permission profile on chat config"
             );
             self.chat_widget.add_error_message(format!(
-                "Failed to refresh overridden Auto-review settings: {err}"
+                "Failed to refresh overridden Approve for me settings: {err}"
             ));
             return;
         }

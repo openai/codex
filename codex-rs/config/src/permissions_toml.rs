@@ -327,14 +327,14 @@ impl NetworkUnixSocketPermissionsToml {
 #[serde(rename_all = "lowercase")]
 pub enum NetworkUnixSocketPermissionToml {
     Allow,
-    None,
+    Deny,
 }
 
 impl std::fmt::Display for NetworkUnixSocketPermissionToml {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let permission = match self {
             Self::Allow => "allow",
-            Self::None => "none",
+            Self::Deny => "deny",
         };
         f.write_str(permission)
     }
@@ -547,7 +547,7 @@ impl NetworkToml {
                     NetworkUnixSocketPermissionToml::Allow => {
                         ProxyNetworkUnixSocketPermission::Allow
                     }
-                    NetworkUnixSocketPermissionToml::None => ProxyNetworkUnixSocketPermission::None,
+                    NetworkUnixSocketPermissionToml::Deny => ProxyNetworkUnixSocketPermission::Deny,
                 };
                 proxy_unix_sockets.entries.insert(path.clone(), permission);
             }

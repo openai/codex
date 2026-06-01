@@ -20,7 +20,7 @@ use std::path::PathBuf;
 #[allow(clippy::too_many_arguments)]
 pub async fn spawn_windows_sandbox_session_legacy(
     permission_profile: &PermissionProfile,
-    permission_profile_cwd: &Path,
+    workspace_roots: &[AbsolutePathBuf],
     codex_home: &Path,
     command: Vec<String>,
     cwd: &Path,
@@ -34,7 +34,7 @@ pub async fn spawn_windows_sandbox_session_legacy(
 ) -> Result<SpawnedProcess> {
     backends::legacy::spawn_windows_sandbox_session_legacy(
         permission_profile,
-        permission_profile_cwd,
+        workspace_roots,
         codex_home,
         command,
         cwd,
@@ -52,7 +52,7 @@ pub async fn spawn_windows_sandbox_session_legacy(
 #[allow(clippy::too_many_arguments)]
 pub async fn spawn_windows_sandbox_session_elevated_for_permission_profile(
     permission_profile: &PermissionProfile,
-    permission_profile_cwd: &Path,
+    workspace_roots: &[AbsolutePathBuf],
     codex_home: &Path,
     command: Vec<String>,
     cwd: &Path,
@@ -69,7 +69,7 @@ pub async fn spawn_windows_sandbox_session_elevated_for_permission_profile(
 ) -> Result<SpawnedProcess> {
     backends::elevated::spawn_windows_sandbox_session_elevated_for_permission_profile(
         permission_profile,
-        permission_profile_cwd,
+        workspace_roots,
         codex_home,
         command,
         cwd,

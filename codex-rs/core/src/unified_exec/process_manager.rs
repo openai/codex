@@ -897,7 +897,7 @@ impl UnifiedExecProcessManager {
                 codex_protocol::config_types::WindowsSandboxLevel::Elevated => {
                     codex_windows_sandbox::spawn_windows_sandbox_session_elevated_for_permission_profile(
                         &request.permission_profile,
-                        request.windows_sandbox_policy_cwd.as_path(),
+                        request.windows_sandbox_workspace_roots.as_slice(),
                         codex_home.as_ref(),
                         request.command.clone(),
                         request.cwd.as_path(),
@@ -918,7 +918,7 @@ impl UnifiedExecProcessManager {
                 | codex_protocol::config_types::WindowsSandboxLevel::Disabled => {
                     codex_windows_sandbox::spawn_windows_sandbox_session_legacy(
                         &request.permission_profile,
-                        request.windows_sandbox_policy_cwd.as_path(),
+                        request.windows_sandbox_workspace_roots.as_slice(),
                         codex_home.as_ref(),
                         request.command.clone(),
                         request.cwd.as_path(),

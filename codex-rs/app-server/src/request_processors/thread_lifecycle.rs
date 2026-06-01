@@ -566,8 +566,28 @@ pub(super) async fn handle_pending_thread_resume_request(
         has_live_in_progress_turn,
     );
     let token_usage_thread = pending.include_turns.then(|| thread.clone());
+    let mut initial_turns_page = if let Some(params) = pending.initial_turns_page.as_ref() {
+        match super::thread_processor::build_thread_resume_initial_turns_page(
+            &pending.history_items,
+            thread.status.clone(),
+            has_live_in_progress_turn,
+            live_turns.as_slice(),
+            params,
+        ) {
+            Ok(page) => Some(page),
+            Err(error) => {
+                outgoing.send_error(request_id, error).await;
+                return;
+            }
+        }
+    } else {
+        None
+    };
     if pending.redact_resume_payloads {
-        redact_thread_resume_payloads(&mut thread);
+        redact_thread_resume_payloads(&mut thread.turns);
+        if let Some(initial_turns_page) = initial_turns_page.as_mut() {
+            redact_thread_resume_payloads(&mut initial_turns_page.data);
+        }
     }
 
     {
@@ -636,6 +656,7 @@ pub(super) async fn handle_pending_thread_resume_request(
         sandbox,
         active_permission_profile,
         reasoning_effort,
+        initial_turns_page,
     };
     outgoing.send_response(request_id, response).await;
     // Match cold resume: metadata-only resume should attach the listener without

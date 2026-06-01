@@ -1047,7 +1047,7 @@ fn canonical_json(value: &Value) -> Value {
     match value {
         Value::Object(map) => {
             let mut entries = map.iter().collect::<Vec<_>>();
-            entries.sort_by(|(left_key, _), (right_key, _)| left_key.cmp(right_key));
+            entries.sort_by_key(|(left_key, _)| *left_key);
             Value::Object(
                 entries
                     .into_iter()

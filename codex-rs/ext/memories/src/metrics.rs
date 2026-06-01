@@ -15,7 +15,7 @@ pub(crate) fn record_tool_call(
         return;
     };
 
-    let tool = format!("{MEMORY_TOOLS_NAMESPACE}{operation}");
+    let tool = format!("{MEMORY_TOOLS_NAMESPACE}/{operation}");
     let _ = metrics_client.counter(
         MEMORIES_TOOL_CALL_METRIC,
         /*inc*/ 1,

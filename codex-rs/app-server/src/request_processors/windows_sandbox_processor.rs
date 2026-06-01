@@ -41,6 +41,29 @@ impl WindowsSandboxRequestProcessor {
         request_id: &ConnectionRequestId,
         params: WindowsSandboxSetupStartParams,
     ) -> Result<(), JSONRPCErrorError> {
+        // Validate requirements before acknowledging setup so callers do not get a
+        // `started` response for a Windows sandbox mode that cannot be persisted.
+        let command_cwd = params
+            .cwd
+            .map(PathBuf::from)
+            .unwrap_or_else(|| self.config.cwd.to_path_buf());
+        let config = self
+            .config_manager
+            .load_for_cwd(
+                /*request_overrides*/ None,
+                ConfigOverrides {
+                    cwd: Some(command_cwd.clone()),
+                    ..Default::default()
+                },
+                Some(command_cwd.clone()),
+            )
+            .await
+            .map_err(|err| config_load_error(&err))?;
+        let setup_mode = resolve_allowed_windows_sandbox_setup_mode(
+            config.config_layer_stack.requirements(),
+            params.mode,
+        )?;
+
         self.outgoing
             .send_response(
                 request_id.clone(),
@@ -48,46 +71,22 @@ impl WindowsSandboxRequestProcessor {
             )
             .await;
 
-        let mode = match params.mode {
-            WindowsSandboxSetupMode::Elevated => CoreWindowsSandboxSetupMode::Elevated,
-            WindowsSandboxSetupMode::Unelevated => CoreWindowsSandboxSetupMode::Unelevated,
-        };
-        let config = Arc::clone(&self.config);
-        let config_manager = self.config_manager.clone();
-        let command_cwd = params
-            .cwd
-            .map(PathBuf::from)
-            .unwrap_or_else(|| config.cwd.to_path_buf());
         let outgoing = Arc::clone(&self.outgoing);
         let connection_id = request_id.connection_id;
 
         tokio::spawn(async move {
-            let derived_config = config_manager
-                .load_for_cwd(
-                    /*request_overrides*/ None,
-                    ConfigOverrides {
-                        cwd: Some(command_cwd.clone()),
-                        ..Default::default()
-                    },
-                    Some(command_cwd.clone()),
-                )
-                .await;
-            let setup_result = match derived_config {
-                Ok(config) => {
-                    let setup_request = WindowsSandboxSetupRequest {
-                        mode,
-                        permission_profile: config.permissions.effective_permission_profile(),
-                        permission_profile_cwd: config.cwd.to_path_buf(),
-                        command_cwd,
-                        env_map: std::env::vars().collect(),
-                        codex_home: config.codex_home.to_path_buf(),
-                    };
-                    codex_core::windows_sandbox::run_windows_sandbox_setup(setup_request).await
-                }
-                Err(err) => Err(err.into()),
+            let setup_request = WindowsSandboxSetupRequest {
+                mode: setup_mode,
+                permission_profile: config.permissions.effective_permission_profile(),
+                workspace_roots: config.effective_workspace_roots(),
+                command_cwd,
+                env_map: std::env::vars().collect(),
+                codex_home: config.codex_home.to_path_buf(),
             };
+            let setup_result =
+                codex_core::windows_sandbox::run_windows_sandbox_setup(setup_request).await;
             let notification = WindowsSandboxSetupCompletedNotification {
-                mode: match mode {
+                mode: match setup_mode {
                     CoreWindowsSandboxSetupMode::Elevated => WindowsSandboxSetupMode::Elevated,
                     CoreWindowsSandboxSetupMode::Unelevated => WindowsSandboxSetupMode::Unelevated,
                 },
@@ -103,6 +102,28 @@ impl WindowsSandboxRequestProcessor {
         });
         Ok(())
     }
+}
+
+/// Resolves the requested API mode after checking that managed requirements allow it.
+fn resolve_allowed_windows_sandbox_setup_mode(
+    requirements: &codex_config::ConfigRequirements,
+    requested_mode: WindowsSandboxSetupMode,
+) -> Result<CoreWindowsSandboxSetupMode, JSONRPCErrorError> {
+    let (setup_mode, config_mode) = match requested_mode {
+        WindowsSandboxSetupMode::Elevated => (
+            CoreWindowsSandboxSetupMode::Elevated,
+            codex_config::types::WindowsSandboxModeToml::Elevated,
+        ),
+        WindowsSandboxSetupMode::Unelevated => (
+            CoreWindowsSandboxSetupMode::Unelevated,
+            codex_config::types::WindowsSandboxModeToml::Unelevated,
+        ),
+    };
+    requirements
+        .windows_sandbox_mode
+        .can_set(&Some(config_mode))
+        .map_err(|err| invalid_request(format!("invalid Windows sandbox setup mode: {err}")))?;
+    Ok(setup_mode)
 }
 
 fn determine_windows_sandbox_readiness(config: &Config) -> WindowsSandboxReadinessResponse {
@@ -140,6 +161,34 @@ fn determine_windows_sandbox_readiness_from_state(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error_code::INVALID_REQUEST_ERROR_CODE;
+    use codex_config::ConfigRequirements;
+    use codex_config::Constrained;
+    use codex_config::ConstrainedWithSource;
+    use codex_config::types::WindowsSandboxModeToml;
+
+    #[test]
+    fn resolve_allowed_windows_sandbox_setup_mode_rejects_disallowed_mode() {
+        let requirements = ConfigRequirements {
+            windows_sandbox_mode: ConstrainedWithSource::new(
+                Constrained::allow_only(Some(WindowsSandboxModeToml::Elevated)),
+                /*source*/ None,
+            ),
+            ..Default::default()
+        };
+
+        let err = resolve_allowed_windows_sandbox_setup_mode(
+            &requirements,
+            WindowsSandboxSetupMode::Unelevated,
+        )
+        .expect_err("unelevated setup should be rejected");
+
+        assert_eq!(err.code, INVALID_REQUEST_ERROR_CODE);
+        assert!(
+            err.message.contains("invalid Windows sandbox setup mode"),
+            "{err:?}"
+        );
+    }
 
     #[test]
     fn determine_windows_sandbox_readiness_reports_not_configured_when_disabled() {

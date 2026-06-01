@@ -68,13 +68,13 @@ mod thread_processor_behavior_tests {
     use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS;
     use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_READ_ONLY;
     use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
+    use codex_protocol::models::PermissionProfile;
     use codex_protocol::openai_models::ReasoningEffort;
     use codex_protocol::permissions::FileSystemAccessMode;
     use codex_protocol::permissions::FileSystemPath;
     use codex_protocol::permissions::FileSystemSandboxEntry;
     use codex_protocol::permissions::NetworkSandboxPolicy;
     use codex_protocol::protocol::AskForApproval;
-    use codex_protocol::protocol::SandboxPolicy;
     use codex_protocol::protocol::SessionSource;
     use codex_protocol::protocol::SubAgentSource;
     use codex_state::ThreadMetadataBuilder;
@@ -246,6 +246,7 @@ mod thread_processor_behavior_tests {
     fn thread_turns_list_merges_in_progress_active_turn_before_agent_status_running() {
         let persisted_items = vec![RolloutItem::EventMsg(EventMsg::UserMessage(
             codex_protocol::protocol::UserMessageEvent {
+                client_id: None,
                 message: "persisted".to_string(),
                 images: None,
                 local_images: Vec::new(),
@@ -257,6 +258,7 @@ mod thread_processor_behavior_tests {
             id: "live-turn".to_string(),
             items: vec![ThreadItem::UserMessage {
                 id: "live-user-message".to_string(),
+                client_id: None,
                 content: vec![V2UserInput::Text {
                     text: "live".to_string(),
                     text_elements: Vec::new(),
@@ -501,6 +503,7 @@ mod thread_processor_behavior_tests {
             thread_id,
             rollout_path: Some(PathBuf::from("/tmp/thread.jsonl")),
             forked_from_id: None,
+            parent_thread_id: None,
             preview: "preview".to_string(),
             name: None,
             model_provider: "openai".to_string(),
@@ -518,7 +521,7 @@ mod thread_processor_behavior_tests {
             agent_path: None,
             git_info: None,
             approval_mode: AskForApproval::OnRequest,
-            sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            permission_profile: PermissionProfile::read_only(),
             token_usage: None,
             first_user_message: Some("first user message".to_string()),
             history: None,
@@ -760,6 +763,7 @@ mod thread_processor_behavior_tests {
             developer_instructions: None,
             personality: None,
             exclude_turns: false,
+            initial_turns_page: None,
             persist_extended_history: false,
         };
         let config_snapshot = ThreadConfigSnapshot {
@@ -786,6 +790,7 @@ mod thread_processor_behavior_tests {
                 },
             },
             session_source: SessionSource::Cli,
+            parent_thread_id: None,
             thread_source: None,
         };
 

@@ -259,6 +259,7 @@ async fn turn_start_settings_override_emits_thread_settings_updated() -> Result<
     let turn_request_id = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
+            client_user_message_id: None,
             input: vec![V2UserInput::Text {
                 text: "hello".to_string(),
                 text_elements: Vec::new(),

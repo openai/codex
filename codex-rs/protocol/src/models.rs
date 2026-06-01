@@ -1237,7 +1237,9 @@ impl From<Vec<UserInput>> for ResponseInputItem {
                 .into_iter()
                 .flat_map(|c| match c {
                     UserInput::Text { text, .. } => vec![ContentItem::InputText { text }],
-                    UserInput::Image { image_url, detail } => {
+                    UserInput::Image {
+                        image_url, detail, ..
+                    } => {
                         image_index += 1;
                         let detail = detail.unwrap_or(DEFAULT_IMAGE_DETAIL);
                         vec![ContentItem::InputImage {
@@ -1245,7 +1247,7 @@ impl From<Vec<UserInput>> for ResponseInputItem {
                             detail: Some(detail),
                         }]
                     }
-                    UserInput::LocalImage { path, detail } => {
+                    UserInput::LocalImage { path, detail, .. } => {
                         image_index += 1;
                         let detail = detail.unwrap_or(DEFAULT_IMAGE_DETAIL);
                         match std::fs::read(&path) {

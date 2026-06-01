@@ -13,6 +13,7 @@ use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::openai_models::ApplyPatchToolType;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::InputModality;
+use codex_protocol::openai_models::ToolMode;
 use codex_protocol::openai_models::WebSearchToolType;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
@@ -215,6 +216,15 @@ fn set_feature(turn: &mut TurnContext, feature: Feature, enabled: bool) {
             .expect("test feature should be disableable in config");
     }
     turn.config = Arc::new(config);
+    turn.tool_mode = turn.model_info.tool_mode.unwrap_or_else(|| {
+        if turn.config.features.enabled(Feature::CodeModeOnly) {
+            ToolMode::CodeModeOnly
+        } else if turn.config.features.enabled(Feature::CodeMode) {
+            ToolMode::CodeMode
+        } else {
+            ToolMode::Direct
+        }
+    });
 }
 
 fn set_features(turn: &mut TurnContext, features: &[Feature]) {
@@ -302,21 +312,15 @@ fn mcp_tool(server: &str, namespace: &str, name: &str) -> ToolInfo {
         callable_name: name.to_string(),
         callable_namespace: namespace.to_string(),
         namespace_description: Some(format!("Tools from {server}.")),
-        tool: rmcp::model::Tool {
-            name: name.to_string().into(),
-            title: None,
-            description: Some(format!("{name} test tool").into()),
-            input_schema: Arc::new(rmcp::model::object(json!({
+        tool: rmcp::model::Tool::new(
+            name.to_string(),
+            format!("{name} test tool"),
+            Arc::new(rmcp::model::object(json!({
                 "type": "object",
                 "properties": {},
                 "additionalProperties": false,
             }))),
-            output_schema: None,
-            annotations: None,
-            execution: None,
-            icons: None,
-            meta: None,
-        },
+        ),
         connector_id: None,
         connector_name: None,
         plugin_display_names: Vec::new(),
@@ -371,6 +375,22 @@ fn apply_patch_accepts_environment_id(spec: &ToolSpec) -> bool {
         }
         _ => false,
     }
+}
+
+#[tokio::test]
+async fn request_user_input_tool_respects_experimental_config_gate() {
+    let enabled = probe(|_| {}).await;
+    enabled.assert_visible_contains(&["request_user_input"]);
+    enabled.assert_registered_contains(&["request_user_input"]);
+
+    let disabled = probe(|turn| {
+        update_config(turn, |config| {
+            config.experimental_request_user_input_enabled = false;
+        });
+    })
+    .await;
+    disabled.assert_visible_lacks(&["request_user_input"]);
+    disabled.assert_registered_lacks(&["request_user_input"]);
 }
 
 #[tokio::test]
@@ -526,7 +546,7 @@ async fn mcp_and_tool_search_follow_direct_and_deferred_tool_exposure() {
         "read_mcp_resource",
     ]);
 
-    let missing_namespace_capability = probe_with(
+    let bedrock_namespace_capability = probe_with(
         |turn| {
             turn.model_info.supports_search_tool = true;
             use_bedrock_provider(turn);
@@ -537,7 +557,7 @@ async fn mcp_and_tool_search_follow_direct_and_deferred_tool_exposure() {
         },
     )
     .await;
-    missing_namespace_capability.assert_visible_lacks(&["tool_search"]);
+    bedrock_namespace_capability.assert_visible_contains(&["tool_search"]);
 
     let enabled = probe_with(
         |turn| {
@@ -746,7 +766,7 @@ async fn multi_agent_feature_selects_one_agent_tool_family() {
         "wait_agent",
         "close_agent",
         "send_message",
-        "followup_task",
+        "assign_task",
         "list_agents",
     ]);
     assert_eq!(
@@ -770,7 +790,7 @@ async fn multi_agent_feature_selects_one_agent_tool_family() {
     v2.assert_visible_contains(&[
         "spawn_agent",
         "send_message",
-        "followup_task",
+        "assign_task",
         "wait_agent",
         "close_agent",
         "list_agents",
@@ -801,6 +821,20 @@ async fn multi_agent_feature_selects_one_agent_tool_family() {
         direct_model_only.exposure("spawn_agent"),
         ToolExposure::DirectModelOnly
     );
+}
+
+#[tokio::test]
+async fn tool_mode_selector_overrides_feature_flags() {
+    let direct = probe(|turn| {
+        set_features(turn, &[Feature::CodeMode, Feature::CodeModeOnly]);
+        turn.model_info.tool_mode = Some(ToolMode::Direct);
+        turn.tool_mode = ToolMode::Direct;
+    })
+    .await;
+    direct.assert_visible_lacks(&[
+        codex_code_mode::PUBLIC_TOOL_NAME,
+        codex_code_mode::WAIT_TOOL_NAME,
+    ]);
 }
 
 #[tokio::test]
@@ -861,7 +895,7 @@ async fn multi_agent_v2_can_use_configured_tool_namespace() {
     for tool_name in [
         "spawn_agent",
         "send_message",
-        "followup_task",
+        "assign_task",
         "wait_agent",
         "close_agent",
         "list_agents",
@@ -890,7 +924,7 @@ async fn multi_agent_v2_can_use_configured_tool_namespace() {
 }
 
 #[tokio::test]
-async fn multi_agent_v2_namespace_is_ignored_without_provider_namespace_support() {
+async fn multi_agent_v2_namespace_is_supported_by_bedrock_provider() {
     let plan = probe(|turn| {
         set_feature(turn, Feature::MultiAgentV2, /*enabled*/ true);
         update_config(turn, |config| {
@@ -900,15 +934,15 @@ async fn multi_agent_v2_namespace_is_ignored_without_provider_namespace_support(
     })
     .await;
 
-    plan.assert_visible_contains(&["spawn_agent", "send_message", "list_agents"]);
-    plan.assert_visible_lacks(&["agents"]);
-    assert!(
-        plan.registered_names
-            .contains(&ToolName::plain("spawn_agent").to_string())
-    );
+    plan.assert_visible_contains(&["agents"]);
+    plan.assert_visible_lacks(&["spawn_agent", "send_message", "list_agents"]);
     assert!(
         !plan
             .registered_names
+            .contains(&ToolName::plain("spawn_agent").to_string())
+    );
+    assert!(
+        plan.registered_names
             .contains(&ToolName::namespaced("agents", "spawn_agent").to_string())
     );
 }
@@ -935,7 +969,7 @@ async fn code_mode_only_can_expose_namespaced_multi_agent_v2_as_normal_tools() {
     for tool_name in [
         "spawn_agent",
         "send_message",
-        "followup_task",
+        "assign_task",
         "wait_agent",
         "close_agent",
         "list_agents",
@@ -965,6 +999,16 @@ async fn hosted_tools_follow_provider_auth_model_and_config_gates() {
     })
     .await;
     image_generation.assert_visible_contains(&["image_generation"]);
+
+    let extension_flag_without_imagegen_tool = probe(|turn| {
+        use_chatgpt_auth(turn);
+        set_feature(turn, Feature::ImageGeneration, /*enabled*/ true);
+        set_feature(turn, Feature::ImageGenExt, /*enabled*/ true);
+        turn.model_info.input_modalities = vec![InputModality::Image];
+    })
+    .await;
+    extension_flag_without_imagegen_tool.assert_visible_contains(&["image_generation"]);
+    extension_flag_without_imagegen_tool.assert_visible_lacks(&["image_gen"]);
 
     let live_web_search = probe(|turn| {
         set_web_search_mode(turn, WebSearchMode::Live);

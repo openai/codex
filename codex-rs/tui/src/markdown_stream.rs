@@ -878,8 +878,8 @@ mod tests {
         let rendered_strs = lines_to_plain_strings(&rendered);
 
         assert!(
-            rendered_strs.iter().any(|line| line.contains('┌')),
-            "expected markdown-fenced table to render as boxed table: {rendered_strs:?}"
+            rendered_strs.iter().any(|line| line.contains('━')),
+            "expected markdown-fenced table to render with a separator: {rendered_strs:?}"
         );
         assert!(
             !rendered_strs.iter().any(|line| line.trim() == "| A | B |"),

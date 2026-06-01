@@ -209,6 +209,9 @@ pub(crate) enum AppEvent {
     /// Resume a thread by UUID or thread name inside the running TUI session.
     ResumeSessionByIdOrName(String),
 
+    /// Archive the current active main thread and exit after it succeeds.
+    ArchiveCurrentThread,
+
     /// Fork the current session into a new thread.
     ForkCurrentSession,
 
@@ -230,6 +233,9 @@ pub(crate) enum AppEvent {
     /// Forward a command to the Agent. Using an `AppEvent` for this avoids
     /// bubbling channels through layers of widgets.
     CodexOp(AppCommand),
+
+    /// Restore an output-free interrupted turn into the composer and roll it back.
+    RestoreCancelledTurn(UserMessage),
 
     /// Approve one retry of a recent auto-review denial selected in the TUI.
     ApproveRecentAutoReviewDenial {

@@ -6,12 +6,13 @@ use std::path::PathBuf;
 
 pub struct ElevatedSandboxProfileCaptureRequest<'a> {
     pub permission_profile: &'a PermissionProfile,
-    pub permission_profile_cwd: &'a Path,
+    pub workspace_roots: &'a [AbsolutePathBuf],
     pub codex_home: &'a Path,
     pub command: Vec<String>,
     pub cwd: &'a Path,
     pub env_map: HashMap<String, String>,
     pub timeout_ms: Option<u64>,
+    pub cancellation: Option<crate::WindowsSandboxCancellationToken>,
     pub use_private_desktop: bool,
     pub proxy_enforced: bool,
     pub read_roots_override: Option<&'a [PathBuf]>,
@@ -30,11 +31,14 @@ mod windows_impl {
     use crate::env::inherit_path_env;
     use crate::env::normalize_null_device_env;
     use crate::identity::require_logon_sandbox_creds;
+    use crate::ipc_framed::EmptyPayload;
+    use crate::ipc_framed::FramedMessage;
     use crate::ipc_framed::Message;
     use crate::ipc_framed::OutputStream;
     use crate::ipc_framed::SpawnRequest;
     use crate::ipc_framed::decode_bytes;
     use crate::ipc_framed::read_frame;
+    use crate::ipc_framed::write_frame;
     use crate::logging::log_failure;
     use crate::logging::log_start;
     use crate::logging::log_success;
@@ -46,9 +50,47 @@ mod windows_impl {
     use crate::token::LocalSid;
     use anyhow::Result;
     use codex_utils_absolute_path::AbsolutePathBuf;
+    use std::fs::File;
     use std::path::Path;
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::atomic::Ordering;
+    use std::time::Duration;
 
     pub use crate::windows_impl::CaptureResult;
+
+    /// Polls for cancellation and sends the runner's terminate IPC frame when requested.
+    ///
+    /// The 50 ms park bounds cancellation latency without busy-waiting.
+    fn spawn_cancel_writer(
+        pipe_write: &File,
+        cancellation: Option<crate::WindowsSandboxCancellationToken>,
+    ) -> Result<Option<(std::thread::JoinHandle<()>, Arc<AtomicBool>)>> {
+        let Some(cancellation) = cancellation else {
+            return Ok(None);
+        };
+        let mut pipe_write = pipe_write.try_clone()?;
+        let done = Arc::new(AtomicBool::new(false));
+        let done_for_thread = Arc::clone(&done);
+        let handle = std::thread::spawn(move || {
+            while !done_for_thread.load(Ordering::SeqCst) {
+                if cancellation.is_cancelled() {
+                    let _ = write_frame(
+                        &mut pipe_write,
+                        &FramedMessage {
+                            version: 1,
+                            message: Message::Terminate {
+                                payload: EmptyPayload::default(),
+                            },
+                        },
+                    );
+                    break;
+                }
+                std::thread::park_timeout(Duration::from_millis(50));
+            }
+        });
+        Ok(Some((handle, done)))
+    }
 
     /// Launches the command runner under the sandbox user and captures its output.
     #[allow(clippy::too_many_arguments)]
@@ -57,12 +99,13 @@ mod windows_impl {
     ) -> Result<CaptureResult> {
         let ElevatedSandboxProfileCaptureRequest {
             permission_profile,
-            permission_profile_cwd,
+            workspace_roots,
             codex_home,
             command,
             cwd,
             mut env_map,
             timeout_ms,
+            cancellation,
             use_private_desktop,
             proxy_enforced,
             read_roots_override,
@@ -71,10 +114,11 @@ mod windows_impl {
             deny_read_paths_override,
             deny_write_paths_override,
         } = request;
-        let permissions = ResolvedWindowsSandboxPermissions::try_from_permission_profile_for_cwd(
-            permission_profile,
-            permission_profile_cwd,
-        )?;
+        let permissions =
+            ResolvedWindowsSandboxPermissions::try_from_permission_profile_for_workspace_roots(
+                permission_profile,
+                workspace_roots,
+            )?;
         let deny_read_paths_override = deny_read_paths_override
             .iter()
             .map(AbsolutePathBuf::to_path_buf)
@@ -139,7 +183,7 @@ mod windows_impl {
                 cwd: cwd.to_path_buf(),
                 env: env_map.clone(),
                 permission_profile: permission_profile.clone(),
-                permission_profile_cwd: permission_profile_cwd.to_path_buf(),
+                workspace_roots: workspace_roots.to_vec(),
                 codex_home: sandbox_base.clone(),
                 real_codex_home: codex_home.to_path_buf(),
                 cap_sids,
@@ -156,33 +200,45 @@ mod windows_impl {
                 spawn_request,
             )?;
             let (pipe_write, mut pipe_read) = transport.into_files();
-            drop(pipe_write);
+            let cancel_writer = spawn_cancel_writer(&pipe_write, cancellation)?;
 
             let mut stdout = Vec::new();
             let mut stderr = Vec::new();
-            let (exit_code, timed_out) = loop {
-                let msg = read_frame(&mut pipe_read)?
-                    .ok_or_else(|| anyhow::anyhow!("runner pipe closed before exit"))?;
+            let result = loop {
+                let msg = match read_frame(&mut pipe_read) {
+                    Ok(Some(msg)) => msg,
+                    Ok(None) => break Err(anyhow::anyhow!("runner pipe closed before exit")),
+                    Err(err) => break Err(err),
+                };
                 match msg.message {
                     Message::SpawnReady { .. } => {}
-                    Message::Output { payload } => {
-                        let bytes = decode_bytes(&payload.data_b64)?;
-                        match payload.stream {
+                    Message::Output { payload } => match decode_bytes(&payload.data_b64) {
+                        Ok(bytes) => match payload.stream {
                             OutputStream::Stdout => stdout.extend_from_slice(&bytes),
                             OutputStream::Stderr => stderr.extend_from_slice(&bytes),
+                        },
+                        Err(err) => {
+                            break Err(err);
                         }
-                    }
-                    Message::Exit { payload } => break (payload.exit_code, payload.timed_out),
+                    },
+                    Message::Exit { payload } => break Ok((payload.exit_code, payload.timed_out)),
                     Message::Error { payload } => {
-                        return Err(anyhow::anyhow!("runner error: {}", payload.message));
+                        break Err(anyhow::anyhow!("runner error: {}", payload.message));
                     }
                     other => {
-                        return Err(anyhow::anyhow!(
+                        break Err(anyhow::anyhow!(
                             "unexpected runner message during capture: {other:?}"
                         ));
                     }
                 }
             };
+            if let Some((cancel_handle, done)) = cancel_writer {
+                done.store(true, Ordering::SeqCst);
+                cancel_handle.thread().unpark();
+                let _ = cancel_handle.join();
+            }
+            drop(pipe_write);
+            let (exit_code, timed_out) = result?;
 
             if exit_code == 0 {
                 log_success(&command, logs_base_dir);

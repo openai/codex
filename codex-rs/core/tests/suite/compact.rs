@@ -559,10 +559,8 @@ async fn summarize_context_three_requests_and_instructions() {
             RolloutItem::TurnContext(_) => {
                 regular_turn_context_count += 1;
             }
-            RolloutItem::Compacted(ci) => {
-                if ci.message == expected_summary_message {
-                    saw_compacted_summary = true;
-                }
+            RolloutItem::Compacted(ci) if ci.message == expected_summary_message => {
+                saw_compacted_summary = true;
             }
             _ => {}
         }
@@ -2790,10 +2788,57 @@ async fn manual_compact_twice_preserves_latest_user_messages() {
         contains_user_text(&requests[1], first_user_message),
         "first compact request should include history before compaction"
     );
+    let compact_metadata: Value = serde_json::from_str(
+        &requests[1]
+            .header("x-codex-turn-metadata")
+            .expect("local compact request should include turn metadata"),
+    )
+    .expect("local compact turn metadata should be valid json");
+    assert_eq!(
+        compact_metadata["request_kind"].as_str(),
+        Some("compaction")
+    );
+    assert_eq!(
+        compact_metadata["window_id"].as_str(),
+        requests[1].header("x-codex-window-id").as_deref()
+    );
+    assert_eq!(
+        compact_metadata["compaction"],
+        json!({
+            "trigger": "manual",
+            "reason": "user_requested",
+            "implementation": "responses",
+            "phase": "standalone_turn",
+            "strategy": "memento",
+        })
+    );
 
     assert!(
         contains_user_text(&requests[2], second_user_message),
         "second turn request missing second user message"
+    );
+    let next_turn_metadata: Value = serde_json::from_str(
+        &requests[2]
+            .header("x-codex-turn-metadata")
+            .expect("next regular request should include turn metadata"),
+    )
+    .expect("next regular turn metadata should be valid json");
+    assert_eq!(
+        next_turn_metadata["request_kind"].as_str(),
+        Some("turn"),
+        "regular requests after compaction should remain turn requests"
+    );
+    assert_eq!(
+        next_turn_metadata["window_id"].as_str(),
+        requests[2].header("x-codex-window-id").as_deref()
+    );
+    assert_ne!(
+        compact_metadata["window_id"], next_turn_metadata["window_id"],
+        "the next request should use the new compacted context window"
+    );
+    assert!(
+        next_turn_metadata.get("compaction").is_none(),
+        "regular requests after compaction should not be marked as compact requests"
     );
     assert!(
         contains_user_text(&requests[2], first_user_message),

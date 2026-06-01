@@ -306,6 +306,7 @@ async fn turn_start_notify_payload_includes_initialize_client_name() -> Result<(
     let turn_req = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id,
+            client_user_message_id: None,
             input: vec![V2UserInput::Text {
                 text: "Hello".to_string(),
                 text_elements: Vec::new(),

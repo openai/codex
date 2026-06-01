@@ -111,6 +111,7 @@ fn session_configured_produces_thread_started_event() {
         session_id: SessionId::from(thread_id),
         thread_id,
         forked_from_id: None,
+        parent_thread_id: None,
         thread_source: None,
         thread_name: None,
         model: "codex-mini-latest".to_string(),

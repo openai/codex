@@ -400,16 +400,16 @@ impl App {
     }
 
     pub(super) fn refresh_plugin_mentions(&mut self, app_server: &AppServerSession) {
-        let config = self.config.clone();
+        let cwd = self.config.cwd.to_path_buf();
         let request_handle = app_server.request_handle();
         let app_event_tx = self.app_event_tx.clone();
-        if !config.features.enabled(Feature::Plugins) {
+        if !self.config.features.enabled(Feature::Plugins) {
             app_event_tx.send(AppEvent::PluginMentionsLoaded { plugins: None });
             return;
         }
 
         tokio::spawn(async move {
-            match fetch_plugin_mentions(request_handle, config.cwd.to_path_buf()).await {
+            match fetch_plugin_mentions(request_handle, cwd).await {
                 Ok(plugins) => {
                     app_event_tx.send(AppEvent::PluginMentionsLoaded {
                         plugins: Some(plugins),
@@ -1061,6 +1061,7 @@ mod tests {
         let statuses = vec![
             McpServerStatus {
                 name: "docs".to_string(),
+                server_info: None,
                 tools: HashMap::from([(
                     "list".to_string(),
                     Tool {
@@ -1080,6 +1081,7 @@ mod tests {
             },
             McpServerStatus {
                 name: "disabled".to_string(),
+                server_info: None,
                 tools: HashMap::new(),
                 resources: Vec::new(),
                 resource_templates: Vec::new(),

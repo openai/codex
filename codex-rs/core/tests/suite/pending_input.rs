@@ -152,6 +152,7 @@ async fn steer_user_input(codex: &CodexThread, text: &str) {
             }],
             /*additional_context*/ Default::default(),
             /*expected_turn_id*/ None,
+            /*client_user_message_id*/ None,
             /*responsesapi_client_metadata*/ None,
         )
         .await

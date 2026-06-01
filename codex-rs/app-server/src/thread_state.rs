@@ -36,6 +36,8 @@ pub(crate) struct PendingThreadResumeRequest {
     pub(crate) emit_thread_goal_update: bool,
     pub(crate) thread_goal_state_db: Option<StateDbHandle>,
     pub(crate) include_turns: bool,
+    pub(crate) initial_turns_page:
+        Option<codex_app_server_protocol::ThreadResumeInitialTurnsPageParams>,
     pub(crate) redact_resume_payloads: bool,
 }
 

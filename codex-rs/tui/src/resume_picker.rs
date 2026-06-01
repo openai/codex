@@ -7,6 +7,7 @@ use std::sync::Arc;
 mod transcript;
 
 use crate::app_server_session::AppServerSession;
+use crate::clipboard_paste::normalize_pasted_search_query;
 use crate::color::blend;
 use crate::color::is_light;
 use crate::git_action_directives::parse_assistant_markdown;
@@ -546,11 +547,6 @@ fn picker_cwd_filter(
     } else {
         Some(config_cwd.to_path_buf())
     }
-}
-
-fn normalize_pasted_query(pasted: &str) -> Option<String> {
-    let normalized = pasted.split_whitespace().collect::<Vec<_>>().join(" ");
-    (!normalized.is_empty()).then_some(normalized)
 }
 
 fn spawn_app_server_page_loader(
@@ -1159,23 +1155,21 @@ impl PickerState {
                     self.request_frame();
                 }
             }
-            _ if allow_plain_char_navigation && self.list_keymap.jump_top.is_pressed(key) => {
-                if !self.filtered_rows.is_empty() {
+            _ if allow_plain_char_navigation && self.list_keymap.jump_top.is_pressed(key)
+                && !self.filtered_rows.is_empty() => {
                     self.selected = 0;
                     self.ensure_selected_visible();
                     self.request_frame();
                 }
-            }
-            _ if allow_plain_char_navigation && self.list_keymap.jump_bottom.is_pressed(key) => {
-                if !self.filtered_rows.is_empty() {
+            _ if allow_plain_char_navigation && self.list_keymap.jump_bottom.is_pressed(key)
+                && !self.filtered_rows.is_empty() => {
                     self.selected = self.filtered_rows.len().saturating_sub(1);
                     self.ensure_selected_visible();
                     self.maybe_load_more_for_scroll();
                     self.request_frame();
                 }
-            }
-            _ if allow_plain_char_navigation && self.list_keymap.page_down.is_pressed(key) => {
-                if !self.filtered_rows.is_empty() {
+            _ if allow_plain_char_navigation && self.list_keymap.page_down.is_pressed(key)
+                && !self.filtered_rows.is_empty() => {
                     let step = self.view_rows.unwrap_or(10).max(1);
                     let target = self.selected.saturating_add(step);
                     let max_index = self.filtered_rows.len().saturating_sub(1);
@@ -1189,7 +1183,6 @@ impl PickerState {
                     }
                     self.request_frame();
                 }
-            }
             KeyEvent {
                 code: KeyCode::Tab, ..
             } => {
@@ -1222,16 +1215,15 @@ impl PickerState {
                 code: KeyCode::Char(c),
                 modifiers,
                 ..
-            } => {
+            }
                 // basic text input for search
                 if !modifiers.contains(KeyModifiers::CONTROL)
                     && !modifiers.contains(KeyModifiers::ALT)
-                {
+                => {
                     let mut new_query = self.query.clone();
                     new_query.push(c);
                     self.set_query(new_query);
                 }
-            }
             _ => {}
         }
         Ok(None)
@@ -1241,7 +1233,7 @@ impl PickerState {
         if self.is_transcript_loading() {
             return;
         }
-        let Some(pasted) = normalize_pasted_query(&pasted) else {
+        let Some(pasted) = normalize_pasted_search_query(&pasted) else {
             return;
         };
         let mut new_query = self.query.clone();
@@ -5730,6 +5722,7 @@ session_picker_view = "dense"
             id: thread_id.to_string(),
             session_id: thread_id.to_string(),
             forked_from_id: None,
+            parent_thread_id: None,
             preview: String::from("remote thread"),
             ephemeral: false,
             model_provider: String::from("openai"),
@@ -5764,6 +5757,7 @@ session_picker_view = "dense"
             id: thread_id.to_string(),
             session_id: thread_id.to_string(),
             forked_from_id: None,
+            parent_thread_id: None,
             preview: String::from("preview"),
             ephemeral: false,
             model_provider: String::from("openai"),
@@ -5785,6 +5779,7 @@ session_picker_view = "dense"
                 items: vec![
                     ThreadItem::UserMessage {
                         id: String::from("user-1"),
+                        client_id: None,
                         content: vec![codex_app_server_protocol::UserInput::Text {
                             text: String::from("hello from user"),
                             text_elements: Vec::new(),
@@ -5831,6 +5826,7 @@ session_picker_view = "dense"
             id: thread_id.to_string(),
             session_id: thread_id.to_string(),
             forked_from_id: None,
+            parent_thread_id: None,
             preview: String::from("preview"),
             ephemeral: false,
             model_provider: String::from("openai"),
@@ -5888,6 +5884,7 @@ session_picker_view = "dense"
             id: thread_id.to_string(),
             session_id: thread_id.to_string(),
             forked_from_id: None,
+            parent_thread_id: None,
             preview: String::from("preview"),
             ephemeral: false,
             model_provider: String::from("openai"),
@@ -6225,14 +6222,6 @@ session_picker_view = "dense"
         state.handle_paste(String::from("results"));
 
         assert_eq!(state.query, "resize results");
-    }
-
-    #[test]
-    fn normalize_pasted_query_collapses_whitespace() {
-        assert_eq!(
-            normalize_pasted_query("  alpha\n\tbeta\r\n gamma  "),
-            Some(String::from("alpha beta gamma"))
-        );
     }
 
     #[tokio::test]

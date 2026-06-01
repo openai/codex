@@ -2176,11 +2176,7 @@ struct RolloutStats {
 
 impl RolloutStats {
     fn average_bytes(&self) -> u64 {
-        if self.files == 0 {
-            0
-        } else {
-            self.total_bytes / self.files
-        }
+        self.total_bytes.checked_div(self.files).unwrap_or(0)
     }
 }
 

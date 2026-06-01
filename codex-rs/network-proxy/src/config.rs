@@ -107,7 +107,7 @@ impl NetworkDomainPermissions {
 #[serde(rename_all = "lowercase")]
 pub enum NetworkUnixSocketPermission {
     Allow,
-    None,
+    Deny,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
