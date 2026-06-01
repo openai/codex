@@ -100,6 +100,7 @@ async fn models_client_hits_models_endpoint() {
             supports_search_tool: false,
             auto_review_model_override: None,
             tool_mode: None,
+            multi_agent_version: None,
         }],
     };
 

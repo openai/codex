@@ -353,6 +353,7 @@ impl TurnContext {
             model: self.model_info.slug.clone(),
             personality: self.personality,
             collaboration_mode: Some(self.collaboration_mode.clone()),
+            multi_agent_version: None,
             realtime_active: Some(self.realtime_active),
             effort: self.reasoning_effort,
             summary: ReasoningSummaryConfig::Auto,
