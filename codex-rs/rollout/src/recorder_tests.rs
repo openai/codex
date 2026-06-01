@@ -99,6 +99,7 @@ async fn state_db_init_backfills_before_returning() -> anyhow::Result<()> {
             base_instructions: None,
             dynamic_tools: None,
             memory_mode: None,
+            multi_agent_version: None,
         },
         git: None,
     };

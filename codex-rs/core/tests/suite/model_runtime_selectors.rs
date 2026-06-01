@@ -11,6 +11,7 @@ use codex_protocol::openai_models::ModelVisibility;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ToolMode;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::user_input::UserInput;
@@ -30,6 +31,10 @@ use serde_json::Value;
 use tokio::time::Duration;
 use tokio::time::Instant;
 use tokio::time::sleep;
+
+const CHILD_MODEL: &str = "test-multi-agent-child";
+const ROOT_MODEL: &str = "test-multi-agent-root";
+const ROOT_PROMPT: &str = "spawn a child";
 
 fn remote_model(slug: &str) -> ModelInfo {
     ModelInfo {
@@ -167,6 +172,112 @@ async fn remote_tool_mode_selector_overrides_feature_flags() -> Result<()> {
             codex_code_mode::PUBLIC_TOOL_NAME.to_string(),
             codex_code_mode::WAIT_TOOL_NAME.to_string(),
         ]
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_multi_agent_selector_overrides_feature_flags() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let mut v2_model = remote_model("test-multi-agent-v2");
+    v2_model.multi_agent_version = Some(MultiAgentVersion::V2);
+    let v2_body = response_body_for_remote_model(v2_model, |config| {
+        config
+            .features
+            .enable(Feature::Collab)
+            .expect("test config should allow feature update");
+        config
+            .features
+            .disable(Feature::MultiAgentV2)
+            .expect("test config should allow feature update");
+    })
+    .await?;
+    assert!(tool_names(&v2_body).contains(&"send_message".to_string()));
+
+    let mut disabled_model = remote_model("test-multi-agent-disabled");
+    disabled_model.multi_agent_version = Some(MultiAgentVersion::Disabled);
+    let disabled_body = response_body_for_remote_model(disabled_model, |config| {
+        config
+            .features
+            .enable(Feature::MultiAgentV2)
+            .expect("test config should allow feature update");
+    })
+    .await?;
+    let disabled_tools = tool_names(&disabled_body);
+    assert!(disabled_tools.iter().all(|name| !matches!(
+        name.as_str(),
+        "multi_agent_v1" | "spawn_agent" | "send_message" | "wait_agent" | "list_agents"
+    )));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_multi_agent_selector_uses_model_selected_before_first_turn() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = wiremock::MockServer::start().await;
+    let mut initial_model = remote_model(ROOT_MODEL);
+    initial_model.multi_agent_version = Some(MultiAgentVersion::V1);
+    let mut selected_model = remote_model(CHILD_MODEL);
+    selected_model.multi_agent_version = Some(MultiAgentVersion::V2);
+    let models_mock = mount_models_once(
+        &server,
+        ModelsResponse {
+            models: vec![initial_model, selected_model],
+        },
+    )
+    .await;
+    let response_mock = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+
+    let mut builder = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(|config| {
+            config.model = Some(ROOT_MODEL.to_string());
+        });
+    let test = builder.build(&server).await?;
+    assert_eq!(
+        (
+            models_mock.requests().len(),
+            test.codex.multi_agent_version(),
+        ),
+        (1, None)
+    );
+
+    submit_thread_settings(
+        &test.codex,
+        ThreadSettingsOverrides {
+            model: Some(CHILD_MODEL.to_string()),
+            ..Default::default()
+        },
+    )
+    .await?;
+    assert_eq!(test.codex.multi_agent_version(), None);
+
+    test.submit_turn(ROOT_PROMPT).await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    assert_eq!(
+        (
+            models_mock.requests().len(),
+            test.codex.multi_agent_version(),
+            tool_names(&response_mock.single_request().body_json())
+                .contains(&"send_message".to_string()),
+        ),
+        (1, Some(MultiAgentVersion::V2), true)
     );
 
     Ok(())

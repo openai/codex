@@ -1,6 +1,4 @@
 use crate::agent::control::SpawnAgentOptions;
-use crate::agent::exceeds_thread_spawn_depth_limit;
-use crate::agent::next_thread_spawn_depth;
 use crate::agent::status::is_final;
 use crate::config::Config;
 use crate::function_tool::FunctionCallError;
@@ -11,6 +9,7 @@ use crate::tools::handlers::parse_arguments;
 use codex_protocol::ThreadId;
 use codex_protocol::error::CodexErr;
 use codex_protocol::protocol::AgentStatus;
+use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::user_input::UserInput;
@@ -89,6 +88,7 @@ struct ReportAgentJobResultToolResult {
 struct JobRunnerOptions {
     max_concurrency: usize,
     spawn_config: Config,
+    multi_agent_version: MultiAgentVersion,
 }
 
 #[derive(Debug, Clone)]
@@ -111,26 +111,32 @@ async fn build_runner_options(
     turn: &Arc<TurnContext>,
     requested_concurrency: Option<usize>,
 ) -> Result<JobRunnerOptions, FunctionCallError> {
-    let session_source = turn.session_source.clone();
-    let child_depth = next_thread_spawn_depth(&session_source);
-    let max_depth = turn.config.agent_max_depth;
-    if exceeds_thread_spawn_depth_limit(child_depth, max_depth) {
+    let multi_agent_version = turn.multi_agent_version.ok_or_else(|| {
+        FunctionCallError::RespondToModel(
+            "multi-agent version is unresolved; this session cannot spawn workers".to_string(),
+        )
+    })?;
+    if multi_agent_version == MultiAgentVersion::Disabled {
         return Err(FunctionCallError::RespondToModel(
-            "agent depth limit reached; this session cannot spawn more subagents".to_string(),
+            "multi-agent runtime is disabled; this session cannot spawn workers".to_string(),
         ));
     }
-    if turn.config.agent_max_threads == Some(0) {
+    let agent_max_threads = turn
+        .config
+        .effective_agent_max_threads(multi_agent_version)
+        .map_err(|err| FunctionCallError::Fatal(err.to_string()))?;
+    if agent_max_threads == Some(0) {
         return Err(FunctionCallError::RespondToModel(
             "agent thread limit reached; this session cannot spawn more subagents".to_string(),
         ));
     }
-    let max_concurrency =
-        normalize_concurrency(requested_concurrency, turn.config.agent_max_threads);
+    let max_concurrency = normalize_concurrency(requested_concurrency, agent_max_threads);
     let base_instructions = session.get_base_instructions().await;
     let spawn_config = build_agent_spawn_config(&base_instructions, turn.as_ref())?;
     Ok(JobRunnerOptions {
         max_concurrency,
         spawn_config,
+        multi_agent_version,
     })
 }
 
@@ -210,6 +216,7 @@ async fn run_agent_job_loop(
                         Some(SessionSource::SubAgent(SubAgentSource::Other(format!(
                             "agent_job:{job_id}"
                         )))),
+                        options.multi_agent_version,
                         SpawnAgentOptions {
                             parent_thread_id: Some(session.conversation_id),
                             environments: Some(turn.environments.to_selections()),

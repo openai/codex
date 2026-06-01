@@ -86,6 +86,7 @@ use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
+use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::NetworkAccess;
 use codex_protocol::protocol::RealtimeVoice;
 use codex_protocol::protocol::SandboxPolicy;
@@ -9801,7 +9802,13 @@ non_code_mode_only = true
     assert_eq!(config.multi_agent_v2.min_wait_timeout_ms, 2500);
     assert_eq!(config.multi_agent_v2.max_wait_timeout_ms, 120000);
     assert_eq!(config.multi_agent_v2.default_wait_timeout_ms, 30000);
-    assert_eq!(config.agent_max_threads, Some(4));
+    assert_eq!(
+        (
+            config.agent_max_threads,
+            config.effective_agent_max_threads(MultiAgentVersion::V2)?
+        ),
+        (None, Some(4))
+    );
     assert!(!config.multi_agent_v2.usage_hint_enabled);
     assert_eq!(
         config.multi_agent_v2.usage_hint_text.as_deref(),
@@ -9845,7 +9852,13 @@ enabled = true
     assert_eq!(config.multi_agent_v2.min_wait_timeout_ms, 10_000);
     assert_eq!(config.multi_agent_v2.max_wait_timeout_ms, 3_600_000);
     assert_eq!(config.multi_agent_v2.default_wait_timeout_ms, 30_000);
-    assert_eq!(config.agent_max_threads, Some(3));
+    assert_eq!(
+        (
+            config.agent_max_threads,
+            config.effective_agent_max_threads(MultiAgentVersion::V2)?
+        ),
+        (None, Some(3))
+    );
     assert_eq!(
         config.multi_agent_v2.root_agent_usage_hint_text.as_deref(),
         Some(DEFAULT_MULTI_AGENT_V2_ROOT_AGENT_USAGE_HINT_TEXT)
@@ -9912,17 +9925,19 @@ max_threads = 3
 "#,
     )?;
 
-    let err = ConfigBuilder::without_managed_config_for_tests()
+    let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
         .fallback_cwd(Some(codex_home.path().to_path_buf()))
         .build()
-        .await
+        .await?;
+    let err = config
+        .effective_agent_max_threads(MultiAgentVersion::V2)
         .expect_err("agents.max_threads should conflict with multi_agent_v2");
 
     assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
     assert_eq!(
         err.to_string(),
-        "agents.max_threads cannot be set when multi_agent_v2 is enabled"
+        "agents.max_threads cannot be set when the multi-agent runtime is v2"
     );
 
     Ok(())
@@ -10181,7 +10196,13 @@ max_concurrent_threads_per_session = 1
         .await?;
 
     assert_eq!(config.multi_agent_v2.max_concurrent_threads_per_session, 1);
-    assert_eq!(config.agent_max_threads, Some(0));
+    assert_eq!(
+        (
+            config.agent_max_threads,
+            config.effective_agent_max_threads(MultiAgentVersion::V2)?
+        ),
+        (None, Some(0))
+    );
 
     Ok(())
 }

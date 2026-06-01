@@ -105,6 +105,7 @@ use codex_protocol::protocol::HasLegacyEvent;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::protocol::ItemStartedEvent;
+use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::RawResponseItemEvent;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::RolloutItem;
@@ -137,6 +138,7 @@ use codex_thread_store::LiveThreadInitGuard;
 use codex_thread_store::LocalThreadStore;
 use codex_thread_store::ReadThreadParams;
 use codex_thread_store::ResumeThreadParams;
+use codex_thread_store::SetMultiAgentVersionIfUnsetParams;
 use codex_thread_store::ThreadEventPersistenceMode;
 use codex_thread_store::ThreadPersistenceMetadata;
 use codex_thread_store::ThreadStore;
@@ -420,6 +422,21 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) analytics_events_client: Option<AnalyticsEventsClient>,
     pub(crate) thread_store: Arc<dyn ThreadStore>,
     pub(crate) attestation_provider: Option<Arc<dyn AttestationProvider>>,
+    pub(crate) inherited_multi_agent_version: Option<MultiAgentVersion>,
+}
+
+pub(crate) fn resolve_multi_agent_version(
+    conversation_history: &InitialHistory,
+    inherited_multi_agent_version: Option<MultiAgentVersion>,
+) -> Option<MultiAgentVersion> {
+    conversation_history
+        .get_multi_agent_version()
+        .or(inherited_multi_agent_version)
+        .or_else(|| match conversation_history {
+            InitialHistory::New | InitialHistory::Cleared => None,
+            // Threads created before runtime metadata existed keep the legacy V1 tool surface.
+            InitialHistory::Resumed(_) | InitialHistory::Forked(_) => Some(MultiAgentVersion::V1),
+        })
 }
 
 pub(crate) const INITIAL_SUBMIT_ID: &str = "";
@@ -482,17 +499,10 @@ impl Codex {
             analytics_events_client,
             thread_store,
             attestation_provider,
+            inherited_multi_agent_version,
         } = args;
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
-
-        if let SessionSource::SubAgent(SubAgentSource::ThreadSpawn { depth, .. }) = session_source
-            && depth >= config.agent_max_depth
-            && !config.features.enabled(Feature::MultiAgentV2)
-        {
-            let _ = config.features.disable(Feature::SpawnCsv);
-            let _ = config.features.disable(Feature::Collab);
-        }
 
         let primary_environment = environment_selections.primary_environment();
         let mut user_instruction_warnings = Vec::new();
@@ -544,6 +554,13 @@ impl Codex {
         let model_info = models_manager
             .get_model_info(model.as_str(), &config.to_models_manager_config())
             .await;
+        let multi_agent_version =
+            resolve_multi_agent_version(&conversation_history, inherited_multi_agent_version);
+        let _ = config
+            .effective_agent_max_threads(
+                multi_agent_version.unwrap_or_else(|| config.multi_agent_version_from_features()),
+            )
+            .map_err(|err| CodexErr::InvalidRequest(err.to_string()))?;
         let base_instructions = config
             .base_instructions
             .clone()
@@ -629,6 +646,7 @@ impl Codex {
             thread_store,
             parent_rollout_thread_trace,
             attestation_provider,
+            multi_agent_version,
         )
         .await
         .map_err(|e| {
@@ -1652,7 +1670,7 @@ impl Session {
         turn_context: &TurnContext,
         msg: &EventMsg,
     ) {
-        if !self.enabled(Feature::MultiAgentV2) {
+        if turn_context.multi_agent_version != Some(MultiAgentVersion::V2) {
             return;
         }
 
@@ -2621,6 +2639,56 @@ impl Session {
     pub(crate) async fn collaboration_mode(&self) -> CollaborationMode {
         let state = self.state.lock().await;
         state.session_configuration.collaboration_mode.clone()
+    }
+
+    pub(crate) fn multi_agent_version(&self) -> Option<MultiAgentVersion> {
+        self.multi_agent_version.get().copied()
+    }
+
+    pub(crate) fn set_multi_agent_version_if_unset(
+        &self,
+        multi_agent_version: MultiAgentVersion,
+    ) -> MultiAgentVersion {
+        *self.multi_agent_version.get_or_init(|| multi_agent_version)
+    }
+
+    pub(crate) async fn resolve_multi_agent_version_for_model(
+        &self,
+        model_info: &ModelInfo,
+        config: &Config,
+    ) -> MultiAgentVersion {
+        if let Some(multi_agent_version) = self.multi_agent_version() {
+            return multi_agent_version;
+        }
+
+        let selected = model_info
+            .multi_agent_version
+            .unwrap_or_else(|| config.multi_agent_version_from_features());
+
+        let stored = if config.ephemeral {
+            selected
+        } else {
+            match self
+                .services
+                .thread_store
+                .set_multi_agent_version_if_unset(SetMultiAgentVersionIfUnsetParams {
+                    thread_id: self.thread_id(),
+                    multi_agent_version: selected,
+                })
+                .await
+            {
+                Ok(multi_agent_version) => multi_agent_version,
+                Err(err) => {
+                    warn!(
+                        "failed to set multi-agent version for thread {}: {err}",
+                        self.thread_id()
+                    );
+                    selected
+                }
+            }
+        };
+
+        self.set_multi_agent_version_if_unset(stored)
     }
 
     async fn send_raw_response_items(&self, turn_context: &TurnContext, items: &[ResponseItem]) {

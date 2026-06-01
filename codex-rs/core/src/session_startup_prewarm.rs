@@ -222,7 +222,7 @@ async fn schedule_startup_prewarm_inner(
 ) -> CodexResult<ModelClientSession> {
     let prewarm_started_at = Instant::now();
     let startup_turn_context = session
-        .new_default_turn_with_sub_id(INITIAL_SUBMIT_ID.to_owned())
+        .new_startup_prewarm_turn_with_sub_id(INITIAL_SUBMIT_ID.to_owned())
         .await;
     startup_turn_context.session_telemetry.record_startup_phase(
         "startup_prewarm_create_turn_context",

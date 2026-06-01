@@ -9,6 +9,7 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::GitInfo;
+use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::ThreadMemoryMode as MemoryMode;
@@ -65,6 +66,15 @@ pub struct ThreadPersistenceMetadata {
     pub memory_mode: MemoryMode,
 }
 
+/// Parameters for setting a thread's multi-agent runtime when it has not been recorded yet.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SetMultiAgentVersionIfUnsetParams {
+    /// Thread id whose metadata should be initialized.
+    pub thread_id: ThreadId,
+    /// Version to persist if the thread does not already have one.
+    pub multi_agent_version: MultiAgentVersion,
+}
+
 /// Parameters required to create a persisted thread.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CreateThreadParams {
@@ -82,6 +92,8 @@ pub struct CreateThreadParams {
     pub base_instructions: BaseInstructions,
     /// Dynamic tools available to the thread at startup.
     pub dynamic_tools: Vec<DynamicToolSpec>,
+    /// Multi-agent runtime selected when the thread was created.
+    pub multi_agent_version: Option<MultiAgentVersion>,
     /// Metadata captured for the newly created thread.
     pub metadata: ThreadPersistenceMetadata,
     /// Whether persistence should include the extended event surface.

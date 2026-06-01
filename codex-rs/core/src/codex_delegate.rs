@@ -52,6 +52,7 @@ use codex_login::AuthManager;
 use codex_models_manager::manager::SharedModelsManager;
 use codex_protocol::error::CodexErr;
 use codex_protocol::protocol::InitialHistory;
+use codex_protocol::protocol::MultiAgentVersion;
 
 #[cfg(test)]
 use crate::session::completed_session_loop_termination;
@@ -104,6 +105,7 @@ pub(crate) async fn run_codex_thread_interactive(
         analytics_events_client: Some(parent_session.services.analytics_events_client.clone()),
         thread_store: Arc::clone(&parent_session.services.thread_store),
         attestation_provider: parent_session.services.attestation_provider.clone(),
+        inherited_multi_agent_version: Some(MultiAgentVersion::Disabled),
     }))
     .or_cancel(&cancel_token)
     .await??;
