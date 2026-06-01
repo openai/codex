@@ -17,6 +17,7 @@ use codex_login::logout;
 use codex_login::revoke_account_session_auth;
 use codex_login::save_account_session_auth;
 use codex_login::save_auth;
+use codex_login::token_data::parse_chatgpt_jwt_claims;
 use serde::Deserialize;
 use serde::Serialize;
 use std::fs::OpenOptions;
@@ -202,26 +203,52 @@ impl<'a> AccountSessionsStore<'a> {
         Ok(Self::response(stored))
     }
 
-    pub(crate) fn switch(
+    pub(crate) async fn switch(
         &self,
         session_id: &str,
         account_id: &str,
     ) -> std::io::Result<AccountSessionsResponse> {
         self.sync_active_auth()?;
         let mut stored = self.load()?;
-        let session = stored
+        let index = stored
             .sessions
-            .iter_mut()
-            .find(|session| session.session_id == session_id)
+            .iter()
+            .position(|session| session.session_id == session_id)
             .ok_or_else(|| std::io::Error::other("Saved ChatGPT account session not found"))?;
         let mut auth_json = self
-            .load_session_auth(&session.session_id)?
+            .load_session_auth(&stored.sessions[index].session_id)?
             .ok_or_else(|| std::io::Error::other("Saved ChatGPT account session has no tokens"))?;
+        let auth = CodexAuth::from_account_session_auth_dot_json(
+            self.codex_home,
+            &stored.sessions[index].session_id,
+            auth_json.clone(),
+            self.auth_credentials_store_mode,
+            Some(self.chatgpt_base_url),
+        )
+        .await?;
+        let client = BackendClient::from_auth(self.chatgpt_base_url, &auth)
+            .map_err(std::io::Error::other)?;
+        let replacement = client
+            .switch_workspace_token(account_id)
+            .await
+            .map_err(std::io::Error::other)?;
+        let plan = parse_chatgpt_jwt_claims(&replacement.access_token)
+            .ok()
+            .and_then(|claims| claims.get_chatgpt_plan_type_raw());
         let tokens = auth_json
             .tokens
             .as_mut()
             .ok_or_else(|| std::io::Error::other("Saved ChatGPT account session has no tokens"))?;
+        tokens.access_token = replacement.access_token;
+        if let Some(refresh_token) = replacement.refresh_token {
+            tokens.refresh_token = refresh_token;
+        }
         tokens.account_id = Some(account_id.to_string());
+        auth_json.last_refresh = Some(Utc::now());
+        let session = &mut stored.sessions[index];
+        if let Some(plan) = plan {
+            session.plan = Some(plan);
+        }
         session.selected_workspace_account_id = Some(account_id.to_string());
         session.last_used_at = Utc::now().timestamp();
         stored.active_session_id = Some(session_id.to_string());

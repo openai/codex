@@ -35,6 +35,13 @@ pub struct AccountEntry {
     pub structure: String,
 }
 
+#[derive(Clone, Debug, Deserialize)]
+pub struct SwitchWorkspaceTokenResponse {
+    pub access_token: String,
+    #[serde(default)]
+    pub refresh_token: Option<String>,
+}
+
 #[derive(Deserialize)]
 struct RawAccountsCheckResponse {
     #[serde(default)]

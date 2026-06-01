@@ -1866,7 +1866,7 @@ Field notes:
 
 ### 6) Save and switch ChatGPT account sessions
 
-Desktop clients can save the current managed ChatGPT auth payload after login, list saved sessions, and switch the active workspace. These methods return the full saved-session snapshot because the number of interactive account sessions is intentionally small.
+Desktop clients can save the current managed ChatGPT auth payload after login, list saved sessions, and switch the active workspace. Switching a workspace exchanges the saved access token for a newly signed workspace-scoped token without opening a browser. These methods return the full saved-session snapshot because the number of interactive account sessions is intentionally small.
 
 ```json
 { "method": "accountSession/add", "id": 6, "params": { "switchToAddedAccount": true } }

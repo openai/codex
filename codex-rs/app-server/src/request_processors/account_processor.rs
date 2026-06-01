@@ -149,6 +149,7 @@ impl AccountRequestProcessor {
         let response = self
             .account_sessions_store()
             .switch(&params.session_id, &params.account_id)
+            .await
             .map_err(|err| internal_error(format!("failed to switch account session: {err}")))?;
         self.sync_auth_after_account_session_change().await;
         Ok(Some(response.into()))
