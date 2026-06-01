@@ -240,8 +240,14 @@ impl CommandExecRequestProcessor {
                 .map_err(|err| invalid_request(format!("invalid sandbox policy: {err}")))?;
             let mut file_system_sandbox_policy =
                 codex_protocol::permissions::FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(&policy, &sandbox_cwd);
-            if self.config.managed_allow_limited_git_writes() == Some(true) {
-                file_system_sandbox_policy.apply_managed_limited_git_writes(&sandbox_cwd);
+            match self.config.managed_allow_limited_git_writes() {
+                Some(true) => {
+                    file_system_sandbox_policy.apply_managed_limited_git_writes(&sandbox_cwd);
+                }
+                Some(false) => {
+                    file_system_sandbox_policy.apply_managed_git_write_protection(&sandbox_cwd);
+                }
+                None => {}
             }
             let network_sandbox_policy =
                 codex_protocol::permissions::NetworkSandboxPolicy::from(&policy);

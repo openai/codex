@@ -49,6 +49,7 @@ impl DenyReadMergeState {
                 PermissionsRequirementsToml {
                     filesystem: Some(FilesystemRequirementsToml {
                         deny_read: Some(self.deny_read),
+                        allow_git: None,
                     }),
                     profiles: Default::default(),
                 },

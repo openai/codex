@@ -2150,8 +2150,10 @@ fn apply_managed_filesystem_constraints(
     filesystem_constraints: &codex_config::FilesystemConstraints,
     cwd: &Path,
 ) {
-    if filesystem_constraints.allow_git == Some(true) {
-        file_system_sandbox_policy.apply_managed_limited_git_writes(cwd);
+    match filesystem_constraints.allow_git {
+        Some(true) => file_system_sandbox_policy.apply_managed_limited_git_writes(cwd),
+        Some(false) => file_system_sandbox_policy.apply_managed_git_write_protection(cwd),
+        None => {}
     }
     for deny_read in &filesystem_constraints.deny_read {
         let deny_entry = if deny_read.contains_glob() {

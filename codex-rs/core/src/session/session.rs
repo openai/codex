@@ -176,8 +176,14 @@ impl SessionConfiguration {
         &self,
         file_system_sandbox_policy: &mut FileSystemSandboxPolicy,
     ) {
-        if self.managed_allow_limited_git_writes == Some(true) {
-            file_system_sandbox_policy.apply_managed_limited_git_writes(self.cwd.as_path());
+        match self.managed_allow_limited_git_writes {
+            Some(true) => {
+                file_system_sandbox_policy.apply_managed_limited_git_writes(self.cwd.as_path());
+            }
+            Some(false) => {
+                file_system_sandbox_policy.apply_managed_git_write_protection(self.cwd.as_path());
+            }
+            None => {}
         }
     }
 

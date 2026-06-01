@@ -1568,10 +1568,6 @@ allow_git = true
 
         let policy = config.permissions.file_system_sandbox_policy();
         assert!(
-            policy.allow_limited_git_writes,
-            "expected system requirements to enable limited git writes for `{source}`"
-        );
-        assert!(
             policy.can_write_path_with_cwd(&tmp.path().join(".git").join("HEAD"), tmp.path()),
             "expected system requirements to permit Git metadata writes for `{source}`"
         );
@@ -1616,10 +1612,6 @@ allow_git = false
     .await?;
 
     let policy = config.permissions.file_system_sandbox_policy();
-    assert!(
-        !policy.allow_limited_git_writes,
-        "expected system requirements to override local limited git write opt-in"
-    );
     assert!(
         !policy.can_write_path_with_cwd(&tmp.path().join(".git").join("HEAD"), tmp.path()),
         "expected the disabled managed setting to protect Git metadata"

@@ -464,6 +464,49 @@ impl FileSystemSandboxPolicy {
         }
     }
 
+    /// Apply a managed override that keeps Git metadata protected even when a
+    /// profile opted into limited Git metadata writes.
+    pub fn apply_managed_git_write_protection(&mut self, cwd: &Path) {
+        if !matches!(self.kind, FileSystemSandboxKind::Restricted) {
+            return;
+        }
+
+        let writable_root_paths = dedup_absolute_paths(
+            self.resolved_entries_with_cwd(cwd)
+                .into_iter()
+                .filter(|entry| entry.access.can_write())
+                .filter(|entry| self.can_write_path_with_cwd(entry.path.as_path(), cwd))
+                .map(|entry| entry.path)
+                .collect(),
+            /*normalize_effective_paths*/ false,
+        );
+        let protected_git_roots = dedup_absolute_paths(
+            writable_root_paths
+                .iter()
+                .flat_map(|root| managed_git_read_only_subpaths_for_writable_root(root, false))
+                .chain(
+                    writable_root_paths
+                        .iter()
+                        .filter(|root| path_contains_git_metadata_component(root))
+                        .cloned(),
+                )
+                .collect(),
+            /*normalize_effective_paths*/ true,
+        );
+        self.entries.retain(|entry| {
+            !entry.access.can_write()
+                || !is_managed_git_write_entry(entry, cwd, &protected_git_roots)
+        });
+
+        append_default_read_only_project_root_subpath_if_no_explicit_rule(
+            &mut self.entries,
+            PROTECTED_METADATA_GIT_PATH_NAME,
+        );
+        for git_root in protected_git_roots {
+            append_default_read_only_path_if_no_explicit_rule(&mut self.entries, git_root);
+        }
+    }
+
     fn has_root_access(&self, predicate: impl Fn(FileSystemAccessMode) -> bool) -> bool {
         matches!(self.kind, FileSystemSandboxKind::Restricted)
             && self.entries.iter().any(|entry| {
@@ -1749,6 +1792,23 @@ fn pointed_gitdirs_for_writable_roots(writable_roots: &[AbsolutePathBuf]) -> Vec
         .collect();
     dedup_absolute_paths(gitdirs, /*normalize_effective_paths*/ true)
 }
+
+pub(crate) fn add_limited_git_writable_roots(
+    roots: &mut Vec<WritableRoot>,
+    writable_root_paths: &[AbsolutePathBuf],
+) {
+    for gitdir in pointed_gitdirs_for_writable_roots(writable_root_paths) {
+        if roots.iter().any(|root| root.root == gitdir) {
+            continue;
+        }
+
+        roots.push(WritableRoot {
+            read_only_subpaths: protected_git_subpaths_when_writable(&gitdir),
+            protected_metadata_names: Vec::new(),
+            root: gitdir,
+        });
+    }
+}
 /// Rebuilds the filesystem policy that legacy sandbox runtimes enforce for a
 /// concrete cwd.
 ///
@@ -1841,6 +1901,16 @@ fn protected_git_subpaths_when_writable(gitdir: &AbsolutePathBuf) -> Vec<Absolut
         .collect()
 }
 
+fn path_contains_git_metadata_component(path: &AbsolutePathBuf) -> bool {
+    path.as_path().components().any(|component| {
+        matches!(
+            component,
+            std::path::Component::Normal(name)
+                if name == OsStr::new(PROTECTED_METADATA_GIT_PATH_NAME)
+        )
+    })
+}
+
 fn append_default_read_only_project_root_subpath_if_no_explicit_rule(
     entries: &mut Vec<FileSystemSandboxEntry>,
     subpath: impl Into<PathBuf>,
@@ -1877,51 +1947,6 @@ fn append_default_read_only_entry_if_no_explicit_rule(
     });
 }
 
-fn git_root_protection_children(path: &FileSystemPath) -> Option<[FileSystemPath; 2]> {
-    match path {
-        FileSystemPath::Special {
-            value:
-                FileSystemSpecialPath::ProjectRoots {
-                    subpath: Some(subpath),
-                },
-        } if subpath == Path::new(PROTECTED_METADATA_GIT_PATH_NAME) => Some([
-            FileSystemPath::Special {
-                value: FileSystemSpecialPath::project_roots(Some(subpath.join("config"))),
-            },
-            FileSystemPath::Special {
-                value: FileSystemSpecialPath::project_roots(Some(subpath.join("hooks"))),
-            },
-        ]),
-        FileSystemPath::Path { .. }
-        | FileSystemPath::GlobPattern { .. }
-        | FileSystemPath::Special { .. } => None,
-    }
-}
-
-fn git_child_protection_root(path: &FileSystemPath) -> Option<FileSystemPath> {
-    match path {
-        FileSystemPath::Special {
-            value:
-                FileSystemSpecialPath::ProjectRoots {
-                    subpath: Some(subpath),
-                },
-        } if matches!(
-            subpath.as_path(),
-            path if path == Path::new(".git/config") || path == Path::new(".git/hooks")
-        ) =>
-        {
-            Some(FileSystemPath::Special {
-                value: FileSystemSpecialPath::project_roots(Some(PathBuf::from(
-                    PROTECTED_METADATA_GIT_PATH_NAME,
-                ))),
-            })
-        }
-        FileSystemPath::Path { .. }
-        | FileSystemPath::GlobPattern { .. }
-        | FileSystemPath::Special { .. } => None,
-    }
-}
-
 fn is_managed_git_protected_write_entry(
     entry: &FileSystemSandboxEntry,
     cwd: &Path,
@@ -1945,6 +1970,34 @@ fn is_managed_git_protected_write_entry(
             .iter()
             .any(|protected_subpath| subpath.starts_with(Path::new(protected_subpath))),
         FileSystemPath::Special { .. } => resolve_file_system_path(
+            &entry.path,
+            AbsolutePathBuf::from_absolute_path(cwd).ok().as_ref(),
+        )
+        .is_some_and(|path| {
+            let path = normalize_effective_absolute_path(path);
+            protected_paths.iter().any(|protected_path| {
+                path.as_path().starts_with(
+                    normalize_effective_absolute_path(protected_path.clone()).as_path(),
+                )
+            })
+        }),
+        FileSystemPath::GlobPattern { .. } => false,
+    }
+}
+
+fn is_managed_git_write_entry(
+    entry: &FileSystemSandboxEntry,
+    cwd: &Path,
+    protected_paths: &[AbsolutePathBuf],
+) -> bool {
+    match &entry.path {
+        FileSystemPath::Special {
+            value:
+                FileSystemSpecialPath::ProjectRoots {
+                    subpath: Some(subpath),
+                },
+        } => subpath.starts_with(Path::new(PROTECTED_METADATA_GIT_PATH_NAME)),
+        FileSystemPath::Special { .. } | FileSystemPath::Path { .. } => resolve_file_system_path(
             &entry.path,
             AbsolutePathBuf::from_absolute_path(cwd).ok().as_ref(),
         )

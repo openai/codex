@@ -2373,6 +2373,7 @@ async fn explicit_builtin_workspace_profile_ignores_legacy_workspace_write_setti
             sandbox_workspace_write: Some(SandboxWorkspaceWrite {
                 writable_roots: vec![extra_root.path().abs()],
                 network_access: true,
+                allow_limited_git_writes: false,
                 exclude_tmpdir_env_var: true,
                 exclude_slash_tmp: true,
             }),
@@ -2589,6 +2590,7 @@ async fn implicit_builtin_workspace_profile_preserves_sandbox_workspace_write_se
             sandbox_workspace_write: Some(SandboxWorkspaceWrite {
                 writable_roots: vec![extra_root.clone()],
                 network_access: true,
+                allow_limited_git_writes: false,
                 exclude_tmpdir_env_var: true,
                 exclude_slash_tmp: false,
             }),
