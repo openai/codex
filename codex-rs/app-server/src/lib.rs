@@ -73,6 +73,7 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::registry::Registry;
 use tracing_subscriber::util::SubscriberInitExt;
 
+mod account_sessions;
 mod analytics_utils;
 mod app_server_tracing;
 mod attestation;

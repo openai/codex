@@ -1775,6 +1775,10 @@ Codex supports these authentication modes. The current mode is surfaced in `acco
 - `account/login/start` — begin login (`apiKey`, `chatgpt`, `chatgptDeviceCode`).
 - `account/login/completed` (notify) — emitted when a login attempt finishes (success or error).
 - `account/login/cancel` — cancel a pending managed ChatGPT login by `loginId`.
+- `accountSession/add` — save the current managed ChatGPT auth session.
+- `accountSession/list` — list saved managed ChatGPT auth sessions and optionally refresh their workspace metadata.
+- `accountSession/switch` — make a saved ChatGPT auth session and workspace current.
+- `accountSession/logout` — revoke and remove one saved ChatGPT auth session.
 - `account/logout` — sign out; triggers `account/updated`.
 - `account/updated` (notify) — emitted whenever auth mode changes (`authMode`: `apikey`, `chatgpt`, or `null`) and includes the current ChatGPT `planType` when available.
 - `account/rateLimits/read` — fetch ChatGPT rate limits and an optional effective monthly credit limit; updates arrive via `account/rateLimits/updated` (notify).
@@ -1860,19 +1864,30 @@ Field notes:
 { "method": "account/login/completed", "params": { "loginId": "<uuid>", "success": false, "error": "…" } }
 ```
 
-### 6) Logout
+### 6) Save and switch ChatGPT account sessions
+
+Desktop clients can save the current managed ChatGPT auth payload after login, list saved sessions, and switch the active workspace. These methods return the full saved-session snapshot because the number of interactive account sessions is intentionally small.
 
 ```json
-{ "method": "account/logout", "id": 6 }
-{ "id": 6, "result": {} }
+{ "method": "accountSession/add", "id": 6, "params": { "switchToAddedAccount": true } }
+{ "method": "accountSession/list", "id": 7, "params": { "refreshWorkspaceMetadata": true } }
+{ "method": "accountSession/switch", "id": 8, "params": { "sessionId": "<uuid>", "accountId": "<workspace-id>" } }
+{ "method": "accountSession/logout", "id": 9, "params": { "sessionId": "<uuid>" } }
+```
+
+### 7) Logout
+
+```json
+{ "method": "account/logout", "id": 10 }
+{ "id": 10, "result": {} }
 { "method": "account/updated", "params": { "authMode": null, "planType": null } }
 ```
 
-### 7) Rate limits (ChatGPT)
+### 8) Rate limits (ChatGPT)
 
 ```json
-{ "method": "account/rateLimits/read", "id": 7 }
-{ "id": 7, "result": { "rateLimits": { "primary": { "usedPercent": 25, "windowDurationMins": 15, "resetsAt": 1730947200 }, "secondary": null, "rateLimitReachedType": null } } }
+{ "method": "account/rateLimits/read", "id": 11 }
+{ "id": 11, "result": { "rateLimits": { "primary": { "usedPercent": 25, "windowDurationMins": 15, "resetsAt": 1730947200 }, "secondary": null, "rateLimitReachedType": null } } }
 { "method": "account/rateLimits/updated", "params": { "rateLimits": { … } } }
 ```
 

@@ -105,6 +105,55 @@ impl AccountRequestProcessor {
             .map(|response| Some(response.into()))
     }
 
+    pub(crate) async fn add_account_session(
+        &self,
+        params: AccountSessionsAddParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        let response = self
+            .account_sessions_store()
+            .add(params.switch_to_added_account)
+            .await
+            .map_err(|err| internal_error(format!("failed to add account session: {err}")))?;
+        self.sync_auth_after_account_session_change().await;
+        Ok(Some(response.into()))
+    }
+
+    pub(crate) async fn list_account_sessions(
+        &self,
+        params: AccountSessionsListParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        self.account_sessions_store()
+            .list(params.refresh_workspace_metadata)
+            .await
+            .map(|response| Some(response.into()))
+            .map_err(|err| internal_error(format!("failed to list account sessions: {err}")))
+    }
+
+    pub(crate) async fn logout_account_session(
+        &self,
+        params: AccountSessionsLogoutParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        let response = self
+            .account_sessions_store()
+            .logout(&params.session_id)
+            .await
+            .map_err(|err| internal_error(format!("failed to log out account session: {err}")))?;
+        self.sync_auth_after_account_session_change().await;
+        Ok(Some(response.into()))
+    }
+
+    pub(crate) async fn switch_account_session(
+        &self,
+        params: AccountSessionsSwitchParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        let response = self
+            .account_sessions_store()
+            .switch(&params.session_id, &params.account_id)
+            .map_err(|err| internal_error(format!("failed to switch account session: {err}")))?;
+        self.sync_auth_after_account_session_change().await;
+        Ok(Some(response.into()))
+    }
+
     pub(crate) async fn get_account(
         &self,
         params: GetAccountParams,
@@ -157,6 +206,42 @@ impl AccountRequestProcessor {
             auth_mode: auth.as_ref().map(CodexAuth::api_auth_mode),
             plan_type: auth.as_ref().and_then(CodexAuth::account_plan_type),
         }
+    }
+
+    fn account_sessions_store(&self) -> AccountSessionsStore<'_> {
+        AccountSessionsStore::new(
+            &self.config.codex_home,
+            self.config.cli_auth_credentials_store_mode,
+            &self.config.chatgpt_base_url,
+        )
+    }
+
+    fn sync_active_account_session(&self) -> Result<(), JSONRPCErrorError> {
+        self.account_sessions_store()
+            .sync_active_auth()
+            .map_err(|err| internal_error(format!("failed to sync active account session: {err}")))
+    }
+
+    async fn sync_auth_after_account_session_change(&self) {
+        self.auth_manager.reload().await;
+        self.config_manager.replace_cloud_requirements_loader(
+            self.auth_manager.clone(),
+            self.config.chatgpt_base_url.clone(),
+        );
+        self.config_manager
+            .sync_default_client_residency_requirement()
+            .await;
+        Self::maybe_refresh_remote_installed_plugins_cache_for_current_config(
+            &self.config_manager,
+            &self.thread_manager,
+            self.auth_manager.auth_cached(),
+        )
+        .await;
+        self.outgoing
+            .send_server_notification(ServerNotification::AccountUpdated(
+                self.current_account_updated_notification(),
+            ))
+            .await;
     }
 
     async fn maybe_refresh_remote_installed_plugins_cache_for_current_config(
@@ -265,6 +350,8 @@ impl AccountRequestProcessor {
             ));
         }
 
+        self.sync_active_account_session()?;
+
         // Cancel any active login attempt.
         {
             let mut guard = self.active_login.lock().await;
@@ -317,9 +404,16 @@ impl AccountRequestProcessor {
             ));
         }
 
+        self.sync_active_account_session()?;
+        let revoke_previous_auth = !self
+            .account_sessions_store()
+            .has_sessions()
+            .map_err(|err| internal_error(format!("failed to read account sessions: {err}")))?;
+
         let opts = LoginServerOptions {
             open_browser: false,
             codex_streamlined_login,
+            revoke_previous_auth,
             ..LoginServerOptions::new(
                 config.codex_home.to_path_buf(),
                 CLIENT_ID.to_string(),
@@ -562,6 +656,8 @@ impl AccountRequestProcessor {
             ));
         }
 
+        self.sync_active_account_session()?;
+
         // Cancel any active login attempt to avoid persisting managed auth state.
         {
             let mut guard = self.active_login.lock().await;
@@ -675,6 +771,12 @@ impl AccountRequestProcessor {
                 drop(active);
             }
         }
+
+        self.sync_active_account_session()?;
+        self.account_sessions_store()
+            .revoke_all_and_clear()
+            .await
+            .map_err(|err| internal_error(format!("failed to clear account sessions: {err}")))?;
 
         match self.auth_manager.logout_with_revoke().await {
             Ok(_) => {}

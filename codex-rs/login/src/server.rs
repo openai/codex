@@ -71,6 +71,7 @@ pub struct ServerOptions {
     pub force_state: Option<String>,
     pub forced_chatgpt_workspace_id: Option<Vec<String>>,
     pub codex_streamlined_login: bool,
+    pub revoke_previous_auth: bool,
     pub cli_auth_credentials_store_mode: AuthCredentialsStoreMode,
 }
 
@@ -91,6 +92,7 @@ impl ServerOptions {
             force_state: None,
             forced_chatgpt_workspace_id,
             codex_streamlined_login: false,
+            revoke_previous_auth: true,
             cli_auth_credentials_store_mode,
         }
     }
@@ -362,6 +364,7 @@ async fn process_request(
                         tokens.access_token.clone(),
                         tokens.refresh_token.clone(),
                         opts.cli_auth_credentials_store_mode,
+                        opts.revoke_previous_auth,
                     )
                     .await
                     {
@@ -793,6 +796,7 @@ pub(crate) async fn persist_tokens_async(
     access_token: String,
     refresh_token: String,
     auth_credentials_store_mode: AuthCredentialsStoreMode,
+    revoke_previous_auth: bool,
 ) -> io::Result<()> {
     // Reuse existing synchronous logic but run it off the async runtime.
     let codex_home = codex_home.to_path_buf();
@@ -829,7 +833,8 @@ pub(crate) async fn persist_tokens_async(
     .await
     .map_err(|e| io::Error::other(format!("persist task failed: {e}")))??;
 
-    if should_revoke_auth_tokens(previous_auth.as_ref(), &auth)
+    if revoke_previous_auth
+        && should_revoke_auth_tokens(previous_auth.as_ref(), &auth)
         && let Err(err) = revoke_auth_tokens(previous_auth.as_ref()).await
     {
         warn!("failed to revoke superseded auth tokens after login: {err}");
@@ -1227,6 +1232,7 @@ mod tests {
             "new-access".to_string(),
             "new-refresh".to_string(),
             AuthCredentialsStoreMode::File,
+            /*revoke_previous_auth*/ true,
         )
         .await?;
 
@@ -1287,6 +1293,7 @@ mod tests {
             "new-access".to_string(),
             "shared-refresh".to_string(),
             AuthCredentialsStoreMode::File,
+            /*revoke_previous_auth*/ true,
         )
         .await?;
 

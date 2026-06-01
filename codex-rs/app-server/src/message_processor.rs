@@ -1286,6 +1286,18 @@ impl MessageProcessor {
             ClientRequest::CancelLoginAccount { params, .. } => {
                 self.account_processor.cancel_login_account(params).await
             }
+            ClientRequest::AccountSessionsAdd { params, .. } => {
+                self.account_processor.add_account_session(params).await
+            }
+            ClientRequest::AccountSessionsList { params, .. } => {
+                self.account_processor.list_account_sessions(params).await
+            }
+            ClientRequest::AccountSessionsLogout { params, .. } => {
+                self.account_processor.logout_account_session(params).await
+            }
+            ClientRequest::AccountSessionsSwitch { params, .. } => {
+                self.account_processor.switch_account_session(params).await
+            }
             ClientRequest::GetAccount { params, .. } => {
                 self.account_processor.get_account(params).await
             }
