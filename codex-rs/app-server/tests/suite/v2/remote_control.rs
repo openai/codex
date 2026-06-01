@@ -3,7 +3,7 @@ use std::time::Duration;
 use anyhow::Context;
 use anyhow::Result;
 use app_test_support::ChatGptAuthFixture;
-use app_test_support::McpProcess;
+use app_test_support::AppServer;
 use app_test_support::to_response;
 use app_test_support::write_chatgpt_auth;
 use app_test_support::write_mock_responses_config_toml_with_chatgpt_base_url;
@@ -29,7 +29,7 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 #[tokio::test]
 async fn remote_control_disable_returns_disabled_status() -> Result<()> {
     let codex_home = TempDir::new()?;
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = AppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp.send_remote_control_disable_request().await?;
@@ -50,7 +50,7 @@ async fn remote_control_disable_returns_disabled_status() -> Result<()> {
 #[tokio::test]
 async fn remote_control_status_read_returns_disabled_status() -> Result<()> {
     let codex_home = TempDir::new()?;
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = AppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp.send_remote_control_status_read_request().await?;
@@ -72,7 +72,7 @@ async fn remote_control_status_read_returns_disabled_status() -> Result<()> {
 async fn remote_control_enable_returns_connecting_status() -> Result<()> {
     let codex_home = TempDir::new()?;
     let _backend = BlockingRemoteControlBackend::start(codex_home.path()).await?;
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = AppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp.send_remote_control_enable_request().await?;
@@ -94,7 +94,7 @@ async fn remote_control_enable_returns_connecting_status() -> Result<()> {
 async fn remote_control_status_read_returns_connecting_status_after_enable() -> Result<()> {
     let codex_home = TempDir::new()?;
     let mut backend = BlockingRemoteControlBackend::start(codex_home.path()).await?;
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = AppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp.send_remote_control_enable_request().await?;

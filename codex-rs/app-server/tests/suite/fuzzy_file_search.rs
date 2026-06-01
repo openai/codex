@@ -1,6 +1,6 @@
 use anyhow::Result;
 use anyhow::anyhow;
-use app_test_support::McpProcess;
+use app_test_support::AppServer;
 use codex_app_server_protocol::FuzzyFileSearchSessionCompletedNotification;
 use codex_app_server_protocol::FuzzyFileSearchSessionUpdatedNotification;
 use codex_app_server_protocol::JSONRPCResponse;
@@ -44,15 +44,15 @@ shell_snapshot = false
     )
 }
 
-async fn initialized_mcp(codex_home: &TempDir) -> Result<McpProcess> {
+async fn initialized_mcp(codex_home: &TempDir) -> Result<AppServer> {
     create_config_toml(codex_home.path())?;
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = AppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
     Ok(mcp)
 }
 
 async fn wait_for_session_updated(
-    mcp: &mut McpProcess,
+    mcp: &mut AppServer,
     session_id: &str,
     query: &str,
     file_expectation: FileExpectation,
@@ -99,7 +99,7 @@ async fn wait_for_session_updated(
 }
 
 async fn wait_for_session_completed(
-    mcp: &mut McpProcess,
+    mcp: &mut AppServer,
     session_id: &str,
 ) -> Result<FuzzyFileSearchSessionCompletedNotification> {
     let description = format!("session completion for sessionId={session_id}");
@@ -140,7 +140,7 @@ async fn wait_for_session_completed(
 }
 
 async fn assert_update_request_fails_for_missing_session(
-    mcp: &mut McpProcess,
+    mcp: &mut AppServer,
     session_id: &str,
     query: &str,
 ) -> Result<()> {
@@ -161,7 +161,7 @@ async fn assert_update_request_fails_for_missing_session(
 }
 
 async fn assert_no_session_updates_for(
-    mcp: &mut McpProcess,
+    mcp: &mut AppServer,
     session_id: &str,
     grace_period: std::time::Duration,
     duration: std::time::Duration,
@@ -236,7 +236,7 @@ async fn test_fuzzy_file_search_sorts_and_includes_indices() -> Result<()> {
         .to_string();
 
     // Start MCP server and initialize.
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = AppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let root_path = root.path().to_string_lossy().to_string();
@@ -302,7 +302,7 @@ async fn test_fuzzy_file_search_accepts_cancellation_token() -> Result<()> {
 
     std::fs::write(root.path().join("alpha.txt"), "contents")?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = AppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let root_path = root.path().to_string_lossy().to_string();
