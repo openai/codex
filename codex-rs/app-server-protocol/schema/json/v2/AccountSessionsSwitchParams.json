@@ -1,0 +1,17 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+    "accountId": {
+      "type": "string"
+    },
+    "sessionId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "accountId",
+    "sessionId"
+  ],
+  "title": "AccountSessionsSwitchParams",
+  "type": "object"
+}
