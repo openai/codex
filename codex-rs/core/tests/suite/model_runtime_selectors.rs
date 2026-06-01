@@ -392,6 +392,10 @@ async fn guardian_stays_disabled_when_model_selects_multi_agent_v2() -> Result<(
                 .features
                 .enable(Feature::RequestPermissionsTool)
                 .expect("test config should allow feature update");
+            config
+                .features
+                .disable(Feature::Apps)
+                .expect("test config should allow feature update");
         });
     let test = builder.build(&server).await?;
     test.submit_turn("request network access").await?;
