@@ -7,6 +7,7 @@ use std::time::SystemTime;
 
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::SessionMeta;
@@ -18,7 +19,9 @@ use tempfile::TempDir;
 use uuid::Uuid;
 
 use super::*;
+use crate::RolloutConfig;
 use crate::RolloutRecorder;
+use crate::RolloutRecorderParams;
 use crate::append_rollout_item_to_path;
 
 #[tokio::test]
@@ -141,6 +144,58 @@ async fn worker_compresses_old_archived_rollouts_only() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn resume_materializes_compressed_rollout_path() -> anyhow::Result<()> {
+    let home = TempDir::new()?;
+    let config = RolloutConfig {
+        codex_home: home.path().to_path_buf(),
+        sqlite_home: home.path().to_path_buf(),
+        cwd: home.path().to_path_buf(),
+        model_provider_id: "test-provider".to_string(),
+        generate_memories: true,
+    };
+    let uuid = Uuid::from_u128(3);
+    let thread_id = ThreadId::from_string(&uuid.to_string())?;
+    let rollout_path = rollout_path(home.path(), "2025-01-03T12-00-00", uuid);
+    write_rollout(&rollout_path, thread_id, "hello before resume")?;
+    compress_now(&rollout_path)?;
+    let compressed_path = compressed_rollout_path(&rollout_path);
+
+    let InitialHistory::Resumed(history) =
+        RolloutRecorder::get_rollout_history(compressed_path.as_path()).await?
+    else {
+        panic!("expected compressed rollout to load as resumed history");
+    };
+    assert_eq!(history.rollout_path, Some(rollout_path.clone()));
+
+    let recorder = RolloutRecorder::new(
+        &config,
+        RolloutRecorderParams::resume(compressed_path.clone()),
+    )
+    .await?;
+
+    assert_eq!(recorder.rollout_path(), rollout_path.as_path());
+    assert!(rollout_path.exists());
+    assert!(!compressed_path.exists());
+    recorder
+        .record_canonical_items(&[RolloutItem::EventMsg(EventMsg::UserMessage(
+            UserMessageEvent {
+                message: "hello after resume".to_string(),
+                ..Default::default()
+            },
+        ))])
+        .await?;
+    recorder.flush().await?;
+    recorder.shutdown().await?;
+
+    let (items, loaded_thread_id, parse_errors) =
+        RolloutRecorder::load_rollout_items(&rollout_path).await?;
+    assert_eq!(loaded_thread_id, Some(thread_id));
+    assert_eq!(parse_errors, 0);
+    assert_eq!(items.len(), 3);
+    Ok(())
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn compression_preserves_rollout_permissions() -> anyhow::Result<()> {
@@ -160,6 +215,20 @@ async fn compression_preserves_rollout_permissions() -> anyhow::Result<()> {
         fs::metadata(&compressed_path)?.permissions().mode() & 0o777,
         0o600
     );
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn append_materialization_preserves_compressed_rollout_permissions() -> anyhow::Result<()> {
+    let home = TempDir::new()?;
+    let uuid = Uuid::from_u128(6);
+    let thread_id = ThreadId::from_string(&uuid.to_string())?;
+    let rollout_path = rollout_path(home.path(), "2025-01-03T12-00-00", uuid);
+    write_rollout(&rollout_path, thread_id, "restricted transcript")?;
+    compress_now(&rollout_path)?;
+    let compressed_path = compressed_rollout_path(&rollout_path);
+    fs::set_permissions(&compressed_path, fs::Permissions::from_mode(0o600))?;
 
     append_rollout_item_to_path(
         &rollout_path,
@@ -330,10 +399,6 @@ fn archived_rollout_path(home: &std::path::Path, ts: &str, uuid: Uuid) -> std::p
         .join(format!("rollout-{ts}-{uuid}.jsonl"))
 }
 
-fn compressed_rollout_path(path: &std::path::Path) -> std::path::PathBuf {
-    super::path::compressed_rollout_path(path)
-}
-
 fn write_rollout(path: &std::path::Path, thread_id: ThreadId, message: &str) -> anyhow::Result<()> {
     let parent = path.parent().expect("rollout path should have parent");
     fs::create_dir_all(parent)?;
@@ -341,6 +406,7 @@ fn write_rollout(path: &std::path::Path, thread_id: ThreadId, message: &str) -> 
         meta: SessionMeta {
             id: thread_id,
             forked_from_id: None,
+            parent_thread_id: None,
             timestamp: "2025-01-03T12:00:00Z".to_string(),
             cwd: parent.to_path_buf(),
             originator: "test".to_string(),

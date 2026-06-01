@@ -21,6 +21,7 @@
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
 use codex_config::types::KeybindingsSpec;
+use codex_config::types::MAX_FUNCTION_KEY;
 use codex_config::types::TuiKeymap;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyModifiers;
@@ -158,6 +159,7 @@ pub(crate) struct VimNormalKeymap {
     pub(crate) move_line_start: Vec<KeyBinding>,
     pub(crate) move_line_end: Vec<KeyBinding>,
     pub(crate) delete_char: Vec<KeyBinding>,
+    pub(crate) substitute_char: Vec<KeyBinding>,
     pub(crate) delete_to_line_end: Vec<KeyBinding>,
     pub(crate) change_to_line_end: Vec<KeyBinding>,
     pub(crate) yank_line: Vec<KeyBinding>,
@@ -494,6 +496,7 @@ impl RuntimeKeymap {
             move_line_start: resolve_local!(keymap, defaults, vim_normal, move_line_start),
             move_line_end: resolve_local!(keymap, defaults, vim_normal, move_line_end),
             delete_char: resolve_local!(keymap, defaults, vim_normal, delete_char),
+            substitute_char: resolve_local!(keymap, defaults, vim_normal, substitute_char),
             delete_to_line_end: resolve_local!(keymap, defaults, vim_normal, delete_to_line_end),
             change_to_line_end: resolve_local!(keymap, defaults, vim_normal, change_to_line_end),
             yank_line: resolve_local!(keymap, defaults, vim_normal, yank_line),
@@ -580,6 +583,10 @@ impl RuntimeKeymap {
                 vim_normal.delete_char.as_slice(),
             ),
             (
+                keymap.vim_normal.change_to_line_end.as_ref(),
+                vim_normal.change_to_line_end.as_slice(),
+            ),
+            (
                 keymap.vim_normal.delete_to_line_end.as_ref(),
                 vim_normal.delete_to_line_end.as_slice(),
             ),
@@ -600,6 +607,10 @@ impl RuntimeKeymap {
                 vim_normal.start_yank_operator.as_slice(),
             ),
             (
+                keymap.vim_normal.start_change_operator.as_ref(),
+                vim_normal.start_change_operator.as_slice(),
+            ),
+            (
                 keymap.vim_normal.cancel_operator.as_ref(),
                 vim_normal.cancel_operator.as_slice(),
             ),
@@ -608,6 +619,11 @@ impl RuntimeKeymap {
         if keymap.vim_normal.start_change_operator.is_none() {
             vim_normal
                 .start_change_operator
+                .retain(|binding| !configured_vim_normal_bindings_to_preserve.contains(binding));
+        }
+        if keymap.vim_normal.substitute_char.is_none() {
+            vim_normal
+                .substitute_char
                 .retain(|binding| !configured_vim_normal_bindings_to_preserve.contains(binding));
         }
 
@@ -990,6 +1006,7 @@ impl RuntimeKeymap {
                     shift(KeyCode::Char('$'))
                 ],
                 delete_char: default_bindings![plain(KeyCode::Char('x'))],
+                substitute_char: default_bindings![plain(KeyCode::Char('s'))],
                 delete_to_line_end: default_bindings![
                     shift(KeyCode::Char('d')),
                     plain(KeyCode::Char('D'))
@@ -1434,6 +1451,10 @@ impl RuntimeKeymap {
                 ),
                 ("move_line_end", self.vim_normal.move_line_end.as_slice()),
                 ("delete_char", self.vim_normal.delete_char.as_slice()),
+                (
+                    "substitute_char",
+                    self.vim_normal.substitute_char.as_slice(),
+                ),
                 (
                     "delete_to_line_end",
                     self.vim_normal.delete_to_line_end.as_slice(),
@@ -1919,7 +1940,7 @@ fn parse_keybinding(spec: &str) -> Option<KeyBinding> {
         other if other.len() == 1 => KeyCode::Char(char::from(other.as_bytes()[0])),
         other if other.starts_with('f') => {
             let number = other[1..].parse::<u8>().ok()?;
-            if (1..=12).contains(&number) {
+            if (1..=MAX_FUNCTION_KEY).contains(&number) {
                 KeyCode::F(number)
             } else {
                 return None;
@@ -2312,6 +2333,29 @@ mod tests {
     }
 
     #[test]
+    fn configured_legacy_vim_normal_bindings_prune_new_substitute_default() {
+        let mut keymap = TuiKeymap::default();
+        keymap.vim_normal.move_left = Some(one("s"));
+
+        let runtime = RuntimeKeymap::from_config(&keymap).expect("config should parse");
+
+        assert_eq!(
+            runtime.vim_normal.move_left,
+            vec![key_hint::plain(KeyCode::Char('s'))]
+        );
+        assert_eq!(runtime.vim_normal.substitute_char, Vec::new());
+    }
+
+    #[test]
+    fn explicit_new_vim_normal_substitute_binding_still_conflicts_with_legacy_binding() {
+        let mut keymap = TuiKeymap::default();
+        keymap.vim_normal.move_left = Some(one("s"));
+        keymap.vim_normal.substitute_char = Some(one("s"));
+
+        expect_conflict(&keymap, "move_left", "substitute_char");
+    }
+
+    #[test]
     fn configured_legacy_vim_operator_bindings_prune_new_text_object_defaults() {
         let mut keymap = TuiKeymap::default();
         keymap.vim_operator.motion_left = Some(one("i"));
@@ -2593,7 +2637,11 @@ mod tests {
             parse_keybinding("f1").map(|binding| binding.parts()),
             Some((KeyCode::F(1), KeyModifiers::NONE))
         );
-        assert_eq!(parse_keybinding("f13"), None);
+        assert_eq!(
+            parse_keybinding("f24").map(|binding| binding.parts()),
+            Some((KeyCode::F(24), KeyModifiers::NONE))
+        );
+        assert_eq!(parse_keybinding("f25"), None);
     }
 
     #[test]

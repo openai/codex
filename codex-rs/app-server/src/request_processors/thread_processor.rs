@@ -1308,7 +1308,7 @@ impl ThreadRequestProcessor {
         params: ThreadArchiveParams,
     ) -> Result<(ThreadArchiveResponse, Vec<String>), JSONRPCErrorError> {
         let thread_id = ThreadId::from_string(&params.thread_id)
-            .map_err(|err| invalid_request(format!("invalid thread id: {err}")))?;
+            .map_err(|err| invalid_request(format!("invalid session id: {err}")))?;
 
         let mut thread_ids = vec![thread_id];
         if let Some(state_db_ctx) = self.state_db.as_ref() {
@@ -1317,7 +1317,7 @@ impl ThreadRequestProcessor {
                 .await
                 .map_err(|err| {
                     internal_error(format!(
-                        "failed to list spawned descendants for thread id {thread_id}: {err}"
+                        "failed to list spawned descendants for session {thread_id}: {err}"
                     ))
                 })?;
             let mut seen = HashSet::from([thread_id]);
@@ -1629,7 +1629,7 @@ impl ThreadRequestProcessor {
         params: ThreadUnarchiveParams,
     ) -> Result<(ThreadUnarchiveResponse, String), JSONRPCErrorError> {
         let thread_id = ThreadId::from_string(&params.thread_id)
-            .map_err(|err| invalid_request(format!("invalid thread id: {err}")))?;
+            .map_err(|err| invalid_request(format!("invalid session id: {err}")))?;
 
         let fallback_provider = self.config.model_provider_id.clone();
         let stored_thread = self
@@ -2968,7 +2968,7 @@ impl ThreadRequestProcessor {
             let existing_thread_id = match ThreadId::from_string(thread_id) {
                 Ok(id) => id,
                 Err(err) => {
-                    return Err(invalid_request(format!("invalid thread id: {err}")));
+                    return Err(invalid_request(format!("invalid session id: {err}")));
                 }
             };
             let params = StoreReadThreadParams {
@@ -2979,7 +2979,15 @@ impl ThreadRequestProcessor {
             self.thread_store.read_thread(params).await
         };
 
-        result.map_err(thread_store_resume_read_error)
+        let stored_thread = result.map_err(thread_store_resume_read_error)?;
+        if stored_thread.archived_at.is_some() {
+            let thread_id = stored_thread.thread_id;
+            return Err(invalid_request(format!(
+                "session {thread_id} is archived. Run `codex unarchive {thread_id}` to unarchive it first."
+            )));
+        }
+
+        Ok(stored_thread)
     }
 
     async fn stored_thread_to_initial_history(
@@ -3964,7 +3972,7 @@ fn thread_store_archive_error(operation: &str, err: ThreadStoreError) -> JSONRPC
         ThreadStoreError::Unsupported {
             operation: unsupported_operation,
         } => unsupported_thread_store_operation(unsupported_operation),
-        err => internal_error(format!("failed to {operation} thread: {err}")),
+        err => internal_error(format!("failed to {operation} session: {err}")),
     }
 }
 
@@ -4004,6 +4012,7 @@ pub(crate) fn thread_from_stored_thread(
         id: thread_id.clone(),
         session_id: thread_id,
         forked_from_id: thread.forked_from_id.map(|id| id.to_string()),
+        parent_thread_id: thread.parent_thread_id.map(|id| id.to_string()),
         preview: thread.preview,
         ephemeral: false,
         model_provider: if thread.model_provider.is_empty() {
@@ -4212,6 +4221,7 @@ fn build_thread_from_snapshot(
         id: thread_id.to_string(),
         session_id,
         forked_from_id: None,
+        parent_thread_id: config_snapshot.parent_thread_id.map(|id| id.to_string()),
         preview: String::new(),
         ephemeral: config_snapshot.ephemeral,
         model_provider: config_snapshot.model_provider_id.clone(),

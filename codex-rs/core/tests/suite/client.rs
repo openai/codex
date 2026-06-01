@@ -488,6 +488,7 @@ async fn resume_replays_legacy_js_repl_image_rollout_shapes() {
             item: RolloutItem::SessionMeta(SessionMetaLine {
                 meta: SessionMeta {
                     id: ThreadId::default(),
+                    parent_thread_id: None,
                     timestamp: "2024-01-01T00:00:00Z".to_string(),
                     cwd: ".".into(),
                     originator: "test_originator".to_string(),
@@ -618,6 +619,7 @@ async fn resume_replays_image_tool_outputs_with_detail() {
             item: RolloutItem::SessionMeta(SessionMetaLine {
                 meta: SessionMeta {
                     id: ThreadId::default(),
+                    parent_thread_id: None,
                     timestamp: "2024-01-01T00:00:00Z".to_string(),
                     cwd: ".".into(),
                     originator: "test_originator".to_string(),
@@ -902,6 +904,7 @@ async fn send_provider_auth_request(server: &MockServer, auth: ModelProviderAuth
         /*installation_id*/ "11111111-1111-4111-8111-111111111111".to_string(),
         provider,
         SessionSource::Exec,
+        /*parent_thread_id*/ None,
         config.model_verbosity,
         /*enable_request_compression*/ false,
         /*include_timing_metrics*/ false,
@@ -2358,6 +2361,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         /*installation_id*/ "11111111-1111-4111-8111-111111111111".to_string(),
         provider.clone(),
         SessionSource::Exec,
+        /*parent_thread_id*/ None,
         config.model_verbosity,
         /*enable_request_compression*/ false,
         /*include_timing_metrics*/ false,

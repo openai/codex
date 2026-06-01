@@ -3381,7 +3381,7 @@ async fn hook_completed_before_reveal_renders_completed_without_running_flash() 
             codex_app_server_protocol::HookRunStatus::Completed,
             vec![codex_app_server_protocol::HookOutputEntry {
                 kind: codex_app_server_protocol::HookOutputEntryKind::Context,
-                text: "session context".to_string(),
+                text: "session context\nsecond line".to_string(),
             }],
         ),
     );

@@ -1,4 +1,5 @@
 use super::*;
+use codex_protocol::openai_models::ToolMode;
 use std::sync::atomic::AtomicBool;
 
 /// Spawn a review thread using the given prompt.
@@ -47,6 +48,15 @@ pub(super) async fn spawn_review_thread(
     let mut per_turn_config = (*config).clone();
     per_turn_config.model = Some(model.clone());
     per_turn_config.features = review_features.clone();
+    let tool_mode = model_info.tool_mode.unwrap_or_else(|| {
+        if per_turn_config.features.enabled(Feature::CodeModeOnly) {
+            ToolMode::CodeModeOnly
+        } else if per_turn_config.features.enabled(Feature::CodeMode) {
+            ToolMode::CodeMode
+        } else {
+            ToolMode::Direct
+        }
+    });
     if let Err(err) = per_turn_config.web_search_mode.set(review_web_search_mode) {
         let fallback_value = per_turn_config.web_search_mode.value();
         tracing::warn!(
@@ -80,6 +90,8 @@ pub(super) async fn spawn_review_thread(
         sess.session_id().to_string(),
         sess.thread_id().to_string(),
         forked_from_thread_id,
+        parent_turn_context.parent_thread_id,
+        &session_source,
         parent_turn_context.thread_source,
         review_turn_id.clone(),
         #[allow(deprecated)]
@@ -96,11 +108,13 @@ pub(super) async fn spawn_review_thread(
         config: per_turn_config,
         auth_manager: auth_manager_for_context,
         model_info: model_info.clone(),
+        tool_mode,
         session_telemetry: session_telemetry_for_context,
         provider: provider_for_context,
         reasoning_effort,
         reasoning_summary,
         session_source,
+        parent_thread_id: parent_turn_context.parent_thread_id,
         thread_source: parent_turn_context.thread_source,
         environments: parent_turn_context.environments.clone(),
         available_models,

@@ -42,9 +42,8 @@ pub(crate) async fn file_modified_time(path: &Path) -> io::Result<Option<time::O
 
 /// Opens a rollout line reader that transparently handles plain `.jsonl` and `.jsonl.zst` files.
 ///
-/// If the requested path disappears during a compression or decompression transition, this retries
-/// the matching plain/compressed sibling once so readers do not need to know which representation is
-/// currently stored on disk.
+/// If the requested path disappears during a representation transition, this briefly retries
+/// resolution so callers do not need to know which representation is on disk.
 pub async fn open_rollout_line_reader(path: &Path) -> io::Result<RolloutLineReader> {
     for _ in 0..MAX_NOT_FOUND_RETRIES {
         match reader::open_once(path).await {
@@ -56,6 +55,12 @@ pub async fn open_rollout_line_reader(path: &Path) -> io::Result<RolloutLineRead
         }
     }
     reader::open_once(path).await
+}
+
+/// Returns the compressed `.jsonl.zst` path for a rollout path.
+#[cfg(test)]
+pub(crate) fn compressed_rollout_path(path: &Path) -> PathBuf {
+    path::compressed_rollout_path(path)
 }
 
 /// Materializes a compressed rollout back to plain `.jsonl` for async append paths.

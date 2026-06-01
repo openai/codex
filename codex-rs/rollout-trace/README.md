@@ -177,7 +177,7 @@ the edges between them.
 
 ```mermaid
 flowchart LR
-    RootTool["root ToolCall\nspawn_agent / followup_task / send_message"]
+    RootTool["root ToolCall\nspawn_agent / assign_task / send_message"]
     ChildInput["child ConversationItem\ninjected task/message"]
     ChildThread["child AgentThread"]
     ChildResult["child assistant ConversationItem\nresult message"]

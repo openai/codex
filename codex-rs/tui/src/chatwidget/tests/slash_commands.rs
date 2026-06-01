@@ -1728,6 +1728,27 @@ async fn slash_clear_is_disabled_while_task_running() {
 }
 
 #[tokio::test]
+async fn slash_archive_is_disabled_while_task_running() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.bottom_pane.set_task_running(/*running*/ true);
+
+    chat.dispatch_command(SlashCommand::Archive);
+
+    let event = rx.try_recv().expect("expected disabled command error");
+    match event {
+        AppEvent::InsertHistoryCell(cell) => {
+            let rendered = lines_to_single_string(&cell.display_lines(/*width*/ 80));
+            assert!(
+                rendered.contains("'/archive' is disabled while a task is in progress."),
+                "expected /archive task-running error, got {rendered:?}"
+            );
+        }
+        other => panic!("expected InsertHistoryCell error, got {other:?}"),
+    }
+    assert!(rx.try_recv().is_err(), "expected no follow-up events");
+}
+
+#[tokio::test]
 async fn slash_memory_drop_reports_stubbed_feature() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
@@ -1844,6 +1865,24 @@ async fn slash_resume_opens_picker() {
     chat.dispatch_command(SlashCommand::Resume);
 
     assert_matches!(rx.try_recv(), Ok(AppEvent::OpenResumePicker));
+}
+
+#[tokio::test]
+async fn slash_archive_confirmation_requests_current_thread_archive() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.dispatch_command(SlashCommand::Archive);
+
+    assert!(chat.bottom_pane.has_active_view());
+    assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
+
+    let popup = render_bottom_popup(&chat, /*width*/ 80);
+    assert_chatwidget_snapshot!("slash_archive_confirmation_popup", popup);
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    assert_matches!(rx.try_recv(), Ok(AppEvent::ArchiveCurrentThread));
 }
 
 #[tokio::test]

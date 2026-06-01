@@ -1,7 +1,7 @@
 use chrono::DateTime;
 use chrono::Utc;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
 use codex_rollout::RolloutRecorder;
@@ -15,6 +15,7 @@ use codex_state::ThreadMetadata;
 use super::LocalThreadStore;
 use super::helpers::distinct_thread_metadata_title;
 use super::helpers::git_info_from_parts;
+use super::helpers::permission_profile_from_metadata_value;
 use super::helpers::rollout_path_is_archived;
 use super::helpers::set_thread_name_from_title;
 use super::helpers::stored_thread_from_rollout_item;
@@ -45,6 +46,7 @@ pub(super) async fn read_thread(
             )
             .await)
     {
+        let metadata_sandbox_policy = metadata.sandbox_policy.clone();
         let mut thread = stored_thread_from_sqlite_metadata(store, metadata).await;
         if !params.include_history
             && let Some(rollout_path) = thread.rollout_path.clone()
@@ -57,6 +59,10 @@ pub(super) async fn read_thread(
                 rollout_thread.name = thread.name;
             }
             rollout_thread.git_info = thread.git_info;
+            rollout_thread.permission_profile = permission_profile_from_metadata_value(
+                &metadata_sandbox_policy,
+                rollout_thread.cwd.as_path(),
+            );
             thread = rollout_thread;
         }
         attach_history_if_requested(&mut thread, params.include_history).await?;
@@ -236,6 +242,7 @@ async fn read_thread_from_rollout_path(
     thread.rollout_path = Some(codex_rollout::plain_rollout_path(path.as_path()));
     if let Ok(meta_line) = read_session_meta_line(path.as_path()).await {
         thread.forked_from_id = meta_line.meta.forked_from_id;
+        thread.parent_thread_id = meta_line.meta.parent_thread_id;
         if let Some(model_provider) = meta_line
             .meta
             .model_provider
@@ -289,15 +296,19 @@ async fn stored_thread_from_sqlite_metadata(
         .map(|meta_line| meta_line.meta);
     let rollout_path = codex_rollout::plain_rollout_path(metadata.rollout_path.as_path());
     let forked_from_id = session_meta.as_ref().and_then(|meta| meta.forked_from_id);
+    let parent_thread_id = session_meta.as_ref().and_then(|meta| meta.parent_thread_id);
     let preview = metadata
         .preview
         .clone()
         .or_else(|| metadata.first_user_message.clone())
         .unwrap_or_default();
+    let permission_profile =
+        permission_profile_from_metadata_value(&metadata.sandbox_policy, metadata.cwd.as_path());
     StoredThread {
         thread_id: metadata.id,
         rollout_path: Some(rollout_path),
         forked_from_id,
+        parent_thread_id,
         preview,
         name,
         model_provider: if metadata.model_provider.is_empty() {
@@ -323,10 +334,7 @@ async fn stored_thread_from_sqlite_metadata(
             metadata.git_origin_url,
         ),
         approval_mode: parse_or_default(&metadata.approval_mode, AskForApproval::OnRequest),
-        sandbox_policy: parse_or_default(
-            &metadata.sandbox_policy,
-            SandboxPolicy::new_read_only_policy(),
-        ),
+        permission_profile,
         token_usage: None,
         first_user_message: metadata.first_user_message,
         history: None,
@@ -365,6 +373,7 @@ fn stored_thread_from_meta_line(
         thread_id: meta_line.meta.id,
         rollout_path: Some(rollout_path),
         forked_from_id: meta_line.meta.forked_from_id,
+        parent_thread_id: meta_line.meta.parent_thread_id,
         preview: String::new(),
         name: None,
         model_provider: meta_line
@@ -386,7 +395,7 @@ fn stored_thread_from_meta_line(
         agent_path: meta_line.meta.agent_path,
         git_info: meta_line.git,
         approval_mode: AskForApproval::OnRequest,
-        sandbox_policy: SandboxPolicy::new_read_only_policy(),
+        permission_profile: PermissionProfile::read_only(),
         token_usage: None,
         first_user_message: None,
         history: None,
@@ -421,6 +430,7 @@ mod tests {
 
     use chrono::Utc;
     use codex_protocol::ThreadId;
+    use codex_protocol::protocol::SandboxPolicy;
     use codex_protocol::protocol::SessionSource;
     use codex_state::ThreadMetadataBuilder;
     use pretty_assertions::assert_eq;
@@ -681,6 +691,84 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn read_thread_returns_permission_profile_from_sqlite_metadata() {
+        let home = TempDir::new().expect("temp dir");
+        let config = test_config(home.path());
+        let uuid = Uuid::from_u128(225);
+        let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
+        let rollout_path =
+            write_session_file(home.path(), "2025-01-03T12-00-00", uuid).expect("session file");
+        let runtime = codex_state::StateRuntime::init(
+            config.sqlite_home.clone(),
+            config.default_model_provider_id.clone(),
+        )
+        .await
+        .expect("state db should initialize");
+        let store = LocalThreadStore::new(config.clone(), Some(runtime.clone()));
+        let mut builder =
+            ThreadMetadataBuilder::new(thread_id, rollout_path, Utc::now(), SessionSource::Cli);
+        builder.model_provider = Some(config.default_model_provider_id.clone());
+        builder.cwd = home.path().to_path_buf();
+        let mut metadata = builder.build(config.default_model_provider_id.as_str());
+        metadata.sandbox_policy =
+            serde_json::to_string(&PermissionProfile::Disabled).expect("serialize profile");
+        runtime
+            .upsert_thread(&metadata)
+            .await
+            .expect("state db upsert should succeed");
+
+        let thread = store
+            .read_thread(ReadThreadParams {
+                thread_id,
+                include_archived: false,
+                include_history: false,
+            })
+            .await
+            .expect("read thread");
+
+        assert_eq!(thread.preview, "Hello from user");
+        assert_eq!(thread.permission_profile, PermissionProfile::Disabled);
+    }
+
+    #[tokio::test]
+    async fn read_thread_accepts_legacy_sandbox_policy_metadata() {
+        let home = TempDir::new().expect("temp dir");
+        let config = test_config(home.path());
+        let uuid = Uuid::from_u128(226);
+        let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
+        let rollout_path =
+            write_session_file(home.path(), "2025-01-03T12-00-00", uuid).expect("session file");
+        let runtime = codex_state::StateRuntime::init(
+            config.sqlite_home.clone(),
+            config.default_model_provider_id.clone(),
+        )
+        .await
+        .expect("state db should initialize");
+        let store = LocalThreadStore::new(config.clone(), Some(runtime.clone()));
+        let mut builder =
+            ThreadMetadataBuilder::new(thread_id, rollout_path, Utc::now(), SessionSource::Cli);
+        builder.model_provider = Some(config.default_model_provider_id.clone());
+        builder.cwd = home.path().to_path_buf();
+        let mut metadata = builder.build(config.default_model_provider_id.as_str());
+        metadata.sandbox_policy = "danger-full-access".to_string();
+        runtime
+            .upsert_thread(&metadata)
+            .await
+            .expect("state db upsert should succeed");
+
+        let thread = store
+            .read_thread(ReadThreadParams {
+                thread_id,
+                include_archived: false,
+                include_history: true,
+            })
+            .await
+            .expect("read thread");
+
+        assert_eq!(thread.permission_profile, PermissionProfile::Disabled);
+    }
+
+    #[tokio::test]
     async fn read_thread_preserves_rollout_cwd_when_sqlite_metadata_exists() {
         let home = TempDir::new().expect("temp dir");
         let config = test_config(home.path());
@@ -734,6 +822,7 @@ mod tests {
         let mut metadata = builder.build(config.default_model_provider_id.as_str());
         metadata.title = "Saved title".to_string();
         metadata.first_user_message = Some("Hello from sqlite".to_string());
+        metadata.sandbox_policy = "workspace-write".to_string();
         runtime
             .upsert_thread(&metadata)
             .await
@@ -754,6 +843,19 @@ mod tests {
         assert_eq!(thread.name, Some("Saved title".to_string()));
         assert_eq!(thread.model_provider, "rollout-provider");
         assert_eq!(thread.cwd, rollout_cwd);
+        let legacy_policy = SandboxPolicy::WorkspaceWrite {
+            writable_roots: Vec::new(),
+            network_access: false,
+            exclude_tmpdir_env_var: false,
+            exclude_slash_tmp: false,
+        };
+        assert_eq!(
+            thread.permission_profile,
+            PermissionProfile::from_legacy_sandbox_policy_for_cwd(
+                &legacy_policy,
+                rollout_cwd.as_path()
+            )
+        );
     }
 
     #[tokio::test]

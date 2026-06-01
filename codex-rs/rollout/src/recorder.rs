@@ -82,6 +82,7 @@ pub enum RolloutRecorderParams {
     Create {
         conversation_id: ThreadId,
         forked_from_id: Option<ThreadId>,
+        parent_thread_id: Option<ThreadId>,
         source: SessionSource,
         thread_source: Option<ThreadSource>,
         base_instructions: BaseInstructions,
@@ -157,6 +158,7 @@ impl RolloutRecorderParams {
     pub fn new(
         conversation_id: ThreadId,
         forked_from_id: Option<ThreadId>,
+        parent_thread_id: Option<ThreadId>,
         source: SessionSource,
         thread_source: Option<ThreadSource>,
         base_instructions: BaseInstructions,
@@ -165,6 +167,7 @@ impl RolloutRecorderParams {
         Self::Create {
             conversation_id,
             forked_from_id,
+            parent_thread_id,
             source,
             thread_source,
             base_instructions,
@@ -653,6 +656,7 @@ impl RolloutRecorder {
             RolloutRecorderParams::Create {
                 conversation_id,
                 forked_from_id,
+                parent_thread_id,
                 source,
                 thread_source,
                 base_instructions,
@@ -674,6 +678,7 @@ impl RolloutRecorder {
                 let session_meta = SessionMeta {
                     id: session_id,
                     forked_from_id,
+                    parent_thread_id,
                     timestamp,
                     cwd: config.cwd().to_path_buf(),
                     originator: originator().value,
@@ -898,7 +903,7 @@ impl RolloutRecorder {
         Ok(InitialHistory::Resumed(ResumedHistory {
             conversation_id,
             history: items,
-            rollout_path: Some(path.to_path_buf()),
+            rollout_path: Some(compression::plain_rollout_path(path)),
         }))
     }
 
@@ -1025,6 +1030,7 @@ fn fill_missing_thread_item_metadata(item: &mut ThreadItem, state_item: ThreadIt
         git_sha,
         git_origin_url,
         source,
+        parent_thread_id,
         agent_nickname,
         agent_role,
         model_provider,
@@ -1053,6 +1059,9 @@ fn fill_missing_thread_item_metadata(item: &mut ThreadItem, state_item: ThreadIt
     }
     if item.source.is_none() {
         item.source = source;
+    }
+    if item.parent_thread_id.is_none() {
+        item.parent_thread_id = parent_thread_id;
     }
     if item.agent_nickname.is_none() {
         item.agent_nickname = agent_nickname;
@@ -1697,6 +1706,7 @@ fn thread_item_from_state_metadata(item: codex_state::ThreadMetadata) -> ThreadI
                 .or_else(|_| serde_json::from_value(Value::String(item.source)))
                 .unwrap_or(SessionSource::Unknown),
         ),
+        parent_thread_id: None,
         agent_nickname: item.agent_nickname,
         agent_role: item.agent_role,
         model_provider: Some(item.model_provider),

@@ -145,7 +145,7 @@ mod tests {
             .search(
                 &SearchRequest {
                     id: "search-session".to_string(),
-                    model: Some("gpt-test".to_string()),
+                    model: "gpt-test".to_string(),
                     reasoning: None,
                     input: Some(SearchInput::Items(vec![ResponseItem::Message {
                         id: None,

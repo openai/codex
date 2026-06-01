@@ -38,8 +38,8 @@ use crate::tools::handlers::multi_agents_common::MAX_WAIT_TIMEOUT_MS;
 use crate::tools::handlers::multi_agents_common::MIN_WAIT_TIMEOUT_MS;
 use crate::tools::handlers::multi_agents_spec::SpawnAgentToolOptions;
 use crate::tools::handlers::multi_agents_spec::WaitAgentTimeoutOptions;
+use crate::tools::handlers::multi_agents_v2::AssignTaskHandler as AssignTaskHandlerV2;
 use crate::tools::handlers::multi_agents_v2::CloseAgentHandler as CloseAgentHandlerV2;
-use crate::tools::handlers::multi_agents_v2::FollowupTaskHandler as FollowupTaskHandlerV2;
 use crate::tools::handlers::multi_agents_v2::ListAgentsHandler as ListAgentsHandlerV2;
 use crate::tools::handlers::multi_agents_v2::SendMessageHandler as SendMessageHandlerV2;
 use crate::tools::handlers::multi_agents_v2::SpawnAgentHandler as SpawnAgentHandlerV2;
@@ -60,6 +60,7 @@ use codex_mcp::ToolInfo;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::InputModality;
+use codex_protocol::openai_models::ToolMode;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_tools::DiscoverableTool;
@@ -230,8 +231,10 @@ fn spec_for_model_request(
     exposure: ToolExposure,
     spec: ToolSpec,
 ) -> ToolSpec {
-    if code_mode_enabled(turn_context)
-        && exposure != ToolExposure::DirectModelOnly
+    if matches!(
+        turn_context.tool_mode,
+        ToolMode::CodeMode | ToolMode::CodeModeOnly
+    ) && exposure != ToolExposure::DirectModelOnly
         && codex_code_mode::is_code_mode_nested_tool(spec.name())
     {
         codex_tools::augment_tool_spec_for_code_mode(spec)
@@ -280,14 +283,6 @@ pub(crate) fn tool_suggest_enabled(turn_context: &TurnContext) -> bool {
 
 fn namespace_tools_enabled(turn_context: &TurnContext) -> bool {
     turn_context.provider.capabilities().namespace_tools
-}
-
-fn code_mode_enabled(turn_context: &TurnContext) -> bool {
-    turn_context.features.get().enabled(Feature::CodeMode)
-}
-
-fn code_mode_only_enabled(turn_context: &TurnContext) -> bool {
-    code_mode_enabled(turn_context) && turn_context.features.get().enabled(Feature::CodeModeOnly)
 }
 
 fn multi_agent_v2_enabled(turn_context: &TurnContext) -> bool {
@@ -398,7 +393,7 @@ fn is_hidden_by_code_mode_only(
     tool_name: &ToolName,
     exposure: ToolExposure,
 ) -> bool {
-    code_mode_only_enabled(turn_context)
+    turn_context.tool_mode == ToolMode::CodeModeOnly
         && exposure != ToolExposure::DirectModelOnly
         && codex_code_mode::is_code_mode_nested_tool(&codex_tools::code_mode_name_for_tool_name(
             tool_name,
@@ -410,7 +405,10 @@ fn build_code_mode_executors(
     executors: &[Arc<dyn CoreToolRuntime>],
     deferred_tools_available: bool,
 ) -> Vec<Arc<dyn CoreToolRuntime>> {
-    if !code_mode_enabled(turn_context) {
+    if !matches!(
+        turn_context.tool_mode,
+        ToolMode::CodeMode | ToolMode::CodeModeOnly
+    ) {
         return vec![];
     }
 
@@ -444,7 +442,7 @@ fn build_code_mode_executors(
             create_code_mode_tool(
                 &enabled_tools,
                 &namespace_descriptions,
-                code_mode_only_enabled(turn_context),
+                turn_context.tool_mode == ToolMode::CodeModeOnly,
                 deferred_tools_available,
             ),
             code_mode_nested_tool_specs,
@@ -602,9 +600,11 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut
         planned_tools.add(UpdateGoalHandler);
     }
 
-    planned_tools.add(RequestUserInputHandler {
-        available_modes: request_user_input_available_modes(features),
-    });
+    if turn_context.config.experimental_request_user_input_enabled {
+        planned_tools.add(RequestUserInputHandler {
+            available_modes: request_user_input_available_modes(features),
+        });
+    }
 
     if features.enabled(Feature::RequestPermissionsTool) {
         planned_tools.add(RequestPermissionsHandler);
@@ -617,7 +617,9 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut
         planned_tools.add(ListAvailablePluginsToInstallHandler::new(
             collect_request_plugin_install_entries(discoverable_tools),
         ));
-        planned_tools.add(RequestPluginInstallHandler);
+        planned_tools.add(RequestPluginInstallHandler::new(
+            discoverable_tools.to_vec(),
+        ));
     }
 
     if environment_mode.has_environment() && turn_context.model_info.apply_patch_tool_type.is_some()
@@ -684,7 +686,7 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mu
                 exposure,
             ));
             planned_tools.add_arc(override_tool_exposure(
-                multi_agent_v2_handler(FollowupTaskHandlerV2, tool_namespace),
+                multi_agent_v2_handler(AssignTaskHandlerV2, tool_namespace),
                 exposure,
             ));
             planned_tools.add_arc(override_tool_exposure(
@@ -847,7 +849,10 @@ fn append_extension_tool_executors(
         .iter()
         .map(|executor| executor.tool_name())
         .collect::<HashSet<_>>();
-    if code_mode_enabled(turn_context) {
+    if matches!(
+        turn_context.tool_mode,
+        ToolMode::CodeMode | ToolMode::CodeModeOnly
+    ) {
         reserved_tool_names.insert(ToolName::plain(codex_code_mode::PUBLIC_TOOL_NAME));
         reserved_tool_names.insert(ToolName::plain(codex_code_mode::WAIT_TOOL_NAME));
     }

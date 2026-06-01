@@ -241,6 +241,8 @@ pub use setup::SandboxSetupRequest;
 #[cfg(target_os = "windows")]
 pub use setup::SetupRootOverrides;
 #[cfg(target_os = "windows")]
+pub use setup::run_elevated_provisioning_setup;
+#[cfg(target_os = "windows")]
 pub use setup::run_elevated_setup;
 #[cfg(target_os = "windows")]
 pub use setup::run_setup_refresh;

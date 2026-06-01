@@ -63,6 +63,8 @@ pub struct ThreadItem {
     pub git_origin_url: Option<String>,
     /// Session source from session metadata.
     pub source: Option<SessionSource>,
+    /// Immediate control/spawn parent thread id from session metadata.
+    pub parent_thread_id: Option<ThreadId>,
     /// Random unique nickname from session metadata for AgentControl-spawned sub-agents.
     pub agent_nickname: Option<String>,
     /// Role (agent_role) from session metadata for AgentControl-spawned sub-agents.
@@ -96,6 +98,7 @@ struct HeadTailSummary {
     git_sha: Option<String>,
     git_origin_url: Option<String>,
     source: Option<SessionSource>,
+    parent_thread_id: Option<ThreadId>,
     agent_nickname: Option<String>,
     agent_role: Option<String>,
     model_provider: Option<String>,
@@ -779,6 +782,7 @@ async fn build_thread_item(
             git_sha,
             git_origin_url,
             source,
+            parent_thread_id,
             agent_nickname,
             agent_role,
             model_provider,
@@ -800,6 +804,7 @@ async fn build_thread_item(
             git_sha,
             git_origin_url,
             source,
+            parent_thread_id,
             agent_nickname,
             agent_role,
             model_provider,
@@ -1093,6 +1098,7 @@ async fn read_head_summary(path: &Path, head_limit: usize) -> io::Result<HeadTai
             RolloutItem::SessionMeta(session_meta_line) => {
                 if !summary.saw_session_meta {
                     summary.source = Some(session_meta_line.meta.source.clone());
+                    summary.parent_thread_id = session_meta_line.meta.parent_thread_id;
                     summary.agent_nickname = session_meta_line.meta.agent_nickname.clone();
                     summary.agent_role = session_meta_line.meta.agent_role.clone();
                     summary.model_provider = session_meta_line.meta.model_provider.clone();

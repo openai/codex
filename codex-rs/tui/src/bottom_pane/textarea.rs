@@ -677,9 +677,10 @@ impl TextArea {
         }
         if self.vim_normal_keymap.open_line_below.is_pressed(event) {
             let eol = self.end_of_current_line();
-            let insert_at = if eol < self.text.len() { eol + 1 } else { eol };
+            let old_len = self.text.len();
+            let insert_at = if eol < old_len { eol + 1 } else { eol };
             self.insert_str_at(insert_at, "\n");
-            let cursor = if eol < self.text.len() {
+            let cursor = if eol < old_len {
                 insert_at
             } else {
                 insert_at + 1
@@ -733,6 +734,13 @@ impl TextArea {
         }
         if self.vim_normal_keymap.delete_char.is_pressed(event) {
             self.delete_forward_kill(/*n*/ 1);
+            return;
+        }
+        if self.vim_normal_keymap.substitute_char.is_pressed(event) {
+            if self.cursor_pos < self.end_of_current_line() {
+                self.delete_forward_kill(/*n*/ 1);
+            }
+            self.vim_mode = VimMode::Insert;
             return;
         }
         if self.vim_normal_keymap.delete_to_line_end.is_pressed(event) {
@@ -2361,6 +2369,38 @@ mod tests {
     }
 
     #[test]
+    fn vim_s_substitutes_current_character_and_enters_insert_mode() {
+        let mut t = ta_with("abc");
+        t.set_cursor(/*pos*/ 1);
+        t.set_vim_enabled(/*enabled*/ true);
+
+        t.input(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE));
+
+        assert_eq!(t.text(), "ac");
+        assert_eq!(t.cursor(), 1);
+        assert_eq!(t.vim_mode_label(), Some("Insert"));
+
+        t.input(KeyEvent::new(KeyCode::Char('X'), KeyModifiers::NONE));
+
+        assert_eq!(t.text(), "aXc");
+        assert_eq!(t.cursor(), 2);
+        assert_eq!(t.vim_mode_label(), Some("Insert"));
+    }
+
+    #[test]
+    fn vim_s_on_empty_line_enters_insert_without_deleting_newline() {
+        let mut t = ta_with("before\n\nnext");
+        t.set_cursor(/*pos*/ "before\n".len());
+        t.set_vim_enabled(/*enabled*/ true);
+
+        t.input(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE));
+
+        assert_eq!(t.text(), "before\n\nnext");
+        assert_eq!(t.cursor(), "before\n".len());
+        assert_eq!(t.vim_mode_label(), Some("Insert"));
+    }
+
+    #[test]
     fn vim_d_at_line_end_does_not_remove_newline() {
         let mut t = ta_with("hello\nworld");
         t.set_cursor(/*pos*/ "hello".len());
@@ -2410,6 +2450,19 @@ mod tests {
         t.input(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::NONE));
 
         assert_eq!(t.text(), "one\n\ntwo");
+        assert_eq!(t.vim_mode_label(), Some("Insert"));
+        assert_eq!(t.cursor(), "one\n".len());
+    }
+
+    #[test]
+    fn vim_o_opens_line_below_final_line_and_moves_to_new_line() {
+        let mut t = ta_with("one");
+        t.set_cursor(/*pos*/ 1);
+        t.set_vim_enabled(/*enabled*/ true);
+
+        t.input(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::NONE));
+
+        assert_eq!(t.text(), "one\n");
         assert_eq!(t.vim_mode_label(), Some("Insert"));
         assert_eq!(t.cursor(), "one\n".len());
     }
