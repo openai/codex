@@ -39,15 +39,9 @@ async fn record_used_connector_id_preserves_first_use_order() {
     let session_configuration = make_session_configuration_for_tests().await;
     let mut state = SessionState::new(session_configuration);
 
-    assert_eq!(
-        state.record_used_connector_id("calendar"),
-        Some(vec!["calendar".to_string()])
-    );
-    assert_eq!(state.record_used_connector_id("calendar"), None);
-    assert_eq!(
-        state.record_used_connector_id("drive"),
-        Some(vec!["calendar".to_string(), "drive".to_string()])
-    );
+    assert!(state.record_used_connector_id("calendar"));
+    assert!(!state.record_used_connector_id("calendar"));
+    assert!(state.record_used_connector_id("drive"));
     assert_eq!(
         state.get_used_connector_ids(),
         vec!["calendar".to_string(), "drive".to_string()]

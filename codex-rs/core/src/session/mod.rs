@@ -1169,13 +1169,13 @@ impl Session {
     }
 
     pub(crate) async fn record_used_connector_id(&self, connector_id: &str) {
-        let used_connector_ids = {
+        let is_new_connector_id = {
             let mut state = self.state.lock().await;
             state.record_used_connector_id(connector_id)
         };
-        let Some(used_connector_ids) = used_connector_ids else {
+        if !is_new_connector_id {
             return;
-        };
+        }
 
         let Some(live_thread) = self.live_thread() else {
             return;
@@ -1183,7 +1183,7 @@ impl Session {
         if let Err(err) = live_thread
             .update_metadata(
                 ThreadMetadataPatch {
-                    used_connector_ids: Some(used_connector_ids),
+                    used_connector_ids: Some(vec![connector_id.to_string()]),
                     ..Default::default()
                 },
                 /*include_archived*/ true,

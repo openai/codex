@@ -529,7 +529,7 @@ pub struct ThreadMetadataPatch {
     pub git_info: Option<GitInfoPatch>,
     /// Thread memory behavior.
     pub memory_mode: Option<MemoryMode>,
-    /// Connector IDs used by this thread, in first-use order.
+    /// Connector IDs to merge into this thread's first-use ordered connector set.
     pub used_connector_ids: Option<Vec<String>>,
 }
 
@@ -608,8 +608,16 @@ impl ThreadMetadataPatch {
         if next.memory_mode.is_some() {
             self.memory_mode = next.memory_mode;
         }
-        if next.used_connector_ids.is_some() {
-            self.used_connector_ids = next.used_connector_ids;
+        if let Some(next_used_connector_ids) = next.used_connector_ids {
+            let used_connector_ids = self.used_connector_ids.get_or_insert_with(Vec::new);
+            for connector_id in next_used_connector_ids {
+                if !used_connector_ids
+                    .iter()
+                    .any(|used_connector_id| used_connector_id == &connector_id)
+                {
+                    used_connector_ids.push(connector_id);
+                }
+            }
         }
     }
 
@@ -737,6 +745,7 @@ mod tests {
         let mut current = ThreadMetadataPatch {
             name: Some(Some("old name".to_string())),
             preview: Some("old preview".to_string()),
+            used_connector_ids: Some(vec!["calendar".to_string()]),
             git_info: Some(GitInfoPatch {
                 sha: Some(Some("abc123".to_string())),
                 branch: Some(Some("main".to_string())),
@@ -749,6 +758,7 @@ mod tests {
             name: Some(None),
             preview: None,
             title: Some("new title".to_string()),
+            used_connector_ids: Some(vec!["calendar".to_string(), "drive".to_string()]),
             git_info: Some(GitInfoPatch {
                 sha: None,
                 branch: Some(Some("feature".to_string())),
@@ -760,6 +770,10 @@ mod tests {
         assert_eq!(current.name, Some(None));
         assert_eq!(current.preview.as_deref(), Some("old preview"));
         assert_eq!(current.title.as_deref(), Some("new title"));
+        assert_eq!(
+            current.used_connector_ids,
+            Some(vec!["calendar".to_string(), "drive".to_string()])
+        );
         assert_eq!(
             current.git_info,
             Some(GitInfoPatch {

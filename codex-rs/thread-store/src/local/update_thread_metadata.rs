@@ -188,6 +188,7 @@ async fn apply_metadata_update(
     let sqlite_write_result: ThreadStoreResult<()> = if let Some(state_db) = state_db.as_ref() {
         let patch = patch.clone();
         async {
+            let used_connector_ids_patch = patch.used_connector_ids.clone();
             let existing =
                 state_db
                     .get_thread(thread_id)
@@ -295,8 +296,8 @@ async fn apply_metadata_update(
                 metadata.git_branch = branch;
                 metadata.git_origin_url = origin_url;
             }
-            if let Some(used_connector_ids) = patch.used_connector_ids {
-                metadata.used_connector_ids = used_connector_ids;
+            if let Some(used_connector_ids) = used_connector_ids_patch.as_ref() {
+                metadata.used_connector_ids = used_connector_ids.clone();
             }
             state_db
                 .upsert_thread(&metadata)
@@ -304,12 +305,16 @@ async fn apply_metadata_update(
                 .map_err(|err| ThreadStoreError::Internal {
                     message: format!("failed to update thread metadata for {thread_id}: {err}"),
                 })?;
-            state_db
-                .set_thread_used_connector_ids(thread_id, &metadata.used_connector_ids)
-                .await
-                .map_err(|err| ThreadStoreError::Internal {
-                    message: format!("failed to update used connector ids for {thread_id}: {err}"),
-                })?;
+            if let Some(used_connector_ids) = used_connector_ids_patch {
+                state_db
+                    .merge_thread_used_connector_ids(thread_id, &used_connector_ids)
+                    .await
+                    .map_err(|err| ThreadStoreError::Internal {
+                        message: format!(
+                            "failed to update used connector ids for {thread_id}: {err}"
+                        ),
+                    })?;
+            }
             if let Some(memory_mode) = patch.memory_mode {
                 state_db
                     .set_thread_memory_mode(thread_id, memory_mode_as_str(memory_mode))
@@ -1306,6 +1311,73 @@ mod tests {
         assert_eq!(
             metadata.first_user_message.as_deref(),
             Some("Later first message")
+        );
+    }
+
+    #[tokio::test]
+    async fn metadata_patch_merges_used_connector_ids_without_unrelated_clobbering() {
+        let home = TempDir::new().expect("temp dir");
+        let config = test_config(home.path());
+        let runtime = codex_state::StateRuntime::init(
+            home.path().to_path_buf(),
+            config.default_model_provider_id.clone(),
+        )
+        .await
+        .expect("state db should initialize");
+        let store = LocalThreadStore::new(config, Some(runtime.clone()));
+        let uuid = Uuid::from_u128(317);
+        let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
+        write_session_file(home.path(), "2025-01-03T19-15-00", uuid).expect("session file");
+
+        store
+            .update_thread_metadata(UpdateThreadMetadataParams {
+                thread_id,
+                patch: ThreadMetadataPatch {
+                    used_connector_ids: Some(vec![
+                        "connector_calendar".to_string(),
+                        "connector_drive".to_string(),
+                    ]),
+                    ..Default::default()
+                },
+                include_archived: false,
+            })
+            .await
+            .expect("set used connector metadata");
+        store
+            .update_thread_metadata(UpdateThreadMetadataParams {
+                thread_id,
+                patch: ThreadMetadataPatch {
+                    used_connector_ids: Some(vec!["connector_calendar".to_string()]),
+                    ..Default::default()
+                },
+                include_archived: false,
+            })
+            .await
+            .expect("merge older used connector metadata");
+        store
+            .update_thread_metadata(UpdateThreadMetadataParams {
+                thread_id,
+                patch: ThreadMetadataPatch {
+                    title: Some("Derived title".to_string()),
+                    preview: Some("Derived preview".to_string()),
+                    ..Default::default()
+                },
+                include_archived: false,
+            })
+            .await
+            .expect("apply unrelated observed metadata");
+
+        let metadata = runtime
+            .get_thread(thread_id)
+            .await
+            .expect("sqlite metadata read")
+            .expect("sqlite metadata");
+        assert_eq!(
+            metadata.used_connector_ids,
+            vec![
+                "connector_calendar".to_string(),
+                "connector_drive".to_string()
+            ]
         );
     }
 

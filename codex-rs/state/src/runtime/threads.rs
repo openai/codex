@@ -571,17 +571,46 @@ ON CONFLICT(id) DO NOTHING
         Ok(result.rows_affected() > 0)
     }
 
-    pub async fn set_thread_used_connector_ids(
+    pub async fn merge_thread_used_connector_ids(
         &self,
         thread_id: ThreadId,
         used_connector_ids: &[String],
     ) -> anyhow::Result<bool> {
-        let result = sqlx::query("UPDATE threads SET used_connector_ids = ? WHERE id = ?")
-            .bind(used_connector_ids_json(used_connector_ids)?)
-            .bind(thread_id.to_string())
-            .execute(self.pool.as_ref())
-            .await?;
-        Ok(result.rows_affected() > 0)
+        if used_connector_ids.is_empty() {
+            return Ok(false);
+        }
+
+        let thread_id = thread_id.to_string();
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
+        let current_json: Option<String> =
+            sqlx::query_scalar("SELECT used_connector_ids FROM threads WHERE id = ?")
+                .bind(&thread_id)
+                .fetch_optional(&mut *tx)
+                .await?;
+        let Some(current_json) = current_json else {
+            tx.commit().await?;
+            return Ok(false);
+        };
+        let mut merged = serde_json::from_str::<Vec<String>>(&current_json)
+            .map_err(|err| anyhow::anyhow!("invalid used_connector_ids JSON: {err}"))?;
+        let mut changed = false;
+        for connector_id in used_connector_ids {
+            if !merged.contains(connector_id) {
+                merged.push(connector_id.clone());
+                changed = true;
+            }
+        }
+
+        if changed {
+            sqlx::query("UPDATE threads SET used_connector_ids = ? WHERE id = ?")
+                .bind(used_connector_ids_json(&merged)?)
+                .bind(thread_id)
+                .execute(&mut *tx)
+                .await?;
+        }
+
+        tx.commit().await?;
+        Ok(changed)
     }
 
     pub async fn update_thread_title(
@@ -1170,7 +1199,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn used_connector_ids_are_updated_explicitly_and_preserved_by_upsert() {
+    async fn used_connector_ids_are_merged_explicitly_and_preserved_by_upsert() {
         let codex_home = unique_temp_dir();
         let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
             .await
@@ -1184,7 +1213,7 @@ mod tests {
             .await
             .expect("initial insert should succeed");
         runtime
-            .set_thread_used_connector_ids(
+            .merge_thread_used_connector_ids(
                 thread_id,
                 &[
                     "connector_calendar".to_string(),
@@ -1193,6 +1222,10 @@ mod tests {
             )
             .await
             .expect("used connector update should succeed");
+        runtime
+            .merge_thread_used_connector_ids(thread_id, &["connector_calendar".to_string()])
+            .await
+            .expect("older used connector update should succeed");
 
         metadata.title = "updated title".to_string();
         runtime

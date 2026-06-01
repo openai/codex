@@ -237,17 +237,17 @@ impl SessionState {
         }
     }
 
-    pub(crate) fn record_used_connector_id(&mut self, connector_id: &str) -> Option<Vec<String>> {
+    pub(crate) fn record_used_connector_id(&mut self, connector_id: &str) -> bool {
         if self
             .used_connector_ids
             .iter()
             .any(|used_connector_id| used_connector_id == connector_id)
         {
-            return None;
+            return false;
         }
 
         self.used_connector_ids.push(connector_id.to_string());
-        Some(self.used_connector_ids.clone())
+        true
     }
 
     pub(crate) fn get_used_connector_ids(&self) -> Vec<String> {
