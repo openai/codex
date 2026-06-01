@@ -409,6 +409,46 @@ async fn shell_family_registers_visible_unified_exec_and_hidden_legacy_shell() {
 }
 
 #[tokio::test]
+async fn shell_zsh_fork_stays_standalone_until_unified_exec_composition_is_enabled() {
+    let standalone = probe(|turn| {
+        set_features(turn, &[Feature::ShellTool, Feature::UnifiedExec]);
+        set_feature(turn, Feature::ShellZshFork, /*enabled*/ true);
+        set_feature(turn, Feature::UnifiedExecZshFork, /*enabled*/ false);
+        turn.model_info.shell_type = ConfigShellToolType::ShellCommand;
+    })
+    .await;
+
+    standalone.assert_visible_contains(&["shell_command"]);
+    standalone.assert_visible_lacks(&["exec_command", "write_stdin"]);
+    standalone.assert_registered_contains(&["shell_command"]);
+    standalone.assert_registered_lacks(&["exec_command", "write_stdin"]);
+
+    let composed = probe(|turn| {
+        set_features(
+            turn,
+            &[
+                Feature::ShellTool,
+                Feature::UnifiedExec,
+                Feature::ShellZshFork,
+                Feature::UnifiedExecZshFork,
+            ],
+        );
+        turn.model_info.shell_type = ConfigShellToolType::ShellCommand;
+    })
+    .await;
+
+    if codex_utils_pty::conpty_supported() {
+        composed.assert_visible_contains(&["exec_command", "write_stdin"]);
+        composed.assert_visible_lacks(&["shell_command"]);
+        composed.assert_registered_contains(&["exec_command", "write_stdin", "shell_command"]);
+        assert_eq!(composed.exposure("shell_command"), ToolExposure::Hidden);
+    } else {
+        composed.assert_visible_contains(&["shell_command"]);
+        composed.assert_visible_lacks(&["exec_command", "write_stdin"]);
+    }
+}
+
+#[tokio::test]
 async fn environment_count_controls_environment_backed_tools() {
     let no_environment = probe(|turn| {
         turn.environments.turn_environments.clear();
