@@ -109,16 +109,16 @@ use std::path::Path;
 use std::time::Duration;
 use tempfile::TempDir;
 
-fn stdio_mcp(command: &str) -> McpServerConfig {
-    McpServerConfig::builder()
-        .transport(McpServerTransportConfig::Stdio {
-            command: command.to_string(),
+macro_rules! stdio_mcp_builder {
+    ($command:expr) => {
+        McpServerConfig::builder().transport(McpServerTransportConfig::Stdio {
+            command: ($command).to_string(),
             args: Vec::new(),
             env: None,
             env_vars: Vec::new(),
             cwd: None,
         })
-        .build()
+    };
 }
 
 fn http_mcp(url: &str) -> McpServerConfig {
@@ -3724,14 +3724,23 @@ fn filter_mcp_servers_by_allowlist_enforces_identity_rules() {
     const GOOD_URL: &str = "https://example.com/good";
 
     let mut servers = HashMap::from([
-        (MISMATCHED_COMMAND_SERVER.to_string(), stdio_mcp("docs-cmd")),
+        (
+            MISMATCHED_COMMAND_SERVER.to_string(),
+            stdio_mcp_builder!("docs-cmd").build(),
+        ),
         (
             MISMATCHED_URL_SERVER.to_string(),
             http_mcp("https://example.com/mcp"),
         ),
-        (MATCHED_COMMAND_SERVER.to_string(), stdio_mcp(GOOD_CMD)),
+        (
+            MATCHED_COMMAND_SERVER.to_string(),
+            stdio_mcp_builder!(GOOD_CMD).build(),
+        ),
         (MATCHED_URL_SERVER.to_string(), http_mcp(GOOD_URL)),
-        (DIFFERENT_NAME_SERVER.to_string(), stdio_mcp("same-cmd")),
+        (
+            DIFFERENT_NAME_SERVER.to_string(),
+            stdio_mcp_builder!("same-cmd").build(),
+        ),
     ]);
     let source = RequirementSource::LegacyManagedConfigTomlFromMdm;
     let requirements = Sourced::new(
@@ -3798,7 +3807,7 @@ fn filter_mcp_servers_by_allowlist_enforces_identity_rules() {
 #[test]
 fn filter_mcp_servers_by_allowlist_allows_all_when_unset() {
     let mut servers = HashMap::from([
-        ("server-a".to_string(), stdio_mcp("cmd-a")),
+        ("server-a".to_string(), stdio_mcp_builder!("cmd-a").build()),
         ("server-b".to_string(), http_mcp("https://example.com/b")),
     ]);
 
@@ -3822,7 +3831,7 @@ fn filter_mcp_servers_by_allowlist_allows_all_when_unset() {
 #[test]
 fn filter_mcp_servers_by_allowlist_blocks_all_when_empty() {
     let mut servers = HashMap::from([
-        ("server-a".to_string(), stdio_mcp("cmd-a")),
+        ("server-a".to_string(), stdio_mcp_builder!("cmd-a").build()),
         ("server-b".to_string(), http_mcp("https://example.com/b")),
     ]);
 
@@ -3854,8 +3863,14 @@ fn filter_plugin_mcp_servers_by_allowlist_enforces_plugin_and_identity_rules() {
     const GOOD_CMD: &str = "good-cmd";
 
     let mut servers = HashMap::from([
-        (MATCHED_SERVER.to_string(), stdio_mcp(GOOD_CMD)),
-        (MISMATCHED_SERVER.to_string(), stdio_mcp("bad-cmd")),
+        (
+            MATCHED_SERVER.to_string(),
+            stdio_mcp_builder!(GOOD_CMD).build(),
+        ),
+        (
+            MISMATCHED_SERVER.to_string(),
+            stdio_mcp_builder!("bad-cmd").build(),
+        ),
         (
             UNLISTED_SERVER.to_string(),
             http_mcp("https://example.com/mcp"),
@@ -3910,7 +3925,8 @@ fn filter_plugin_mcp_servers_by_allowlist_enforces_plugin_and_identity_rules() {
 
 #[test]
 fn filter_plugin_mcp_servers_by_allowlist_blocks_unlisted_plugin() {
-    let mut servers = HashMap::from([("server-a".to_string(), stdio_mcp("cmd-a"))]);
+    let mut servers =
+        HashMap::from([("server-a".to_string(), stdio_mcp_builder!("cmd-a").build())]);
     let source = RequirementSource::CloudRequirements;
     let requirements = Sourced::new(
         BTreeMap::from([(
@@ -4128,28 +4144,29 @@ async fn rebuild_preserving_session_layers_refreshes_requirements() -> std::io::
         &HashMap::from([
             (
                 "session_overrides_user".to_string(),
-                stdio_mcp("session-command"),
+                stdio_mcp_builder!("session-command").build(),
             ),
             (
                 "managed_overrides_session".to_string(),
-                stdio_mcp("managed-command"),
+                stdio_mcp_builder!("managed-command").build(),
             ),
             (
                 "fresh_global".to_string(),
-                stdio_mcp("fresh-global-command"),
+                stdio_mcp_builder!("fresh-global-command").build(),
             ),
             (
                 "fresh_project".to_string(),
-                stdio_mcp("fresh-project-command"),
+                stdio_mcp_builder!("fresh-project-command").build(),
             ),
-            ("blocked_session".to_string(), {
-                let mut server = stdio_mcp("blocked-session-command");
-                server.enabled = false;
-                server.disabled_reason = Some(McpServerDisabledReason::Requirements {
-                    source: RequirementSource::Unknown,
-                });
-                server
-            },),
+            (
+                "blocked_session".to_string(),
+                stdio_mcp_builder!("blocked-session-command")
+                    .enabled(/*value*/ false)
+                    .disabled_reason(McpServerDisabledReason::Requirements {
+                        source: RequirementSource::Unknown,
+                    })
+                    .build(),
+            ),
         ])
     );
 
@@ -5277,7 +5294,7 @@ trust_level = "trusted"
 
     assert_eq!(
         config.mcp_servers.get("docs"),
-        Some(&stdio_mcp("docs-server"))
+        Some(&stdio_mcp_builder!("docs-server").build())
     );
 }
 
