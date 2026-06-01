@@ -389,6 +389,16 @@ impl ChatWidget {
             self.refresh_pending_input_preview();
         }
 
+        if render_in_history {
+            self.record_cancel_edit_candidate(UserMessage {
+                text: text.clone(),
+                local_images: local_images.clone(),
+                remote_image_urls: remote_image_urls.clone(),
+                text_elements: text_elements.clone(),
+                mention_bindings: mention_bindings.clone(),
+            });
+        }
+
         // Show replayable user content in conversation history.
         let display_user_message = render_in_history.then(|| {
             user_message_display_for_history(

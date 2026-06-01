@@ -11,11 +11,11 @@ use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::USER_MESSAGE_BEGIN;
 use regex::Regex;
 use regex::RegexBuilder;
-use tokio::io::AsyncBufReadExt;
 use tokio::process::Command;
 
 use super::ARCHIVED_SESSIONS_SUBDIR;
 use super::SESSIONS_SUBDIR;
+use super::compression;
 
 const MATCH_CONTEXT_BEFORE_CHARS: usize = 48;
 const MATCH_CONTEXT_AFTER_CHARS: usize = 96;
@@ -32,7 +32,10 @@ pub async fn search_rollout_paths(
         SESSIONS_SUBDIR
     });
     let search_term = json_escaped_search_term(search_term)?;
-    ripgrep_rollout_paths(rg_command, root.as_path(), search_term.as_str()).await
+    let mut matches =
+        ripgrep_rollout_paths(rg_command, root.as_path(), search_term.as_str()).await?;
+    matches.extend(scan_compressed_rollout_paths(root.as_path(), search_term.as_str()).await?);
+    Ok(matches)
 }
 
 async fn ripgrep_rollout_paths(
@@ -106,13 +109,14 @@ async fn scan_rollout_paths(root: &Path, search_term: &str) -> io::Result<HashSe
                 dirs.push(path);
                 continue;
             }
-            if !file_type.is_file()
-                || path.extension().and_then(|extension| extension.to_str()) != Some("jsonl")
-            {
+            if !file_type.is_file() {
                 continue;
             }
-            if rollout_contains(path.as_path(), &search_term).await? {
-                matches.insert(path);
+            let Some(rollout_file) = compression::RolloutFile::from_path(path) else {
+                continue;
+            };
+            if rollout_contains(rollout_file.path(), &search_term).await? {
+                matches.insert(rollout_file.into_path());
             }
         }
     }
@@ -121,8 +125,7 @@ async fn scan_rollout_paths(root: &Path, search_term: &str) -> io::Result<HashSe
 }
 
 async fn rollout_contains(path: &Path, search_term: &Regex) -> io::Result<bool> {
-    let file = tokio::fs::File::open(path).await?;
-    let mut lines = tokio::io::BufReader::new(file).lines();
+    let mut lines = compression::open_rollout_line_reader(path).await?;
     while let Some(line) = lines.next_line().await? {
         if search_term.is_match(line.as_str()) {
             return Ok(true);
@@ -135,8 +138,7 @@ pub async fn first_rollout_content_match_snippet(
     path: &Path,
     search_term: &str,
 ) -> io::Result<Option<String>> {
-    let file = tokio::fs::File::open(path).await?;
-    let mut lines = tokio::io::BufReader::new(file).lines();
+    let mut lines = compression::open_rollout_line_reader(path).await?;
     let json_search_term = case_insensitive_literal_regex(json_escaped_search_term(search_term)?)?;
     let search_term = case_insensitive_literal_regex(search_term)?;
     while let Some(line) = lines.next_line().await? {
@@ -147,6 +149,45 @@ pub async fn first_rollout_content_match_snippet(
         }
     }
     Ok(None)
+}
+
+async fn scan_compressed_rollout_paths(
+    root: &Path,
+    search_term: &str,
+) -> io::Result<HashSet<PathBuf>> {
+    let mut matches = HashSet::new();
+    let mut dirs = vec![root.to_path_buf()];
+    let search_term = case_insensitive_literal_regex(search_term)?;
+
+    while let Some(dir) = dirs.pop() {
+        let mut entries = match tokio::fs::read_dir(dir).await {
+            Ok(entries) => entries,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
+            Err(err) => return Err(err),
+        };
+        while let Some(entry) = entries.next_entry().await? {
+            let path = entry.path();
+            let file_type = entry.file_type().await?;
+            if file_type.is_dir() {
+                dirs.push(path);
+                continue;
+            }
+            if !file_type.is_file() {
+                continue;
+            }
+            let Some(rollout_file) = compression::RolloutFile::from_path(path) else {
+                continue;
+            };
+            if !rollout_file.is_compressed() {
+                continue;
+            }
+            if rollout_contains(rollout_file.path(), &search_term).await? {
+                matches.insert(rollout_file.into_path());
+            }
+        }
+    }
+
+    Ok(matches)
 }
 
 fn json_escaped_search_term(search_term: &str) -> io::Result<String> {

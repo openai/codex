@@ -27,6 +27,7 @@ codex-utils-string = { workspace = true }
 regex = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+tempfile = { workspace = true }
 time = { workspace = true, features = [
     "formatting",
     "local-offset",
@@ -44,7 +45,7 @@ tokio = { workspace = true, features = [
 ] }
 tracing = { workspace = true }
 uuid = { workspace = true }
+zstd = { workspace = true }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }
-tempfile = { workspace = true }

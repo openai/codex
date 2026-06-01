@@ -2985,6 +2985,7 @@ dependencies = [
  "codex-protocol",
  "codex-state",
  "codex-tools",
+ "codex-utils-template",
  "pretty_assertions",
  "serde",
  "serde_json",
@@ -3590,6 +3591,7 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+ "zstd 0.13.3",
 ]
 
 [[package]]

@@ -5,6 +5,7 @@ use crate::environment_selection::ResolvedTurnEnvironments;
 use codex_model_provider::SharedModelProvider;
 use codex_model_provider::create_model_provider;
 use codex_protocol::SessionId;
+use codex_protocol::ThreadId;
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::openai_models::ToolMode;
 use codex_protocol::protocol::ThreadSource;
@@ -62,6 +63,7 @@ pub struct TurnContext {
     pub(crate) reasoning_effort: Option<ReasoningEffortConfig>,
     pub(crate) reasoning_summary: ReasoningSummaryConfig,
     pub(crate) session_source: SessionSource,
+    pub(crate) parent_thread_id: Option<ThreadId>,
     pub(crate) thread_source: Option<ThreadSource>,
     pub(crate) environments: ResolvedTurnEnvironments,
     /// The session's absolute working directory. All relative paths provided
@@ -232,6 +234,7 @@ impl TurnContext {
             reasoning_effort,
             reasoning_summary: self.reasoning_summary,
             session_source: self.session_source.clone(),
+            parent_thread_id: self.parent_thread_id,
             thread_source: self.thread_source,
             environments: self.environments.clone(),
             #[allow(deprecated)]
@@ -506,6 +509,7 @@ impl Session {
             session_id.to_string(),
             thread_id.to_string(),
             session_configuration.forked_from_thread_id,
+            session_configuration.parent_thread_id,
             &session_configuration.session_source,
             session_configuration.thread_source,
             sub_id.clone(),
@@ -529,6 +533,7 @@ impl Session {
             reasoning_effort,
             reasoning_summary,
             session_source,
+            parent_thread_id: session_configuration.parent_thread_id,
             thread_source: session_configuration.thread_source,
             environments,
             #[allow(deprecated)]

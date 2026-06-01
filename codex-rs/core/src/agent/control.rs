@@ -54,6 +54,7 @@ pub(crate) enum SpawnAgentForkMode {
 pub(crate) struct SpawnAgentOptions {
     pub(crate) fork_parent_spawn_call_id: Option<String>,
     pub(crate) fork_mode: Option<SpawnAgentForkMode>,
+    pub(crate) parent_thread_id: Option<ThreadId>,
     pub(crate) environments: Option<Vec<TurnEnvironmentSelection>>,
 }
 
@@ -262,12 +263,12 @@ impl AgentControl {
                 .await?
             }
             (Some(session_source), None) => {
-                let forked_from_thread_id = thread_spawn_parent_thread_id(&session_source);
                 Box::pin(state.spawn_new_thread_with_source(
                     config.clone(),
                     self.clone(),
                     session_source,
-                    forked_from_thread_id,
+                    options.parent_thread_id,
+                    /*forked_from_thread_id*/ None,
                     /*thread_source*/ Some(ThreadSource::Subagent),
                     /*persist_extended_history*/ false,
                     /*metrics_service_name*/ None,
@@ -309,6 +310,7 @@ impl AgentControl {
                 }
             };
             let thread_config = new_thread.thread.codex.thread_config_snapshot().await;
+            let parent_thread_id = thread_config.parent_thread_id;
             emit_subagent_session_started(
                 &new_thread
                     .thread
@@ -319,7 +321,7 @@ impl AgentControl {
                 client_metadata,
                 new_thread.thread.codex.session.session_id(),
                 new_thread.thread_id,
-                /*parent_thread_id*/ None,
+                parent_thread_id,
                 thread_config,
                 subagent_source.clone(),
             );
@@ -473,6 +475,7 @@ impl AgentControl {
         }
         if preserve_reference_context_item
             && config.features.enabled(Feature::MultiAgentV2)
+            && config.multi_agent_v2.usage_hint_enabled
             && let Some(subagent_usage_hint_text) =
                 config.multi_agent_v2.subagent_usage_hint_text.clone()
             && let Some(subagent_usage_hint_message) =
@@ -490,6 +493,7 @@ impl AgentControl {
                 self.clone(),
                 session_source,
                 /*thread_source*/ Some(ThreadSource::Subagent),
+                /*parent_thread_id*/ Some(parent_thread_id),
                 /*forked_from_thread_id*/ Some(parent_thread_id),
                 /*persist_extended_history*/ false,
                 inherited_shell_snapshot,
@@ -638,6 +642,7 @@ impl AgentControl {
             .history
             .ok_or_else(|| CodexErr::ThreadNotFound(thread_id))?
             .items;
+        let parent_thread_id = stored_thread.parent_thread_id;
 
         let resumed_thread = state
             .resume_thread_with_history_with_source(ResumeThreadWithHistoryOptions {
@@ -649,6 +654,7 @@ impl AgentControl {
                 }),
                 agent_control: self.clone(),
                 session_source,
+                parent_thread_id,
                 inherited_shell_snapshot,
                 inherited_exec_policy,
             })
@@ -841,9 +847,9 @@ impl AgentControl {
     pub(crate) fn register_session_root(
         &self,
         current_thread_id: ThreadId,
-        current_session_source: &SessionSource,
+        current_parent_thread_id: Option<ThreadId>,
     ) {
-        if thread_spawn_parent_thread_id(current_session_source).is_none() {
+        if current_parent_thread_id.is_none() {
             self.state.register_root_thread(current_thread_id);
         }
     }
@@ -1218,7 +1224,8 @@ impl AgentControl {
         child_thread_id: ThreadId,
         session_source: Option<&SessionSource>,
     ) {
-        let Some(parent_thread_id) = session_source.and_then(thread_spawn_parent_thread_id) else {
+        let Some(parent_thread_id) = session_source.and_then(SessionSource::parent_thread_id)
+        else {
             return;
         };
         let Some(state_db_ctx) = thread.state_db() else {
@@ -1261,10 +1268,6 @@ impl AgentControl {
 
         Ok(descendants)
     }
-}
-
-fn thread_spawn_parent_thread_id(session_source: &SessionSource) -> Option<ThreadId> {
-    session_source.parent_thread_id()
 }
 
 fn agent_matches_prefix(agent_path: Option<&AgentPath>, prefix: &AgentPath) -> bool {
