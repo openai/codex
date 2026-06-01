@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::RwLock;
 
+use crate::ExecServerCapability;
 use crate::ExecServerError;
 use crate::ExecServerRuntimePaths;
 use crate::ExecutorFileSystem;
@@ -289,6 +290,7 @@ pub struct Environment {
     exec_backend: Arc<dyn ExecBackend>,
     filesystem: Arc<dyn ExecutorFileSystem>,
     http_client: Arc<dyn HttpClient>,
+    remote_client: Option<LazyRemoteExecServerClient>,
     local_runtime_paths: Option<ExecServerRuntimePaths>,
 }
 
@@ -301,6 +303,7 @@ impl Environment {
             exec_backend: Arc::new(LocalProcess::default()),
             filesystem: Arc::new(LocalFileSystem::unsandboxed()),
             http_client: Arc::new(ReqwestHttpClient),
+            remote_client: None,
             local_runtime_paths: None,
         }
     }
@@ -359,6 +362,7 @@ impl Environment {
                 local_runtime_paths.clone(),
             )),
             http_client: Arc::new(ReqwestHttpClient),
+            remote_client: None,
             local_runtime_paths: Some(local_runtime_paths),
         }
     }
@@ -394,7 +398,8 @@ impl Environment {
             remote_transport: Some(remote_transport),
             exec_backend,
             filesystem,
-            http_client: Arc::new(client),
+            http_client: Arc::new(client.clone()),
+            remote_client: Some(client),
             local_runtime_paths,
         }
     }
@@ -418,6 +423,16 @@ impl Environment {
 
     pub fn get_http_client(&self) -> Arc<dyn HttpClient> {
         Arc::clone(&self.http_client)
+    }
+
+    pub async fn supports_exec_server_capability(
+        &self,
+        capability: ExecServerCapability,
+    ) -> Result<bool, ExecServerError> {
+        let Some(client) = &self.remote_client else {
+            return Ok(false);
+        };
+        Ok(client.get().await?.supports(capability))
     }
 
     pub fn get_filesystem(&self) -> Arc<dyn ExecutorFileSystem> {
@@ -806,6 +821,7 @@ mod tests {
                 tty: false,
                 pipe_stdin: false,
                 arg0: None,
+                launch: crate::ExecLaunch::Materialized,
             })
             .await
             .expect("start process");

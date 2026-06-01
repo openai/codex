@@ -4,7 +4,12 @@ mod common;
 
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCResponse;
+use codex_exec_server::ExecLaunch;
+use codex_exec_server::ExecParams;
 use codex_exec_server::ExecResponse;
+use codex_exec_server::ExecSandboxIntent;
+use codex_exec_server::ExecSandboxMode;
+use codex_exec_server::ExecServerCapability;
 use codex_exec_server::InitializeParams;
 use codex_exec_server::InitializeResponse;
 use codex_exec_server::ProcessId;
@@ -12,6 +17,9 @@ use codex_exec_server::ReadResponse;
 use codex_exec_server::TerminateResponse;
 use codex_exec_server::WriteResponse;
 use codex_exec_server::WriteStatus;
+use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_protocol::models::PermissionProfile;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use common::exec_server::exec_server;
 use pretty_assertions::assert_eq;
 
@@ -27,7 +35,7 @@ async fn exec_server_starts_process_over_websocket() -> anyhow::Result<()> {
             })?,
         )
         .await?;
-    let _ = server
+    let initialize_response = server
         .wait_for_event(|event| {
             matches!(
                 event,
@@ -35,6 +43,16 @@ async fn exec_server_starts_process_over_websocket() -> anyhow::Result<()> {
             )
         })
         .await?;
+    let JSONRPCMessage::Response(JSONRPCResponse { result, .. }) = initialize_response else {
+        panic!("expected initialize response");
+    };
+    let initialize_response: InitializeResponse = serde_json::from_value(result)?;
+    let expected_capabilities = if cfg!(windows) {
+        Vec::new()
+    } else {
+        vec![ExecServerCapability::ProcessStartSandboxIntent]
+    };
+    assert_eq!(initialize_response.capabilities, expected_capabilities);
 
     server
         .send_notification("initialized", serde_json::json!({}))
@@ -70,7 +88,161 @@ async fn exec_server_starts_process_over_websocket() -> anyhow::Result<()> {
     assert_eq!(
         process_start_response,
         ExecResponse {
-            process_id: ProcessId::from("proc-1")
+            process_id: ProcessId::from("proc-1"),
+            sandbox: None,
+        }
+    );
+
+    server.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn exec_server_materializes_process_sandbox_intent() -> anyhow::Result<()> {
+    let mut server = exec_server().await?;
+    let initialize_id = server
+        .send_request(
+            "initialize",
+            serde_json::to_value(InitializeParams {
+                client_name: "exec-server-test".to_string(),
+                resume_session_id: None,
+            })?,
+        )
+        .await?;
+    let _ = server
+        .wait_for_event(|event| {
+            matches!(
+                event,
+                JSONRPCMessage::Response(JSONRPCResponse { id, .. }) if id == &initialize_id
+            )
+        })
+        .await?;
+    server
+        .send_notification("initialized", serde_json::json!({}))
+        .await?;
+
+    let cwd = AbsolutePathBuf::from_absolute_path(std::env::current_dir()?.as_path())?;
+    let process_start_id = server
+        .send_request(
+            "process/start",
+            serde_json::to_value(ExecParams {
+                process_id: ProcessId::from("proc-sandbox-intent"),
+                argv: vec!["true".to_string()],
+                cwd: cwd.to_path_buf(),
+                env_policy: None,
+                env: Default::default(),
+                tty: false,
+                pipe_stdin: false,
+                arg0: None,
+                launch: ExecLaunch::SandboxIntent {
+                    intent: ExecSandboxIntent {
+                        sandbox: ExecSandboxMode::None,
+                        permissions: PermissionProfile::Disabled,
+                        sandbox_policy_cwd: cwd.clone(),
+                        use_legacy_landlock: false,
+                        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+                        windows_sandbox_private_desktop: false,
+                        additional_permissions: None,
+                    },
+                },
+            })?,
+        )
+        .await?;
+    let response = server
+        .wait_for_event(|event| {
+            matches!(
+                event,
+                JSONRPCMessage::Response(JSONRPCResponse { id, .. }) if id == &process_start_id
+            )
+        })
+        .await?;
+    let JSONRPCMessage::Response(JSONRPCResponse { result, .. }) = response else {
+        panic!("expected process/start response");
+    };
+    let process_start_response: ExecResponse = serde_json::from_value(result)?;
+
+    assert_eq!(
+        process_start_response,
+        ExecResponse {
+            process_id: ProcessId::from("proc-sandbox-intent"),
+            sandbox: Some(codex_sandboxing::SandboxType::None),
+        }
+    );
+
+    server.shutdown().await?;
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn exec_server_materializes_platform_process_sandbox_intent() -> anyhow::Result<()> {
+    let mut server = exec_server().await?;
+    let initialize_id = server
+        .send_request(
+            "initialize",
+            serde_json::to_value(InitializeParams {
+                client_name: "exec-server-test".to_string(),
+                resume_session_id: None,
+            })?,
+        )
+        .await?;
+    let _ = server
+        .wait_for_event(|event| {
+            matches!(
+                event,
+                JSONRPCMessage::Response(JSONRPCResponse { id, .. }) if id == &initialize_id
+            )
+        })
+        .await?;
+    server
+        .send_notification("initialized", serde_json::json!({}))
+        .await?;
+
+    let cwd = AbsolutePathBuf::from_absolute_path(std::env::current_dir()?.as_path())?;
+    let process_start_id = server
+        .send_request(
+            "process/start",
+            serde_json::to_value(ExecParams {
+                process_id: ProcessId::from("proc-platform-sandbox-intent"),
+                argv: vec!["true".to_string()],
+                cwd: cwd.to_path_buf(),
+                env_policy: None,
+                env: Default::default(),
+                tty: false,
+                pipe_stdin: false,
+                arg0: None,
+                launch: ExecLaunch::SandboxIntent {
+                    intent: ExecSandboxIntent {
+                        sandbox: ExecSandboxMode::Platform,
+                        permissions: PermissionProfile::Disabled,
+                        sandbox_policy_cwd: cwd,
+                        use_legacy_landlock: false,
+                        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+                        windows_sandbox_private_desktop: false,
+                        additional_permissions: None,
+                    },
+                },
+            })?,
+        )
+        .await?;
+    let response = server
+        .wait_for_event(|event| {
+            matches!(
+                event,
+                JSONRPCMessage::Response(JSONRPCResponse { id, .. }) if id == &process_start_id
+            )
+        })
+        .await?;
+    let JSONRPCMessage::Response(JSONRPCResponse { result, .. }) = response else {
+        panic!("expected process/start response");
+    };
+    let process_start_response: ExecResponse = serde_json::from_value(result)?;
+
+    assert_eq!(
+        process_start_response,
+        ExecResponse {
+            process_id: ProcessId::from("proc-platform-sandbox-intent"),
+            sandbox: codex_sandboxing::get_platform_sandbox(/*windows_sandbox_enabled*/ false),
         }
     );
 
@@ -135,7 +307,8 @@ async fn exec_server_defaults_omitted_pipe_stdin_to_closed_stdin() -> anyhow::Re
     assert_eq!(
         process_start_response,
         ExecResponse {
-            process_id: ProcessId::from("proc-default-stdin")
+            process_id: ProcessId::from("proc-default-stdin"),
+            sandbox: None,
         }
     );
 

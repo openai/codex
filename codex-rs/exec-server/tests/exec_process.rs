@@ -8,6 +8,7 @@ use anyhow::Context;
 use anyhow::Result;
 use codex_exec_server::Environment;
 use codex_exec_server::ExecBackend;
+use codex_exec_server::ExecLaunch;
 use codex_exec_server::ExecOutputStream;
 use codex_exec_server::ExecParams;
 use codex_exec_server::ExecProcess;
@@ -79,6 +80,7 @@ async fn assert_exec_process_starts_and_exits(use_remote: bool) -> Result<()> {
             tty: false,
             pipe_stdin: false,
             arg0: None,
+            launch: ExecLaunch::Materialized,
         })
         .await?;
     assert_eq!(session.process.process_id().as_str(), "proc-1");
@@ -220,11 +222,12 @@ async fn assert_exec_process_streams_output(use_remote: bool) -> Result<()> {
             tty: false,
             pipe_stdin: false,
             arg0: None,
+            launch: ExecLaunch::Materialized,
         })
         .await?;
     assert_eq!(session.process.process_id().as_str(), process_id);
 
-    let StartedExecProcess { process } = session;
+    let StartedExecProcess { process, .. } = session;
     let wake_rx = process.subscribe_wake();
     let (output, exit_code, closed) = collect_process_output_from_reads(process, wake_rx).await?;
     assert_eq!(output, "session output\n");
@@ -251,11 +254,12 @@ async fn assert_exec_process_pushes_events(use_remote: bool) -> Result<()> {
             tty: false,
             pipe_stdin: false,
             arg0: None,
+            launch: ExecLaunch::Materialized,
         })
         .await?;
     assert_eq!(session.process.process_id().as_str(), process_id);
 
-    let StartedExecProcess { process } = session;
+    let StartedExecProcess { process, .. } = session;
     let actual = collect_process_event_snapshots(process).await?;
     assert_eq!(
         actual,
@@ -298,11 +302,12 @@ async fn assert_exec_process_replays_events_after_close(use_remote: bool) -> Res
             tty: false,
             pipe_stdin: false,
             arg0: None,
+            launch: ExecLaunch::Materialized,
         })
         .await?;
     assert_eq!(session.process.process_id().as_str(), process_id);
 
-    let StartedExecProcess { process } = session;
+    let StartedExecProcess { process, .. } = session;
     let wake_rx = process.subscribe_wake();
     let read_result = collect_process_output_from_reads(Arc::clone(&process), wake_rx).await?;
     assert_eq!(
@@ -346,11 +351,12 @@ async fn assert_exec_process_retains_output_after_exit_until_streams_close(
             tty: false,
             pipe_stdin: false,
             arg0: None,
+            launch: ExecLaunch::Materialized,
         })
         .await?;
     assert_eq!(session.process.process_id().as_str(), process_id);
 
-    let StartedExecProcess { process } = session;
+    let StartedExecProcess { process, .. } = session;
 
     let exit_response = timeout(
         Duration::from_secs(2),
@@ -419,13 +425,14 @@ async fn assert_exec_process_write_then_read(use_remote: bool) -> Result<()> {
             tty: true,
             pipe_stdin: false,
             arg0: None,
+            launch: ExecLaunch::Materialized,
         })
         .await?;
     assert_eq!(session.process.process_id().as_str(), process_id);
 
     tokio::time::sleep(Duration::from_millis(200)).await;
     session.process.write(b"hello\n".to_vec()).await?;
-    let StartedExecProcess { process } = session;
+    let StartedExecProcess { process, .. } = session;
     let wake_rx = process.subscribe_wake();
     let (output, exit_code, closed) = collect_process_output_from_reads(process, wake_rx).await?;
 
@@ -456,6 +463,7 @@ async fn assert_exec_process_write_then_read_without_tty(use_remote: bool) -> Re
             tty: false,
             pipe_stdin: true,
             arg0: None,
+            launch: ExecLaunch::Materialized,
         })
         .await?;
     assert_eq!(session.process.process_id().as_str(), process_id);
@@ -463,7 +471,7 @@ async fn assert_exec_process_write_then_read_without_tty(use_remote: bool) -> Re
     tokio::time::sleep(Duration::from_millis(200)).await;
     let write_response = session.process.write(b"hello\n".to_vec()).await?;
     assert_eq!(write_response.status, WriteStatus::Accepted);
-    let StartedExecProcess { process } = session;
+    let StartedExecProcess { process, .. } = session;
     let wake_rx = process.subscribe_wake();
     let actual = collect_process_output_from_reads(process, wake_rx).await?;
 
@@ -489,13 +497,14 @@ async fn assert_exec_process_rejects_write_without_pipe_stdin(use_remote: bool) 
             tty: false,
             pipe_stdin: false,
             arg0: None,
+            launch: ExecLaunch::Materialized,
         })
         .await?;
     assert_eq!(session.process.process_id().as_str(), process_id);
 
     let write_response = session.process.write(b"ignored\n".to_vec()).await?;
     assert_eq!(write_response.status, WriteStatus::StdinClosed);
-    let StartedExecProcess { process } = session;
+    let StartedExecProcess { process, .. } = session;
     let wake_rx = process.subscribe_wake();
     let (output, exit_code, closed) = collect_process_output_from_reads(process, wake_rx).await?;
 
@@ -524,12 +533,13 @@ async fn assert_exec_process_preserves_queued_events_before_subscribe(
             tty: false,
             pipe_stdin: false,
             arg0: None,
+            launch: ExecLaunch::Materialized,
         })
         .await?;
 
     tokio::time::sleep(Duration::from_millis(200)).await;
 
-    let StartedExecProcess { process } = session;
+    let StartedExecProcess { process, .. } = session;
     let wake_rx = process.subscribe_wake();
     let (output, exit_code, closed) = collect_process_output_from_reads(process, wake_rx).await?;
     assert_eq!(output, "queued output\n");
@@ -558,6 +568,7 @@ async fn remote_exec_process_reports_transport_disconnect() -> Result<()> {
             tty: false,
             pipe_stdin: false,
             arg0: None,
+            launch: ExecLaunch::Materialized,
         })
         .await?;
 

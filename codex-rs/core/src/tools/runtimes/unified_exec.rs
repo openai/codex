@@ -41,6 +41,7 @@ use crate::unified_exec::UnifiedExecError;
 use crate::unified_exec::UnifiedExecProcess;
 use crate::unified_exec::UnifiedExecProcessManager;
 use codex_exec_server::Environment;
+use codex_exec_server::ExecServerCapability;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::SandboxErr;
@@ -107,6 +108,24 @@ fn unified_exec_options(
     ExecOptions {
         expiration,
         capture_policy: ExecCapturePolicy::ShellTool,
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DirectExecServerLaunch {
+    Materialized,
+    SandboxIntent,
+}
+
+fn direct_exec_server_launch(
+    environment_is_remote: bool,
+    supports_sandbox_intent: bool,
+    requires_core_network_realization: bool,
+) -> DirectExecServerLaunch {
+    if environment_is_remote && supports_sandbox_intent && !requires_core_network_realization {
+        DirectExecServerLaunch::SandboxIntent
+    } else {
+        DirectExecServerLaunch::Materialized
     }
 }
 
@@ -370,6 +389,41 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
         let command =
             build_sandbox_command(&command, &req.cwd, &env, req.additional_permissions.clone())
                 .map_err(|_| ToolError::Rejected("missing command line for PTY".to_string()))?;
+        let supports_sandbox_intent = if environment_is_remote {
+            req.environment
+                .supports_exec_server_capability(ExecServerCapability::ProcessStartSandboxIntent)
+                .await
+                .map_err(|err| ToolError::Rejected(err.to_string()))?
+        } else {
+            false
+        };
+        if direct_exec_server_launch(
+            environment_is_remote,
+            supports_sandbox_intent,
+            managed_network.is_some() || attempt.enforce_managed_network,
+        ) == DirectExecServerLaunch::SandboxIntent
+        {
+            return self
+                .manager
+                .open_session_with_exec_server_sandbox_intent(
+                    req.process_id,
+                    command,
+                    attempt.exec_server_sandbox_intent(),
+                    req.exec_server_env_config.as_ref(),
+                    req.tty,
+                    req.environment.as_ref(),
+                )
+                .await
+                .map_err(|err| match err {
+                    UnifiedExecError::SandboxDenied { output, .. } => {
+                        ToolError::Codex(CodexErr::Sandbox(SandboxErr::Denied {
+                            output: Box::new(output),
+                            network_policy_decision: None,
+                        }))
+                    }
+                    other => ToolError::Rejected(other.to_string()),
+                });
+        }
         let options = unified_exec_options(attempt.network_denial_cancellation_token.clone());
         let mut exec_env = attempt
             .env_for(command, options, managed_network)
@@ -425,6 +479,38 @@ mod tests {
             }
             other => panic!("expected timeout-or-cancellation expiration, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn direct_remote_exec_server_uses_sandbox_intent_only_when_network_stays_executor_local() {
+        assert_eq!(
+            direct_exec_server_launch(
+                /*environment_is_remote*/ true, /*supports_sandbox_intent*/ true,
+                /*requires_core_network_realization*/ false,
+            ),
+            DirectExecServerLaunch::SandboxIntent,
+        );
+        assert_eq!(
+            direct_exec_server_launch(
+                /*environment_is_remote*/ true, /*supports_sandbox_intent*/ false,
+                /*requires_core_network_realization*/ false,
+            ),
+            DirectExecServerLaunch::Materialized,
+        );
+        assert_eq!(
+            direct_exec_server_launch(
+                /*environment_is_remote*/ true, /*supports_sandbox_intent*/ true,
+                /*requires_core_network_realization*/ true,
+            ),
+            DirectExecServerLaunch::Materialized,
+        );
+        assert_eq!(
+            direct_exec_server_launch(
+                /*environment_is_remote*/ false, /*supports_sandbox_intent*/ true,
+                /*requires_core_network_realization*/ false,
+            ),
+            DirectExecServerLaunch::Materialized,
+        );
     }
 
     #[tokio::test]

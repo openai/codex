@@ -12,9 +12,11 @@ use crate::protocol::ExecParams;
 use crate::protocol::ProcessOutputChunk;
 use crate::protocol::ReadResponse;
 use crate::protocol::WriteResponse;
+use codex_sandboxing::SandboxType;
 
 pub struct StartedExecProcess {
     pub process: Arc<dyn ExecProcess>,
+    pub sandbox: Option<SandboxType>,
 }
 
 /// Pushed process events for consumers that want to follow process output as it

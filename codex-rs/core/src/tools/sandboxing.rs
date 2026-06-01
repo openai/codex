@@ -421,6 +421,22 @@ pub(crate) struct SandboxAttempt<'a> {
 }
 
 impl<'a> SandboxAttempt<'a> {
+    pub fn exec_server_sandbox_intent(&self) -> codex_exec_server::ExecSandboxIntent {
+        codex_exec_server::ExecSandboxIntent {
+            sandbox: if self.sandbox == SandboxType::None {
+                codex_exec_server::ExecSandboxMode::None
+            } else {
+                codex_exec_server::ExecSandboxMode::Platform
+            },
+            permissions: self.permissions.clone(),
+            sandbox_policy_cwd: self.sandbox_cwd.clone(),
+            use_legacy_landlock: self.use_legacy_landlock,
+            windows_sandbox_level: self.windows_sandbox_level,
+            windows_sandbox_private_desktop: self.windows_sandbox_private_desktop,
+            additional_permissions: None,
+        }
+    }
+
     pub fn env_for(
         &self,
         command: SandboxCommand,

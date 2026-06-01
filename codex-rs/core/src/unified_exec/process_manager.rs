@@ -129,19 +129,20 @@ fn env_overlay_for_exec_server(
         .collect()
 }
 
-fn exec_server_env_for_request(
-    request: &ExecRequest,
+fn exec_server_env_for_command(
+    env: &HashMap<String, String>,
+    exec_server_env_config: Option<&ExecServerEnvConfig>,
 ) -> (
     Option<codex_exec_server::ExecEnvPolicy>,
     HashMap<String, String>,
 ) {
-    if let Some(exec_server_env_config) = &request.exec_server_env_config {
+    if let Some(exec_server_env_config) = exec_server_env_config {
         (
             Some(exec_server_env_config.policy.clone()),
-            env_overlay_for_exec_server(&request.env, &exec_server_env_config.local_policy_env),
+            env_overlay_for_exec_server(env, &exec_server_env_config.local_policy_env),
         )
     } else {
-        (None, request.env.clone())
+        (None, env.clone())
     }
 }
 
@@ -150,7 +151,8 @@ fn exec_server_params_for_request(
     request: &ExecRequest,
     tty: bool,
 ) -> codex_exec_server::ExecParams {
-    let (env_policy, env) = exec_server_env_for_request(request);
+    let (env_policy, env) =
+        exec_server_env_for_command(&request.env, request.exec_server_env_config.as_ref());
     codex_exec_server::ExecParams {
         process_id: exec_server_process_id(process_id).into(),
         argv: request.command.clone(),
@@ -160,7 +162,43 @@ fn exec_server_params_for_request(
         tty,
         pipe_stdin: false,
         arg0: request.arg0.clone(),
+        launch: codex_exec_server::ExecLaunch::Materialized,
     }
+}
+
+fn exec_server_params_for_sandbox_intent(
+    process_id: i32,
+    command: codex_sandboxing::SandboxCommand,
+    mut intent: codex_exec_server::ExecSandboxIntent,
+    exec_server_env_config: Option<&ExecServerEnvConfig>,
+    tty: bool,
+) -> Result<codex_exec_server::ExecParams, UnifiedExecError> {
+    let codex_sandboxing::SandboxCommand {
+        program,
+        args,
+        cwd,
+        env,
+        additional_permissions,
+    } = command;
+    let program = program.into_string().map_err(|program| {
+        UnifiedExecError::create_process(format!(
+            "exec-server sandbox intent program is not UTF-8: {}",
+            program.to_string_lossy()
+        ))
+    })?;
+    let (env_policy, env) = exec_server_env_for_command(&env, exec_server_env_config);
+    intent.additional_permissions = additional_permissions;
+    Ok(codex_exec_server::ExecParams {
+        process_id: exec_server_process_id(process_id).into(),
+        argv: std::iter::once(program).chain(args).collect(),
+        cwd: cwd.to_path_buf(),
+        env_policy,
+        env,
+        tty,
+        pipe_stdin: false,
+        arg0: None,
+        launch: codex_exec_server::ExecLaunch::SandboxIntent { intent },
+    })
 }
 
 /// Borrowed process state prepared for a `write_stdin` or poll operation.
@@ -987,6 +1025,40 @@ impl UnifiedExecProcessManager {
             spawn_result.map_err(|err| UnifiedExecError::create_process(err.to_string()))?;
         spawn_lifecycle.after_spawn();
         UnifiedExecProcess::from_spawned(spawned, request.sandbox, spawn_lifecycle).await
+    }
+
+    pub(crate) async fn open_session_with_exec_server_sandbox_intent(
+        &self,
+        process_id: i32,
+        command: codex_sandboxing::SandboxCommand,
+        intent: codex_exec_server::ExecSandboxIntent,
+        exec_server_env_config: Option<&ExecServerEnvConfig>,
+        tty: bool,
+        environment: &codex_exec_server::Environment,
+    ) -> Result<UnifiedExecProcess, UnifiedExecError> {
+        if !environment.is_remote() {
+            return Err(UnifiedExecError::create_process(
+                "exec-server sandbox intent requires a remote environment".to_string(),
+            ));
+        }
+
+        let started = environment
+            .get_exec_backend()
+            .start(exec_server_params_for_sandbox_intent(
+                process_id,
+                command,
+                intent,
+                exec_server_env_config,
+                tty,
+            )?)
+            .await
+            .map_err(|err| UnifiedExecError::create_process(err.to_string()))?;
+        let sandbox = started.sandbox.ok_or_else(|| {
+            UnifiedExecError::create_process(
+                "exec-server sandbox intent response omitted materialized sandbox".to_string(),
+            )
+        })?;
+        UnifiedExecProcess::from_exec_server_started(started, sandbox).await
     }
 
     pub(super) async fn open_session_with_sandbox(

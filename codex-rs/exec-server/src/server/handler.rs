@@ -123,7 +123,10 @@ impl ExecServerHandler {
             .session
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(session);
-        Ok(InitializeResponse { session_id })
+        Ok(InitializeResponse {
+            session_id,
+            capabilities: process_start_capabilities(),
+        })
     }
 
     pub(crate) fn initialized(&self) -> Result<(), String> {
@@ -340,6 +343,14 @@ impl ExecServerHandler {
         }
         active_body_stream_ids.insert(request_id.to_string());
         Ok(())
+    }
+}
+
+fn process_start_capabilities() -> Vec<crate::protocol::ExecServerCapability> {
+    if cfg!(windows) {
+        Vec::new()
+    } else {
+        vec![crate::protocol::ExecServerCapability::ProcessStartSandboxIntent]
     }
 }
 
