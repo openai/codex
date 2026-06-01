@@ -40,10 +40,9 @@ app-server-test-client *args:
 fmt:
     just --unstable --fmt
     cargo fmt -- --config imports_granularity=Item {stderr-null}
-    # The SDK and internal scripts use separate project roots for their Ruff environments.
-    uv sync --frozen --project ../sdk/python --extra dev --no-install-package openai-codex-cli-bin
-    uv run --frozen --project ../sdk/python --extra dev --no-sync ruff check --fix --fix-only ../sdk/python
-    uv run --frozen --project ../sdk/python --extra dev --no-sync ruff format ../sdk/python
+    uv run --frozen --project ../sdk/python --extra dev ruff check --fix --fix-only ../sdk/python
+    uv run --frozen --project ../sdk/python --extra dev ruff format ../sdk/python
+    # Root scripts have their own locked Ruff environment.
     uv run --frozen --project ../scripts ruff format ../scripts
 
 fmt-check:

@@ -92,10 +92,9 @@ def test_root_fmt_recipe_formats_justfile_rust_python_sdk_and_scripts() -> None:
         "commands": [
             "just --unstable --fmt",
             "cargo fmt -- --config imports_granularity=Item {stderr-null}",
-            "# The SDK and internal scripts use separate project roots for their Ruff environments.",
-            "uv sync --frozen --project ../sdk/python --extra dev --no-install-package openai-codex-cli-bin",
-            "uv run --frozen --project ../sdk/python --extra dev --no-sync ruff check --fix --fix-only ../sdk/python",
-            "uv run --frozen --project ../sdk/python --extra dev --no-sync ruff format ../sdk/python",
+            "uv run --frozen --project ../sdk/python --extra dev ruff check --fix --fix-only ../sdk/python",
+            "uv run --frozen --project ../sdk/python --extra dev ruff format ../sdk/python",
+            "# Root scripts have their own locked Ruff environment.",
             "uv run --frozen --project ../scripts ruff format ../scripts",
         ],
     }
@@ -126,15 +125,25 @@ def test_root_fmt_check_recipe_checks_all_formatters() -> None:
         if line.strip() and not line.strip().startswith("#")
     ]
     fmt_to_fmt_check = {
-        "just --unstable --fmt": "just --unstable --fmt --check",
-        "cargo fmt -- --config imports_granularity=Item {stderr-null}": "cargo fmt -- --config imports_granularity=Item --check {stderr-null}",
-        "uv sync --frozen --project ../sdk/python --extra dev --no-install-package openai-codex-cli-bin": "uv sync --frozen --project ../sdk/python --extra dev --no-install-package openai-codex-cli-bin",
-        "uv run --frozen --project ../sdk/python --extra dev --no-sync ruff check --fix --fix-only ../sdk/python": "uv run --frozen --project ../sdk/python --extra dev --no-sync ruff check --diff ../sdk/python",
-        "uv run --frozen --project ../sdk/python --extra dev --no-sync ruff format ../sdk/python": "uv run --frozen --project ../sdk/python --extra dev --no-sync ruff format --check ../sdk/python",
-        "uv run --frozen --project ../scripts ruff format ../scripts": "uv run --frozen --project ../scripts ruff format --check ../scripts",
+        "just --unstable --fmt": ["just --unstable --fmt --check"],
+        "cargo fmt -- --config imports_granularity=Item {stderr-null}": [
+            "cargo fmt -- --config imports_granularity=Item --check {stderr-null}"
+        ],
+        "uv run --frozen --project ../sdk/python --extra dev ruff check --fix --fix-only ../sdk/python": [
+            "uv sync --frozen --project ../sdk/python --extra dev --no-install-package openai-codex-cli-bin",
+            "uv run --frozen --project ../sdk/python --extra dev --no-sync ruff check --diff ../sdk/python",
+        ],
+        "uv run --frozen --project ../sdk/python --extra dev ruff format ../sdk/python": [
+            "uv run --frozen --project ../sdk/python --extra dev --no-sync ruff format --check ../sdk/python"
+        ],
+        "uv run --frozen --project ../scripts ruff format ../scripts": [
+            "uv run --frozen --project ../scripts ruff format --check ../scripts"
+        ],
     }
     assert [line.strip() for line in fmt_check_recipe[1:] if line.strip()] == [
-        fmt_to_fmt_check[command] for command in fmt_commands
+        fmt_check_command
+        for command in fmt_commands
+        for fmt_check_command in fmt_to_fmt_check[command]
     ]
 
 
