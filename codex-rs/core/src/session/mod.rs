@@ -431,10 +431,6 @@ fn resolve_multi_agent_version(
     model_info: &ModelInfo,
     config: &Config,
 ) -> Option<MultiAgentVersion> {
-    if inherited_multi_agent_version == Some(MultiAgentVersion::Disabled) {
-        return inherited_multi_agent_version;
-    }
-
     conversation_history
         .get_multi_agent_version()
         .or(inherited_multi_agent_version)

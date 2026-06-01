@@ -1,5 +1,4 @@
 use anyhow::Result;
-use anyhow::bail;
 use codex_core::config::Config;
 use codex_core::config::Constrained;
 use codex_core::sandboxing::SandboxPermissions;
@@ -28,6 +27,7 @@ use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_models_once;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_once_match;
+use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::skip_if_no_network;
 use core_test_support::submit_thread_settings;
@@ -341,38 +341,33 @@ async fn guardian_stays_disabled_when_model_selects_multi_agent_v2() -> Result<(
         "sandbox_permissions": SandboxPermissions::RequireEscalated,
         "justification": GUARDIAN_REASON,
     }))?;
-    let root_mock = mount_sse_once_match(
+    let request_log = mount_sse_sequence(
         &server,
-        |req: &Request| {
-            body_contains(req, GUARDIAN_ROOT_PROMPT) && !body_contains(req, GUARDIAN_REASON)
-        },
-        sse(vec![
-            ev_response_created("resp-root"),
-            ev_function_call("exec-call", "exec_command", &exec_args),
-            ev_completed("resp-root"),
-        ]),
-    )
-    .await;
-    let guardian_mock = mount_sse_once_match(
-        &server,
-        |req: &Request| {
-            body_contains(req, GUARDIAN_REASON)
-                && body_contains(req, r#""prompt_cache_key":"guardian:"#)
-        },
-        sse(vec![
-            ev_response_created("resp-guardian"),
-            ev_assistant_message(
-                "msg-guardian",
-                &json!({
-                    "risk_level": "low",
-                    "user_authorization": "high",
-                    "outcome": "deny",
-                    "rationale": "Keep the test command from executing.",
-                })
-                .to_string(),
-            ),
-            ev_completed("resp-guardian"),
-        ]),
+        vec![
+            sse(vec![
+                ev_response_created("resp-root"),
+                ev_function_call("exec-call", "exec_command", &exec_args),
+                ev_completed("resp-root"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-guardian"),
+                ev_assistant_message(
+                    "msg-guardian",
+                    &json!({
+                        "risk_level": "low",
+                        "user_authorization": "high",
+                        "outcome": "deny",
+                        "rationale": "Keep the test command from executing.",
+                    })
+                    .to_string(),
+                ),
+                ev_completed("resp-guardian"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-root-followup"),
+                ev_completed("resp-root-followup"),
+            ]),
+        ],
     )
     .await;
 
@@ -389,34 +384,27 @@ async fn guardian_stays_disabled_when_model_selects_multi_agent_v2() -> Result<(
         });
     let test = builder.build(&server).await?;
     test.submit_turn(GUARDIAN_ROOT_PROMPT).await?;
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while guardian_mock.requests().is_empty() {
-        if Instant::now() >= deadline {
-            bail!("timed out waiting for guardian request");
-        }
-        sleep(Duration::from_millis(10)).await;
-    }
-    test.codex.submit(Op::Interrupt).await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
 
-    let root_request = root_mock
-        .requests()
-        .into_iter()
-        .next()
-        .expect("expected root request");
-    let guardian_request = guardian_mock
-        .requests()
-        .into_iter()
-        .next()
-        .expect("expected guardian request");
+    let requests = request_log.requests();
+    let [root_request, guardian_request, _root_followup_request] = requests.as_slice() else {
+        panic!("expected root, guardian, and root follow-up requests");
+    };
     assert_eq!(
         (
             models_mock.requests().len(),
             test.codex.multi_agent_version(),
             tool_names(&root_request.body_json()).contains(&"spawn_agent".to_string()),
             guardian_request.body_contains_text(GUARDIAN_REASON),
+            guardian_request.body_json()["prompt_cache_key"]
+                .as_str()
+                .is_some_and(|key| key.starts_with("guardian:")),
             tool_names(&guardian_request.body_json()).contains(&"spawn_agent".to_string()),
         ),
-        (1, Some(MultiAgentVersion::V2), true, true, false)
+        (1, Some(MultiAgentVersion::V2), true, true, true, false)
     );
 
     Ok(())
