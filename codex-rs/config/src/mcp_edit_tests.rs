@@ -23,7 +23,7 @@ async fn replace_mcp_servers_serializes_per_tool_approval_overrides() -> anyhow:
                 env_vars: Vec::new(),
                 cwd: None,
             })
-            .supports_parallel_tool_calls(true)
+            .supports_parallel_tool_calls(/*value*/ true)
             .default_tools_approval_mode(AppToolApproval::Auto)
             .tools(HashMap::from([
                 (

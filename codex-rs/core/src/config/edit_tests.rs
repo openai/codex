@@ -887,7 +887,7 @@ fn blocking_replace_mcp_servers_round_trips() {
                 env_vars: vec!["FOO".into()],
                 cwd: None,
             })
-            .supports_parallel_tool_calls(true)
+            .supports_parallel_tool_calls(/*value*/ true)
             .enabled_tools(vec!["one".to_string(), "two".to_string()])
             .build(),
     );
@@ -905,7 +905,7 @@ fn blocking_replace_mcp_servers_round_trips() {
                 ),
                 env_http_headers: None,
             })
-            .enabled(false)
+            .enabled(/*value*/ false)
             .startup_timeout_sec(std::time::Duration::from_secs(5))
             .disabled_tools(vec!["forbidden".to_string()])
             .oauth(McpServerOAuthConfig {
@@ -1051,7 +1051,7 @@ foo = { command = "cmd" } # keep me
                 env_vars: Vec::new(),
                 cwd: None,
             })
-            .enabled(false)
+            .enabled(/*value*/ false)
             .build(),
     );
 
@@ -1123,7 +1123,7 @@ foo = { command = "cmd" }
                 env_vars: Vec::new(),
                 cwd: None,
             })
-            .enabled(false)
+            .enabled(/*value*/ false)
             .build(),
     );
 

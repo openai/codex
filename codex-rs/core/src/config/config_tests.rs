@@ -5960,7 +5960,7 @@ async fn replace_mcp_servers_serializes_disabled_flag() -> anyhow::Result<()> {
                 env_vars: Vec::new(),
                 cwd: None,
             })
-            .enabled(false)
+            .enabled(/*value*/ false)
             .build(),
     )]);
 
@@ -5997,7 +5997,7 @@ async fn replace_mcp_servers_serializes_required_flag() -> anyhow::Result<()> {
                 env_vars: Vec::new(),
                 cwd: None,
             })
-            .required(true)
+            .required(/*value*/ true)
             .build(),
     )]);
 

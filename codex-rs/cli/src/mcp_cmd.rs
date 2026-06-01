@@ -89,7 +89,7 @@ pub struct AddArgs {
     group(
         ArgGroup::new("transport")
             .args(["command", "url"])
-            .required(true)
+            .required(/*value*/ true)
             .multiple(false)
     )
 )]
