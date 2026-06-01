@@ -1061,8 +1061,8 @@ async fn list_threads_search_repairs_stale_state_db_hits_before_returning() -> s
     builder.model_provider = Some(config.model_provider_id.clone());
     builder.cwd = home.path().to_path_buf();
     let mut metadata = builder.build(config.model_provider_id.as_str());
-    metadata.title = "needle stale title".to_string();
-    metadata.first_user_message = Some("stale first user".to_string());
+    metadata.title = "needle stale first user".to_string();
+    metadata.first_user_message = Some(metadata.title.clone());
     metadata.preview = metadata.first_user_message.clone();
     runtime
         .upsert_thread(&metadata)

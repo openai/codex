@@ -514,6 +514,7 @@ pub async fn reconcile_rollout(
     metadata.cwd = normalize_cwd_for_state_db(&metadata.cwd);
     if let Ok(Some(existing_metadata)) = ctx.get_thread(metadata.id).await {
         metadata.prefer_existing_git_info(&existing_metadata);
+        metadata.prefer_existing_explicit_title(&existing_metadata);
     }
     match archived_only {
         Some(true) if metadata.archived_at.is_none() => {
