@@ -11,6 +11,7 @@ use codex_extension_api::FunctionCallError;
 use codex_extension_api::NoopTurnItemEmitter;
 use codex_extension_api::ThreadResumeInput;
 use codex_extension_api::ThreadStartInput;
+use codex_extension_api::ThreadStopInput;
 use codex_extension_api::ToolCall;
 use codex_extension_api::ToolCallOutcome;
 use codex_extension_api::ToolCallSource;
@@ -20,8 +21,11 @@ use codex_extension_api::ToolPayload;
 use codex_extension_api::TurnErrorInput;
 use codex_extension_api::TurnStartInput;
 use codex_extension_api::TurnStopInput;
+use codex_goal_extension::GoalObjectiveUpdate;
 use codex_goal_extension::GoalRuntimeHandle;
-use codex_goal_extension::PreviousGoalSnapshot;
+use codex_goal_extension::GoalService;
+use codex_goal_extension::GoalSetRequest;
+use codex_goal_extension::GoalTokenBudgetUpdate;
 use codex_goal_extension::install_with_backend;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationMode;
@@ -778,7 +782,8 @@ async fn external_goal_mutation_start_accounts_active_goal_progress() -> anyhow:
 }
 
 #[tokio::test]
-async fn external_goal_set_active_resets_baseline_without_live_thread() -> anyhow::Result<()> {
+async fn goal_service_external_set_active_resets_baseline_without_live_thread() -> anyhow::Result<()>
+{
     let runtime = test_runtime().await?;
     let thread_id = test_thread_id()?;
     seed_thread_metadata(runtime.as_ref(), thread_id).await?;
@@ -815,38 +820,19 @@ async fn external_goal_set_active_resets_baseline_without_live_thread() -> anyho
             ),
         )
         .await;
-    harness
-        .runtime_handle()
-        .prepare_external_goal_mutation()
-        .await
-        .map_err(anyhow::Error::msg)?;
-
-    let previous_goal = runtime
-        .thread_goals()
-        .get_thread_goal(thread_id)
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("goal should exist"))?;
-    let updated_goal = runtime
-        .thread_goals()
-        .update_thread_goal(
-            thread_id,
-            codex_state::GoalUpdate {
-                objective: Some("new objective".to_string()),
-                status: Some(codex_state::ThreadGoalStatus::Active),
-                token_budget: None,
-                expected_goal_id: Some(previous_goal.goal_id.clone()),
+    let outcome = harness
+        .goal_service
+        .set_thread_goal(
+            runtime.as_ref(),
+            GoalSetRequest {
+                thread_id,
+                objective: GoalObjectiveUpdate::Set("new objective"),
+                status: Some(ThreadGoalStatus::Active),
+                token_budget: GoalTokenBudgetUpdate::Keep,
             },
         )
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("goal update should succeed"))?;
-    harness
-        .runtime_handle()
-        .apply_external_goal_set(
-            updated_goal,
-            Some(PreviousGoalSnapshot::from(&previous_goal)),
-        )
-        .await
-        .map_err(anyhow::Error::msg)?;
+        .await?;
+    outcome.apply_runtime_effects(&harness.goal_service).await;
 
     harness
         .record_token_usage(
@@ -868,6 +854,46 @@ async fn external_goal_set_active_resets_baseline_without_live_thread() -> anyho
         .await?
         .ok_or_else(|| anyhow::anyhow!("goal should exist"))?;
     assert_eq!(30, goal.tokens_used);
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_stop_unregisters_goal_runtime_from_service() -> anyhow::Result<()> {
+    let runtime = test_runtime().await?;
+    let thread_id = test_thread_id()?;
+    seed_thread_metadata(runtime.as_ref(), thread_id).await?;
+    let harness = GoalExtensionHarness::new(runtime.clone(), thread_id).await?;
+    harness.start_turn("turn-1", &TokenUsage::default()).await;
+
+    let tools = harness.tools();
+    let create_tool = tool_by_name(&tools, "create_goal");
+    create_tool
+        .handle(tool_call(
+            "create_goal",
+            "call-create-goal",
+            json!({ "objective": "ship goal extension backend" }),
+        ))
+        .await?;
+    harness.sink.clear();
+
+    harness
+        .record_token_usage(
+            "turn-1",
+            &token_usage(
+                /*input_tokens*/ 10, /*cached_input_tokens*/ 0, /*output_tokens*/ 0,
+                /*reasoning_output_tokens*/ 0, /*total_tokens*/ 10,
+            ),
+        )
+        .await;
+    harness.stop_thread().await;
+
+    assert!(
+        harness
+            .goal_service
+            .clear_thread_goal(runtime.as_ref(), thread_id)
+            .await?
+    );
+    assert_eq!(Vec::<CapturedGoalEvent>::new(), harness.sink.goal_events());
     Ok(())
 }
 
@@ -917,6 +943,48 @@ async fn thread_resume_rehydrates_active_goal_idle_accounting() -> anyhow::Resul
     Ok(())
 }
 
+#[tokio::test]
+async fn goal_service_sets_gets_and_clears_thread_goal() -> anyhow::Result<()> {
+    let runtime = test_runtime().await?;
+    let thread_id = test_thread_id()?;
+    seed_thread_metadata(runtime.as_ref(), thread_id).await?;
+    let api = GoalService::new();
+
+    let set = api
+        .set_thread_goal(
+            runtime.as_ref(),
+            GoalSetRequest {
+                thread_id,
+                objective: GoalObjectiveUpdate::Set(" ship goal API ownership "),
+                status: None,
+                token_budget: GoalTokenBudgetUpdate::Set(Some(123)),
+            },
+        )
+        .await?;
+    let get = api
+        .get_thread_goal(runtime.as_ref(), thread_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("goal should exist"))?;
+    let metadata = runtime
+        .get_thread(thread_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("seeded thread metadata should exist"))?;
+
+    assert_eq!(set.goal, get);
+    assert_eq!("ship goal API ownership", get.objective);
+    assert_eq!(ThreadGoalStatus::Active, get.status);
+    assert_eq!(Some(123), get.token_budget);
+    assert_eq!(Some("ship goal API ownership"), metadata.preview.as_deref());
+
+    assert!(api.clear_thread_goal(runtime.as_ref(), thread_id).await?);
+    assert_eq!(
+        None,
+        api.get_thread_goal(runtime.as_ref(), thread_id).await?
+    );
+    assert!(!api.clear_thread_goal(runtime.as_ref(), thread_id).await?);
+    Ok(())
+}
+
 async fn installed_tools(
     runtime: Arc<codex_state::StateRuntime>,
     thread_id: ThreadId,
@@ -937,11 +1005,13 @@ async fn installed_tools_with_start(
     persistent_thread_state_available: bool,
 ) -> Vec<Arc<dyn ToolExecutor<ToolCall>>> {
     let mut builder = ExtensionRegistryBuilder::<()>::new();
+    let goal_service = Arc::new(GoalService::new());
     install_with_backend(
         &mut builder,
         runtime,
         /*metrics_client*/ None,
         Weak::new(),
+        goal_service,
         |_| true,
     );
     let registry = builder.build();
@@ -974,6 +1044,7 @@ struct GoalExtensionHarness {
     registry: codex_extension_api::ExtensionRegistry<()>,
     session_store: ExtensionData,
     thread_store: ExtensionData,
+    goal_service: Arc<GoalService>,
     sink: Arc<RecordingEventSink>,
 }
 
@@ -984,11 +1055,13 @@ impl GoalExtensionHarness {
     ) -> anyhow::Result<Self> {
         let sink = Arc::new(RecordingEventSink::default());
         let mut builder = ExtensionRegistryBuilder::<()>::with_event_sink(sink.clone());
+        let goal_service = Arc::new(GoalService::new());
         install_with_backend(
             &mut builder,
             runtime,
             /*metrics_client*/ None,
             Weak::new(),
+            Arc::clone(&goal_service),
             |_| true,
         );
         let registry = builder.build();
@@ -1010,6 +1083,7 @@ impl GoalExtensionHarness {
             registry,
             session_store,
             thread_store,
+            goal_service,
             sink,
         })
     }
@@ -1081,6 +1155,17 @@ impl GoalExtensionHarness {
         for contributor in self.registry.thread_lifecycle_contributors() {
             contributor
                 .on_thread_resume(ThreadResumeInput {
+                    session_store: &self.session_store,
+                    thread_store: &self.thread_store,
+                })
+                .await;
+        }
+    }
+
+    async fn stop_thread(&self) {
+        for contributor in self.registry.thread_lifecycle_contributors() {
+            contributor
+                .on_thread_stop(ThreadStopInput {
                     session_store: &self.session_store,
                     thread_store: &self.thread_store,
                 })

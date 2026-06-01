@@ -5,6 +5,7 @@ use crate::environment_selection::ResolvedTurnEnvironments;
 use codex_model_provider::SharedModelProvider;
 use codex_model_provider::create_model_provider;
 use codex_protocol::SessionId;
+use codex_protocol::ThreadId;
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::openai_models::ToolMode;
 use codex_protocol::protocol::ThreadSource;
@@ -61,6 +62,7 @@ pub struct TurnContext {
     pub(crate) reasoning_effort: Option<ReasoningEffortConfig>,
     pub(crate) reasoning_summary: ReasoningSummaryConfig,
     pub(crate) session_source: SessionSource,
+    pub(crate) parent_thread_id: Option<ThreadId>,
     pub(crate) thread_source: Option<ThreadSource>,
     pub(crate) environments: ResolvedTurnEnvironments,
     /// The session's absolute working directory. All relative paths provided
@@ -219,6 +221,7 @@ impl TurnContext {
             reasoning_effort,
             reasoning_summary: self.reasoning_summary,
             session_source: self.session_source.clone(),
+            parent_thread_id: self.parent_thread_id,
             thread_source: self.thread_source,
             environments: self.environments.clone(),
             #[allow(deprecated)]
@@ -479,10 +482,8 @@ impl Session {
         let provider_for_context = create_model_provider(provider, auth_manager);
         let session_telemetry_for_context = session_telemetry;
         let available_models = models_manager.try_list_models().unwrap_or_default();
-        let shell_command_backend =
-            shell_command_backend_for_features(per_turn_config.features.get());
         let unified_exec_shell_mode = UnifiedExecShellMode::for_session(
-            shell_command_backend,
+            codex_tools::unified_exec_uses_zsh_fork_for_features(per_turn_config.features.get()),
             crate::tools::tool_user_shell_type(user_shell),
             shell_zsh_path,
             main_execve_wrapper_exe,
@@ -508,6 +509,7 @@ impl Session {
             session_id.to_string(),
             thread_id.to_string(),
             session_configuration.forked_from_thread_id,
+            session_configuration.parent_thread_id,
             &session_configuration.session_source,
             session_configuration.thread_source,
             sub_id.clone(),
@@ -531,6 +533,7 @@ impl Session {
             reasoning_effort,
             reasoning_summary,
             session_source,
+            parent_thread_id: session_configuration.parent_thread_id,
             thread_source: session_configuration.thread_source,
             environments,
             #[allow(deprecated)]

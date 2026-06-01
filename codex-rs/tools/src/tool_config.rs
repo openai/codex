@@ -41,6 +41,22 @@ pub fn shell_command_backend_for_features(features: &Features) -> ShellCommandBa
     }
 }
 
+/// Returns whether unified exec should launch local zsh commands through the
+/// zsh fork.
+///
+/// `unified_exec_zsh_fork` is only a composition gate. It does not enable
+/// either underlying shell mode on its own, so disabling `unified_exec` or
+/// `shell_zsh_fork` keeps those features independently off. This lets
+/// enterprise deployments opt into, or out of, unified exec and zsh-fork
+/// behavior separately; otherwise enabling the composition flag would silently
+/// activate a shell backend that the configured feature set left disabled.
+pub fn unified_exec_uses_zsh_fork_for_features(features: &Features) -> bool {
+    features.enabled(Feature::ShellTool)
+        && features.enabled(Feature::UnifiedExec)
+        && features.enabled(Feature::ShellZshFork)
+        && features.enabled(Feature::UnifiedExecZshFork)
+}
+
 pub fn shell_type_for_model_and_features(
     model_info: &ModelInfo,
     features: &Features,
@@ -58,7 +74,9 @@ pub fn shell_type_for_model_and_features(
 
     if !features.enabled(Feature::ShellTool) {
         ConfigShellToolType::Disabled
-    } else if features.enabled(Feature::ShellZshFork) {
+    } else if features.enabled(Feature::ShellZshFork)
+        && !unified_exec_uses_zsh_fork_for_features(features)
+    {
         ConfigShellToolType::ShellCommand
     } else if unified_exec_enabled {
         if codex_utils_pty::conpty_supported() {
@@ -85,13 +103,13 @@ pub struct ZshForkConfig {
 
 impl UnifiedExecShellMode {
     pub fn for_session(
-        shell_command_backend: ShellCommandBackendConfig,
+        use_zsh_fork: bool,
         user_shell_type: ToolUserShellType,
         shell_zsh_path: Option<&PathBuf>,
         main_execve_wrapper_exe: Option<&PathBuf>,
     ) -> Self {
         if cfg!(unix)
-            && shell_command_backend == ShellCommandBackendConfig::ZshFork
+            && use_zsh_fork
             && matches!(user_shell_type, ToolUserShellType::Zsh)
             && let (Some(shell_zsh_path), Some(main_execve_wrapper_exe)) =
                 (shell_zsh_path, main_execve_wrapper_exe)

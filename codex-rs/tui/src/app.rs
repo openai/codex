@@ -515,7 +515,7 @@ pub(crate) struct App {
 
     // Esc-backtracking state grouped
     pub(crate) backtrack: crate::app_backtrack::BacktrackState,
-    /// When set, the next draw re-renders the transcript into terminal scrollback once.
+    /// When set, the next draw rebuilds terminal scrollback from the retained transcript cells.
     ///
     /// This is used after a confirmed thread rollback to ensure scrollback reflects the trimmed
     /// transcript cells.
@@ -1105,16 +1105,15 @@ See the Codex keymap documentation for supported actions and examples."
 
         #[cfg(not(debug_assertions))]
         let pre_loop_exit_reason = if let Some(latest_version) = upgrade_version {
-            let control = app
-                .handle_event(
-                    tui,
-                    &mut app_server,
-                    AppEvent::InsertHistoryCell(Box::new(UpdateAvailableHistoryCell::new(
-                        latest_version,
-                        crate::update_action::get_update_action(),
-                    ))),
-                )
-                .await?;
+            let control = Box::pin(app.handle_event(
+                tui,
+                &mut app_server,
+                AppEvent::InsertHistoryCell(Box::new(UpdateAvailableHistoryCell::new(
+                    latest_version,
+                    crate::update_action::get_update_action(),
+                ))),
+            ))
+            .await?;
             match control {
                 AppRunControl::Continue => None,
                 AppRunControl::Exit(exit_reason) => Some(exit_reason),
@@ -1131,7 +1130,7 @@ See the Codex keymap documentation for supported actions and examples."
             loop {
                 let control = select! {
                     Some(event) = app_event_rx.recv() => {
-                        match app.handle_event(tui, &mut app_server, event).await {
+                        match Box::pin(app.handle_event(tui, &mut app_server, event)).await {
                             Ok(control) => control,
                             Err(err) => break Err(err),
                         }
@@ -1257,8 +1256,8 @@ See the Codex keymap documentation for supported actions and examples."
                 }
                 TuiEvent::Draw | TuiEvent::Resize => {
                     if self.backtrack_render_pending {
+                        self.rebuild_transcript_after_backtrack(tui)?;
                         self.backtrack_render_pending = false;
-                        self.render_transcript_once(tui);
                     }
                     self.chat_widget.maybe_post_pending_notification(tui);
                     if self

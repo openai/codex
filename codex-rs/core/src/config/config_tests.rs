@@ -9856,7 +9856,55 @@ enabled = true
     assert_eq!(config.multi_agent_v2.max_wait_timeout_ms, 3_600_000);
     assert_eq!(config.multi_agent_v2.default_wait_timeout_ms, 30_000);
     assert_eq!(config.agent_max_threads, Some(3));
-    assert!(!config.multi_agent_v2.non_code_mode_only);
+    assert_eq!(
+        config.multi_agent_v2.root_agent_usage_hint_text.as_deref(),
+        Some(DEFAULT_MULTI_AGENT_V2_ROOT_AGENT_USAGE_HINT_TEXT)
+    );
+    assert!(
+        !config
+            .multi_agent_v2
+            .root_agent_usage_hint_text
+            .as_deref()
+            .unwrap_or_default()
+            .contains("maximum concurrency"),
+    );
+    assert_eq!(
+        config.multi_agent_v2.subagent_usage_hint_text.as_deref(),
+        Some(DEFAULT_MULTI_AGENT_V2_SUBAGENT_USAGE_HINT_TEXT)
+    );
+    assert!(
+        !config
+            .multi_agent_v2
+            .subagent_usage_hint_text
+            .as_deref()
+            .unwrap_or_default()
+            .contains("maximum concurrency"),
+    );
+    assert!(config.multi_agent_v2.non_code_mode_only);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn multi_agent_v2_empty_usage_hint_overrides_clear_default_hints() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"[features.multi_agent_v2]
+enabled = true
+root_agent_usage_hint_text = ""
+subagent_usage_hint_text = ""
+"#,
+    )?;
+
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .build()
+        .await?;
+
+    assert_eq!(config.multi_agent_v2.root_agent_usage_hint_text, None);
+    assert_eq!(config.multi_agent_v2.subagent_usage_hint_text, None);
 
     Ok(())
 }

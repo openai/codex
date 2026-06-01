@@ -361,7 +361,6 @@ use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
 use codex_tools::ToolEnvironmentMode;
 use codex_tools::UnifiedExecShellMode;
-use codex_tools::shell_command_backend_for_features;
 use codex_utils_absolute_path::AbsolutePathBuf;
 #[cfg(test)]
 use codex_utils_stream_parser::ProposedPlanSegment;
@@ -401,6 +400,7 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) conversation_history: InitialHistory,
     pub(crate) session_source: SessionSource,
     pub(crate) forked_from_thread_id: Option<ThreadId>,
+    pub(crate) parent_thread_id: Option<ThreadId>,
     pub(crate) thread_source: Option<ThreadSource>,
     pub(crate) agent_control: AgentControl,
     pub(crate) dynamic_tools: Vec<DynamicToolSpec>,
@@ -466,6 +466,7 @@ impl Codex {
             conversation_history,
             session_source,
             forked_from_thread_id,
+            parent_thread_id,
             thread_source,
             agent_control,
             dynamic_tools,
@@ -594,6 +595,7 @@ impl Codex {
             app_server_client_version: None,
             session_source,
             forked_from_thread_id,
+            parent_thread_id,
             thread_source,
             dynamic_tools,
             persist_extended_history,

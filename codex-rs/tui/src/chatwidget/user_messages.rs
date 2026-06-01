@@ -25,16 +25,16 @@ use super::ChatWidget;
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct UserMessage {
-    pub(super) text: String,
-    pub(super) local_images: Vec<LocalImageAttachment>,
+    pub(crate) text: String,
+    pub(crate) local_images: Vec<LocalImageAttachment>,
     /// Remote image attachments represented as URLs (for example data URLs)
     /// provided by app-server clients.
     ///
     /// Unlike `local_images`, these are not created by TUI image attach/paste
     /// flows. The TUI can restore and remove them while editing/backtracking.
-    pub(super) remote_image_urls: Vec<String>,
-    pub(super) text_elements: Vec<TextElement>,
-    pub(super) mention_bindings: Vec<MentionBinding>,
+    pub(crate) remote_image_urls: Vec<String>,
+    pub(crate) text_elements: Vec<TextElement>,
+    pub(crate) mention_bindings: Vec<MentionBinding>,
 }
 
 #[derive(Clone, Debug, PartialEq)]

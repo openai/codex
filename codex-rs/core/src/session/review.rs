@@ -31,9 +31,8 @@ pub(super) async fn spawn_review_thread(
         .models_manager
         .list_models(RefreshStrategy::OnlineIfUncached)
         .await;
-    let shell_command_backend = shell_command_backend_for_features(review_features.get());
     let unified_exec_shell_mode = UnifiedExecShellMode::for_session(
-        shell_command_backend,
+        codex_tools::unified_exec_uses_zsh_fork_for_features(review_features.get()),
         crate::tools::tool_user_shell_type(sess.services.user_shell.as_ref()),
         sess.services.shell_zsh_path.as_ref(),
         sess.services.main_execve_wrapper_exe.as_ref(),
@@ -90,6 +89,7 @@ pub(super) async fn spawn_review_thread(
         sess.session_id().to_string(),
         sess.thread_id().to_string(),
         forked_from_thread_id,
+        parent_turn_context.parent_thread_id,
         &session_source,
         parent_turn_context.thread_source,
         review_turn_id.clone(),
@@ -113,6 +113,7 @@ pub(super) async fn spawn_review_thread(
         reasoning_effort,
         reasoning_summary,
         session_source,
+        parent_thread_id: parent_turn_context.parent_thread_id,
         thread_source: parent_turn_context.thread_source,
         environments: parent_turn_context.environments.clone(),
         available_models,
