@@ -151,7 +151,7 @@ fn is_multi_agent_v2_usage_hint_message(item: &ResponseItem, usage_hint_texts: &
 /// An `AgentControl` instance is intended to be created at most once per root thread/session
 /// tree. That same `AgentControl` is then shared with every sub-agent spawned from that root,
 /// which keeps the registry scoped to that root thread rather than the entire `ThreadManager`.
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub(crate) struct AgentControl {
     /// ID shared by the whole agent control session. This means every sub-agents from a common
     /// root share the same session ID.
@@ -162,18 +162,6 @@ pub(crate) struct AgentControl {
     manager: Weak<ThreadManagerState>,
     state: Arc<AgentRegistry>,
     code_mode_session_provider_selection: codex_code_mode::SessionProviderSelection,
-}
-
-impl Default for AgentControl {
-    fn default() -> Self {
-        Self {
-            session_id: SessionId::default(),
-            manager: Weak::new(),
-            state: Arc::new(AgentRegistry::default()),
-            code_mode_session_provider_selection:
-                codex_code_mode::SessionProviderSelection::Disabled,
-        }
-    }
 }
 
 impl AgentControl {

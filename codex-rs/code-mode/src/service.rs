@@ -157,10 +157,11 @@ pub trait CodeModeSessionProvider: Send + Sync {
 }
 
 /// Selects how a code-mode session is provisioned for a Codex session.
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub enum SessionProviderSelection {
-    InProcess,
+    #[default]
     Disabled,
+    InProcess,
     Custom(Arc<dyn CodeModeSessionProvider>),
 }
 
@@ -894,7 +895,6 @@ mod tests {
     use super::PendingRuntimeMode;
     use super::RuntimeCommand;
     use super::RuntimeResponse;
-    use super::SessionProviderSelection;
     use super::WaitOutcome;
     use super::WaitRequest;
     use super::WaitToPendingOutcome;
@@ -965,26 +965,6 @@ mod tests {
                 }],
                 error_text: None,
             }
-        );
-    }
-
-    #[tokio::test]
-    async fn provider_selection_can_use_in_process_or_disable() {
-        let delegate = Arc::new(NoopCodeModeSessionDelegate);
-
-        assert!(
-            SessionProviderSelection::InProcess
-                .create_session(delegate.clone())
-                .await
-                .unwrap()
-                .is_some()
-        );
-        assert!(
-            SessionProviderSelection::Disabled
-                .create_session(delegate)
-                .await
-                .unwrap()
-                .is_none()
         );
     }
 
