@@ -380,29 +380,16 @@ async fn mcp_tool_call_output_exceeds_limit_truncated_for_model() -> Result<()> 
         let mut servers = config.mcp_servers.get().clone();
         servers.insert(
             server_name.to_string(),
-            codex_config::types::McpServerConfig {
-                transport: codex_config::types::McpServerTransportConfig::Stdio {
+            codex_config::types::McpServerConfig::builder()
+                .transport(codex_config::types::McpServerTransportConfig::Stdio {
                     command: rmcp_test_server_bin,
                     args: Vec::new(),
                     env: None,
                     env_vars: Vec::new(),
                     cwd: None,
-                },
-                environment_id: "local".to_string(),
-                enabled: true,
-                required: false,
-                supports_parallel_tool_calls: false,
-                disabled_reason: None,
-                startup_timeout_sec: Some(std::time::Duration::from_secs(10)),
-                tool_timeout_sec: None,
-                default_tools_approval_mode: None,
-                enabled_tools: None,
-                disabled_tools: None,
-                scopes: None,
-                oauth: None,
-                oauth_resource: None,
-                tools: HashMap::new(),
-            },
+                })
+                .startup_timeout_sec(std::time::Duration::from_secs(10))
+                .build(),
         );
         config
             .mcp_servers
@@ -478,8 +465,8 @@ async fn mcp_image_output_preserves_image_and_no_text_summary() -> Result<()> {
         let mut servers = config.mcp_servers.get().clone();
         servers.insert(
             server_name.to_string(),
-            McpServerConfig {
-                transport: McpServerTransportConfig::Stdio {
+            McpServerConfig::builder()
+                .transport(McpServerTransportConfig::Stdio {
                     command: rmcp_test_server_bin,
                     args: Vec::new(),
                     env: Some(HashMap::from([(
@@ -488,22 +475,9 @@ async fn mcp_image_output_preserves_image_and_no_text_summary() -> Result<()> {
                     )])),
                     env_vars: Vec::new(),
                     cwd: None,
-                },
-                environment_id: "local".to_string(),
-                enabled: true,
-                required: false,
-                supports_parallel_tool_calls: false,
-                disabled_reason: None,
-                startup_timeout_sec: Some(Duration::from_secs(10)),
-                tool_timeout_sec: None,
-                default_tools_approval_mode: None,
-                enabled_tools: None,
-                disabled_tools: None,
-                scopes: None,
-                oauth: None,
-                oauth_resource: None,
-                tools: HashMap::new(),
-            },
+                })
+                .startup_timeout_sec(Duration::from_secs(10))
+                .build(),
         );
         config
             .mcp_servers
@@ -771,29 +745,16 @@ async fn mcp_tool_call_output_not_truncated_with_custom_limit() -> Result<()> {
         let mut servers = config.mcp_servers.get().clone();
         servers.insert(
             server_name.to_string(),
-            codex_config::types::McpServerConfig {
-                transport: codex_config::types::McpServerTransportConfig::Stdio {
+            codex_config::types::McpServerConfig::builder()
+                .transport(codex_config::types::McpServerTransportConfig::Stdio {
                     command: rmcp_test_server_bin,
                     args: Vec::new(),
                     env: None,
                     env_vars: Vec::new(),
                     cwd: None,
-                },
-                environment_id: "local".to_string(),
-                enabled: true,
-                required: false,
-                supports_parallel_tool_calls: false,
-                disabled_reason: None,
-                startup_timeout_sec: Some(std::time::Duration::from_secs(10)),
-                tool_timeout_sec: None,
-                default_tools_approval_mode: None,
-                enabled_tools: None,
-                disabled_tools: None,
-                scopes: None,
-                oauth: None,
-                oauth_resource: None,
-                tools: HashMap::new(),
-            },
+                })
+                .startup_timeout_sec(std::time::Duration::from_secs(10))
+                .build(),
         );
         config
             .mcp_servers

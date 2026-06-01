@@ -316,23 +316,13 @@ fn insert_mcp_server(
     let mut servers = config.mcp_servers.get().clone();
     servers.insert(
         server_name.to_string(),
-        McpServerConfig {
-            transport,
-            environment_id: options.environment_id,
-            enabled: true,
-            required: false,
-            supports_parallel_tool_calls: options.supports_parallel_tool_calls,
-            disabled_reason: None,
-            startup_timeout_sec: Some(Duration::from_secs(10)),
-            tool_timeout_sec: options.tool_timeout_sec,
-            default_tools_approval_mode: None,
-            enabled_tools: None,
-            disabled_tools: None,
-            scopes: None,
-            oauth: None,
-            oauth_resource: None,
-            tools: HashMap::new(),
-        },
+        McpServerConfig::builder()
+            .transport(transport)
+            .environment_id(options.environment_id)
+            .supports_parallel_tool_calls(options.supports_parallel_tool_calls)
+            .startup_timeout_sec(Duration::from_secs(10))
+            .maybe_tool_timeout_sec(options.tool_timeout_sec)
+            .build(),
     );
     if let Err(err) = config.mcp_servers.set(servers) {
         panic!("test mcp servers should accept any configuration: {err}");

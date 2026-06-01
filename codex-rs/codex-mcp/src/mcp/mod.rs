@@ -451,28 +451,15 @@ fn codex_apps_mcp_server_config(config: &McpConfig) -> McpServerConfig {
         HashMap::from([("X-OpenAI-Product-Sku".to_string(), product_sku.clone())])
     });
 
-    McpServerConfig {
-        transport: McpServerTransportConfig::StreamableHttp {
+    McpServerConfig::builder()
+        .transport(McpServerTransportConfig::StreamableHttp {
             url,
             bearer_token_env_var: codex_apps_mcp_bearer_token_env_var(),
             http_headers,
             env_http_headers: None,
-        },
-        environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
-        enabled: true,
-        required: false,
-        supports_parallel_tool_calls: false,
-        disabled_reason: None,
-        startup_timeout_sec: Some(Duration::from_secs(30)),
-        tool_timeout_sec: None,
-        default_tools_approval_mode: None,
-        enabled_tools: None,
-        disabled_tools: None,
-        scopes: None,
-        oauth: None,
-        oauth_resource: None,
-        tools: HashMap::new(),
-    }
+        })
+        .startup_timeout_sec(Duration::from_secs(30))
+        .build()
 }
 
 fn protocol_tool_from_rmcp_tool(name: &str, tool: &rmcp::model::Tool) -> Option<Tool> {

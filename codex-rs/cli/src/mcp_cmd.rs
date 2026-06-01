@@ -340,27 +340,17 @@ async fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Re
         AddMcpTransportArgs { .. } => bail!("exactly one of --command or --url must be provided"),
     };
 
-    let new_entry = McpServerConfig {
-        transport: transport.clone(),
-        environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
-        enabled: true,
-        required: false,
-        supports_parallel_tool_calls: false,
-        disabled_reason: None,
-        startup_timeout_sec: None,
-        tool_timeout_sec: None,
-        default_tools_approval_mode: None,
-        enabled_tools: None,
-        disabled_tools: None,
-        scopes: None,
-        oauth: oauth_client_id
-            .clone()
-            .map(|client_id| McpServerOAuthConfig {
-                client_id: Some(client_id),
-            }),
-        oauth_resource: oauth_resource.clone(),
-        tools: HashMap::new(),
-    };
+    let new_entry = McpServerConfig::builder()
+        .transport(transport.clone())
+        .maybe_oauth(
+            oauth_client_id
+                .clone()
+                .map(|client_id| McpServerOAuthConfig {
+                    client_id: Some(client_id),
+                }),
+        )
+        .maybe_oauth_resource(oauth_resource.clone())
+        .build();
 
     servers.insert(name.clone(), new_entry);
 

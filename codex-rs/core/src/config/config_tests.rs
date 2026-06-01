@@ -110,54 +110,26 @@ use std::time::Duration;
 use tempfile::TempDir;
 
 fn stdio_mcp(command: &str) -> McpServerConfig {
-    McpServerConfig {
-        transport: McpServerTransportConfig::Stdio {
+    McpServerConfig::builder()
+        .transport(McpServerTransportConfig::Stdio {
             command: command.to_string(),
             args: Vec::new(),
             env: None,
             env_vars: Vec::new(),
             cwd: None,
-        },
-        environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
-        enabled: true,
-        required: false,
-        supports_parallel_tool_calls: false,
-        disabled_reason: None,
-        startup_timeout_sec: None,
-        tool_timeout_sec: None,
-        default_tools_approval_mode: None,
-        enabled_tools: None,
-        disabled_tools: None,
-        scopes: None,
-        oauth: None,
-        oauth_resource: None,
-        tools: HashMap::new(),
-    }
+        })
+        .build()
 }
 
 fn http_mcp(url: &str) -> McpServerConfig {
-    McpServerConfig {
-        transport: McpServerTransportConfig::StreamableHttp {
+    McpServerConfig::builder()
+        .transport(McpServerTransportConfig::StreamableHttp {
             url: url.to_string(),
             bearer_token_env_var: None,
             http_headers: None,
             env_http_headers: None,
-        },
-        environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
-        enabled: true,
-        required: false,
-        supports_parallel_tool_calls: false,
-        disabled_reason: None,
-        startup_timeout_sec: None,
-        tool_timeout_sec: None,
-        default_tools_approval_mode: None,
-        enabled_tools: None,
-        disabled_tools: None,
-        scopes: None,
-        oauth: None,
-        oauth_resource: None,
-        tools: HashMap::new(),
-    }
+        })
+        .build()
 }
 
 async fn derive_legacy_sandbox_policy_for_test(
@@ -4170,16 +4142,14 @@ async fn rebuild_preserving_session_layers_refreshes_requirements() -> std::io::
                 "fresh_project".to_string(),
                 stdio_mcp("fresh-project-command"),
             ),
-            (
-                "blocked_session".to_string(),
-                McpServerConfig {
-                    enabled: false,
-                    disabled_reason: Some(McpServerDisabledReason::Requirements {
-                        source: RequirementSource::Unknown,
-                    }),
-                    ..stdio_mcp("blocked-session-command")
-                },
-            ),
+            ("blocked_session".to_string(), {
+                let mut server = stdio_mcp("blocked-session-command");
+                server.enabled = false;
+                server.disabled_reason = Some(McpServerDisabledReason::Requirements {
+                    source: RequirementSource::Unknown,
+                });
+                server
+            },),
         ])
     );
 
@@ -5150,29 +5120,18 @@ async fn replace_mcp_servers_round_trips_entries() -> anyhow::Result<()> {
     let mut servers = BTreeMap::new();
     servers.insert(
         "docs".to_string(),
-        McpServerConfig {
-            transport: McpServerTransportConfig::Stdio {
+        McpServerConfig::builder()
+            .transport(McpServerTransportConfig::Stdio {
                 command: "echo".to_string(),
                 args: vec!["hello".to_string()],
                 env: None,
                 env_vars: Vec::new(),
                 cwd: Some(codex_home.path().to_path_buf()),
-            },
-            environment_id: "remote".to_string(),
-            enabled: true,
-            required: false,
-            supports_parallel_tool_calls: false,
-            disabled_reason: None,
-            startup_timeout_sec: Some(Duration::from_secs(3)),
-            tool_timeout_sec: Some(Duration::from_secs(5)),
-            default_tools_approval_mode: None,
-            enabled_tools: None,
-            disabled_tools: None,
-            scopes: None,
-            oauth: None,
-            oauth_resource: None,
-            tools: HashMap::new(),
-        },
+            })
+            .environment_id("remote".to_string())
+            .startup_timeout_sec(Duration::from_secs(3))
+            .tool_timeout_sec(Duration::from_secs(5))
+            .build(),
     );
 
     apply_blocking(
@@ -5513,8 +5472,8 @@ async fn replace_mcp_servers_serializes_env_sorted() -> anyhow::Result<()> {
 
     let servers = BTreeMap::from([(
         "docs".to_string(),
-        McpServerConfig {
-            transport: McpServerTransportConfig::Stdio {
+        McpServerConfig::builder()
+            .transport(McpServerTransportConfig::Stdio {
                 command: "docs-server".to_string(),
                 args: vec!["--verbose".to_string()],
                 env: Some(HashMap::from([
@@ -5523,22 +5482,8 @@ async fn replace_mcp_servers_serializes_env_sorted() -> anyhow::Result<()> {
                 ])),
                 env_vars: Vec::new(),
                 cwd: None,
-            },
-            environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
-            enabled: true,
-            required: false,
-            supports_parallel_tool_calls: false,
-            disabled_reason: None,
-            startup_timeout_sec: None,
-            tool_timeout_sec: None,
-            default_tools_approval_mode: None,
-            enabled_tools: None,
-            disabled_tools: None,
-            scopes: None,
-            oauth: None,
-            oauth_resource: None,
-            tools: HashMap::new(),
-        },
+            })
+            .build(),
     )]);
 
     apply_blocking(
@@ -5592,29 +5537,15 @@ async fn replace_mcp_servers_serializes_env_vars() -> anyhow::Result<()> {
 
     let servers = BTreeMap::from([(
         "docs".to_string(),
-        McpServerConfig {
-            transport: McpServerTransportConfig::Stdio {
+        McpServerConfig::builder()
+            .transport(McpServerTransportConfig::Stdio {
                 command: "docs-server".to_string(),
                 args: Vec::new(),
                 env: None,
                 env_vars: vec!["ALPHA".into(), "BETA".into()],
                 cwd: None,
-            },
-            environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
-            enabled: true,
-            required: false,
-            supports_parallel_tool_calls: false,
-            disabled_reason: None,
-            startup_timeout_sec: None,
-            tool_timeout_sec: None,
-            default_tools_approval_mode: None,
-            enabled_tools: None,
-            disabled_tools: None,
-            scopes: None,
-            oauth: None,
-            oauth_resource: None,
-            tools: HashMap::new(),
-        },
+            })
+            .build(),
     )]);
 
     apply_blocking(
@@ -5647,8 +5578,8 @@ async fn replace_mcp_servers_serializes_sourced_env_vars() -> anyhow::Result<()>
 
     let servers = BTreeMap::from([(
         "docs".to_string(),
-        McpServerConfig {
-            transport: McpServerTransportConfig::Stdio {
+        McpServerConfig::builder()
+            .transport(McpServerTransportConfig::Stdio {
                 command: "docs-server".to_string(),
                 args: Vec::new(),
                 env: None,
@@ -5660,22 +5591,8 @@ async fn replace_mcp_servers_serializes_sourced_env_vars() -> anyhow::Result<()>
                     },
                 ],
                 cwd: None,
-            },
-            environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
-            enabled: true,
-            required: false,
-            supports_parallel_tool_calls: false,
-            disabled_reason: None,
-            startup_timeout_sec: None,
-            tool_timeout_sec: None,
-            default_tools_approval_mode: None,
-            enabled_tools: None,
-            disabled_tools: None,
-            scopes: None,
-            oauth: None,
-            oauth_resource: None,
-            tools: HashMap::new(),
-        },
+            })
+            .build(),
     )]);
 
     apply_blocking(
@@ -5704,29 +5621,15 @@ async fn replace_mcp_servers_serializes_cwd() -> anyhow::Result<()> {
     let cwd_path = PathBuf::from("/tmp/codex-mcp");
     let servers = BTreeMap::from([(
         "docs".to_string(),
-        McpServerConfig {
-            transport: McpServerTransportConfig::Stdio {
+        McpServerConfig::builder()
+            .transport(McpServerTransportConfig::Stdio {
                 command: "docs-server".to_string(),
                 args: Vec::new(),
                 env: None,
                 env_vars: Vec::new(),
                 cwd: Some(cwd_path.clone()),
-            },
-            environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
-            enabled: true,
-            required: false,
-            supports_parallel_tool_calls: false,
-            disabled_reason: None,
-            startup_timeout_sec: None,
-            tool_timeout_sec: None,
-            default_tools_approval_mode: None,
-            enabled_tools: None,
-            disabled_tools: None,
-            scopes: None,
-            oauth: None,
-            oauth_resource: None,
-            tools: HashMap::new(),
-        },
+            })
+            .build(),
     )]);
 
     apply_blocking(
@@ -5759,28 +5662,15 @@ async fn replace_mcp_servers_streamable_http_serializes_bearer_token() -> anyhow
 
     let servers = BTreeMap::from([(
         "docs".to_string(),
-        McpServerConfig {
-            transport: McpServerTransportConfig::StreamableHttp {
+        McpServerConfig::builder()
+            .transport(McpServerTransportConfig::StreamableHttp {
                 url: "https://example.com/mcp".to_string(),
                 bearer_token_env_var: Some("MCP_TOKEN".to_string()),
                 http_headers: None,
                 env_http_headers: None,
-            },
-            environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
-            enabled: true,
-            required: false,
-            supports_parallel_tool_calls: false,
-            disabled_reason: None,
-            startup_timeout_sec: Some(Duration::from_secs(2)),
-            tool_timeout_sec: None,
-            default_tools_approval_mode: None,
-            enabled_tools: None,
-            disabled_tools: None,
-            scopes: None,
-            oauth: None,
-            oauth_resource: None,
-            tools: HashMap::new(),
-        },
+            })
+            .startup_timeout_sec(Duration::from_secs(2))
+            .build(),
     )]);
 
     apply_blocking(
@@ -5826,8 +5716,8 @@ async fn replace_mcp_servers_streamable_http_serializes_custom_headers() -> anyh
 
     let servers = BTreeMap::from([(
         "docs".to_string(),
-        McpServerConfig {
-            transport: McpServerTransportConfig::StreamableHttp {
+        McpServerConfig::builder()
+            .transport(McpServerTransportConfig::StreamableHttp {
                 url: "https://example.com/mcp".to_string(),
                 bearer_token_env_var: Some("MCP_TOKEN".to_string()),
                 http_headers: Some(HashMap::from([("X-Doc".to_string(), "42".to_string())])),
@@ -5835,22 +5725,9 @@ async fn replace_mcp_servers_streamable_http_serializes_custom_headers() -> anyh
                     "X-Auth".to_string(),
                     "DOCS_AUTH".to_string(),
                 )])),
-            },
-            environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
-            enabled: true,
-            required: false,
-            supports_parallel_tool_calls: false,
-            disabled_reason: None,
-            startup_timeout_sec: Some(Duration::from_secs(2)),
-            tool_timeout_sec: None,
-            default_tools_approval_mode: None,
-            enabled_tools: None,
-            disabled_tools: None,
-            scopes: None,
-            oauth: None,
-            oauth_resource: None,
-            tools: HashMap::new(),
-        },
+            })
+            .startup_timeout_sec(Duration::from_secs(2))
+            .build(),
     )]);
     apply_blocking(
         codex_home.path(),
@@ -5908,8 +5785,8 @@ async fn replace_mcp_servers_streamable_http_removes_optional_sections() -> anyh
 
     let mut servers = BTreeMap::from([(
         "docs".to_string(),
-        McpServerConfig {
-            transport: McpServerTransportConfig::StreamableHttp {
+        McpServerConfig::builder()
+            .transport(McpServerTransportConfig::StreamableHttp {
                 url: "https://example.com/mcp".to_string(),
                 bearer_token_env_var: Some("MCP_TOKEN".to_string()),
                 http_headers: Some(HashMap::from([("X-Doc".to_string(), "42".to_string())])),
@@ -5917,22 +5794,9 @@ async fn replace_mcp_servers_streamable_http_removes_optional_sections() -> anyh
                     "X-Auth".to_string(),
                     "DOCS_AUTH".to_string(),
                 )])),
-            },
-            environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
-            enabled: true,
-            required: false,
-            supports_parallel_tool_calls: false,
-            disabled_reason: None,
-            startup_timeout_sec: Some(Duration::from_secs(2)),
-            tool_timeout_sec: None,
-            default_tools_approval_mode: None,
-            enabled_tools: None,
-            disabled_tools: None,
-            scopes: None,
-            oauth: None,
-            oauth_resource: None,
-            tools: HashMap::new(),
-        },
+            })
+            .startup_timeout_sec(Duration::from_secs(2))
+            .build(),
     )]);
 
     apply_blocking(
@@ -5946,28 +5810,14 @@ async fn replace_mcp_servers_streamable_http_removes_optional_sections() -> anyh
 
     servers.insert(
         "docs".to_string(),
-        McpServerConfig {
-            transport: McpServerTransportConfig::StreamableHttp {
+        McpServerConfig::builder()
+            .transport(McpServerTransportConfig::StreamableHttp {
                 url: "https://example.com/mcp".to_string(),
                 bearer_token_env_var: None,
                 http_headers: None,
                 env_http_headers: None,
-            },
-            environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
-            enabled: true,
-            required: false,
-            supports_parallel_tool_calls: false,
-            disabled_reason: None,
-            startup_timeout_sec: None,
-            tool_timeout_sec: None,
-            default_tools_approval_mode: None,
-            enabled_tools: None,
-            disabled_tools: None,
-            scopes: None,
-            oauth: None,
-            oauth_resource: None,
-            tools: HashMap::new(),
-        },
+            })
+            .build(),
     );
     apply_blocking(
         codex_home.path(),
@@ -6013,8 +5863,8 @@ async fn replace_mcp_servers_streamable_http_isolates_headers_between_servers() 
     let servers = BTreeMap::from([
         (
             "docs".to_string(),
-            McpServerConfig {
-                transport: McpServerTransportConfig::StreamableHttp {
+            McpServerConfig::builder()
+                .transport(McpServerTransportConfig::StreamableHttp {
                     url: "https://example.com/mcp".to_string(),
                     bearer_token_env_var: Some("MCP_TOKEN".to_string()),
                     http_headers: Some(HashMap::from([("X-Doc".to_string(), "42".to_string())])),
@@ -6022,48 +5872,21 @@ async fn replace_mcp_servers_streamable_http_isolates_headers_between_servers() 
                         "X-Auth".to_string(),
                         "DOCS_AUTH".to_string(),
                     )])),
-                },
-                environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
-                enabled: true,
-                required: false,
-                supports_parallel_tool_calls: false,
-                disabled_reason: None,
-                startup_timeout_sec: Some(Duration::from_secs(2)),
-                tool_timeout_sec: None,
-                default_tools_approval_mode: None,
-                enabled_tools: None,
-                disabled_tools: None,
-                scopes: None,
-                oauth: None,
-                oauth_resource: None,
-                tools: HashMap::new(),
-            },
+                })
+                .startup_timeout_sec(Duration::from_secs(2))
+                .build(),
         ),
         (
             "logs".to_string(),
-            McpServerConfig {
-                transport: McpServerTransportConfig::Stdio {
+            McpServerConfig::builder()
+                .transport(McpServerTransportConfig::Stdio {
                     command: "logs-server".to_string(),
                     args: vec!["--follow".to_string()],
                     env: None,
                     env_vars: Vec::new(),
                     cwd: None,
-                },
-                environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
-                enabled: true,
-                required: false,
-                supports_parallel_tool_calls: false,
-                disabled_reason: None,
-                startup_timeout_sec: None,
-                tool_timeout_sec: None,
-                default_tools_approval_mode: None,
-                enabled_tools: None,
-                disabled_tools: None,
-                scopes: None,
-                oauth: None,
-                oauth_resource: None,
-                tools: HashMap::new(),
-            },
+                })
+                .build(),
         ),
     ]);
 
@@ -6129,29 +5952,16 @@ async fn replace_mcp_servers_serializes_disabled_flag() -> anyhow::Result<()> {
 
     let servers = BTreeMap::from([(
         "docs".to_string(),
-        McpServerConfig {
-            transport: McpServerTransportConfig::Stdio {
+        McpServerConfig::builder()
+            .transport(McpServerTransportConfig::Stdio {
                 command: "docs-server".to_string(),
                 args: Vec::new(),
                 env: None,
                 env_vars: Vec::new(),
                 cwd: None,
-            },
-            environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
-            enabled: false,
-            required: false,
-            supports_parallel_tool_calls: false,
-            disabled_reason: None,
-            startup_timeout_sec: None,
-            tool_timeout_sec: None,
-            default_tools_approval_mode: None,
-            enabled_tools: None,
-            disabled_tools: None,
-            scopes: None,
-            oauth: None,
-            oauth_resource: None,
-            tools: HashMap::new(),
-        },
+            })
+            .enabled(false)
+            .build(),
     )]);
 
     apply_blocking(
@@ -6179,29 +5989,16 @@ async fn replace_mcp_servers_serializes_required_flag() -> anyhow::Result<()> {
 
     let servers = BTreeMap::from([(
         "docs".to_string(),
-        McpServerConfig {
-            transport: McpServerTransportConfig::Stdio {
+        McpServerConfig::builder()
+            .transport(McpServerTransportConfig::Stdio {
                 command: "docs-server".to_string(),
                 args: Vec::new(),
                 env: None,
                 env_vars: Vec::new(),
                 cwd: None,
-            },
-            environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
-            enabled: true,
-            required: true,
-            supports_parallel_tool_calls: false,
-            disabled_reason: None,
-            startup_timeout_sec: None,
-            tool_timeout_sec: None,
-            default_tools_approval_mode: None,
-            enabled_tools: None,
-            disabled_tools: None,
-            scopes: None,
-            oauth: None,
-            oauth_resource: None,
-            tools: HashMap::new(),
-        },
+            })
+            .required(true)
+            .build(),
     )]);
 
     apply_blocking(
@@ -6229,29 +6026,17 @@ async fn replace_mcp_servers_serializes_tool_filters() -> anyhow::Result<()> {
 
     let servers = BTreeMap::from([(
         "docs".to_string(),
-        McpServerConfig {
-            transport: McpServerTransportConfig::Stdio {
+        McpServerConfig::builder()
+            .transport(McpServerTransportConfig::Stdio {
                 command: "docs-server".to_string(),
                 args: Vec::new(),
                 env: None,
                 env_vars: Vec::new(),
                 cwd: None,
-            },
-            environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
-            enabled: true,
-            required: false,
-            supports_parallel_tool_calls: false,
-            disabled_reason: None,
-            startup_timeout_sec: None,
-            tool_timeout_sec: None,
-            default_tools_approval_mode: None,
-            enabled_tools: Some(vec!["allowed".to_string()]),
-            disabled_tools: Some(vec!["blocked".to_string()]),
-            scopes: None,
-            oauth: None,
-            oauth_resource: None,
-            tools: HashMap::new(),
-        },
+            })
+            .enabled_tools(vec!["allowed".to_string()])
+            .disabled_tools(vec!["blocked".to_string()])
+            .build(),
     )]);
 
     apply_blocking(
@@ -6284,30 +6069,18 @@ async fn replace_mcp_servers_streamable_http_serializes_oauth_resource() -> anyh
 
     let servers = BTreeMap::from([(
         "docs".to_string(),
-        McpServerConfig {
-            transport: McpServerTransportConfig::StreamableHttp {
+        McpServerConfig::builder()
+            .transport(McpServerTransportConfig::StreamableHttp {
                 url: "https://example.com/mcp".to_string(),
                 bearer_token_env_var: None,
                 http_headers: None,
                 env_http_headers: None,
-            },
-            environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
-            enabled: true,
-            required: false,
-            supports_parallel_tool_calls: false,
-            disabled_reason: None,
-            startup_timeout_sec: None,
-            tool_timeout_sec: None,
-            default_tools_approval_mode: None,
-            enabled_tools: None,
-            disabled_tools: None,
-            scopes: None,
-            oauth: Some(McpServerOAuthConfig {
+            })
+            .oauth(McpServerOAuthConfig {
                 client_id: Some("eci-prd-pub-codex-123".to_string()),
-            }),
-            oauth_resource: Some("https://resource.example.com".to_string()),
-            tools: HashMap::new(),
-        },
+            })
+            .oauth_resource("https://resource.example.com".to_string())
+            .build(),
     )]);
 
     apply_blocking(

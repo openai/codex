@@ -212,30 +212,17 @@ async fn load_plugins_loads_default_skills_and_mcp_servers() {
             has_enabled_skills: true,
             mcp_servers: HashMap::from([(
                 "sample".to_string(),
-                McpServerConfig {
-                    transport: McpServerTransportConfig::StreamableHttp {
+                McpServerConfig::builder()
+                    .transport(McpServerTransportConfig::StreamableHttp {
                         url: "https://sample.example/mcp".to_string(),
                         bearer_token_env_var: None,
                         http_headers: None,
                         env_http_headers: None,
-                    },
-                    environment_id: "local".to_string(),
-                    enabled: true,
-                    required: false,
-                    supports_parallel_tool_calls: false,
-                    disabled_reason: None,
-                    startup_timeout_sec: None,
-                    tool_timeout_sec: None,
-                    default_tools_approval_mode: None,
-                    enabled_tools: None,
-                    disabled_tools: None,
-                    scopes: None,
-                    oauth: Some(McpServerOAuthConfig {
+                    })
+                    .oauth(McpServerOAuthConfig {
                         client_id: Some("client-id".to_string()),
-                    }),
-                    oauth_resource: None,
-                    tools: HashMap::new(),
-                },
+                    })
+                    .build(),
             )]),
             apps: vec![AppConnectorId("connector_example".to_string())],
             hook_sources: Vec::new(),
@@ -715,28 +702,14 @@ async fn load_plugins_uses_manifest_configured_component_paths() {
         outcome.plugins()[0].mcp_servers,
         HashMap::from([(
             "custom".to_string(),
-            McpServerConfig {
-                transport: McpServerTransportConfig::StreamableHttp {
+            McpServerConfig::builder()
+                .transport(McpServerTransportConfig::StreamableHttp {
                     url: "https://custom.example/mcp".to_string(),
                     bearer_token_env_var: None,
                     http_headers: None,
                     env_http_headers: None,
-                },
-                environment_id: "local".to_string(),
-                enabled: true,
-                required: false,
-                supports_parallel_tool_calls: false,
-                disabled_reason: None,
-                startup_timeout_sec: None,
-                tool_timeout_sec: None,
-                default_tools_approval_mode: None,
-                enabled_tools: None,
-                disabled_tools: None,
-                scopes: None,
-                oauth: None,
-                oauth_resource: None,
-                tools: HashMap::new(),
-            },
+                })
+                .build(),
         )])
     );
     assert_eq!(
@@ -827,28 +800,14 @@ async fn load_plugins_ignores_manifest_component_paths_without_dot_slash() {
         outcome.plugins()[0].mcp_servers,
         HashMap::from([(
             "default".to_string(),
-            McpServerConfig {
-                transport: McpServerTransportConfig::StreamableHttp {
+            McpServerConfig::builder()
+                .transport(McpServerTransportConfig::StreamableHttp {
                     url: "https://default.example/mcp".to_string(),
                     bearer_token_env_var: None,
                     http_headers: None,
                     env_http_headers: None,
-                },
-                environment_id: "local".to_string(),
-                enabled: true,
-                required: false,
-                supports_parallel_tool_calls: false,
-                disabled_reason: None,
-                startup_timeout_sec: None,
-                tool_timeout_sec: None,
-                default_tools_approval_mode: None,
-                enabled_tools: None,
-                disabled_tools: None,
-                scopes: None,
-                oauth: None,
-                oauth_resource: None,
-                tools: HashMap::new(),
-            },
+                })
+                .build(),
         )])
     );
     assert_eq!(
@@ -1033,27 +992,15 @@ async fn effective_apps_preserves_app_config_order() {
 fn capability_index_filters_inactive_and_zero_capability_plugins() {
     let codex_home = TempDir::new().unwrap();
     let connector = |id: &str| AppConnectorId(id.to_string());
-    let http_server = |url: &str| McpServerConfig {
-        transport: McpServerTransportConfig::StreamableHttp {
-            url: url.to_string(),
-            bearer_token_env_var: None,
-            http_headers: None,
-            env_http_headers: None,
-        },
-        environment_id: "local".to_string(),
-        enabled: true,
-        required: false,
-        supports_parallel_tool_calls: false,
-        disabled_reason: None,
-        startup_timeout_sec: None,
-        tool_timeout_sec: None,
-        default_tools_approval_mode: None,
-        enabled_tools: None,
-        disabled_tools: None,
-        scopes: None,
-        oauth: None,
-        oauth_resource: None,
-        tools: HashMap::new(),
+    let http_server = |url: &str| {
+        McpServerConfig::builder()
+            .transport(McpServerTransportConfig::StreamableHttp {
+                url: url.to_string(),
+                bearer_token_env_var: None,
+                http_headers: None,
+                env_http_headers: None,
+            })
+            .build()
     };
     let plugin = |config_name: &str, dir_name: &str, manifest_name: &str| LoadedPlugin {
         config_name: config_name.to_string(),

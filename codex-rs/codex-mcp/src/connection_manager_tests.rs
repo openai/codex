@@ -1116,54 +1116,30 @@ async fn no_local_runtime_fails_local_stdio_but_keeps_local_http_server() {
     let mcp_servers = HashMap::from([
         (
             "stdio".to_string(),
-            EffectiveMcpServer::configured(McpServerConfig {
-                transport: McpServerTransportConfig::Stdio {
-                    command: "echo".to_string(),
-                    args: Vec::new(),
-                    env: None,
-                    env_vars: Vec::new(),
-                    cwd: None,
-                },
-                environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
-                enabled: true,
-                required: false,
-                supports_parallel_tool_calls: false,
-                disabled_reason: None,
-                startup_timeout_sec: None,
-                tool_timeout_sec: None,
-                default_tools_approval_mode: None,
-                enabled_tools: None,
-                disabled_tools: None,
-                scopes: None,
-                oauth: None,
-                oauth_resource: None,
-                tools: HashMap::new(),
-            }),
+            EffectiveMcpServer::configured(
+                McpServerConfig::builder()
+                    .transport(McpServerTransportConfig::Stdio {
+                        command: "echo".to_string(),
+                        args: Vec::new(),
+                        env: None,
+                        env_vars: Vec::new(),
+                        cwd: None,
+                    })
+                    .build(),
+            ),
         ),
         (
             "http".to_string(),
-            EffectiveMcpServer::configured(McpServerConfig {
-                transport: McpServerTransportConfig::StreamableHttp {
-                    url: "http://127.0.0.1:1".to_string(),
-                    bearer_token_env_var: None,
-                    http_headers: None,
-                    env_http_headers: None,
-                },
-                environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
-                enabled: true,
-                required: false,
-                supports_parallel_tool_calls: false,
-                disabled_reason: None,
-                startup_timeout_sec: None,
-                tool_timeout_sec: None,
-                default_tools_approval_mode: None,
-                enabled_tools: None,
-                disabled_tools: None,
-                scopes: None,
-                oauth: None,
-                oauth_resource: None,
-                tools: HashMap::new(),
-            }),
+            EffectiveMcpServer::configured(
+                McpServerConfig::builder()
+                    .transport(McpServerTransportConfig::StreamableHttp {
+                        url: "http://127.0.0.1:1".to_string(),
+                        bearer_token_env_var: None,
+                        http_headers: None,
+                        env_http_headers: None,
+                    })
+                    .build(),
+            ),
         ),
     ]);
 
@@ -1241,28 +1217,16 @@ fn elicitation_capability_advertises_url_support_when_enabled() {
 fn mcp_init_error_display_prompts_for_github_pat() {
     let server_name = "github";
     let entry = McpAuthStatusEntry {
-        config: Some(McpServerConfig {
-            transport: McpServerTransportConfig::StreamableHttp {
-                url: "https://api.githubcopilot.com/mcp/".to_string(),
-                bearer_token_env_var: None,
-                http_headers: None,
-                env_http_headers: None,
-            },
-            environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
-            enabled: true,
-            required: false,
-            supports_parallel_tool_calls: false,
-            disabled_reason: None,
-            startup_timeout_sec: None,
-            tool_timeout_sec: None,
-            default_tools_approval_mode: None,
-            enabled_tools: None,
-            disabled_tools: None,
-            scopes: None,
-            oauth: None,
-            oauth_resource: None,
-            tools: HashMap::new(),
-        }),
+        config: Some(
+            McpServerConfig::builder()
+                .transport(McpServerTransportConfig::StreamableHttp {
+                    url: "https://api.githubcopilot.com/mcp/".to_string(),
+                    bearer_token_env_var: None,
+                    http_headers: None,
+                    env_http_headers: None,
+                })
+                .build(),
+        ),
         auth_status: McpAuthStatus::Unsupported,
     };
     let err: StartupOutcomeError = anyhow::anyhow!("OAuth is unsupported").into();
@@ -1294,28 +1258,16 @@ fn mcp_init_error_display_prompts_for_login_when_auth_required() {
 fn mcp_init_error_display_reports_generic_errors() {
     let server_name = "custom";
     let entry = McpAuthStatusEntry {
-        config: Some(McpServerConfig {
-            transport: McpServerTransportConfig::StreamableHttp {
-                url: "https://example.com".to_string(),
-                bearer_token_env_var: Some("TOKEN".to_string()),
-                http_headers: None,
-                env_http_headers: None,
-            },
-            environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
-            enabled: true,
-            required: false,
-            supports_parallel_tool_calls: false,
-            disabled_reason: None,
-            startup_timeout_sec: None,
-            tool_timeout_sec: None,
-            default_tools_approval_mode: None,
-            enabled_tools: None,
-            disabled_tools: None,
-            scopes: None,
-            oauth: None,
-            oauth_resource: None,
-            tools: HashMap::new(),
-        }),
+        config: Some(
+            McpServerConfig::builder()
+                .transport(McpServerTransportConfig::StreamableHttp {
+                    url: "https://example.com".to_string(),
+                    bearer_token_env_var: Some("TOKEN".to_string()),
+                    http_headers: None,
+                    env_http_headers: None,
+                })
+                .build(),
+        ),
         auth_status: McpAuthStatus::Unsupported,
     };
     let err: StartupOutcomeError = anyhow::anyhow!("boom").into();

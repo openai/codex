@@ -51,7 +51,6 @@ use core_test_support::wait_for_mcp_server;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
-use std::collections::HashMap;
 use std::time::Duration;
 
 const SEARCH_TOOL_DESCRIPTION_SNIPPETS: [&str; 2] = [
@@ -1085,29 +1084,18 @@ async fn tool_search_indexes_only_enabled_non_app_mcp_tools() -> Result<()> {
             let mut servers = config.mcp_servers.get().clone();
             servers.insert(
                 "rmcp".to_string(),
-                McpServerConfig {
-                    transport: McpServerTransportConfig::Stdio {
+                McpServerConfig::builder()
+                    .transport(McpServerTransportConfig::Stdio {
                         command: rmcp_test_server_bin,
                         args: Vec::new(),
                         env: None,
                         env_vars: Vec::new(),
                         cwd: None,
-                    },
-                    environment_id: "local".to_string(),
-                    enabled: true,
-                    required: false,
-                    disabled_reason: None,
-                    startup_timeout_sec: Some(Duration::from_secs(10)),
-                    tool_timeout_sec: None,
-                    default_tools_approval_mode: None,
-                    enabled_tools: Some(vec!["echo".to_string(), "image".to_string()]),
-                    disabled_tools: Some(vec!["image".to_string()]),
-                    scopes: None,
-                    oauth: None,
-                    oauth_resource: None,
-                    supports_parallel_tool_calls: false,
-                    tools: HashMap::new(),
-                },
+                    })
+                    .startup_timeout_sec(Duration::from_secs(10))
+                    .enabled_tools(vec!["echo".to_string(), "image".to_string()])
+                    .disabled_tools(vec!["image".to_string()])
+                    .build(),
             );
             config
                 .mcp_servers
@@ -1215,29 +1203,17 @@ async fn tool_search_surfaced_mcp_tool_errors_are_returned_to_model() -> Result<
             let mut servers = config.mcp_servers.get().clone();
             servers.insert(
                 "rmcp".to_string(),
-                McpServerConfig {
-                    transport: McpServerTransportConfig::Stdio {
+                McpServerConfig::builder()
+                    .transport(McpServerTransportConfig::Stdio {
                         command: rmcp_test_server_bin,
                         args: Vec::new(),
                         env: None,
                         env_vars: Vec::new(),
                         cwd: None,
-                    },
-                    environment_id: "local".to_string(),
-                    enabled: true,
-                    required: false,
-                    disabled_reason: None,
-                    startup_timeout_sec: Some(Duration::from_secs(10)),
-                    tool_timeout_sec: None,
-                    default_tools_approval_mode: None,
-                    enabled_tools: Some(vec!["echo".to_string()]),
-                    disabled_tools: None,
-                    scopes: None,
-                    oauth: None,
-                    oauth_resource: None,
-                    supports_parallel_tool_calls: false,
-                    tools: HashMap::new(),
-                },
+                    })
+                    .startup_timeout_sec(Duration::from_secs(10))
+                    .enabled_tools(vec!["echo".to_string()])
+                    .build(),
             );
             config
                 .mcp_servers
@@ -1364,29 +1340,17 @@ async fn tool_search_uses_non_app_mcp_server_instructions_as_namespace_descripti
             let mut servers = config.mcp_servers.get().clone();
             servers.insert(
                 "rmcp".to_string(),
-                McpServerConfig {
-                    transport: McpServerTransportConfig::Stdio {
+                McpServerConfig::builder()
+                    .transport(McpServerTransportConfig::Stdio {
                         command: rmcp_test_server_bin,
                         args: Vec::new(),
                         env: None,
                         env_vars: Vec::new(),
                         cwd: None,
-                    },
-                    environment_id: "local".to_string(),
-                    enabled: true,
-                    required: false,
-                    disabled_reason: None,
-                    startup_timeout_sec: Some(Duration::from_secs(10)),
-                    tool_timeout_sec: None,
-                    default_tools_approval_mode: None,
-                    enabled_tools: Some(vec!["echo".to_string()]),
-                    disabled_tools: None,
-                    scopes: None,
-                    oauth: None,
-                    oauth_resource: None,
-                    supports_parallel_tool_calls: false,
-                    tools: HashMap::new(),
-                },
+                    })
+                    .startup_timeout_sec(Duration::from_secs(10))
+                    .enabled_tools(vec!["echo".to_string()])
+                    .build(),
             );
             config
                 .mcp_servers

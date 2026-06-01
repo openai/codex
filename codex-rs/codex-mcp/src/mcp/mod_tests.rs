@@ -310,53 +310,25 @@ async fn effective_mcp_servers_preserve_user_servers_and_add_codex_apps() {
 
     config.configured_mcp_servers.insert(
         "sample".to_string(),
-        McpServerConfig {
-            transport: McpServerTransportConfig::StreamableHttp {
+        McpServerConfig::builder()
+            .transport(McpServerTransportConfig::StreamableHttp {
                 url: "https://user.example/mcp".to_string(),
                 bearer_token_env_var: None,
                 http_headers: None,
                 env_http_headers: None,
-            },
-            environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
-            enabled: true,
-            required: false,
-            supports_parallel_tool_calls: false,
-            disabled_reason: None,
-            startup_timeout_sec: None,
-            tool_timeout_sec: None,
-            default_tools_approval_mode: None,
-            enabled_tools: None,
-            disabled_tools: None,
-            scopes: None,
-            oauth: None,
-            oauth_resource: None,
-            tools: HashMap::new(),
-        },
+            })
+            .build(),
     );
     config.configured_mcp_servers.insert(
         "docs".to_string(),
-        McpServerConfig {
-            transport: McpServerTransportConfig::StreamableHttp {
+        McpServerConfig::builder()
+            .transport(McpServerTransportConfig::StreamableHttp {
                 url: "https://docs.example/mcp".to_string(),
                 bearer_token_env_var: None,
                 http_headers: None,
                 env_http_headers: None,
-            },
-            environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
-            enabled: true,
-            required: false,
-            supports_parallel_tool_calls: false,
-            disabled_reason: None,
-            startup_timeout_sec: None,
-            tool_timeout_sec: None,
-            default_tools_approval_mode: None,
-            enabled_tools: None,
-            disabled_tools: None,
-            scopes: None,
-            oauth: None,
-            oauth_resource: None,
-            tools: HashMap::new(),
-        },
+            })
+            .build(),
     );
 
     let effective = effective_mcp_servers(&config, Some(&auth));

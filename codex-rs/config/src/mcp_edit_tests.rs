@@ -15,28 +15,17 @@ async fn replace_mcp_servers_serializes_per_tool_approval_overrides() -> anyhow:
     ));
     let servers = BTreeMap::from([(
         "docs".to_string(),
-        McpServerConfig {
-            transport: McpServerTransportConfig::Stdio {
+        McpServerConfig::builder()
+            .transport(McpServerTransportConfig::Stdio {
                 command: "docs-server".to_string(),
                 args: Vec::new(),
                 env: None,
                 env_vars: Vec::new(),
                 cwd: None,
-            },
-            environment_id: crate::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
-            enabled: true,
-            required: false,
-            supports_parallel_tool_calls: true,
-            disabled_reason: None,
-            startup_timeout_sec: None,
-            tool_timeout_sec: None,
-            default_tools_approval_mode: Some(AppToolApproval::Auto),
-            enabled_tools: None,
-            disabled_tools: None,
-            scopes: None,
-            oauth: None,
-            oauth_resource: None,
-            tools: HashMap::from([
+            })
+            .supports_parallel_tool_calls(true)
+            .default_tools_approval_mode(AppToolApproval::Auto)
+            .tools(HashMap::from([
                 (
                     "search".to_string(),
                     McpServerToolConfig {
@@ -49,8 +38,8 @@ async fn replace_mcp_servers_serializes_per_tool_approval_overrides() -> anyhow:
                         approval_mode: Some(AppToolApproval::Prompt),
                     },
                 ),
-            ]),
-        },
+            ]))
+            .build(),
     )]);
 
     ConfigEditsBuilder::new(&codex_home)
@@ -94,30 +83,17 @@ async fn replace_mcp_servers_serializes_oauth_client_id() -> anyhow::Result<()> 
     ));
     let servers = BTreeMap::from([(
         "maas_outlook".to_string(),
-        McpServerConfig {
-            transport: McpServerTransportConfig::StreamableHttp {
+        McpServerConfig::builder()
+            .transport(McpServerTransportConfig::StreamableHttp {
                 url: "https://example.com/mcp".to_string(),
                 bearer_token_env_var: None,
                 http_headers: None,
                 env_http_headers: None,
-            },
-            environment_id: crate::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
-            enabled: true,
-            required: false,
-            supports_parallel_tool_calls: false,
-            disabled_reason: None,
-            startup_timeout_sec: None,
-            tool_timeout_sec: None,
-            default_tools_approval_mode: None,
-            enabled_tools: None,
-            disabled_tools: None,
-            scopes: None,
-            oauth: Some(McpServerOAuthConfig {
+            })
+            .oauth(McpServerOAuthConfig {
                 client_id: Some("eci-prd-pub-codex-123".to_string()),
-            }),
-            oauth_resource: None,
-            tools: HashMap::new(),
-        },
+            })
+            .build(),
     )]);
 
     ConfigEditsBuilder::new(&codex_home)

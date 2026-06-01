@@ -354,28 +354,14 @@ fn mcp_dependency_to_server_config(
             .url
             .as_ref()
             .ok_or_else(|| "missing url for streamable_http dependency".to_string())?;
-        return Ok(McpServerConfig {
-            transport: McpServerTransportConfig::StreamableHttp {
+        return Ok(McpServerConfig::builder()
+            .transport(McpServerTransportConfig::StreamableHttp {
                 url: url.clone(),
                 bearer_token_env_var: None,
                 http_headers: None,
                 env_http_headers: None,
-            },
-            environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
-            enabled: true,
-            required: false,
-            supports_parallel_tool_calls: false,
-            disabled_reason: None,
-            startup_timeout_sec: None,
-            tool_timeout_sec: None,
-            default_tools_approval_mode: None,
-            enabled_tools: None,
-            disabled_tools: None,
-            scopes: None,
-            oauth: None,
-            oauth_resource: None,
-            tools: HashMap::new(),
-        });
+            })
+            .build());
     }
 
     if transport.eq_ignore_ascii_case("stdio") {
@@ -383,29 +369,15 @@ fn mcp_dependency_to_server_config(
             .command
             .as_ref()
             .ok_or_else(|| "missing command for stdio dependency".to_string())?;
-        return Ok(McpServerConfig {
-            transport: McpServerTransportConfig::Stdio {
+        return Ok(McpServerConfig::builder()
+            .transport(McpServerTransportConfig::Stdio {
                 command: command.clone(),
                 args: Vec::new(),
                 env: None,
                 env_vars: Vec::new(),
                 cwd: None,
-            },
-            environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
-            enabled: true,
-            required: false,
-            supports_parallel_tool_calls: false,
-            disabled_reason: None,
-            startup_timeout_sec: None,
-            tool_timeout_sec: None,
-            default_tools_approval_mode: None,
-            enabled_tools: None,
-            disabled_tools: None,
-            scopes: None,
-            oauth: None,
-            oauth_resource: None,
-            tools: HashMap::new(),
-        });
+            })
+            .build());
     }
 
     Err(format!("unsupported transport {transport}"))

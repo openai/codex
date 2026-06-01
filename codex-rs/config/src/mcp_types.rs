@@ -126,24 +126,28 @@ pub struct McpServerOAuthConfig {
     pub client_id: Option<String>,
 }
 
-#[derive(Serialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Debug, Clone, PartialEq, bon::Builder)]
 pub struct McpServerConfig {
     #[serde(flatten)]
     pub transport: McpServerTransportConfig,
 
     /// Effective environment id for where Codex should start this MCP server.
+    #[builder(default = DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string())]
     pub environment_id: String,
 
     /// When `false`, Codex skips initializing this MCP server.
     #[serde(default = "default_enabled")]
+    #[builder(default = true)]
     pub enabled: bool,
 
     /// When `true`, `codex exec` exits with an error if this MCP server fails to initialize.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[builder(default)]
     pub required: bool,
 
     /// When `true`, every tool from this server is advertised as safe for parallel tool calls.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[builder(default)]
     pub supports_parallel_tool_calls: bool,
 
     /// Reason this server was disabled after applying requirements.
@@ -188,6 +192,7 @@ pub struct McpServerConfig {
 
     /// Per-tool approval settings keyed by tool name.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    #[builder(default)]
     pub tools: HashMap<String, McpServerToolConfig>,
 }
 

@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use std::time::Duration;
@@ -183,29 +182,17 @@ fn insert_rmcp_test_server(config: &mut Config, command: String, approval_mode: 
     let mut servers = config.mcp_servers.get().clone();
     servers.insert(
         RMCP_SERVER.to_string(),
-        McpServerConfig {
-            transport: McpServerTransportConfig::Stdio {
+        McpServerConfig::builder()
+            .transport(McpServerTransportConfig::Stdio {
                 command,
                 args: Vec::new(),
                 env: None,
                 env_vars: Vec::new(),
                 cwd: None,
-            },
-            environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
-            enabled: true,
-            required: false,
-            supports_parallel_tool_calls: false,
-            disabled_reason: None,
-            startup_timeout_sec: Some(Duration::from_secs(10)),
-            tool_timeout_sec: None,
-            default_tools_approval_mode: Some(approval_mode),
-            enabled_tools: None,
-            disabled_tools: None,
-            scopes: None,
-            oauth: None,
-            oauth_resource: None,
-            tools: HashMap::new(),
-        },
+            })
+            .startup_timeout_sec(Duration::from_secs(10))
+            .default_tools_approval_mode(approval_mode)
+            .build(),
     );
     if let Err(err) = config.mcp_servers.set(servers) {
         panic!("test mcp servers should accept any configuration: {err}");

@@ -263,6 +263,7 @@ aws-types = "1"
 axum = { version = "0.8", default-features = false }
 base64 = "0.22.1"
 bm25 = "2.3.2"
+bon = "3.9.1"
 bytes = "1.10.1"
 chardetng = "0.1.17"
 chrono = "0.4.43"

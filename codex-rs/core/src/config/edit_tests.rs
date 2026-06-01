@@ -872,8 +872,8 @@ fn blocking_replace_mcp_servers_round_trips() {
     let mut servers = BTreeMap::new();
     servers.insert(
         "stdio".to_string(),
-        McpServerConfig {
-            transport: McpServerTransportConfig::Stdio {
+        McpServerConfig::builder()
+            .transport(McpServerTransportConfig::Stdio {
                 command: "cmd".to_string(),
                 args: vec!["--flag".to_string()],
                 env: Some(
@@ -886,28 +886,16 @@ fn blocking_replace_mcp_servers_round_trips() {
                 ),
                 env_vars: vec!["FOO".into()],
                 cwd: None,
-            },
-            environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
-            enabled: true,
-            required: false,
-            supports_parallel_tool_calls: true,
-            disabled_reason: None,
-            startup_timeout_sec: None,
-            tool_timeout_sec: None,
-            default_tools_approval_mode: None,
-            enabled_tools: Some(vec!["one".to_string(), "two".to_string()]),
-            disabled_tools: None,
-            scopes: None,
-            oauth: None,
-            oauth_resource: None,
-            tools: HashMap::new(),
-        },
+            })
+            .supports_parallel_tool_calls(true)
+            .enabled_tools(vec!["one".to_string(), "two".to_string()])
+            .build(),
     );
 
     servers.insert(
         "http".to_string(),
-        McpServerConfig {
-            transport: McpServerTransportConfig::StreamableHttp {
+        McpServerConfig::builder()
+            .transport(McpServerTransportConfig::StreamableHttp {
                 url: "https://example.com".to_string(),
                 bearer_token_env_var: Some("TOKEN".to_string()),
                 http_headers: Some(
@@ -916,24 +904,15 @@ fn blocking_replace_mcp_servers_round_trips() {
                         .collect(),
                 ),
                 env_http_headers: None,
-            },
-            environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
-            enabled: false,
-            required: false,
-            supports_parallel_tool_calls: false,
-            disabled_reason: None,
-            startup_timeout_sec: Some(std::time::Duration::from_secs(5)),
-            tool_timeout_sec: None,
-            default_tools_approval_mode: None,
-            enabled_tools: None,
-            disabled_tools: Some(vec!["forbidden".to_string()]),
-            scopes: None,
-            oauth: Some(McpServerOAuthConfig {
+            })
+            .enabled(false)
+            .startup_timeout_sec(std::time::Duration::from_secs(5))
+            .disabled_tools(vec!["forbidden".to_string()])
+            .oauth(McpServerOAuthConfig {
                 client_id: Some("eci-prd-pub-codex-123".to_string()),
-            }),
-            oauth_resource: Some("https://resource.example.com".to_string()),
-            tools: HashMap::new(),
-        },
+            })
+            .oauth_resource("https://resource.example.com".to_string())
+            .build(),
     );
 
     apply_blocking(
@@ -980,34 +959,22 @@ fn blocking_replace_mcp_servers_serializes_tool_approval_overrides() {
     let mut servers = BTreeMap::new();
     servers.insert(
         "docs".to_string(),
-        McpServerConfig {
-            transport: McpServerTransportConfig::Stdio {
+        McpServerConfig::builder()
+            .transport(McpServerTransportConfig::Stdio {
                 command: "docs-server".to_string(),
                 args: Vec::new(),
                 env: None,
                 env_vars: Vec::new(),
                 cwd: None,
-            },
-            environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
-            enabled: true,
-            required: false,
-            supports_parallel_tool_calls: false,
-            disabled_reason: None,
-            startup_timeout_sec: None,
-            tool_timeout_sec: None,
-            default_tools_approval_mode: Some(AppToolApproval::Prompt),
-            enabled_tools: None,
-            disabled_tools: None,
-            scopes: None,
-            oauth: None,
-            oauth_resource: None,
-            tools: HashMap::from([(
+            })
+            .default_tools_approval_mode(AppToolApproval::Prompt)
+            .tools(HashMap::from([(
                 "search".to_string(),
                 McpServerToolConfig {
                     approval_mode: Some(AppToolApproval::Approve),
                 },
-            )]),
-        },
+            )]))
+            .build(),
     );
 
     apply_blocking(codex_home, &[ConfigEdit::ReplaceMcpServers(servers)]).expect("persist");
@@ -1040,29 +1007,15 @@ foo = { command = "cmd" }
     let mut servers = BTreeMap::new();
     servers.insert(
         "foo".to_string(),
-        McpServerConfig {
-            transport: McpServerTransportConfig::Stdio {
+        McpServerConfig::builder()
+            .transport(McpServerTransportConfig::Stdio {
                 command: "cmd".to_string(),
                 args: Vec::new(),
                 env: None,
                 env_vars: Vec::new(),
                 cwd: None,
-            },
-            environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
-            enabled: true,
-            required: false,
-            supports_parallel_tool_calls: false,
-            disabled_reason: None,
-            startup_timeout_sec: None,
-            tool_timeout_sec: None,
-            default_tools_approval_mode: None,
-            enabled_tools: None,
-            disabled_tools: None,
-            scopes: None,
-            oauth: None,
-            oauth_resource: None,
-            tools: HashMap::new(),
-        },
+            })
+            .build(),
     );
 
     apply_blocking(codex_home, &[ConfigEdit::ReplaceMcpServers(servers)]).expect("persist");
@@ -1090,29 +1043,16 @@ foo = { command = "cmd" } # keep me
     let mut servers = BTreeMap::new();
     servers.insert(
         "foo".to_string(),
-        McpServerConfig {
-            transport: McpServerTransportConfig::Stdio {
+        McpServerConfig::builder()
+            .transport(McpServerTransportConfig::Stdio {
                 command: "cmd".to_string(),
                 args: Vec::new(),
                 env: None,
                 env_vars: Vec::new(),
                 cwd: None,
-            },
-            environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
-            enabled: false,
-            required: false,
-            supports_parallel_tool_calls: false,
-            disabled_reason: None,
-            startup_timeout_sec: None,
-            tool_timeout_sec: None,
-            default_tools_approval_mode: None,
-            enabled_tools: None,
-            disabled_tools: None,
-            scopes: None,
-            oauth: None,
-            oauth_resource: None,
-            tools: HashMap::new(),
-        },
+            })
+            .enabled(false)
+            .build(),
     );
 
     apply_blocking(codex_home, &[ConfigEdit::ReplaceMcpServers(servers)]).expect("persist");
@@ -1139,29 +1079,15 @@ foo = { command = "cmd", args = ["--flag"] } # keep me
     let mut servers = BTreeMap::new();
     servers.insert(
         "foo".to_string(),
-        McpServerConfig {
-            transport: McpServerTransportConfig::Stdio {
+        McpServerConfig::builder()
+            .transport(McpServerTransportConfig::Stdio {
                 command: "cmd".to_string(),
                 args: Vec::new(),
                 env: None,
                 env_vars: Vec::new(),
                 cwd: None,
-            },
-            environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
-            enabled: true,
-            required: false,
-            supports_parallel_tool_calls: false,
-            disabled_reason: None,
-            startup_timeout_sec: None,
-            tool_timeout_sec: None,
-            default_tools_approval_mode: None,
-            enabled_tools: None,
-            disabled_tools: None,
-            scopes: None,
-            oauth: None,
-            oauth_resource: None,
-            tools: HashMap::new(),
-        },
+            })
+            .build(),
     );
 
     apply_blocking(codex_home, &[ConfigEdit::ReplaceMcpServers(servers)]).expect("persist");
@@ -1189,29 +1115,16 @@ foo = { command = "cmd" }
     let mut servers = BTreeMap::new();
     servers.insert(
         "foo".to_string(),
-        McpServerConfig {
-            transport: McpServerTransportConfig::Stdio {
+        McpServerConfig::builder()
+            .transport(McpServerTransportConfig::Stdio {
                 command: "cmd".to_string(),
                 args: Vec::new(),
                 env: None,
                 env_vars: Vec::new(),
                 cwd: None,
-            },
-            environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
-            enabled: false,
-            required: false,
-            supports_parallel_tool_calls: false,
-            disabled_reason: None,
-            startup_timeout_sec: None,
-            tool_timeout_sec: None,
-            default_tools_approval_mode: None,
-            enabled_tools: None,
-            disabled_tools: None,
-            scopes: None,
-            oauth: None,
-            oauth_resource: None,
-            tools: HashMap::new(),
-        },
+            })
+            .enabled(false)
+            .build(),
     );
 
     apply_blocking(codex_home, &[ConfigEdit::ReplaceMcpServers(servers)]).expect("persist");

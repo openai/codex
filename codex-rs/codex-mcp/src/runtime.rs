@@ -118,8 +118,6 @@ pub(crate) fn emit_duration(metric: &str, duration: Duration, tags: &[(&str, &st
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-
     use codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID;
     use codex_config::McpServerConfig;
     use codex_config::McpServerTransportConfig;
@@ -129,42 +127,28 @@ mod tests {
     use super::*;
 
     fn stdio_server(environment_id: &str) -> McpServerConfig {
-        McpServerConfig {
-            transport: McpServerTransportConfig::Stdio {
+        McpServerConfig::builder()
+            .transport(McpServerTransportConfig::Stdio {
                 command: "echo".to_string(),
                 args: Vec::new(),
                 env: None,
                 env_vars: Vec::new(),
                 cwd: None,
-            },
-            environment_id: environment_id.to_string(),
-            enabled: true,
-            required: false,
-            supports_parallel_tool_calls: false,
-            disabled_reason: None,
-            startup_timeout_sec: None,
-            tool_timeout_sec: None,
-            default_tools_approval_mode: None,
-            enabled_tools: None,
-            disabled_tools: None,
-            scopes: None,
-            oauth: None,
-            oauth_resource: None,
-            tools: HashMap::new(),
-        }
+            })
+            .environment_id(environment_id.to_string())
+            .build()
     }
 
     fn http_server(environment_id: &str) -> McpServerConfig {
-        McpServerConfig {
-            transport: McpServerTransportConfig::StreamableHttp {
+        McpServerConfig::builder()
+            .transport(McpServerTransportConfig::StreamableHttp {
                 url: "http://127.0.0.1:1".to_string(),
                 bearer_token_env_var: None,
                 http_headers: None,
                 env_http_headers: None,
-            },
-            environment_id: environment_id.to_string(),
-            ..stdio_server(environment_id)
-        }
+            })
+            .environment_id(environment_id.to_string())
+            .build()
     }
 
     #[test]
