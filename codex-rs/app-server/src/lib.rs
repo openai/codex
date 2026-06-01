@@ -789,8 +789,11 @@ pub async fn run_main_with_transport_options(
 
     let processor_handle = tokio::spawn({
         let auth_manager = Arc::clone(&auth_manager);
-        let analytics_events_client =
-            analytics_events_client_from_config(Arc::clone(&auth_manager), &config);
+        let analytics_events_client = analytics_events_client_from_config(
+            Arc::clone(&auth_manager),
+            &config,
+            default_analytics_enabled,
+        );
         let rpc_transport = analytics_rpc_transport(&transport);
         let outgoing_message_sender = Arc::new(OutgoingMessageSender::new(
             outgoing_tx,
@@ -1090,15 +1093,19 @@ pub async fn run_main_with_transport_options(
 fn analytics_rpc_transport(transport: &AppServerTransport) -> AppServerRpcTransport {
     match transport {
         AppServerTransport::Stdio => AppServerRpcTransport::Stdio,
-        AppServerTransport::UnixSocket { .. }
-        | AppServerTransport::WebSocket { .. }
-        | AppServerTransport::Off => AppServerRpcTransport::Websocket,
+        AppServerTransport::UnixSocket { .. } => AppServerRpcTransport::UnixSocket,
+        AppServerTransport::WebSocket { .. } | AppServerTransport::Off => {
+            AppServerRpcTransport::Websocket
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::LogFormat;
+    use super::analytics_rpc_transport;
+    use crate::transport::AppServerTransport;
+    use codex_analytics::AppServerRpcTransport;
     use pretty_assertions::assert_eq;
 
     #[test]
@@ -1117,5 +1124,18 @@ mod tests {
         assert_eq!(LogFormat::from_env_value(Some("")), LogFormat::Default);
         assert_eq!(LogFormat::from_env_value(Some("text")), LogFormat::Default);
         assert_eq!(LogFormat::from_env_value(Some("jsonl")), LogFormat::Default);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn analytics_rpc_transport_preserves_unix_socket() {
+        let transport = "unix:///tmp/codex-app-server.sock"
+            .parse::<AppServerTransport>()
+            .expect("unix socket transport should parse");
+
+        assert!(matches!(
+            analytics_rpc_transport(&transport),
+            AppServerRpcTransport::UnixSocket
+        ));
     }
 }

@@ -763,6 +763,7 @@ async fn plugin_install_tracks_remote_plugin_analytics_event() -> Result<()> {
     )
     .await;
     configure_remote_plugin_test(codex_home.path(), &server)?;
+    enable_analytics(codex_home.path())?;
     mount_remote_plugin_detail(&server, REMOTE_PLUGIN_ID, "1.2.3", Some(&bundle_url)).await;
     mount_empty_remote_installed_plugins(&server).await;
     mount_remote_plugin_install(&server, REMOTE_PLUGIN_ID).await;
@@ -1333,7 +1334,16 @@ plugins = true
 fn write_analytics_config(codex_home: &std::path::Path, base_url: &str) -> std::io::Result<()> {
     std::fs::write(
         codex_home.join("config.toml"),
-        format!("chatgpt_base_url = \"{base_url}\"\n"),
+        format!("chatgpt_base_url = \"{base_url}\"\n\n[analytics]\nenabled = true\n"),
+    )
+}
+
+fn enable_analytics(codex_home: &std::path::Path) -> std::io::Result<()> {
+    let config_path = codex_home.join("config.toml");
+    let config = std::fs::read_to_string(&config_path)?;
+    std::fs::write(
+        config_path,
+        format!("{config}\n[analytics]\nenabled = true\n"),
     )
 }
 

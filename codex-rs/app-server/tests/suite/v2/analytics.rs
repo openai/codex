@@ -113,6 +113,24 @@ async fn standalone_app_server_startup_tracks_analytics_event() -> Result<()> {
 }
 
 #[tokio::test]
+async fn standalone_app_server_startup_respects_default_disabled_analytics() -> Result<()> {
+    let server = MockServer::start().await;
+    let codex_home = TempDir::new()?;
+    write_mock_responses_config_toml_with_chatgpt_base_url(
+        codex_home.path(),
+        &server.uri(),
+        &server.uri(),
+    )?;
+    mount_analytics_endpoint(&server).await;
+    write_analytics_auth(codex_home.path())?;
+
+    let _mcp = McpProcess::new_without_managed_config(codex_home.path()).await?;
+
+    assert_analytics_event_not_received(&server, Duration::from_secs(1), "codex_app_server_started")
+        .await
+}
+
+#[tokio::test]
 async fn embedded_app_server_startup_tracks_analytics_event() -> Result<()> {
     let server = MockServer::start().await;
     let codex_home = TempDir::new()?;
@@ -123,14 +141,53 @@ async fn embedded_app_server_startup_tracks_analytics_event() -> Result<()> {
     )?;
     mount_analytics_capture(&server, codex_home.path()).await?;
 
+    let client =
+        in_process::start(in_process_start_args(codex_home.path(), "codex-tui").await?).await?;
+
+    let event =
+        wait_for_analytics_event(&server, Duration::from_secs(10), "codex_app_server_started")
+            .await?;
+
+    assert_app_server_started_event(&event, "in_process");
+    client.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn embedded_app_server_failed_initialize_does_not_track_startup_event() -> Result<()> {
+    let server = MockServer::start().await;
+    let codex_home = TempDir::new()?;
+    write_mock_responses_config_toml_with_chatgpt_base_url(
+        codex_home.path(),
+        &server.uri(),
+        &server.uri(),
+    )?;
+    mount_analytics_capture(&server, codex_home.path()).await?;
+
+    let result =
+        in_process::start(in_process_start_args(codex_home.path(), "bad\rname").await?).await;
+    let Err(error) = result else {
+        anyhow::bail!("in-process start should reject an invalid client name");
+    };
+    assert!(
+        error
+            .to_string()
+            .contains("in-process initialize failed: Invalid clientInfo.name")
+    );
+
+    assert_analytics_event_not_received(&server, Duration::from_secs(1), "codex_app_server_started")
+        .await
+}
+
+async fn in_process_start_args(codex_home: &Path, client_name: &str) -> Result<InProcessStartArgs> {
     let loader_overrides = LoaderOverrides::without_managed_config_for_tests();
     let config = ConfigBuilder::default()
-        .codex_home(codex_home.path().to_path_buf())
-        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .codex_home(codex_home.to_path_buf())
+        .fallback_cwd(Some(codex_home.to_path_buf()))
         .loader_overrides(loader_overrides.clone())
         .build()
         .await?;
-    let client = in_process::start(InProcessStartArgs {
+    Ok(InProcessStartArgs {
         arg0_paths: Arg0DispatchPaths::default(),
         config: Arc::new(config),
         cli_overrides: Vec::new(),
@@ -147,7 +204,7 @@ async fn embedded_app_server_startup_tracks_analytics_event() -> Result<()> {
         enable_codex_api_key_env: false,
         initialize: InitializeParams {
             client_info: ClientInfo {
-                name: "codex-tui".to_string(),
+                name: client_name.to_string(),
                 title: None,
                 version: "0.1.0".to_string(),
             },
@@ -155,15 +212,6 @@ async fn embedded_app_server_startup_tracks_analytics_event() -> Result<()> {
         },
         channel_capacity: in_process::DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
     })
-    .await?;
-
-    let event =
-        wait_for_analytics_event(&server, Duration::from_secs(10), "codex_app_server_started")
-            .await?;
-
-    assert_app_server_started_event(&event, "in_process");
-    client.shutdown().await?;
-    Ok(())
 }
 
 fn assert_app_server_started_event(event: &Value, rpc_transport: &str) {
@@ -178,12 +226,27 @@ fn assert_app_server_started_event(event: &Value, rpc_transport: &str) {
 }
 
 pub(crate) async fn mount_analytics_capture(server: &MockServer, codex_home: &Path) -> Result<()> {
+    mount_analytics_endpoint(server).await;
+
+    let config_path = codex_home.join("config.toml");
+    let config = std::fs::read_to_string(&config_path)?;
+    std::fs::write(
+        config_path,
+        format!("{config}\n[analytics]\nenabled = true\n"),
+    )?;
+
+    write_analytics_auth(codex_home)
+}
+
+async fn mount_analytics_endpoint(server: &MockServer) {
     Mock::given(method("POST"))
         .and(path("/codex/analytics-events/events"))
         .respond_with(ResponseTemplate::new(200))
         .mount(server)
         .await;
+}
 
+fn write_analytics_auth(codex_home: &Path) -> Result<()> {
     write_chatgpt_auth(
         codex_home,
         ChatGptAuthFixture::new("chatgpt-token")
@@ -193,6 +256,31 @@ pub(crate) async fn mount_analytics_capture(server: &MockServer, codex_home: &Pa
         AuthCredentialsStoreMode::File,
     )?;
 
+    Ok(())
+}
+
+async fn assert_analytics_event_not_received(
+    server: &MockServer,
+    wait_duration: Duration,
+    event_type: &str,
+) -> Result<()> {
+    tokio::time::sleep(wait_duration).await;
+    let Some(requests) = server.received_requests().await else {
+        return Ok(());
+    };
+    for request in &requests {
+        if request.method != "POST" || request.url.path() != "/codex/analytics-events/events" {
+            continue;
+        }
+        let payload: Value = serde_json::from_slice(&request.body)
+            .map_err(|err| anyhow::anyhow!("invalid analytics payload: {err}"))?;
+        if payload["events"]
+            .as_array()
+            .is_some_and(|events| events.iter().any(|event| event["event_type"] == event_type))
+        {
+            anyhow::bail!("received unexpected {event_type} analytics event");
+        }
+    }
     Ok(())
 }
 

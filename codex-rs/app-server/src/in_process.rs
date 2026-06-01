@@ -382,8 +382,11 @@ async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClie
         let auth_manager =
             AuthManager::shared_from_config(args.config.as_ref(), args.enable_codex_api_key_env)
                 .await;
-        let analytics_events_client =
-            analytics_events_client_from_config(Arc::clone(&auth_manager), args.config.as_ref());
+        let analytics_events_client = analytics_events_client_from_config(
+            Arc::clone(&auth_manager),
+            args.config.as_ref(),
+            /*default_analytics_enabled*/ true,
+        );
         let outgoing_message_sender = Arc::new(OutgoingMessageSender::new(
             outgoing_tx,
             analytics_events_client.clone(),
@@ -422,9 +425,8 @@ async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClie
             args.thread_config_loader,
         );
         let (processor_tx, mut processor_rx) = mpsc::channel::<ProcessorCommand>(channel_capacity);
-        analytics_events_client
-            .track_app_server_started(AppServerRpcTransport::InProcess, startup_started.elapsed());
         let mut processor_handle = tokio::spawn(async move {
+            let app_server_started_analytics_events_client = analytics_events_client.clone();
             let processor = Arc::new(MessageProcessor::new(MessageProcessorArgs {
                 outgoing: Arc::clone(&processor_outgoing),
                 analytics_events_client,
@@ -446,6 +448,7 @@ async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClie
             let mut thread_created_rx = processor.thread_created_receiver();
             let session = Arc::new(ConnectionSessionState::new());
             let mut listen_for_threads = true;
+            let mut app_server_started_tracked = false;
 
             loop {
                 tokio::select! {
@@ -483,7 +486,17 @@ async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClie
                                 }
                             }
                             Some(ProcessorCommand::Notification(notification)) => {
+                                let initialized =
+                                    matches!(notification, ClientNotification::Initialized);
                                 processor.process_client_notification(notification).await;
+                                if initialized && !app_server_started_tracked {
+                                    app_server_started_analytics_events_client
+                                        .track_app_server_started(
+                                            AppServerRpcTransport::InProcess,
+                                            startup_started.elapsed(),
+                                        );
+                                    app_server_started_tracked = true;
+                                }
                             }
                             None => {
                                 break;

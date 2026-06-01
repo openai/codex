@@ -87,7 +87,7 @@ async fn plugin_uninstall_tracks_analytics_event() -> Result<()> {
     std::fs::write(
         codex_home.path().join("config.toml"),
         format!(
-            "chatgpt_base_url = \"{}\"\n\n[features]\nplugins = true\n\n[plugins.\"sample-plugin@debug\"]\nenabled = true\n",
+            "chatgpt_base_url = \"{}\"\n\n[features]\nplugins = true\n\n[analytics]\nenabled = true\n\n[plugins.\"sample-plugin@debug\"]\nenabled = true\n",
             analytics_server.uri()
         ),
     )?;
