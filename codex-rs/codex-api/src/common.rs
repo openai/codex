@@ -6,7 +6,7 @@ use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::ModelVerification;
 use codex_protocol::protocol::RateLimitSnapshot;
 use codex_protocol::protocol::TokenUsage;
-use codex_protocol::protocol::TurnProtectionResultEvent;
+use codex_protocol::protocol::TurnModerationMetadataEvent;
 use codex_protocol::protocol::W3cTraceContext;
 use futures::Stream;
 use serde::Deserialize;
@@ -79,8 +79,8 @@ pub enum ResponseEvent {
     ServerModel(String),
     /// Emitted when the server recommends additional account verification.
     ModelVerifications(Vec<ModelVerification>),
-    /// Emitted when the server includes safety output for first-party turn presentation.
-    TurnProtectionResult(TurnProtectionResultEvent),
+    /// Emitted when the server includes moderation metadata for first-party turn presentation.
+    TurnModerationMetadata(TurnModerationMetadataEvent),
     /// Emitted when `X-Reasoning-Included: true` is present on the response,
     /// meaning the server already accounted for past reasoning tokens and the
     /// client should not re-estimate them.

@@ -8,7 +8,7 @@ use codex_client::StreamResponse;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::ModelVerification;
 use codex_protocol::protocol::TokenUsage;
-use codex_protocol::protocol::TurnProtectionResultEvent;
+use codex_protocol::protocol::TurnModerationMetadataEvent;
 use eventsource_stream::Eventsource;
 use futures::StreamExt;
 use serde::Deserialize;
@@ -195,15 +195,16 @@ impl ResponsesStreamEvent {
             .and_then(model_verifications_from_json_value)
     }
 
-    pub(crate) fn turn_protection_result(&self) -> Option<TurnProtectionResultEvent> {
+    pub(crate) fn turn_moderation_metadata(&self) -> Option<TurnModerationMetadataEvent> {
         if self.kind() != "response.metadata" {
             return None;
         }
 
         self.metadata
             .as_ref()
-            .and_then(|metadata| metadata.get("openai_chatgpt_protection_result"))
-            .and_then(|result| serde_json::from_value(result.clone()).ok())
+            .and_then(|metadata| metadata.get("openai_chatgpt_moderation_metadata"))
+            .cloned()
+            .map(|metadata| TurnModerationMetadataEvent { metadata })
     }
 }
 
@@ -456,7 +457,7 @@ pub async fn process_sse(
             }
         };
         let model_verifications = event.model_verifications();
-        let turn_protection_result = event.turn_protection_result();
+        let turn_moderation_metadata = event.turn_moderation_metadata();
 
         if let Some(model) = event.response_model()
             && last_server_model.as_deref() != Some(model.as_str())
@@ -478,9 +479,9 @@ pub async fn process_sse(
         {
             return;
         }
-        if let Some(result) = turn_protection_result
+        if let Some(metadata) = turn_moderation_metadata
             && tx_event
-                .send(Ok(ResponseEvent::TurnProtectionResult(result)))
+                .send(Ok(ResponseEvent::TurnModerationMetadata(metadata)))
                 .await
                 .is_err()
         {
@@ -1237,22 +1238,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn process_sse_emits_turn_protection_result_field() {
+    async fn process_sse_emits_turn_moderation_metadata_field() {
         let events = run_sse(vec![
             json!({
                 "type": "response.metadata",
                 "metadata": {
-                    "openai_chatgpt_protection_result": {
-                        "wellbeing": {
-                            "prompt": {
-                                "labels": ["U-S5"],
-                                "modapi_scores": {"U-S4": 0.91}
-                            },
-                            "generation": {
-                                "labels": ["A-S4"],
-                                "modapi_scores": {}
-                            }
-                        }
+                    "openai_chatgpt_moderation_metadata": {
+                        "presentation": "inline"
                     }
                 }
             }),
@@ -1267,10 +1259,8 @@ mod tests {
 
         assert_matches!(
             &events[0],
-            ResponseEvent::TurnProtectionResult(result)
-                if result.wellbeing.prompt.labels == vec!["U-S5".to_string()]
-                    && result.wellbeing.prompt.modapi_scores.get("U-S4") == Some(&0.91)
-                    && result.wellbeing.generation.labels == vec!["A-S4".to_string()]
+            ResponseEvent::TurnModerationMetadata(result)
+                if result.metadata == json!({"presentation": "inline"})
         );
         assert_matches!(
             &events[1],

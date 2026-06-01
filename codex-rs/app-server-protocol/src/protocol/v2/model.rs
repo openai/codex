@@ -8,7 +8,7 @@ use codex_protocol::protocol::ModelVerification as CoreModelVerification;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
-use std::collections::HashMap;
+use serde_json::Value as JsonValue;
 use ts_rs::TS;
 
 v2_enum_from_core!(
@@ -157,24 +157,8 @@ pub struct ModelVerificationNotification {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct ProtectionClassifierResult {
-    pub labels: Vec<String>,
-    pub modapi_scores: HashMap<String, f64>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct WellbeingProtectionResult {
-    pub prompt: ProtectionClassifierResult,
-    pub generation: ProtectionClassifierResult,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct TurnProtectionResultNotification {
+pub struct TurnModerationMetadataNotification {
     pub thread_id: String,
     pub turn_id: String,
-    pub wellbeing: WellbeingProtectionResult,
+    pub metadata: JsonValue,
 }

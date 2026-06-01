@@ -651,6 +651,29 @@ impl ModelClient {
         extra_headers
     }
 
+    fn extend_chatgpt_client_metadata_from_turn_metadata(
+        client_metadata: &mut HashMap<String, String>,
+        turn_metadata_header: Option<&str>,
+    ) {
+        let Some(turn_metadata_header) = turn_metadata_header else {
+            return;
+        };
+        let Ok(turn_metadata) =
+            serde_json::from_str::<HashMap<String, serde_json::Value>>(turn_metadata_header)
+        else {
+            return;
+        };
+        for (key, value) in turn_metadata {
+            if key.starts_with("chatgpt_")
+                && let Some(value) = value.as_str()
+            {
+                client_metadata
+                    .entry(key)
+                    .or_insert_with(|| value.to_string());
+            }
+        }
+    }
+
     fn build_ws_client_metadata(
         &self,
         turn_metadata_header: Option<&str>,
@@ -681,6 +704,10 @@ impl ModelClient {
                 turn_metadata.to_string(),
             );
         }
+        Self::extend_chatgpt_client_metadata_from_turn_metadata(
+            &mut client_metadata,
+            turn_metadata_header,
+        );
         client_metadata
     }
 
@@ -1276,7 +1303,7 @@ impl ModelClientSession {
                 .build_responses_options(turn_metadata_header, compression)
                 .await;
 
-            let request = self.client.build_responses_request(
+            let mut request = self.client.build_responses_request(
                 &client_setup.api_provider,
                 prompt,
                 model_info,
@@ -1284,6 +1311,12 @@ impl ModelClientSession {
                 summary,
                 service_tier.clone(),
             )?;
+            if let Some(client_metadata) = request.client_metadata.as_mut() {
+                ModelClient::extend_chatgpt_client_metadata_from_turn_metadata(
+                    client_metadata,
+                    turn_metadata_header,
+                );
+            }
             let inference_trace_attempt = inference_trace.start_attempt();
             inference_trace_attempt.add_request_headers(&mut options.extra_headers);
             inference_trace_attempt.record_started(&request);

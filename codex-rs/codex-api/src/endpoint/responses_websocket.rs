@@ -718,7 +718,7 @@ async fn run_websocket_response_stream(
                     }
                 };
                 let model_verifications = event.model_verifications();
-                let turn_protection_result = event.turn_protection_result();
+                let turn_moderation_metadata = event.turn_moderation_metadata();
                 if event.kind() == "codex.rate_limits" {
                     if let Some(snapshot) = parse_rate_limit_event(&text) {
                         let _ = tx_event.send(Ok(ResponseEvent::RateLimits(snapshot))).await;
@@ -743,9 +743,9 @@ async fn run_websocket_response_stream(
                         "response event consumer dropped".to_string(),
                     ));
                 }
-                if let Some(result) = turn_protection_result
+                if let Some(metadata) = turn_moderation_metadata
                     && tx_event
-                        .send(Ok(ResponseEvent::TurnProtectionResult(result)))
+                        .send(Ok(ResponseEvent::TurnModerationMetadata(metadata)))
                         .await
                         .is_err()
                 {
