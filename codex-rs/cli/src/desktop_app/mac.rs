@@ -4,7 +4,6 @@ use std::path::Path;
 use std::path::PathBuf;
 use tempfile::Builder;
 use tokio::process::Command;
-use url::Url;
 
 const CODEX_DMG_URL_ARM64: &str = "https://persistent.oaistatic.com/codex-app-prod/Codex.dmg";
 const CODEX_DMG_URL_X64: &str =
@@ -104,11 +103,11 @@ async fn open_codex_app(app_path: &Path, workspace: &Path) -> anyhow::Result<()>
 }
 
 fn codex_new_thread_url(workspace: &Path) -> String {
-    let mut url = Url::parse("codex://threads/new").expect("static Codex URL is valid");
     let workspace = workspace.as_os_str().to_string_lossy();
-    url.query_pairs_mut()
-        .append_pair("path", workspace.as_ref());
-    url.to_string()
+    let mut serializer = url::form_urlencoded::Serializer::new(String::new());
+    serializer.append_pair("path", workspace.as_ref());
+    let query = serializer.finish();
+    format!("codex://threads/new?{query}")
 }
 
 async fn download_and_install_codex_to_user_applications(dmg_url: &str) -> anyhow::Result<PathBuf> {
