@@ -587,7 +587,7 @@ mod worker {
                 return Ok(CompressionMeasurement::new(
                     CompressionOutcome::SkippedNotCold,
                     state.map(|state| state.len),
-                    None,
+                    /*compressed_bytes*/ None,
                 ));
             }
         };
@@ -597,7 +597,7 @@ mod worker {
             return Ok(CompressionMeasurement::new(
                 CompressionOutcome::SkippedAlreadyCompressed,
                 source_bytes,
-                None,
+                /*compressed_bytes*/ None,
             ));
         }
 
@@ -617,7 +617,7 @@ mod worker {
             return Ok(CompressionMeasurement::new(
                 CompressionOutcome::SkippedChanged,
                 source_bytes,
-                None,
+                /*compressed_bytes*/ None,
             ));
         }
         set_file_metadata(temp_file.as_file(), before.modified, &before.permissions)?;
@@ -630,7 +630,7 @@ mod worker {
                 return Ok(CompressionMeasurement::new(
                     CompressionOutcome::SkippedAlreadyCompressed,
                     source_bytes,
-                    None,
+                    /*compressed_bytes*/ None,
                 ));
             }
             Err(err) => return Err(err.error),
@@ -640,7 +640,7 @@ mod worker {
             return Ok(CompressionMeasurement::new(
                 CompressionOutcome::SkippedChanged,
                 source_bytes,
-                None,
+                /*compressed_bytes*/ None,
             ));
         }
         std::fs::remove_file(path)?;
