@@ -428,20 +428,13 @@ pub(crate) struct CodexSpawnArgs {
 fn resolve_multi_agent_version(
     conversation_history: &InitialHistory,
     inherited_multi_agent_version: Option<MultiAgentVersion>,
-    session_source: &SessionSource,
     model_info: &ModelInfo,
     config: &Config,
 ) -> Option<MultiAgentVersion> {
     conversation_history
         .get_multi_agent_version()
         .or(inherited_multi_agent_version)
-        .or_else(|| {
-            if session_source.is_non_root_agent() {
-                None
-            } else {
-                model_info.multi_agent_version
-            }
-        })
+        .or(model_info.multi_agent_version)
         .or_else(|| config.multi_agent_version_from_features())
 }
 
@@ -563,7 +556,6 @@ impl Codex {
         let multi_agent_version = resolve_multi_agent_version(
             &conversation_history,
             inherited_multi_agent_version,
-            &session_source,
             &model_info,
             &config,
         );
