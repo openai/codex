@@ -459,7 +459,21 @@ async fn delegated_mcp_user_reviewer_skips_metadata_lookup_without_app_override(
         },
     )])));
     let cancel_token = CancellationToken::new();
-    let _manager_guard = parent_session.services.mcp_connection_manager.write().await;
+    let manager = Arc::clone(&parent_session.services.mcp_connection_manager);
+    let (manager_locked_tx, manager_locked_rx) = std::sync::mpsc::sync_channel(0);
+    let (release_manager_tx, release_manager_rx) = std::sync::mpsc::sync_channel(0);
+    let manager_lock = tokio::task::spawn_blocking(move || {
+        let _manager_guard = manager.blocking_write();
+        manager_locked_tx
+            .send(())
+            .expect("manager lock receiver should remain open");
+        release_manager_rx
+            .recv()
+            .expect("manager lock release sender should remain open");
+    });
+    manager_locked_rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("manager write lock should be acquired");
 
     let response = timeout(
         Duration::from_millis(100),
@@ -486,4 +500,10 @@ async fn delegated_mcp_user_reviewer_skips_metadata_lookup_without_app_override(
     .expect("manual reviewer should not wait for MCP metadata");
 
     assert_eq!(response, None);
+    release_manager_tx
+        .send(())
+        .expect("manager lock holder should remain open");
+    manager_lock
+        .await
+        .expect("manager lock task should not panic");
 }
