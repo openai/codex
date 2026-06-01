@@ -135,6 +135,7 @@ pub use exec_events::TurnStartedEvent;
 pub use exec_events::Usage;
 pub use exec_events::WebSearchItem;
 use serde_json::Value;
+use std::future::Future;
 use std::io::IsTerminal;
 use std::io::Read;
 use std::path::Path;
@@ -439,19 +440,12 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
             .cloud_requirements(cloud_requirements.clone())
             .build()
     };
-    let config = build_config(overrides.clone()).await?;
-    let config = if config.approvals_reviewer == ApprovalsReviewer::AutoReview
-        && !dangerously_bypass_approvals_and_sandbox
-        && !removed_full_auto
-    {
-        build_config(ConfigOverrides {
-            approval_policy: None,
-            ..overrides
-        })
-        .await?
-    } else {
-        config
-    };
+    let config = build_exec_config(
+        overrides,
+        dangerously_bypass_approvals_and_sandbox || removed_full_auto,
+        build_config,
+    )
+    .await?;
 
     #[allow(clippy::print_stderr)]
     match check_execpolicy_for_warnings(&config.config_layer_stack).await {
@@ -575,6 +569,41 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
     })
     .instrument(exec_span)
     .await
+}
+
+async fn build_exec_config<BuildConfig, BuildFuture>(
+    overrides: ConfigOverrides,
+    preserve_headless_approval_policy: bool,
+    build_config: BuildConfig,
+) -> std::io::Result<Config>
+where
+    BuildConfig: Fn(ConfigOverrides) -> BuildFuture,
+    BuildFuture: Future<Output = std::io::Result<Config>>,
+{
+    let build_without_headless_approval_policy = || {
+        build_config(ConfigOverrides {
+            approval_policy: None,
+            ..overrides.clone()
+        })
+    };
+    match build_config(overrides.clone()).await {
+        Ok(config)
+            if config.approvals_reviewer == ApprovalsReviewer::AutoReview
+                && !preserve_headless_approval_policy =>
+        {
+            build_without_headless_approval_policy().await
+        }
+        Ok(config) => Ok(config),
+        Err(headless_error) if !preserve_headless_approval_policy => {
+            let config = build_without_headless_approval_policy().await?;
+            if config.approvals_reviewer == ApprovalsReviewer::AutoReview {
+                Ok(config)
+            } else {
+                Err(headless_error)
+            }
+        }
+        Err(headless_error) => Err(headless_error),
+    }
 }
 
 async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
