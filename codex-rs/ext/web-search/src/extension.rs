@@ -146,6 +146,8 @@ mod tests {
     use super::Config;
     use super::WebSearchExtensionConfig;
     use super::install;
+    use crate::tool::RUN_TOOL_NAME;
+    use crate::tool::WEB_NAMESPACE;
 
     #[test]
     fn installed_extension_contributes_web_run_when_enabled() {
@@ -170,6 +172,9 @@ mod tests {
             .map(|tool| tool.tool_name())
             .collect::<Vec<_>>();
 
-        assert_eq!(tool_names, vec![ToolName::namespaced("web", "run")]);
+        assert_eq!(
+            tool_names,
+            vec![ToolName::namespaced(WEB_NAMESPACE, RUN_TOOL_NAME)]
+        );
     }
 }

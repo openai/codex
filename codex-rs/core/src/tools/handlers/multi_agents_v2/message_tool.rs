@@ -1,6 +1,6 @@
 //! Shared argument parsing and dispatch for the v2 text-only agent messaging tools.
 //!
-//! `send_message` and `followup_task` share the same submission path and differ only in whether the
+//! `send_message` and `assign_task` share the same submission path and differ only in whether the
 //! resulting `InterAgentCommunication` should wake the target immediately.
 
 use super::*;
@@ -40,8 +40,8 @@ pub(crate) struct SendMessageArgs {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-/// Input for the MultiAgentV2 `followup_task` tool.
-pub(crate) struct FollowupTaskArgs {
+/// Input for the MultiAgentV2 `assign_task` tool.
+pub(crate) struct AssignTaskArgs {
     pub(crate) target: String,
     pub(crate) message: String,
 }
@@ -55,7 +55,7 @@ fn message_content(message: String) -> Result<String, FunctionCallError> {
     Ok(message)
 }
 
-/// Handles the shared MultiAgentV2 plain-text message flow for both `send_message` and `followup_task`.
+/// Handles the shared MultiAgentV2 plain-text message flow for both `send_message` and `assign_task`.
 pub(crate) async fn handle_message_string_tool(
     invocation: ToolInvocation,
     mode: MessageDeliveryMode,

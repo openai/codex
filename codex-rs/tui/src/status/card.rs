@@ -682,13 +682,14 @@ fn status_approval_label(
     approvals_reviewer: ApprovalsReviewer,
     approval: &str,
 ) -> String {
-    if approval_policy == AskForApproval::OnRequest
-        && approvals_reviewer == ApprovalsReviewer::AutoReview
-    {
-        "auto-review".to_string()
-    } else {
-        approval.to_string()
+    if approval_policy == AskForApproval::OnRequest {
+        return match approvals_reviewer {
+            ApprovalsReviewer::AutoReview => "Approve for me".to_string(),
+            ApprovalsReviewer::User => "Ask for approval".to_string(),
+        };
     }
+
+    approval.to_string()
 }
 
 impl HistoryCell for StatusHistoryCell {

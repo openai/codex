@@ -19,6 +19,8 @@ pub enum SetupErrorCode {
     OrchestratorSandboxDirCreateFailed,
     /// Failed to determine whether the current process is elevated.
     OrchestratorElevationCheckFailed,
+    /// The setup command requires an already elevated process.
+    OrchestratorElevationRequired,
     /// Failed to serialize the elevation payload before launching the helper.
     OrchestratorPayloadSerializeFailed,
     /// Failed to launch the setup helper process (spawn or ShellExecuteExW).
@@ -75,6 +77,7 @@ impl SetupErrorCode {
         match self {
             Self::OrchestratorSandboxDirCreateFailed => "orchestrator_sandbox_dir_create_failed",
             Self::OrchestratorElevationCheckFailed => "orchestrator_elevation_check_failed",
+            Self::OrchestratorElevationRequired => "orchestrator_elevation_required",
             Self::OrchestratorPayloadSerializeFailed => "orchestrator_payload_serialize_failed",
             Self::OrchestratorHelperLaunchFailed => "orchestrator_helper_launch_failed",
             Self::OrchestratorHelperLaunchCanceled => "orchestrator_helper_launch_canceled",

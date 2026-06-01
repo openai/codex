@@ -8,8 +8,8 @@ use crate::session::tests::make_session_and_context;
 use crate::session_prefix::format_subagent_notification_message;
 use crate::thread_manager::thread_store_from_config;
 use crate::tools::context::ToolOutput;
+use crate::tools::handlers::multi_agents_v2::AssignTaskHandler as AssignTaskHandlerV2;
 use crate::tools::handlers::multi_agents_v2::CloseAgentHandler as CloseAgentHandlerV2;
-use crate::tools::handlers::multi_agents_v2::FollowupTaskHandler as FollowupTaskHandlerV2;
 use crate::tools::handlers::multi_agents_v2::ListAgentsHandler as ListAgentsHandlerV2;
 use crate::tools::handlers::multi_agents_v2::SendMessageHandler as SendMessageHandlerV2;
 use crate::tools::handlers::multi_agents_v2::SpawnAgentHandler as SpawnAgentHandlerV2;
@@ -1413,7 +1413,7 @@ async fn multi_agent_v2_send_message_accepts_root_target_from_child() {
 }
 
 #[tokio::test]
-async fn multi_agent_v2_followup_task_rejects_root_target_from_child() {
+async fn multi_agent_v2_assign_task_rejects_root_target_from_child() {
     let (mut session, mut turn) = make_session_and_context().await;
     let manager = thread_manager();
     let root = manager
@@ -1461,11 +1461,11 @@ async fn multi_agent_v2_followup_task_rejects_root_target_from_child() {
         agent_role: None,
     });
 
-    let Err(err) = FollowupTaskHandlerV2
+    let Err(err) = AssignTaskHandlerV2
         .handle(invocation(
             Arc::new(session),
             Arc::new(turn),
-            "followup_task",
+            "assign_task",
             function_payload(json!({
                 "target": "/root",
                 "message": "run this",
@@ -1473,7 +1473,7 @@ async fn multi_agent_v2_followup_task_rejects_root_target_from_child() {
         ))
         .await
     else {
-        panic!("followup_task should reject the root target");
+        panic!("assign_task should reject the root target");
     };
 
     assert_eq!(
@@ -1868,7 +1868,7 @@ async fn multi_agent_v2_send_message_rejects_interrupt_parameter() {
 }
 
 #[tokio::test]
-async fn multi_agent_v2_followup_task_completion_notifies_parent_on_every_turn() {
+async fn multi_agent_v2_assign_task_completion_notifies_parent_on_every_turn() {
     let (mut session, mut turn) = make_session_and_context().await;
     let manager = thread_manager();
     let root = manager
@@ -1923,18 +1923,18 @@ async fn multi_agent_v2_followup_task_completion_notifies_parent_on_every_turn()
         )
         .await;
 
-    FollowupTaskHandlerV2
+    AssignTaskHandlerV2
         .handle(invocation(
             session,
             turn,
-            "followup_task",
+            "assign_task",
             function_payload(json!({
                 "target": agent_id.to_string(),
                 "message": "continue",
             })),
         ))
         .await
-        .expect("followup_task should succeed");
+        .expect("assign_task should succeed");
 
     let second_turn = thread.codex.session.new_default_turn().await;
     thread
@@ -2003,7 +2003,7 @@ async fn multi_agent_v2_followup_task_completion_notifies_parent_on_every_turn()
 }
 
 #[tokio::test]
-async fn multi_agent_v2_followup_task_rejects_legacy_items_field() {
+async fn multi_agent_v2_assign_task_rejects_legacy_items_field() {
     let (mut session, mut turn) = make_session_and_context().await;
     let manager = thread_manager();
     let root = manager
@@ -2039,14 +2039,14 @@ async fn multi_agent_v2_followup_task_rejects_legacy_items_field() {
     let invocation = invocation(
         session,
         turn,
-        "followup_task",
+        "assign_task",
         function_payload(json!({
             "target": agent_id.to_string(),
             "items": [{"type": "text", "text": "continue"}],
         })),
     );
 
-    let Err(err) = FollowupTaskHandlerV2.handle(invocation).await else {
+    let Err(err) = AssignTaskHandlerV2.handle(invocation).await else {
         panic!("legacy items field should be rejected in v2");
     };
     let FunctionCallError::RespondToModel(message) = err else {

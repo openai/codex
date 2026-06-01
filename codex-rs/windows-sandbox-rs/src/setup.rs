@@ -203,6 +203,7 @@ fn run_setup_refresh_inner(
         allow_local_binding: offline_proxy_settings.allow_local_binding,
         otel: None,
         real_user: std::env::var("USERNAME").unwrap_or_else(|_| "Administrators".to_string()),
+        mode: SetupMode::Full,
         refresh_only: true,
     };
     let json = serde_json::to_vec(&payload)?;
@@ -496,8 +497,16 @@ struct ElevationPayload {
     allow_local_binding: bool,
     otel: Option<codex_otel::StatsigMetricsSettings>,
     real_user: String,
+    mode: SetupMode,
     #[serde(default)]
     refresh_only: bool,
+}
+
+#[derive(Clone, Copy, Serialize)]
+#[serde(rename_all = "kebab-case")]
+enum SetupMode {
+    Full,
+    ProvisionOnly,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -808,6 +817,7 @@ pub fn run_elevated_setup(
         allow_local_binding: offline_proxy_settings.allow_local_binding,
         real_user: std::env::var("USERNAME").unwrap_or_else(|_| "Administrators".to_string()),
         otel: codex_otel::global_statsig_metrics_settings(),
+        mode: SetupMode::Full,
         refresh_only: false,
     };
     let needs_elevation = !is_elevated().map_err(|err| {
@@ -817,6 +827,45 @@ pub fn run_elevated_setup(
         )
     })?;
     run_setup_exe(&payload, needs_elevation, request.codex_home)
+}
+
+pub fn run_elevated_provisioning_setup(codex_home: &Path, real_user: &str) -> Result<()> {
+    let sbx_dir = sandbox_dir(codex_home);
+    std::fs::create_dir_all(&sbx_dir).map_err(|err| {
+        failure(
+            SetupErrorCode::OrchestratorSandboxDirCreateFailed,
+            format!("failed to create sandbox dir {}: {err}", sbx_dir.display()),
+        )
+    })?;
+    if !is_elevated().map_err(|err| {
+        failure(
+            SetupErrorCode::OrchestratorElevationCheckFailed,
+            format!("failed to determine elevation state: {err}"),
+        )
+    })? {
+        return Err(failure(
+            SetupErrorCode::OrchestratorElevationRequired,
+            "sandbox provisioning setup must be run from an elevated process",
+        ));
+    }
+    let payload = ElevationPayload {
+        version: SETUP_VERSION,
+        offline_username: OFFLINE_USERNAME.to_string(),
+        online_username: ONLINE_USERNAME.to_string(),
+        codex_home: codex_home.to_path_buf(),
+        command_cwd: codex_home.to_path_buf(),
+        read_roots: Vec::new(),
+        write_roots: Vec::new(),
+        deny_read_paths: Vec::new(),
+        deny_write_paths: Vec::new(),
+        proxy_ports: Vec::new(),
+        allow_local_binding: false,
+        otel: codex_otel::global_statsig_metrics_settings(),
+        real_user: real_user.to_string(),
+        mode: SetupMode::ProvisionOnly,
+        refresh_only: false,
+    };
+    run_setup_exe(&payload, /*needs_elevation*/ false, codex_home)
 }
 
 fn build_payload_roots(

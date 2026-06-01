@@ -11,17 +11,19 @@ use codex_extension_api::FunctionCallError;
 use codex_extension_api::NoopTurnItemEmitter;
 use codex_extension_api::ThreadResumeInput;
 use codex_extension_api::ThreadStartInput;
+use codex_extension_api::ThreadStopInput;
 use codex_extension_api::ToolCall;
 use codex_extension_api::ToolCallOutcome;
 use codex_extension_api::ToolCallSource;
 use codex_extension_api::ToolExecutor;
 use codex_extension_api::ToolFinishInput;
 use codex_extension_api::ToolPayload;
+use codex_extension_api::TurnErrorInput;
 use codex_extension_api::TurnStartInput;
 use codex_extension_api::TurnStopInput;
-use codex_goal_extension::GoalApi;
 use codex_goal_extension::GoalObjectiveUpdate;
 use codex_goal_extension::GoalRuntimeHandle;
+use codex_goal_extension::GoalService;
 use codex_goal_extension::GoalSetRequest;
 use codex_goal_extension::GoalTokenBudgetUpdate;
 use codex_goal_extension::install_with_backend;
@@ -29,6 +31,7 @@ use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
+use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::SessionSource;
@@ -401,7 +404,7 @@ async fn budget_limited_goal_keeps_accounting_after_later_tool_finish() -> anyho
 }
 
 #[tokio::test]
-async fn usage_limit_active_goal_accounts_progress_and_clears_accounting() -> anyhow::Result<()> {
+async fn turn_error_usage_limit_accounts_progress_and_clears_accounting() -> anyhow::Result<()> {
     let runtime = test_runtime().await?;
     let thread_id = test_thread_id()?;
     seed_thread_metadata(runtime.as_ref(), thread_id).await?;
@@ -428,11 +431,18 @@ async fn usage_limit_active_goal_accounts_progress_and_clears_accounting() -> an
             ),
         )
         .await;
-    harness
-        .runtime_handle()
-        .usage_limit_active_goal_for_turn("turn-1")
-        .await
-        .map_err(anyhow::Error::msg)?;
+    let turn_store = ExtensionData::new("turn-1");
+    for contributor in harness.registry.turn_lifecycle_contributors() {
+        contributor
+            .on_turn_error(TurnErrorInput {
+                turn_id: "turn-1",
+                error: CodexErrorInfo::UsageLimitExceeded,
+                session_store: &harness.session_store,
+                thread_store: &harness.thread_store,
+                turn_store: &turn_store,
+            })
+            .await;
+    }
 
     let goal = runtime
         .thread_goals()
@@ -772,7 +782,8 @@ async fn external_goal_mutation_start_accounts_active_goal_progress() -> anyhow:
 }
 
 #[tokio::test]
-async fn goal_api_external_set_active_resets_baseline_without_live_thread() -> anyhow::Result<()> {
+async fn goal_service_external_set_active_resets_baseline_without_live_thread() -> anyhow::Result<()>
+{
     let runtime = test_runtime().await?;
     let thread_id = test_thread_id()?;
     seed_thread_metadata(runtime.as_ref(), thread_id).await?;
@@ -810,7 +821,7 @@ async fn goal_api_external_set_active_resets_baseline_without_live_thread() -> a
         )
         .await;
     let outcome = harness
-        .goal_api
+        .goal_service
         .set_thread_goal(
             runtime.as_ref(),
             GoalSetRequest {
@@ -821,7 +832,7 @@ async fn goal_api_external_set_active_resets_baseline_without_live_thread() -> a
             },
         )
         .await?;
-    outcome.apply_runtime_effects(&harness.goal_api).await;
+    outcome.apply_runtime_effects(&harness.goal_service).await;
 
     harness
         .record_token_usage(
@@ -843,6 +854,46 @@ async fn goal_api_external_set_active_resets_baseline_without_live_thread() -> a
         .await?
         .ok_or_else(|| anyhow::anyhow!("goal should exist"))?;
     assert_eq!(30, goal.tokens_used);
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_stop_unregisters_goal_runtime_from_service() -> anyhow::Result<()> {
+    let runtime = test_runtime().await?;
+    let thread_id = test_thread_id()?;
+    seed_thread_metadata(runtime.as_ref(), thread_id).await?;
+    let harness = GoalExtensionHarness::new(runtime.clone(), thread_id).await?;
+    harness.start_turn("turn-1", &TokenUsage::default()).await;
+
+    let tools = harness.tools();
+    let create_tool = tool_by_name(&tools, "create_goal");
+    create_tool
+        .handle(tool_call(
+            "create_goal",
+            "call-create-goal",
+            json!({ "objective": "ship goal extension backend" }),
+        ))
+        .await?;
+    harness.sink.clear();
+
+    harness
+        .record_token_usage(
+            "turn-1",
+            &token_usage(
+                /*input_tokens*/ 10, /*cached_input_tokens*/ 0, /*output_tokens*/ 0,
+                /*reasoning_output_tokens*/ 0, /*total_tokens*/ 10,
+            ),
+        )
+        .await;
+    harness.stop_thread().await;
+
+    assert!(
+        harness
+            .goal_service
+            .clear_thread_goal(runtime.as_ref(), thread_id)
+            .await?
+    );
+    assert_eq!(Vec::<CapturedGoalEvent>::new(), harness.sink.goal_events());
     Ok(())
 }
 
@@ -893,11 +944,11 @@ async fn thread_resume_rehydrates_active_goal_idle_accounting() -> anyhow::Resul
 }
 
 #[tokio::test]
-async fn goal_api_sets_gets_and_clears_thread_goal() -> anyhow::Result<()> {
+async fn goal_service_sets_gets_and_clears_thread_goal() -> anyhow::Result<()> {
     let runtime = test_runtime().await?;
     let thread_id = test_thread_id()?;
     seed_thread_metadata(runtime.as_ref(), thread_id).await?;
-    let api = GoalApi::new();
+    let api = GoalService::new();
 
     let set = api
         .set_thread_goal(
@@ -954,13 +1005,13 @@ async fn installed_tools_with_start(
     persistent_thread_state_available: bool,
 ) -> Vec<Arc<dyn ToolExecutor<ToolCall>>> {
     let mut builder = ExtensionRegistryBuilder::<()>::new();
-    let goal_api = Arc::new(GoalApi::new());
+    let goal_service = Arc::new(GoalService::new());
     install_with_backend(
         &mut builder,
         runtime,
         /*metrics_client*/ None,
         Weak::new(),
-        goal_api,
+        goal_service,
         |_| true,
     );
     let registry = builder.build();
@@ -993,7 +1044,7 @@ struct GoalExtensionHarness {
     registry: codex_extension_api::ExtensionRegistry<()>,
     session_store: ExtensionData,
     thread_store: ExtensionData,
-    goal_api: Arc<GoalApi>,
+    goal_service: Arc<GoalService>,
     sink: Arc<RecordingEventSink>,
 }
 
@@ -1004,13 +1055,13 @@ impl GoalExtensionHarness {
     ) -> anyhow::Result<Self> {
         let sink = Arc::new(RecordingEventSink::default());
         let mut builder = ExtensionRegistryBuilder::<()>::with_event_sink(sink.clone());
-        let goal_api = Arc::new(GoalApi::new());
+        let goal_service = Arc::new(GoalService::new());
         install_with_backend(
             &mut builder,
             runtime,
             /*metrics_client*/ None,
             Weak::new(),
-            Arc::clone(&goal_api),
+            Arc::clone(&goal_service),
             |_| true,
         );
         let registry = builder.build();
@@ -1032,7 +1083,7 @@ impl GoalExtensionHarness {
             registry,
             session_store,
             thread_store,
-            goal_api,
+            goal_service,
             sink,
         })
     }
@@ -1111,6 +1162,17 @@ impl GoalExtensionHarness {
         }
     }
 
+    async fn stop_thread(&self) {
+        for contributor in self.registry.thread_lifecycle_contributors() {
+            contributor
+                .on_thread_stop(ThreadStopInput {
+                    session_store: &self.session_store,
+                    thread_store: &self.thread_store,
+                })
+                .await;
+        }
+    }
+
     async fn notify_tool_finish(&self, turn_id: &str, call_id: &str, tool_name: &str) {
         let turn_store = ExtensionData::new(turn_id);
         let tool_name = codex_extension_api::ToolName::plain(tool_name);
@@ -1152,6 +1214,7 @@ fn tool_call(tool_name: &str, call_id: &str, arguments: serde_json::Value) -> To
         turn_id: "turn-1".to_string(),
         call_id: call_id.to_string(),
         tool_name: codex_extension_api::ToolName::plain(tool_name),
+        model: "gpt-test".to_string(),
         truncation_policy: TruncationPolicy::Bytes(1024),
         conversation_history: codex_extension_api::ConversationHistory::default(),
         turn_item_emitter: Arc::new(NoopTurnItemEmitter),

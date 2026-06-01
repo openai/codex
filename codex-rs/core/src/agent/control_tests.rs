@@ -74,6 +74,15 @@ fn assistant_message(text: &str, phase: Option<MessagePhase>) -> ResponseItem {
     }
 }
 
+#[test]
+fn register_session_root_skips_threads_with_explicit_parent() {
+    let control = AgentControl::default();
+
+    control.register_session_root(ThreadId::new(), Some(ThreadId::new()));
+
+    assert_eq!(control.state.agent_id_for_path(&AgentPath::root()), None);
+}
+
 fn spawn_agent_call(call_id: &str) -> ResponseItem {
     ResponseItem::FunctionCall {
         id: None,
@@ -708,6 +717,53 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
         "full-history forked child should preserve the parent diff baseline"
     );
 
+    let mut disabled_hint_child_config = harness.config.clone();
+    let _ = disabled_hint_child_config
+        .features
+        .enable(Feature::MultiAgentV2);
+    disabled_hint_child_config.multi_agent_v2.usage_hint_enabled = false;
+    disabled_hint_child_config
+        .multi_agent_v2
+        .subagent_usage_hint_text = Some("Disabled child subagent guidance.".to_string());
+    let disabled_hint_child_thread_id = harness
+        .control
+        .spawn_agent_with_metadata(
+            disabled_hint_child_config,
+            text_input("child task without hints"),
+            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id,
+                depth: 1,
+                agent_path: None,
+                agent_nickname: None,
+                agent_role: None,
+            })),
+            SpawnAgentOptions {
+                fork_parent_spawn_call_id: Some(parent_spawn_call_id.clone()),
+                fork_mode: Some(SpawnAgentForkMode::FullHistory),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("forked spawn should honor disabled usage hints")
+        .thread_id;
+    let disabled_hint_child_thread = harness
+        .manager
+        .get_thread(disabled_hint_child_thread_id)
+        .await
+        .expect("disabled-hint child thread should be registered");
+    let disabled_hint_history = disabled_hint_child_thread
+        .codex
+        .session
+        .clone_history()
+        .await;
+    assert!(
+        !history_contains_text(
+            disabled_hint_history.raw_items(),
+            "Disabled child subagent guidance.",
+        ),
+        "full-history forked child should not add subagent guidance when usage hints are disabled"
+    );
+
     let expected = (
         child_thread_id,
         Op::UserInput {
@@ -734,6 +790,11 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
         .shutdown_live_agent(child_thread_id)
         .await
         .expect("child shutdown should submit");
+    let _ = harness
+        .control
+        .shutdown_live_agent(disabled_hint_child_thread_id)
+        .await
+        .expect("disabled-hint child shutdown should submit");
     let _ = parent_thread
         .submit(Op::Shutdown {})
         .await

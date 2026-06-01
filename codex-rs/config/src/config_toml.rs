@@ -87,6 +87,10 @@ const fn default_hide_agent_reasoning() -> Option<bool> {
     Some(false)
 }
 
+const fn default_true() -> bool {
+    true
+}
+
 /// Backward-compatible shape for ChatGPT workspace login restrictions in config.toml.
 #[derive(Serialize, Debug, Clone, PartialEq, JsonSchema)]
 #[serde(untagged)]
@@ -617,6 +621,14 @@ pub struct ToolsToml {
         deserialize_with = "deserialize_optional_web_search_tool_config"
     )]
     pub web_search: Option<WebSearchToolConfig>,
+    pub experimental_request_user_input: Option<ExperimentalRequestUserInput>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct ExperimentalRequestUserInput {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
 }
 
 #[derive(Deserialize)]

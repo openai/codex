@@ -30,6 +30,7 @@ use codex_app_server_protocol::NetworkRequirements;
 use codex_app_server_protocol::NetworkUnixSocketPermission;
 use codex_app_server_protocol::SandboxMode;
 use codex_app_server_protocol::ServerNotification;
+use codex_app_server_protocol::WindowsSandboxSetupMode;
 use codex_chatgpt::connectors;
 use codex_config::ConfigRequirementsToml;
 use codex_config::HookEventsToml;
@@ -420,6 +421,23 @@ fn map_requirements_toml_to_api(requirements: ConfigRequirementsToml) -> ConfigR
                 .filter_map(map_sandbox_mode_requirement_to_api)
                 .collect()
         }),
+        allowed_windows_sandbox_implementations: requirements.windows.and_then(|windows| {
+            windows
+                .allowed_sandbox_implementations
+                .map(|implementations| {
+                    implementations
+                        .into_iter()
+                        .map(|implementation| match implementation {
+                            codex_config::types::WindowsSandboxModeToml::Elevated => {
+                                WindowsSandboxSetupMode::Elevated
+                            }
+                            codex_config::types::WindowsSandboxModeToml::Unelevated => {
+                                WindowsSandboxSetupMode::Unelevated
+                            }
+                        })
+                        .collect()
+                })
+        }),
         allowed_permissions: requirements.allowed_permissions,
         allowed_web_search_modes: requirements.allowed_web_search_modes.map(|modes| {
             let mut normalized = modes
@@ -634,8 +652,10 @@ fn config_write_error(code: ConfigWriteErrorCode, message: impl Into<String>) ->
 #[cfg(test)]
 mod tests {
     use super::map_requirements_toml_to_api;
+    use codex_app_server_protocol::WindowsSandboxSetupMode;
     use codex_config::ComputerUseRequirementsToml;
     use codex_config::ConfigRequirementsToml;
+    use codex_config::WindowsRequirementsToml;
     use pretty_assertions::assert_eq;
 
     #[test]
@@ -685,6 +705,27 @@ mod tests {
                 .computer_use
                 .and_then(|requirements| requirements.allow_locked_computer_use),
             Some(false)
+        );
+    }
+
+    #[test]
+    fn requirements_api_includes_allowed_windows_sandbox_implementations() {
+        let mapped = map_requirements_toml_to_api(ConfigRequirementsToml {
+            windows: Some(WindowsRequirementsToml {
+                allowed_sandbox_implementations: Some(vec![
+                    codex_config::types::WindowsSandboxModeToml::Elevated,
+                    codex_config::types::WindowsSandboxModeToml::Unelevated,
+                ]),
+            }),
+            ..ConfigRequirementsToml::default()
+        });
+
+        assert_eq!(
+            mapped.allowed_windows_sandbox_implementations,
+            Some(vec![
+                WindowsSandboxSetupMode::Elevated,
+                WindowsSandboxSetupMode::Unelevated,
+            ])
         );
     }
 }

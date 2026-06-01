@@ -9,8 +9,10 @@ use chrono::DateTime;
 use chrono::Utc;
 use codex_git_utils::GitSha;
 use codex_protocol::ThreadId;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::GitInfo;
+use codex_protocol::protocol::NetworkAccess;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_rollout::ARCHIVED_SESSIONS_SUBDIR;
@@ -120,6 +122,7 @@ pub(super) fn stored_thread_from_rollout_item(
         thread_id,
         rollout_path: Some(item.path),
         forked_from_id: None,
+        parent_thread_id: item.parent_thread_id,
         preview,
         name: None,
         model_provider: item
@@ -140,11 +143,32 @@ pub(super) fn stored_thread_from_rollout_item(
         agent_path: None,
         git_info,
         approval_mode: AskForApproval::OnRequest,
-        sandbox_policy: SandboxPolicy::new_read_only_policy(),
+        permission_profile: PermissionProfile::read_only(),
         token_usage: None,
         first_user_message: item.first_user_message,
         history: None,
     })
+}
+
+pub(super) fn permission_profile_from_metadata_value(value: &str, cwd: &Path) -> PermissionProfile {
+    serde_json::from_str::<PermissionProfile>(value)
+        .or_else(|_| {
+            parse_legacy_sandbox_policy(value)
+                .map(|policy| PermissionProfile::from_legacy_sandbox_policy_for_cwd(&policy, cwd))
+        })
+        .unwrap_or_else(|_| PermissionProfile::read_only())
+}
+
+pub(super) fn permission_profile_to_metadata_value(
+    permission_profile: &PermissionProfile,
+) -> String {
+    match serde_json::to_string(permission_profile) {
+        Ok(value) => value,
+        Err(err) => {
+            tracing::warn!("failed to serialize permission profile metadata: {err}");
+            String::new()
+        }
+    }
 }
 
 pub(super) fn distinct_thread_metadata_title(metadata: &ThreadMetadata) -> Option<String> {
@@ -167,6 +191,20 @@ fn parse_rfc3339(value: Option<&str>) -> Option<DateTime<Utc>> {
     DateTime::parse_from_rfc3339(value?)
         .ok()
         .map(|dt| dt.with_timezone(&Utc))
+}
+
+fn parse_legacy_sandbox_policy(value: &str) -> serde_json::Result<SandboxPolicy> {
+    serde_json::from_str(value)
+        .or_else(|_| serde_json::from_value(serde_json::Value::String(value.to_string())))
+        .or_else(|_| match value {
+            "danger-full-access" => Ok(SandboxPolicy::DangerFullAccess),
+            "read-only" => Ok(SandboxPolicy::new_read_only_policy()),
+            "workspace-write" => Ok(SandboxPolicy::new_workspace_write_policy()),
+            "external-sandbox" => Ok(SandboxPolicy::ExternalSandbox {
+                network_access: NetworkAccess::Restricted,
+            }),
+            _ => serde_json::from_value(serde_json::Value::String(value.to_string())),
+        })
 }
 
 pub(super) fn git_info_from_parts(

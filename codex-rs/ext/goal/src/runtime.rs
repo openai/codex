@@ -158,10 +158,8 @@ impl GoalRuntimeHandle {
         self.inner
             .metrics
             .record_terminal_if_status_changed(previous_status, &goal);
-        let should_steer_active_turn = previous_goal.as_ref().is_none_or(|previous_goal| {
-            previous_goal.goal_id != goal.goal_id
-                || previous_goal.status != codex_state::ThreadGoalStatus::Active
-                || previous_goal.objective != goal.objective
+        let objective_changed = previous_goal.as_ref().is_some_and(|previous_goal| {
+            !replaced_existing_goal && previous_goal.objective != goal.objective
         });
         match goal.status {
             codex_state::ThreadGoalStatus::Active => {
@@ -175,10 +173,11 @@ impl GoalRuntimeHandle {
                         .accounting_state
                         .mark_idle_goal_active(goal.goal_id.clone());
                 }
-                if should_steer_active_turn {
+                if objective_changed {
                     let item = objective_updated_steering_item(&protocol_goal_from_state(goal));
                     self.inject_active_turn_steering(item).await;
                 }
+                self.continue_if_idle().await?;
             }
             codex_state::ThreadGoalStatus::BudgetLimited => {
                 if self.inner.accounting_state.current_turn_id().is_none() {

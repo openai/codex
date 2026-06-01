@@ -1,4 +1,3 @@
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use codex_core::config::Config;
@@ -17,7 +16,6 @@ use codex_model_provider_info::ModelProviderInfo;
 
 use crate::backend::CodexImagesBackend;
 use crate::tool::ImageGenerationTool;
-use crate::tool::generated_image_output_dir;
 
 #[derive(Clone)]
 struct ImageGenerationExtension {
@@ -28,7 +26,6 @@ struct ImageGenerationExtension {
 struct ImageGenerationExtensionConfig {
     enabled: bool,
     provider: ModelProviderInfo,
-    codex_home: PathBuf,
 }
 
 impl From<&Config> for ImageGenerationExtensionConfig {
@@ -38,7 +35,6 @@ impl From<&Config> for ImageGenerationExtensionConfig {
             enabled: config.features.enabled(Feature::ImageGenExt)
                 && config.model_provider.is_openai(),
             provider: config.model_provider.clone(),
-            codex_home: config.codex_home.to_path_buf(),
         }
     }
 }
@@ -80,13 +76,9 @@ impl ToolContributor for ImageGenerationExtension {
             return Vec::new();
         }
 
-        vec![Arc::new(ImageGenerationTool::new(
-            CodexImagesBackend::new(create_model_provider(
-                config.provider.clone(),
-                Some(self.auth_manager.clone()),
-            )),
-            generated_image_output_dir(&config.codex_home, thread_store.level_id()),
-        ))]
+        vec![Arc::new(ImageGenerationTool::new(CodexImagesBackend::new(
+            create_model_provider(config.provider.clone(), Some(self.auth_manager.clone())),
+        )))]
     }
 }
 
