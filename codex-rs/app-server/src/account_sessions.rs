@@ -14,7 +14,7 @@ use codex_login::delete_account_session_auth;
 use codex_login::load_account_session_auth;
 use codex_login::load_auth_dot_json;
 use codex_login::logout;
-use codex_login::revoke_auth_tokens;
+use codex_login::revoke_account_session_auth;
 use codex_login::save_account_session_auth;
 use codex_login::save_auth;
 use serde::Deserialize;
@@ -66,8 +66,6 @@ struct AccessTokenClaims {
 
 #[derive(Default, Deserialize)]
 struct AccessTokenProfileClaims {
-    #[serde(default)]
-    email: Option<String>,
     #[serde(default)]
     image: Option<String>,
     #[serde(default)]
@@ -171,8 +169,13 @@ impl<'a> AccountSessionsStore<'a> {
             .position(|session| session.session_id == session_id)
             .ok_or_else(|| std::io::Error::other("Saved ChatGPT account session not found"))?;
         let removed = stored.sessions.remove(index);
-        let removed_auth = self.load_session_auth(&removed.session_id)?;
-        if let Err(err) = revoke_auth_tokens(removed_auth.as_ref()).await {
+        if let Err(err) = revoke_account_session_auth(
+            self.codex_home,
+            &removed.session_id,
+            self.auth_credentials_store_mode,
+        )
+        .await
+        {
             tracing::warn!("failed to revoke saved account session during logout: {err}");
         }
         delete_account_session_auth(
@@ -232,16 +235,8 @@ impl<'a> AccountSessionsStore<'a> {
         Ok(Self::response(stored))
     }
 
-    pub(crate) fn has_sessions(&self) -> std::io::Result<bool> {
-        Ok(self
-            .read()?
-            .is_some_and(|stored| !stored.sessions.is_empty()))
-    }
-
     pub(crate) fn sync_active_auth(&self) -> std::io::Result<()> {
-        let Some(mut stored) = self.read()? else {
-            return Ok(());
-        };
+        let mut stored = self.load()?;
         if self.migrate_legacy_auth(&mut stored)? {
             self.save(&stored)?;
         }
@@ -289,8 +284,13 @@ impl<'a> AccountSessionsStore<'a> {
         };
         self.migrate_legacy_auth(&mut stored)?;
         for session in stored.sessions {
-            let auth_json = self.load_session_auth(&session.session_id)?;
-            if let Err(err) = revoke_auth_tokens(auth_json.as_ref()).await {
+            if let Err(err) = revoke_account_session_auth(
+                self.codex_home,
+                &session.session_id,
+                self.auth_credentials_store_mode,
+            )
+            .await
+            {
                 tracing::warn!("failed to revoke saved account session during logout: {err}");
             }
             delete_account_session_auth(
@@ -408,8 +408,9 @@ impl<'a> AccountSessionsStore<'a> {
         session: &mut StoredAccountSession,
         auth_json: &mut AuthDotJson,
     ) {
-        let Ok(auth) = CodexAuth::from_auth_dot_json(
+        let Ok(auth) = CodexAuth::from_account_session_auth_dot_json(
             self.codex_home,
+            &session.session_id,
             auth_json.clone(),
             self.auth_credentials_store_mode,
             Some(self.chatgpt_base_url),
@@ -442,9 +443,7 @@ impl<'a> AccountSessionsStore<'a> {
     }
 
     fn session_from_auth_json(auth_json: &AuthDotJson) -> Option<StoredAccountSession> {
-        let Some(tokens) = auth_json.tokens.as_ref() else {
-            return None;
-        };
+        let tokens = auth_json.tokens.as_ref()?;
         let claims = Self::access_token_claims(&tokens.access_token);
         let selected_workspace_account_id = tokens
             .account_id

@@ -405,15 +405,11 @@ impl AccountRequestProcessor {
         }
 
         self.sync_active_account_session()?;
-        let revoke_previous_auth = !self
-            .account_sessions_store()
-            .has_sessions()
-            .map_err(|err| internal_error(format!("failed to read account sessions: {err}")))?;
 
         let opts = LoginServerOptions {
             open_browser: false,
             codex_streamlined_login,
-            revoke_previous_auth,
+            revoke_previous_auth: false,
             ..LoginServerOptions::new(
                 config.codex_home.to_path_buf(),
                 CLIENT_ID.to_string(),
