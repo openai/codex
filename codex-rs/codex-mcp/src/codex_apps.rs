@@ -25,12 +25,12 @@ use sha1::Digest;
 use sha1::Sha1;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct McpApprovalsReviewers {
+pub struct McpApprovalsReviewerPolicy {
     default: ApprovalsReviewer,
     codex_apps_by_connector_id: HashMap<String, ApprovalsReviewer>,
 }
 
-impl McpApprovalsReviewers {
+impl McpApprovalsReviewerPolicy {
     pub fn new(
         default: ApprovalsReviewer,
         codex_apps_by_connector_id: HashMap<String, ApprovalsReviewer>,
@@ -51,17 +51,9 @@ impl McpApprovalsReviewers {
 
         self.default
     }
-
-    pub fn may_resolve_to(&self, reviewer: ApprovalsReviewer) -> bool {
-        self.default == reviewer
-            || self
-                .codex_apps_by_connector_id
-                .values()
-                .any(|configured| *configured == reviewer)
-    }
 }
 
-impl Default for McpApprovalsReviewers {
+impl Default for McpApprovalsReviewerPolicy {
     fn default() -> Self {
         Self::new(ApprovalsReviewer::User, HashMap::new())
     }
@@ -365,24 +357,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn mcp_approvals_reviewers_only_apply_connector_overrides_to_codex_apps() {
-        let reviewers = McpApprovalsReviewers::new(
+    fn mcp_approvals_reviewer_policy_only_applies_connector_overrides_to_codex_apps() {
+        let policy = McpApprovalsReviewerPolicy::new(
             ApprovalsReviewer::User,
             HashMap::from([("calendar".to_string(), ApprovalsReviewer::AutoReview)]),
         );
 
         assert_eq!(
-            reviewers.resolve(CODEX_APPS_MCP_SERVER_NAME, Some("calendar")),
+            policy.resolve(CODEX_APPS_MCP_SERVER_NAME, Some("calendar")),
             ApprovalsReviewer::AutoReview
         );
         assert_eq!(
-            reviewers.resolve("custom_server", Some("calendar")),
+            policy.resolve("custom_server", Some("calendar")),
             ApprovalsReviewer::User
         );
         assert_eq!(
-            reviewers.resolve(CODEX_APPS_MCP_SERVER_NAME, Some("drive")),
+            policy.resolve(CODEX_APPS_MCP_SERVER_NAME, Some("drive")),
             ApprovalsReviewer::User
         );
-        assert!(reviewers.may_resolve_to(ApprovalsReviewer::AutoReview));
     }
 }

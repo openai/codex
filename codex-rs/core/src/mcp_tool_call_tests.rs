@@ -1276,7 +1276,7 @@ async fn install_host_owned_codex_apps_manager(session: &Session, turn_context: 
         turn_context.config.prefix_mcp_tool_names(),
         rmcp::model::ElicitationCapability::default(),
         codex_mcp::ToolPluginProvenance::default(),
-        crate::connectors::mcp_approvals_reviewers(&turn_context.config),
+        crate::connectors::mcp_approvals_reviewer_policy(&turn_context.config),
         auth.as_ref(),
         /*elicitation_reviewer*/ None,
     )

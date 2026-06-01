@@ -5,7 +5,6 @@ use async_channel::Receiver;
 use async_channel::Sender;
 use codex_analytics::GuardianApprovalRequestSource;
 use codex_async_utils::OrCancelExt;
-use codex_config::types::ApprovalsReviewer;
 use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
@@ -685,18 +684,6 @@ async fn maybe_auto_review_mcp_request_user_input(
         .await
         .get(&event.call_id)
         .cloned()?;
-    if !routes_approval_to_guardian(parent_ctx)
-        && (!routes_approval_to_guardian_with_reviewer(parent_ctx, ApprovalsReviewer::AutoReview)
-            || !parent_session
-                .services
-                .mcp_connection_manager
-                .try_read()
-                .is_ok_and(|manager| {
-                    manager.may_resolve_approvals_to(ApprovalsReviewer::AutoReview)
-                }))
-    {
-        return None;
-    }
     let metadata = lookup_mcp_tool_metadata(
         parent_session.as_ref(),
         parent_ctx.as_ref(),

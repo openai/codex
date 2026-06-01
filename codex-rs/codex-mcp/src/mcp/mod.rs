@@ -21,7 +21,6 @@ use codex_config::Constrained;
 use codex_config::McpServerConfig;
 use codex_config::McpServerTransportConfig;
 use codex_config::types::AppToolApproval;
-use codex_config::types::ApprovalsReviewer;
 use codex_config::types::OAuthCredentialsStoreMode;
 use codex_login::CodexAuth;
 use codex_plugin::PluginCapabilitySummary;
@@ -91,7 +90,6 @@ pub fn mcp_permission_prompt_is_auto_approved(
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct McpPermissionPromptAutoApproveContext {
-    pub approvals_reviewer: Option<ApprovalsReviewer>,
     pub tool_approval_mode: Option<AppToolApproval>,
 }
 
@@ -295,7 +293,7 @@ pub async fn read_mcp_resource(
         config.prefix_mcp_tool_names,
         config.client_elicitation_capability.clone(),
         tool_plugin_provenance(config),
-        crate::McpApprovalsReviewers::default(),
+        crate::McpApprovalsReviewerPolicy::default(),
         auth,
         /*elicitation_reviewer*/ None,
     )
@@ -366,7 +364,7 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
         config.prefix_mcp_tool_names,
         config.client_elicitation_capability.clone(),
         tool_plugin_provenance,
-        crate::McpApprovalsReviewers::default(),
+        crate::McpApprovalsReviewerPolicy::default(),
         auth,
         /*elicitation_reviewer*/ None,
     )

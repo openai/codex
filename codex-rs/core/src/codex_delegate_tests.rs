@@ -448,7 +448,7 @@ async fn delegated_mcp_guardian_abort_returns_synthetic_decline_answer() {
 }
 
 #[tokio::test]
-async fn delegated_mcp_user_reviewer_skips_metadata_lookup_without_app_override() {
+async fn delegated_mcp_user_reviewer_waits_for_metadata_lookup() {
     let (parent_session, parent_ctx, _rx_events) =
         crate::session::tests::make_session_and_context_with_rx().await;
     let pending_mcp_invocations = Arc::new(Mutex::new(HashMap::from([(
@@ -476,35 +476,42 @@ async fn delegated_mcp_user_reviewer_skips_metadata_lookup_without_app_override(
         .recv_timeout(Duration::from_secs(1))
         .expect("manager write lock should be acquired");
 
-    let response = timeout(
-        Duration::from_millis(100),
-        maybe_auto_review_mcp_request_user_input(
-            &parent_session,
-            &parent_ctx,
-            &pending_mcp_invocations,
-            &RequestUserInputEvent {
-                call_id: "call-1".to_string(),
-                turn_id: "child-turn-1".to_string(),
-                questions: vec![RequestUserInputQuestion {
-                    id: format!("{MCP_TOOL_APPROVAL_QUESTION_ID_PREFIX}_call-1"),
-                    header: "Approve app tool call?".to_string(),
-                    question: "Allow this app tool?".to_string(),
-                    is_other: false,
-                    is_secret: false,
-                    options: None,
-                }],
-            },
-            &cancel_token,
-        ),
-    )
-    .await
-    .expect("manual reviewer should not wait for MCP metadata");
-
-    assert_eq!(response, None);
+    let event = RequestUserInputEvent {
+        call_id: "call-1".to_string(),
+        turn_id: "child-turn-1".to_string(),
+        questions: vec![RequestUserInputQuestion {
+            id: format!("{MCP_TOOL_APPROVAL_QUESTION_ID_PREFIX}_call-1"),
+            header: "Approve app tool call?".to_string(),
+            question: "Allow this app tool?".to_string(),
+            is_other: false,
+            is_secret: false,
+            options: None,
+        }],
+    };
+    let response = maybe_auto_review_mcp_request_user_input(
+        &parent_session,
+        &parent_ctx,
+        &pending_mcp_invocations,
+        &event,
+        &cancel_token,
+    );
+    tokio::pin!(response);
+    assert!(
+        timeout(Duration::from_millis(100), &mut response)
+            .await
+            .is_err(),
+        "manual reviewer should wait for MCP metadata"
+    );
     release_manager_tx
         .send(())
         .expect("manager lock holder should remain open");
     manager_lock
         .await
         .expect("manager lock task should not panic");
+    assert_eq!(
+        timeout(Duration::from_secs(1), response)
+            .await
+            .expect("manual reviewer should finish after MCP metadata lookup"),
+        None
+    );
 }

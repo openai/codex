@@ -1173,7 +1173,7 @@ impl Session {
                 config.prefix_mcp_tool_names(),
                 client_elicitation_capability,
                 tool_plugin_provenance,
-                crate::connectors::mcp_approvals_reviewers(config.as_ref()),
+                crate::connectors::mcp_approvals_reviewer_policy(config.as_ref()),
                 auth,
                 Some(sess.mcp_elicitation_reviewer()),
             )

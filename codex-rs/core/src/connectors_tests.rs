@@ -393,64 +393,50 @@ fn app_is_enabled_prefers_per_app_override_over_default() {
 }
 
 #[tokio::test]
-async fn app_approvals_reviewer_allows_app_to_enable_guardian() {
-    let codex_home = tempdir().expect("tempdir should succeed");
-    std::fs::write(
-        codex_home.path().join(CONFIG_TOML_FILE),
-        r#"
-approvals_reviewer = "user"
+async fn app_approvals_reviewer_overrides_global_reviewer() {
+    for (global, app, expected_global, expected_app) in [
+        (
+            "user",
+            "auto_review",
+            ApprovalsReviewer::User,
+            ApprovalsReviewer::AutoReview,
+        ),
+        (
+            "auto_review",
+            "user",
+            ApprovalsReviewer::AutoReview,
+            ApprovalsReviewer::User,
+        ),
+    ] {
+        let codex_home = tempdir().expect("tempdir should succeed");
+        std::fs::write(
+            codex_home.path().join(CONFIG_TOML_FILE),
+            format!(
+                r#"
+approvals_reviewer = "{global}"
 
 [apps.calendar]
-approvals_reviewer = "auto_review"
-"#,
-    )
-    .expect("write config");
-    let config = ConfigBuilder::default()
-        .codex_home(codex_home.path().to_path_buf())
-        .build()
-        .await
-        .expect("config should build");
+approvals_reviewer = "{app}"
+"#
+            ),
+        )
+        .expect("write config");
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .build()
+            .await
+            .expect("config should build");
 
-    let reviewers = mcp_approvals_reviewers(&config);
-    assert_eq!(
-        reviewers.resolve(CODEX_APPS_MCP_SERVER_NAME, Some("calendar")),
-        ApprovalsReviewer::AutoReview
-    );
-    assert_eq!(
-        reviewers.resolve(CODEX_APPS_MCP_SERVER_NAME, Some("drive")),
-        ApprovalsReviewer::User
-    );
-    assert!(reviewers.may_resolve_to(ApprovalsReviewer::AutoReview));
-}
-
-#[tokio::test]
-async fn app_approvals_reviewer_allows_app_to_disable_guardian() {
-    let codex_home = tempdir().expect("tempdir should succeed");
-    std::fs::write(
-        codex_home.path().join(CONFIG_TOML_FILE),
-        r#"
-approvals_reviewer = "auto_review"
-
-[apps.calendar]
-approvals_reviewer = "user"
-"#,
-    )
-    .expect("write config");
-    let config = ConfigBuilder::default()
-        .codex_home(codex_home.path().to_path_buf())
-        .build()
-        .await
-        .expect("config should build");
-
-    let reviewers = mcp_approvals_reviewers(&config);
-    assert_eq!(
-        reviewers.resolve(CODEX_APPS_MCP_SERVER_NAME, Some("calendar")),
-        ApprovalsReviewer::User
-    );
-    assert_eq!(
-        reviewers.resolve(CODEX_APPS_MCP_SERVER_NAME, Some("drive")),
-        ApprovalsReviewer::AutoReview
-    );
+        let policy = mcp_approvals_reviewer_policy(&config);
+        assert_eq!(
+            policy.resolve(CODEX_APPS_MCP_SERVER_NAME, Some("calendar")),
+            expected_app
+        );
+        assert_eq!(
+            policy.resolve(CODEX_APPS_MCP_SERVER_NAME, Some("drive")),
+            expected_global
+        );
+    }
 }
 
 #[tokio::test]
@@ -479,12 +465,11 @@ approvals_reviewer = "user"
         .await
         .expect("config should build");
 
-    let reviewers = mcp_approvals_reviewers(&config);
+    let policy = mcp_approvals_reviewer_policy(&config);
     assert_eq!(
-        reviewers.resolve(CODEX_APPS_MCP_SERVER_NAME, Some("calendar")),
+        policy.resolve(CODEX_APPS_MCP_SERVER_NAME, Some("calendar")),
         ApprovalsReviewer::AutoReview
     );
-    assert!(!reviewers.may_resolve_to(ApprovalsReviewer::User));
 }
 
 #[test]

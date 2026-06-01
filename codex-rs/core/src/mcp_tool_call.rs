@@ -1169,7 +1169,6 @@ async fn maybe_request_mcp_tool_approval(
         turn_context.approval_policy.value(),
         &turn_context.permission_profile(),
         McpPermissionPromptAutoApproveContext {
-            approvals_reviewer: Some(approvals_reviewer),
             tool_approval_mode: Some(approval_mode),
         },
     ) {

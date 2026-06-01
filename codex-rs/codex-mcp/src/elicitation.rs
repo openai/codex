@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 
-use crate::McpApprovalsReviewers;
+use crate::McpApprovalsReviewerPolicy;
 use crate::mcp::McpPermissionPromptAutoApproveContext;
 use crate::mcp::mcp_permission_prompt_is_auto_approved;
 use anyhow::Context;
@@ -57,7 +57,7 @@ pub(crate) struct ElicitationRequestManager {
     pub(crate) approval_policy: Arc<StdMutex<AskForApproval>>,
     pub(crate) permission_profile: Arc<StdMutex<PermissionProfile>>,
     auto_deny: Arc<StdMutex<bool>>,
-    approvals_reviewers: Arc<StdMutex<McpApprovalsReviewers>>,
+    approvals_reviewer_policy: Arc<StdMutex<McpApprovalsReviewerPolicy>>,
     reviewer: Option<ElicitationReviewerHandle>,
 }
 
@@ -65,7 +65,7 @@ impl ElicitationRequestManager {
     pub(crate) fn new(
         approval_policy: AskForApproval,
         permission_profile: PermissionProfile,
-        approvals_reviewers: McpApprovalsReviewers,
+        approvals_reviewer_policy: McpApprovalsReviewerPolicy,
         reviewer: Option<ElicitationReviewerHandle>,
     ) -> Self {
         Self {
@@ -73,7 +73,7 @@ impl ElicitationRequestManager {
             approval_policy: Arc::new(StdMutex::new(approval_policy)),
             permission_profile: Arc::new(StdMutex::new(permission_profile)),
             auto_deny: Arc::new(StdMutex::new(false)),
-            approvals_reviewers: Arc::new(StdMutex::new(approvals_reviewers)),
+            approvals_reviewer_policy: Arc::new(StdMutex::new(approvals_reviewer_policy)),
             reviewer,
         }
     }
@@ -91,9 +91,12 @@ impl ElicitationRequestManager {
         }
     }
 
-    pub(crate) fn set_approvals_reviewers(&self, approvals_reviewers: McpApprovalsReviewers) {
-        if let Ok(mut current) = self.approvals_reviewers.lock() {
-            *current = approvals_reviewers;
+    pub(crate) fn set_approvals_reviewer_policy(
+        &self,
+        approvals_reviewer_policy: McpApprovalsReviewerPolicy,
+    ) {
+        if let Ok(mut current) = self.approvals_reviewer_policy.lock() {
+            *current = approvals_reviewer_policy;
         }
     }
 
@@ -102,17 +105,10 @@ impl ElicitationRequestManager {
         server_name: &str,
         connector_id: Option<&str>,
     ) -> codex_config::types::ApprovalsReviewer {
-        self.approvals_reviewers
+        self.approvals_reviewer_policy
             .lock()
             .map(|reviewers| reviewers.resolve(server_name, connector_id))
             .unwrap_or_default()
-    }
-
-    pub(crate) fn may_resolve_to(&self, reviewer: codex_config::types::ApprovalsReviewer) -> bool {
-        self.approvals_reviewers
-            .lock()
-            .map(|reviewers| reviewers.may_resolve_to(reviewer))
-            .unwrap_or(false)
     }
 
     pub(crate) async fn resolve(
@@ -139,7 +135,7 @@ impl ElicitationRequestManager {
         let approval_policy = self.approval_policy.clone();
         let permission_profile = self.permission_profile.clone();
         let auto_deny = self.auto_deny.clone();
-        let approvals_reviewers = self.approvals_reviewers.clone();
+        let approvals_reviewer_policy = self.approvals_reviewer_policy.clone();
         let reviewer = self.reviewer.clone();
         Box::new(move |id, elicitation| {
             let elicitation_requests = elicitation_requests.clone();
@@ -148,7 +144,7 @@ impl ElicitationRequestManager {
             let approval_policy = approval_policy.clone();
             let permission_profile = permission_profile.clone();
             let auto_deny = auto_deny.clone();
-            let approvals_reviewers = approvals_reviewers.clone();
+            let approvals_reviewer_policy = approvals_reviewer_policy.clone();
             let reviewer = reviewer.clone();
             async move {
                 let auto_deny = auto_deny
@@ -193,7 +189,7 @@ impl ElicitationRequestManager {
                 }
 
                 if let Some(reviewer) = reviewer.as_ref() {
-                    let approvals_reviewer = approvals_reviewers
+                    let approvals_reviewer = approvals_reviewer_policy
                         .lock()
                         .map(|reviewers| {
                             reviewers.resolve(
