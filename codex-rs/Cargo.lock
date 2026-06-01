@@ -2669,6 +2669,7 @@ dependencies = [
  "codex-utils-plugins",
  "dirs",
  "flate2",
+ "indexmap 2.13.0",
  "libc",
  "pretty_assertions",
  "reqwest 0.12.28",
