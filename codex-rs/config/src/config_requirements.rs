@@ -505,13 +505,13 @@ impl From<NetworkRequirementsToml> for NetworkConstraints {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FilesystemRequirementsToml {
     pub deny_read: Option<Vec<FilesystemDenyReadPattern>>,
-    pub allow_limited_git_writes: Option<bool>,
+    pub allow_git: Option<bool>,
 }
 
 #[derive(Deserialize)]
 struct RawFilesystemRequirementsToml {
     deny_read: Option<Vec<FilesystemDenyReadPattern>>,
-    allow_limited_git_writes: Option<bool>,
+    allow_git: Option<bool>,
     description: Option<serde::de::IgnoredAny>,
     extends: Option<serde::de::IgnoredAny>,
     workspace_roots: Option<serde::de::IgnoredAny>,
@@ -527,7 +527,7 @@ impl<'de> Deserialize<'de> for FilesystemRequirementsToml {
         let raw = RawFilesystemRequirementsToml::deserialize(deserializer)?;
         let RawFilesystemRequirementsToml {
             deny_read,
-            allow_limited_git_writes,
+            allow_git,
             description,
             extends,
             workspace_roots,
@@ -548,7 +548,7 @@ impl<'de> Deserialize<'de> for FilesystemRequirementsToml {
 
         Ok(Self {
             deny_read,
-            allow_limited_git_writes,
+            allow_git,
         })
     }
 }
@@ -565,7 +565,7 @@ pub struct PermissionsRequirementsToml {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FilesystemConstraints {
     pub deny_read: Vec<FilesystemDenyReadPattern>,
-    pub allow_limited_git_writes: Option<bool>,
+    pub allow_git: Option<bool>,
 }
 
 impl From<PermissionsRequirementsToml> for FilesystemConstraints {
@@ -575,7 +575,7 @@ impl From<PermissionsRequirementsToml> for FilesystemConstraints {
         };
         Self {
             deny_read: filesystem.deny_read.unwrap_or_default(),
-            allow_limited_git_writes: filesystem.allow_limited_git_writes,
+            allow_git: filesystem.allow_git,
         }
     }
 }
@@ -2003,7 +2003,7 @@ allowed_approvals_reviewers = ["user"]
             r#"
             [permissions.filesystem]
             deny_read = [{deny_read_0:?}, {deny_read_1:?}]
-            allow_limited_git_writes = true
+            allow_git = true
         "#
         );
 
@@ -2018,7 +2018,7 @@ allowed_approvals_reviewers = ["user"]
                         AbsolutePathBuf::from_absolute_path(deny_read_0)?.into(),
                         AbsolutePathBuf::from_absolute_path(deny_read_1)?.into(),
                     ],
-                    allow_limited_git_writes: Some(true),
+                    allow_git: Some(true),
                 },
                 RequirementSource::Unknown,
             ))
@@ -2047,7 +2047,7 @@ allowed_approvals_reviewers = ["user"]
                         FilesystemDenyReadPattern::from_input("./private/**/*.txt")
                             .expect("normalize glob pattern"),
                     ],
-                    allow_limited_git_writes: None,
+                    allow_git: None,
                 },
                 RequirementSource::Unknown,
             ))

@@ -2150,7 +2150,7 @@ fn apply_managed_filesystem_constraints(
     filesystem_constraints: &codex_config::FilesystemConstraints,
     cwd: &Path,
 ) {
-    if filesystem_constraints.allow_limited_git_writes == Some(true) {
+    if filesystem_constraints.allow_git == Some(true) {
         file_system_sandbox_policy.apply_managed_limited_git_writes(cwd);
     }
     for deny_read in &filesystem_constraints.deny_read {
@@ -3279,7 +3279,7 @@ impl Config {
             source: filesystem_requirements_source,
         }) = filesystem_requirements.as_ref()
             && (!filesystem_requirements.deny_read.is_empty()
-                || filesystem_requirements.allow_limited_git_writes.is_some())
+                || filesystem_requirements.allow_git.is_some())
         {
             let requirement_source = filesystem_requirements_source.clone();
             constrained_permission_profile
@@ -3699,7 +3699,7 @@ impl Config {
             .requirements()
             .filesystem
             .as_ref()
-            .and_then(|filesystem| filesystem.value.allow_limited_git_writes)
+            .and_then(|filesystem| filesystem.value.allow_git)
     }
 
     pub(crate) fn network_proxy_spec_for_active_permission_profile(

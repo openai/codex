@@ -242,9 +242,9 @@ fn render_debug_config_lines(stack: &ConfigLayerStack) -> Vec<Line<'static>> {
     }
 
     if let Some(filesystem) = requirements.filesystem.as_ref() {
-        if let Some(allow_limited_git_writes) = filesystem.value.allow_limited_git_writes {
+        if let Some(allow_limited_git_writes) = filesystem.value.allow_git {
             requirement_lines.push(requirement_line(
-                "permissions.filesystem.allow_limited_git_writes",
+                "permissions.filesystem.allow_git",
                 allow_limited_git_writes.to_string(),
                 Some(&filesystem.source),
             ));
@@ -696,7 +696,7 @@ mod tests {
             filesystem: Some(Sourced::new(
                 FilesystemConstraints {
                     deny_read: vec![denied_path.clone().into()],
-                    allow_limited_git_writes: Some(true),
+                    allow_git: Some(true),
                 },
                 RequirementSource::SystemRequirementsToml {
                     file: requirements_file.clone(),
@@ -791,7 +791,7 @@ mod tests {
         assert!(
             rendered.contains(
                 format!(
-                    "permissions.filesystem.allow_limited_git_writes: true (source: {})",
+                    "permissions.filesystem.allow_git: true (source: {})",
                     requirements_file.as_path().display()
                 )
                 .as_str(),

@@ -72,6 +72,7 @@ async fn restricted_read_implicitly_allows_helper_executables() -> std::io::Resu
                         workspace_roots: None,
                         filesystem: Some(FilesystemPermissionsToml {
                             glob_scan_max_depth: None,
+                            allow_git: false,
                             entries: BTreeMap::new(),
                         }),
                         network: None,
@@ -471,6 +472,7 @@ fn compile_permission_profile_workspace_roots_resolves_enabled_entries() -> std:
 fn read_write_glob_warnings_skip_supported_deny_read_globs_and_trailing_subpaths() {
     let filesystem = FilesystemPermissionsToml {
         glob_scan_max_depth: None,
+        allow_git: false,
         entries: BTreeMap::from([
             (
                 "/tmp/**/*.log".to_string(),
@@ -505,6 +507,7 @@ fn read_write_glob_warnings_skip_supported_deny_read_globs_and_trailing_subpaths
 fn unreadable_globstar_warning_is_suppressed_when_scan_depth_is_configured() {
     let filesystem = FilesystemPermissionsToml {
         glob_scan_max_depth: None,
+        allow_git: false,
         entries: BTreeMap::from([(
             ":workspace_roots".to_string(),
             FilesystemPermissionToml::Scoped(BTreeMap::from([
@@ -557,7 +560,7 @@ fn workspace_parent_uses_profile_limited_git_write_setting() -> std::io::Result<
                     workspace_roots: None,
                     filesystem: Some(FilesystemPermissionsToml {
                         glob_scan_max_depth: None,
-                        allow_limited_git_writes: true,
+                        allow_git: true,
                         entries: BTreeMap::new(),
                     }),
                     network: None,
@@ -598,6 +601,7 @@ fn read_write_trailing_glob_suffix_compiles_as_subpath() -> std::io::Result<()> 
                     workspace_roots: None,
                     filesystem: Some(FilesystemPermissionsToml {
                         glob_scan_max_depth: None,
+                        allow_git: false,
                         entries: BTreeMap::from([(
                             ":workspace_roots".to_string(),
                             FilesystemPermissionToml::Scoped(BTreeMap::from([(
