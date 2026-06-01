@@ -151,7 +151,7 @@ fn is_multi_agent_v2_usage_hint_message(item: &ResponseItem, usage_hint_texts: &
 /// An `AgentControl` instance is intended to be created at most once per root thread/session
 /// tree. That same `AgentControl` is then shared with every sub-agent spawned from that root,
 /// which keeps the registry scoped to that root thread rather than the entire `ThreadManager`.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub(crate) struct AgentControl {
     /// ID shared by the whole agent control session. This means every sub-agents from a common
     /// root share the same session ID.
@@ -161,18 +161,30 @@ pub(crate) struct AgentControl {
     /// `ThreadManagerState -> CodexThread -> Session -> SessionServices -> ThreadManagerState`.
     manager: Weak<ThreadManagerState>,
     state: Arc<AgentRegistry>,
-    code_mode_session_provider: Option<Arc<dyn codex_code_mode::CodeModeSessionProvider>>,
+    code_mode_session_provider_selection: codex_code_mode::SessionProviderSelection,
+}
+
+impl Default for AgentControl {
+    fn default() -> Self {
+        Self {
+            session_id: SessionId::default(),
+            manager: Weak::new(),
+            state: Arc::new(AgentRegistry::default()),
+            code_mode_session_provider_selection:
+                codex_code_mode::SessionProviderSelection::Disabled,
+        }
+    }
 }
 
 impl AgentControl {
     /// Construct a new `AgentControl` that can spawn/message agents via the given manager state.
     pub(crate) fn new(
         manager: Weak<ThreadManagerState>,
-        code_mode_session_provider: Option<Arc<dyn codex_code_mode::CodeModeSessionProvider>>,
+        code_mode_session_provider_selection: codex_code_mode::SessionProviderSelection,
     ) -> Self {
         Self {
             manager,
-            code_mode_session_provider,
+            code_mode_session_provider_selection,
             ..Default::default()
         }
     }
@@ -186,10 +198,10 @@ impl AgentControl {
         self.session_id
     }
 
-    pub(crate) fn code_mode_session_provider(
+    pub(crate) fn code_mode_session_provider_selection(
         &self,
-    ) -> Option<Arc<dyn codex_code_mode::CodeModeSessionProvider>> {
-        self.code_mode_session_provider.clone()
+    ) -> codex_code_mode::SessionProviderSelection {
+        self.code_mode_session_provider_selection.clone()
     }
 
     /// Spawn a new agent thread and submit the initial prompt.

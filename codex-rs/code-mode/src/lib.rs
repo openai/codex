@@ -39,6 +39,7 @@ pub use service::CodeModeSessionResultFuture;
 pub use service::InProcessCodeModeSessionProvider;
 pub use service::NoopCodeModeSessionDelegate;
 pub use service::NotificationFuture;
+pub use service::SessionProviderSelection;
 pub use service::StartedCell;
 pub use service::ToolInvocationFuture;
 

@@ -342,26 +342,23 @@ async fn start_thread_rejects_explicit_local_environment_when_default_provider_i
         environment_manager,
     );
 
-    let result =
-        manager
-            .start_thread_with_options(StartThreadOptions {
-                config: config.clone(),
-                initial_history: InitialHistory::New,
-                session_source: None,
-                thread_source: None,
-                code_mode_session_provider: Some(
-                    ThreadManager::in_process_code_mode_session_provider(),
-                ),
-                dynamic_tools: Vec::new(),
-                persist_extended_history: false,
-                metrics_service_name: None,
-                parent_trace: None,
-                environments: vec![TurnEnvironmentSelection {
-                    environment_id: "local".to_string(),
-                    cwd: config.cwd.clone(),
-                }],
-            })
-            .await;
+    let result = manager
+        .start_thread_with_options(StartThreadOptions {
+            config: config.clone(),
+            initial_history: InitialHistory::New,
+            session_source: None,
+            thread_source: None,
+            code_mode_session_provider_selection: Default::default(),
+            dynamic_tools: Vec::new(),
+            persist_extended_history: false,
+            metrics_service_name: None,
+            parent_trace: None,
+            environments: vec![TurnEnvironmentSelection {
+                environment_id: "local".to_string(),
+                cwd: config.cwd.clone(),
+            }],
+        })
+        .await;
     let err = match result {
         Ok(_) => panic!("explicit local environment should not resolve when provider is disabled"),
         Err(err) => err,
@@ -464,14 +461,6 @@ args = ["dev", "cd /tmp && true"]
     assert!(!environment_context.contains("\n  <shell>"));
 }
 
-#[test]
-fn in_process_code_mode_session_provider_is_a_singleton() {
-    assert!(Arc::ptr_eq(
-        &ThreadManager::in_process_code_mode_session_provider(),
-        &ThreadManager::in_process_code_mode_session_provider(),
-    ));
-}
-
 #[tokio::test]
 async fn start_thread_options_code_mode_provider_is_propagated_to_spawned_agents() {
     let temp_dir = tempdir().expect("tempdir");
@@ -497,7 +486,9 @@ async fn start_thread_options_code_mode_provider_is_propagated_to_spawned_agents
             initial_history: InitialHistory::New,
             session_source: None,
             thread_source: None,
-            code_mode_session_provider: Some(provider),
+            code_mode_session_provider_selection: codex_code_mode::SessionProviderSelection::Custom(
+                provider,
+            ),
             dynamic_tools: Vec::new(),
             persist_extended_history: false,
             metrics_service_name: None,
@@ -533,26 +524,23 @@ async fn start_thread_keeps_internal_threads_hidden_from_normal_lookups() {
         config.codex_home.to_path_buf(),
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
     );
-    let thread =
-        manager
-            .start_thread_with_options(StartThreadOptions {
-                config,
-                initial_history: InitialHistory::New,
-                session_source: Some(SessionSource::Internal(
-                    InternalSessionSource::MemoryConsolidation,
-                )),
-                thread_source: None,
-                code_mode_session_provider: Some(
-                    ThreadManager::in_process_code_mode_session_provider(),
-                ),
-                dynamic_tools: Vec::new(),
-                persist_extended_history: false,
-                metrics_service_name: None,
-                parent_trace: None,
-                environments: Vec::new(),
-            })
-            .await
-            .expect("internal thread should start");
+    let thread = manager
+        .start_thread_with_options(StartThreadOptions {
+            config,
+            initial_history: InitialHistory::New,
+            session_source: Some(SessionSource::Internal(
+                InternalSessionSource::MemoryConsolidation,
+            )),
+            thread_source: None,
+            code_mode_session_provider_selection: Default::default(),
+            dynamic_tools: Vec::new(),
+            persist_extended_history: false,
+            metrics_service_name: None,
+            parent_trace: None,
+            environments: Vec::new(),
+        })
+        .await
+        .expect("internal thread should start");
 
     assert_eq!(manager.list_thread_ids().await, Vec::new());
     assert!(manager.get_thread(thread.thread_id).await.is_err());
@@ -601,7 +589,8 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
             initial_history: InitialHistory::New,
             session_source: None,
             thread_source: None,
-            code_mode_session_provider: None,
+            code_mode_session_provider_selection:
+                codex_code_mode::SessionProviderSelection::Disabled,
             dynamic_tools: Vec::new(),
             persist_extended_history: false,
             metrics_service_name: None,
@@ -874,7 +863,8 @@ async fn resume_stopped_thread_from_rollout_preserves_thread_source() {
             initial_history: InitialHistory::New,
             session_source: None,
             thread_source: Some(ThreadSource::User),
-            code_mode_session_provider: None,
+            code_mode_session_provider_selection:
+                codex_code_mode::SessionProviderSelection::Disabled,
             dynamic_tools: Vec::new(),
             persist_extended_history: false,
             metrics_service_name: None,

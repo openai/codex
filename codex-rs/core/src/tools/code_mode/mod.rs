@@ -11,9 +11,9 @@ use std::time::Duration;
 use codex_code_mode::CellId;
 use codex_code_mode::CodeModeNestedToolCall;
 use codex_code_mode::CodeModeSession;
-use codex_code_mode::CodeModeSessionProvider;
 use codex_code_mode::CodeModeToolKind;
 use codex_code_mode::RuntimeResponse;
+use codex_code_mode::SessionProviderSelection;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use serde_json::Value as JsonValue;
 use tokio_util::sync::CancellationToken;
@@ -75,14 +75,13 @@ impl CodeModeService {
         }
     }
 
-    pub(crate) async fn from_provider(
-        provider: Option<Arc<dyn CodeModeSessionProvider>>,
+    pub(crate) async fn from_provider_selection(
+        provider_selection: SessionProviderSelection,
     ) -> Result<Self, String> {
         let dispatch_broker = Arc::new(CodeModeDispatchBroker::new());
-        let session = match provider {
-            Some(provider) => Some(provider.create_session(dispatch_broker.clone()).await?),
-            None => None,
-        };
+        let session = provider_selection
+            .create_session(dispatch_broker.clone())
+            .await?;
         Ok(Self {
             session,
             dispatch_broker,

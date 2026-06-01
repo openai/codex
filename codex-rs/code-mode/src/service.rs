@@ -156,6 +156,31 @@ pub trait CodeModeSessionProvider: Send + Sync {
     ) -> CodeModeSessionProviderFuture<'a>;
 }
 
+/// Selects how a code-mode session is provisioned for a Codex session.
+#[derive(Clone, Default)]
+pub enum SessionProviderSelection {
+    #[default]
+    InProcess,
+    Disabled,
+    Custom(Arc<dyn CodeModeSessionProvider>),
+}
+
+impl SessionProviderSelection {
+    pub async fn create_session(
+        &self,
+        delegate: Arc<dyn CodeModeSessionDelegate>,
+    ) -> Result<Option<Arc<dyn CodeModeSession>>, String> {
+        match self {
+            Self::InProcess => InProcessCodeModeSessionProvider
+                .create_session(delegate)
+                .await
+                .map(Some),
+            Self::Disabled => Ok(None),
+            Self::Custom(provider) => provider.create_session(delegate).await.map(Some),
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct InProcessCodeModeSessionProvider;
 
@@ -870,6 +895,7 @@ mod tests {
     use super::PendingRuntimeMode;
     use super::RuntimeCommand;
     use super::RuntimeResponse;
+    use super::SessionProviderSelection;
     use super::WaitOutcome;
     use super::WaitRequest;
     use super::WaitToPendingOutcome;
@@ -940,6 +966,26 @@ mod tests {
                 }],
                 error_text: None,
             }
+        );
+    }
+
+    #[tokio::test]
+    async fn provider_selection_defaults_to_in_process_and_can_disable() {
+        let delegate = Arc::new(NoopCodeModeSessionDelegate);
+
+        assert!(
+            SessionProviderSelection::default()
+                .create_session(delegate.clone())
+                .await
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            SessionProviderSelection::Disabled
+                .create_session(delegate)
+                .await
+                .unwrap()
+                .is_none()
         );
     }
 
