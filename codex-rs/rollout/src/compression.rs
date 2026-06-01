@@ -260,15 +260,18 @@ mod worker {
         failed: usize,
     }
 
-    struct CompressionRunMarker;
+    pub(super) struct CompressionRunMarker {
+        path: PathBuf,
+        remove_on_drop: bool,
+    }
 
     impl CompressionRunMarker {
-        fn try_claim(codex_home: &Path) -> io::Result<Option<Self>> {
+        pub(super) fn try_claim(codex_home: &Path) -> io::Result<Option<Self>> {
             let marker_dir = codex_home.join(".tmp");
             std::fs::create_dir_all(marker_dir.as_path())?;
             let path = marker_dir.join(RUN_MARKER_FILE_NAME);
             match create_run_marker_file(path.as_path()) {
-                Ok(()) => return Ok(Some(Self)),
+                Ok(()) => return Ok(Some(Self::new(path))),
                 Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {}
                 Err(err) => return Err(err),
             }
@@ -287,9 +290,28 @@ mod worker {
                 Err(err) => return Err(err),
             }
             match create_run_marker_file(path.as_path()) {
-                Ok(()) => Ok(Some(Self)),
+                Ok(()) => Ok(Some(Self::new(path))),
                 Err(err) if err.kind() == io::ErrorKind::AlreadyExists => Ok(None),
                 Err(err) => Err(err),
+            }
+        }
+
+        fn new(path: PathBuf) -> Self {
+            Self {
+                path,
+                remove_on_drop: true,
+            }
+        }
+
+        pub(super) fn persist(mut self) {
+            self.remove_on_drop = false;
+        }
+    }
+
+    impl Drop for CompressionRunMarker {
+        fn drop(&mut self) {
+            if self.remove_on_drop {
+                let _ = std::fs::remove_file(self.path.as_path());
             }
         }
     }
@@ -313,7 +335,7 @@ mod worker {
     }
 
     pub(super) async fn run(codex_home: PathBuf) -> io::Result<()> {
-        let Some(_marker) = CompressionRunMarker::try_claim(codex_home.as_path())? else {
+        let Some(marker) = CompressionRunMarker::try_claim(codex_home.as_path())? else {
             debug!(
                 "rollout compression worker recently ran or is already running for {}",
                 codex_home.display()
@@ -332,6 +354,7 @@ mod worker {
             "rollout compression worker finished: scanned={}, compressed={}, skipped={}, failed={}",
             stats.scanned, stats.compressed, stats.skipped, stats.failed
         );
+        marker.persist();
         Ok(())
     }
 

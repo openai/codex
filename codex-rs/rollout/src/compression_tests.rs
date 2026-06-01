@@ -347,6 +347,27 @@ async fn worker_skips_when_fresh_run_marker_exists() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[test]
+fn run_marker_is_removed_unless_persisted() -> anyhow::Result<()> {
+    let home = TempDir::new()?;
+    let marker_path = home.path().join(".tmp").join("rollout-compression.lock");
+
+    {
+        let marker = worker::CompressionRunMarker::try_claim(home.path())?;
+        assert!(marker.is_some());
+    }
+    assert!(!marker_path.exists());
+
+    let marker = worker::CompressionRunMarker::try_claim(home.path())?;
+    let Some(marker) = marker else {
+        panic!("expected run marker claim");
+    };
+    marker.persist();
+    assert!(marker_path.exists());
+    assert!(worker::CompressionRunMarker::try_claim(home.path())?.is_none());
+    Ok(())
+}
+
 #[tokio::test]
 async fn find_thread_path_by_id_handles_compressed_rollout_filenames() -> anyhow::Result<()> {
     let home = TempDir::new()?;
