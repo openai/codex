@@ -676,6 +676,9 @@ mod tests {
             ..ConfigRequirementsToml::default()
         });
 
-        assert_eq!(mapped.network.and_then(|network| network.enabled), Some(true));
+        assert_eq!(
+            mapped.network.and_then(|network| network.enabled),
+            Some(true)
+        );
     }
 }

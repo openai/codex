@@ -50,6 +50,7 @@ impl DenyReadMergeState {
                     filesystem: Some(FilesystemRequirementsToml {
                         deny_read: Some(self.deny_read),
                     }),
+                    network: None,
                     profiles: Default::default(),
                 },
                 source,
