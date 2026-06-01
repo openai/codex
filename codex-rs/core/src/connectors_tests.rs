@@ -419,6 +419,10 @@ approvals_reviewer = "auto_review"
         app_approvals_reviewer(&config, Some("drive")),
         ApprovalsReviewer::User
     );
+    assert!(has_app_approvals_reviewer_override(
+        &config,
+        ApprovalsReviewer::AutoReview
+    ));
 }
 
 #[tokio::test]
@@ -480,6 +484,10 @@ approvals_reviewer = "user"
         app_approvals_reviewer(&config, Some("calendar")),
         ApprovalsReviewer::AutoReview
     );
+    assert!(!has_app_approvals_reviewer_override(
+        &config,
+        ApprovalsReviewer::User
+    ));
 }
 
 #[test]

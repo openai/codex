@@ -586,6 +586,28 @@ pub(crate) fn app_approvals_reviewer(
         .unwrap_or(config.approvals_reviewer)
 }
 
+pub(crate) fn has_app_approvals_reviewer_override(
+    config: &Config,
+    approvals_reviewer: ApprovalsReviewer,
+) -> bool {
+    if config
+        .config_layer_stack
+        .requirements()
+        .approvals_reviewer
+        .can_set(&approvals_reviewer)
+        .is_err()
+    {
+        return false;
+    }
+
+    read_user_apps_config(config).is_some_and(|apps_config| {
+        apps_config
+            .apps
+            .values()
+            .any(|app| app.approvals_reviewer == Some(approvals_reviewer))
+    })
+}
+
 fn read_apps_config(config: &Config) -> Option<AppsConfigToml> {
     let apps_config = read_user_apps_config(config);
     let had_apps_config = apps_config.is_some();
