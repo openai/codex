@@ -278,24 +278,19 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
         if let Some(network) = managed_network {
             network.apply_to_env(&mut env);
         }
-        let explicit_env_overrides = req.explicit_env_overrides.clone();
-        #[cfg(unix)]
-        let explicit_env_overrides = {
-            let mut explicit_env_overrides = explicit_env_overrides;
-            if let UnifiedExecShellMode::ZshFork(zsh_fork_config) = &self.shell_mode {
-                apply_zsh_fork_path_prepend(
-                    &mut env,
-                    &mut explicit_env_overrides,
-                    zsh_fork_config.shell_zsh_path.as_path(),
-                );
-            }
-            explicit_env_overrides
-        };
+        let mut explicit_env_overrides = req.explicit_env_overrides.clone();
         let environment_is_remote = req.environment.is_remote();
-        let mut explicit_env_overrides = explicit_env_overrides;
         if !environment_is_remote {
             ctx.session
                 .apply_session_start_env(&mut explicit_env_overrides);
+        }
+        #[cfg(unix)]
+        if let UnifiedExecShellMode::ZshFork(zsh_fork_config) = &self.shell_mode {
+            apply_zsh_fork_path_prepend(
+                &mut env,
+                &mut explicit_env_overrides,
+                zsh_fork_config.shell_zsh_path.as_path(),
+            );
         }
         let command = if environment_is_remote {
             base_command.to_vec()

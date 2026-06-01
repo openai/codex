@@ -3225,8 +3225,8 @@ impl Session {
         Arc::clone(&self.services.user_shell)
     }
 
-    pub(crate) fn replace_session_start_env(&self, env: HashMap<String, String>) {
-        self.services.session_start_env.replace(env);
+    pub(crate) fn merge_session_start_env(&self, env: HashMap<String, String>) {
+        self.services.session_start_env.merge(env);
     }
 
     pub(crate) fn session_start_env_snapshot(&self) -> HashMap<String, String> {

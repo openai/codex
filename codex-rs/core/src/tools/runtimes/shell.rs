@@ -247,11 +247,12 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
         let managed_network =
             managed_network_for_sandbox_permissions(req.network.as_ref(), sandbox_permissions);
         let env = exec_env_for_sandbox_permissions(&req.env, sandbox_permissions);
-        let explicit_env_overrides = req.explicit_env_overrides.clone();
+        let mut explicit_env_overrides = req.explicit_env_overrides.clone();
+        ctx.session
+            .apply_session_start_env(&mut explicit_env_overrides);
         #[cfg(unix)]
         let (env, explicit_env_overrides) = {
             let mut env = env;
-            let mut explicit_env_overrides = explicit_env_overrides;
             if self.backend == ShellRuntimeBackend::ShellCommandZshFork
                 && let Some(shell_zsh_path) = ctx.session.services.shell_zsh_path.as_deref()
             {
@@ -259,9 +260,6 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
             }
             (env, explicit_env_overrides)
         };
-        let mut explicit_env_overrides = explicit_env_overrides;
-        ctx.session
-            .apply_session_start_env(&mut explicit_env_overrides);
         let command = maybe_wrap_shell_lc_with_snapshot(
             &req.command,
             session_shell.as_ref(),

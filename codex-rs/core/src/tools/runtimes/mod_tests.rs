@@ -2,6 +2,8 @@ use super::*;
 use crate::exec::ExecCapturePolicy;
 use crate::exec::ExecExpiration;
 use crate::sandboxing::ExecOptions;
+#[cfg(unix)]
+use crate::session_start_env::SessionStartEnvOverlay;
 use crate::shell::ShellType;
 use crate::shell_snapshot::ShellSnapshot;
 use crate::tools::sandboxing::SandboxAttempt;
@@ -183,6 +185,31 @@ fn apply_zsh_fork_path_prepend_moves_existing_shell_parent_to_front() {
     assert_eq!(
         env.get("PATH").map(String::as_str),
         Some("/package/codex-resources/zsh/bin:/usr/bin:/bin")
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn apply_zsh_fork_path_prepend_wins_after_session_start_env() {
+    let overlay = SessionStartEnvOverlay::new(HashMap::from([(
+        "PATH".to_string(),
+        "/plugin/bin:/usr/bin".to_string(),
+    )]));
+    let mut env = HashMap::from([("PATH".to_string(), "/plugin/bin:/usr/bin".to_string())]);
+    let mut explicit_env_overrides = HashMap::new();
+    overlay.apply(&mut explicit_env_overrides);
+
+    apply_zsh_fork_path_prepend(
+        &mut env,
+        &mut explicit_env_overrides,
+        PathBuf::from("/package/codex-resources/zsh/bin/zsh").as_path(),
+    );
+
+    let expected = "/package/codex-resources/zsh/bin:/plugin/bin:/usr/bin";
+    assert_eq!(env.get("PATH").map(String::as_str), Some(expected));
+    assert_eq!(
+        explicit_env_overrides.get("PATH").map(String::as_str),
+        Some(expected)
     );
 }
 

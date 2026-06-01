@@ -399,7 +399,7 @@ pub(crate) struct SessionStartHookSpecificOutputWire {
     /// Environment changes applied to subsequent local shell commands.
     ///
     /// Multiple matching `SessionStart` handlers merge in configured order.
-    /// Later handlers win for duplicate keys.
+    /// Later handlers and later `SessionStart` events win for duplicate keys.
     #[serde(default)]
     pub env: HashMap<String, String>,
 }

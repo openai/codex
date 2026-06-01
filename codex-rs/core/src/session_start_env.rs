@@ -4,7 +4,7 @@ use std::sync::RwLock;
 
 use crate::exec_env::CODEX_THREAD_ID_ENV_VAR;
 
-/// Session-owned environment changes emitted by `SessionStart` hooks.
+/// Session-owned additive environment changes emitted by `SessionStart` hooks.
 #[derive(Default)]
 pub(crate) struct SessionStartEnvOverlay {
     values: RwLock<HashMap<String, String>>,
@@ -17,8 +17,19 @@ impl SessionStartEnvOverlay {
         }
     }
 
-    pub(crate) fn replace(&self, values: HashMap<String, String>) {
-        *self.values.write().unwrap_or_else(PoisonError::into_inner) = values;
+    pub(crate) fn merge(&self, values: HashMap<String, String>) {
+        let mut current = self.values.write().unwrap_or_else(PoisonError::into_inner);
+        for (key, value) in values {
+            #[cfg(windows)]
+            if let Some(existing) = current
+                .keys()
+                .find(|candidate| candidate.eq_ignore_ascii_case(&key))
+                .cloned()
+            {
+                current.remove(&existing);
+            }
+            current.insert(key, value);
+        }
     }
 
     pub(crate) fn snapshot(&self) -> HashMap<String, String> {
@@ -62,7 +73,7 @@ mod tests {
     #[test]
     fn applies_hook_env_with_runtime_precedence() {
         let overlay = SessionStartEnvOverlay::default();
-        overlay.replace(HashMap::from([
+        overlay.merge(HashMap::from([
             ("CODEX_THREAD_ID".to_string(), "hook-thread".to_string()),
             ("PATH".to_string(), "/hook/bin".to_string()),
             ("SET_BY_POLICY".to_string(), "hook".to_string()),
@@ -81,6 +92,28 @@ mod tests {
                 ("CODEX_THREAD_ID".to_string(), "runtime-thread".to_string()),
                 ("PATH".to_string(), "/hook/bin".to_string()),
                 ("SET_BY_POLICY".to_string(), "hook".to_string()),
+            ])
+        );
+    }
+
+    #[test]
+    fn merges_later_session_start_env_additively() {
+        let overlay = SessionStartEnvOverlay::new(HashMap::from([
+            ("PATH".to_string(), "/startup/bin".to_string()),
+            ("STARTUP_ONLY".to_string(), "1".to_string()),
+        ]));
+
+        overlay.merge(HashMap::from([
+            ("PATH".to_string(), "/compact/bin".to_string()),
+            ("COMPACT_ONLY".to_string(), "1".to_string()),
+        ]));
+
+        assert_eq!(
+            overlay.snapshot(),
+            HashMap::from([
+                ("PATH".to_string(), "/compact/bin".to_string()),
+                ("STARTUP_ONLY".to_string(), "1".to_string()),
+                ("COMPACT_ONLY".to_string(), "1".to_string()),
             ])
         );
     }

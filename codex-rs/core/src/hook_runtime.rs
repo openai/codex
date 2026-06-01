@@ -129,7 +129,7 @@ pub(crate) async fn run_pending_session_start_hooks(
             .await;
         emit_hook_completed_events(sess, turn_context, hook_events).await;
         if let Some(env) = session_start_env {
-            sess.replace_session_start_env(env);
+            sess.merge_session_start_env(env);
         }
         record_additional_contexts(sess, turn_context, additional_contexts).await;
         if should_stop {

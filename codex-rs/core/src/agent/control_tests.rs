@@ -564,7 +564,7 @@ async fn spawned_agent_inherits_session_start_env_snapshot() {
     parent_thread
         .codex
         .session
-        .replace_session_start_env(HashMap::from([(
+        .merge_session_start_env(HashMap::from([(
             "CODEX_TEST_PARENT_ENV".to_string(),
             "at-spawn".to_string(),
         )]));
@@ -593,7 +593,7 @@ async fn spawned_agent_inherits_session_start_env_snapshot() {
     parent_thread
         .codex
         .session
-        .replace_session_start_env(HashMap::from([(
+        .merge_session_start_env(HashMap::from([(
             "CODEX_TEST_PARENT_ENV".to_string(),
             "after-spawn".to_string(),
         )]));
