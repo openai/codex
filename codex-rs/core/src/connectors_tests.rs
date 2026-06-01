@@ -411,18 +411,16 @@ approvals_reviewer = "auto_review"
         .await
         .expect("config should build");
 
+    let reviewers = mcp_approvals_reviewers(&config);
     assert_eq!(
-        app_approvals_reviewer(&config, Some("calendar")),
+        reviewers.resolve(CODEX_APPS_MCP_SERVER_NAME, Some("calendar")),
         ApprovalsReviewer::AutoReview
     );
     assert_eq!(
-        app_approvals_reviewer(&config, Some("drive")),
+        reviewers.resolve(CODEX_APPS_MCP_SERVER_NAME, Some("drive")),
         ApprovalsReviewer::User
     );
-    assert!(has_app_approvals_reviewer_override(
-        &config,
-        ApprovalsReviewer::AutoReview
-    ));
+    assert!(reviewers.may_resolve_to(ApprovalsReviewer::AutoReview));
 }
 
 #[tokio::test]
@@ -444,12 +442,13 @@ approvals_reviewer = "user"
         .await
         .expect("config should build");
 
+    let reviewers = mcp_approvals_reviewers(&config);
     assert_eq!(
-        app_approvals_reviewer(&config, Some("calendar")),
+        reviewers.resolve(CODEX_APPS_MCP_SERVER_NAME, Some("calendar")),
         ApprovalsReviewer::User
     );
     assert_eq!(
-        app_approvals_reviewer(&config, Some("drive")),
+        reviewers.resolve(CODEX_APPS_MCP_SERVER_NAME, Some("drive")),
         ApprovalsReviewer::AutoReview
     );
 }
@@ -480,14 +479,12 @@ approvals_reviewer = "user"
         .await
         .expect("config should build");
 
+    let reviewers = mcp_approvals_reviewers(&config);
     assert_eq!(
-        app_approvals_reviewer(&config, Some("calendar")),
+        reviewers.resolve(CODEX_APPS_MCP_SERVER_NAME, Some("calendar")),
         ApprovalsReviewer::AutoReview
     );
-    assert!(!has_app_approvals_reviewer_override(
-        &config,
-        ApprovalsReviewer::User
-    ));
+    assert!(!reviewers.may_resolve_to(ApprovalsReviewer::User));
 }
 
 #[test]

@@ -691,6 +691,9 @@ impl Session {
             mcp_connection_manager.set_approval_policy(&session_configuration.approval_policy);
             mcp_connection_manager
                 .set_permission_profile(session_configuration.permission_profile());
+            mcp_connection_manager.set_approvals_reviewers(
+                crate::connectors::mcp_approvals_reviewers(&per_turn_config),
+            );
         }
 
         let model_info = self

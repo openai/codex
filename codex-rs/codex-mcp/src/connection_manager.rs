@@ -16,6 +16,7 @@ use std::time::Instant;
 use crate::McpAuthStatusEntry;
 use crate::codex_apps::CodexAppsToolsCacheContext;
 use crate::codex_apps::CodexAppsToolsCacheKey;
+use crate::codex_apps::McpApprovalsReviewers;
 use crate::codex_apps::write_cached_codex_apps_tools_if_needed;
 use crate::elicitation::ElicitationRequestManager;
 use crate::elicitation::ElicitationReviewerHandle;
@@ -139,6 +140,7 @@ impl McpConnectionManager {
             elicitation_requests: ElicitationRequestManager::new(
                 approval_policy.value(),
                 permission_profile.clone(),
+                McpApprovalsReviewers::default(),
                 /*reviewer*/ None,
             ),
             startup_cancellation_token: CancellationToken::new(),
@@ -201,6 +203,27 @@ impl McpConnectionManager {
         }
     }
 
+    pub fn set_approvals_reviewers(&self, approvals_reviewers: McpApprovalsReviewers) {
+        self.elicitation_requests
+            .set_approvals_reviewers(approvals_reviewers);
+    }
+
+    pub fn approvals_reviewer(
+        &self,
+        server_name: &str,
+        connector_id: Option<&str>,
+    ) -> codex_config::types::ApprovalsReviewer {
+        self.elicitation_requests
+            .approvals_reviewer(server_name, connector_id)
+    }
+
+    pub fn may_resolve_approvals_to(
+        &self,
+        reviewer: codex_config::types::ApprovalsReviewer,
+    ) -> bool {
+        self.elicitation_requests.may_resolve_to(reviewer)
+    }
+
     pub fn elicitations_auto_deny(&self) -> bool {
         self.elicitation_requests.auto_deny()
     }
@@ -225,6 +248,7 @@ impl McpConnectionManager {
         prefix_mcp_tool_names: bool,
         client_elicitation_capability: ElicitationCapability,
         tool_plugin_provenance: ToolPluginProvenance,
+        approvals_reviewers: McpApprovalsReviewers,
         auth: Option<&CodexAuth>,
         elicitation_reviewer: Option<ElicitationReviewerHandle>,
     ) -> (Self, CancellationToken) {
@@ -235,6 +259,7 @@ impl McpConnectionManager {
         let elicitation_requests = ElicitationRequestManager::new(
             approval_policy.value(),
             initial_permission_profile,
+            approvals_reviewers,
             elicitation_reviewer,
         );
         let tool_plugin_provenance = Arc::new(tool_plugin_provenance);

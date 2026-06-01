@@ -1,5 +1,4 @@
 use super::*;
-use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::ElicitationReviewRequest;
 use codex_mcp::ElicitationReviewer;
 use codex_mcp::ElicitationReviewerHandle;
@@ -357,6 +356,7 @@ impl Session {
             mcp_config.prefix_mcp_tool_names,
             mcp_config.client_elicitation_capability,
             tool_plugin_provenance,
+            crate::connectors::mcp_approvals_reviewers(turn_context.config.as_ref()),
             auth.as_ref(),
             elicitation_reviewer,
         )
@@ -456,24 +456,9 @@ async fn review_guardian_mcp_elicitation(
         return Ok(None);
     };
 
-    let connector_id = if request.server_name == CODEX_APPS_MCP_SERVER_NAME {
-        match &request.elicitation {
-            CreateElicitationRequestParams::FormElicitationParams { meta, .. }
-            | CreateElicitationRequestParams::UrlElicitationParams { meta, .. } => meta
-                .as_ref()
-                .and_then(|meta| metadata_str(&meta.0, MCP_ELICITATION_CONNECTOR_ID_KEY)),
-        }
-    } else {
-        None
-    };
-    let approvals_reviewer = if request.server_name == CODEX_APPS_MCP_SERVER_NAME {
-        crate::connectors::app_approvals_reviewer(&turn_context.config, connector_id)
-    } else {
-        turn_context.config.approvals_reviewer
-    };
     if !crate::guardian::routes_approval_to_guardian_with_reviewer(
         turn_context.as_ref(),
-        approvals_reviewer,
+        request.approvals_reviewer,
     ) {
         return Ok(None);
     }

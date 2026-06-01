@@ -6,7 +6,6 @@ use async_channel::Sender;
 use codex_analytics::GuardianApprovalRequestSource;
 use codex_async_utils::OrCancelExt;
 use codex_config::types::ApprovalsReviewer;
-use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
@@ -33,7 +32,6 @@ use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 
 use crate::config::Config;
-use crate::connectors::has_app_approvals_reviewer_override;
 use crate::guardian::GuardianApprovalRequest;
 use crate::guardian::new_guardian_review_id;
 use crate::guardian::routes_approval_to_guardian;
@@ -689,11 +687,13 @@ async fn maybe_auto_review_mcp_request_user_input(
         .cloned()?;
     if !routes_approval_to_guardian(parent_ctx)
         && (!routes_approval_to_guardian_with_reviewer(parent_ctx, ApprovalsReviewer::AutoReview)
-            || invocation.server != CODEX_APPS_MCP_SERVER_NAME
-            || !has_app_approvals_reviewer_override(
-                &parent_ctx.config,
-                ApprovalsReviewer::AutoReview,
-            ))
+            || !parent_session
+                .services
+                .mcp_connection_manager
+                .try_read()
+                .is_ok_and(|manager| {
+                    manager.may_resolve_approvals_to(ApprovalsReviewer::AutoReview)
+                }))
     {
         return None;
     }
@@ -706,7 +706,7 @@ async fn maybe_auto_review_mcp_request_user_input(
     .await;
     if !routes_approval_to_guardian_with_reviewer(
         parent_ctx,
-        mcp_approvals_reviewer(parent_ctx, &invocation, metadata.as_ref()),
+        mcp_approvals_reviewer(parent_ctx, metadata.as_ref()),
     ) {
         return None;
     }

@@ -74,6 +74,7 @@ fn approval_metadata(
 ) -> McpToolApprovalMetadata {
     McpToolApprovalMetadata {
         annotations: None,
+        approvals_reviewer: None,
         connector_id: connector_id.map(str::to_string),
         connector_name: connector_name.map(str::to_string),
         connector_description: connector_description.map(str::to_string),
@@ -1156,6 +1157,7 @@ async fn codex_apps_tool_call_request_meta_includes_turn_metadata_and_codex_apps
         .expect("turn metadata");
     let metadata = McpToolApprovalMetadata {
         annotations: None,
+        approvals_reviewer: None,
         connector_id: Some("calendar".to_string()),
         connector_name: Some("Calendar".to_string()),
         connector_description: Some("Manage events".to_string()),
@@ -1274,6 +1276,7 @@ async fn install_host_owned_codex_apps_manager(session: &Session, turn_context: 
         turn_context.config.prefix_mcp_tool_names(),
         rmcp::model::ElicitationCapability::default(),
         codex_mcp::ToolPluginProvenance::default(),
+        crate::connectors::mcp_approvals_reviewers(&turn_context.config),
         auth.as_ref(),
         /*elicitation_reviewer*/ None,
     )
@@ -1615,6 +1618,7 @@ fn guardian_mcp_review_request_includes_annotations_when_present() {
     };
     let metadata = McpToolApprovalMetadata {
         annotations: Some(annotations(Some(false), Some(true), Some(true))),
+        approvals_reviewer: None,
         connector_id: None,
         connector_name: None,
         connector_description: None,
@@ -2280,6 +2284,7 @@ async fn approve_mode_skips_when_annotations_do_not_require_approval() {
             /*destructive*/ None,
             /*open_world*/ None,
         )),
+        approvals_reviewer: None,
         connector_id: None,
         connector_name: None,
         connector_description: None,
@@ -2354,6 +2359,7 @@ async fn guardian_mode_skips_auto_when_annotations_do_not_require_approval() {
             /*destructive*/ None,
             /*open_world*/ None,
         )),
+        approvals_reviewer: None,
         connector_id: None,
         connector_name: None,
         connector_description: None,
@@ -2411,6 +2417,7 @@ async fn permission_request_hook_allows_mcp_tool_call() {
             Some(true),
             /*open_world*/ None,
         )),
+        approvals_reviewer: None,
         connector_id: None,
         connector_name: None,
         connector_description: None,
@@ -2547,6 +2554,7 @@ async fn permission_request_hook_runs_after_remembered_mcp_approval() {
             Some(true),
             /*open_world*/ None,
         )),
+        approvals_reviewer: None,
         connector_id: None,
         connector_name: None,
         connector_description: None,
@@ -2634,6 +2642,7 @@ async fn guardian_mode_mcp_denial_returns_rationale_message() {
     };
     let metadata = McpToolApprovalMetadata {
         annotations: Some(annotations(Some(false), Some(true), Some(true))),
+        approvals_reviewer: None,
         connector_id: None,
         connector_name: None,
         connector_description: None,
@@ -2690,31 +2699,23 @@ approvals_reviewer = "auto_review"
         .expect("config should build");
     let (_session, mut turn_context) = make_session_and_context().await;
     turn_context.config = Arc::new(config);
-    let metadata = approval_metadata(
+    let mut metadata = approval_metadata(
         Some("calendar"),
         Some("Calendar"),
         /*connector_description*/ None,
         /*tool_title*/ None,
         /*tool_description*/ None,
     );
-    let connected_app_invocation = McpInvocation {
-        server: CODEX_APPS_MCP_SERVER_NAME.to_string(),
-        tool: "create_event".to_string(),
-        arguments: None,
-    };
+    metadata.approvals_reviewer = Some(ApprovalsReviewer::AutoReview);
 
     assert_eq!(
-        mcp_approvals_reviewer(&turn_context, &connected_app_invocation, Some(&metadata),),
+        mcp_approvals_reviewer(&turn_context, Some(&metadata)),
         ApprovalsReviewer::AutoReview
     );
 
-    let custom_mcp_invocation = McpInvocation {
-        server: "custom_server".to_string(),
-        tool: "create_event".to_string(),
-        arguments: None,
-    };
+    metadata.approvals_reviewer = None;
     assert_eq!(
-        mcp_approvals_reviewer(&turn_context, &custom_mcp_invocation, Some(&metadata)),
+        mcp_approvals_reviewer(&turn_context, Some(&metadata)),
         ApprovalsReviewer::User
     );
 }
@@ -2737,6 +2738,7 @@ async fn prompt_mode_waits_for_approval_when_annotations_do_not_require_approval
             /*destructive*/ None,
             /*open_world*/ None,
         )),
+        approvals_reviewer: None,
         connector_id: None,
         connector_name: None,
         connector_description: None,
@@ -2792,6 +2794,7 @@ async fn full_access_mode_skips_mcp_tool_approval_for_all_approval_modes() {
     };
     let metadata = McpToolApprovalMetadata {
         annotations: Some(annotations(Some(false), Some(true), Some(true))),
+        approvals_reviewer: None,
         connector_id: Some("calendar".to_string()),
         connector_name: Some("Calendar".to_string()),
         connector_description: Some("Manage events".to_string()),
@@ -2845,6 +2848,7 @@ async fn approve_mode_skips_guardian_in_every_permission_mode() {
     };
     let metadata = McpToolApprovalMetadata {
         annotations: Some(annotations(Some(false), Some(true), Some(true))),
+        approvals_reviewer: None,
         connector_id: Some("calendar".to_string()),
         connector_name: Some("Calendar".to_string()),
         connector_description: Some("Manage events".to_string()),

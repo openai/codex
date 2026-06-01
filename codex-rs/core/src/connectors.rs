@@ -26,7 +26,6 @@ use crate::plugins::list_tool_suggest_discoverable_plugins;
 use crate::session::INITIAL_SUBMIT_ID;
 use codex_config::AppsRequirementsToml;
 use codex_config::types::AppToolApproval;
-use codex_config::types::ApprovalsReviewer;
 use codex_config::types::AppsConfigToml;
 use codex_config::types::ToolSuggestDiscoverableType;
 use codex_core_plugins::PluginsManager;
@@ -35,6 +34,7 @@ use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_login::default_client::originator;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
+use codex_mcp::McpApprovalsReviewers;
 use codex_mcp::McpConnectionManager;
 use codex_mcp::McpRuntimeContext;
 use codex_mcp::ToolInfo;
@@ -280,6 +280,7 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_environment_manager(
         mcp_config.prefix_mcp_tool_names,
         mcp_config.client_elicitation_capability,
         ToolPluginProvenance::default(),
+        mcp_approvals_reviewers(config),
         auth.as_ref(),
         /*elicitation_reviewer*/ None,
     )
@@ -567,45 +568,29 @@ pub(crate) fn codex_app_tool_is_enabled(config: &Config, tool_info: &ToolInfo) -
     .enabled
 }
 
-pub(crate) fn app_approvals_reviewer(
-    config: &Config,
-    connector_id: Option<&str>,
-) -> ApprovalsReviewer {
-    read_user_apps_config(config)
-        .as_ref()
-        .and_then(|apps_config| connector_id.and_then(|id| apps_config.apps.get(id)))
-        .and_then(|app| app.approvals_reviewer)
-        .filter(|reviewer| {
-            config
-                .config_layer_stack
-                .requirements()
-                .approvals_reviewer
-                .can_set(reviewer)
-                .is_ok()
+pub(crate) fn mcp_approvals_reviewers(config: &Config) -> McpApprovalsReviewers {
+    let codex_apps_by_connector_id = read_user_apps_config(config)
+        .map(|apps_config| {
+            apps_config
+                .apps
+                .into_iter()
+                .filter_map(|(connector_id, app)| {
+                    app.approvals_reviewer
+                        .filter(|reviewer| {
+                            config
+                                .config_layer_stack
+                                .requirements()
+                                .approvals_reviewer
+                                .can_set(reviewer)
+                                .is_ok()
+                        })
+                        .map(|reviewer| (connector_id, reviewer))
+                })
+                .collect()
         })
-        .unwrap_or(config.approvals_reviewer)
-}
+        .unwrap_or_default();
 
-pub(crate) fn has_app_approvals_reviewer_override(
-    config: &Config,
-    approvals_reviewer: ApprovalsReviewer,
-) -> bool {
-    if config
-        .config_layer_stack
-        .requirements()
-        .approvals_reviewer
-        .can_set(&approvals_reviewer)
-        .is_err()
-    {
-        return false;
-    }
-
-    read_user_apps_config(config).is_some_and(|apps_config| {
-        apps_config
-            .apps
-            .values()
-            .any(|app| app.approvals_reviewer == Some(approvals_reviewer))
-    })
+    McpApprovalsReviewers::new(config.approvals_reviewer, codex_apps_by_connector_id)
 }
 
 fn read_apps_config(config: &Config) -> Option<AppsConfigToml> {
