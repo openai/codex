@@ -1087,6 +1087,22 @@ pub fn local_image_content_items_with_label_number(
         ImageDetail::Auto | ImageDetail::Low | ImageDetail::High => PromptImageMode::ResizeToFit,
     };
 
+    local_image_content_items_with_label_number_and_mode(
+        path,
+        file_bytes,
+        label_number,
+        Some(detail),
+        mode,
+    )
+}
+
+fn local_image_content_items_with_label_number_and_mode(
+    path: &std::path::Path,
+    file_bytes: Vec<u8>,
+    label_number: Option<usize>,
+    detail: Option<ImageDetail>,
+    mode: PromptImageMode,
+) -> Vec<ContentItem> {
     match load_for_prompt_bytes(path, file_bytes, mode) {
         Ok(image) => {
             let mut items = Vec::with_capacity(3);
@@ -1097,7 +1113,7 @@ pub fn local_image_content_items_with_label_number(
             }
             items.push(ContentItem::InputImage {
                 image_url: image.into_data_url(),
-                detail: Some(detail),
+                detail,
             });
             if label_number.is_some() {
                 items.push(ContentItem::InputText {
@@ -1119,7 +1135,72 @@ pub fn local_image_content_items_with_label_number(
             ImageProcessingError::UnsupportedImageFormat { mime } => {
                 vec![unsupported_image_error_placeholder(path, mime)]
             }
+            ImageProcessingError::InvalidDataUrl { .. } => {
+                vec![local_image_error_placeholder(path, &err)]
+            }
+            ImageProcessingError::ImageTooLarge { .. } => {
+                vec![local_image_error_placeholder(path, &err)]
+            }
         },
+    }
+}
+
+pub fn response_input_item_from_user_input(
+    items: Vec<UserInput>,
+    use_responses_lite: bool,
+) -> ResponseInputItem {
+    let mut image_index = 0;
+    ResponseInputItem::Message {
+        role: "user".to_string(),
+        content: items
+            .into_iter()
+            .flat_map(|c| match c {
+                UserInput::Text { text, .. } => vec![ContentItem::InputText { text }],
+                UserInput::Image {
+                    image_url, detail, ..
+                } => {
+                    image_index += 1;
+                    vec![ContentItem::InputImage {
+                        image_url,
+                        detail: if use_responses_lite {
+                            detail
+                        } else {
+                            Some(detail.unwrap_or(DEFAULT_IMAGE_DETAIL))
+                        },
+                    }]
+                }
+                UserInput::LocalImage { path, detail, .. } => {
+                    image_index += 1;
+                    let mode = if use_responses_lite {
+                        // The centralized Responses Lite pass owns detail-specific resizing.
+                        PromptImageMode::Original
+                    } else {
+                        match detail.unwrap_or(DEFAULT_IMAGE_DETAIL) {
+                            ImageDetail::Original => PromptImageMode::Original,
+                            ImageDetail::Auto | ImageDetail::Low | ImageDetail::High => {
+                                PromptImageMode::ResizeToFit
+                            }
+                        }
+                    };
+                    match std::fs::read(&path) {
+                        Ok(file_bytes) => local_image_content_items_with_label_number_and_mode(
+                            &path,
+                            file_bytes,
+                            Some(image_index),
+                            if use_responses_lite {
+                                detail
+                            } else {
+                                Some(detail.unwrap_or(DEFAULT_IMAGE_DETAIL))
+                            },
+                            mode,
+                        ),
+                        Err(err) => vec![local_image_error_placeholder(&path, err)],
+                    }
+                }
+                UserInput::Skill { .. } | UserInput::Mention { .. } => Vec::new(), // Tool bodies are injected later in core
+            })
+            .collect::<Vec<ContentItem>>(),
+        phase: None,
     }
 }
 
@@ -1235,41 +1316,7 @@ pub enum ReasoningItemContent {
 
 impl From<Vec<UserInput>> for ResponseInputItem {
     fn from(items: Vec<UserInput>) -> Self {
-        let mut image_index = 0;
-        Self::Message {
-            role: "user".to_string(),
-            content: items
-                .into_iter()
-                .flat_map(|c| match c {
-                    UserInput::Text { text, .. } => vec![ContentItem::InputText { text }],
-                    UserInput::Image {
-                        image_url, detail, ..
-                    } => {
-                        image_index += 1;
-                        let detail = detail.unwrap_or(DEFAULT_IMAGE_DETAIL);
-                        vec![ContentItem::InputImage {
-                            image_url,
-                            detail: Some(detail),
-                        }]
-                    }
-                    UserInput::LocalImage { path, detail, .. } => {
-                        image_index += 1;
-                        let detail = detail.unwrap_or(DEFAULT_IMAGE_DETAIL);
-                        match std::fs::read(&path) {
-                            Ok(file_bytes) => local_image_content_items_with_label_number(
-                                &path,
-                                file_bytes,
-                                Some(image_index),
-                                detail,
-                            ),
-                            Err(err) => vec![local_image_error_placeholder(&path, err)],
-                        }
-                    }
-                    UserInput::Skill { .. } | UserInput::Mention { .. } => Vec::new(), // Tool bodies are injected later in core
-                })
-                .collect::<Vec<ContentItem>>(),
-            phase: None,
-        }
+        response_input_item_from_user_input(items, /*use_responses_lite*/ false)
     }
 }
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

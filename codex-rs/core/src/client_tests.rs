@@ -10,6 +10,7 @@ use super::X_OPENAI_SUBAGENT_HEADER;
 use crate::AttestationContext;
 use crate::AttestationProvider;
 use crate::GenerateAttestationFuture;
+use crate::client_common::Prompt;
 use codex_api::ApiError;
 use codex_api::ResponseEvent;
 use codex_app_server_protocol::AuthMode;
@@ -23,6 +24,7 @@ use codex_model_provider_info::create_oss_provider_with_base_url;
 use codex_otel::SessionTelemetry;
 use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
+use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelInfo;
@@ -322,6 +324,70 @@ fn build_ws_client_metadata_includes_window_lineage_and_turn_metadata() {
                 r#"{"turn_id":"turn-123"}"#.to_string(),
             ),
         ])
+    );
+}
+
+#[tokio::test]
+async fn build_responses_request_replaces_invalid_historical_image_for_responses_lite() {
+    let client = test_model_client(SessionSource::Cli);
+    let provider = client
+        .state
+        .provider
+        .api_provider()
+        .await
+        .expect("resolve API provider");
+    let prompt = Prompt {
+        input: vec![ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![
+                ContentItem::InputText {
+                    text: "before".to_string(),
+                },
+                ContentItem::InputImage {
+                    image_url: "https://example.com/historical.png".to_string(),
+                    detail: None,
+                },
+                ContentItem::InputText {
+                    text: "after".to_string(),
+                },
+            ],
+            phase: None,
+        }],
+        ..Prompt::default()
+    };
+
+    let mut model_info = test_model_info();
+    model_info.use_responses_lite = true;
+    let request = client
+        .build_responses_request(
+            &provider,
+            &prompt,
+            &model_info,
+            /*effort*/ None,
+            ReasoningSummaryConfig::None,
+            /*service_tier*/ None,
+        )
+        .expect("build Responses Lite request");
+
+    assert_eq!(
+        request.input,
+        vec![ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![
+                ContentItem::InputText {
+                    text: "before".to_string(),
+                },
+                ContentItem::InputText {
+                    text: "image content omitted because it could not be processed".to_string(),
+                },
+                ContentItem::InputText {
+                    text: "after".to_string(),
+                },
+            ],
+            phase: None,
+        }]
     );
 }
 

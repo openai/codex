@@ -1847,7 +1847,7 @@ fn multiple_inline_images_apply_multiple_fixed_costs() {
 }
 
 #[test]
-fn original_detail_images_scale_with_dimensions() {
+fn original_sized_image_details_scale_with_dimensions() {
     // 2304x864 at 32px patches yields 72 * 27 = 1,944 patches.
     // The byte heuristic uses 4 bytes per token, so the replacement cost is 7,776 bytes.
     const EXPECTED_ORIGINAL_DETAIL_IMAGE_BYTES: i64 = 7_776;
@@ -1861,21 +1861,28 @@ fn original_detail_images_scale_with_dimensions() {
         .expect("encode png");
     let payload = BASE64_STANDARD.encode(bytes.get_ref());
     let image_url = format!("data:image/png;base64,{payload}");
-    let item = ResponseItem::FunctionCallOutput {
-        call_id: "call-original".to_string(),
-        output: FunctionCallOutputPayload::from_content_items(vec![
-            FunctionCallOutputContentItem::InputImage {
-                image_url,
-                detail: Some(ImageDetail::Original),
-            },
-        ]),
-    };
 
-    let raw_len = serde_json::to_string(&item).unwrap().len() as i64;
-    let estimated = estimate_response_item_model_visible_bytes(&item);
-    let expected = raw_len - payload.len() as i64 + EXPECTED_ORIGINAL_DETAIL_IMAGE_BYTES;
+    for (detail, name) in [
+        (None, "missing"),
+        (Some(ImageDetail::Auto), "auto"),
+        (Some(ImageDetail::Original), "original"),
+    ] {
+        let item = ResponseItem::FunctionCallOutput {
+            call_id: format!("call-{name}"),
+            output: FunctionCallOutputPayload::from_content_items(vec![
+                FunctionCallOutputContentItem::InputImage {
+                    image_url: image_url.clone(),
+                    detail,
+                },
+            ]),
+        };
 
-    assert_eq!(estimated, expected);
+        let raw_len = serde_json::to_string(&item).unwrap().len() as i64;
+        let estimated = estimate_response_item_model_visible_bytes(&item);
+        let expected = raw_len - payload.len() as i64 + EXPECTED_ORIGINAL_DETAIL_IMAGE_BYTES;
+
+        assert_eq!(estimated, expected);
+    }
 }
 
 #[test]
@@ -1906,6 +1913,37 @@ fn original_detail_images_are_capped_at_max_patch_count() {
     let capped_original_detail_image_bytes =
         i64::try_from(approx_bytes_for_tokens(ORIGINAL_IMAGE_MAX_PATCHES)).unwrap();
     let expected = raw_len - payload.len() as i64 + capped_original_detail_image_bytes;
+
+    assert_eq!(estimated, expected);
+}
+
+#[test]
+fn original_detail_images_apply_max_dimension_before_patch_count() {
+    // 6401x100 first scales to 6000x94. At 32px patches that is 188 * 3 = 564.
+    const EXPECTED_MAX_DIMENSION_IMAGE_BYTES: i64 = 2_256;
+
+    let width = 6401;
+    let height = 100;
+    let image = ImageBuffer::from_pixel(width, height, Rgba([12u8, 34, 56, 255]));
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    image
+        .write_to(&mut bytes, ImageFormat::Png)
+        .expect("encode png");
+    let payload = BASE64_STANDARD.encode(bytes.get_ref());
+    let image_url = format!("data:image/png;base64,{payload}");
+    let item = ResponseItem::FunctionCallOutput {
+        call_id: "call-original-max-dimension".to_string(),
+        output: FunctionCallOutputPayload::from_content_items(vec![
+            FunctionCallOutputContentItem::InputImage {
+                image_url,
+                detail: Some(ImageDetail::Original),
+            },
+        ]),
+    };
+
+    let raw_len = serde_json::to_string(&item).unwrap().len() as i64;
+    let estimated = estimate_response_item_model_visible_bytes(&item);
+    let expected = raw_len - payload.len() as i64 + EXPECTED_MAX_DIMENSION_IMAGE_BYTES;
 
     assert_eq!(estimated, expected);
 }

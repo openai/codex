@@ -28,7 +28,6 @@ use codex_protocol::error::Result as CodexResult;
 use codex_protocol::items::ContextCompactionItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ContentItem;
-use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::CompactedItem;
 use codex_protocol::protocol::EventMsg;
@@ -201,11 +200,15 @@ async fn run_compact_task_inner_impl(
     let compaction_item = TurnItem::ContextCompaction(ContextCompactionItem::new());
     sess.emit_turn_item_started(&turn_context, &compaction_item)
         .await;
-    let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input);
+    let initial_response_item = sess.response_item_from_user_input(turn_context.as_ref(), input);
+    let prepared_initial_response_item = sess.prepare_conversation_items_for_history(
+        turn_context.as_ref(),
+        std::slice::from_ref(&initial_response_item),
+    );
 
     let mut history = sess.clone_history().await;
     history.record_items(
-        &[initial_input_for_turn.into()],
+        prepared_initial_response_item.as_ref(),
         turn_context.truncation_policy,
     );
 

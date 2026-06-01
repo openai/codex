@@ -57,6 +57,8 @@ use wiremock::ResponseTemplate;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
 
+const TINY_PNG_BASE64: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==";
+
 fn custom_tool_output_items(req: &ResponsesRequest, call_id: &str) -> Vec<Value> {
     match req.custom_tool_call_output(call_id).get("output") {
         Some(Value::Array(items)) => items.clone(),
@@ -175,7 +177,31 @@ async fn run_code_mode_turn_with_config(
             configure(config);
         });
     let test = builder.build(server).await?;
+    run_code_mode_turn_with_test(server, prompt, code, test).await
+}
 
+async fn run_code_mode_turn_with_responses_lite(
+    server: &MockServer,
+    prompt: &str,
+    code: &str,
+) -> Result<(TestCodex, ResponseMock)> {
+    let mut builder = test_codex()
+        .with_model_info_override("gpt-5.4", |model_info| {
+            model_info.use_responses_lite = true;
+        })
+        .with_config(|config| {
+            let _ = config.features.enable(Feature::CodeMode);
+        });
+    let test = builder.build(server).await?;
+    run_code_mode_turn_with_test(server, prompt, code, test).await
+}
+
+async fn run_code_mode_turn_with_test(
+    server: &MockServer,
+    prompt: &str,
+    code: &str,
+    test: TestCodex,
+) -> Result<(TestCodex, ResponseMock)> {
     responses::mount_sse_once(
         server,
         sse(vec![
@@ -2537,6 +2563,73 @@ image("data:image/png;base64,AAA");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_responses_lite_prepares_global_helper_image_output() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let (_test, second_mock) = run_code_mode_turn_with_responses_lite(
+        &server,
+        "use exec to return a Responses Lite image",
+        &format!(
+            r#"
+image("data:image/png;base64,{TINY_PNG_BASE64}", "high");
+"#
+        ),
+    )
+    .await?;
+
+    let req = second_mock.single_request();
+    let items = custom_tool_output_items(&req, "call-1");
+    let (_, success) = custom_tool_output_body_and_success(&req, "call-1");
+    assert_ne!(
+        success,
+        Some(false),
+        "code_mode image output failed unexpectedly"
+    );
+    assert_eq!(items.len(), 2);
+    assert_eq!(
+        items[1].get("type").and_then(Value::as_str),
+        Some("input_image")
+    );
+    assert!(
+        items[1]
+            .get("image_url")
+            .and_then(Value::as_str)
+            .is_some_and(|image_url| image_url.starts_with("data:image/png;base64,"))
+    );
+    assert_eq!(items[1].get("detail"), None);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_responses_lite_replaces_invalid_image_output() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let (_test, second_mock) = run_code_mode_turn_with_responses_lite(
+        &server,
+        "use exec to return an invalid Responses Lite image",
+        r#"
+image("data:image/png;base64,AAA", "high");
+"#,
+    )
+    .await?;
+
+    let req = second_mock.single_request();
+    let items = custom_tool_output_items(&req, "call-1");
+    let (_, success) = custom_tool_output_body_and_success(&req, "call-1");
+    assert_ne!(success, Some(false));
+    assert_eq!(items.len(), 2);
+    assert_eq!(
+        text_item(&items, /*index*/ 1),
+        "image content omitted because it could not be processed"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn code_mode_can_use_view_image_result_with_image_helper() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -2548,9 +2641,7 @@ async fn code_mode_can_use_view_image_result_with_image_helper() -> Result<()> {
         });
     let test = builder.build(&server).await?;
 
-    let image_bytes = BASE64_STANDARD.decode(
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==",
-    )?;
+    let image_bytes = BASE64_STANDARD.decode(TINY_PNG_BASE64)?;
     let image_path = test.cwd_path().join("code_mode_view_image.png");
     fs::write(&image_path, image_bytes)?;
 

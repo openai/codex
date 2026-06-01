@@ -103,7 +103,58 @@ fn body_contains(req: &wiremock::Request, text: &str) -> bool {
         .is_some_and(|body| body.contains(text))
 }
 
+struct ImageTurnResult {
+    input_images: Vec<Value>,
+    response_request_bodies: Vec<Value>,
+    completed: TurnCompletedNotification,
+}
+
+#[derive(Clone, Copy)]
+enum ImageTurnMode {
+    Default,
+    ResponsesLite,
+}
+
 async fn run_local_image_turn(detail: Option<ImageDetail>) -> Result<Vec<Value>> {
+    Ok(
+        run_local_image_turn_with_options(detail, ImageTurnMode::Default)
+            .await?
+            .input_images,
+    )
+}
+
+async fn run_local_image_turn_with_options(
+    detail: Option<ImageDetail>,
+    mode: ImageTurnMode,
+) -> Result<ImageTurnResult> {
+    run_image_turn_with_options(mode, move |codex_home, _server| {
+        let image_path = codex_home.join("image.png");
+        std::fs::write(&image_path, TINY_PNG_BYTES)?;
+        Ok(V2UserInput::LocalImage {
+            path: image_path,
+            detail,
+        })
+    })
+    .await
+}
+
+async fn run_url_image_turn_with_options(
+    detail: Option<ImageDetail>,
+    mode: ImageTurnMode,
+) -> Result<ImageTurnResult> {
+    run_image_turn_with_options(mode, move |_codex_home, server| {
+        Ok(V2UserInput::Image {
+            url: format!("{}/responses-lite-image.png", server.uri()),
+            detail,
+        })
+    })
+    .await
+}
+
+async fn run_image_turn_with_options(
+    mode: ImageTurnMode,
+    make_input: impl FnOnce(&Path, &wiremock::MockServer) -> Result<V2UserInput> + Send,
+) -> Result<ImageTurnResult> {
     // Two Codex turns hit the mock model (session start + turn/start).
     let responses = vec![
         create_final_assistant_message_sse_response("Done")?,
@@ -120,6 +171,18 @@ async fn run_local_image_turn(detail: Option<ImageDetail>) -> Result<Vec<Value>>
         "never",
         &BTreeMap::default(),
     )?;
+    if matches!(mode, ImageTurnMode::ResponsesLite) {
+        write_models_cache(codex_home.path())?;
+        let cache_path = codex_home.path().join("models_cache.json");
+        let mut cache: Value = serde_json::from_str(&std::fs::read_to_string(&cache_path)?)?;
+        let model = cache["models"]
+            .as_array_mut()
+            .and_then(|models| models.first_mut())
+            .context("models cache should contain a model")?;
+        model["slug"] = Value::String("mock-model".to_string());
+        model["use_responses_lite"] = Value::Bool(true);
+        std::fs::write(cache_path, serde_json::to_string_pretty(&cache)?)?;
+    }
 
     let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -137,17 +200,11 @@ async fn run_local_image_turn(detail: Option<ImageDetail>) -> Result<Vec<Value>>
     .await??;
     let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
 
-    let image_path = codex_home.path().join("image.png");
-    std::fs::write(&image_path, TINY_PNG_BYTES)?;
-
     let turn_req = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
             client_user_message_id: None,
-            input: vec![V2UserInput::LocalImage {
-                path: image_path,
-                detail,
-            }],
+            input: vec![make_input(codex_home.path(), &server)?],
             ..Default::default()
         })
         .await?;
@@ -159,21 +216,35 @@ async fn run_local_image_turn(detail: Option<ImageDetail>) -> Result<Vec<Value>>
     let TurnStartResponse { turn } = to_response::<TurnStartResponse>(turn_resp)?;
     assert!(!turn.id.is_empty());
 
-    timeout(
+    let completed_notif: JSONRPCNotification = timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_notification_message("turn/completed"),
     )
     .await??;
+    let completed = serde_json::from_value(
+        completed_notif
+            .params
+            .context("turn/completed params must be present")?,
+    )?;
 
-    received_response_input_images(&server).await
+    let response_request_bodies = received_response_request_bodies(&server).await?;
+    let input_images = response_request_bodies
+        .iter()
+        .flat_map(input_images_from_response_request)
+        .collect();
+    Ok(ImageTurnResult {
+        input_images,
+        response_request_bodies,
+        completed,
+    })
 }
 
-async fn received_response_input_images(server: &wiremock::MockServer) -> Result<Vec<Value>> {
+async fn received_response_request_bodies(server: &wiremock::MockServer) -> Result<Vec<Value>> {
     let requests = server
         .received_requests()
         .await
         .context("failed to fetch received requests")?;
-    let mut input_images = Vec::new();
+    let mut response_request_bodies = Vec::new();
 
     for request in requests {
         if !request.url.path().ends_with("/responses") {
@@ -182,27 +253,28 @@ async fn received_response_input_images(server: &wiremock::MockServer) -> Result
         let body = request
             .body_json::<Value>()
             .context("request body should be JSON")?;
-        let Some(input) = body.get("input").and_then(Value::as_array) else {
-            continue;
-        };
-
-        for item in input {
-            if item.get("type").and_then(Value::as_str) != Some("message") {
-                continue;
-            }
-            let Some(content) = item.get("content").and_then(Value::as_array) else {
-                continue;
-            };
-            input_images.extend(
-                content
-                    .iter()
-                    .filter(|span| span.get("type").and_then(Value::as_str) == Some("input_image"))
-                    .cloned(),
-            );
-        }
+        response_request_bodies.push(body);
     }
 
-    Ok(input_images)
+    Ok(response_request_bodies)
+}
+
+fn input_images_from_response_request(body: &Value) -> Vec<Value> {
+    let Some(input) = body.get("input").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+
+    input
+        .iter()
+        .filter(|item| item.get("type").and_then(Value::as_str) == Some("message"))
+        .filter_map(|item| item.get("content").and_then(Value::as_array))
+        .flat_map(|content| {
+            content
+                .iter()
+                .filter(|span| span.get("type").and_then(Value::as_str) == Some("input_image"))
+                .cloned()
+        })
+        .collect()
 }
 
 #[tokio::test]
@@ -1954,6 +2026,75 @@ async fn turn_start_forwards_custom_local_image_detail() -> Result<()> {
     assert_eq!(input_images.len(), 1);
     assert_eq!(
         input_images[0].get("detail").and_then(Value::as_str),
+        Some("original")
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn turn_start_responses_lite_prepares_local_image() -> Result<()> {
+    let result =
+        run_local_image_turn_with_options(Some(ImageDetail::High), ImageTurnMode::ResponsesLite)
+            .await?;
+
+    assert_eq!(result.input_images.len(), 1);
+    assert!(
+        result.input_images[0]
+            .get("image_url")
+            .and_then(Value::as_str)
+            .is_some_and(|image_url| image_url.starts_with("data:image/png;base64,"))
+    );
+    assert_eq!(result.input_images[0].get("detail"), None);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn turn_start_responses_lite_replaces_http_image_url() -> Result<()> {
+    let result =
+        run_url_image_turn_with_options(Some(ImageDetail::High), ImageTurnMode::ResponsesLite)
+            .await?;
+
+    assert_eq!(result.completed.turn.status, TurnStatus::Completed);
+    assert!(result.completed.turn.error.is_none());
+    assert!(result.input_images.is_empty());
+    assert!(
+        result
+            .response_request_bodies
+            .iter()
+            .all(|body| !body.to_string().contains("/responses-lite-image.png")),
+        "HTTP image URL should not be forwarded to /responses: {:?}",
+        result.response_request_bodies
+    );
+    assert!(
+        result.response_request_bodies.iter().any(|body| body
+            .to_string()
+            .contains("image content omitted because it could not be processed")),
+        "expected image placeholder in /responses request: {:?}",
+        result.response_request_bodies
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn turn_start_non_responses_lite_forwards_http_image_url_and_detail() -> Result<()> {
+    let result =
+        run_url_image_turn_with_options(Some(ImageDetail::Original), ImageTurnMode::Default)
+            .await?;
+
+    assert_eq!(result.input_images.len(), 1);
+    let image_url = result.input_images[0]
+        .get("image_url")
+        .and_then(Value::as_str)
+        .context("input image should have image_url")?;
+    assert!(
+        image_url.ends_with("/responses-lite-image.png") && !image_url.starts_with("data:"),
+        "expected forwarded remote URL, got {image_url}"
+    );
+    assert_eq!(
+        result.input_images[0].get("detail").and_then(Value::as_str),
         Some("original")
     );
 

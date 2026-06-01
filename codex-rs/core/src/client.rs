@@ -762,7 +762,10 @@ impl ModelClient {
         service_tier: Option<String>,
     ) -> Result<ResponsesApiRequest> {
         let instructions = &prompt.base_instructions.text;
-        let input = prompt.get_formatted_input();
+        let mut input = prompt.get_formatted_input();
+        if model_info.use_responses_lite {
+            crate::responses_lite_images::prepare_response_items_for_responses_lite(&mut input);
+        }
         let tools = create_tools_json_for_responses_api(&prompt.tools)?;
         let reasoning = Self::build_reasoning(model_info, effort, summary);
         let include = if reasoning.is_some() {

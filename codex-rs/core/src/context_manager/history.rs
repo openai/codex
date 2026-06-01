@@ -3,8 +3,6 @@ use crate::event_mapping::has_non_contextual_dev_message_content;
 use crate::event_mapping::is_contextual_dev_message_content;
 use crate::event_mapping::is_contextual_user_message_content;
 use crate::session::turn_context::TurnContext;
-use base64::Engine;
-use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputBody;
@@ -19,6 +17,11 @@ use codex_protocol::protocol::TokenUsageInfo;
 use codex_protocol::protocol::TurnContextItem;
 use codex_utils_cache::BlockingLruCache;
 use codex_utils_cache::sha1_digest;
+use codex_utils_image::ORIGINAL_DETAIL_MAX_PATCHES;
+use codex_utils_image::PromptImageMode;
+use codex_utils_image::image_dimensions_from_base64_payload;
+use codex_utils_image::prompt_image_output_dimensions;
+use codex_utils_image::prompt_image_patch_count;
 use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::approx_bytes_for_tokens;
 use codex_utils_output_truncation::approx_token_count;
@@ -487,13 +490,12 @@ fn estimate_item_token_count(item: &ResponseItem) -> i64 {
 /// with ceiling division, so 7,373 bytes maps to approximately 1,844 tokens.
 const RESIZED_IMAGE_BYTES_ESTIMATE: i64 = 7373;
 // See https://platform.openai.com/docs/guides/images-vision#calculating-costs.
-// Use a direct 32px patch count only for `detail: "original"`;
-// all other image inputs continue to use `RESIZED_IMAGE_BYTES_ESTIMATE`.
-const ORIGINAL_IMAGE_PATCH_SIZE: u32 = 32;
+// GPT-5.5 sizes omitted, auto, and original image details with the original-detail budget.
+// Other image inputs continue to use `RESIZED_IMAGE_BYTES_ESTIMATE`.
 // See https://platform.openai.com/docs/guides/images-vision#model-sizing-behavior.
 // Keep this hard-coded for now; move it into model capabilities if the patch
 // budget starts changing often across model releases.
-const ORIGINAL_IMAGE_MAX_PATCHES: usize = 10_000;
+const ORIGINAL_IMAGE_MAX_PATCHES: usize = ORIGINAL_DETAIL_MAX_PATCHES;
 const ORIGINAL_IMAGE_ESTIMATE_CACHE_SIZE: usize = 32;
 
 static ORIGINAL_IMAGE_ESTIMATE_CACHE: LazyLock<BlockingLruCache<[u8; 20], Option<i64>>> =
@@ -579,27 +581,24 @@ fn estimate_original_image_bytes(image_url: &str) -> Option<i64> {
                 return None;
             }
         };
-        let bytes = match BASE64_STANDARD.decode(payload) {
-            Ok(bytes) => bytes,
+        let (width, height) = match image_dimensions_from_base64_payload(payload) {
+            Ok(dimensions) => dimensions,
             Err(error) => {
-                tracing::trace!("failed to decode original-detail image payload: {error}");
+                tracing::trace!("failed to read original-detail image dimensions: {error}");
                 return None;
             }
         };
-        let dynamic = match image::load_from_memory(&bytes) {
-            Ok(dynamic) => dynamic,
-            Err(error) => {
-                tracing::trace!("failed to decode original-detail image bytes: {error}");
-                return None;
-            }
-        };
-        let width = i64::from(dynamic.width());
-        let height = i64::from(dynamic.height());
-        let patch_size = i64::from(ORIGINAL_IMAGE_PATCH_SIZE);
-        let patches_wide = width.saturating_add(patch_size.saturating_sub(1)) / patch_size;
-        let patches_high = height.saturating_add(patch_size.saturating_sub(1)) / patch_size;
-        let patch_count = patches_wide.saturating_mul(patches_high);
-        let patch_count = usize::try_from(patch_count).unwrap_or(usize::MAX);
+        // This is token accounting, not client-side image preparation. We
+        // intentionally use `ResponsesLiteOriginal` here even for the legacy
+        // non-Responses-Lite path: legacy accounting already capped
+        // original-detail images at 10K patches, so this preserves the
+        // effective behavior of the previous logic while also modeling the
+        // 6000px maximum dimension that production Responses applies before
+        // counting patches. This does not resize or otherwise modify the image
+        // in history.
+        let (width, height) =
+            prompt_image_output_dimensions(width, height, PromptImageMode::ResponsesLiteOriginal);
+        let patch_count = prompt_image_patch_count(width, height);
         let patch_count = patch_count.min(ORIGINAL_IMAGE_MAX_PATCHES);
         Some(i64::try_from(approx_bytes_for_tokens(patch_count)).unwrap_or(i64::MAX))
     })
@@ -618,7 +617,7 @@ fn image_data_url_estimate_adjustment(item: &ResponseItem) -> (i64, i64) {
             payload_bytes =
                 payload_bytes.saturating_add(i64::try_from(payload_len).unwrap_or(i64::MAX));
             replacement_bytes = replacement_bytes.saturating_add(match detail {
-                Some(ImageDetail::Original) => {
+                None | Some(ImageDetail::Auto | ImageDetail::Original) => {
                     estimate_original_image_bytes(image_url).unwrap_or(RESIZED_IMAGE_BYTES_ESTIMATE)
                 }
                 _ => RESIZED_IMAGE_BYTES_ESTIMATE,
