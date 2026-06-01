@@ -479,7 +479,7 @@ impl RuntimeKeymap {
             yank: resolve_local!(keymap, defaults, editor, yank),
         };
 
-        let configured_main_bindings_to_preserve = configured_bindings_to_preserve([
+        let mut configured_main_bindings_to_preserve = configured_bindings_to_preserve([
             (
                 keymap.global.open_transcript.as_ref(),
                 app.open_transcript.as_slice(),
@@ -616,22 +616,6 @@ impl RuntimeKeymap {
             ),
             (keymap.editor.yank.as_ref(), editor.yank.as_slice()),
         ]);
-
-        // Keep newly introduced compatibility aliases from invalidating existing
-        // explicit keymaps. Explicit reasoning bindings remain authoritative and
-        // continue to report conflicts normally.
-        if keymap.chat.decrease_reasoning_effort.is_none() {
-            chat.decrease_reasoning_effort.retain(|binding| {
-                *binding != key_hint::shift(KeyCode::Down)
-                    || !configured_main_bindings_to_preserve.contains(binding)
-            });
-        }
-        if keymap.chat.increase_reasoning_effort.is_none() {
-            chat.increase_reasoning_effort.retain(|binding| {
-                *binding != key_hint::shift(KeyCode::Up)
-                    || !configured_main_bindings_to_preserve.contains(binding)
-            });
-        }
 
         let mut vim_normal = VimNormalKeymap {
             enter_insert: resolve_local!(keymap, defaults, vim_normal, enter_insert),
@@ -891,6 +875,75 @@ impl RuntimeKeymap {
             backtick: resolve_local!(keymap, defaults, vim_text_object, backtick),
             cancel: resolve_local!(keymap, defaults, vim_text_object, cancel),
         };
+
+        configured_main_bindings_to_preserve.extend(configured_vim_normal_bindings_to_preserve);
+        configured_main_bindings_to_preserve.extend(configured_vim_operator_bindings_to_preserve);
+        configured_main_bindings_to_preserve.extend(configured_bindings_to_preserve([
+            (
+                keymap.vim_normal.substitute_char.as_ref(),
+                vim_normal.substitute_char.as_slice(),
+            ),
+            (
+                keymap.vim_operator.select_inner_text_object.as_ref(),
+                vim_operator.select_inner_text_object.as_slice(),
+            ),
+            (
+                keymap.vim_operator.select_around_text_object.as_ref(),
+                vim_operator.select_around_text_object.as_slice(),
+            ),
+            (
+                keymap.vim_text_object.word.as_ref(),
+                vim_text_object.word.as_slice(),
+            ),
+            (
+                keymap.vim_text_object.big_word.as_ref(),
+                vim_text_object.big_word.as_slice(),
+            ),
+            (
+                keymap.vim_text_object.parentheses.as_ref(),
+                vim_text_object.parentheses.as_slice(),
+            ),
+            (
+                keymap.vim_text_object.brackets.as_ref(),
+                vim_text_object.brackets.as_slice(),
+            ),
+            (
+                keymap.vim_text_object.braces.as_ref(),
+                vim_text_object.braces.as_slice(),
+            ),
+            (
+                keymap.vim_text_object.double_quote.as_ref(),
+                vim_text_object.double_quote.as_slice(),
+            ),
+            (
+                keymap.vim_text_object.single_quote.as_ref(),
+                vim_text_object.single_quote.as_slice(),
+            ),
+            (
+                keymap.vim_text_object.backtick.as_ref(),
+                vim_text_object.backtick.as_slice(),
+            ),
+            (
+                keymap.vim_text_object.cancel.as_ref(),
+                vim_text_object.cancel.as_slice(),
+            ),
+        ]));
+
+        // Keep newly introduced compatibility aliases from invalidating or
+        // shadowing existing explicit keymaps. Explicit reasoning bindings
+        // remain authoritative.
+        if keymap.chat.decrease_reasoning_effort.is_none() {
+            chat.decrease_reasoning_effort.retain(|binding| {
+                *binding != key_hint::shift(KeyCode::Down)
+                    || !configured_main_bindings_to_preserve.contains(binding)
+            });
+        }
+        if keymap.chat.increase_reasoning_effort.is_none() {
+            chat.increase_reasoning_effort.retain(|binding| {
+                *binding != key_hint::shift(KeyCode::Up)
+                    || !configured_main_bindings_to_preserve.contains(binding)
+            });
+        }
 
         let pager = PagerKeymap {
             scroll_up: resolve_local!(keymap, defaults, pager, scroll_up),
@@ -2416,6 +2469,66 @@ mod tests {
         keymap.chat.increase_reasoning_effort = Some(one("shift-up"));
 
         expect_conflict(&keymap, "chat.increase_reasoning_effort", "editor.move_up");
+    }
+
+    #[test]
+    fn configured_vim_normal_bindings_prune_new_reasoning_default_overlaps() {
+        let mut keymap = TuiKeymap::default();
+        keymap.vim_normal.move_up = Some(one("shift-up"));
+        keymap.vim_normal.move_down = Some(one("shift-down"));
+
+        let runtime = RuntimeKeymap::from_config(&keymap).expect("config should parse");
+
+        assert_eq!(
+            runtime.vim_normal.move_up,
+            vec![key_hint::shift(KeyCode::Up)]
+        );
+        assert_eq!(
+            runtime.vim_normal.move_down,
+            vec![key_hint::shift(KeyCode::Down)]
+        );
+        assert_eq!(
+            runtime.chat.decrease_reasoning_effort,
+            vec![key_hint::alt(KeyCode::Char(','))]
+        );
+        assert_eq!(
+            runtime.chat.increase_reasoning_effort,
+            vec![key_hint::alt(KeyCode::Char('.'))]
+        );
+    }
+
+    #[test]
+    fn configured_vim_operator_binding_prunes_new_reasoning_default_overlap() {
+        let mut keymap = TuiKeymap::default();
+        keymap.vim_operator.select_inner_text_object = Some(one("shift-up"));
+
+        let runtime = RuntimeKeymap::from_config(&keymap).expect("config should parse");
+
+        assert_eq!(
+            runtime.vim_operator.select_inner_text_object,
+            vec![key_hint::shift(KeyCode::Up)]
+        );
+        assert_eq!(
+            runtime.chat.increase_reasoning_effort,
+            vec![key_hint::alt(KeyCode::Char('.'))]
+        );
+    }
+
+    #[test]
+    fn configured_vim_text_object_binding_prunes_new_reasoning_default_overlap() {
+        let mut keymap = TuiKeymap::default();
+        keymap.vim_text_object.word = Some(one("shift-down"));
+
+        let runtime = RuntimeKeymap::from_config(&keymap).expect("config should parse");
+
+        assert_eq!(
+            runtime.vim_text_object.word,
+            vec![key_hint::shift(KeyCode::Down)]
+        );
+        assert_eq!(
+            runtime.chat.decrease_reasoning_effort,
+            vec![key_hint::alt(KeyCode::Char(','))]
+        );
     }
 
     #[test]
