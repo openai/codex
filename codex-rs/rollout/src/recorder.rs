@@ -157,6 +157,7 @@ fn clone_io_error(err: &IoError) -> IoError {
 }
 
 impl RolloutRecorderParams {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         conversation_id: ThreadId,
         forked_from_id: Option<ThreadId>,

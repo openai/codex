@@ -740,6 +740,9 @@ async fn spawn_agent_can_fork_parent_thread_history_with_sanitized_items() {
                 agent_nickname: None,
                 agent_role: None,
             })),
+            parent_thread
+                .multi_agent_version()
+                .expect("parent thread should have a multi-agent version"),
             SpawnAgentOptions {
                 fork_parent_spawn_call_id: Some(parent_spawn_call_id.clone()),
                 fork_mode: Some(SpawnAgentForkMode::FullHistory),
