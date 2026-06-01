@@ -1,20 +1,25 @@
 use anyhow::Result;
 use anyhow::bail;
 use codex_core::config::Config;
+use codex_core::config::Constrained;
 use codex_features::Feature;
 use codex_login::CodexAuth;
 use codex_models_manager::manager::RefreshStrategy;
 use codex_models_manager::manager::SharedModelsManager;
 use codex_models_manager::model_info::model_info_from_slug;
+use codex_protocol::config_types::ApprovalsReviewer;
+use codex_protocol::models::NetworkPermissions;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelVisibility;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ToolMode;
+use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ThreadSettingsOverrides;
+use codex_protocol::request_permissions::RequestPermissionProfile;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses;
 use core_test_support::responses::ev_assistant_message;
@@ -24,6 +29,7 @@ use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_models_once;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_once_match;
+use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::skip_if_no_network;
 use core_test_support::submit_thread_settings;
@@ -40,6 +46,7 @@ use wiremock::Request;
 
 const CHILD_PROMPT: &str = "inspect the child runtime";
 const CHILD_MODEL: &str = "test-multi-agent-child";
+const GUARDIAN_REASON: &str = "Allow a narrowly scoped network request";
 const ROOT_MODEL: &str = "test-multi-agent-root";
 const ROOT_PROMPT: &str = "spawn a child";
 const SPAWN_CALL_ID: &str = "spawn-call-1";
@@ -311,6 +318,101 @@ async fn remote_multi_agent_selector_overrides_features_and_child_model_info() -
             CHILD_MODEL.to_string(),
             Some(MultiAgentVersion::V2),
         )
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn guardian_stays_disabled_when_model_selects_multi_agent_v2() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = wiremock::MockServer::start().await;
+    let mut model = remote_model(ROOT_MODEL);
+    model.multi_agent_version = Some(MultiAgentVersion::V2);
+    let models_mock = mount_models_once(
+        &server,
+        ModelsResponse {
+            models: vec![model],
+        },
+    )
+    .await;
+    let requested_permissions = RequestPermissionProfile {
+        network: Some(NetworkPermissions {
+            enabled: Some(true),
+        }),
+        ..RequestPermissionProfile::default()
+    };
+    let request_permissions_args = serde_json::to_string(&json!({
+        "reason": GUARDIAN_REASON,
+        "permissions": requested_permissions,
+    }))?;
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-root-1"),
+                ev_function_call(
+                    "request-permissions-call",
+                    "request_permissions",
+                    &request_permissions_args,
+                ),
+                ev_completed("resp-root-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-guardian"),
+                ev_assistant_message(
+                    "msg-guardian",
+                    &json!({
+                        "risk_level": "low",
+                        "user_authorization": "high",
+                        "outcome": "allow",
+                        "rationale": "The request is narrowly scoped.",
+                    })
+                    .to_string(),
+                ),
+                ev_completed("resp-guardian"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-root-2"),
+                ev_assistant_message("msg-root-2", "done"),
+                ev_completed("resp-root-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let mut builder = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(|config| {
+            config.model = Some(ROOT_MODEL.to_string());
+            config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+            config.approvals_reviewer = ApprovalsReviewer::AutoReview;
+            config
+                .features
+                .enable(Feature::RequestPermissionsTool)
+                .expect("test config should allow feature update");
+        });
+    let test = builder.build(&server).await?;
+    test.submit_turn("request network access").await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let requests = responses.requests();
+    let [root_request, guardian_request, _root_followup] = requests.as_slice() else {
+        panic!("expected root, guardian, and root follow-up requests: {requests:?}");
+    };
+    assert_eq!(
+        (
+            models_mock.requests().len(),
+            test.codex.multi_agent_version(),
+            tool_names(&root_request.body_json()).contains(&"spawn_agent".to_string()),
+            guardian_request.body_contains_text(GUARDIAN_REASON),
+            tool_names(&guardian_request.body_json()).contains(&"spawn_agent".to_string()),
+        ),
+        (1, Some(MultiAgentVersion::V2), true, true, false)
     );
 
     Ok(())
