@@ -85,9 +85,14 @@ pub(super) fn get_auth_file(codex_home: &Path) -> PathBuf {
     codex_home.join("auth.json")
 }
 
-pub(super) fn delete_file_if_exists(codex_home: &Path) -> std::io::Result<bool> {
-    let auth_file = get_auth_file(codex_home);
-    match std::fs::remove_file(&auth_file) {
+fn get_account_session_auth_file(codex_home: &Path, session_id: &str) -> PathBuf {
+    codex_home
+        .join("account-sessions")
+        .join(format!("{session_id}.json"))
+}
+
+fn delete_file_if_exists(path: &Path) -> std::io::Result<bool> {
+    match std::fs::remove_file(path) {
         Ok(()) => Ok(true),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
         Err(err) => Err(err),
@@ -102,12 +107,20 @@ pub(super) trait AuthStorageBackend: Debug + Send + Sync {
 
 #[derive(Clone, Debug)]
 pub(super) struct FileAuthStorage {
-    codex_home: PathBuf,
+    auth_file: PathBuf,
 }
 
 impl FileAuthStorage {
     pub(super) fn new(codex_home: PathBuf) -> Self {
-        Self { codex_home }
+        Self {
+            auth_file: get_auth_file(&codex_home),
+        }
+    }
+
+    fn for_account_session(codex_home: PathBuf, session_id: &str) -> Self {
+        Self {
+            auth_file: get_account_session_auth_file(&codex_home, session_id),
+        }
     }
 
     /// Attempt to read and parse the `auth.json` file in the given `CODEX_HOME` directory.
@@ -124,8 +137,7 @@ impl FileAuthStorage {
 
 impl AuthStorageBackend for FileAuthStorage {
     fn load(&self) -> std::io::Result<Option<AuthDotJson>> {
-        let auth_file = get_auth_file(&self.codex_home);
-        let auth_dot_json = match self.try_read_auth_json(&auth_file) {
+        let auth_dot_json = match self.try_read_auth_json(&self.auth_file) {
             Ok(auth) => auth,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(err) => return Err(err),
@@ -134,9 +146,7 @@ impl AuthStorageBackend for FileAuthStorage {
     }
 
     fn save(&self, auth_dot_json: &AuthDotJson) -> std::io::Result<()> {
-        let auth_file = get_auth_file(&self.codex_home);
-
-        if let Some(parent) = auth_file.parent() {
+        if let Some(parent) = self.auth_file.parent() {
             std::fs::create_dir_all(parent)?;
         }
         let json_data = serde_json::to_string_pretty(auth_dot_json)?;
@@ -146,14 +156,14 @@ impl AuthStorageBackend for FileAuthStorage {
         {
             options.mode(0o600);
         }
-        let mut file = options.open(auth_file)?;
+        let mut file = options.open(&self.auth_file)?;
         file.write_all(json_data.as_bytes())?;
         file.flush()?;
         Ok(())
     }
 
     fn delete(&self) -> std::io::Result<bool> {
-        delete_file_if_exists(&self.codex_home)
+        delete_file_if_exists(&self.auth_file)
     }
 }
 
@@ -173,16 +183,42 @@ fn compute_store_key(codex_home: &Path) -> std::io::Result<String> {
     Ok(format!("cli|{truncated}"))
 }
 
+fn compute_account_session_store_key(
+    codex_home: &Path,
+    session_id: &str,
+) -> std::io::Result<String> {
+    Ok(format!(
+        "{}|account-session|{session_id}",
+        compute_store_key(codex_home)?
+    ))
+}
+
 #[derive(Clone, Debug)]
 struct KeyringAuthStorage {
-    codex_home: PathBuf,
+    auth_file: PathBuf,
+    store_key: String,
     keyring_store: Arc<dyn KeyringStore>,
 }
 
 impl KeyringAuthStorage {
     fn new(codex_home: PathBuf, keyring_store: Arc<dyn KeyringStore>) -> Self {
         Self {
-            codex_home,
+            auth_file: get_auth_file(&codex_home),
+            store_key: compute_store_key(&codex_home)
+                .expect("computing the auth key should be infallible"),
+            keyring_store,
+        }
+    }
+
+    fn for_account_session(
+        codex_home: PathBuf,
+        session_id: &str,
+        keyring_store: Arc<dyn KeyringStore>,
+    ) -> Self {
+        Self {
+            auth_file: get_account_session_auth_file(&codex_home, session_id),
+            store_key: compute_account_session_store_key(&codex_home, session_id)
+                .expect("computing the account session auth key should be infallible"),
             keyring_store,
         }
     }
@@ -219,30 +255,27 @@ impl KeyringAuthStorage {
 
 impl AuthStorageBackend for KeyringAuthStorage {
     fn load(&self) -> std::io::Result<Option<AuthDotJson>> {
-        let key = compute_store_key(&self.codex_home)?;
-        self.load_from_keyring(&key)
+        self.load_from_keyring(&self.store_key)
     }
 
     fn save(&self, auth: &AuthDotJson) -> std::io::Result<()> {
-        let key = compute_store_key(&self.codex_home)?;
         // Simpler error mapping per style: prefer method reference over closure
         let serialized = serde_json::to_string(auth).map_err(std::io::Error::other)?;
-        self.save_to_keyring(&key, &serialized)?;
-        if let Err(err) = delete_file_if_exists(&self.codex_home) {
+        self.save_to_keyring(&self.store_key, &serialized)?;
+        if let Err(err) = delete_file_if_exists(&self.auth_file) {
             warn!("failed to remove CLI auth fallback file: {err}");
         }
         Ok(())
     }
 
     fn delete(&self) -> std::io::Result<bool> {
-        let key = compute_store_key(&self.codex_home)?;
         let keyring_removed = self
             .keyring_store
-            .delete(KEYRING_SERVICE, &key)
+            .delete(KEYRING_SERVICE, &self.store_key)
             .map_err(|err| {
                 std::io::Error::other(format!("failed to delete auth from keyring: {err}"))
             })?;
-        let file_removed = delete_file_if_exists(&self.codex_home)?;
+        let file_removed = delete_file_if_exists(&self.auth_file)?;
         Ok(keyring_removed || file_removed)
     }
 }
@@ -258,6 +291,21 @@ impl AutoAuthStorage {
         Self {
             keyring_storage: Arc::new(KeyringAuthStorage::new(codex_home.clone(), keyring_store)),
             file_storage: Arc::new(FileAuthStorage::new(codex_home)),
+        }
+    }
+
+    fn for_account_session(
+        codex_home: PathBuf,
+        session_id: &str,
+        keyring_store: Arc<dyn KeyringStore>,
+    ) -> Self {
+        Self {
+            keyring_storage: Arc::new(KeyringAuthStorage::for_account_session(
+                codex_home.clone(),
+                session_id,
+                keyring_store,
+            )),
+            file_storage: Arc::new(FileAuthStorage::for_account_session(codex_home, session_id)),
         }
     }
 }
@@ -297,18 +345,32 @@ static EPHEMERAL_AUTH_STORE: Lazy<Mutex<HashMap<String, AuthDotJson>>> =
 #[derive(Clone, Debug)]
 struct EphemeralAuthStorage {
     codex_home: PathBuf,
+    account_session_id: Option<String>,
 }
 
 impl EphemeralAuthStorage {
     fn new(codex_home: PathBuf) -> Self {
-        Self { codex_home }
+        Self {
+            codex_home,
+            account_session_id: None,
+        }
+    }
+
+    fn for_account_session(codex_home: PathBuf, session_id: &str) -> Self {
+        Self {
+            codex_home,
+            account_session_id: Some(session_id.to_string()),
+        }
     }
 
     fn with_store<F, T>(&self, action: F) -> std::io::Result<T>
     where
         F: FnOnce(&mut HashMap<String, AuthDotJson>, String) -> std::io::Result<T>,
     {
-        let key = compute_store_key(&self.codex_home)?;
+        let key = match self.account_session_id.as_deref() {
+            Some(session_id) => compute_account_session_store_key(&self.codex_home, session_id)?,
+            None => compute_store_key(&self.codex_home)?,
+        };
         let mut store = EPHEMERAL_AUTH_STORE
             .lock()
             .map_err(|_| std::io::Error::other("failed to lock ephemeral auth storage"))?;
@@ -339,6 +401,32 @@ pub(super) fn create_auth_storage(
 ) -> Arc<dyn AuthStorageBackend> {
     let keyring_store: Arc<dyn KeyringStore> = Arc::new(DefaultKeyringStore);
     create_auth_storage_with_keyring_store(codex_home, mode, keyring_store)
+}
+
+pub(super) fn create_account_session_auth_storage(
+    codex_home: PathBuf,
+    session_id: &str,
+    mode: AuthCredentialsStoreMode,
+) -> Arc<dyn AuthStorageBackend> {
+    let keyring_store: Arc<dyn KeyringStore> = Arc::new(DefaultKeyringStore);
+    match mode {
+        AuthCredentialsStoreMode::File => {
+            Arc::new(FileAuthStorage::for_account_session(codex_home, session_id))
+        }
+        AuthCredentialsStoreMode::Keyring => Arc::new(KeyringAuthStorage::for_account_session(
+            codex_home,
+            session_id,
+            keyring_store,
+        )),
+        AuthCredentialsStoreMode::Auto => Arc::new(AutoAuthStorage::for_account_session(
+            codex_home,
+            session_id,
+            keyring_store,
+        )),
+        AuthCredentialsStoreMode::Ephemeral => Arc::new(EphemeralAuthStorage::for_account_session(
+            codex_home, session_id,
+        )),
+    }
 }
 
 fn create_auth_storage_with_keyring_store(

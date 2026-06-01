@@ -30,6 +30,7 @@ pub use crate::auth::agent_identity::AgentIdentityAuth;
 pub use crate::auth::storage::AgentIdentityAuthRecord;
 pub use crate::auth::storage::AuthDotJson;
 use crate::auth::storage::AuthStorageBackend;
+use crate::auth::storage::create_account_session_auth_storage;
 use crate::auth::storage::create_auth_storage;
 use crate::auth::util::try_parse_error_message;
 use crate::default_client::build_reqwest_client;
@@ -198,7 +199,7 @@ impl From<RefreshTokenError> for std::io::Error {
 }
 
 impl CodexAuth {
-    async fn from_auth_dot_json(
+    pub async fn from_auth_dot_json(
         codex_home: &Path,
         auth_dot_json: AuthDotJson,
         auth_credentials_store_mode: AuthCredentialsStoreMode,
@@ -605,6 +606,49 @@ pub fn load_auth_dot_json(
 ) -> std::io::Result<Option<AuthDotJson>> {
     let storage = create_auth_storage(codex_home.to_path_buf(), auth_credentials_store_mode);
     storage.load()
+}
+
+/// Persist a saved account session without replacing the active auth payload.
+pub fn save_account_session_auth(
+    codex_home: &Path,
+    session_id: &str,
+    auth: &AuthDotJson,
+    auth_credentials_store_mode: AuthCredentialsStoreMode,
+) -> std::io::Result<()> {
+    let storage = create_account_session_auth_storage(
+        codex_home.to_path_buf(),
+        session_id,
+        auth_credentials_store_mode,
+    );
+    storage.save(auth)
+}
+
+/// Load a saved account session without changing the active auth payload.
+pub fn load_account_session_auth(
+    codex_home: &Path,
+    session_id: &str,
+    auth_credentials_store_mode: AuthCredentialsStoreMode,
+) -> std::io::Result<Option<AuthDotJson>> {
+    let storage = create_account_session_auth_storage(
+        codex_home.to_path_buf(),
+        session_id,
+        auth_credentials_store_mode,
+    );
+    storage.load()
+}
+
+/// Delete a saved account session without changing the active auth payload.
+pub fn delete_account_session_auth(
+    codex_home: &Path,
+    session_id: &str,
+    auth_credentials_store_mode: AuthCredentialsStoreMode,
+) -> std::io::Result<bool> {
+    let storage = create_account_session_auth_storage(
+        codex_home.to_path_buf(),
+        session_id,
+        auth_credentials_store_mode,
+    );
+    storage.delete()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

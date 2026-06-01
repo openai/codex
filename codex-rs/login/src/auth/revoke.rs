@@ -52,9 +52,7 @@ struct RevokeTokenRequest<'a> {
     client_id: Option<&'static str>,
 }
 
-pub(crate) async fn revoke_auth_tokens(
-    auth_dot_json: Option<&AuthDotJson>,
-) -> Result<(), std::io::Error> {
+pub async fn revoke_auth_tokens(auth_dot_json: Option<&AuthDotJson>) -> Result<(), std::io::Error> {
     let Some((token, kind)) = auth_dot_json.and_then(revocable_token) else {
         return Ok(());
     };
