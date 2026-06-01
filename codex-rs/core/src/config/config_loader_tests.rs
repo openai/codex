@@ -1543,6 +1543,11 @@ extends = ":workspace"
             "",
         ),
     ] {
+        // Windows maps legacy workspace-write config to read-only; the profile
+        // cases still cover managed allow_git there.
+        if cfg!(target_os = "windows") && source == "legacy workspace-write" {
+            continue;
+        }
         let tmp = tempdir()?;
         tokio::fs::create_dir_all(tmp.path().join(".git").join("hooks")).await?;
         let requirements = format!(
@@ -1606,7 +1611,7 @@ allow_git = true
 [permissions.filesystem]
 allow_git = false
 "#,
-        None,
+        /*permission_profile*/ None,
     )
     .await?;
 
@@ -1644,7 +1649,7 @@ extends = ":workspace"
 [permissions.filesystem]
 allow_git = true
 "#,
-        None,
+        /*permission_profile*/ None,
     )
     .await?;
 
@@ -1669,18 +1674,12 @@ async fn system_filesystem_requirements_enable_linked_worktree_gitdir_writes() -
     let config = load_config_with_system_filesystem_requirements(
         tmp.path(),
         &cwd,
-        r#"
-sandbox_mode = "workspace-write"
-
-[sandbox_workspace_write]
-exclude_tmpdir_env_var = true
-exclude_slash_tmp = true
-"#,
+        r#"default_permissions = ":workspace""#,
         r#"
 [permissions.filesystem]
 allow_git = true
 "#,
-        None,
+        /*permission_profile*/ None,
     )
     .await?;
 
@@ -1718,7 +1717,7 @@ async fn system_filesystem_requirements_reject_unrestricted_profile_selection() 
 [permissions.filesystem]
 allow_git = true
 "#,
-        None,
+        /*permission_profile*/ None,
     )
     .await?;
 
