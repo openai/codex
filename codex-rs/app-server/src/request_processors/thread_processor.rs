@@ -2501,7 +2501,7 @@ impl ThreadRequestProcessor {
         let include_turns = !exclude_turns;
 
         let (thread_history, resume_source_thread) = match if let Some(history) = history {
-            self.resume_thread_from_history(&thread_id, history.as_slice())
+            self.resume_thread_from_history(history.as_slice())
                 .await
                 .map(|thread_history| (thread_history, None))
         } else {
@@ -2928,20 +2928,18 @@ impl ThreadRequestProcessor {
 
     async fn resume_thread_from_history(
         &self,
-        thread_id: &str,
         history: &[ResponseItem],
     ) -> Result<InitialHistory, JSONRPCErrorError> {
         if history.is_empty() {
             return Err(invalid_request("history must not be empty"));
         }
-        Ok(InitialHistory::Forked(ForkedHistory {
-            source_thread_id: ThreadId::from_string(thread_id).ok(),
-            history: history
+        Ok(InitialHistory::Forked(
+            history
                 .iter()
                 .cloned()
                 .map(RolloutItem::ResponseItem)
                 .collect(),
-        }))
+        ))
     }
 
     async fn resume_thread_from_rollout(
@@ -3121,14 +3119,14 @@ impl ThreadRequestProcessor {
                     }
                 }
             }
-            InitialHistory::Forked(forked) => {
+            InitialHistory::Forked(items) => {
                 let mut thread = build_thread_from_snapshot(
                     thread_id,
                     session_id.clone(),
                     &config_snapshot,
                     Some(rollout_path.into()),
                 );
-                thread.preview = preview_from_rollout_items(&forked.history);
+                thread.preview = preview_from_rollout_items(items);
                 Ok(thread)
             }
             InitialHistory::New | InitialHistory::Cleared => Err(format!(

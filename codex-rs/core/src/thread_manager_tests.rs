@@ -33,13 +33,6 @@ use wiremock::MockServer;
 
 const TEST_INSTALLATION_ID: &str = "11111111-1111-4111-8111-111111111111";
 
-fn forked_history(history: Vec<RolloutItem>) -> InitialHistory {
-    InitialHistory::Forked(ForkedHistory {
-        source_thread_id: None,
-        history,
-    })
-}
-
 fn user_msg(text: &str) -> ResponseItem {
     ResponseItem::Message {
         id: None,
@@ -103,7 +96,7 @@ fn truncates_before_requested_user_message() {
         .map(RolloutItem::ResponseItem)
         .collect();
     let truncated = truncate_before_nth_user_message(
-        forked_history(initial),
+        InitialHistory::Forked(initial),
         /*n*/ 1,
         &SnapshotTurnState {
             ends_mid_turn: false,
@@ -128,7 +121,7 @@ fn truncates_before_requested_user_message() {
         .map(RolloutItem::ResponseItem)
         .collect();
     let truncated2 = truncate_before_nth_user_message(
-        forked_history(initial2.clone()),
+        InitialHistory::Forked(initial2.clone()),
         /*n*/ 2,
         &SnapshotTurnState {
             ends_mid_turn: false,
@@ -152,7 +145,7 @@ fn out_of_range_truncation_drops_only_unfinished_suffix_mid_turn() {
     ];
 
     let truncated = truncate_before_nth_user_message(
-        forked_history(items.clone()),
+        InitialHistory::Forked(items.clone()),
         usize::MAX,
         &SnapshotTurnState {
             ends_mid_turn: true,
@@ -203,7 +196,7 @@ fn out_of_range_truncation_drops_pre_user_active_turn_prefix() {
         RolloutItem::ResponseItem(assistant_msg("partial")),
     ];
 
-    let snapshot_state = snapshot_turn_state(&forked_history(items.clone()));
+    let snapshot_state = snapshot_turn_state(&InitialHistory::Forked(items.clone()));
     assert_eq!(
         snapshot_state,
         SnapshotTurnState {
@@ -214,7 +207,7 @@ fn out_of_range_truncation_drops_pre_user_active_turn_prefix() {
     );
 
     let truncated = truncate_before_nth_user_message(
-        forked_history(items.clone()),
+        InitialHistory::Forked(items.clone()),
         usize::MAX,
         &snapshot_state,
     );
@@ -241,7 +234,7 @@ async fn ignores_session_prefix_messages_when_truncating() {
         .collect();
 
     let truncated = truncate_before_nth_user_message(
-        forked_history(rollout_items),
+        InitialHistory::Forked(rollout_items),
         /*n*/ 1,
         &SnapshotTurnState {
             ends_mid_turn: false,
@@ -989,7 +982,8 @@ async fn new_uses_active_provider_for_model_refresh() {
 
 #[test]
 fn interrupted_fork_snapshot_appends_interrupt_boundary() {
-    let committed_history = forked_history(vec![RolloutItem::ResponseItem(user_msg("hello"))]);
+    let committed_history =
+        InitialHistory::Forked(vec![RolloutItem::ResponseItem(user_msg("hello"))]);
 
     assert_eq!(
         serde_json::to_value(
@@ -1038,7 +1032,8 @@ fn interrupted_fork_snapshot_appends_interrupt_boundary() {
 
 #[test]
 fn disabled_interrupted_fork_snapshot_appends_only_interrupt_event() {
-    let committed_history = forked_history(vec![RolloutItem::ResponseItem(user_msg("hello"))]);
+    let committed_history =
+        InitialHistory::Forked(vec![RolloutItem::ResponseItem(user_msg("hello"))]);
 
     assert_eq!(
         serde_json::to_value(
@@ -1085,7 +1080,7 @@ fn disabled_interrupted_fork_snapshot_appends_only_interrupt_event() {
 
 #[test]
 fn interrupted_snapshot_is_not_mid_turn() {
-    let interrupted_history = forked_history(vec![
+    let interrupted_history = InitialHistory::Forked(vec![
         RolloutItem::ResponseItem(user_msg("hello")),
         RolloutItem::ResponseItem(assistant_msg("partial")),
         RolloutItem::ResponseItem(contextual_user_interrupted_marker()),
@@ -1127,7 +1122,7 @@ fn multi_agent_v2_interrupted_marker_uses_developer_input_message() {
 
 #[test]
 fn completed_legacy_event_history_is_not_mid_turn() {
-    let completed_history = forked_history(vec![
+    let completed_history = InitialHistory::Forked(vec![
         RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
             client_id: None,
             message: "hello".to_string(),
@@ -1155,7 +1150,7 @@ fn completed_legacy_event_history_is_not_mid_turn() {
 
 #[test]
 fn mixed_response_and_legacy_user_event_history_is_mid_turn() {
-    let mixed_history = forked_history(vec![
+    let mixed_history = InitialHistory::Forked(vec![
         RolloutItem::ResponseItem(user_msg("hello")),
         RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
             client_id: None,
@@ -1204,7 +1199,7 @@ async fn interrupted_fork_snapshot_does_not_synthesize_turn_id_for_legacy_histor
     let source = manager
         .resume_thread_with_history(
             config.clone(),
-            forked_history(vec![
+            InitialHistory::Forked(vec![
                 RolloutItem::ResponseItem(user_msg("hello")),
                 RolloutItem::ResponseItem(assistant_msg("partial")),
             ]),
@@ -1312,7 +1307,7 @@ async fn interrupted_fork_snapshot_preserves_explicit_turn_id() {
     let source = manager
         .resume_thread_with_history(
             config.clone(),
-            forked_history(vec![
+            InitialHistory::Forked(vec![
                 RolloutItem::EventMsg(EventMsg::TurnStarted(TurnStartedEvent {
                     turn_id: "turn-explicit".to_string(),
                     trace_id: None,
@@ -1410,7 +1405,7 @@ async fn interrupted_fork_snapshot_uses_persisted_mid_turn_history_without_live_
     let source = manager
         .resume_thread_with_history(
             config.clone(),
-            forked_history(vec![
+            InitialHistory::Forked(vec![
                 RolloutItem::ResponseItem(user_msg("hello")),
                 RolloutItem::ResponseItem(assistant_msg("partial")),
             ]),
@@ -1553,7 +1548,7 @@ async fn resumed_thread_keeps_paused_goal_paused() -> anyhow::Result<()> {
     let source = manager
         .resume_thread_with_history(
             config.clone(),
-            forked_history(vec![RolloutItem::ResponseItem(user_msg("keep working"))]),
+            InitialHistory::Forked(vec![RolloutItem::ResponseItem(user_msg("keep working"))]),
             auth_manager.clone(),
             /*persist_extended_history*/ false,
             /*parent_trace*/ None,

@@ -2335,17 +2335,11 @@ pub struct ResumedHistory {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
-pub struct ForkedHistory {
-    pub source_thread_id: Option<ThreadId>,
-    pub history: Vec<RolloutItem>,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub enum InitialHistory {
     New,
     Cleared,
     Resumed(ResumedHistory),
-    Forked(ForkedHistory),
+    Forked(Vec<RolloutItem>),
 }
 
 impl InitialHistory {
@@ -2353,7 +2347,7 @@ impl InitialHistory {
         match self {
             InitialHistory::New | InitialHistory::Cleared => false,
             InitialHistory::Resumed(resumed) => resumed.history.iter().any(&mut predicate),
-            InitialHistory::Forked(forked) => forked.history.iter().any(predicate),
+            InitialHistory::Forked(items) => items.iter().any(predicate),
         }
     }
 
@@ -2366,15 +2360,10 @@ impl InitialHistory {
                     _ => None,
                 })
             }
-            InitialHistory::Forked(forked) => forked.source_thread_id,
-        }
-    }
-
-    pub fn source_thread_id(&self) -> Option<ThreadId> {
-        match self {
-            InitialHistory::New | InitialHistory::Cleared => None,
-            InitialHistory::Resumed(resumed) => Some(resumed.conversation_id),
-            InitialHistory::Forked(forked) => forked.source_thread_id,
+            InitialHistory::Forked(items) => items.iter().find_map(|item| match item {
+                RolloutItem::SessionMeta(meta_line) => Some(meta_line.meta.id),
+                _ => None,
+            }),
         }
     }
 
@@ -2382,7 +2371,7 @@ impl InitialHistory {
         match self {
             InitialHistory::New | InitialHistory::Cleared => None,
             InitialHistory::Resumed(resumed) => session_cwd_from_items(&resumed.history),
-            InitialHistory::Forked(forked) => session_cwd_from_items(&forked.history),
+            InitialHistory::Forked(items) => session_cwd_from_items(items),
         }
     }
 
@@ -2390,7 +2379,7 @@ impl InitialHistory {
         match self {
             InitialHistory::New | InitialHistory::Cleared => Vec::new(),
             InitialHistory::Resumed(resumed) => resumed.history.clone(),
-            InitialHistory::Forked(forked) => forked.history.clone(),
+            InitialHistory::Forked(items) => items.clone(),
         }
     }
 
@@ -2407,9 +2396,8 @@ impl InitialHistory {
                     })
                     .collect(),
             ),
-            InitialHistory::Forked(forked) => Some(
-                forked
-                    .history
+            InitialHistory::Forked(items) => Some(
+                items
                     .iter()
                     .filter_map(|ri| match ri {
                         RolloutItem::EventMsg(ev) => Some(ev.clone()),
@@ -2430,7 +2418,7 @@ impl InitialHistory {
                     _ => None,
                 })
             }
-            InitialHistory::Forked(forked) => forked.history.iter().find_map(|item| match item {
+            InitialHistory::Forked(items) => items.iter().find_map(|item| match item {
                 RolloutItem::SessionMeta(meta_line) => meta_line.meta.base_instructions.clone(),
                 _ => None,
             }),
@@ -2446,7 +2434,7 @@ impl InitialHistory {
                     _ => None,
                 })
             }
-            InitialHistory::Forked(forked) => forked.history.iter().find_map(|item| match item {
+            InitialHistory::Forked(items) => items.iter().find_map(|item| match item {
                 RolloutItem::SessionMeta(meta_line) => meta_line.meta.dynamic_tools.clone(),
                 _ => None,
             }),
@@ -2459,9 +2447,9 @@ impl InitialHistory {
             InitialHistory::Resumed(resumed) => {
                 multi_agent_version_from_items(&resumed.history, Some(resumed.conversation_id))
             }
-            InitialHistory::Forked(forked) => forked.source_thread_id.and_then(|thread_id| {
-                multi_agent_version_from_items(&forked.history, Some(thread_id))
-            }),
+            InitialHistory::Forked(items) => {
+                multi_agent_version_from_items(items, /*thread_id*/ None)
+            }
         }
     }
 

@@ -1245,20 +1245,20 @@ impl Session {
                     let _ = self.flush_rollout().await;
                 }
             }
-            InitialHistory::Forked(forked) => {
-                self.apply_rollout_reconstruction(&turn_context, &forked.history)
+            InitialHistory::Forked(rollout_items) => {
+                self.apply_rollout_reconstruction(&turn_context, &rollout_items)
                     .await;
 
                 // Seed usage info from the recorded rollout so UIs can show token counts
                 // immediately on resume/fork.
-                if let Some(info) = Self::last_token_info_from_rollout(&forked.history) {
+                if let Some(info) = Self::last_token_info_from_rollout(&rollout_items) {
                     let mut state = self.state.lock().await;
                     state.set_token_info(Some(info));
                 }
 
                 // If persisting, persist all rollout items as-is (the store filters).
-                if !forked.history.is_empty() {
-                    self.persist_rollout_items(&forked.history).await;
+                if !rollout_items.is_empty() {
+                    self.persist_rollout_items(&rollout_items).await;
                 }
 
                 // Forked threads should remain file-backed immediately after startup.

@@ -21,7 +21,6 @@ use codex_protocol::error::Result as CodexResult;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::models::ResponseItem;
-use codex_protocol::protocol::ForkedHistory;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::MultiAgentVersion;
@@ -521,10 +520,7 @@ impl AgentControl {
         state
             .fork_thread_with_source(
                 config.clone(),
-                InitialHistory::Forked(ForkedHistory {
-                    source_thread_id: Some(parent_thread_id),
-                    history: forked_rollout_items,
-                }),
+                InitialHistory::Forked(forked_rollout_items),
                 self.clone(),
                 session_source,
                 /*thread_source*/ Some(ThreadSource::Subagent),
