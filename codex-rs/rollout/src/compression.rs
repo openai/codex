@@ -2,7 +2,6 @@ use std::ffi::OsStr;
 use std::fs::File;
 use std::fs::Permissions;
 use std::io;
-use std::io::Read;
 use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
@@ -10,12 +9,16 @@ use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
+use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
+
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
 const COMPRESSED_SUFFIX: &str = ".zst";
+const COMPRESSED_READER_BUFFER_LINES: usize = 8;
 const MAX_NOT_FOUND_RETRIES: usize = 3;
 const OPEN_ROLLOUT_LINE_READER_RETRY_DELAY: Duration = Duration::from_millis(50);
 const TEMP_SUFFIX: &str = ".tmp";
@@ -193,7 +196,7 @@ pub struct RolloutLineReader {
 
 enum RolloutLineReaderInner {
     Plain(tokio::io::Lines<tokio::io::BufReader<tokio::fs::File>>),
-    Blocking(Option<BlockingLineReader>),
+    Compressed(CompressedLineReader),
 }
 
 impl RolloutLineReader {
@@ -201,22 +204,38 @@ impl RolloutLineReader {
     pub async fn next_line(&mut self) -> io::Result<Option<String>> {
         match &mut self.inner {
             RolloutLineReaderInner::Plain(lines) => lines.next_line().await,
-            RolloutLineReaderInner::Blocking(slot) => {
-                let Some(mut reader) = slot.take() else {
-                    return Err(io::Error::other("compressed rollout reader is busy"));
-                };
-                let (line, reader) =
-                    tokio::task::spawn_blocking(move || (reader.next().transpose(), reader))
-                        .await
-                        .map_err(io::Error::other)?;
-                *slot = Some(reader);
-                line
-            }
+            RolloutLineReaderInner::Compressed(reader) => reader.next_line().await,
         }
     }
 }
 
-type BlockingLineReader = std::io::Lines<std::io::BufReader<Box<dyn Read + Send>>>;
+struct CompressedLineReader {
+    lines: mpsc::Receiver<io::Result<String>>,
+    task: Option<JoinHandle<()>>,
+}
+
+impl CompressedLineReader {
+    async fn next_line(&mut self) -> io::Result<Option<String>> {
+        match self.lines.recv().await {
+            Some(Ok(line)) => Ok(Some(line)),
+            Some(Err(err)) => {
+                self.join_task().await?;
+                Err(err)
+            }
+            None => {
+                self.join_task().await?;
+                Ok(None)
+            }
+        }
+    }
+
+    async fn join_task(&mut self) -> io::Result<()> {
+        let Some(task) = self.task.take() else {
+            return Ok(());
+        };
+        task.await.map_err(io::Error::other)
+    }
+}
 
 mod worker {
     use std::ffi::OsStr;
@@ -726,6 +745,10 @@ mod reader {
     use std::io::Read;
     use std::path::Path;
 
+    use tokio::sync::mpsc;
+
+    use super::COMPRESSED_READER_BUFFER_LINES;
+    use super::CompressedLineReader;
     use super::RolloutLineReader;
     use super::RolloutLineReaderInner;
     use super::path;
@@ -736,23 +759,42 @@ mod reader {
             .await
             .unwrap_or_else(|| path.to_path_buf());
         if path::is_compressed_rollout_path(path.as_path()) {
-            let reader = tokio::task::spawn_blocking(move || {
-                let input = File::open(path.as_path())?;
-                let decoder = zstd::stream::read::Decoder::new(input)?;
-                Ok::<_, io::Error>(
-                    io::BufReader::new(Box::new(decoder) as Box<dyn Read + Send>).lines(),
-                )
-            })
-            .await
-            .map_err(io::Error::other)??;
+            let input = tokio::fs::File::open(path.as_path()).await?;
+            let input = input.into_std().await;
+            let (tx, rx) = mpsc::channel(COMPRESSED_READER_BUFFER_LINES);
+            let task = tokio::task::spawn_blocking(move || stream_compressed_lines(input, tx));
             return Ok(RolloutLineReader {
-                inner: RolloutLineReaderInner::Blocking(Some(reader)),
+                inner: RolloutLineReaderInner::Compressed(CompressedLineReader {
+                    lines: rx,
+                    task: Some(task),
+                }),
             });
         }
         let file = tokio::fs::File::open(path).await?;
         Ok(RolloutLineReader {
             inner: RolloutLineReaderInner::Plain(tokio::io::BufReader::new(file).lines()),
         })
+    }
+
+    fn stream_compressed_lines(input: File, tx: mpsc::Sender<io::Result<String>>) {
+        if let Err(err) = try_stream_compressed_lines(input, &tx) {
+            let _ = tx.blocking_send(Err(err));
+        }
+    }
+
+    fn try_stream_compressed_lines(
+        input: File,
+        tx: &mpsc::Sender<io::Result<String>>,
+    ) -> io::Result<()> {
+        let decoder = zstd::stream::read::Decoder::new(input)?;
+        let reader = io::BufReader::new(Box::new(decoder) as Box<dyn Read + Send>);
+        for line in reader.lines() {
+            let line = line?;
+            if tx.blocking_send(Ok(line)).is_err() {
+                return Ok(());
+            }
+        }
+        Ok(())
     }
 }
 
