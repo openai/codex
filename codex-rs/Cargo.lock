@@ -1665,6 +1665,7 @@ dependencies = [
  "iana-time-zone",
  "js-sys",
  "num-traits",
+ "pure-rust-locales",
  "serde",
  "wasm-bindgen",
  "windows-link",
@@ -3894,6 +3895,7 @@ dependencies = [
  "strum_macros 0.28.0",
  "supports-color 3.0.2",
  "syntect",
+ "sys-locale",
  "tempfile",
  "textwrap 0.16.2",
  "thiserror 2.0.18",
@@ -10403,6 +10405,12 @@ name = "pulldown-cmark-escape"
 version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bd348ff538bc9caeda7ee8cad2d1d48236a1f443c1fa3913c6a02fe0043b1dd3"
+
+[[package]]
+name = "pure-rust-locales"
+version = "0.8.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "869675ad2d7541aea90c6d88c81f46a7f4ea9af8cd0395d38f11a95126998a0d"
 
 [[package]]
 name = "pxfm"

@@ -4,6 +4,8 @@ use crate::status::StatusAccountDisplay;
 use crate::text_formatting;
 use chrono::DateTime;
 use chrono::Local;
+use chrono::Locale as ChronoLocale;
+use chrono::Timelike;
 use codex_protocol::account::PlanType;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::path::Path;
@@ -162,12 +164,54 @@ pub(crate) fn format_directory_display(directory: &Path, max_width: Option<usize
 }
 
 pub(crate) fn format_reset_timestamp(dt: DateTime<Local>, captured_at: DateTime<Local>) -> String {
-    let time = dt.format("%H:%M").to_string();
+    let time = system_chrono_locale()
+        .map(|locale| time_without_seconds_for_locale(dt, locale))
+        .unwrap_or_else(|| dt.format("%H:%M").to_string());
     if dt.date_naive() == captured_at.date_naive() {
         time
     } else {
         format!("{time} on {}", dt.format("%-d %b"))
     }
+}
+
+#[cfg(not(test))]
+fn system_chrono_locale() -> Option<ChronoLocale> {
+    sys_locale::get_locale()
+        .as_deref()
+        .and_then(parse_chrono_locale)
+}
+
+#[cfg(test)]
+fn system_chrono_locale() -> Option<ChronoLocale> {
+    Some(ChronoLocale::POSIX)
+}
+
+fn parse_chrono_locale(locale: &str) -> Option<ChronoLocale> {
+    locale.replace('-', "_").parse().ok()
+}
+
+fn time_without_seconds_for_locale(dt: DateTime<Local>, locale: ChronoLocale) -> String {
+    let dt = dt.with_second(0).unwrap_or(dt);
+    strip_ascii_seconds(dt.format_localized("%X", locale).to_string())
+}
+
+fn strip_ascii_seconds(mut time: String) -> String {
+    let Some(seconds) = time.rfind(":00") else {
+        return time;
+    };
+    if !time[..seconds].contains(':') {
+        return time;
+    }
+    if time[seconds + 3..]
+        .chars()
+        .next()
+        .is_some_and(|ch| !ch.is_whitespace())
+    {
+        return time;
+    }
+
+    time.replace_range(seconds..seconds + 3, "");
+    time
 }
 
 fn title_case(s: &str) -> String {
@@ -188,6 +232,7 @@ mod tests {
     use crate::legacy_core::DEFAULT_AGENTS_MD_FILENAME;
     use crate::legacy_core::LOCAL_AGENTS_MD_FILENAME;
     use crate::legacy_core::config::ConfigBuilder;
+    use chrono::TimeZone;
     use codex_utils_absolute_path::test_support::PathBufExt;
     use pretty_assertions::assert_eq;
     use tempfile::TempDir;
@@ -221,6 +266,44 @@ mod tests {
         for (plan_type, expected) in cases {
             assert_eq!(plan_type_display_name(plan_type), expected);
         }
+    }
+
+    #[test]
+    fn strip_ascii_seconds_keeps_locale_time_compact() {
+        let cases = [
+            ("23:04:00", "23:04"),
+            ("11:04:00 PM", "11:04 PM"),
+            ("23:04", "23:04"),
+            ("23:00", "23:00"),
+            ("23:04:00.000", "23:04:00.000"),
+        ];
+
+        for (time, expected) in cases {
+            assert_eq!(strip_ascii_seconds(time.to_string()), expected.to_string());
+        }
+    }
+
+    #[test]
+    fn parse_chrono_locale_accepts_system_locale_tags() {
+        assert_eq!(parse_chrono_locale("en-US"), Some(ChronoLocale::en_US));
+        assert_eq!(parse_chrono_locale("nl-NL"), Some(ChronoLocale::nl_NL));
+    }
+
+    #[test]
+    fn locale_time_uses_locale_clock_conventions() {
+        let dt = Local
+            .with_ymd_and_hms(2024, 1, 2, 15, 4, 27)
+            .single()
+            .expect("timestamp");
+
+        assert_eq!(
+            time_without_seconds_for_locale(dt, ChronoLocale::en_US),
+            "03:04 PM"
+        );
+        assert_eq!(
+            time_without_seconds_for_locale(dt, ChronoLocale::nl_NL),
+            "15:04"
+        );
     }
 
     #[tokio::test]

@@ -24,7 +24,7 @@ workspace = true
 [dependencies]
 anyhow = { workspace = true }
 base64 = { workspace = true }
-chrono = { workspace = true, features = ["serde"] }
+chrono = { workspace = true, features = ["serde", "unstable-locales"] }
 clap = { workspace = true, features = ["derive"] }
 codex-ansi-escape = { workspace = true }
 codex-app-server-client = { workspace = true }
@@ -96,6 +96,7 @@ shlex = { workspace = true }
 strum = { workspace = true }
 strum_macros = { workspace = true }
 supports-color = { workspace = true }
+sys-locale = { workspace = true }
 tempfile = { workspace = true }
 textwrap = { workspace = true }
 thiserror = { workspace = true }
@@ -156,7 +157,7 @@ codex-mcp = { workspace = true }
 core_test_support = { workspace = true }
 codex-utils-cargo-bin = { workspace = true }
 assert_matches = { workspace = true }
-chrono = { workspace = true, features = ["serde"] }
+chrono = { workspace = true, features = ["serde", "unstable-locales"] }
 insta = { workspace = true }
 pretty_assertions = { workspace = true }
 rand = { workspace = true }
