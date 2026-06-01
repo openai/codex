@@ -4066,6 +4066,7 @@ async fn active_profile_update_rebuilds_network_proxy_config() -> std::io::Resul
                     workspace_roots: None,
                     filesystem: Some(FilesystemPermissionsToml {
                         glob_scan_max_depth: None,
+                        allow_git: false,
                         entries: std::collections::BTreeMap::from([(
                             ":minimal".to_string(),
                             FilesystemPermissionToml::Access(FileSystemAccessMode::Read),
@@ -4082,6 +4083,7 @@ async fn active_profile_update_rebuilds_network_proxy_config() -> std::io::Resul
                     workspace_roots: None,
                     filesystem: Some(FilesystemPermissionsToml {
                         glob_scan_max_depth: None,
+                        allow_git: false,
                         entries: std::collections::BTreeMap::from([(
                             ":minimal".to_string(),
                             FilesystemPermissionToml::Access(FileSystemAccessMode::Read),
