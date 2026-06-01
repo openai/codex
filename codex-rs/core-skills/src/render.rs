@@ -905,6 +905,7 @@ fn prompt_scope_rank(scope: SkillScope) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_exec_server::EnvironmentPathRef;
     use std::collections::HashMap;
     use std::sync::Arc;
 
@@ -920,6 +921,7 @@ mod tests {
             interface: None,
             dependencies: None,
             policy: None,
+            source_path: EnvironmentPathRef::local(test_path_buf(&format!("/tmp/{name}/SKILL.md")).abs()),
             path_to_skills_md: test_path_buf(&format!("/tmp/{name}/SKILL.md")).abs(),
             scope,
             plugin_id: None,

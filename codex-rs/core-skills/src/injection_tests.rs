@@ -1,4 +1,5 @@
 use super::*;
+use codex_exec_server::EnvironmentPathRef;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::test_support::PathBufExt;
 use codex_utils_absolute_path::test_support::test_path_buf;
@@ -14,6 +15,7 @@ fn make_skill(name: &str, path: &str) -> SkillMetadata {
         interface: None,
         dependencies: None,
         policy: None,
+        source_path: EnvironmentPathRef::local(test_path_buf(path).abs()),
         path_to_skills_md: test_path_buf(path).abs(),
         scope: codex_protocol::protocol::SkillScope::User,
         plugin_id: None,

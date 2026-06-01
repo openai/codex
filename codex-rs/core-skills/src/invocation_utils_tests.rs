@@ -4,6 +4,7 @@ use super::canonicalize_if_exists;
 use super::detect_skill_doc_read;
 use super::detect_skill_script_run;
 use super::script_run_token;
+use codex_exec_server::EnvironmentPathRef;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::test_support::PathBufExt;
 use codex_utils_absolute_path::test_support::test_path_buf;
@@ -19,6 +20,7 @@ fn test_skill_metadata(skill_doc_path: AbsolutePathBuf) -> SkillMetadata {
         interface: None,
         dependencies: None,
         policy: None,
+        source_path: EnvironmentPathRef::local(skill_doc_path.clone()),
         path_to_skills_md: skill_doc_path,
         scope: codex_protocol::protocol::SkillScope::User,
         plugin_id: None,
