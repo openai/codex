@@ -256,16 +256,12 @@ mod path {
 
     pub(super) async fn existing_rollout_path(path: &Path) -> Option<PathBuf> {
         let plain_path = plain_rollout_path(path);
-        if tokio::fs::try_exists(plain_path.as_path())
-            .await
-            .unwrap_or(false)
+        if matches!(tokio::fs::metadata(plain_path.as_path()).await, Ok(metadata) if metadata.is_file())
         {
             return Some(plain_path);
         }
         let compressed_path = compressed_rollout_path(plain_path.as_path());
-        if tokio::fs::try_exists(compressed_path.as_path())
-            .await
-            .unwrap_or(false)
+        if matches!(tokio::fs::metadata(compressed_path.as_path()).await, Ok(metadata) if metadata.is_file())
         {
             return Some(compressed_path);
         }

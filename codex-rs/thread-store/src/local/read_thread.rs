@@ -143,6 +143,25 @@ async fn resolve_requested_rollout_path(
     } else {
         rollout_path
     };
+    match tokio::fs::metadata(path.as_path()).await {
+        Ok(metadata) if metadata.is_dir() => {
+            return Err(ThreadStoreError::InvalidRequest {
+                message: format!(
+                    "failed to resolve rollout path `{}`: path is a directory",
+                    path.display()
+                ),
+            });
+        }
+        Ok(metadata) if !metadata.is_file() => {
+            return Err(ThreadStoreError::InvalidRequest {
+                message: format!(
+                    "failed to resolve rollout path `{}`: path is not a file",
+                    path.display()
+                ),
+            });
+        }
+        _ => {}
+    }
     let Some(path) = codex_rollout::existing_rollout_path(path.as_path()).await else {
         return Err(ThreadStoreError::InvalidRequest {
             message: format!(
