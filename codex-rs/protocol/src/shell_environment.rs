@@ -77,7 +77,7 @@ where
     // spawn the app-server with `RUST_LOG=warn` by default, which can then cause
     // unexpected behavior in subprocesses. Users can still explicitly include
     // it via overrides.
-    env_map.remove("RUST_LOG");
+    env_map.retain(|key, _| !key.eq_ignore_ascii_case("RUST_LOG"));
 
     let matches_any = |name: &str, patterns: &[EnvironmentVariablePattern]| -> bool {
         patterns.iter().any(|pattern| pattern.matches(name))
@@ -154,6 +154,46 @@ pub const WINDOWS_CORE_ENV_VARS: &[&str] = &[
     "POWERSHELL",
     "PWSH",
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn inherited_rust_log_is_removed() {
+        let vars = vec![
+            ("PATH".to_string(), "/usr/bin".to_string()),
+            ("rust_log".to_string(), "warn".to_string()),
+        ];
+
+        let result = populate_env(
+            vars,
+            &ShellEnvironmentPolicy::default(),
+            /*thread_id*/ None,
+        );
+
+        assert_eq!(
+            result,
+            HashMap::from([("PATH".to_string(), "/usr/bin".to_string())])
+        );
+    }
+
+    #[test]
+    fn explicit_rust_log_override_is_preserved() {
+        let vars = vec![("RUST_LOG".to_string(), "warn".to_string())];
+        let policy = ShellEnvironmentPolicy {
+            r#set: HashMap::from([("RUST_LOG".to_string(), "codex_core=trace".to_string())]),
+            ..Default::default()
+        };
+
+        let result = populate_env(vars, &policy, /*thread_id*/ None);
+
+        assert_eq!(
+            result,
+            HashMap::from([("RUST_LOG".to_string(), "codex_core=trace".to_string())])
+        );
+    }
+}
 
 #[cfg(all(test, target_os = "windows"))]
 mod windows_tests {

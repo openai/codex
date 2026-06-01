@@ -148,6 +148,47 @@ fn bash_snapshot_filters_invalid_exports() -> Result<()> {
 }
 
 #[cfg(unix)]
+fn assert_snapshot_filters_rust_log(shell: &str, snapshot_script: String) -> Result<()> {
+    let home = tempdir()?;
+    let output = Command::new(shell)
+        .arg("-c")
+        .arg(snapshot_script)
+        .env("HOME", home.path())
+        .env("BASH_ENV", "/dev/null")
+        .env_remove("ENV")
+        .env("RUST_LOG", "warn")
+        .output()?;
+
+    assert!(output.status.success());
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !stdout.contains("RUST_LOG"),
+        "snapshot should not capture app-server logging configuration"
+    );
+
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn bash_snapshot_filters_rust_log() -> Result<()> {
+    assert_snapshot_filters_rust_log("/bin/bash", bash_snapshot_script())
+}
+
+#[cfg(unix)]
+#[test]
+fn sh_snapshot_filters_rust_log() -> Result<()> {
+    assert_snapshot_filters_rust_log("/bin/sh", sh_snapshot_script())
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn zsh_snapshot_filters_rust_log() -> Result<()> {
+    assert_snapshot_filters_rust_log("/bin/zsh", zsh_snapshot_script())
+}
+
+#[cfg(unix)]
 #[test]
 fn bash_snapshot_preserves_multiline_exports() -> Result<()> {
     let multiline_cert = "-----BEGIN CERTIFICATE-----\nabc\n-----END CERTIFICATE-----";
