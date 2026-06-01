@@ -644,6 +644,26 @@ async fn request_plugin_install_requires_all_discovery_features_and_discoverable
 }
 
 #[tokio::test]
+async fn search_plugins_requires_plugins_and_remote_plugin_features() {
+    for disabled_feature in [Feature::Plugins, Feature::RemotePlugin] {
+        let plan = probe(|turn| {
+            set_features(turn, &[Feature::Plugins, Feature::RemotePlugin]);
+            set_feature(turn, disabled_feature, /*enabled*/ false);
+        })
+        .await;
+        plan.assert_visible_lacks(&["search_plugins"]);
+        plan.assert_registered_lacks(&["search_plugins"]);
+    }
+
+    let enabled = probe(|turn| {
+        set_features(turn, &[Feature::Plugins, Feature::RemotePlugin]);
+    })
+    .await;
+    enabled.assert_visible_contains(&["search_plugins"]);
+    enabled.assert_registered_contains(&["search_plugins"]);
+}
+
+#[tokio::test]
 async fn install_suggestion_tools_stay_visible_without_tool_search() {
     let plan = probe_with(
         |turn| {

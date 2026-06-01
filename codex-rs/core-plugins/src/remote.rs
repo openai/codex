@@ -22,6 +22,7 @@ use std::time::Duration;
 use url::Url;
 
 mod remote_installed_plugin_sync;
+mod search;
 mod share;
 
 pub use remote_installed_plugin_sync::RemoteInstalledPluginBundleSyncError;
@@ -30,6 +31,9 @@ pub use remote_installed_plugin_sync::RemotePluginCacheMutationGuard;
 pub use remote_installed_plugin_sync::mark_remote_plugin_cache_mutation_in_flight;
 pub(crate) use remote_installed_plugin_sync::maybe_start_remote_installed_plugin_bundle_sync;
 pub use remote_installed_plugin_sync::sync_remote_installed_plugin_bundles_once;
+pub use search::RemotePluginSearchPlugin;
+pub use search::RemotePluginSearchResult;
+pub use search::search_global_remote_plugins;
 pub use share::RemotePluginShareAccessPolicy;
 pub use share::RemotePluginShareDiscoverability;
 pub use share::RemotePluginSharePrincipal;
