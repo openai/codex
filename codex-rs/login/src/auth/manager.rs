@@ -210,7 +210,7 @@ impl CodexAuth {
             auth_dot_json,
             auth_credentials_store_mode,
             chatgpt_base_url,
-            None,
+            /*chatgpt_storage*/ None,
         )
         .await
     }
