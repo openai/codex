@@ -49,7 +49,7 @@ fmt:
 fmt-check:
     just --unstable --fmt --check
     cargo fmt -- --config imports_granularity=Item --check {stderr-null}
-    uv run --frozen --project ../sdk/python --extra dev {{ sdk_python_platform }} ruff check ../sdk/python
+    uv run --frozen --project ../sdk/python --extra dev {{ sdk_python_platform }} ruff check --diff ../sdk/python
     uv run --frozen --project ../sdk/python --extra dev {{ sdk_python_platform }} ruff format --check ../sdk/python
     uv run --frozen --project ../scripts ruff format --check ../scripts
 

@@ -122,7 +122,7 @@ def test_root_fmt_check_recipe_checks_all_formatters() -> None:
     assert [line.strip() for line in fmt_check_recipe[1:] if line.strip()] == [
         "just --unstable --fmt --check",
         "cargo fmt -- --config imports_granularity=Item --check {stderr-null}",
-        "uv run --frozen --project ../sdk/python --extra dev {{ sdk_python_platform }} ruff check ../sdk/python",
+        "uv run --frozen --project ../sdk/python --extra dev {{ sdk_python_platform }} ruff check --diff ../sdk/python",
         "uv run --frozen --project ../sdk/python --extra dev {{ sdk_python_platform }} ruff format --check ../sdk/python",
         "uv run --frozen --project ../scripts ruff format --check ../scripts",
     ]
