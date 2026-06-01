@@ -1,4 +1,5 @@
 use anyhow::Result;
+use anyhow::bail;
 use codex_core::config::Config;
 use codex_core::config::Constrained;
 use codex_core::sandboxing::SandboxPermissions;
