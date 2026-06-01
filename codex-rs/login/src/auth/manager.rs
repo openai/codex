@@ -199,11 +199,51 @@ impl From<RefreshTokenError> for std::io::Error {
 }
 
 impl CodexAuth {
-    pub async fn from_auth_dot_json(
+    pub(crate) async fn from_auth_dot_json(
         codex_home: &Path,
         auth_dot_json: AuthDotJson,
         auth_credentials_store_mode: AuthCredentialsStoreMode,
         chatgpt_base_url: Option<&str>,
+    ) -> std::io::Result<Self> {
+        Self::from_auth_dot_json_with_chatgpt_storage(
+            codex_home,
+            auth_dot_json,
+            auth_credentials_store_mode,
+            chatgpt_base_url,
+            None,
+        )
+        .await
+    }
+
+    pub async fn from_account_session_auth_dot_json(
+        codex_home: &Path,
+        session_id: &str,
+        auth_dot_json: AuthDotJson,
+        auth_credentials_store_mode: AuthCredentialsStoreMode,
+        chatgpt_base_url: Option<&str>,
+    ) -> std::io::Result<Self> {
+        let storage_mode = auth_dot_json.storage_mode(auth_credentials_store_mode);
+        let storage = create_account_session_auth_storage(
+            codex_home.to_path_buf(),
+            session_id,
+            storage_mode,
+        )?;
+        Self::from_auth_dot_json_with_chatgpt_storage(
+            codex_home,
+            auth_dot_json,
+            auth_credentials_store_mode,
+            chatgpt_base_url,
+            Some(storage),
+        )
+        .await
+    }
+
+    async fn from_auth_dot_json_with_chatgpt_storage(
+        codex_home: &Path,
+        auth_dot_json: AuthDotJson,
+        auth_credentials_store_mode: AuthCredentialsStoreMode,
+        chatgpt_base_url: Option<&str>,
+        chatgpt_storage: Option<Arc<dyn AuthStorageBackend>>,
     ) -> std::io::Result<Self> {
         let auth_mode = auth_dot_json.resolved_mode();
         let client = create_client();
@@ -230,7 +270,8 @@ impl CodexAuth {
 
         match auth_mode {
             ApiAuthMode::Chatgpt => {
-                let storage = create_auth_storage(codex_home.to_path_buf(), storage_mode);
+                let storage = chatgpt_storage
+                    .unwrap_or_else(|| create_auth_storage(codex_home.to_path_buf(), storage_mode));
                 Ok(Self::Chatgpt(ChatgptAuth { state, storage }))
             }
             ApiAuthMode::ChatgptAuthTokens => {
@@ -619,7 +660,7 @@ pub fn save_account_session_auth(
         codex_home.to_path_buf(),
         session_id,
         auth_credentials_store_mode,
-    );
+    )?;
     storage.save(auth)
 }
 
@@ -633,7 +674,7 @@ pub fn load_account_session_auth(
         codex_home.to_path_buf(),
         session_id,
         auth_credentials_store_mode,
-    );
+    )?;
     storage.load()
 }
 
@@ -647,7 +688,7 @@ pub fn delete_account_session_auth(
         codex_home.to_path_buf(),
         session_id,
         auth_credentials_store_mode,
-    );
+    )?;
     storage.delete()
 }
 

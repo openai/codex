@@ -12,6 +12,7 @@ use std::io::Read;
 use std::io::Write;
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
+use std::path::Component;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -196,7 +197,8 @@ fn compute_account_session_store_key(
 #[derive(Clone, Debug)]
 struct KeyringAuthStorage {
     auth_file: PathBuf,
-    store_key: String,
+    codex_home: PathBuf,
+    account_session_id: Option<String>,
     keyring_store: Arc<dyn KeyringStore>,
 }
 
@@ -204,8 +206,8 @@ impl KeyringAuthStorage {
     fn new(codex_home: PathBuf, keyring_store: Arc<dyn KeyringStore>) -> Self {
         Self {
             auth_file: get_auth_file(&codex_home),
-            store_key: compute_store_key(&codex_home)
-                .expect("computing the auth key should be infallible"),
+            codex_home,
+            account_session_id: None,
             keyring_store,
         }
     }
@@ -217,9 +219,16 @@ impl KeyringAuthStorage {
     ) -> Self {
         Self {
             auth_file: get_account_session_auth_file(&codex_home, session_id),
-            store_key: compute_account_session_store_key(&codex_home, session_id)
-                .expect("computing the account session auth key should be infallible"),
+            codex_home,
+            account_session_id: Some(session_id.to_string()),
             keyring_store,
+        }
+    }
+
+    fn store_key(&self) -> std::io::Result<String> {
+        match self.account_session_id.as_deref() {
+            Some(session_id) => compute_account_session_store_key(&self.codex_home, session_id),
+            None => compute_store_key(&self.codex_home),
         }
     }
 
@@ -255,13 +264,12 @@ impl KeyringAuthStorage {
 
 impl AuthStorageBackend for KeyringAuthStorage {
     fn load(&self) -> std::io::Result<Option<AuthDotJson>> {
-        self.load_from_keyring(&self.store_key)
+        self.load_from_keyring(&self.store_key()?)
     }
 
     fn save(&self, auth: &AuthDotJson) -> std::io::Result<()> {
-        // Simpler error mapping per style: prefer method reference over closure
         let serialized = serde_json::to_string(auth).map_err(std::io::Error::other)?;
-        self.save_to_keyring(&self.store_key, &serialized)?;
+        self.save_to_keyring(&self.store_key()?, &serialized)?;
         if let Err(err) = delete_file_if_exists(&self.auth_file) {
             warn!("failed to remove CLI auth fallback file: {err}");
         }
@@ -269,14 +277,15 @@ impl AuthStorageBackend for KeyringAuthStorage {
     }
 
     fn delete(&self) -> std::io::Result<bool> {
+        let store_key = self.store_key()?;
         let keyring_removed = self
             .keyring_store
-            .delete(KEYRING_SERVICE, &self.store_key)
+            .delete(KEYRING_SERVICE, &store_key)
             .map_err(|err| {
                 std::io::Error::other(format!("failed to delete auth from keyring: {err}"))
-            })?;
-        let file_removed = delete_file_if_exists(&self.auth_file)?;
-        Ok(keyring_removed || file_removed)
+            });
+        let file_removed = delete_file_if_exists(&self.auth_file);
+        Ok(keyring_removed? || file_removed?)
     }
 }
 
@@ -407,9 +416,10 @@ pub(super) fn create_account_session_auth_storage(
     codex_home: PathBuf,
     session_id: &str,
     mode: AuthCredentialsStoreMode,
-) -> Arc<dyn AuthStorageBackend> {
+) -> std::io::Result<Arc<dyn AuthStorageBackend>> {
+    validate_account_session_id(session_id)?;
     let keyring_store: Arc<dyn KeyringStore> = Arc::new(DefaultKeyringStore);
-    match mode {
+    Ok(match mode {
         AuthCredentialsStoreMode::File => {
             Arc::new(FileAuthStorage::for_account_session(codex_home, session_id))
         }
@@ -426,7 +436,18 @@ pub(super) fn create_account_session_auth_storage(
         AuthCredentialsStoreMode::Ephemeral => Arc::new(EphemeralAuthStorage::for_account_session(
             codex_home, session_id,
         )),
+    })
+}
+
+fn validate_account_session_id(session_id: &str) -> std::io::Result<()> {
+    let mut components = Path::new(session_id).components();
+    if matches!(components.next(), Some(Component::Normal(_))) && components.next().is_none() {
+        return Ok(());
     }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::InvalidInput,
+        "account session ID must be a single path component",
+    ))
 }
 
 fn create_auth_storage_with_keyring_store(
