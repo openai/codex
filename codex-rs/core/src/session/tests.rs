@@ -109,6 +109,7 @@ use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::CompactedItem;
 use codex_protocol::protocol::ConversationAudioParams;
 use codex_protocol::protocol::CreditsSnapshot;
+use codex_protocol::protocol::ForkedHistory;
 use codex_protocol::protocol::GranularApprovalConfig;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::InterAgentCommunication;
@@ -2256,7 +2257,10 @@ async fn record_initial_history_reconstructs_forked_transcript() {
     let (rollout_items, expected) = sample_rollout(&session, &turn_context).await;
 
     session
-        .record_initial_history(InitialHistory::Forked(rollout_items))
+        .record_initial_history(InitialHistory::Forked(ForkedHistory {
+            source_thread_id: None,
+            history: rollout_items,
+        }))
         .await;
 
     let history = session.state.lock().await.clone_history();
@@ -2513,7 +2517,10 @@ async fn record_initial_history_forked_hydrates_previous_turn_settings() {
     ];
 
     session
-        .record_initial_history(InitialHistory::Forked(rollout_items))
+        .record_initial_history(InitialHistory::Forked(ForkedHistory {
+            source_thread_id: None,
+            history: rollout_items,
+        }))
         .await;
 
     let history = session.clone_history().await;

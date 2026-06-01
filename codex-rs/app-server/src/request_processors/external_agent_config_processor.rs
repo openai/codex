@@ -35,6 +35,7 @@ use codex_external_agent_sessions::PendingSessionImport;
 use codex_external_agent_sessions::prepare_validated_session_imports;
 use codex_external_agent_sessions::record_imported_session;
 use codex_protocol::ThreadId;
+use codex_protocol::protocol::ForkedHistory;
 use codex_protocol::protocol::InitialHistory;
 use codex_thread_store::ThreadMetadataPatch;
 use std::collections::HashSet;
@@ -305,7 +306,10 @@ impl ExternalAgentConfigRequestProcessor {
             .thread_manager
             .start_thread_with_options(StartThreadOptions {
                 config,
-                initial_history: InitialHistory::Forked(rollout_items),
+                initial_history: InitialHistory::Forked(ForkedHistory {
+                    source_thread_id: None,
+                    history: rollout_items,
+                }),
                 session_source: None,
                 thread_source: None,
                 dynamic_tools: Vec::new(),
