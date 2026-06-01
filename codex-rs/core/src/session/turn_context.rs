@@ -706,19 +706,32 @@ impl Session {
                 &per_turn_config.to_models_manager_config(),
             )
             .await;
+        let path_ref = primary_turn_environment.map(|turn_environment| {
+            crate::skills::EnvironmentPathRef::new(
+                turn_environment.environment.get_filesystem(),
+                turn_environment.cwd.clone(),
+            )
+        });
+        // Workspace/repo skill roots use the selected turn environment path above when present,
+        // while user/system/plugin skill roots still read from the local-authority filesystem.
+        let local_file_system = Some(Arc::clone(&codex_exec_server::LOCAL_FS));
+        let plugins_input = per_turn_config.plugins_config_input();
         let plugin_outcome = self
             .services
             .plugins_manager
-            .plugins_for_config(&per_turn_config.plugins_config_input())
+            .plugins_for_config(&plugins_input)
             .await;
         let effective_skill_roots = plugin_outcome.effective_plugin_skill_roots();
-        let skills_input = skills_load_input_from_config(&per_turn_config, effective_skill_roots);
-        let fs = primary_turn_environment
-            .map(|turn_environment| turn_environment.environment.get_filesystem());
+        let skills_input = skills_load_input_from_config(
+            &per_turn_config,
+            path_ref,
+            local_file_system,
+            effective_skill_roots,
+        );
         let skills_outcome = Arc::new(
             self.services
                 .skills_manager
-                .skills_for_config(&skills_input, fs)
+                .skills_for_config(&skills_input)
                 .await,
         );
         let goal_tools_supported = !per_turn_config.ephemeral && self.state_db().is_some();

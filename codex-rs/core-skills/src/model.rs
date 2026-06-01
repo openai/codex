@@ -1,12 +1,10 @@
-use std::collections::HashMap;
-use std::collections::HashSet;
-use std::fmt;
-use std::sync::Arc;
-
-use codex_exec_server::ExecutorFileSystem;
+use codex_exec_server::EnvironmentPathRef;
 use codex_protocol::protocol::Product;
 use codex_protocol::protocol::SkillScope;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use std::collections::HashMap;
+use std::collections::HashSet;
+use std::sync::Arc;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SkillMetadata {
@@ -18,6 +16,8 @@ pub struct SkillMetadata {
     pub policy: Option<SkillPolicy>,
     /// Path to the SKILLS.md file that declares this skill.
     pub path_to_skills_md: AbsolutePathBuf,
+    /// Bound path to the SKILL.md file that declares this skill.
+    pub source_path: EnvironmentPathRef,
     pub scope: SkillScope,
     pub plugin_id: Option<String>,
 }
@@ -89,17 +89,16 @@ pub struct SkillError {
 pub struct SkillLoadOutcome {
     pub skills: Vec<SkillMetadata>,
     pub errors: Vec<SkillError>,
-    pub disabled_paths: HashSet<AbsolutePathBuf>,
-    pub(crate) skill_roots: Vec<AbsolutePathBuf>,
-    pub(crate) skill_root_by_path: Arc<HashMap<AbsolutePathBuf, AbsolutePathBuf>>,
-    pub(crate) file_systems_by_skill_path: SkillFileSystemsByPath,
-    pub(crate) implicit_skills_by_scripts_dir: Arc<HashMap<AbsolutePathBuf, SkillMetadata>>,
-    pub(crate) implicit_skills_by_doc_path: Arc<HashMap<AbsolutePathBuf, SkillMetadata>>,
+    pub disabled_paths: HashSet<EnvironmentPathRef>,
+    pub(crate) skill_roots: Vec<EnvironmentPathRef>,
+    pub(crate) skill_root_by_path: Arc<HashMap<EnvironmentPathRef, EnvironmentPathRef>>,
+    pub(crate) implicit_skills_by_scripts_dir: Arc<HashMap<EnvironmentPathRef, SkillMetadata>>,
+    pub(crate) implicit_skills_by_doc_path: Arc<HashMap<EnvironmentPathRef, SkillMetadata>>,
 }
 
 impl SkillLoadOutcome {
     pub fn is_skill_enabled(&self, skill: &SkillMetadata) -> bool {
-        !self.disabled_paths.contains(&skill.path_to_skills_md)
+        !self.disabled_paths.contains(&skill.source_path)
     }
 
     pub fn is_skill_allowed_for_implicit_invocation(&self, skill: &SkillMetadata) -> bool {
@@ -119,49 +118,6 @@ impl SkillLoadOutcome {
             .iter()
             .map(|skill| (skill, self.is_skill_enabled(skill)))
     }
-
-    pub(crate) fn file_system_for_skill(
-        &self,
-        skill: &SkillMetadata,
-    ) -> Option<Arc<dyn ExecutorFileSystem>> {
-        self.file_systems_by_skill_path
-            .get(&skill.path_to_skills_md)
-    }
-}
-
-#[derive(Clone, Default)]
-pub(crate) struct SkillFileSystemsByPath {
-    values: Arc<HashMap<AbsolutePathBuf, Arc<dyn ExecutorFileSystem>>>,
-}
-
-impl SkillFileSystemsByPath {
-    pub(crate) fn new(values: HashMap<AbsolutePathBuf, Arc<dyn ExecutorFileSystem>>) -> Self {
-        Self {
-            values: Arc::new(values),
-        }
-    }
-
-    fn get(&self, path: &AbsolutePathBuf) -> Option<Arc<dyn ExecutorFileSystem>> {
-        self.values.get(path).map(Arc::clone)
-    }
-
-    fn retain_paths(&mut self, paths: &HashSet<AbsolutePathBuf>) {
-        self.values = Arc::new(
-            self.values
-                .iter()
-                .filter(|(path, _)| paths.contains(*path))
-                .map(|(path, fs)| (path.clone(), Arc::clone(fs)))
-                .collect(),
-        );
-    }
-}
-
-impl fmt::Debug for SkillFileSystemsByPath {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("SkillFileSystemsByPath")
-            .field("len", &self.values.len())
-            .finish()
-    }
 }
 
 pub fn filter_skill_load_outcome_for_product(
@@ -171,14 +127,11 @@ pub fn filter_skill_load_outcome_for_product(
     outcome
         .skills
         .retain(|skill| skill.matches_product_restriction_for_product(restriction_product));
-    let retained_paths: HashSet<AbsolutePathBuf> = outcome
+    let retained_paths: HashSet<EnvironmentPathRef> = outcome
         .skills
         .iter()
-        .map(|skill| skill.path_to_skills_md.clone())
+        .map(|skill| skill.source_path.clone())
         .collect();
-    outcome
-        .file_systems_by_skill_path
-        .retain_paths(&retained_paths);
     outcome.skill_root_by_path = Arc::new(
         outcome
             .skill_root_by_path
@@ -187,7 +140,7 @@ pub fn filter_skill_load_outcome_for_product(
             .map(|(path, root)| (path.clone(), root.clone()))
             .collect(),
     );
-    let retained_roots: HashSet<AbsolutePathBuf> =
+    let retained_roots: HashSet<EnvironmentPathRef> =
         outcome.skill_root_by_path.values().cloned().collect();
     outcome
         .skill_roots
@@ -209,4 +162,31 @@ pub fn filter_skill_load_outcome_for_product(
             .collect(),
     );
     outcome
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use codex_exec_server::EnvironmentPathRef;
+    use codex_utils_absolute_path::test_support::PathBufExt;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn environment_path_ref_joins_only_relative_paths() {
+        let root_path = std::env::temp_dir().join("skills");
+        let path_ref = EnvironmentPathRef::local(root_path.abs());
+
+        assert_eq!(
+            path_ref
+                .join_relative(Path::new("demo/SKILL.md"))
+                .map(|path_ref| path_ref.path().clone()),
+            Some(root_path.join("demo/SKILL.md").abs())
+        );
+        assert!(
+            path_ref
+                .join_relative(std::env::temp_dir().join("SKILL.md").as_path())
+                .is_none()
+        );
+    }
 }

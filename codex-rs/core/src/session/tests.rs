@@ -4132,9 +4132,20 @@ async fn new_default_turn_uses_config_aware_skills_for_role_overrides() {
         .services
         .skills_manager
         .skills_for_cwd(
-            &crate::skills_load_input_from_config(&parent_config, Vec::new()),
+            &crate::skills_load_input_from_config(
+                &parent_config,
+                Some(crate::skills::EnvironmentPathRef::new(
+                    Arc::clone(&skill_fs),
+                    parent_config.cwd.clone(),
+                )),
+                session
+                    .services
+                    .environment_manager
+                    .try_local_environment()
+                    .map(|environment| environment.get_filesystem()),
+                Vec::new(),
+            ),
             /*force_reload*/ true,
-            Some(Arc::clone(&skill_fs)),
         )
         .await;
     let parent_skill = parent_outcome
@@ -4700,13 +4711,23 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         .plugins_for_config(&per_turn_config.plugins_config_input())
         .await;
     let effective_skill_roots = plugin_outcome.effective_plugin_skill_roots();
-    let skills_input =
-        crate::skills_load_input_from_config(&per_turn_config, effective_skill_roots);
-    let skill_fs = environment.get_filesystem();
+    let cwd = crate::skills::EnvironmentPathRef::new(
+        environment.get_filesystem(),
+        per_turn_config.cwd.clone(),
+    );
+    let skills_input = crate::skills_load_input_from_config(
+        &per_turn_config,
+        Some(cwd),
+        services
+            .environment_manager
+            .try_local_environment()
+            .map(|environment| environment.get_filesystem()),
+        effective_skill_roots,
+    );
     let skills_outcome = Arc::new(
         services
             .skills_manager
-            .skills_for_config(&skills_input, Some(Arc::clone(&skill_fs)))
+            .skills_for_config(&skills_input)
             .await,
     );
     let turn_environments = turn_environments_for_tests(&environment, &session_configuration.cwd);
@@ -6548,13 +6569,23 @@ where
         .plugins_for_config(&per_turn_config.plugins_config_input())
         .await;
     let effective_skill_roots = plugin_outcome.effective_plugin_skill_roots();
-    let skills_input =
-        crate::skills_load_input_from_config(&per_turn_config, effective_skill_roots);
-    let skill_fs = environment.get_filesystem();
+    let cwd = crate::skills::EnvironmentPathRef::new(
+        environment.get_filesystem(),
+        per_turn_config.cwd.clone(),
+    );
+    let skills_input = crate::skills_load_input_from_config(
+        &per_turn_config,
+        Some(cwd),
+        services
+            .environment_manager
+            .try_local_environment()
+            .map(|environment| environment.get_filesystem()),
+        effective_skill_roots,
+    );
     let skills_outcome = Arc::new(
         services
             .skills_manager
-            .skills_for_config(&skills_input, Some(Arc::clone(&skill_fs)))
+            .skills_for_config(&skills_input)
             .await,
     );
     let turn_environments = turn_environments_for_tests(&environment, &session_configuration.cwd);
@@ -7265,6 +7296,9 @@ async fn build_initial_context_trims_skill_metadata_from_context_window_budget()
             interface: None,
             dependencies: None,
             policy: None,
+            source_path: codex_exec_server::EnvironmentPathRef::local(
+                test_path_buf("/tmp/admin-skill/SKILL.md").abs(),
+            ),
             path_to_skills_md: test_path_buf("/tmp/admin-skill/SKILL.md").abs(),
             scope: SkillScope::Admin,
             plugin_id: None,
@@ -7276,6 +7310,9 @@ async fn build_initial_context_trims_skill_metadata_from_context_window_budget()
             interface: None,
             dependencies: None,
             policy: None,
+            source_path: codex_exec_server::EnvironmentPathRef::local(
+                test_path_buf("/tmp/repo-skill/SKILL.md").abs(),
+            ),
             path_to_skills_md: test_path_buf("/tmp/repo-skill/SKILL.md").abs(),
             scope: SkillScope::Repo,
             plugin_id: None,
@@ -7312,6 +7349,9 @@ fn emit_thread_start_skill_metrics_records_enabled_kept_and_truncated_values() {
         interface: None,
         dependencies: None,
         policy: None,
+        source_path: codex_exec_server::EnvironmentPathRef::local(
+            test_path_buf("/tmp/repo-skill/SKILL.md").abs(),
+        ),
         path_to_skills_md: test_path_buf("/tmp/repo-skill/SKILL.md").abs(),
         scope: SkillScope::Repo,
         plugin_id: None,
@@ -7357,6 +7397,9 @@ fn emit_thread_start_skill_metrics_records_description_truncated_chars_without_o
         interface: None,
         dependencies: None,
         policy: None,
+        source_path: codex_exec_server::EnvironmentPathRef::local(
+            test_path_buf("/tmp/alpha-skill/SKILL.md").abs(),
+        ),
         path_to_skills_md: test_path_buf("/tmp/alpha-skill/SKILL.md").abs(),
         scope: SkillScope::Repo,
         plugin_id: None,
@@ -7368,6 +7411,9 @@ fn emit_thread_start_skill_metrics_records_description_truncated_chars_without_o
         interface: None,
         dependencies: None,
         policy: None,
+        source_path: codex_exec_server::EnvironmentPathRef::local(
+            test_path_buf("/tmp/beta-skill/SKILL.md").abs(),
+        ),
         path_to_skills_md: test_path_buf("/tmp/beta-skill/SKILL.md").abs(),
         scope: SkillScope::Repo,
         plugin_id: None,
@@ -7416,6 +7462,9 @@ async fn build_initial_context_emits_thread_start_skill_warning_on_repeated_buil
             interface: None,
             dependencies: None,
             policy: None,
+            source_path: codex_exec_server::EnvironmentPathRef::local(
+                test_path_buf("/tmp/admin-skill/SKILL.md").abs(),
+            ),
             path_to_skills_md: test_path_buf("/tmp/admin-skill/SKILL.md").abs(),
             scope: SkillScope::Admin,
             plugin_id: None,
@@ -7427,6 +7476,9 @@ async fn build_initial_context_emits_thread_start_skill_warning_on_repeated_buil
             interface: None,
             dependencies: None,
             policy: None,
+            source_path: codex_exec_server::EnvironmentPathRef::local(
+                test_path_buf("/tmp/repo-skill/SKILL.md").abs(),
+            ),
             path_to_skills_md: test_path_buf("/tmp/repo-skill/SKILL.md").abs(),
             scope: SkillScope::Repo,
             plugin_id: None,

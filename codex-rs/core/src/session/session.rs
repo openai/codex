@@ -450,20 +450,31 @@ async fn warm_plugins_and_skills_for_session_init(
     skills_manager: Arc<SkillsManager>,
     environments: Vec<TurnEnvironmentSelection>,
 ) -> Vec<SkillError> {
-    let fs = crate::environment_selection::resolve_environment_selections(
+    let resolved_environments = crate::environment_selection::resolve_environment_selections(
         environment_manager.as_ref(),
         &environments,
     )
-    .ok()
-    .and_then(|resolved| resolved.primary_filesystem());
+    .ok();
+    let path_ref = resolved_environments
+        .as_ref()
+        .and_then(crate::environment_selection::ResolvedTurnEnvironments::primary)
+        .map(|environment| {
+            crate::skills::EnvironmentPathRef::new(
+                environment.environment.get_filesystem(),
+                environment.cwd.clone(),
+            )
+        });
+    let local_file_system = Some(Arc::clone(&codex_exec_server::LOCAL_FS));
     let plugins_input = config.plugins_config_input();
     let plugin_outcome = plugins_manager.plugins_for_config(&plugins_input).await;
     let effective_skill_roots = plugin_outcome.effective_plugin_skill_roots();
-    let skills_input = skills_load_input_from_config(config.as_ref(), effective_skill_roots);
-    skills_manager
-        .skills_for_config(&skills_input, fs)
-        .await
-        .errors
+    let skills_input = skills_load_input_from_config(
+        config.as_ref(),
+        path_ref,
+        local_file_system,
+        effective_skill_roots,
+    );
+    skills_manager.skills_for_config(&skills_input).await.errors
 }
 
 impl Session {

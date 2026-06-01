@@ -19,7 +19,7 @@ use codex_core_skills::config_rules::resolve_disabled_skill_paths;
 use codex_core_skills::config_rules::skill_config_rules_from_stack;
 use codex_core_skills::loader::SkillRoot;
 use codex_core_skills::loader::load_skills_from_roots;
-use codex_exec_server::LOCAL_FS;
+use codex_exec_server::EnvironmentPathRef;
 use codex_plugin::AppConnectorId;
 use codex_plugin::LoadedPlugin;
 use codex_plugin::PluginCapabilitySummary;
@@ -40,7 +40,6 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
-use std::sync::Arc;
 use tempfile::TempDir;
 use tracing::warn;
 
@@ -564,8 +563,10 @@ async fn load_plugin(
         .or_else(|| Some(manifest.name.clone()));
     loaded_plugin.manifest_description = manifest.description.clone();
     loaded_plugin.skill_roots = plugin_skill_roots(&plugin_root, manifest_paths);
+    // TODO: Support multi-env plugin skill loading. Plugin discovery is local-only today, so bind
+    // plugin skill reads to the local environment instead of the selected turn environment.
     let resolved_skills = load_plugin_skills(
-        &plugin_root,
+        EnvironmentPathRef::local(plugin_root.clone()),
         &loaded_plugin_id,
         manifest_paths,
         restriction_product,
@@ -642,18 +643,17 @@ impl ResolvedPluginSkills {
 }
 
 pub async fn load_plugin_skills(
-    plugin_root: &AbsolutePathBuf,
+    plugin_root: EnvironmentPathRef,
     plugin_id: &PluginId,
     manifest_paths: &PluginManifestPaths,
     restriction_product: Option<Product>,
     skill_config_rules: &SkillConfigRules,
 ) -> ResolvedPluginSkills {
-    let roots = plugin_skill_roots(plugin_root, manifest_paths)
+    let roots = plugin_skill_roots(plugin_root.path(), manifest_paths)
         .into_iter()
         .map(|path| SkillRoot {
-            path,
+            path: plugin_root.with_path(path),
             scope: SkillScope::User,
-            file_system: Arc::clone(&LOCAL_FS),
             plugin_id: Some(plugin_id.as_key()),
             plugin_root: Some(plugin_root.clone()),
         })
@@ -665,7 +665,10 @@ pub async fn load_plugin_skills(
         .into_iter()
         .filter(|skill| skill.matches_product_restriction_for_product(restriction_product))
         .collect::<Vec<_>>();
-    let disabled_skill_paths = resolve_disabled_skill_paths(&skills, skill_config_rules);
+    let disabled_skill_paths = resolve_disabled_skill_paths(&skills, skill_config_rules)
+        .into_iter()
+        .map(|path| path.path().clone())
+        .collect();
 
     ResolvedPluginSkills {
         skills,

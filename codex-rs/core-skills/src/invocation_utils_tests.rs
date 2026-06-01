@@ -19,6 +19,7 @@ fn test_skill_metadata(skill_doc_path: AbsolutePathBuf) -> SkillMetadata {
         interface: None,
         dependencies: None,
         policy: None,
+        source_path: codex_exec_server::EnvironmentPathRef::local((skill_doc_path).clone()),
         path_to_skills_md: skill_doc_path,
         scope: codex_protocol::protocol::SkillScope::User,
         plugin_id: None,
@@ -27,6 +28,10 @@ fn test_skill_metadata(skill_doc_path: AbsolutePathBuf) -> SkillMetadata {
 
 fn test_path_display(unix_path: &str) -> String {
     test_path_buf(unix_path).display().to_string()
+}
+
+fn local_path_ref(path: AbsolutePathBuf) -> codex_exec_server::EnvironmentPathRef {
+    codex_exec_server::EnvironmentPathRef::local(path)
 }
 
 #[test]
@@ -54,7 +59,7 @@ fn script_run_detection_excludes_python_c() {
 #[test]
 fn skill_doc_read_detection_matches_absolute_path() {
     let skill_doc_path = test_path_buf("/tmp/skill-test/SKILL.md").abs();
-    let normalized_skill_doc_path = canonicalize_if_exists(&skill_doc_path);
+    let normalized_skill_doc_path = canonicalize_if_exists(&local_path_ref(skill_doc_path.clone()));
     let skill = test_skill_metadata(skill_doc_path);
     let outcome = SkillLoadOutcome {
         implicit_skills_by_scripts_dir: Arc::new(HashMap::new()),
@@ -68,7 +73,11 @@ fn skill_doc_read_detection_matches_absolute_path() {
         "|".to_string(),
         "head".to_string(),
     ];
-    let found = detect_skill_doc_read(&outcome, &tokens, &test_path_buf("/tmp").abs());
+    let found = detect_skill_doc_read(
+        &outcome,
+        &tokens,
+        &local_path_ref(test_path_buf("/tmp").abs()),
+    );
 
     assert_eq!(
         found.map(|value| value.name),
@@ -79,7 +88,9 @@ fn skill_doc_read_detection_matches_absolute_path() {
 #[test]
 fn skill_script_run_detection_matches_relative_path_from_skill_root() {
     let skill_doc_path = test_path_buf("/tmp/skill-test/SKILL.md").abs();
-    let scripts_dir = canonicalize_if_exists(&test_path_buf("/tmp/skill-test/scripts").abs());
+    let scripts_dir = canonicalize_if_exists(&local_path_ref(
+        test_path_buf("/tmp/skill-test/scripts").abs(),
+    ));
     let skill = test_skill_metadata(skill_doc_path);
     let outcome = SkillLoadOutcome {
         implicit_skills_by_scripts_dir: Arc::new(HashMap::from([(scripts_dir, skill)])),
@@ -91,7 +102,11 @@ fn skill_script_run_detection_matches_relative_path_from_skill_root() {
         "scripts/fetch_comments.py".to_string(),
     ];
 
-    let found = detect_skill_script_run(&outcome, &tokens, &test_path_buf("/tmp/skill-test").abs());
+    let found = detect_skill_script_run(
+        &outcome,
+        &tokens,
+        &local_path_ref(test_path_buf("/tmp/skill-test").abs()),
+    );
 
     assert_eq!(
         found.map(|value| value.name),
@@ -102,7 +117,9 @@ fn skill_script_run_detection_matches_relative_path_from_skill_root() {
 #[test]
 fn skill_script_run_detection_matches_absolute_path_from_any_workdir() {
     let skill_doc_path = test_path_buf("/tmp/skill-test/SKILL.md").abs();
-    let scripts_dir = canonicalize_if_exists(&test_path_buf("/tmp/skill-test/scripts").abs());
+    let scripts_dir = canonicalize_if_exists(&local_path_ref(
+        test_path_buf("/tmp/skill-test/scripts").abs(),
+    ));
     let skill = test_skill_metadata(skill_doc_path);
     let outcome = SkillLoadOutcome {
         implicit_skills_by_scripts_dir: Arc::new(HashMap::from([(scripts_dir, skill)])),
@@ -114,7 +131,11 @@ fn skill_script_run_detection_matches_absolute_path_from_any_workdir() {
         test_path_display("/tmp/skill-test/scripts/fetch_comments.py"),
     ];
 
-    let found = detect_skill_script_run(&outcome, &tokens, &test_path_buf("/tmp/other").abs());
+    let found = detect_skill_script_run(
+        &outcome,
+        &tokens,
+        &local_path_ref(test_path_buf("/tmp/other").abs()),
+    );
 
     assert_eq!(
         found.map(|value| value.name),

@@ -1,5 +1,6 @@
 use super::*;
-use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_exec_server::EnvironmentPathRef;
+use codex_exec_server::LocalFileSystem;
 use codex_utils_absolute_path::test_support::PathBufExt;
 use codex_utils_absolute_path::test_support::test_path_buf;
 use pretty_assertions::assert_eq;
@@ -14,6 +15,7 @@ fn make_skill(name: &str, path: &str) -> SkillMetadata {
         interface: None,
         dependencies: None,
         policy: None,
+        source_path: codex_exec_server::EnvironmentPathRef::local(test_path_buf(path).abs()),
         path_to_skills_md: test_path_buf(path).abs(),
         scope: codex_protocol::protocol::SkillScope::User,
         plugin_id: None,
@@ -37,7 +39,7 @@ fn linked_skill_mention(name: &str, unix_path: &str) -> String {
 fn collect_mentions(
     inputs: &[UserInput],
     skills: &[SkillMetadata],
-    disabled_paths: &HashSet<AbsolutePathBuf>,
+    disabled_paths: &HashSet<EnvironmentPathRef>,
     connector_slug_counts: &HashMap<String, usize>,
 ) -> Vec<SkillMetadata> {
     collect_explicit_skill_mentions(inputs, skills, disabled_paths, connector_slug_counts)
@@ -193,6 +195,7 @@ fn collect_explicit_skill_mentions_skips_invalid_structured_and_blocks_plain_fal
 #[test]
 fn collect_explicit_skill_mentions_skips_disabled_structured_and_blocks_plain_fallback() {
     let alpha = make_skill("alpha-skill", "/tmp/alpha");
+    let disabled = HashSet::from([alpha.source_path.clone()]);
     let skills = vec![alpha];
     let inputs = vec![
         UserInput::Text {
@@ -204,7 +207,6 @@ fn collect_explicit_skill_mentions_skips_disabled_structured_and_blocks_plain_fa
             path: test_path_buf("/tmp/alpha"),
         },
     ];
-    let disabled = HashSet::from([test_path_buf("/tmp/alpha").abs()]);
     let connector_counts = HashMap::new();
 
     let selected = collect_mentions(&inputs, &skills, &disabled, &connector_counts);
@@ -226,6 +228,29 @@ fn collect_explicit_skill_mentions_dedupes_by_path() {
     let selected = collect_mentions(&inputs, &skills, &HashSet::new(), &connector_counts);
 
     assert_eq!(selected, vec![alpha]);
+}
+
+#[test]
+fn collect_explicit_skill_mentions_skips_ambiguous_linked_path() {
+    let alpha = make_skill("demo-skill", "/tmp/shared");
+    let beta = SkillMetadata {
+        name: "demo-skill".to_string(),
+        source_path: EnvironmentPathRef::new(
+            std::sync::Arc::new(LocalFileSystem::unsandboxed()),
+            alpha.path_to_skills_md.clone(),
+        ),
+        ..alpha.clone()
+    };
+    let skills = vec![alpha, beta];
+    let inputs = vec![UserInput::Text {
+        text: linked_skill_mention("demo-skill", "/tmp/shared"),
+        text_elements: Vec::new(),
+    }];
+    let connector_counts = HashMap::new();
+
+    let selected = collect_mentions(&inputs, &skills, &HashSet::new(), &connector_counts);
+
+    assert_eq!(selected, Vec::new());
 }
 
 #[test]
@@ -297,12 +322,12 @@ fn collect_explicit_skill_mentions_allows_explicit_path_with_connector_conflict(
 fn collect_explicit_skill_mentions_skips_when_linked_path_disabled() {
     let alpha = make_skill("demo-skill", "/tmp/alpha");
     let beta = make_skill("demo-skill", "/tmp/beta");
+    let disabled = HashSet::from([alpha.source_path.clone()]);
     let skills = vec![alpha, beta];
     let inputs = vec![UserInput::Text {
         text: format!("use {}", linked_skill_mention("demo-skill", "/tmp/alpha")),
         text_elements: Vec::new(),
     }];
-    let disabled = HashSet::from([test_path_buf("/tmp/alpha").abs()]);
     let connector_counts = HashMap::new();
 
     let selected = collect_mentions(&inputs, &skills, &disabled, &connector_counts);
