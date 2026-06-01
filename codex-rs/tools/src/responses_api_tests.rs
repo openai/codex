@@ -167,3 +167,128 @@ fn loadable_tool_spec_namespace_serializes_with_deferred_child_tools() {
         })
     );
 }
+
+#[test]
+fn strict_responses_api_tool_serializes_valid_schema() {
+    let tool = strict_tool(JsonSchema::object(
+        BTreeMap::from([(
+            "order_id".to_string(),
+            JsonSchema::string(/*description*/ None),
+        )]),
+        Some(vec!["order_id".to_string()]),
+        Some(false.into()),
+    ));
+
+    tool.validate_for_responses_api()
+        .expect("strict schema should validate");
+
+    assert_eq!(
+        serde_json::to_value(tool).expect("serialize strict tool"),
+        json!({
+            "name": "lookup_order",
+            "description": "Look up an order",
+            "strict": true,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "order_id": { "type": "string" }
+                },
+                "required": ["order_id"],
+                "additionalProperties": false,
+            },
+        })
+    );
+}
+
+#[test]
+fn strict_responses_api_tool_rejects_invalid_schemas() {
+    let cases = [
+        (
+            "non-object root",
+            JsonSchema::any_of(
+                vec![JsonSchema::string(/*description*/ None)],
+                /*description*/ None,
+            ),
+            "strict tool parameters must be an object schema",
+        ),
+        (
+            "missing required",
+            JsonSchema::object(BTreeMap::new(), /*required*/ None, Some(false.into())),
+            "strict object schemas must include `required`",
+        ),
+        (
+            "missing additionalProperties",
+            JsonSchema::object(
+                BTreeMap::new(),
+                Some(Vec::new()),
+                /*additional_properties*/ None,
+            ),
+            "strict object schemas must set `additionalProperties` to false",
+        ),
+        (
+            "true additionalProperties",
+            JsonSchema::object(BTreeMap::new(), Some(Vec::new()), Some(true.into())),
+            "strict object schemas must set `additionalProperties` to false",
+        ),
+        (
+            "schema additionalProperties",
+            JsonSchema::object(
+                BTreeMap::new(),
+                Some(Vec::new()),
+                Some(JsonSchema::string(/*description*/ None).into()),
+            ),
+            "strict object schemas must set `additionalProperties` to false",
+        ),
+        (
+            "property omitted from required",
+            JsonSchema::object(
+                BTreeMap::from([(
+                    "order_id".to_string(),
+                    JsonSchema::string(/*description*/ None),
+                )]),
+                Some(Vec::new()),
+                Some(false.into()),
+            ),
+            "strict object schemas must list every property in `required`; missing `order_id`",
+        ),
+        (
+            "nested object missing required",
+            JsonSchema::object(
+                BTreeMap::from([(
+                    "customer".to_string(),
+                    JsonSchema::object(
+                        BTreeMap::from([(
+                            "name".to_string(),
+                            JsonSchema::string(/*description*/ None),
+                        )]),
+                        /*required*/ None,
+                        Some(false.into()),
+                    ),
+                )]),
+                Some(vec!["customer".to_string()]),
+                Some(false.into()),
+            ),
+            "strict object schemas must include `required`",
+        ),
+    ];
+
+    for (name, parameters, expected) in cases {
+        let err = match strict_tool(parameters).validate_for_responses_api() {
+            Ok(()) => panic!("{name} should fail validation"),
+            Err(err) => err,
+        };
+
+        assert_eq!(err.to_string(), expected, "{name}");
+    }
+}
+
+fn strict_tool(parameters: JsonSchema) -> ResponsesApiTool {
+    ResponsesApiTool {
+        name: "lookup_order".to_string(),
+        description: "Look up an order".to_string(),
+        strict: true,
+        defer_loading: None,
+        parameters,
+        output_schema: None,
+    }
+}

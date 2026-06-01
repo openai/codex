@@ -10,6 +10,7 @@ use super::X_OPENAI_SUBAGENT_HEADER;
 use crate::AttestationContext;
 use crate::AttestationProvider;
 use crate::GenerateAttestationFuture;
+use crate::client_common::Prompt;
 use codex_api::ApiError;
 use codex_api::ResponseEvent;
 use codex_app_server_protocol::AuthMode;
@@ -23,6 +24,7 @@ use codex_model_provider_info::create_oss_provider_with_base_url;
 use codex_otel::SessionTelemetry;
 use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
+use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelInfo;
@@ -36,6 +38,9 @@ use codex_rollout_trace::RawTraceEventPayload;
 use codex_rollout_trace::RolloutTrace;
 use codex_rollout_trace::TraceWriter;
 use codex_rollout_trace::replay_bundle;
+use codex_tools::JsonSchema;
+use codex_tools::ResponsesApiTool;
+use codex_tools::ToolSpec;
 use futures::StreamExt;
 use pretty_assertions::assert_eq;
 use serde_json::json;
@@ -338,6 +343,44 @@ async fn summarize_memories_returns_empty_for_empty_input() {
         .await
         .expect("empty summarize request should succeed");
     assert_eq!(output.len(), 0);
+}
+
+#[test]
+fn build_responses_request_rejects_invalid_strict_tool_schema() -> anyhow::Result<()> {
+    let client = test_model_client(SessionSource::Cli);
+    let provider = create_oss_provider_with_base_url("https://example.com/v1", WireApi::Responses)
+        .to_api_provider(/*auth_mode*/ None)?;
+    let prompt = Prompt {
+        tools: vec![ToolSpec::Function(ResponsesApiTool {
+            name: "lookup_order".to_string(),
+            description: "Look up an order".to_string(),
+            strict: true,
+            defer_loading: None,
+            parameters: JsonSchema::any_of(
+                vec![JsonSchema::string(/*description*/ None)],
+                /*description*/ None,
+            ),
+            output_schema: None,
+        })],
+        ..Default::default()
+    };
+
+    let err = client
+        .build_responses_request(
+            &provider,
+            &prompt,
+            &test_model_info(),
+            /*effort*/ None,
+            ReasoningSummaryConfig::None,
+            /*service_tier*/ None,
+        )
+        .expect_err("invalid strict tool schema should fail request building");
+
+    assert_eq!(
+        err.to_string(),
+        "strict tool parameters must be an object schema"
+    );
+    Ok(())
 }
 
 #[tokio::test]

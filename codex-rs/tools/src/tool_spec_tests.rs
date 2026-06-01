@@ -150,6 +150,28 @@ fn create_tools_json_for_responses_api_includes_top_level_name() {
 }
 
 #[test]
+fn create_tools_json_for_responses_api_rejects_invalid_strict_schema() {
+    let err = create_tools_json_for_responses_api(&[ToolSpec::Function(ResponsesApiTool {
+        name: "demo".to_string(),
+        description: "A demo tool".to_string(),
+        strict: true,
+        defer_loading: None,
+        parameters: JsonSchema::object(
+            BTreeMap::from([("foo".to_string(), JsonSchema::string(/*description*/ None))]),
+            Some(Vec::new()),
+            Some(false.into()),
+        ),
+        output_schema: None,
+    })])
+    .expect_err("invalid strict schema should be rejected");
+
+    assert_eq!(
+        err.to_string(),
+        "strict object schemas must list every property in `required`; missing `foo`"
+    );
+}
+
+#[test]
 fn namespace_tool_spec_serializes_expected_wire_shape() {
     assert_eq!(
         serde_json::to_value(ToolSpec::Namespace(ResponsesApiNamespace {

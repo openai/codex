@@ -2,6 +2,7 @@ use crate::FreeformTool;
 use crate::JsonSchema;
 use crate::LoadableToolSpec;
 use crate::ResponsesApiNamespace;
+use crate::ResponsesApiNamespaceTool;
 use crate::ResponsesApiTool;
 use codex_protocol::config_types::WebSearchContextSize;
 use codex_protocol::config_types::WebSearchFilters as ConfigWebSearchFilters;
@@ -78,14 +79,26 @@ impl From<LoadableToolSpec> for ToolSpec {
 pub fn create_tools_json_for_responses_api(
     tools: &[ToolSpec],
 ) -> Result<Vec<Value>, serde_json::Error> {
-    let mut tools_json = Vec::new();
+    tools
+        .iter()
+        .map(|tool| {
+            validate_tool_for_responses_api(tool)?;
+            serde_json::to_value(tool)
+        })
+        .collect()
+}
 
-    for tool in tools {
-        let json = serde_json::to_value(tool)?;
-        tools_json.push(json);
+fn validate_tool_for_responses_api(tool: &ToolSpec) -> Result<(), serde_json::Error> {
+    match tool {
+        ToolSpec::Function(tool) => tool.validate_for_responses_api(),
+        ToolSpec::Namespace(namespace) => namespace.tools.iter().try_for_each(|tool| match tool {
+            ResponsesApiNamespaceTool::Function(tool) => tool.validate_for_responses_api(),
+        }),
+        ToolSpec::ToolSearch { .. }
+        | ToolSpec::ImageGeneration { .. }
+        | ToolSpec::WebSearch { .. }
+        | ToolSpec::Freeform(_) => Ok(()),
     }
-
-    Ok(tools_json)
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]

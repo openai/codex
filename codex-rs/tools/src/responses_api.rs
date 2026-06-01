@@ -1,4 +1,7 @@
+use crate::AdditionalProperties;
 use crate::JsonSchema;
+use crate::JsonSchemaPrimitiveType;
+use crate::JsonSchemaType;
 use crate::ToolDefinition;
 use crate::ToolName;
 use crate::parse_dynamic_tool;
@@ -26,15 +29,108 @@ pub struct FreeformToolFormat {
 pub struct ResponsesApiTool {
     pub name: String,
     pub description: String,
-    /// TODO: Validation. When strict is set to true, the JSON schema,
-    /// `required` and `additional_properties` must be present. All fields in
-    /// `properties` must be present in `required`.
+    /// Whether Responses API strict JSON Schema validation should be enforced.
+    ///
+    /// When true, request construction fails unless the schema uses the
+    /// Responses API strict subset.
     pub strict: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub defer_loading: Option<bool>,
     pub parameters: JsonSchema,
     #[serde(skip)]
     pub output_schema: Option<Value>,
+}
+
+impl ResponsesApiTool {
+    pub(crate) fn validate_for_responses_api(&self) -> Result<(), serde_json::Error> {
+        if !self.strict {
+            return Ok(());
+        }
+
+        if !matches!(
+            self.parameters.schema_type,
+            Some(JsonSchemaType::Single(JsonSchemaPrimitiveType::Object))
+        ) {
+            return Err(strict_schema_error(
+                "strict tool parameters must be an object schema",
+            ));
+        }
+
+        validate_strict_schema(&self.parameters).map_err(strict_schema_error)
+    }
+}
+
+fn strict_schema_error(message: impl Into<String>) -> serde_json::Error {
+    serde_json::Error::io(std::io::Error::new(
+        std::io::ErrorKind::InvalidInput,
+        message.into(),
+    ))
+}
+
+fn validate_strict_schema(schema: &JsonSchema) -> Result<(), String> {
+    if schema_allows_object(schema) {
+        let required = schema
+            .required
+            .as_ref()
+            .ok_or_else(|| "strict object schemas must include `required`".to_string())?;
+
+        if !matches!(
+            schema.additional_properties,
+            Some(AdditionalProperties::Boolean(false))
+        ) {
+            return Err(
+                "strict object schemas must set `additionalProperties` to false".to_string(),
+            );
+        }
+
+        if let Some(properties) = &schema.properties {
+            for name in properties.keys() {
+                if !required.contains(name) {
+                    return Err(format!(
+                        "strict object schemas must list every property in `required`; missing `{name}`"
+                    ));
+                }
+            }
+        }
+    }
+
+    if let Some(properties) = &schema.properties {
+        for schema in properties.values() {
+            validate_strict_schema(schema)?;
+        }
+    }
+
+    if let Some(items) = &schema.items {
+        validate_strict_schema(items)?;
+    }
+
+    if let Some(any_of) = &schema.any_of {
+        for schema in any_of {
+            validate_strict_schema(schema)?;
+        }
+    }
+
+    if let Some(defs) = &schema.defs {
+        for schema in defs.values() {
+            validate_strict_schema(schema)?;
+        }
+    }
+
+    if let Some(definitions) = &schema.definitions {
+        for schema in definitions.values() {
+            validate_strict_schema(schema)?;
+        }
+    }
+
+    Ok(())
+}
+
+fn schema_allows_object(schema: &JsonSchema) -> bool {
+    match &schema.schema_type {
+        Some(JsonSchemaType::Single(JsonSchemaPrimitiveType::Object)) => true,
+        Some(JsonSchemaType::Multiple(types)) => types.contains(&JsonSchemaPrimitiveType::Object),
+        Some(JsonSchemaType::Single(_)) | None => false,
+    }
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
