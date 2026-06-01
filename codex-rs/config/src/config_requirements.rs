@@ -991,10 +991,20 @@ impl ConfigRequirementsWithSources {
                 rules,
                 enforce_residency,
                 network,
-                permissions,
                 guardian_policy_config,
             }
         );
+
+        if let Some(incoming_permissions) = other.permissions.take() {
+            if let Some(existing_permissions) = self.permissions.as_mut() {
+                merge_permissions_requirements_descending(
+                    &mut existing_permissions.value,
+                    incoming_permissions,
+                );
+            } else {
+                self.permissions = Some(Sourced::new(incoming_permissions, source.clone()));
+            }
+        }
 
         if let Some(incoming_apps) = other.apps.take() {
             if let Some(existing_apps) = self.apps.as_mut() {
@@ -1051,6 +1061,21 @@ impl ConfigRequirementsWithSources {
             permissions: permissions.map(|sourced| sourced.value),
             guardian_policy_config: guardian_policy_config.map(|sourced| sourced.value),
         }
+    }
+}
+
+fn merge_permissions_requirements_descending(
+    existing: &mut PermissionsRequirementsToml,
+    mut incoming: PermissionsRequirementsToml,
+) {
+    if existing.filesystem.is_none() {
+        existing.filesystem = incoming.filesystem.take();
+    }
+    if existing.network.is_none() {
+        existing.network = incoming.network.take();
+    }
+    for (profile_id, profile) in incoming.profiles {
+        existing.profiles.entry(profile_id).or_insert(profile);
     }
 }
 
@@ -1962,6 +1987,62 @@ mod tests {
                 guardian_policy_config: None,
             }
         );
+        Ok(())
+    }
+
+    #[test]
+    fn merge_unset_fields_merges_nested_permissions_requirements() -> Result<()> {
+        let deny_read = if cfg!(windows) {
+            r"C:\Users\alice\.ssh"
+        } else {
+            "/home/alice/.ssh"
+        };
+        let high_precedence: ConfigRequirementsToml = from_str(&format!(
+            r#"
+                [permissions.filesystem]
+                deny_read = [{deny_read:?}]
+            "#
+        ))?;
+        let low_precedence: ConfigRequirementsToml = from_str(
+            r#"
+                [permissions.network]
+                enabled = true
+
+                [permissions.managed]
+                sandbox_mode = "workspace-write"
+            "#,
+        )?;
+
+        let mut target = ConfigRequirementsWithSources::default();
+        target.merge_unset_fields(RequirementSource::CloudRequirements, high_precedence);
+        target.merge_unset_fields(RequirementSource::Unknown, low_precedence);
+        let merged_toml = target.clone().into_toml();
+        let requirements = ConfigRequirements::try_from(target)?;
+
+        assert!(
+            merged_toml
+                .permissions
+                .as_ref()
+                .is_some_and(|permissions| permissions.profiles.contains_key("managed"))
+        );
+        assert_eq!(
+            requirements.filesystem,
+            Some(Sourced::new(
+                FilesystemConstraints {
+                    deny_read: vec![AbsolutePathBuf::from_absolute_path(deny_read)?.into()],
+                },
+                RequirementSource::CloudRequirements,
+            ))
+        );
+        assert_eq!(
+            requirements
+                .network
+                .expect("network requirements should merge")
+                .value
+                .enabled,
+            Some(true)
+        );
+
         Ok(())
     }
 
