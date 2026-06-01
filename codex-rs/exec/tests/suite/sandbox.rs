@@ -22,6 +22,7 @@ async fn spawn_command_under_sandbox(
 ) -> std::io::Result<Child> {
     use codex_core::exec::ExecCapturePolicy;
     use codex_core::exec::ExecParams;
+    use codex_core::exec::SandboxProcessLifetime;
     use codex_core::exec::build_exec_request;
     use codex_core::sandboxing::SandboxPermissions;
     use codex_protocol::config_types::WindowsSandboxLevel;
@@ -46,6 +47,7 @@ async fn spawn_command_under_sandbox(
         sandbox_cwd,
         &codex_linux_sandbox_exe,
         /*use_legacy_landlock*/ false,
+        SandboxProcessLifetime::AllowDetachedChildren,
     )
     .map_err(|err| io::Error::other(err.to_string()))?;
 

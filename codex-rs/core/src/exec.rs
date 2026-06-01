@@ -41,6 +41,7 @@ use codex_protocol::protocol::ExecOutputStream;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_sandboxing::SandboxCommand;
 use codex_sandboxing::SandboxManager;
+pub use codex_sandboxing::SandboxProcessLifetime;
 use codex_sandboxing::SandboxTransformRequest;
 use codex_sandboxing::SandboxType;
 use codex_sandboxing::SandboxablePreference;
@@ -307,6 +308,7 @@ pub async fn process_exec_tool_call(
         sandbox_cwd,
         codex_linux_sandbox_exe,
         use_legacy_landlock,
+        SandboxProcessLifetime::AllowDetachedChildren,
     )?;
 
     // Route through the sandboxing module for a single, unified execution path.
@@ -321,6 +323,7 @@ pub fn build_exec_request(
     sandbox_cwd: &AbsolutePathBuf,
     codex_linux_sandbox_exe: &Option<PathBuf>,
     use_legacy_landlock: bool,
+    process_lifetime: SandboxProcessLifetime,
 ) -> Result<ExecRequest> {
     let ExecParams {
         command,
@@ -382,6 +385,7 @@ pub fn build_exec_request(
             sandbox_policy_cwd: sandbox_cwd,
             codex_linux_sandbox_exe: codex_linux_sandbox_exe.as_deref(),
             use_legacy_landlock,
+            process_lifetime,
             windows_sandbox_level,
             windows_sandbox_private_desktop,
         })

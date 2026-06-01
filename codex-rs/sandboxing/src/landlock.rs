@@ -1,3 +1,4 @@
+use crate::SandboxProcessLifetime;
 use codex_protocol::models::PermissionProfile;
 use std::path::Path;
 
@@ -27,6 +28,7 @@ pub fn create_linux_sandbox_command_args_for_permission_profile(
     sandbox_policy_cwd: &Path,
     use_legacy_landlock: bool,
     allow_network_for_proxy: bool,
+    process_lifetime: SandboxProcessLifetime,
 ) -> Vec<String> {
     let permission_profile_json = serde_json::to_string(permission_profile)
         .unwrap_or_else(|err| panic!("failed to serialize permission profile: {err}"));
@@ -53,7 +55,9 @@ pub fn create_linux_sandbox_command_args_for_permission_profile(
     if allow_network_for_proxy {
         linux_cmd.push("--allow-network-for-proxy".to_string());
     }
-    linux_cmd.push("--allow-detached-children".to_string());
+    if process_lifetime == SandboxProcessLifetime::AllowDetachedChildren {
+        linux_cmd.push("--allow-detached-children".to_string());
+    }
     linux_cmd.push("--".to_string());
     linux_cmd.extend(command);
     linux_cmd

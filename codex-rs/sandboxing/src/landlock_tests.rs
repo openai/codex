@@ -65,6 +65,7 @@ fn permission_profile_flag_is_included() {
         cwd,
         /*use_legacy_landlock*/ true,
         /*allow_network_for_proxy*/ false,
+        SandboxProcessLifetime::TerminateWithParent,
     );
 
     assert_eq!(
@@ -76,6 +77,17 @@ fn permission_profile_flag_is_included() {
         args.windows(2)
             .any(|window| window[0] == "--command-cwd" && window[1] == "/tmp/link"),
         true
+    );
+    assert!(!args.contains(&"--allow-detached-children".to_string()));
+
+    let args = create_linux_sandbox_command_args_for_permission_profile(
+        vec!["/bin/true".to_string()],
+        command_cwd,
+        &permission_profile,
+        cwd,
+        /*use_legacy_landlock*/ true,
+        /*allow_network_for_proxy*/ false,
+        SandboxProcessLifetime::AllowDetachedChildren,
     );
     assert!(args.contains(&"--allow-detached-children".to_string()));
 }

@@ -320,6 +320,7 @@ impl CommandExecRequestProcessor {
             &sandbox_cwd,
             &codex_linux_sandbox_exe,
             use_legacy_landlock,
+            codex_core::exec::SandboxProcessLifetime::TerminateWithParent,
         )
         .map_err(|err| internal_error(format!("exec failed: {err}")))?;
         self.command_exec_manager

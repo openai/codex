@@ -11,6 +11,7 @@ use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_sandboxing::SandboxCommand;
 use codex_sandboxing::SandboxExecRequest;
 use codex_sandboxing::SandboxManager;
+use codex_sandboxing::SandboxProcessLifetime;
 use codex_sandboxing::SandboxTransformRequest;
 use codex_sandboxing::SandboxablePreference;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -111,6 +112,7 @@ impl FileSystemSandboxRunner {
                 sandbox_policy_cwd: cwd.as_path(),
                 codex_linux_sandbox_exe: self.runtime_paths.codex_linux_sandbox_exe.as_deref(),
                 use_legacy_landlock: sandbox_context.use_legacy_landlock,
+                process_lifetime: SandboxProcessLifetime::TerminateWithParent,
                 windows_sandbox_level: sandbox_context.windows_sandbox_level,
                 windows_sandbox_private_desktop: sandbox_context.windows_sandbox_private_desktop,
             })

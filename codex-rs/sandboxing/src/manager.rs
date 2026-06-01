@@ -85,6 +85,13 @@ pub struct SandboxExecRequest {
     pub arg0: Option<String>,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum SandboxProcessLifetime {
+    #[default]
+    TerminateWithParent,
+    AllowDetachedChildren,
+}
+
 /// Bundled arguments for sandbox transformation.
 ///
 /// This keeps call sites self-documenting when several fields are optional.
@@ -99,6 +106,7 @@ pub struct SandboxTransformRequest<'a> {
     pub sandbox_policy_cwd: &'a Path,
     pub codex_linux_sandbox_exe: Option<&'a Path>,
     pub use_legacy_landlock: bool,
+    pub process_lifetime: SandboxProcessLifetime,
     pub windows_sandbox_level: WindowsSandboxLevel,
     pub windows_sandbox_private_desktop: bool,
 }
@@ -178,6 +186,7 @@ impl SandboxManager {
             sandbox_policy_cwd,
             codex_linux_sandbox_exe,
             use_legacy_landlock,
+            process_lifetime,
             windows_sandbox_level,
             windows_sandbox_private_desktop,
         } = request;
@@ -232,6 +241,7 @@ impl SandboxManager {
                     sandbox_policy_cwd,
                     use_legacy_landlock,
                     allow_proxy_network,
+                    process_lifetime,
                 );
                 let mut full_command = Vec::with_capacity(1 + args.len());
                 full_command.push(os_string_to_command_component(exe.as_os_str().to_owned()));
