@@ -418,7 +418,11 @@ impl FileSystemSandboxPolicy {
         let protected_git_subpaths = dedup_absolute_paths(
             writable_root_paths
                 .iter()
-                .flat_map(|root| managed_git_read_only_subpaths_for_writable_root(root, true))
+                .flat_map(|root| {
+                    managed_git_read_only_subpaths_for_writable_root(
+                        root, /*allow_limited_git_writes*/ true,
+                    )
+                })
                 .chain(
                     linked_gitdirs
                         .iter()
@@ -483,7 +487,11 @@ impl FileSystemSandboxPolicy {
         let protected_git_roots = dedup_absolute_paths(
             writable_root_paths
                 .iter()
-                .flat_map(|root| managed_git_read_only_subpaths_for_writable_root(root, false))
+                .flat_map(|root| {
+                    managed_git_read_only_subpaths_for_writable_root(
+                        root, /*allow_limited_git_writes*/ false,
+                    )
+                })
                 .chain(
                     writable_root_paths
                         .iter()
