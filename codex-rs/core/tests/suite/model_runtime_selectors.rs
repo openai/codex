@@ -343,7 +343,9 @@ async fn guardian_stays_disabled_when_model_selects_multi_agent_v2() -> Result<(
     }))?;
     let root_mock = mount_sse_once_match(
         &server,
-        |req: &Request| body_contains(req, GUARDIAN_ROOT_PROMPT),
+        |req: &Request| {
+            body_contains(req, GUARDIAN_ROOT_PROMPT) && !body_contains(req, GUARDIAN_REASON)
+        },
         sse(vec![
             ev_response_created("resp-root"),
             ev_function_call("exec-call", "exec_command", &exec_args),
