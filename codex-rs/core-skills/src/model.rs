@@ -93,8 +93,8 @@ pub struct SkillLoadOutcome {
     pub disabled_paths: HashSet<EnvironmentPathRef>,
     pub(crate) skill_roots: Vec<EnvironmentPathRef>,
     pub(crate) skill_root_by_path: Arc<HashMap<EnvironmentPathRef, EnvironmentPathRef>>,
-    pub(crate) implicit_skills_by_scripts_dir: Arc<HashMap<AbsolutePathBuf, SkillMetadata>>,
-    pub(crate) implicit_skills_by_doc_path: Arc<HashMap<AbsolutePathBuf, SkillMetadata>>,
+    pub(crate) implicit_skills_by_scripts_dir: Arc<HashMap<EnvironmentPathRef, SkillMetadata>>,
+    pub(crate) implicit_skills_by_doc_path: Arc<HashMap<EnvironmentPathRef, SkillMetadata>>,
 }
 
 impl SkillLoadOutcome {

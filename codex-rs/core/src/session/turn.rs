@@ -534,7 +534,6 @@ async fn build_skills_and_plugins(
         warnings: skill_warnings,
     } = build_skill_injections(
         &mentioned_skills,
-        Some(skills_outcome),
         Some(&turn_context.session_telemetry),
         &sess.services.analytics_events_client,
         tracking.clone(),

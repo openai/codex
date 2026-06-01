@@ -1,3 +1,4 @@
+use codex_exec_server::EnvironmentPathRef;
 use codex_protocol::ThreadId;
 use codex_protocol::models::ShellCommandToolCallParams;
 use codex_tools::ShellCommandBackendConfig;
@@ -167,6 +168,11 @@ impl ToolExecutor<ToolInvocation> for ShellCommandHandler {
         let params: ShellCommandToolCallParams = parse_arguments_with_base_path(&arguments, &cwd)?;
         #[allow(deprecated)]
         let workdir = turn.resolve_path(params.workdir.clone());
+        let workdir = turn
+            .environments
+            .primary_filesystem()
+            .map(|file_system| EnvironmentPathRef::new(file_system, workdir.clone()))
+            .unwrap_or_else(|| EnvironmentPathRef::local(workdir.clone()));
         maybe_emit_implicit_skill_invocation(
             session.as_ref(),
             turn.as_ref(),
