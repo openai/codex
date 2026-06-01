@@ -68,8 +68,8 @@ def test_generation_has_single_maintenance_entrypoint_script() -> None:
     assert scripts == ["update_sdk_artifacts.py"]
 
 
-def test_root_fmt_recipe_formats_rust_python_sdk_and_scripts() -> None:
-    """The repo fmt command should format Rust, the Python SDK, and scripts."""
+def test_root_fmt_recipe_formats_justfile_rust_python_sdk_and_scripts() -> None:
+    """The repo fmt command should format the justfile, Rust, the Python SDK, and scripts."""
     justfile = ROOT.parents[1] / "justfile"
     lines = justfile.read_text().splitlines()
     fmt_index = lines.index("fmt:")
@@ -88,22 +88,44 @@ def test_root_fmt_recipe_formats_rust_python_sdk_and_scripts() -> None:
     }
     expected = {
         "working_directory": 'set working-directory := "codex-rs"',
-        "previous_comment": "# Format Rust, Python SDK code, and Python scripts.",
+        "previous_comment": "# Format the justfile, Rust, Python SDK code, and Python scripts.",
         "commands": [
+            "just --fmt",
             "cargo fmt -- --config imports_granularity=Item {stderr-null}",
-            "uv run --frozen --project ../sdk/python --extra dev ruff check --fix --fix-only ../sdk/python",
-            "uv run --frozen --project ../sdk/python --extra dev ruff format ../sdk/python",
-            "# Root scripts have their own locked Ruff environment.",
+            "# Python formatting uses the scripts project's locked Ruff environment.",
+            "uv run --frozen --project ../scripts ruff check --fix --fix-only ../sdk/python",
+            "uv run --frozen --project ../scripts ruff format ../sdk/python",
             "uv run --frozen --project ../scripts ruff format ../scripts",
         ],
     }
 
     assert actual == expected, (
-        "The root `just fmt` recipe must run Rust fmt and Ruff for Python SDK code and scripts. "
+        "The root `just fmt` recipe must run Just fmt, Rust fmt, and Ruff for Python SDK code and scripts. "
         "Fix the `fmt` recipe in `justfile`, then run `just fmt`.\n"
         f"Expected: {json.dumps(expected, indent=2)}\n"
         f"Actual: {json.dumps(actual, indent=2)}"
     )
+
+
+def test_root_fmt_check_recipe_checks_all_formatters() -> None:
+    """The repo fmt check should validate everything formatted by the fmt recipe."""
+    justfile = ROOT.parents[1] / "justfile"
+    lines = justfile.read_text().splitlines()
+    fmt_check_index = lines.index("fmt-check:")
+    next_recipe_index = next(
+        index
+        for index in range(fmt_check_index + 1, len(lines))
+        if lines[index] and not lines[index].startswith((" ", "\t", "#"))
+    )
+    fmt_check_recipe = lines[fmt_check_index:next_recipe_index]
+
+    assert [line.strip() for line in fmt_check_recipe[1:] if line.strip()] == [
+        "just --fmt --check",
+        "cargo fmt -- --config imports_granularity=Item --check {stderr-null}",
+        "uv run --frozen --project ../scripts ruff check ../sdk/python",
+        "uv run --frozen --project ../scripts ruff format --check ../sdk/python",
+        "uv run --frozen --project ../scripts ruff format --check ../scripts",
+    ]
 
 
 def test_generate_types_wires_all_generation_steps() -> None:
