@@ -199,7 +199,7 @@ fn zsh_snapshot_preserves_tied_path_exports() -> Result<()> {
         let expected_path = format!("{}:/usr/bin:/bin", tool_dir.display());
         std::fs::write(
             dir.path().join(".zshrc"),
-            format!("{zshrc_prefix}export PATH='{expected_path}'\n"),
+            format!("{zshrc_prefix}export PATH='{expected_path}'\ninteger -x SNAPSHOT_NUMBER=7\n"),
         )?;
 
         let output = Command::new("/bin/zsh")
@@ -214,13 +214,20 @@ fn zsh_snapshot_preserves_tied_path_exports() -> Result<()> {
             stdout.contains(expected_export),
             "snapshot should include {expected_export:?}; stdout={stdout:?}"
         );
+        assert!(
+            stdout.contains("export -i SNAPSHOT_NUMBER=7"),
+            "snapshot should include attributed integer export; stdout={stdout:?}"
+        );
 
         let snapshot_path = dir.path().join("snapshot.sh");
         std::fs::write(&snapshot_path, stdout.as_bytes())?;
 
         let validate = Command::new("/bin/zsh")
             .arg("-fc")
-            .arg("PATH=/should/not/survive; . \"$1\"; print -r -- \"$PATH\"")
+            .arg(
+                "PATH=/should/not/survive; SNAPSHOT_NUMBER=9; . \"$1\"; \
+                 print -r -- \"$PATH\"; print -r -- \"$SNAPSHOT_NUMBER\"",
+            )
             .arg("zsh")
             .arg(&snapshot_path)
             .output()?;
@@ -232,7 +239,7 @@ fn zsh_snapshot_preserves_tied_path_exports() -> Result<()> {
 
         assert_eq!(
             String::from_utf8_lossy(&validate.stdout).trim(),
-            expected_path
+            format!("{expected_path}\n7")
         );
     }
 
