@@ -78,6 +78,7 @@ itertools = { workspace = true }
 lazy_static = { workspace = true }
 pathdiff = { workspace = true }
 pulldown-cmark = { workspace = true }
+pure-rust-locales = { workspace = true }
 rand = { workspace = true }
 ratatui = { workspace = true, features = [
     "scrolling-regions",

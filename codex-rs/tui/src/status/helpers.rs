@@ -5,9 +5,9 @@ use crate::text_formatting;
 use chrono::DateTime;
 use chrono::Local;
 use chrono::Locale as ChronoLocale;
-use chrono::Timelike;
 use codex_protocol::account::PlanType;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use pure_rust_locales::locale_match;
 use std::path::Path;
 use unicode_width::UnicodeWidthStr;
 
@@ -176,6 +176,13 @@ pub(crate) fn format_reset_timestamp(dt: DateTime<Local>, captured_at: DateTime<
 
 #[cfg(not(test))]
 fn system_chrono_locale() -> Option<ChronoLocale> {
+    #[cfg(unix)]
+    {
+        if let Some(locale) = chrono_locale_from_time_env(|key| std::env::var(key).ok()) {
+            return Some(locale);
+        }
+    }
+
     sys_locale::get_locale()
         .as_deref()
         .and_then(parse_chrono_locale)
@@ -187,31 +194,74 @@ fn system_chrono_locale() -> Option<ChronoLocale> {
 }
 
 fn parse_chrono_locale(locale: &str) -> Option<ChronoLocale> {
-    locale.replace('-', "_").parse().ok()
+    let locale = locale
+        .split(['.', '@'])
+        .next()
+        .unwrap_or(locale)
+        .replace('-', "_");
+    match locale.as_str() {
+        "" => None,
+        "C" | "POSIX" => Some(ChronoLocale::POSIX),
+        _ => locale.parse().ok(),
+    }
 }
 
 fn time_without_seconds_for_locale(dt: DateTime<Local>, locale: ChronoLocale) -> String {
-    let dt = dt.with_second(0).unwrap_or(dt);
-    strip_ascii_seconds(dt.format_localized("%X", locale).to_string())
+    dt.format_localized(&time_format_without_seconds(locale), locale)
+        .to_string()
 }
 
-fn strip_ascii_seconds(mut time: String) -> String {
-    let Some(seconds) = time.rfind(":00") else {
-        return time;
-    };
-    if !time[..seconds].contains(':') {
-        return time;
-    }
-    if time[seconds + 3..]
-        .chars()
-        .next()
-        .is_some_and(|ch| !ch.is_whitespace())
-    {
-        return time;
+fn time_format_without_seconds(locale: ChronoLocale) -> String {
+    strip_seconds_from_time_format(locale_match!(locale => LC_TIME::T_FMT))
+}
+
+fn strip_seconds_from_time_format(format: &str) -> String {
+    let mut format = format.replace("%T", "%H:%M");
+    for token in ["%OS", "%S"] {
+        let Some(seconds_start) = format.find(token) else {
+            continue;
+        };
+
+        let mut remove_start = seconds_start;
+        if let Some((separator_start, _)) = format[..seconds_start]
+            .char_indices()
+            .next_back()
+            .filter(|(_, ch)| matches!(ch, ':' | '.' | '፡'))
+        {
+            remove_start = separator_start;
+        }
+
+        let mut remove_end = seconds_start + token.len();
+        if remove_start == seconds_start {
+            while let Some(ch) = format[remove_end..].chars().next() {
+                if ch.is_whitespace() || ch == '%' || ch.is_ascii_punctuation() {
+                    break;
+                }
+                remove_end += ch.len_utf8();
+            }
+            while let Some((whitespace_start, ch)) =
+                format[..remove_start].char_indices().next_back()
+                && ch.is_whitespace()
+            {
+                remove_start = whitespace_start;
+            }
+        }
+
+        format.replace_range(remove_start..remove_end, "");
+        break;
     }
 
-    time.replace_range(seconds..seconds + 3, "");
-    time
+    format
+}
+
+#[cfg(any(test, unix))]
+fn chrono_locale_from_time_env(
+    mut env: impl FnMut(&str) -> Option<String>,
+) -> Option<ChronoLocale> {
+    ["LC_ALL", "LC_TIME", "LANG"]
+        .into_iter()
+        .find_map(|key| env(key).filter(|locale| !locale.is_empty()))
+        .and_then(|locale| parse_chrono_locale(&locale))
 }
 
 fn title_case(s: &str) -> String {
@@ -269,24 +319,53 @@ mod tests {
     }
 
     #[test]
-    fn strip_ascii_seconds_keeps_locale_time_compact() {
+    fn strip_seconds_from_time_format_keeps_locale_time_compact() {
         let cases = [
-            ("23:04:00", "23:04"),
-            ("11:04:00 PM", "11:04 PM"),
-            ("23:04", "23:04"),
-            ("23:00", "23:00"),
-            ("23:04:00.000", "23:04:00.000"),
+            ("%T", "%H:%M"),
+            ("%H:%M:%S", "%H:%M"),
+            ("%I:%M:%S %p", "%I:%M %p"),
+            ("%H.%M.%S", "%H.%M"),
+            ("%H時%M分%S秒", "%H時%M分"),
+            ("%H시 %M분 %S초", "%H시 %M분"),
+            ("%R", "%R"),
         ];
 
-        for (time, expected) in cases {
-            assert_eq!(strip_ascii_seconds(time.to_string()), expected.to_string());
+        for (format, expected) in cases {
+            assert_eq!(strip_seconds_from_time_format(format), expected.to_string());
         }
     }
 
     #[test]
     fn parse_chrono_locale_accepts_system_locale_tags() {
         assert_eq!(parse_chrono_locale("en-US"), Some(ChronoLocale::en_US));
+        assert_eq!(
+            parse_chrono_locale("en_US.UTF-8"),
+            Some(ChronoLocale::en_US)
+        );
         assert_eq!(parse_chrono_locale("nl-NL"), Some(ChronoLocale::nl_NL));
+        assert_eq!(parse_chrono_locale("C"), Some(ChronoLocale::POSIX));
+    }
+
+    #[test]
+    fn time_locale_env_uses_lc_time_before_lang() {
+        let locale = chrono_locale_from_time_env(|key| match key {
+            "LC_TIME" => Some("nl_NL.UTF-8".to_string()),
+            "LANG" => Some("en_US.UTF-8".to_string()),
+            _ => None,
+        });
+
+        assert_eq!(locale, Some(ChronoLocale::nl_NL));
+    }
+
+    #[test]
+    fn time_locale_env_uses_lc_all_before_lc_time() {
+        let locale = chrono_locale_from_time_env(|key| match key {
+            "LC_ALL" => Some("en_US.UTF-8".to_string()),
+            "LC_TIME" => Some("nl_NL.UTF-8".to_string()),
+            _ => None,
+        });
+
+        assert_eq!(locale, Some(ChronoLocale::en_US));
     }
 
     #[test]
@@ -303,6 +382,10 @@ mod tests {
         assert_eq!(
             time_without_seconds_for_locale(dt, ChronoLocale::nl_NL),
             "15:04"
+        );
+        assert_eq!(
+            time_without_seconds_for_locale(dt, ChronoLocale::fi_FI),
+            "15.04"
         );
     }
 
