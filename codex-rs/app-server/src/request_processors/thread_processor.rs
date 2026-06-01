@@ -2390,7 +2390,7 @@ impl ThreadRequestProcessor {
                 thread.rollout_path(),
             );
             self.thread_watch_manager.upsert_thread(loaded_thread).await;
-            if let Some(parent_thread_id) = config_snapshot.session_source.parent_thread_id() {
+            if let Some(parent_thread_id) = config_snapshot.parent_thread_id {
                 raw_events_enabled = self
                     .thread_state_manager
                     .thread_state(parent_thread_id)
