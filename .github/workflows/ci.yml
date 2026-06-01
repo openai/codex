@@ -82,9 +82,6 @@ jobs:
         with:
           version: "0.11.3"
       - name: Check formatting (run `just fmt` to fix)
-        env:
-          # The SDK runtime publishes musllinux wheels for Linux.
-          CODEX_SDK_PYTHON_PLATFORM: --python-platform x86_64-unknown-linux-musl
         run: just fmt-check
 
       - name: Prettier (run `pnpm run format:fix` to fix)

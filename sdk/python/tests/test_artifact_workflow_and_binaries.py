@@ -93,8 +93,9 @@ def test_root_fmt_recipe_formats_justfile_rust_python_sdk_and_scripts() -> None:
             "just --unstable --fmt",
             "cargo fmt -- --config imports_granularity=Item {stderr-null}",
             "# The SDK and internal scripts use separate project roots for their Ruff environments.",
-            "uv run --frozen --project ../sdk/python --extra dev {{ sdk_python_platform }} ruff check --fix --fix-only ../sdk/python",
-            "uv run --frozen --project ../sdk/python --extra dev {{ sdk_python_platform }} ruff format ../sdk/python",
+            "uv sync --frozen --project ../sdk/python --extra dev --no-install-package openai-codex-cli-bin",
+            "uv run --frozen --project ../sdk/python --extra dev --no-sync ruff check --fix --fix-only ../sdk/python",
+            "uv run --frozen --project ../sdk/python --extra dev --no-sync ruff format ../sdk/python",
             "uv run --frozen --project ../scripts ruff format ../scripts",
         ],
     }
@@ -119,12 +120,21 @@ def test_root_fmt_check_recipe_checks_all_formatters() -> None:
     )
     fmt_check_recipe = lines[fmt_check_index:next_recipe_index]
 
+    fmt_commands = [
+        line.strip()
+        for line in lines[lines.index("fmt:") + 1 : fmt_check_index]
+        if line.strip() and not line.strip().startswith("#")
+    ]
+    fmt_to_fmt_check = {
+        "just --unstable --fmt": "just --unstable --fmt --check",
+        "cargo fmt -- --config imports_granularity=Item {stderr-null}": "cargo fmt -- --config imports_granularity=Item --check {stderr-null}",
+        "uv sync --frozen --project ../sdk/python --extra dev --no-install-package openai-codex-cli-bin": "uv sync --frozen --project ../sdk/python --extra dev --no-install-package openai-codex-cli-bin",
+        "uv run --frozen --project ../sdk/python --extra dev --no-sync ruff check --fix --fix-only ../sdk/python": "uv run --frozen --project ../sdk/python --extra dev --no-sync ruff check --diff ../sdk/python",
+        "uv run --frozen --project ../sdk/python --extra dev --no-sync ruff format ../sdk/python": "uv run --frozen --project ../sdk/python --extra dev --no-sync ruff format --check ../sdk/python",
+        "uv run --frozen --project ../scripts ruff format ../scripts": "uv run --frozen --project ../scripts ruff format --check ../scripts",
+    }
     assert [line.strip() for line in fmt_check_recipe[1:] if line.strip()] == [
-        "just --unstable --fmt --check",
-        "cargo fmt -- --config imports_granularity=Item --check {stderr-null}",
-        "uv run --frozen --project ../sdk/python --extra dev {{ sdk_python_platform }} ruff check --diff ../sdk/python",
-        "uv run --frozen --project ../sdk/python --extra dev {{ sdk_python_platform }} ruff format --check ../sdk/python",
-        "uv run --frozen --project ../scripts ruff format --check ../scripts",
+        fmt_to_fmt_check[command] for command in fmt_commands
     ]
 
 

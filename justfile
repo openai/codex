@@ -6,7 +6,6 @@ set windows-shell := ["python", "-c", 'import os, runpy; runpy.run_path(os.envir
 
 rust_min_stack := "8388608" # 8 MiB
 python := if os_family() == "windows" { "python" } else { "python3" }
-sdk_python_platform := env_var_or_default("CODEX_SDK_PYTHON_PLATFORM", "")
 
 # Display help
 help:
@@ -42,15 +41,17 @@ fmt:
     just --unstable --fmt
     cargo fmt -- --config imports_granularity=Item {stderr-null}
     # The SDK and internal scripts use separate project roots for their Ruff environments.
-    uv run --frozen --project ../sdk/python --extra dev {{ sdk_python_platform }} ruff check --fix --fix-only ../sdk/python
-    uv run --frozen --project ../sdk/python --extra dev {{ sdk_python_platform }} ruff format ../sdk/python
+    uv sync --frozen --project ../sdk/python --extra dev --no-install-package openai-codex-cli-bin
+    uv run --frozen --project ../sdk/python --extra dev --no-sync ruff check --fix --fix-only ../sdk/python
+    uv run --frozen --project ../sdk/python --extra dev --no-sync ruff format ../sdk/python
     uv run --frozen --project ../scripts ruff format ../scripts
 
 fmt-check:
     just --unstable --fmt --check
     cargo fmt -- --config imports_granularity=Item --check {stderr-null}
-    uv run --frozen --project ../sdk/python --extra dev {{ sdk_python_platform }} ruff check --diff ../sdk/python
-    uv run --frozen --project ../sdk/python --extra dev {{ sdk_python_platform }} ruff format --check ../sdk/python
+    uv sync --frozen --project ../sdk/python --extra dev --no-install-package openai-codex-cli-bin
+    uv run --frozen --project ../sdk/python --extra dev --no-sync ruff check --diff ../sdk/python
+    uv run --frozen --project ../sdk/python --extra dev --no-sync ruff format --check ../sdk/python
     uv run --frozen --project ../scripts ruff format --check ../scripts
 
 fix *args:
