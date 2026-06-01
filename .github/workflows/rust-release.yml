@@ -149,6 +149,11 @@ jobs:
       # 2026-03-04: temporarily change releases to use thin LTO because
       # Ubuntu ARM is timing out at 60 minutes.
       CARGO_PROFILE_RELEASE_LTO: ${{ contains(github.ref_name, '-alpha') && 'thin' || 'thin' }}
+      # Use the git CLI instead of Cargo's libgit2 path for git dependencies.
+      # macOS release runners have intermittently failed to fetch nested
+      # submodules through SecureTransport/libgit2, especially libwebrtc's
+      # libyuv submodule from chromium.googlesource.com.
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
       SIGN_MACOS: ${{ github.event_name != 'workflow_dispatch' }}
 
     strategy:
