@@ -132,11 +132,12 @@ impl ToolExecutor<ToolInvocation> for ExecCommandHandler {
         let fs = environment.get_filesystem();
         let args: ExecCommandArgs = parse_arguments_with_base_path(&arguments, &cwd)?;
         let hook_command = args.cmd.clone();
+        let workdir = crate::skills::EnvironmentPathRef::new(Arc::clone(&fs), cwd.clone());
         maybe_emit_implicit_skill_invocation(
             session.as_ref(),
             context.turn.as_ref(),
             &hook_command,
-            &cwd,
+            &workdir,
         )
         .await;
         let process_id = manager.allocate_process_id().await;

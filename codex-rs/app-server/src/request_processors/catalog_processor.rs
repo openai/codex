@@ -17,12 +17,12 @@ const SKILLS_LIST_CWD_CONCURRENCY: usize = 5;
 
 fn skills_to_info(
     skills: &[codex_core::skills::SkillMetadata],
-    disabled_paths: &HashSet<AbsolutePathBuf>,
+    disabled_paths: &HashSet<codex_exec_server::EnvironmentPathRef>,
 ) -> Vec<codex_app_server_protocol::SkillMetadata> {
     skills
         .iter()
         .map(|skill| {
-            let enabled = !disabled_paths.contains(&skill.path_to_skills_md);
+            let enabled = !disabled_paths.contains(&skill.source_path);
             codex_app_server_protocol::SkillMetadata {
                 name: skill.name.clone(),
                 description: skill.description.clone(),

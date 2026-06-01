@@ -2,6 +2,7 @@ use super::*;
 use crate::SkillLoadOutcome;
 use crate::config::GhostSnapshotConfig;
 use crate::environment_selection::ResolvedTurnEnvironments;
+use crate::skills::EnvironmentPathRef;
 use codex_model_provider::SharedModelProvider;
 use codex_model_provider::create_model_provider;
 use codex_protocol::SessionId;
@@ -19,7 +20,7 @@ use std::sync::atomic::Ordering;
 #[derive(Clone, Debug)]
 pub(crate) struct TurnSkillsContext {
     pub(crate) outcome: Arc<SkillLoadOutcome>,
-    pub(crate) implicit_invocation_seen_skills: Arc<Mutex<HashSet<String>>>,
+    pub(crate) implicit_invocation_seen_skills: Arc<Mutex<HashSet<EnvironmentPathRef>>>,
 }
 
 impl TurnSkillsContext {

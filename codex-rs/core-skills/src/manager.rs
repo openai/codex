@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::sync::RwLock;
 
 use codex_config::ConfigLayerStack;
+use codex_exec_server::EnvironmentPathRef;
 use codex_exec_server::ExecutorFileSystem;
 use codex_protocol::protocol::Product;
 use codex_protocol::protocol::SkillScope;
@@ -52,7 +53,7 @@ pub struct SkillsManager {
     codex_home: AbsolutePathBuf,
     restriction_product: Option<Product>,
     extra_roots: RwLock<Vec<AbsolutePathBuf>>,
-    cache_by_cwd: RwLock<HashMap<AbsolutePathBuf, SkillLoadOutcome>>,
+    cache_by_cwd: RwLock<HashMap<EnvironmentPathRef, SkillLoadOutcome>>,
     cache_by_config: RwLock<HashMap<ConfigSkillsCacheKey, SkillLoadOutcome>>,
 }
 
@@ -146,10 +147,12 @@ impl SkillsManager {
         force_reload: bool,
         fs: Option<Arc<dyn ExecutorFileSystem>>,
     ) -> SkillLoadOutcome {
-        let use_cwd_cache = fs.is_some();
-        if use_cwd_cache
-            && !force_reload
-            && let Some(outcome) = self.cached_outcome_for_cwd(&input.cwd)
+        let cwd_path_ref = fs
+            .as_ref()
+            .map(|fs| EnvironmentPathRef::new(Arc::clone(fs), input.cwd.clone()));
+        if !force_reload
+            && let Some(cwd_path_ref) = cwd_path_ref.as_ref()
+            && let Some(outcome) = self.cached_outcome_for_cwd(cwd_path_ref)
         {
             return outcome;
         }
@@ -167,12 +170,12 @@ impl SkillsManager {
         }
         let skill_config_rules = skill_config_rules_from_stack(&input.config_layer_stack);
         let outcome = self.build_skill_outcome(roots, &skill_config_rules).await;
-        if use_cwd_cache {
+        if let Some(cwd_path_ref) = cwd_path_ref {
             let mut cache = self
                 .cache_by_cwd
                 .write()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            cache.insert(input.cwd.clone(), outcome.clone());
+            cache.insert(cwd_path_ref, outcome.clone());
         }
         outcome
     }
@@ -187,7 +190,7 @@ impl SkillsManager {
             self.restriction_product,
         );
         let disabled_paths = resolve_disabled_skill_paths(&outcome.skills, skill_config_rules);
-        finalize_skill_outcome(outcome, disabled_paths)
+        finalize_skill_outcome(outcome, disabled_paths).await
     }
 
     pub fn clear_cache(&self) {
@@ -213,7 +216,7 @@ impl SkillsManager {
         info!("skills cache cleared ({cleared} entries)");
     }
 
-    fn cached_outcome_for_cwd(&self, cwd: &AbsolutePathBuf) -> Option<SkillLoadOutcome> {
+    fn cached_outcome_for_cwd(&self, cwd: &EnvironmentPathRef) -> Option<SkillLoadOutcome> {
         match self.cache_by_cwd.read() {
             Ok(cache) => cache.get(cwd).cloned(),
             Err(err) => err.into_inner().get(cwd).cloned(),
@@ -240,7 +243,7 @@ impl SkillsManager {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct ConfigSkillsCacheKey {
-    roots: Vec<(AbsolutePathBuf, u8, Option<String>)>,
+    roots: Vec<(EnvironmentPathRef, u8, Option<String>)>,
     skill_config_rules: SkillConfigRules,
 }
 
@@ -280,20 +283,24 @@ fn config_skills_cache_key(
                     SkillScope::System => 2,
                     SkillScope::Admin => 3,
                 };
-                (root.path.clone(), scope_rank, root.plugin_id.clone())
+                (
+                    EnvironmentPathRef::new(Arc::clone(&root.file_system), root.path.clone()),
+                    scope_rank,
+                    root.plugin_id.clone(),
+                )
             })
             .collect(),
         skill_config_rules: skill_config_rules.clone(),
     }
 }
 
-fn finalize_skill_outcome(
+async fn finalize_skill_outcome(
     mut outcome: SkillLoadOutcome,
-    disabled_paths: HashSet<AbsolutePathBuf>,
+    disabled_paths: HashSet<EnvironmentPathRef>,
 ) -> SkillLoadOutcome {
     outcome.disabled_paths = disabled_paths;
     let (by_scripts_dir, by_doc_path) =
-        build_implicit_skill_path_indexes(outcome.allowed_skills_for_implicit_invocation());
+        build_implicit_skill_path_indexes(outcome.allowed_skills_for_implicit_invocation()).await;
     outcome.implicit_skills_by_scripts_dir = Arc::new(by_scripts_dir);
     outcome.implicit_skills_by_doc_path = Arc::new(by_doc_path);
     outcome

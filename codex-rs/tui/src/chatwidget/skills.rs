@@ -242,6 +242,9 @@ fn protocol_skill_to_core(skill: &ProtocolSkillMetadata) -> Option<SkillMetadata
             }),
         policy: None,
         path_to_skills_md: skill.path.clone(),
+        // TUI only uses listed skills for display and raw-path mention payloads. `skills/list`
+        // does not carry source authority yet, so this placeholder must not be used for reads.
+        source_path: codex_exec_server::EnvironmentPathRef::local(skill.path.clone()),
         scope,
         plugin_id: None,
     })

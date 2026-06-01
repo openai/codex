@@ -1,6 +1,5 @@
 use crate::model::SkillDependencies;
 use crate::model::SkillError;
-use crate::model::SkillFileSystemsByPath;
 use crate::model::SkillInterface;
 use crate::model::SkillLoadOutcome;
 use crate::model::SkillMetadata;
@@ -13,6 +12,7 @@ use codex_config::ConfigLayerStackOrdering;
 use codex_config::default_project_root_markers;
 use codex_config::merge_toml_values;
 use codex_config::project_root_markers_from_config;
+use codex_exec_server::EnvironmentPathRef;
 use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::LOCAL_FS;
 use codex_protocol::protocol::Product;
@@ -163,52 +163,56 @@ where
     I: IntoIterator<Item = SkillRoot>,
 {
     let mut outcome = SkillLoadOutcome::default();
-    let mut skill_roots: Vec<AbsolutePathBuf> = Vec::new();
-    let mut skill_root_by_path: HashMap<AbsolutePathBuf, AbsolutePathBuf> = HashMap::new();
-    let mut file_systems_by_skill_path: HashMap<AbsolutePathBuf, Arc<dyn ExecutorFileSystem>> =
-        HashMap::new();
+    let mut skill_roots: Vec<EnvironmentPathRef> = Vec::new();
+    let mut skill_root_by_path: HashMap<EnvironmentPathRef, EnvironmentPathRef> = HashMap::new();
     for root in roots {
-        let root_path = canonicalize_for_skill_identity(&root.path);
         let fs = root.file_system;
+        let root_path_ref =
+            canonicalize_for_skill_identity(&EnvironmentPathRef::new(Arc::clone(&fs), root.path))
+                .await;
+        let plugin_root = match root.plugin_root {
+            Some(plugin_root) => Some(
+                canonicalize_for_skill_identity(&EnvironmentPathRef::new(
+                    Arc::clone(&fs),
+                    plugin_root,
+                ))
+                .await,
+            ),
+            None => None,
+        };
         let skills_before_root = outcome.skills.len();
         discover_skills_under_root(
-            fs.as_ref(),
-            &root_path,
+            &root_path_ref,
             root.scope,
             root.plugin_id.as_deref(),
-            root.plugin_root.as_ref(),
+            plugin_root.as_ref(),
             &mut outcome,
         )
         .await;
         for skill in &outcome.skills[skills_before_root..] {
-            if !skill_roots.contains(&root_path) {
-                skill_roots.push(root_path.clone());
+            if !skill_roots.contains(&root_path_ref) {
+                skill_roots.push(root_path_ref.clone());
             }
             skill_root_by_path
-                .entry(skill.path_to_skills_md.clone())
-                .or_insert_with(|| root_path.clone());
-            file_systems_by_skill_path
-                .entry(skill.path_to_skills_md.clone())
-                .or_insert_with(|| Arc::clone(&fs));
+                .entry(skill.source_path.clone())
+                .or_insert_with(|| root_path_ref.clone());
         }
     }
 
-    let mut seen: HashSet<AbsolutePathBuf> = HashSet::new();
+    let mut seen: HashSet<EnvironmentPathRef> = HashSet::new();
     outcome
         .skills
-        .retain(|skill| seen.insert(skill.path_to_skills_md.clone()));
-    let retained_skill_paths: HashSet<AbsolutePathBuf> = outcome
+        .retain(|skill| seen.insert(skill.source_path.clone()));
+    let retained_skill_paths: HashSet<EnvironmentPathRef> = outcome
         .skills
         .iter()
-        .map(|skill| skill.path_to_skills_md.clone())
+        .map(|skill| skill.source_path.clone())
         .collect();
     skill_root_by_path.retain(|path, _| retained_skill_paths.contains(path));
-    let used_roots: HashSet<AbsolutePathBuf> = skill_root_by_path.values().cloned().collect();
+    let used_roots: HashSet<EnvironmentPathRef> = skill_root_by_path.values().cloned().collect();
     skill_roots.retain(|root| used_roots.contains(root));
-    file_systems_by_skill_path.retain(|path, _| retained_skill_paths.contains(path));
     outcome.skill_roots = skill_roots;
     outcome.skill_root_by_path = Arc::new(skill_root_by_path);
-    outcome.file_systems_by_skill_path = SkillFileSystemsByPath::new(file_systems_by_skill_path);
 
     fn scope_rank(scope: SkillScope) -> u8 {
         // Higher-priority scopes first (matches root scan order for dedupe).
@@ -466,31 +470,44 @@ fn dirs_between_project_root_and_cwd(
 }
 
 fn dedupe_skill_roots_by_path(roots: &mut Vec<SkillRoot>) {
-    let mut seen: HashSet<AbsolutePathBuf> = HashSet::new();
-    roots.retain(|root| seen.insert(root.path.clone()));
+    let mut seen: HashSet<EnvironmentPathRef> = HashSet::new();
+    roots.retain(|root| {
+        seen.insert(EnvironmentPathRef::new(
+            Arc::clone(&root.file_system),
+            root.path.clone(),
+        ))
+    });
 }
 
-fn canonicalize_for_skill_identity(path: &AbsolutePathBuf) -> AbsolutePathBuf {
-    path.canonicalize().unwrap_or_else(|_| path.clone())
+async fn canonicalize_for_skill_identity(path: &EnvironmentPathRef) -> EnvironmentPathRef {
+    path.canonicalize(/*sandbox*/ None)
+        .await
+        .unwrap_or_else(|_| path.clone())
 }
 
 async fn discover_skills_under_root(
-    fs: &dyn ExecutorFileSystem,
-    root: &AbsolutePathBuf,
+    root: &EnvironmentPathRef,
     scope: SkillScope,
     plugin_id: Option<&str>,
-    plugin_root: Option<&AbsolutePathBuf>,
+    plugin_root: Option<&EnvironmentPathRef>,
     outcome: &mut SkillLoadOutcome,
 ) {
-    let root = canonicalize_for_skill_identity(root);
-    let plugin_root = plugin_root.map(canonicalize_for_skill_identity);
+    let fs = root.file_system();
+    let root = canonicalize_for_skill_identity(root).await;
+    let plugin_root = match plugin_root {
+        Some(plugin_root) => Some(canonicalize_for_skill_identity(plugin_root).await),
+        None => None,
+    };
 
-    match fs.get_metadata(&root, /*sandbox*/ None).await {
+    match fs.get_metadata(root.path(), /*sandbox*/ None).await {
         Ok(metadata) if metadata.is_directory => {}
         Ok(_) => return,
         Err(err) if err.kind() == io::ErrorKind::NotFound => return,
         Err(err) => {
-            error!("failed to stat skills root {}: {err:#}", root.display());
+            error!(
+                "failed to stat skills root {}: {err:#}",
+                root.path().display()
+            );
             return;
         }
     }
@@ -521,9 +538,9 @@ async fn discover_skills_under_root(
     );
 
     let mut visited_dirs: HashSet<AbsolutePathBuf> = HashSet::new();
-    visited_dirs.insert(root.clone());
+    visited_dirs.insert(root.path().clone());
 
-    let mut queue: VecDeque<(AbsolutePathBuf, usize)> = VecDeque::from([(root.clone(), 0)]);
+    let mut queue: VecDeque<(AbsolutePathBuf, usize)> = VecDeque::from([(root.path().clone(), 0)]);
     let mut truncated_by_dir_limit = false;
 
     while let Some((dir, depth)) = queue.pop_front() {
@@ -556,7 +573,11 @@ async fn discover_skills_under_root(
                 }
                 match fs.read_directory(&path, /*sandbox*/ None).await {
                     Ok(_) => {
-                        let resolved_dir = canonicalize_for_skill_identity(&path);
+                        let resolved_dir =
+                            canonicalize_for_skill_identity(&root.with_path(path.clone()))
+                                .await
+                                .path()
+                                .clone();
                         enqueue_dir(
                             &mut queue,
                             &mut visited_dirs,
@@ -581,7 +602,10 @@ async fn discover_skills_under_root(
             }
 
             if metadata.is_directory {
-                let resolved_dir = canonicalize_for_skill_identity(&path);
+                let resolved_dir = canonicalize_for_skill_identity(&root.with_path(path.clone()))
+                    .await
+                    .path()
+                    .clone();
                 enqueue_dir(
                     &mut queue,
                     &mut visited_dirs,
@@ -593,7 +617,14 @@ async fn discover_skills_under_root(
             }
 
             if metadata.is_file && file_name == SKILLS_FILENAME {
-                match parse_skill_file(fs, &path, scope, plugin_id, plugin_root.as_ref()).await {
+                match parse_skill_file(
+                    &root.with_path(path.clone()),
+                    scope,
+                    plugin_id,
+                    plugin_root.as_ref(),
+                )
+                .await
+                {
                     Ok(skill) => {
                         outcome.skills.push(skill);
                     }
@@ -614,20 +645,20 @@ async fn discover_skills_under_root(
         tracing::warn!(
             "skills scan truncated after {} directories (root: {})",
             MAX_SKILLS_DIRS_PER_ROOT,
-            root.display()
+            root.path().display()
         );
     }
 }
 
 async fn parse_skill_file(
-    fs: &dyn ExecutorFileSystem,
-    path: &AbsolutePathBuf,
+    path: &EnvironmentPathRef,
     scope: SkillScope,
     plugin_id: Option<&str>,
-    plugin_root: Option<&AbsolutePathBuf>,
+    plugin_root: Option<&EnvironmentPathRef>,
 ) -> Result<SkillMetadata, SkillParseError> {
+    let fs = path.file_system();
     let contents = fs
-        .read_file_text(path, /*sandbox*/ None)
+        .read_file_text(path.path(), /*sandbox*/ None)
         .await
         .map_err(SkillParseError::Read)?;
 
@@ -641,8 +672,8 @@ async fn parse_skill_file(
         .as_deref()
         .map(sanitize_single_line)
         .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| default_skill_name(path));
-    let name = namespaced_skill_name(fs, path, &base_name).await;
+        .unwrap_or_else(|| default_skill_name(path.path()));
+    let name = namespaced_skill_name(fs.as_ref(), path.path(), &base_name).await;
     let description = parsed
         .description
         .as_deref()
@@ -658,7 +689,12 @@ async fn parse_skill_file(
         interface,
         dependencies,
         policy,
-    } = load_skill_metadata(fs, path, plugin_root).await;
+    } = load_skill_metadata(
+        fs.as_ref(),
+        path.path(),
+        plugin_root.map(EnvironmentPathRef::path),
+    )
+    .await;
 
     validate_len(&name, MAX_NAME_LEN, "name")?;
     validate_len(&description, MAX_DESCRIPTION_LEN, "description")?;
@@ -670,7 +706,7 @@ async fn parse_skill_file(
         )?;
     }
 
-    let resolved_path = canonicalize_for_skill_identity(path);
+    let resolved_path = canonicalize_for_skill_identity(path).await;
 
     Ok(SkillMetadata {
         name,
@@ -679,7 +715,8 @@ async fn parse_skill_file(
         interface,
         dependencies,
         policy,
-        path_to_skills_md: resolved_path,
+        path_to_skills_md: resolved_path.path().clone(),
+        source_path: resolved_path,
         scope,
         plugin_id: plugin_id.map(str::to_string),
     })
