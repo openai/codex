@@ -311,6 +311,9 @@ jobs:
             exit 1
           fi
 
+          # Codex embeds this digest at build time and verifies the bundled
+          # bwrap resource before use. Strip bwrap before hashing so the digest
+          # covers the exact bytes that the release packages.
           strip --strip-debug --strip-unneeded "$bwrap_path"
           digest="$(sha256sum "$bwrap_path" | awk '{print $1}')"
           echo "CODEX_BWRAP_SHA256=${digest}" >> "$GITHUB_ENV"
@@ -325,6 +328,8 @@ jobs:
           fi
           build_args=()
           for binary in ${{ matrix.binaries }}; do
+            # bwrap was built, finalized, and hashed before this build so
+            # Codex can embed the digest of the bytes that will be packaged.
             if [[ "$binary" == "bwrap" ]]; then
               continue
             fi
@@ -345,6 +350,8 @@ jobs:
         run: |
           binaries=()
           for binary in ${{ matrix.binaries }}; do
+            # bwrap is already stripped before hashing. Its symbols are not
+            # useful enough to justify a separate pre-Codex symbols pass.
             if [[ "$binary" == "bwrap" ]]; then
               continue
             fi
