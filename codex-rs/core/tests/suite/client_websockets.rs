@@ -2155,6 +2155,7 @@ async fn websocket_harness_with_provider_options(
         /*installation_id*/ TEST_INSTALLATION_ID.to_string(),
         provider.clone(),
         SessionSource::Exec,
+        /*parent_thread_id*/ None,
         config.model_verbosity,
         /*enable_request_compression*/ false,
         runtime_metrics_enabled,

@@ -485,6 +485,9 @@
             "js_repl_tools_only": {
               "type": "boolean"
             },
+            "local_thread_store_compression": {
+              "type": "boolean"
+            },
             "memories": {
               "type": "boolean"
             },
@@ -612,6 +615,9 @@
               "type": "boolean"
             },
             "unified_exec": {
+              "type": "boolean"
+            },
+            "unified_exec_zsh_fork": {
               "type": "boolean"
             },
             "use_legacy_landlock": {
@@ -759,6 +765,16 @@
       "properties": {
         "config_lockfile": {
           "$ref": "#/definitions/DebugConfigLockToml"
+        }
+      },
+      "type": "object"
+    },
+    "ExperimentalRequestUserInput": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "default": true,
+          "type": "boolean"
         }
       },
       "type": "object"
@@ -2712,6 +2728,9 @@
     "ToolsToml": {
       "additionalProperties": false,
       "properties": {
+        "experimental_request_user_input": {
+          "$ref": "#/definitions/ExperimentalRequestUserInput"
+        },
         "web_search": {
           "allOf": [
             {
@@ -2858,6 +2877,7 @@
               "start_change_operator": null,
               "start_delete_operator": null,
               "start_yank_operator": null,
+              "substitute_char": null,
               "yank_line": null
             },
             "vim_operator": {
@@ -3548,6 +3568,7 @@
             "start_change_operator": null,
             "start_delete_operator": null,
             "start_yank_operator": null,
+            "substitute_char": null,
             "yank_line": null
           }
         },
@@ -3974,6 +3995,14 @@
             }
           ],
           "description": "Begin yank operator; next key selects motion (`y`)."
+        },
+        "substitute_char": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/KeybindingsSpec"
+            }
+          ],
+          "description": "Delete character under cursor and enter insert mode (`s`)."
         },
         "yank_line": {
           "allOf": [
@@ -4579,6 +4608,9 @@
         "js_repl_tools_only": {
           "type": "boolean"
         },
+        "local_thread_store_compression": {
+          "type": "boolean"
+        },
         "memories": {
           "type": "boolean"
         },
@@ -4706,6 +4738,9 @@
           "type": "boolean"
         },
         "unified_exec": {
+          "type": "boolean"
+        },
+        "unified_exec_zsh_fork": {
           "type": "boolean"
         },
         "use_legacy_landlock": {

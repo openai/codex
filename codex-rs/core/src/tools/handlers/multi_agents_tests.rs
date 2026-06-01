@@ -1478,7 +1478,9 @@ async fn multi_agent_v2_followup_task_rejects_root_target_from_child() {
 
     assert_eq!(
         err,
-        FunctionCallError::RespondToModel("Tasks can't be assigned to the root agent".to_string())
+        FunctionCallError::RespondToModel(
+            "Follow-up tasks can't target the root agent".to_string()
+        )
     );
     let root_ops = manager
         .captured_ops()

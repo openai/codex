@@ -68,6 +68,7 @@ members = [
     "process-hardening",
     "protocol",
     "realtime-webrtc",
+    "prompts",
     "rollout",
     "rollout-trace",
     "rmcp-client",
@@ -197,6 +198,7 @@ codex-model-provider = { path = "model-provider" }
 codex-process-hardening = { path = "process-hardening" }
 codex-protocol = { path = "protocol" }
 codex-realtime-webrtc = { path = "realtime-webrtc" }
+codex-prompts = { path = "prompts" }
 codex-responses-api-proxy = { path = "responses-api-proxy" }
 codex-response-debug-context = { path = "response-debug-context" }
 codex-rmcp-client = { path = "rmcp-client" }

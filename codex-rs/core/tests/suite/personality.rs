@@ -592,6 +592,7 @@ async fn remote_model_friendly_personality_instructions_with_feature() -> anyhow
         input_modalities: default_input_modalities(),
         used_fallback_model_metadata: false,
         supports_search_tool: false,
+        auto_review_model_override: None,
         tool_mode: None,
     };
 
@@ -703,6 +704,7 @@ async fn user_turn_personality_remote_model_template_includes_update_message() -
         input_modalities: default_input_modalities(),
         used_fallback_model_metadata: false,
         supports_search_tool: false,
+        auto_review_model_override: None,
         tool_mode: None,
     };
 

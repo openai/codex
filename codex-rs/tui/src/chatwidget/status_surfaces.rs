@@ -562,6 +562,7 @@ impl ChatWidget {
         match item {
             StatusLineItem::ModelName => Some(self.model_display_name().to_string()),
             StatusLineItem::ModelWithReasoning => Some(self.model_with_reasoning_display_name()),
+            StatusLineItem::Reasoning => Some(self.reasoning_display_name().to_string()),
             StatusLineItem::CurrentDir => {
                 Some(format_directory_display(
                     self.status_line_cwd(),
@@ -694,6 +695,7 @@ impl ChatWidget {
             StatusSurfacePreviewItem::RawOutput => StatusLineItem::RawOutput,
             StatusSurfacePreviewItem::Model => StatusLineItem::ModelName,
             StatusSurfacePreviewItem::ModelWithReasoning => StatusLineItem::ModelWithReasoning,
+            StatusSurfacePreviewItem::Reasoning => StatusLineItem::Reasoning,
         };
         self.status_line_value_for_item(status_line_item)
     }
@@ -759,12 +761,20 @@ impl ChatWidget {
                 self.model_with_reasoning_display_name(),
                 /*max_chars*/ 32,
             )),
+            TerminalTitleItem::Reasoning => Some(Self::truncate_terminal_title_part(
+                self.reasoning_display_name().to_string(),
+                /*max_chars*/ 32,
+            )),
             TerminalTitleItem::TaskProgress => self.terminal_title_task_progress(),
         }
     }
 
+    fn reasoning_display_name(&self) -> &'static str {
+        Self::status_line_reasoning_effort_label(self.effective_reasoning_effort())
+    }
+
     fn model_with_reasoning_display_name(&self) -> String {
-        let label = Self::status_line_reasoning_effort_label(self.effective_reasoning_effort());
+        let label = self.reasoning_display_name();
         let service_tier_label = self
             .current_service_tier()
             .and_then(|service_tier| {

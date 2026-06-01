@@ -172,6 +172,7 @@ mod tests {
             id: "thread-1".to_string(),
             session_id: "session-1".to_string(),
             forked_from_id: None,
+            parent_thread_id: None,
             preview: "preview".to_string(),
             ephemeral: false,
             model_provider: "mock_provider".to_string(),

@@ -322,6 +322,7 @@ mod tests {
                     forked_from_id: Some(
                         ThreadId::from_string(&Uuid::now_v7().to_string()).expect("thread id"),
                     ),
+                    parent_thread_id: None,
                     timestamp: "2026-02-26T00:00:00.000Z".to_string(),
                     cwd: PathBuf::from("/child/worktree"),
                     originator: "codex_cli_rs".to_string(),
@@ -479,6 +480,7 @@ mod tests {
                 meta: SessionMeta {
                     id: thread_id,
                     forked_from_id: None,
+                    parent_thread_id: None,
                     timestamp: "2026-02-26T00:00:00.000Z".to_string(),
                     cwd: PathBuf::from("/workspace"),
                     originator: "codex_cli_rs".to_string(),

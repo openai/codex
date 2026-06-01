@@ -133,10 +133,14 @@ async fn load_config(codex_home: &Path, cwd: &Path) -> PluginsConfigInput {
 }
 
 fn remote_installed_linear_plugin() -> RemoteInstalledPlugin {
+    remote_installed_plugin("linear")
+}
+
+fn remote_installed_plugin(name: &str) -> RemoteInstalledPlugin {
     RemoteInstalledPlugin {
         marketplace_name: "openai-curated-remote".to_string(),
-        id: "plugins~Plugin_linear".to_string(),
-        name: "linear".to_string(),
+        id: format!("plugins~Plugin_{name}"),
+        name: name.to_string(),
         enabled: true,
         install_policy: codex_app_server_protocol::PluginInstallPolicy::Available,
         auth_policy: codex_app_server_protocol::PluginAuthPolicy::OnUse,
@@ -144,6 +148,18 @@ fn remote_installed_linear_plugin() -> RemoteInstalledPlugin {
         interface: None,
         keywords: Vec::new(),
     }
+}
+
+fn write_cached_plugin(codex_home: &Path, marketplace_name: &str, plugin_name: &str) {
+    write_plugin_with_version(
+        &codex_home
+            .join("plugins/cache")
+            .join(marketplace_name)
+            .join(plugin_name),
+        "local",
+        plugin_name,
+        /*manifest_version*/ Some("local"),
+    );
 }
 
 #[tokio::test]
@@ -350,6 +366,92 @@ remote_plugin = true
 
     let outcome = manager.plugins_for_config(&config).await;
     assert_eq!(outcome, PluginLoadOutcome::default());
+}
+
+#[tokio::test]
+async fn remote_installed_cache_prefers_local_curated_conflicts_when_remote_plugin_disabled() {
+    let codex_home = TempDir::new().unwrap();
+    write_file(
+        &codex_home.path().join(CONFIG_TOML_FILE),
+        r#"[features]
+plugins = true
+remote_plugin = false
+
+[plugins."linear@openai-curated"]
+enabled = true
+
+[plugins."calendar@openai-curated"]
+enabled = true
+"#,
+    );
+    write_cached_plugin(codex_home.path(), "openai-curated", "linear");
+    write_cached_plugin(codex_home.path(), "openai-curated", "calendar");
+    write_cached_plugin(codex_home.path(), "openai-curated-remote", "linear");
+    write_cached_plugin(codex_home.path(), "openai-curated-remote", "remote-only");
+
+    let config = load_config(codex_home.path(), codex_home.path()).await;
+    let manager = PluginsManager::new(codex_home.path().to_path_buf());
+    manager.write_remote_installed_plugins_cache(vec![
+        remote_installed_plugin("linear"),
+        remote_installed_plugin("remote-only"),
+    ]);
+
+    let outcome = manager.plugins_for_config(&config).await;
+    assert_eq!(
+        outcome
+            .plugins()
+            .iter()
+            .map(|plugin| plugin.config_name.clone())
+            .collect::<Vec<_>>(),
+        vec![
+            "calendar@openai-curated".to_string(),
+            "linear@openai-curated".to_string(),
+            "remote-only@openai-curated-remote".to_string(),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn remote_installed_cache_prefers_remote_curated_conflicts_when_remote_plugin_enabled() {
+    let codex_home = TempDir::new().unwrap();
+    write_file(
+        &codex_home.path().join(CONFIG_TOML_FILE),
+        r#"[features]
+plugins = true
+remote_plugin = true
+
+[plugins."linear@openai-curated"]
+enabled = true
+
+[plugins."calendar@openai-curated"]
+enabled = true
+"#,
+    );
+    write_cached_plugin(codex_home.path(), "openai-curated", "linear");
+    write_cached_plugin(codex_home.path(), "openai-curated", "calendar");
+    write_cached_plugin(codex_home.path(), "openai-curated-remote", "linear");
+    write_cached_plugin(codex_home.path(), "openai-curated-remote", "remote-only");
+
+    let config = load_config(codex_home.path(), codex_home.path()).await;
+    let manager = PluginsManager::new(codex_home.path().to_path_buf());
+    manager.write_remote_installed_plugins_cache(vec![
+        remote_installed_plugin("linear"),
+        remote_installed_plugin("remote-only"),
+    ]);
+
+    let outcome = manager.plugins_for_config(&config).await;
+    assert_eq!(
+        outcome
+            .plugins()
+            .iter()
+            .map(|plugin| plugin.config_name.clone())
+            .collect::<Vec<_>>(),
+        vec![
+            "calendar@openai-curated".to_string(),
+            "linear@openai-curated-remote".to_string(),
+            "remote-only@openai-curated-remote".to_string(),
+        ]
+    );
 }
 
 #[tokio::test]
@@ -981,6 +1083,50 @@ async fn effective_apps_dedupes_connector_ids_across_plugins() {
         vec![
             AppConnectorId("connector_example".to_string()),
             AppConnectorId("connector_gmail".to_string()),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn effective_apps_preserves_app_config_order() {
+    let codex_home = TempDir::new().unwrap();
+    let plugin_root = codex_home
+        .path()
+        .join("plugins/cache")
+        .join("test/sample/local");
+
+    write_file(
+        &plugin_root.join(".codex-plugin/plugin.json"),
+        r#"{"name":"sample"}"#,
+    );
+    write_file(
+        &plugin_root.join(".app.json"),
+        r#"{
+  "apps": {
+    "slack": {
+      "id": "connector_slack"
+    },
+    "github": {
+      "id": "connector_github"
+    },
+    "slack-copy": {
+      "id": "connector_slack"
+    }
+  }
+}"#,
+    );
+
+    let outcome = load_plugins_from_config(
+        &plugin_config_toml(/*enabled*/ true, /*plugins_feature_enabled*/ true),
+        codex_home.path(),
+    )
+    .await;
+
+    assert_eq!(
+        outcome.effective_apps(),
+        vec![
+            AppConnectorId("connector_slack".to_string()),
+            AppConnectorId("connector_github".to_string()),
         ]
     );
 }
@@ -3669,6 +3815,7 @@ async fn load_plugins_ignores_project_config_files() {
         std::collections::HashMap::new(),
         &PluginStore::new(codex_home.path().to_path_buf()),
         Some(Product::Codex),
+        /*prefer_remote_curated_conflicts*/ false,
     )
     .await;
 

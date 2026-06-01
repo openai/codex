@@ -1,7 +1,7 @@
 #![cfg(unix)]
 
 use anyhow::Result;
-use app_test_support::McpProcess;
+use app_test_support::TestAppServer;
 use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_responses_server_sequence;
 use app_test_support::create_mock_responses_server_sequence_unchecked;
@@ -57,7 +57,7 @@ async fn turn_interrupt_aborts_running_turn() -> Result<()> {
         .await;
     create_config_toml(&codex_home, &server.uri(), "never", "workspace-write")?;
 
-    let mut mcp = McpProcess::new(&codex_home).await?;
+    let mut mcp = TestAppServer::new(&codex_home).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     // Start a v2 thread and capture its id.
@@ -141,7 +141,7 @@ async fn turn_interrupt_rejects_completed_turn() -> Result<()> {
     .await;
     create_config_toml(&codex_home, &server.uri(), "never", "workspace-write")?;
 
-    let mut mcp = McpProcess::new(&codex_home).await?;
+    let mut mcp = TestAppServer::new(&codex_home).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let thread_req = mcp
@@ -236,7 +236,7 @@ async fn turn_interrupt_resolves_pending_command_approval_request() -> Result<()
     .await;
     create_config_toml(&codex_home, &server.uri(), "untrusted", "read-only")?;
 
-    let mut mcp = McpProcess::new(&codex_home).await?;
+    let mut mcp = TestAppServer::new(&codex_home).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let thread_req = mcp

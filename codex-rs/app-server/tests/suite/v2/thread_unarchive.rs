@@ -1,5 +1,5 @@
 use anyhow::Result;
-use app_test_support::McpProcess;
+use app_test_support::TestAppServer;
 use app_test_support::create_mock_responses_server_repeating_assistant;
 use app_test_support::to_response;
 use codex_app_server::in_process;
@@ -60,7 +60,7 @@ async fn thread_unarchive_moves_rollout_back_into_sessions_directory() -> Result
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let start_id = mcp
@@ -211,6 +211,7 @@ async fn thread_unarchive_preserves_pathless_store_metadata() -> Result<()> {
         .create_thread(CreateThreadParams {
             thread_id,
             forked_from_id: Some(parent_thread_id),
+            parent_thread_id: None,
             source: SessionSource::Cli,
             thread_source: None,
             base_instructions: BaseInstructions::default(),

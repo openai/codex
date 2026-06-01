@@ -492,6 +492,7 @@ impl PluginsManager {
             self.remote_installed_plugin_configs(),
             &self.store,
             self.restriction_product,
+            config.remote_plugin_enabled,
         )
         .await;
         log_plugin_load_errors(&outcome);
@@ -537,6 +538,7 @@ impl PluginsManager {
             self.remote_installed_plugin_configs(),
             &self.store,
             self.restriction_product,
+            config.remote_plugin_enabled,
         )
         .await
     }

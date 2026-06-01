@@ -249,6 +249,7 @@ fn send_message_tool_requires_message_and_has_no_output_schema() {
 #[test]
 fn followup_task_tool_requires_message_and_has_no_output_schema() {
     let ToolSpec::Function(ResponsesApiTool {
+        name,
         parameters,
         output_schema,
         ..
@@ -256,6 +257,7 @@ fn followup_task_tool_requires_message_and_has_no_output_schema() {
     else {
         panic!("followup_task should be a function tool");
     };
+    assert_eq!(name, "followup_task");
     assert_eq!(
         parameters.schema_type,
         Some(JsonSchemaType::Single(JsonSchemaPrimitiveType::Object))

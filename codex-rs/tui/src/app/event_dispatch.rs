@@ -5,6 +5,8 @@
 
 use super::resize_reflow::trailing_run_start;
 use super::*;
+#[cfg(target_os = "windows")]
+use codex_config::types::WindowsSandboxModeToml;
 
 const SHUTDOWN_FIRST_EXIT_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 2);
 
@@ -322,7 +324,11 @@ impl App {
                 return Ok(AppRunControl::Exit(ExitReason::Fatal(message)));
             }
             AppEvent::CodexOp(op) => {
+                self.chat_widget.prepare_local_op_submission(&op);
                 self.submit_active_thread_op(app_server, op).await?;
+            }
+            AppEvent::RestoreCancelledTurn(prompt) => {
+                self.apply_cancelled_turn_edit(prompt);
             }
             AppEvent::AppendMessageHistoryEntry { thread_id, text } => {
                 self.append_message_history_entry(thread_id, text);
@@ -867,6 +873,19 @@ impl App {
                 preset,
                 profile_selection,
             } => {
+                #[cfg(any(target_os = "windows", test))]
+                if !self.chat_widget.windows_sandbox_mode_allowed(
+                    codex_config::types::WindowsSandboxModeToml::Elevated,
+                ) {
+                    tracing::warn!(
+                        "refusing to set up elevated Windows sandbox mode disallowed by requirements"
+                    );
+                    self.chat_widget.add_info_message(
+                        "That Windows sandbox option is disallowed by requirements.".to_string(),
+                        /*hint*/ None,
+                    );
+                    return Ok(AppRunControl::Continue);
+                }
                 #[cfg(target_os = "windows")]
                 {
                     let setup_permissions = match self
@@ -977,6 +996,19 @@ impl App {
                 preset,
                 profile_selection,
             } => {
+                #[cfg(any(target_os = "windows", test))]
+                if !self.chat_widget.windows_sandbox_mode_allowed(
+                    codex_config::types::WindowsSandboxModeToml::Unelevated,
+                ) {
+                    tracing::warn!(
+                        "refusing to set up unelevated Windows sandbox mode disallowed by requirements"
+                    );
+                    self.chat_widget.add_info_message(
+                        "That Windows sandbox option is disallowed by requirements.".to_string(),
+                        /*hint*/ None,
+                    );
+                    return Ok(AppRunControl::Continue);
+                }
                 #[cfg(target_os = "windows")]
                 {
                     let setup_permissions = match self
@@ -1109,7 +1141,23 @@ impl App {
                             &[("result", "success")],
                         );
                     }
-                    let elevated_enabled = matches!(mode, WindowsSandboxEnableMode::Elevated);
+                    let selected_mode = match mode {
+                        WindowsSandboxEnableMode::Elevated => WindowsSandboxModeToml::Elevated,
+                        WindowsSandboxEnableMode::Legacy => WindowsSandboxModeToml::Unelevated,
+                    };
+                    let elevated_enabled = selected_mode == WindowsSandboxModeToml::Elevated;
+                    if !self.chat_widget.windows_sandbox_mode_allowed(selected_mode) {
+                        tracing::warn!(
+                            ?selected_mode,
+                            "refusing to persist Windows sandbox mode disallowed by requirements"
+                        );
+                        self.chat_widget.add_info_message(
+                            "That Windows sandbox option is disallowed by requirements."
+                                .to_string(),
+                            /*hint*/ None,
+                        );
+                        return Ok(AppRunControl::Continue);
+                    }
                     let edits =
                         crate::config_update::build_windows_sandbox_mode_edits(elevated_enabled);
                     match crate::config_update::write_config_batch(
@@ -1184,8 +1232,9 @@ impl App {
                                         /*personality*/ None,
                                     ),
                                 ));
-                                self.apply_permission_profile_selection(selection).await;
-                                let _ = mode;
+                                if self.apply_permission_profile_selection(selection).await {
+                                    self.chat_widget.submit_initial_user_message_if_pending();
+                                }
                                 self.chat_widget.add_plain_history_lines(vec![
                                     Line::from(vec!["• ".dim(), "Sandbox ready".into()]),
                                     Line::from(vec![
@@ -1219,7 +1268,6 @@ impl App {
                                     .send(AppEvent::UpdateActivePermissionProfile(
                                         preset.active_permission_profile.clone(),
                                     ));
-                                let _ = mode;
                                 self.chat_widget.add_plain_history_lines(vec![
                                     Line::from(vec!["• ".dim(), "Sandbox ready".into()]),
                                     Line::from(vec![
@@ -1462,6 +1510,7 @@ impl App {
                     Some(RuntimePermissionProfileOverride::from_config(&self.config));
                 self.sync_active_thread_permission_settings_to_cached_session()
                     .await;
+                self.chat_widget.submit_initial_user_message_if_pending();
 
                 // If a managed filesystem sandbox is active, run the Windows
                 // world-writable scan.
@@ -1498,7 +1547,9 @@ impl App {
                 }
             }
             AppEvent::SelectPermissionProfile(selection) => {
-                self.apply_permission_profile_selection(selection).await;
+                if self.apply_permission_profile_selection(selection).await {
+                    self.chat_widget.submit_initial_user_message_if_pending();
+                }
             }
             AppEvent::UpdateApprovalsReviewer(policy) => {
                 self.config.approvals_reviewer = policy;

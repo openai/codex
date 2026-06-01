@@ -44,8 +44,8 @@ use tracing::error;
 
 use codex_model_provider_info::ModelProviderInfo;
 
-pub const SUMMARIZATION_PROMPT: &str = include_str!("../templates/compact/prompt.md");
-pub const SUMMARY_PREFIX: &str = include_str!("../templates/compact/summary_prefix.md");
+pub use codex_prompts::SUMMARIZATION_PROMPT;
+pub use codex_prompts::SUMMARY_PREFIX;
 const COMPACT_USER_MESSAGE_MAX_TOKENS: usize = 20_000;
 
 /// Controls whether compaction replacement history must include initial context.

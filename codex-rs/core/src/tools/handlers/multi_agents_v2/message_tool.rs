@@ -82,7 +82,7 @@ pub(crate) async fn handle_message_string_tool(
             .is_some_and(AgentPath::is_root)
     {
         return Err(FunctionCallError::RespondToModel(
-            "Tasks can't be assigned to the root agent".to_string(),
+            "Follow-up tasks can't target the root agent".to_string(),
         ));
     }
     session

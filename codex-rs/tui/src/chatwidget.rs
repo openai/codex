@@ -63,7 +63,7 @@ use crate::legacy_core::config::Config;
 use crate::legacy_core::config::Constrained;
 use crate::legacy_core::config::ConstraintResult;
 use crate::legacy_core::config::PermissionProfileSnapshot;
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", test))]
 use crate::legacy_core::windows_sandbox::WindowsSandboxLevelExt;
 use crate::mention_codec::LinkedMention;
 use crate::mention_codec::encode_history_mentions;
@@ -153,7 +153,7 @@ use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::Settings;
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", test))]
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::items::AgentMessageContent;
 use codex_protocol::items::AgentMessageItem;
@@ -261,7 +261,7 @@ use crate::app_event::AppEvent;
 use crate::app_event::ExitMode;
 use crate::app_event::PermissionProfileSelection;
 use crate::app_event::RateLimitRefreshOrigin;
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", test))]
 use crate::app_event::WindowsSandboxEnableMode;
 use crate::app_event_sender::AppEventSender;
 use crate::auto_review_denials;
@@ -644,6 +644,7 @@ pub(crate) struct ChatWidget {
     // order.
     suppress_initial_user_message_submit: bool,
     input_queue: InputQueueState,
+    cancel_edit: CancelEditState,
     /// Main chat-surface bindings resolved from `tui.keymap.chat`.
     chat_keymap: ChatKeymap,
     /// Keybinding to show for popping the most-recently queued message back
@@ -755,6 +756,13 @@ pub(crate) enum InterruptedTurnNoticeMode {
     #[default]
     Default,
     Suppress,
+}
+
+#[derive(Debug, Default)]
+struct CancelEditState {
+    prompt: Option<UserMessage>,
+    eligible: bool,
+    armed: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1181,6 +1189,9 @@ impl ChatWidget {
     }
 
     fn add_boxed_history(&mut self, cell: Box<dyn HistoryCell>) {
+        if self.turn_lifecycle.agent_turn_running && !cell.display_lines(u16::MAX).is_empty() {
+            self.record_visible_turn_activity();
+        }
         // Keep the placeholder session header as the active cell until real session info arrives,
         // so we can merge headers instead of committing a duplicate box to history.
         let keep_placeholder_header_active = !self.is_session_configured()
@@ -1799,7 +1810,12 @@ impl ChatWidget {
     }
 
     pub(crate) fn prepare_local_op_submission(&mut self, op: &AppCommand) {
-        if matches!(op, AppCommand::Interrupt) && self.turn_lifecycle.agent_turn_running {
+        if let AppCommand::Interrupt { behavior } = op
+            && self.turn_lifecycle.agent_turn_running
+        {
+            if *behavior == crate::app_command::InterruptBehavior::RestorePromptIfNoOutput {
+                self.arm_cancel_edit();
+            }
             if let Some(controller) = self.stream_controller.as_mut() {
                 controller.clear_queue();
             }
