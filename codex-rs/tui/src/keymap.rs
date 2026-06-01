@@ -423,7 +423,7 @@ impl RuntimeKeymap {
             )?,
         };
 
-        let chat = ChatKeymap {
+        let mut chat = ChatKeymap {
             interrupt_turn: resolve_bindings(
                 keymap.chat.interrupt_turn.as_ref(),
                 &defaults.chat.interrupt_turn,
@@ -478,6 +478,160 @@ impl RuntimeKeymap {
             kill_line_end: resolve_local!(keymap, defaults, editor, kill_line_end),
             yank: resolve_local!(keymap, defaults, editor, yank),
         };
+
+        let configured_main_bindings_to_preserve = configured_bindings_to_preserve([
+            (
+                keymap.global.open_transcript.as_ref(),
+                app.open_transcript.as_slice(),
+            ),
+            (
+                keymap.global.open_external_editor.as_ref(),
+                app.open_external_editor.as_slice(),
+            ),
+            (keymap.global.copy.as_ref(), app.copy.as_slice()),
+            (
+                keymap.global.clear_terminal.as_ref(),
+                app.clear_terminal.as_slice(),
+            ),
+            (
+                keymap.global.toggle_vim_mode.as_ref(),
+                app.toggle_vim_mode.as_slice(),
+            ),
+            (
+                keymap.global.toggle_fast_mode.as_ref(),
+                app.toggle_fast_mode.as_slice(),
+            ),
+            (
+                keymap.global.toggle_raw_output.as_ref(),
+                app.toggle_raw_output.as_slice(),
+            ),
+            (
+                keymap.chat.interrupt_turn.as_ref(),
+                chat.interrupt_turn.as_slice(),
+            ),
+            (
+                keymap.chat.decrease_reasoning_effort.as_ref(),
+                chat.decrease_reasoning_effort.as_slice(),
+            ),
+            (
+                keymap.chat.increase_reasoning_effort.as_ref(),
+                chat.increase_reasoning_effort.as_slice(),
+            ),
+            (
+                keymap.chat.edit_queued_message.as_ref(),
+                chat.edit_queued_message.as_slice(),
+            ),
+            (
+                keymap
+                    .composer
+                    .submit
+                    .as_ref()
+                    .or(keymap.global.submit.as_ref()),
+                composer.submit.as_slice(),
+            ),
+            (
+                keymap
+                    .composer
+                    .queue
+                    .as_ref()
+                    .or(keymap.global.queue.as_ref()),
+                composer.queue.as_slice(),
+            ),
+            (
+                keymap
+                    .composer
+                    .toggle_shortcuts
+                    .as_ref()
+                    .or(keymap.global.toggle_shortcuts.as_ref()),
+                composer.toggle_shortcuts.as_slice(),
+            ),
+            (
+                keymap.composer.history_search_previous.as_ref(),
+                composer.history_search_previous.as_slice(),
+            ),
+            (
+                keymap.composer.history_search_next.as_ref(),
+                composer.history_search_next.as_slice(),
+            ),
+            (
+                keymap.editor.insert_newline.as_ref(),
+                editor.insert_newline.as_slice(),
+            ),
+            (
+                keymap.editor.move_left.as_ref(),
+                editor.move_left.as_slice(),
+            ),
+            (
+                keymap.editor.move_right.as_ref(),
+                editor.move_right.as_slice(),
+            ),
+            (keymap.editor.move_up.as_ref(), editor.move_up.as_slice()),
+            (
+                keymap.editor.move_down.as_ref(),
+                editor.move_down.as_slice(),
+            ),
+            (
+                keymap.editor.move_word_left.as_ref(),
+                editor.move_word_left.as_slice(),
+            ),
+            (
+                keymap.editor.move_word_right.as_ref(),
+                editor.move_word_right.as_slice(),
+            ),
+            (
+                keymap.editor.move_line_start.as_ref(),
+                editor.move_line_start.as_slice(),
+            ),
+            (
+                keymap.editor.move_line_end.as_ref(),
+                editor.move_line_end.as_slice(),
+            ),
+            (
+                keymap.editor.delete_backward.as_ref(),
+                editor.delete_backward.as_slice(),
+            ),
+            (
+                keymap.editor.delete_forward.as_ref(),
+                editor.delete_forward.as_slice(),
+            ),
+            (
+                keymap.editor.delete_backward_word.as_ref(),
+                editor.delete_backward_word.as_slice(),
+            ),
+            (
+                keymap.editor.delete_forward_word.as_ref(),
+                editor.delete_forward_word.as_slice(),
+            ),
+            (
+                keymap.editor.kill_line_start.as_ref(),
+                editor.kill_line_start.as_slice(),
+            ),
+            (
+                keymap.editor.kill_whole_line.as_ref(),
+                editor.kill_whole_line.as_slice(),
+            ),
+            (
+                keymap.editor.kill_line_end.as_ref(),
+                editor.kill_line_end.as_slice(),
+            ),
+            (keymap.editor.yank.as_ref(), editor.yank.as_slice()),
+        ]);
+
+        // Keep newly introduced compatibility aliases from invalidating existing
+        // explicit keymaps. Explicit reasoning bindings remain authoritative and
+        // continue to report conflicts normally.
+        if keymap.chat.decrease_reasoning_effort.is_none() {
+            chat.decrease_reasoning_effort.retain(|binding| {
+                *binding != key_hint::shift(KeyCode::Down)
+                    || !configured_main_bindings_to_preserve.contains(binding)
+            });
+        }
+        if keymap.chat.increase_reasoning_effort.is_none() {
+            chat.increase_reasoning_effort.retain(|binding| {
+                *binding != key_hint::shift(KeyCode::Up)
+                    || !configured_main_bindings_to_preserve.contains(binding)
+            });
+        }
 
         let mut vim_normal = VimNormalKeymap {
             enter_insert: resolve_local!(keymap, defaults, vim_normal, enter_insert),
@@ -2230,6 +2384,38 @@ mod tests {
             runtime.list.jump_bottom,
             vec![key_hint::plain(KeyCode::End)]
         );
+    }
+
+    #[test]
+    fn configured_editor_bindings_prune_new_reasoning_default_overlaps() {
+        let mut keymap = TuiKeymap::default();
+        keymap.editor.move_up = Some(one("shift-up"));
+        keymap.editor.move_down = Some(one("shift-down"));
+
+        let runtime = RuntimeKeymap::from_config(&keymap).expect("config should parse");
+
+        assert_eq!(runtime.editor.move_up, vec![key_hint::shift(KeyCode::Up)]);
+        assert_eq!(
+            runtime.editor.move_down,
+            vec![key_hint::shift(KeyCode::Down)]
+        );
+        assert_eq!(
+            runtime.chat.decrease_reasoning_effort,
+            vec![key_hint::alt(KeyCode::Char(','))]
+        );
+        assert_eq!(
+            runtime.chat.increase_reasoning_effort,
+            vec![key_hint::alt(KeyCode::Char('.'))]
+        );
+    }
+
+    #[test]
+    fn explicit_new_reasoning_binding_still_conflicts_with_editor_binding() {
+        let mut keymap = TuiKeymap::default();
+        keymap.editor.move_up = Some(one("shift-up"));
+        keymap.chat.increase_reasoning_effort = Some(one("shift-up"));
+
+        expect_conflict(&keymap, "chat.increase_reasoning_effort", "editor.move_up");
     }
 
     #[test]
