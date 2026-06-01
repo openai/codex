@@ -71,6 +71,8 @@ pub struct ThreadMetadata {
     pub source: String,
     /// Optional analytics source classification for this thread.
     pub thread_source: Option<ThreadSource>,
+    /// Immediate control/spawn parent thread id, if this thread is a subagent.
+    pub parent_thread_id: Option<ThreadId>,
     /// Optional random unique nickname assigned to an AgentControl-spawned sub-agent.
     pub agent_nickname: Option<String>,
     /// Optional role (agent_role) assigned to an AgentControl-spawned sub-agent.
@@ -124,6 +126,8 @@ pub struct ThreadMetadataBuilder {
     pub source: SessionSource,
     /// Optional analytics source classification for this thread.
     pub thread_source: Option<ThreadSource>,
+    /// Immediate control/spawn parent thread id, if this thread is a subagent.
+    pub parent_thread_id: Option<ThreadId>,
     /// Optional random unique nickname assigned to the session.
     pub agent_nickname: Option<String>,
     /// Optional role (agent_role) assigned to the session.
@@ -165,6 +169,7 @@ impl ThreadMetadataBuilder {
             updated_at: None,
             source,
             thread_source: None,
+            parent_thread_id: None,
             agent_nickname: None,
             agent_role: None,
             agent_path: None,
@@ -197,6 +202,7 @@ impl ThreadMetadataBuilder {
             updated_at,
             source,
             thread_source: self.thread_source,
+            parent_thread_id: self.parent_thread_id,
             agent_nickname: self.agent_nickname.clone(),
             agent_role: self.agent_role.clone(),
             agent_path: self
@@ -256,6 +262,9 @@ impl ThreadMetadata {
         }
         if self.source != other.source {
             diffs.push("source");
+        }
+        if self.parent_thread_id != other.parent_thread_id {
+            diffs.push("parent_thread_id");
         }
         if self.agent_nickname != other.agent_nickname {
             diffs.push("agent_nickname");
@@ -327,6 +336,7 @@ pub(crate) struct ThreadRow {
     updated_at: i64,
     source: String,
     thread_source: Option<String>,
+    parent_thread_id: Option<String>,
     agent_nickname: Option<String>,
     agent_role: Option<String>,
     agent_path: Option<String>,
@@ -356,6 +366,7 @@ impl ThreadRow {
             updated_at: row.try_get("updated_at")?,
             source: row.try_get("source")?,
             thread_source: row.try_get("thread_source")?,
+            parent_thread_id: row.try_get("parent_thread_id")?,
             agent_nickname: row.try_get("agent_nickname")?,
             agent_role: row.try_get("agent_role")?,
             agent_path: row.try_get("agent_path")?,
@@ -389,6 +400,7 @@ impl TryFrom<ThreadRow> for ThreadMetadata {
             updated_at,
             source,
             thread_source,
+            parent_thread_id,
             agent_nickname,
             agent_role,
             agent_path,
@@ -412,6 +424,7 @@ impl TryFrom<ThreadRow> for ThreadMetadata {
             .map(|thread_source| thread_source.parse())
             .transpose()
             .map_err(anyhow::Error::msg)?;
+        let parent_thread_id = parent_thread_id.map(ThreadId::try_from).transpose()?;
         Ok(Self {
             id: ThreadId::try_from(id)?,
             rollout_path: PathBuf::from(rollout_path),
@@ -419,6 +432,7 @@ impl TryFrom<ThreadRow> for ThreadMetadata {
             updated_at: epoch_millis_to_datetime(updated_at)?,
             source,
             thread_source,
+            parent_thread_id,
             agent_nickname,
             agent_role,
             agent_path,
@@ -506,6 +520,7 @@ mod tests {
             updated_at: 1_700_000_100,
             source: "cli".to_string(),
             thread_source: None,
+            parent_thread_id: None,
             agent_nickname: None,
             agent_role: None,
             agent_path: None,
@@ -536,6 +551,7 @@ mod tests {
             updated_at: DateTime::<Utc>::from_timestamp(1_700_000_100, 0).expect("timestamp"),
             source: "cli".to_string(),
             thread_source: None,
+            parent_thread_id: None,
             agent_nickname: None,
             agent_role: None,
             agent_path: None,
@@ -565,6 +581,21 @@ mod tests {
         assert_eq!(
             metadata,
             expected_thread_metadata(Some(ReasoningEffort::High))
+        );
+    }
+
+    #[test]
+    fn thread_row_parses_parent_thread_id() {
+        let parent_thread_id = "00000000-0000-0000-0000-000000000124";
+        let mut row = thread_row(/*reasoning_effort*/ None);
+        row.parent_thread_id = Some(parent_thread_id.to_string());
+        let mut expected = expected_thread_metadata(/*reasoning_effort*/ None);
+        expected.parent_thread_id =
+            Some(ThreadId::from_string(parent_thread_id).expect("valid thread id"));
+
+        assert_eq!(
+            ThreadMetadata::try_from(row).expect("thread metadata should parse"),
+            expected
         );
     }
 

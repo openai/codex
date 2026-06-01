@@ -14,6 +14,7 @@ use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionMeta;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::UserMessageEvent;
 use pretty_assertions::assert_eq;
@@ -800,6 +801,115 @@ async fn list_threads_state_db_only_skips_jsonl_repair_scan() -> std::io::Result
     )
     .await?;
     assert_eq!(repaired_state_db_only_page.items.len(), 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn list_threads_state_db_preserves_parent_thread_id() -> std::io::Result<()> {
+    let home = TempDir::new().expect("temp dir");
+    let config = test_config(home.path());
+
+    let runtime = codex_state::StateRuntime::init(
+        home.path().to_path_buf(),
+        config.model_provider_id.clone(),
+    )
+    .await
+    .expect("state db should initialize");
+    runtime
+        .mark_backfill_complete(/*last_watermark*/ None)
+        .await
+        .expect("backfill should be complete");
+
+    let uuid = Uuid::from_u128(9014);
+    let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
+    let parent_thread_id = ThreadId::new();
+    let ts = "2025-01-03T15-00-00";
+    let day_dir = home.path().join("sessions/2025/01/03");
+    fs::create_dir_all(&day_dir)?;
+    let path = day_dir.join(format!("rollout-{ts}-{uuid}.jsonl"));
+    let rollout_line = RolloutLine {
+        timestamp: ts.to_string(),
+        item: RolloutItem::SessionMeta(SessionMetaLine {
+            meta: SessionMeta {
+                id: thread_id,
+                forked_from_id: None,
+                parent_thread_id: Some(parent_thread_id),
+                timestamp: ts.to_string(),
+                cwd: home.path().to_path_buf(),
+                originator: "test_originator".to_string(),
+                cli_version: "test_version".to_string(),
+                source: SessionSource::SubAgent(SubAgentSource::Review),
+                thread_source: None,
+                agent_path: None,
+                agent_nickname: None,
+                agent_role: None,
+                model_provider: Some(config.model_provider_id.clone()),
+                base_instructions: None,
+                dynamic_tools: None,
+                memory_mode: None,
+            },
+            git: None,
+        }),
+    };
+    let mut file = File::create(&path)?;
+    writeln!(
+        file,
+        "{}",
+        serde_json::to_string(&rollout_line).expect("serialize rollout")
+    )?;
+    let user_event = RolloutLine {
+        timestamp: ts.to_string(),
+        item: RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+            message: "Hello from user".to_string(),
+            ..Default::default()
+        })),
+    };
+    writeln!(
+        file,
+        "{}",
+        serde_json::to_string(&user_event).expect("serialize user event")
+    )?;
+    file.flush()?;
+
+    let repaired_page = RolloutRecorder::list_threads(
+        Some(runtime.clone()),
+        &config,
+        /*page_size*/ 10,
+        /*cursor*/ None,
+        ThreadSortKey::CreatedAt,
+        SortDirection::Desc,
+        &[],
+        /*model_providers*/ None,
+        /*cwd_filters*/ None,
+        config.model_provider_id.as_str(),
+        /*search_term*/ None,
+    )
+    .await?;
+    assert_eq!(repaired_page.items.len(), 1);
+    assert_eq!(
+        repaired_page.items[0].parent_thread_id,
+        Some(parent_thread_id)
+    );
+
+    let state_db_only_page = RolloutRecorder::list_threads_from_state_db(
+        Some(runtime.clone()),
+        &config,
+        /*page_size*/ 10,
+        /*cursor*/ None,
+        ThreadSortKey::CreatedAt,
+        SortDirection::Desc,
+        &[],
+        /*model_providers*/ None,
+        /*cwd_filters*/ None,
+        config.model_provider_id.as_str(),
+        /*search_term*/ None,
+    )
+    .await?;
+    assert_eq!(state_db_only_page.items.len(), 1);
+    assert_eq!(
+        state_db_only_page.items[0].parent_thread_id,
+        Some(parent_thread_id)
+    );
     Ok(())
 }
 

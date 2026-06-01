@@ -49,6 +49,7 @@ pub(super) fn test_thread_metadata(
         updated_at: now,
         source: "cli".to_string(),
         thread_source: None,
+        parent_thread_id: None,
         agent_nickname: None,
         agent_role: None,
         agent_path: None,

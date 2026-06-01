@@ -51,6 +51,7 @@ fn apply_session_meta_from_item(metadata: &mut ThreadMetadata, meta_line: &Sessi
     metadata.id = meta_line.meta.id;
     metadata.source = enum_to_string(&meta_line.meta.source);
     metadata.thread_source = meta_line.meta.thread_source;
+    metadata.parent_thread_id = meta_line.meta.parent_thread_id;
     metadata.agent_nickname = meta_line.meta.agent_nickname.clone();
     metadata.agent_role = meta_line.meta.agent_role.clone();
     metadata.agent_path = meta_line.meta.agent_path.clone();
@@ -514,6 +515,7 @@ mod tests {
             updated_at: created_at,
             source: "cli".to_string(),
             thread_source: None,
+            parent_thread_id: None,
             agent_path: None,
             agent_nickname: None,
             agent_role: None,

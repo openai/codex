@@ -1699,7 +1699,7 @@ fn thread_item_from_state_metadata(item: codex_state::ThreadMetadata) -> ThreadI
                 .or_else(|_| serde_json::from_value(Value::String(item.source)))
                 .unwrap_or(SessionSource::Unknown),
         ),
-        parent_thread_id: None,
+        parent_thread_id: item.parent_thread_id,
         agent_nickname: item.agent_nickname,
         agent_role: item.agent_role,
         model_provider: Some(item.model_provider),
