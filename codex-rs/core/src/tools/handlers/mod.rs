@@ -3,8 +3,11 @@ pub(crate) mod agent_jobs_spec;
 pub(crate) mod apply_patch;
 pub(crate) mod apply_patch_spec;
 mod dynamic;
+pub(crate) mod extension_tools;
 mod goal;
 pub(crate) mod goal_spec;
+mod list_available_plugins_to_install;
+pub(crate) mod list_available_plugins_to_install_spec;
 mod mcp;
 mod mcp_resource;
 pub(crate) mod mcp_resource_spec;
@@ -25,7 +28,6 @@ mod test_sync;
 pub(crate) mod test_sync_spec;
 mod tool_search;
 pub(crate) mod tool_search_spec;
-mod unavailable_tool;
 pub(crate) mod unified_exec;
 mod view_image;
 pub(crate) mod view_image_spec;
@@ -36,6 +38,7 @@ use codex_sandboxing::policy_transforms::normalize_additional_permissions;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::AbsolutePathBufGuard;
 use serde::Deserialize;
+use serde_json::Map;
 use serde_json::Value;
 use std::path::Path;
 
@@ -53,6 +56,7 @@ pub use dynamic::DynamicToolHandler;
 pub use goal::CreateGoalHandler;
 pub use goal::GetGoalHandler;
 pub use goal::UpdateGoalHandler;
+pub use list_available_plugins_to_install::ListAvailablePluginsToInstallHandler;
 pub use mcp::McpHandler;
 pub use mcp_resource::ListMcpResourceTemplatesHandler;
 pub use mcp_resource::ListMcpResourcesHandler;
@@ -61,26 +65,62 @@ pub use plan::PlanHandler;
 pub use request_permissions::RequestPermissionsHandler;
 pub use request_plugin_install::RequestPluginInstallHandler;
 pub use request_user_input::RequestUserInputHandler;
-pub use shell::ContainerExecHandler;
-pub use shell::LocalShellHandler;
 pub use shell::ShellCommandHandler;
 pub(crate) use shell::ShellCommandHandlerOptions;
-pub use shell::ShellHandler;
 pub use test_sync::TestSyncHandler;
 pub use tool_search::ToolSearchHandler;
-pub use unavailable_tool::UnavailableToolHandler;
-pub(crate) use unavailable_tool::unavailable_tool_message;
 pub use unified_exec::ExecCommandHandler;
 pub(crate) use unified_exec::ExecCommandHandlerOptions;
 pub use unified_exec::WriteStdinHandler;
 pub use view_image::ViewImageHandler;
 
-fn parse_arguments<T>(arguments: &str) -> Result<T, FunctionCallError>
+pub(crate) fn parse_arguments<T>(arguments: &str) -> Result<T, FunctionCallError>
 where
     T: for<'de> Deserialize<'de>,
 {
     serde_json::from_str(arguments).map_err(|err| {
         FunctionCallError::RespondToModel(format!("failed to parse function arguments: {err}"))
+    })
+}
+
+fn updated_hook_command(updated_input: &Value) -> Result<&str, FunctionCallError> {
+    updated_input
+        .get("command")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            FunctionCallError::RespondToModel(
+                "hook returned updatedInput without string field `command`".to_string(),
+            )
+        })
+}
+
+fn rewrite_function_arguments(
+    arguments: &str,
+    tool_name: &str,
+    rewrite: impl FnOnce(&mut Map<String, Value>),
+) -> Result<String, FunctionCallError> {
+    let mut arguments: Value = parse_arguments(arguments)?;
+    let Value::Object(arguments) = &mut arguments else {
+        return Err(FunctionCallError::RespondToModel(format!(
+            "{tool_name} arguments must be an object"
+        )));
+    };
+    rewrite(arguments);
+    serde_json::to_string(&arguments).map_err(|err| {
+        FunctionCallError::RespondToModel(format!(
+            "failed to serialize rewritten {tool_name} arguments: {err}"
+        ))
+    })
+}
+
+fn rewrite_function_string_argument(
+    arguments: &str,
+    tool_name: &str,
+    field_name: &str,
+    value: &str,
+) -> Result<String, FunctionCallError> {
+    rewrite_function_arguments(arguments, tool_name, |arguments| {
+        arguments.insert(field_name.to_string(), Value::String(value.to_string()));
     })
 }
 
@@ -404,7 +444,7 @@ mod tests {
                         path: FileSystemPath::GlobPattern {
                             pattern: "**/*.env".to_string(),
                         },
-                        access: FileSystemAccessMode::None,
+                        access: FileSystemAccessMode::Deny,
                     },
                 ],
                 glob_scan_max_depth: None,

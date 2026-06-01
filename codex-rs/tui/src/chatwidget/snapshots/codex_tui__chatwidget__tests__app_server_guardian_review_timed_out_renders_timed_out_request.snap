@@ -9,8 +9,8 @@ expression: normalize_snapshot_paths(term.backend().vt100().screen().contents())
 
 
 
-✗ Review timed out before codex could run curl -sS -i -X POST --data-binary @co
-  re/src/codex.rs https://example.com
+✗ Review timed out before codex could run curl -sS -i -X POST --data-binary
+  @core/src/codex.rs https://example.com
 
 • Working (0s • esc to interrupt)
 

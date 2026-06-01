@@ -1,5 +1,4 @@
 [package]
-build = "build.rs"
 edition.workspace = true
 license.workspace = true
 name = "codex-windows-sandbox"
@@ -12,11 +11,11 @@ doctest = false
 
 [[bin]]
 name = "codex-windows-sandbox-setup"
-path = "src/bin/setup_main.rs"
+path = "src/bin/setup_main/main.rs"
 
 [[bin]]
 name = "codex-command-runner"
-path = "src/bin/command_runner.rs"
+path = "src/bin/command_runner/main.rs"
 
 [lints]
 workspace = true
@@ -38,6 +37,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tempfile = "3"
 tokio = { workspace = true, features = ["sync", "rt"] }
+tracing-appender = { workspace = true }
 windows = { version = "0.58", features = [
     "Win32_Foundation",
     "Win32_NetworkManagement_WindowsFirewall",
@@ -93,9 +93,3 @@ version = "0.52"
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }
-
-[build-dependencies]
-winres = "0.1"
-
-[package.metadata.cargo-shear]
-ignored = ["codex-utils-pty", "tokio"]

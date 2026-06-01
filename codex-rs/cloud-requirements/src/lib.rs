@@ -25,11 +25,13 @@ use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_login::RefreshTokenError;
 use codex_protocol::account::PlanType;
+use codex_utils_absolute_path::AbsolutePathBufGuard;
 use hmac::Hmac;
 use hmac::Mac;
 use serde::Deserialize;
 use serde::Serialize;
 use sha2::Sha256;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -138,10 +140,12 @@ struct CloudRequirementsCacheSignedPayload {
 }
 
 impl CloudRequirementsCacheSignedPayload {
-    fn requirements(&self) -> Option<ConfigRequirementsToml> {
-        self.contents
-            .as_deref()
-            .and_then(|contents| parse_cloud_requirements(contents).ok().flatten())
+    fn requirements(&self, requirements_base_dir: &Path) -> Option<ConfigRequirementsToml> {
+        self.contents.as_deref().and_then(|contents| {
+            parse_cloud_requirements(contents, requirements_base_dir)
+                .ok()
+                .flatten()
+        })
     }
 }
 fn sign_cache_payload(payload_bytes: &[u8]) -> Option<String> {
@@ -258,6 +262,7 @@ impl RequirementsFetcher for BackendRequirementsFetcher {
 struct CloudRequirementsService {
     auth_manager: Arc<AuthManager>,
     fetcher: Arc<dyn RequirementsFetcher>,
+    requirements_base_dir: PathBuf,
     cache_path: PathBuf,
     timeout: Duration,
 }
@@ -272,6 +277,7 @@ impl CloudRequirementsService {
         Self {
             auth_manager,
             fetcher,
+            requirements_base_dir: codex_home.clone(),
             cache_path: codex_home.join(CLOUD_REQUIREMENTS_CACHE_FILENAME),
             timeout,
         }
@@ -351,7 +357,7 @@ impl CloudRequirementsService {
                     path = %self.cache_path.display(),
                     "Using cached cloud requirements"
                 );
-                return Ok(signed_payload.requirements());
+                return Ok(signed_payload.requirements(&self.requirements_base_dir));
             }
             Err(cache_load_status) => {
                 self.log_cache_load_status(&cache_load_status);
@@ -482,24 +488,26 @@ impl CloudRequirementsService {
             };
 
             let requirements = match contents.as_deref() {
-                Some(contents) => match parse_cloud_requirements(contents) {
-                    Ok(requirements) => requirements,
-                    Err(err) => {
-                        tracing::error!(error = %err, "Failed to parse cloud requirements");
-                        emit_fetch_final_metric(
-                            trigger,
-                            "error",
-                            "parse_error",
-                            attempt,
-                            last_status_code,
-                        );
-                        return Err(CloudRequirementsLoadError::new(
-                            CloudRequirementsLoadErrorCode::Parse,
-                            /*status_code*/ None,
-                            format_cloud_requirements_parse_failed_message(contents, &err),
-                        ));
+                Some(contents) => {
+                    match parse_cloud_requirements(contents, &self.requirements_base_dir) {
+                        Ok(requirements) => requirements,
+                        Err(err) => {
+                            tracing::error!(error = %err, "Failed to parse cloud requirements");
+                            emit_fetch_final_metric(
+                                trigger,
+                                "error",
+                                "parse_error",
+                                attempt,
+                                last_status_code,
+                            );
+                            return Err(CloudRequirementsLoadError::new(
+                                CloudRequirementsLoadErrorCode::Parse,
+                                /*status_code*/ None,
+                                format_cloud_requirements_parse_failed_message(contents, &err),
+                            ));
+                        }
                     }
-                },
+                }
                 None => None,
             };
 
@@ -738,11 +746,13 @@ pub async fn cloud_requirements_loader_for_storage(
 
 fn parse_cloud_requirements(
     contents: &str,
+    requirements_base_dir: &Path,
 ) -> Result<Option<ConfigRequirementsToml>, toml::de::Error> {
     if contents.trim().is_empty() {
         return Ok(None);
     }
 
+    let _guard = AbsolutePathBufGuard::new(requirements_base_dir);
     let requirements: ConfigRequirementsToml = toml::from_str(contents)?;
     if requirements.is_empty() {
         Ok(None)
@@ -829,6 +839,7 @@ mod tests {
     use super::*;
     use base64::Engine;
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use codex_config::AppToolApproval;
     use codex_config::types::AuthCredentialsStoreMode;
     use codex_login::auth::AgentIdentityAuth;
     use codex_login::auth::AgentIdentityAuthRecord;
@@ -1037,7 +1048,11 @@ mod tests {
     }
 
     fn parse_for_fetch(contents: Option<&str>) -> Option<ConfigRequirementsToml> {
-        contents.and_then(|contents| parse_cloud_requirements(contents).ok().flatten())
+        contents.and_then(|contents| {
+            parse_cloud_requirements(contents, &std::env::temp_dir())
+                .ok()
+                .flatten()
+        })
     }
 
     fn request_error() -> FetchAttemptError {
@@ -1201,8 +1216,13 @@ mod tests {
                 allowed_approval_policies: Some(vec![AskForApproval::Never]),
                 allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
+                allowed_permissions: None,
                 remote_sandbox_config: None,
                 allowed_web_search_modes: None,
+                allow_managed_hooks_only: None,
+                allow_appshots: None,
+                computer_use: None,
+                windows: None,
                 guardian_policy_config: None,
                 feature_requirements: None,
                 hooks: None,
@@ -1283,8 +1303,13 @@ mod tests {
                 allowed_approval_policies: Some(vec![AskForApproval::Never]),
                 allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
+                allowed_permissions: None,
                 remote_sandbox_config: None,
                 allowed_web_search_modes: None,
+                allow_managed_hooks_only: None,
+                allow_appshots: None,
+                computer_use: None,
+                windows: None,
                 guardian_policy_config: None,
                 feature_requirements: None,
                 hooks: None,
@@ -1316,8 +1341,13 @@ mod tests {
                 allowed_approval_policies: Some(vec![AskForApproval::Never]),
                 allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
+                allowed_permissions: None,
                 remote_sandbox_config: None,
                 allowed_web_search_modes: None,
+                allow_managed_hooks_only: None,
+                allow_appshots: None,
+                computer_use: None,
+                windows: None,
                 guardian_policy_config: None,
                 feature_requirements: None,
                 hooks: None,
@@ -1366,8 +1396,13 @@ mod tests {
                 allowed_approval_policies: Some(vec![AskForApproval::Never]),
                 allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
+                allowed_permissions: None,
                 remote_sandbox_config: None,
                 allowed_web_search_modes: None,
+                allow_managed_hooks_only: None,
+                allow_appshots: None,
+                computer_use: None,
+                windows: None,
                 guardian_policy_config: None,
                 feature_requirements: None,
                 hooks: None,
@@ -1380,6 +1415,35 @@ mod tests {
                 permissions: None,
             })
         );
+    }
+
+    #[tokio::test]
+    async fn fetch_cloud_requirements_resolves_relative_deny_read_globs_from_codex_home() {
+        let codex_home = tempdir().expect("tempdir");
+        let service = CloudRequirementsService::new(
+            auth_manager_with_plan("enterprise").await,
+            Arc::new(StaticFetcher {
+                contents: Some(
+                    r#"
+[permissions.filesystem]
+deny_read = ["./sensitive/**/*.txt"]
+"#
+                    .to_string(),
+                ),
+            }),
+            codex_home.path().to_path_buf(),
+            CLOUD_REQUIREMENTS_TIMEOUT,
+        );
+        let deny_read = format!("{}/sensitive/**/*.txt", codex_home.path().display());
+        let expected = toml::from_str::<ConfigRequirementsToml>(&format!(
+            r#"
+[permissions.filesystem]
+deny_read = [{deny_read:?}]
+"#
+        ))
+        .expect("parse expected cloud requirements");
+
+        assert_eq!(service.fetch().await, Ok(Some(expected)));
     }
 
     #[tokio::test]
@@ -1399,6 +1463,40 @@ enabled = false
                         "connector_5f3c8c41a1e54ad7a76272c89e2554fa".to_string(),
                         codex_config::AppRequirementToml {
                             enabled: Some(false),
+                            tools: None,
+                        },
+                    )]),
+                }),
+                ..Default::default()
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn fetch_cloud_requirements_parses_apps_tool_requirements_toml() {
+        let result = parse_for_fetch(Some(
+            r#"
+[apps.connector_5f3c8c41a1e54ad7a76272c89e2554fa.tools."calendar/list_events"]
+approval_mode = "approve"
+"#,
+        ));
+
+        assert_eq!(
+            result,
+            Some(ConfigRequirementsToml {
+                apps: Some(codex_config::AppsRequirementsToml {
+                    apps: BTreeMap::from([(
+                        "connector_5f3c8c41a1e54ad7a76272c89e2554fa".to_string(),
+                        codex_config::AppRequirementToml {
+                            enabled: None,
+                            tools: Some(codex_config::AppToolsRequirementsToml {
+                                tools: BTreeMap::from([(
+                                    "calendar/list_events".to_string(),
+                                    codex_config::AppToolRequirementToml {
+                                        approval_mode: Some(AppToolApproval::Approve),
+                                    },
+                                )]),
+                            }),
                         },
                     )]),
                 }),
@@ -1482,8 +1580,13 @@ command = "sample-mcp"
                 allowed_approval_policies: Some(vec![AskForApproval::Never]),
                 allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
+                allowed_permissions: None,
                 remote_sandbox_config: None,
                 allowed_web_search_modes: None,
+                allow_managed_hooks_only: None,
+                allow_appshots: None,
+                computer_use: None,
+                windows: None,
                 guardian_policy_config: None,
                 feature_requirements: None,
                 hooks: None,
@@ -1562,8 +1665,13 @@ command = "sample-mcp"
                 allowed_approval_policies: Some(vec![AskForApproval::Never]),
                 allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
+                allowed_permissions: None,
                 remote_sandbox_config: None,
                 allowed_web_search_modes: None,
+                allow_managed_hooks_only: None,
+                allow_appshots: None,
+                computer_use: None,
+                windows: None,
                 guardian_policy_config: None,
                 feature_requirements: None,
                 hooks: None,
@@ -1640,8 +1748,13 @@ command = "sample-mcp"
                 allowed_approval_policies: Some(vec![AskForApproval::Never]),
                 allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
+                allowed_permissions: None,
                 remote_sandbox_config: None,
                 allowed_web_search_modes: None,
+                allow_managed_hooks_only: None,
+                allow_appshots: None,
+                computer_use: None,
+                windows: None,
                 guardian_policy_config: None,
                 feature_requirements: None,
                 hooks: None,
@@ -1846,8 +1959,13 @@ command = "sample-mcp"
                 allowed_approval_policies: Some(vec![AskForApproval::Never]),
                 allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
+                allowed_permissions: None,
                 remote_sandbox_config: None,
                 allowed_web_search_modes: None,
+                allow_managed_hooks_only: None,
+                allow_appshots: None,
+                computer_use: None,
+                windows: None,
                 guardian_policy_config: None,
                 feature_requirements: None,
                 hooks: None,
@@ -1886,8 +2004,13 @@ command = "sample-mcp"
                 allowed_approval_policies: Some(vec![AskForApproval::Never]),
                 allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
+                allowed_permissions: None,
                 remote_sandbox_config: None,
                 allowed_web_search_modes: None,
+                allow_managed_hooks_only: None,
+                allow_appshots: None,
+                computer_use: None,
+                windows: None,
                 guardian_policy_config: None,
                 feature_requirements: None,
                 hooks: None,
@@ -1946,8 +2069,13 @@ command = "sample-mcp"
                 allowed_approval_policies: Some(vec![AskForApproval::OnRequest]),
                 allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
+                allowed_permissions: None,
                 remote_sandbox_config: None,
                 allowed_web_search_modes: None,
+                allow_managed_hooks_only: None,
+                allow_appshots: None,
+                computer_use: None,
+                windows: None,
                 guardian_policy_config: None,
                 feature_requirements: None,
                 hooks: None,
@@ -2002,8 +2130,13 @@ command = "sample-mcp"
                 allowed_approval_policies: Some(vec![AskForApproval::OnRequest]),
                 allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
+                allowed_permissions: None,
                 remote_sandbox_config: None,
                 allowed_web_search_modes: None,
+                allow_managed_hooks_only: None,
+                allow_appshots: None,
+                computer_use: None,
+                windows: None,
                 guardian_policy_config: None,
                 feature_requirements: None,
                 hooks: None,
@@ -2060,8 +2193,13 @@ command = "sample-mcp"
                 allowed_approval_policies: Some(vec![AskForApproval::Never]),
                 allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
+                allowed_permissions: None,
                 remote_sandbox_config: None,
                 allowed_web_search_modes: None,
+                allow_managed_hooks_only: None,
+                allow_appshots: None,
+                computer_use: None,
+                windows: None,
                 guardian_policy_config: None,
                 feature_requirements: None,
                 hooks: None,
@@ -2119,8 +2257,13 @@ command = "sample-mcp"
                 allowed_approval_policies: Some(vec![AskForApproval::Never]),
                 allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
+                allowed_permissions: None,
                 remote_sandbox_config: None,
                 allowed_web_search_modes: None,
+                allow_managed_hooks_only: None,
+                allow_appshots: None,
+                computer_use: None,
+                windows: None,
                 guardian_policy_config: None,
                 feature_requirements: None,
                 hooks: None,
@@ -2173,13 +2316,22 @@ command = "sample-mcp"
                 .signed_payload
                 .contents
                 .as_deref()
-                .and_then(|contents| parse_cloud_requirements(contents).ok().flatten()),
+                .and_then(|contents| {
+                    parse_cloud_requirements(contents, codex_home.path())
+                        .ok()
+                        .flatten()
+                }),
             Some(ConfigRequirementsToml {
                 allowed_approval_policies: Some(vec![AskForApproval::Never]),
                 allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
+                allowed_permissions: None,
                 remote_sandbox_config: None,
                 allowed_web_search_modes: None,
+                allow_managed_hooks_only: None,
+                allow_appshots: None,
+                computer_use: None,
+                windows: None,
                 guardian_policy_config: None,
                 feature_requirements: None,
                 hooks: None,
@@ -2267,8 +2419,13 @@ command = "sample-mcp"
                 allowed_approval_policies: Some(vec![AskForApproval::Never]),
                 allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
+                allowed_permissions: None,
                 remote_sandbox_config: None,
                 allowed_web_search_modes: None,
+                allow_managed_hooks_only: None,
+                allow_appshots: None,
+                computer_use: None,
+                windows: None,
                 guardian_policy_config: None,
                 feature_requirements: None,
                 hooks: None,
@@ -2293,13 +2450,22 @@ command = "sample-mcp"
                 .signed_payload
                 .contents
                 .as_deref()
-                .and_then(|contents| parse_cloud_requirements(contents).ok().flatten()),
+                .and_then(|contents| {
+                    parse_cloud_requirements(contents, codex_home.path())
+                        .ok()
+                        .flatten()
+                }),
             Some(ConfigRequirementsToml {
                 allowed_approval_policies: Some(vec![AskForApproval::OnRequest]),
                 allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
+                allowed_permissions: None,
                 remote_sandbox_config: None,
                 allowed_web_search_modes: None,
+                allow_managed_hooks_only: None,
+                allow_appshots: None,
+                computer_use: None,
+                windows: None,
                 guardian_policy_config: None,
                 feature_requirements: None,
                 hooks: None,

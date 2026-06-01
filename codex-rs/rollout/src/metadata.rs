@@ -1,6 +1,6 @@
 use crate::ARCHIVED_SESSIONS_SUBDIR;
 use crate::SESSIONS_SUBDIR;
-use crate::list;
+use crate::compression;
 use crate::list::parse_timestamp_uuid_from_filename;
 use crate::recorder::RolloutRecorder;
 use crate::state_db::normalize_cwd_for_state_db;
@@ -28,8 +28,6 @@ use std::path::PathBuf;
 use tracing::info;
 use tracing::warn;
 
-const ROLLOUT_PREFIX: &str = "rollout-";
-const ROLLOUT_SUFFIX: &str = ".jsonl";
 const BACKFILL_BATCH_SIZE: usize = 200;
 #[cfg(not(test))]
 const BACKFILL_LEASE_SECONDS: i64 = 900;
@@ -79,9 +77,7 @@ pub fn builder_from_items(
     }
 
     let file_name = rollout_path.file_name()?.to_str()?;
-    if !file_name.starts_with(ROLLOUT_PREFIX) || !file_name.ends_with(ROLLOUT_SUFFIX) {
-        return None;
-    }
+    let file_name = compression::parse_rollout_file_name(file_name)?;
     let (created_ts, uuid) = parse_timestamp_uuid_from_filename(file_name)?;
     let created_at =
         DateTime::<Utc>::from_timestamp(created_ts.unix_timestamp(), 0)?.with_nanosecond(0)?;
@@ -263,6 +259,7 @@ pub(crate) async fn backfill_sessions_with_lease(
                     let memory_mode = outcome.memory_mode.unwrap_or_else(|| "enabled".to_string());
                     if let Ok(Some(existing_metadata)) = runtime.get_thread(metadata.id).await {
                         metadata.prefer_existing_git_info(&existing_metadata);
+                        metadata.prefer_existing_explicit_title(&existing_metadata);
                     }
                     if rollout.archived && metadata.archived_at.is_none() {
                         let fallback_archived_at = metadata.updated_at;
@@ -286,25 +283,6 @@ pub(crate) async fn backfill_sessions_with_lease(
                             continue;
                         }
                         stats.upserted = stats.upserted.saturating_add(1);
-                        if let Ok(meta_line) = list::read_session_meta_line(&rollout.path).await {
-                            if let Err(err) = runtime
-                                .persist_dynamic_tools(
-                                    meta_line.meta.id,
-                                    meta_line.meta.dynamic_tools.as_deref(),
-                                )
-                                .await
-                            {
-                                warn!(
-                                    "failed to backfill dynamic tools {}: {err}",
-                                    rollout.path.display()
-                                );
-                            }
-                        } else {
-                            warn!(
-                                "failed to read session meta for dynamic tools {}",
-                                rollout.path.display()
-                            );
-                        }
                     }
                 }
                 Err(err) => {
@@ -384,9 +362,8 @@ fn backfill_watermark_for_path(codex_home: &Path, path: &Path) -> String {
 }
 
 async fn file_modified_time_utc(path: &Path) -> Option<DateTime<Utc>> {
-    let modified = tokio::fs::metadata(path).await.ok()?.modified().ok()?;
-    let updated_at: DateTime<Utc> = modified.into();
-    Some(updated_at)
+    let modified = compression::file_modified_time(path).await.ok()??;
+    DateTime::<Utc>::from_timestamp(modified.unix_timestamp(), modified.nanosecond())
 }
 
 fn parse_timestamp_to_utc(ts: &str) -> Option<DateTime<Utc>> {
@@ -441,12 +418,8 @@ async fn collect_rollout_paths(root: &Path) -> std::io::Result<Vec<PathBuf>> {
             if !file_type.is_file() {
                 continue;
             }
-            let file_name = entry.file_name();
-            let Some(name) = file_name.to_str() else {
-                continue;
-            };
-            if name.starts_with(ROLLOUT_PREFIX) && name.ends_with(ROLLOUT_SUFFIX) {
-                paths.push(path);
+            if let Some(rollout_file) = compression::RolloutFile::from_path(path) {
+                paths.push(rollout_file.into_path());
             }
         }
     }

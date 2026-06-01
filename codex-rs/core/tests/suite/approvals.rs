@@ -10,20 +10,28 @@ use codex_features::Feature;
 use codex_protocol::approvals::NetworkApprovalProtocol;
 use codex_protocol::approvals::NetworkPolicyAmendment;
 use codex_protocol::approvals::NetworkPolicyRuleAction;
+use codex_protocol::models::PermissionProfile;
+use codex_protocol::permissions::FileSystemAccessMode;
+use codex_protocol::permissions::FileSystemPath;
+use codex_protocol::permissions::FileSystemSandboxEntry;
+use codex_protocol::permissions::FileSystemSandboxPolicy;
+use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecApprovalRequestEvent;
 use codex_protocol::protocol::ExecPolicyAmendment;
+use codex_protocol::protocol::GranularApprovalConfig;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::user_input::UserInput;
 use core_test_support::managed_network_requirements_loader;
-use core_test_support::responses::ev_apply_patch_function_call;
+use core_test_support::responses::ev_apply_patch_custom_tool_call;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
+use core_test_support::responses::ev_function_call_with_namespace;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_once_match;
@@ -44,6 +52,8 @@ use serde_json::Value;
 use serde_json::json;
 use std::env;
 use std::fs;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -108,7 +118,7 @@ enum ActionKind {
         command: &'static str,
         justification: Option<&'static str>,
     },
-    ApplyPatchFunction {
+    ApplyPatchFreeform {
         target: TargetPath,
         content: &'static str,
     },
@@ -131,7 +141,7 @@ impl ActionKind {
             | ActionKind::RunCommand { .. }
             | ActionKind::RunCommandWithPrefixRule { .. }
             | ActionKind::RunUnifiedExecCommand { .. }
-            | ActionKind::ApplyPatchFunction { .. }
+            | ActionKind::ApplyPatchFreeform { .. }
             | ActionKind::ApplyPatchShell { .. } => None,
         }
     }
@@ -264,11 +274,11 @@ impl ActionKind {
                 )?;
                 Ok((event, Some(command.to_string())))
             }
-            ActionKind::ApplyPatchFunction { target, content } => {
+            ActionKind::ApplyPatchFreeform { target, content } => {
                 let (path, patch_path) = target.resolve_for_patch(test);
                 let _ = fs::remove_file(&path);
                 let patch = build_add_file_patch(&patch_path, content);
-                Ok((ev_apply_patch_function_call(call_id, &patch), None))
+                Ok((ev_apply_patch_custom_tool_call(call_id, &patch), None))
             }
             ActionKind::ApplyPatchShell { target, content } => {
                 let (path, patch_path) = target.resolve_for_patch(test);
@@ -643,24 +653,30 @@ async fn submit_turn(
     let session_model = test.session_configured.model.clone();
 
     test.codex
-        .submit(Op::UserTurn {
-            environments: None,
+        .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: prompt.into(),
                 text_elements: Vec::new(),
             }],
+            environments: None,
             final_output_json_schema: None,
-            cwd: test.cwd.path().to_path_buf(),
-            approval_policy,
-            approvals_reviewer: Some(ApprovalsReviewer::User),
-            sandbox_policy,
-            permission_profile: None,
-            model: session_model,
-            effort: None,
-            summary: None,
-            service_tier: None,
-            collaboration_mode: None,
-            personality: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+                cwd: Some(test.cwd.path().to_path_buf()),
+                approval_policy: Some(approval_policy),
+                approvals_reviewer: Some(ApprovalsReviewer::User),
+                sandbox_policy: Some(sandbox_policy),
+                collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
+                    mode: codex_protocol::config_types::ModeKind::Default,
+                    settings: codex_protocol::config_types::Settings {
+                        model: session_model,
+                        reasoning_effort: None,
+                        developer_instructions: None,
+                    },
+                }),
+                ..Default::default()
+            },
         })
         .await?;
 
@@ -828,8 +844,8 @@ fn scenarios() -> Vec<ScenarioSpec> {
     let workspace_write = |network_access| SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![],
         network_access,
-        exclude_tmpdir_env_var: false,
-        exclude_slash_tmp: false,
+        exclude_tmpdir_env_var: true,
+        exclude_slash_tmp: true,
     };
 
     vec![
@@ -963,6 +979,46 @@ fn scenarios() -> Vec<ScenarioSpec> {
             },
             expectation: Expectation::CommandFailure {
                 output_contains: "rejected by user",
+            },
+        },
+        ScenarioSpec {
+            name: "known_safe_escalation_on_request_requires_approval",
+            approval_policy: OnRequest,
+            sandbox_policy: workspace_write(false),
+            action: ActionKind::RunCommand {
+                command: "echo known-safe-escalation",
+            },
+            sandbox_permissions: SandboxPermissions::RequireEscalated,
+            features: vec![],
+            model_override: Some("gpt-5.2"),
+            outcome: Outcome::ExecApprovalWithAmendment {
+                decision: ReviewDecision::Denied,
+                expected_reason: None,
+                expected_execpolicy_amendment: Some(&["echo", "known-safe-escalation"]),
+            },
+            expectation: Expectation::CommandFailure {
+                output_contains: "rejected by user",
+            },
+        },
+        ScenarioSpec {
+            name: "known_safe_escalation_granular_sandbox_disabled_rejects",
+            approval_policy: Granular(GranularApprovalConfig {
+                sandbox_approval: false,
+                rules: true,
+                skill_approval: true,
+                request_permissions: true,
+                mcp_elicitations: true,
+            }),
+            sandbox_policy: workspace_write(false),
+            action: ActionKind::RunCommand {
+                command: "echo known-safe-escalation-granular-disabled",
+            },
+            sandbox_permissions: SandboxPermissions::RequireEscalated,
+            features: vec![],
+            model_override: Some("gpt-5.2"),
+            outcome: Outcome::Auto,
+            expectation: Expectation::CommandFailure {
+                output_contains: "you should not ask for escalated permissions",
             },
         },
         ScenarioSpec {
@@ -1342,46 +1398,46 @@ fn scenarios() -> Vec<ScenarioSpec> {
             },
         },
         ScenarioSpec {
-            name: "apply_patch_function_auto_inside_workspace",
+            name: "apply_patch_freeform_auto_inside_workspace",
             approval_policy: OnRequest,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
-            action: ActionKind::ApplyPatchFunction {
-                target: TargetPath::Workspace("apply_patch_function.txt"),
-                content: "function-apply-patch",
+            action: ActionKind::ApplyPatchFreeform {
+                target: TargetPath::Workspace("apply_patch_freeform.txt"),
+                content: "freeform-apply-patch",
             },
             sandbox_permissions: SandboxPermissions::UseDefault,
             features: vec![],
             model_override: Some("gpt-5.4"),
             outcome: Outcome::Auto,
             expectation: Expectation::PatchApplied {
-                target: TargetPath::Workspace("apply_patch_function.txt"),
-                content: "function-apply-patch",
+                target: TargetPath::Workspace("apply_patch_freeform.txt"),
+                content: "freeform-apply-patch",
             },
         },
         ScenarioSpec {
-            name: "apply_patch_function_danger_allows_outside_workspace",
+            name: "apply_patch_freeform_danger_allows_outside_workspace",
             approval_policy: OnRequest,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
-            action: ActionKind::ApplyPatchFunction {
-                target: TargetPath::OutsideWorkspace("apply_patch_function_danger.txt"),
-                content: "function-patch-danger",
+            action: ActionKind::ApplyPatchFreeform {
+                target: TargetPath::OutsideWorkspace("apply_patch_freeform_danger.txt"),
+                content: "freeform-patch-danger",
             },
             sandbox_permissions: SandboxPermissions::UseDefault,
-            features: vec![Feature::ApplyPatchFreeform],
+            features: vec![],
             model_override: Some("gpt-5.4"),
             outcome: Outcome::Auto,
             expectation: Expectation::PatchApplied {
-                target: TargetPath::OutsideWorkspace("apply_patch_function_danger.txt"),
-                content: "function-patch-danger",
+                target: TargetPath::OutsideWorkspace("apply_patch_freeform_danger.txt"),
+                content: "freeform-patch-danger",
             },
         },
         ScenarioSpec {
-            name: "apply_patch_function_outside_requires_patch_approval",
+            name: "apply_patch_freeform_outside_requires_patch_approval",
             approval_policy: OnRequest,
             sandbox_policy: workspace_write(false),
-            action: ActionKind::ApplyPatchFunction {
-                target: TargetPath::OutsideWorkspace("apply_patch_function_outside.txt"),
-                content: "function-patch-outside",
+            action: ActionKind::ApplyPatchFreeform {
+                target: TargetPath::OutsideWorkspace("apply_patch_freeform_outside.txt"),
+                content: "freeform-patch-outside",
             },
             sandbox_permissions: SandboxPermissions::UseDefault,
             features: vec![],
@@ -1391,17 +1447,17 @@ fn scenarios() -> Vec<ScenarioSpec> {
                 expected_reason: None,
             },
             expectation: Expectation::PatchApplied {
-                target: TargetPath::OutsideWorkspace("apply_patch_function_outside.txt"),
-                content: "function-patch-outside",
+                target: TargetPath::OutsideWorkspace("apply_patch_freeform_outside.txt"),
+                content: "freeform-patch-outside",
             },
         },
         ScenarioSpec {
-            name: "apply_patch_function_outside_denied_blocks_patch",
+            name: "apply_patch_freeform_outside_denied_blocks_patch",
             approval_policy: OnRequest,
             sandbox_policy: workspace_write(false),
-            action: ActionKind::ApplyPatchFunction {
-                target: TargetPath::OutsideWorkspace("apply_patch_function_outside_denied.txt"),
-                content: "function-patch-outside-denied",
+            action: ActionKind::ApplyPatchFreeform {
+                target: TargetPath::OutsideWorkspace("apply_patch_freeform_outside_denied.txt"),
+                content: "freeform-patch-outside-denied",
             },
             sandbox_permissions: SandboxPermissions::UseDefault,
             features: vec![],
@@ -1411,7 +1467,7 @@ fn scenarios() -> Vec<ScenarioSpec> {
                 expected_reason: None,
             },
             expectation: Expectation::FileNotCreated {
-                target: TargetPath::OutsideWorkspace("apply_patch_function_outside_denied.txt"),
+                target: TargetPath::OutsideWorkspace("apply_patch_freeform_outside_denied.txt"),
                 message_contains: &["patch rejected by user"],
             },
         },
@@ -1436,12 +1492,12 @@ fn scenarios() -> Vec<ScenarioSpec> {
             },
         },
         ScenarioSpec {
-            name: "apply_patch_function_unless_trusted_requires_patch_approval",
+            name: "apply_patch_freeform_unless_trusted_requires_patch_approval",
             approval_policy: UnlessTrusted,
             sandbox_policy: workspace_write(false),
-            action: ActionKind::ApplyPatchFunction {
-                target: TargetPath::Workspace("apply_patch_function_unless_trusted.txt"),
-                content: "function-patch-unless-trusted",
+            action: ActionKind::ApplyPatchFreeform {
+                target: TargetPath::Workspace("apply_patch_freeform_unless_trusted.txt"),
+                content: "freeform-patch-unless-trusted",
             },
             sandbox_permissions: SandboxPermissions::UseDefault,
             features: vec![],
@@ -1451,24 +1507,24 @@ fn scenarios() -> Vec<ScenarioSpec> {
                 expected_reason: None,
             },
             expectation: Expectation::PatchApplied {
-                target: TargetPath::Workspace("apply_patch_function_unless_trusted.txt"),
-                content: "function-patch-unless-trusted",
+                target: TargetPath::Workspace("apply_patch_freeform_unless_trusted.txt"),
+                content: "freeform-patch-unless-trusted",
             },
         },
         ScenarioSpec {
-            name: "apply_patch_function_never_rejects_outside_workspace",
+            name: "apply_patch_freeform_never_rejects_outside_workspace",
             approval_policy: Never,
             sandbox_policy: workspace_write(false),
-            action: ActionKind::ApplyPatchFunction {
-                target: TargetPath::OutsideWorkspace("apply_patch_function_never.txt"),
-                content: "function-patch-never",
+            action: ActionKind::ApplyPatchFreeform {
+                target: TargetPath::OutsideWorkspace("apply_patch_freeform_never.txt"),
+                content: "freeform-patch-never",
             },
             sandbox_permissions: SandboxPermissions::UseDefault,
             features: vec![],
             model_override: Some("gpt-5.4"),
             outcome: Outcome::Auto,
             expectation: Expectation::FileNotCreated {
-                target: TargetPath::OutsideWorkspace("apply_patch_function_never.txt"),
+                target: TargetPath::OutsideWorkspace("apply_patch_freeform_never.txt"),
                 message_contains: &[
                     "patch rejected: writing outside of the project; rejected by user approval settings",
                 ],
@@ -1812,7 +1868,7 @@ async fn run_scenario_group(group: ScenarioGroup) -> Result<()> {
 
 fn scenario_group(scenario: &ScenarioSpec) -> ScenarioGroup {
     match &scenario.action {
-        ActionKind::ApplyPatchFunction { .. } | ActionKind::ApplyPatchShell { .. } => {
+        ActionKind::ApplyPatchFreeform { .. } | ActionKind::ApplyPatchShell { .. } => {
             ScenarioGroup::ApplyPatch
         }
         ActionKind::RunUnifiedExecCommand { .. } => ScenarioGroup::UnifiedExec,
@@ -1982,7 +2038,12 @@ async fn run_scenario(scenario: &ScenarioSpec) -> Result<()> {
         }
     }
 
-    let output_item = results_mock.single_request().function_call_output(call_id);
+    let output_request = results_mock.single_request();
+    let output_item = if matches!(scenario.action, ActionKind::ApplyPatchFreeform { .. }) {
+        output_request.custom_tool_call_output(call_id)
+    } else {
+        output_request.function_call_output(call_id)
+    };
     let result = parse_result(&output_item);
     eprintln!(
         "approval scenario {} result: exit_code={:?} stdout={:?}",
@@ -2003,8 +2064,8 @@ async fn approving_apply_patch_for_session_skips_future_prompts_for_same_file() 
     let sandbox_policy = SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![],
         network_access: false,
-        exclude_tmpdir_env_var: false,
-        exclude_slash_tmp: false,
+        exclude_tmpdir_env_var: true,
+        exclude_slash_tmp: true,
     };
     let sandbox_policy_for_config = sandbox_policy.clone();
 
@@ -2021,6 +2082,7 @@ async fn approving_apply_patch_for_session_skips_future_prompts_for_same_file() 
 
     let target = TargetPath::OutsideWorkspace("apply_patch_allow_session.txt");
     let (path, patch_path) = target.resolve_for_patch(&test);
+    let _path_cleanup = tempfile::TempPath::try_from_path(path.clone())?;
     let _ = fs::remove_file(&path);
 
     let patch_add = build_add_file_patch(&patch_path, "before");
@@ -2035,7 +2097,7 @@ async fn approving_apply_patch_for_session_skips_future_prompts_for_same_file() 
         &server,
         sse(vec![
             ev_response_created("resp-1"),
-            ev_apply_patch_function_call(call_id_1, &patch_add),
+            ev_apply_patch_custom_tool_call(call_id_1, &patch_add),
             ev_completed("resp-1"),
         ]),
     )
@@ -2070,7 +2132,7 @@ async fn approving_apply_patch_for_session_skips_future_prompts_for_same_file() 
         &server,
         sse(vec![
             ev_response_created("resp-3"),
-            ev_apply_patch_function_call(call_id_2, &patch_update),
+            ev_apply_patch_custom_tool_call(call_id_2, &patch_update),
             ev_completed("resp-3"),
         ]),
     )
@@ -2322,7 +2384,12 @@ async fn spawned_subagent_execpolicy_amendment_propagates_to_parent_session() ->
         |req: &Request| body_contains(req, PARENT_PROMPT),
         sse(vec![
             ev_response_created("resp-parent-1"),
-            ev_function_call(SPAWN_CALL_ID, "spawn_agent", &spawn_args),
+            ev_function_call_with_namespace(
+                SPAWN_CALL_ID,
+                "multi_agent_v1",
+                "spawn_agent",
+                &spawn_args,
+            ),
             ev_completed("resp-parent-1"),
         ]),
     )
@@ -2471,6 +2538,166 @@ async fn spawned_subagent_execpolicy_amendment_propagates_to_parent_session() ->
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[cfg(unix)]
+async fn env_zsh_script_spawned_by_python_can_request_escalation_under_zsh_fork() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let Some(runtime) = zsh_fork_runtime("zsh-fork env zsh nested escalation test")? else {
+        return Ok(());
+    };
+
+    let approval_policy = AskForApproval::OnRequest;
+    let permission_profile = restrictive_workspace_write_profile();
+    let outside_dir = tempfile::tempdir_in(std::env::current_dir()?)?;
+    let outside_path = outside_dir.path().join("zsh-fork-env-zsh-escalated.txt");
+    let outside_path_arg = shlex::try_join([outside_path.to_string_lossy().as_ref()])?;
+    let rules = r#"prefix_rule(pattern=["touch"], decision="prompt")"#.to_string();
+
+    let server = start_mock_server().await;
+    let outside_path_for_hook = outside_path.clone();
+    let test = build_zsh_fork_test(
+        &server,
+        runtime,
+        approval_policy,
+        permission_profile.clone(),
+        move |home| {
+            let _ = fs::remove_file(&outside_path_for_hook);
+            let rules_dir = home.join("rules");
+            fs::create_dir_all(&rules_dir).unwrap();
+            fs::write(rules_dir.join("default.rules"), &rules).unwrap();
+        },
+    )
+    .await?;
+
+    let script_path = test.cwd.path().join("runs-under-env-zsh");
+    fs::write(
+        &script_path,
+        format!(
+            "#!/usr/bin/env zsh\ntouch {outside_path_arg}\nprint -r -- nested-env-zsh-complete\n"
+        ),
+    )?;
+    let mut script_permissions = fs::metadata(&script_path)?.permissions();
+    script_permissions.set_mode(0o755);
+    fs::set_permissions(&script_path, script_permissions)?;
+
+    let script_literal = serde_json::to_string(script_path.to_string_lossy().as_ref())?;
+    let python_script = format!(
+        "import subprocess; subprocess.run([{script_literal}], check=True, close_fds=False)"
+    );
+    let command = shlex::try_join(["python3", "-c", python_script.as_str()])?;
+
+    let call_id = "zsh-fork-env-zsh-nested-escalation";
+    let event = shell_event(
+        call_id,
+        &command,
+        /*timeout_ms*/ 30_000,
+        SandboxPermissions::UseDefault,
+    )?;
+    let _ = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-zsh-fork-env-zsh-1"),
+            event,
+            ev_completed("resp-zsh-fork-env-zsh-1"),
+        ]),
+    )
+    .await;
+    let results = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-zsh-fork-env-zsh-1", "done"),
+            ev_completed("resp-zsh-fork-env-zsh-2"),
+        ]),
+    )
+    .await;
+
+    let session_model = test.session_configured.model.clone();
+    let (sandbox_policy, permission_profile) =
+        turn_permission_fields(permission_profile, test.cwd.path());
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "run nested env zsh script through python".into(),
+                text_elements: Vec::new(),
+            }],
+            environments: None,
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+                cwd: Some(test.cwd.path().to_path_buf()),
+                approval_policy: Some(approval_policy),
+                approvals_reviewer: Some(ApprovalsReviewer::User),
+                sandbox_policy: Some(sandbox_policy),
+                permission_profile,
+                collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
+                    mode: codex_protocol::config_types::ModeKind::Default,
+                    settings: codex_protocol::config_types::Settings {
+                        model: session_model,
+                        reasoning_effort: None,
+                        developer_instructions: None,
+                    },
+                }),
+                ..Default::default()
+            },
+        })
+        .await?;
+
+    let approval_event = wait_for_event_with_timeout(
+        &test.codex,
+        |event| {
+            matches!(
+                event,
+                EventMsg::ExecApprovalRequest(_) | EventMsg::TurnComplete(_)
+            )
+        },
+        Duration::from_secs(10),
+    )
+    .await;
+    let EventMsg::ExecApprovalRequest(approval) = approval_event else {
+        panic!("expected nested zsh script to request approval before completion");
+    };
+    assert!(
+        approval.command.iter().any(|arg| arg.ends_with("/touch"))
+            && approval
+                .command
+                .iter()
+                .any(|arg| arg == outside_path.to_string_lossy().as_ref()),
+        "expected approval for nested touch command, got: {:?}",
+        approval.command
+    );
+
+    test.codex
+        .submit(Op::ExecApproval {
+            id: approval.effective_approval_id(),
+            turn_id: None,
+            decision: ReviewDecision::Approved,
+        })
+        .await?;
+
+    wait_for_completion(&test).await;
+
+    let result = parse_result(&results.single_request().function_call_output(call_id));
+    assert_eq!(
+        result.exit_code.unwrap_or(0),
+        0,
+        "nested env zsh script should complete successfully: {}",
+        result.stdout
+    );
+    assert!(
+        result.stdout.contains("nested-env-zsh-complete"),
+        "nested script did not report completion: {}",
+        result.stdout
+    );
+    assert!(
+        outside_path.exists(),
+        "approved nested touch should create the out-of-workspace file"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[cfg(unix)]
 async fn matched_prefix_rule_runs_unsandboxed_under_zsh_fork() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -2532,24 +2759,31 @@ async fn matched_prefix_rule_runs_unsandboxed_under_zsh_fork() -> Result<()> {
     let (sandbox_policy, permission_profile) =
         turn_permission_fields(permission_profile, test.cwd.path());
     test.codex
-        .submit(Op::UserTurn {
-            environments: None,
+        .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "run allowed touch under zsh fork".into(),
                 text_elements: Vec::new(),
             }],
+            environments: None,
             final_output_json_schema: None,
-            cwd: test.cwd.path().to_path_buf(),
-            approval_policy,
-            approvals_reviewer: Some(ApprovalsReviewer::User),
-            sandbox_policy,
-            permission_profile,
-            model: session_model,
-            effort: None,
-            summary: None,
-            service_tier: None,
-            collaboration_mode: None,
-            personality: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+                cwd: Some(test.cwd.path().to_path_buf()),
+                approval_policy: Some(approval_policy),
+                approvals_reviewer: Some(ApprovalsReviewer::User),
+                sandbox_policy: Some(sandbox_policy),
+                permission_profile,
+                collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
+                    mode: codex_protocol::config_types::ModeKind::Default,
+                    settings: codex_protocol::config_types::Settings {
+                        model: session_model,
+                        reasoning_effort: None,
+                        developer_instructions: None,
+                    },
+                }),
+                ..Default::default()
+            },
         })
         .await?;
 
@@ -2759,8 +2993,8 @@ allow_local_binding = true
     let sandbox_policy = SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![],
         network_access: true,
-        exclude_tmpdir_env_var: false,
-        exclude_slash_tmp: false,
+        exclude_tmpdir_env_var: true,
+        exclude_slash_tmp: true,
     };
     let sandbox_policy_for_config = sandbox_policy.clone();
     let mut builder = test_codex()
@@ -3016,6 +3250,212 @@ allow_local_binding = true
     Ok(())
 }
 
+#[cfg(not(target_os = "windows"))]
+#[tokio::test(flavor = "current_thread")]
+async fn network_approval_retry_keeps_deny_read_sandbox_for_escalated_command() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let home = Arc::new(TempDir::new()?);
+    fs::write(
+        home.path().join("config.toml"),
+        r#"default_permissions = "workspace"
+
+[permissions.workspace.filesystem]
+":minimal" = "read"
+
+[permissions.workspace.network]
+enabled = true
+mode = "limited"
+allow_local_binding = true
+"#,
+    )?;
+    let approval_policy = AskForApproval::OnRequest;
+    let sandbox_policy = SandboxPolicy::WorkspaceWrite {
+        writable_roots: vec![],
+        network_access: true,
+        exclude_tmpdir_env_var: true,
+        exclude_slash_tmp: true,
+    };
+    let mut builder = test_codex()
+        .with_home(home)
+        .with_cloud_requirements(managed_network_requirements_loader())
+        .with_config(move |config| {
+            config.permissions.approval_policy = Constrained::allow_any(approval_policy);
+        });
+    let test = builder.build(&server).await?;
+    assert!(
+        test.config.managed_network_requirements_enabled(),
+        "expected managed network requirements to be enabled"
+    );
+    assert!(
+        test.config.permissions.network.is_some(),
+        "expected managed network proxy config to be present"
+    );
+    test.session_configured
+        .network_proxy
+        .as_ref()
+        .expect("expected runtime managed network proxy addresses");
+
+    let mut file_system_sandbox_policy =
+        FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(
+            &sandbox_policy,
+            test.config.cwd.as_path(),
+        );
+    file_system_sandbox_policy
+        .entries
+        .push(FileSystemSandboxEntry {
+            path: FileSystemPath::GlobPattern {
+                pattern: format!("{}/**/*.env", test.config.cwd.as_path().display()),
+            },
+            access: FileSystemAccessMode::Deny,
+        });
+    assert!(
+        file_system_sandbox_policy.has_denied_read_restrictions(),
+        "test must exercise a permission profile with denied reads"
+    );
+    let permission_profile = PermissionProfile::from_runtime_permissions(
+        &file_system_sandbox_policy,
+        NetworkSandboxPolicy::Restricted,
+    );
+
+    let call_id = "deny-read-network-retry";
+    let fetch_command = r#"python3 -c "import urllib.request; opener = urllib.request.build_opener(urllib.request.ProxyHandler()); print('OK:' + opener.open('http://codex-network-test.invalid', timeout=30).read().decode(errors='replace'))""#
+        .to_string();
+    let event = shell_event(
+        call_id,
+        &fetch_command,
+        /*timeout_ms*/ 30_000,
+        SandboxPermissions::RequireEscalated,
+    )?;
+
+    let _ = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-deny-read-network-1"),
+            event,
+            ev_completed("resp-deny-read-network-1"),
+        ]),
+    )
+    .await;
+    let results = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-deny-read-network-1", "done"),
+            ev_completed("resp-deny-read-network-2"),
+        ]),
+    )
+    .await;
+
+    let (turn_sandbox_policy, turn_permission_profile) =
+        turn_permission_fields(permission_profile, test.config.cwd.as_path());
+    let session_model = test.session_configured.model.clone();
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "deny-read network retry".into(),
+                text_elements: Vec::new(),
+            }],
+            environments: None,
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+                cwd: Some(test.config.cwd.to_path_buf()),
+                approval_policy: Some(approval_policy),
+                approvals_reviewer: Some(ApprovalsReviewer::User),
+                sandbox_policy: Some(turn_sandbox_policy),
+                permission_profile: turn_permission_profile,
+                collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
+                    mode: codex_protocol::config_types::ModeKind::Default,
+                    settings: codex_protocol::config_types::Settings {
+                        model: session_model,
+                        reasoning_effort: None,
+                        developer_instructions: None,
+                    },
+                }),
+                ..Default::default()
+            },
+        })
+        .await?;
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let mut command_approval_count = 0;
+    let approval = loop {
+        let remaining = deadline
+            .checked_duration_since(std::time::Instant::now())
+            .expect("timed out waiting for network approval request");
+        let event = wait_for_event_with_timeout(
+            &test.codex,
+            |event| {
+                matches!(
+                    event,
+                    EventMsg::ExecApprovalRequest(_) | EventMsg::TurnComplete(_)
+                )
+            },
+            remaining,
+        )
+        .await;
+        match event {
+            EventMsg::ExecApprovalRequest(approval) => {
+                if approval.command.first().map(std::string::String::as_str)
+                    == Some("network-access")
+                {
+                    break approval;
+                }
+                command_approval_count += 1;
+                assert_eq!(
+                    command_approval_count, 1,
+                    "expected only the outer explicit escalation approval"
+                );
+                test.codex
+                    .submit(Op::ExecApproval {
+                        id: approval.effective_approval_id(),
+                        turn_id: None,
+                        decision: ReviewDecision::Approved,
+                    })
+                    .await?;
+            }
+            EventMsg::TurnComplete(_) => {
+                panic!("expected network approval request before completion");
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+    };
+    assert_eq!(command_approval_count, 1);
+    let network_context = approval
+        .network_approval_context
+        .clone()
+        .expect("expected network approval context");
+    assert_eq!(network_context.protocol, NetworkApprovalProtocol::Http);
+    let allow_network_amendment = approval
+        .proposed_network_policy_amendments
+        .clone()
+        .expect("expected proposed network policy amendments")
+        .into_iter()
+        .find(|amendment| amendment.action == NetworkPolicyRuleAction::Allow)
+        .expect("expected allow network policy amendment");
+
+    test.codex
+        .submit(Op::ExecApproval {
+            id: approval.effective_approval_id(),
+            turn_id: None,
+            decision: ReviewDecision::NetworkPolicyAmendment {
+                network_policy_amendment: allow_network_amendment,
+            },
+        })
+        .await?;
+    wait_for_completion(&test).await;
+
+    let output = parse_result(&results.single_request().function_call_output(call_id));
+    assert!(
+        output.exit_code.is_some(),
+        "expected the approved retry to report command output"
+    );
+
+    Ok(())
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn network_approval_flow_survives_danger_full_access_session_start() -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -3039,8 +3479,8 @@ allow_local_binding = true
     let turn_sandbox_policy = SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![],
         network_access: true,
-        exclude_tmpdir_env_var: false,
-        exclude_slash_tmp: false,
+        exclude_tmpdir_env_var: true,
+        exclude_slash_tmp: true,
     };
     let mut builder = test_codex()
         .with_home(home)

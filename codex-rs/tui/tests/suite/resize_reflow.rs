@@ -8,14 +8,18 @@ use std::time::Instant;
 
 use anyhow::Context;
 use anyhow::Result;
+use core_test_support::responses;
+use core_test_support::skip_if_no_network;
 use tempfile::tempdir;
+use wiremock::MockServer;
 
-#[test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires tmux and a locally built codex binary; run with --ignored for manual resize smoke"]
-fn tmux_split_preserves_fresh_session_composer_row_after_resize_reflow() -> Result<()> {
+async fn tmux_split_preserves_fresh_session_composer_row_after_resize_reflow() -> Result<()> {
     if cfg!(windows) {
         return Ok(());
     }
+    skip_if_no_network!(Ok(()));
     if Command::new("tmux").arg("-V").output().is_err() {
         eprintln!("skipping resize smoke because tmux is unavailable");
         return Ok(());
@@ -24,9 +28,9 @@ fn tmux_split_preserves_fresh_session_composer_row_after_resize_reflow() -> Resu
     let repo_root = codex_utils_cargo_bin::repo_root()?;
     let codex = codex_binary(&repo_root)?;
     let codex_home = tempdir()?;
-    let fixture_dir = tempdir()?;
-    let fixture = fixture_dir.path().join("resize-reflow.sse");
-    write_fixture(&fixture)?;
+    let server = MockServer::start().await;
+    let _response_mock = responses::mount_sse_once(&server, resize_reflow_sse()).await;
+    let openai_base_url_config = format!("openai_base_url=\"{}/v1\"", server.uri());
     write_config(
         codex_home.path(),
         &repo_root,
@@ -57,10 +61,11 @@ fn tmux_split_preserves_fresh_session_composer_row_after_resize_reflow() -> Resu
             .arg("env")
             .arg(format!("CODEX_HOME={}", codex_home.path().display()))
             .arg("OPENAI_API_KEY=dummy")
-            .arg(format!("CODEX_RS_SSE_FIXTURE={}", fixture.display()))
             .arg(codex)
             .arg("-c")
             .arg("analytics.enabled=false")
+            .arg("-c")
+            .arg(&openai_base_url_config)
             .arg("--no-alt-screen")
             .arg("-C")
             .arg(&repo_root)
@@ -162,29 +167,31 @@ fn tmux_split_preserves_fresh_session_composer_row_after_resize_reflow() -> Resu
     Ok(())
 }
 
-#[test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires tmux and a locally built codex binary; run with --ignored for manual resize smoke"]
-fn tmux_repeated_resizes_do_not_push_composer_down() -> Result<()> {
+async fn tmux_repeated_resizes_do_not_push_composer_down() -> Result<()> {
     if cfg!(windows) {
         return Ok(());
     }
+    skip_if_no_network!(Ok(()));
     if Command::new("tmux").arg("-V").output().is_err() {
         eprintln!("skipping resize smoke because tmux is unavailable");
         return Ok(());
     }
 
-    run_repeated_resize_smoke(/*terminal_resize_reflow_enabled*/ false)?;
-    run_repeated_resize_smoke(/*terminal_resize_reflow_enabled*/ true)?;
+    run_repeated_resize_smoke(/*terminal_resize_reflow_enabled*/ false).await?;
+    run_repeated_resize_smoke(/*terminal_resize_reflow_enabled*/ true).await?;
 
     Ok(())
 }
 
-#[test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires tmux and a locally built codex binary; run with --ignored for manual resize smoke"]
-fn tmux_width_resize_restore_keeps_visible_content_anchored() -> Result<()> {
+async fn tmux_width_resize_restore_keeps_visible_content_anchored() -> Result<()> {
     if cfg!(windows) {
         return Ok(());
     }
+    skip_if_no_network!(Ok(()));
     if Command::new("tmux").arg("-V").output().is_err() {
         eprintln!("skipping resize smoke because tmux is unavailable");
         return Ok(());
@@ -193,9 +200,9 @@ fn tmux_width_resize_restore_keeps_visible_content_anchored() -> Result<()> {
     let repo_root = codex_utils_cargo_bin::repo_root()?;
     let codex = codex_binary(&repo_root)?;
     let codex_home = tempdir()?;
-    let fixture_dir = tempdir()?;
-    let fixture = fixture_dir.path().join("resize-reflow.sse");
-    write_fixture(&fixture)?;
+    let server = MockServer::start().await;
+    let _response_mock = responses::mount_sse_once(&server, resize_reflow_sse()).await;
+    let openai_base_url_config = format!("openai_base_url=\"{}/v1\"", server.uri());
     write_config(
         codex_home.path(),
         &repo_root,
@@ -226,10 +233,11 @@ fn tmux_width_resize_restore_keeps_visible_content_anchored() -> Result<()> {
             .arg("env")
             .arg(format!("CODEX_HOME={}", codex_home.path().display()))
             .arg("OPENAI_API_KEY=dummy")
-            .arg(format!("CODEX_RS_SSE_FIXTURE={}", fixture.display()))
             .arg(codex)
             .arg("-c")
             .arg("analytics.enabled=false")
+            .arg("-c")
+            .arg(&openai_base_url_config)
             .arg("--no-alt-screen")
             .arg("-C")
             .arg(&repo_root)
@@ -312,13 +320,13 @@ fn tmux_width_resize_restore_keeps_visible_content_anchored() -> Result<()> {
     Ok(())
 }
 
-fn run_repeated_resize_smoke(terminal_resize_reflow_enabled: bool) -> Result<()> {
+async fn run_repeated_resize_smoke(terminal_resize_reflow_enabled: bool) -> Result<()> {
     let repo_root = codex_utils_cargo_bin::repo_root()?;
     let codex = codex_binary(&repo_root)?;
     let codex_home = tempdir()?;
-    let fixture_dir = tempdir()?;
-    let fixture = fixture_dir.path().join("resize-reflow.sse");
-    write_fixture(&fixture)?;
+    let server = MockServer::start().await;
+    let _response_mock = responses::mount_sse_once(&server, resize_reflow_sse()).await;
+    let openai_base_url_config = format!("openai_base_url=\"{}/v1\"", server.uri());
     write_config(
         codex_home.path(),
         &repo_root,
@@ -354,10 +362,11 @@ fn run_repeated_resize_smoke(terminal_resize_reflow_enabled: bool) -> Result<()>
             .arg("env")
             .arg(format!("CODEX_HOME={}", codex_home.path().display()))
             .arg("OPENAI_API_KEY=dummy")
-            .arg(format!("CODEX_RS_SSE_FIXTURE={}", fixture.display()))
             .arg(codex)
             .arg("-c")
             .arg("analytics.enabled=false")
+            .arg("-c")
+            .arg(&openai_base_url_config)
             .arg("--no-alt-screen")
             .arg("-C")
             .arg(&repo_root)
@@ -510,33 +519,13 @@ fn write_auth(codex_home: &Path) -> Result<()> {
     Ok(())
 }
 
-fn write_fixture(path: &Path) -> Result<()> {
+fn resize_reflow_sse() -> String {
     let text = "resize reflow sentinel says hi. This paragraph is intentionally long enough to exercise terminal wrapping, scrollback redraw, and pane resize behavior without requiring a live model response. It includes enough ordinary prose to wrap across several rows in a narrow tmux pane, then keep going so repeated split and restore cycles have visible history above the composer. If a resize path accidentally inserts blank rows or anchors the viewport lower on each pass, the composer row will drift after the pane returns to its original height.";
-    let created = serde_json::json!({
-        "type": "response.created",
-        "response": { "id": "resp-resize-smoke" },
-    });
-    let done = serde_json::json!({
-        "type": "response.output_item.done",
-        "item": {
-            "type": "message",
-            "role": "assistant",
-            "content": [
-                { "type": "output_text", "text": text }
-            ],
-        },
-    });
-    let completed = serde_json::json!({
-        "type": "response.completed",
-        "response": { "id": "resp-resize-smoke", "output": [] },
-    });
-    let fixture = format!(
-        "event: response.created\ndata: {created}\n\n\
-         event: response.output_item.done\ndata: {done}\n\n\
-         event: response.completed\ndata: {completed}\n\n"
-    );
-    std::fs::write(path, fixture)?;
-    Ok(())
+    responses::sse(vec![
+        responses::ev_response_created("resp-resize-smoke"),
+        responses::ev_assistant_message("msg-resize-smoke", text),
+        responses::ev_completed("resp-resize-smoke"),
+    ])
 }
 
 fn wait_for_capture_contains(pane: &str, needle: &str, timeout: Duration) -> Result<String> {

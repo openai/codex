@@ -14,9 +14,13 @@ use crate::sandboxing::ExecOptions;
 use crate::sandboxing::ExecServerEnvConfig;
 use crate::sandboxing::SandboxPermissions;
 use crate::shell::ShellType;
+use crate::tools::flat_tool_name;
 use crate::tools::network_approval::NetworkApprovalMode;
 use crate::tools::network_approval::NetworkApprovalSpec;
+#[cfg(unix)]
+use crate::tools::runtimes::apply_zsh_fork_path_prepend;
 use crate::tools::runtimes::build_sandbox_command;
+use crate::tools::runtimes::disable_powershell_profile_for_elevated_windows_sandbox;
 use crate::tools::runtimes::exec_env_for_sandbox_permissions;
 use crate::tools::runtimes::maybe_wrap_shell_lc_with_snapshot;
 use crate::tools::runtimes::shell::zsh_fork_backend;
@@ -25,13 +29,12 @@ use crate::tools::sandboxing::ApprovalCtx;
 use crate::tools::sandboxing::ExecApprovalRequirement;
 use crate::tools::sandboxing::PermissionRequestPayload;
 use crate::tools::sandboxing::SandboxAttempt;
-use crate::tools::sandboxing::SandboxOverride;
 use crate::tools::sandboxing::Sandboxable;
 use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::ToolRuntime;
 use crate::tools::sandboxing::managed_network_for_sandbox_permissions;
-use crate::tools::sandboxing::sandbox_override_for_first_attempt;
+use crate::tools::sandboxing::sandbox_permissions_preserving_denied_reads;
 use crate::tools::sandboxing::with_cached_approval;
 use crate::unified_exec::NoopSpawnLifecycle;
 use crate::unified_exec::UnifiedExecError;
@@ -57,9 +60,11 @@ use tokio_util::sync::CancellationToken;
 #[derive(Clone, Debug)]
 pub struct UnifiedExecRequest {
     pub command: Vec<String>,
+    pub shell_type: ShellType,
     pub hook_command: String,
     pub process_id: i32,
     pub cwd: AbsolutePathBuf,
+    pub sandbox_cwd: AbsolutePathBuf,
     pub environment: Arc<Environment>,
     pub env: HashMap<String, String>,
     pub exec_server_env_config: Option<ExecServerEnvConfig>,
@@ -211,14 +216,14 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
         ))
     }
 
-    fn sandbox_mode_for_first_attempt(&self, req: &UnifiedExecRequest) -> SandboxOverride {
-        sandbox_override_for_first_attempt(req.sandbox_permissions, &req.exec_approval_requirement)
+    fn sandbox_permissions(&self, req: &UnifiedExecRequest) -> SandboxPermissions {
+        req.sandbox_permissions
     }
 }
 
 impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRuntime<'a> {
     fn sandbox_cwd<'b>(&self, req: &'b UnifiedExecRequest) -> Option<&'b AbsolutePathBuf> {
-        Some(&req.cwd)
+        Some(&req.sandbox_cwd)
     }
 
     fn network_approval_spec(
@@ -226,14 +231,19 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
         req: &UnifiedExecRequest,
         ctx: &ToolCtx,
     ) -> Option<NetworkApprovalSpec> {
+        let file_system_sandbox_policy = ctx.turn.file_system_sandbox_policy();
+        let sandbox_permissions = sandbox_permissions_preserving_denied_reads(
+            req.sandbox_permissions,
+            &file_system_sandbox_policy,
+        );
         let network =
-            managed_network_for_sandbox_permissions(req.network.as_ref(), req.sandbox_permissions)?;
+            managed_network_for_sandbox_permissions(req.network.as_ref(), sandbox_permissions)?;
         Some(NetworkApprovalSpec {
             network: Some(network.clone()),
             mode: NetworkApprovalMode::Deferred,
             trigger: GuardianNetworkAccessTrigger {
                 call_id: ctx.call_id.clone(),
-                tool_name: ctx.tool_name.clone(),
+                tool_name: flat_tool_name(&ctx.tool_name).into_owned(),
                 command: req.command.clone(),
                 cwd: req.cwd.clone(),
                 sandbox_permissions: req.sandbox_permissions,
@@ -253,12 +263,34 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
     ) -> Result<UnifiedExecProcess, ToolError> {
         let base_command = &req.command;
         let session_shell = ctx.session.user_shell();
+        let (file_system_sandbox_policy, _) = attempt.permissions.to_runtime_permissions();
+        let sandbox_permissions = sandbox_permissions_preserving_denied_reads(
+            req.sandbox_permissions,
+            &file_system_sandbox_policy,
+        );
+        let req = &UnifiedExecRequest {
+            sandbox_permissions,
+            ..req.clone()
+        };
         let managed_network =
             managed_network_for_sandbox_permissions(req.network.as_ref(), req.sandbox_permissions);
         let mut env = exec_env_for_sandbox_permissions(&req.env, req.sandbox_permissions);
         if let Some(network) = managed_network {
             network.apply_to_env(&mut env);
         }
+        let explicit_env_overrides = req.explicit_env_overrides.clone();
+        #[cfg(unix)]
+        let explicit_env_overrides = {
+            let mut explicit_env_overrides = explicit_env_overrides;
+            if let UnifiedExecShellMode::ZshFork(zsh_fork_config) = &self.shell_mode {
+                apply_zsh_fork_path_prepend(
+                    &mut env,
+                    &mut explicit_env_overrides,
+                    zsh_fork_config.shell_zsh_path.as_path(),
+                );
+            }
+            explicit_env_overrides
+        };
         let environment_is_remote = req.environment.is_remote();
         let command = if environment_is_remote {
             base_command.to_vec()
@@ -267,10 +299,16 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
                 base_command,
                 session_shell.as_ref(),
                 &req.cwd,
-                &req.explicit_env_overrides,
+                &explicit_env_overrides,
                 &env,
             )
         };
+        let command = disable_powershell_profile_for_elevated_windows_sandbox(
+            &command,
+            Some(&req.shell_type),
+            attempt.sandbox,
+            attempt.windows_sandbox_level,
+        );
         let command = if matches!(session_shell.shell_type, ShellType::PowerShell) {
             prefix_powershell_script_with_utf8(&command)
         } else {
@@ -362,7 +400,10 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
 mod tests {
     use super::*;
     use crate::exec::DEFAULT_EXEC_COMMAND_TIMEOUT_MS;
+    use crate::tools::sandboxing::ToolRuntime;
+    use codex_exec_server::Environment;
     use std::time::Duration;
+    use tempfile::tempdir;
 
     #[test]
     fn unified_exec_options_combines_default_timeout_with_network_denial_cancellation() {
@@ -384,5 +425,42 @@ mod tests {
             }
             other => panic!("expected timeout-or-cancellation expiration, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn unified_exec_uses_the_trusted_sandbox_cwd() {
+        let cwd_dir = tempdir().expect("create process temp dir");
+        let sandbox_dir = tempdir().expect("create sandbox temp dir");
+        let cwd =
+            AbsolutePathBuf::try_from(cwd_dir.path().to_path_buf()).expect("absolute temp dir");
+        let sandbox_cwd = AbsolutePathBuf::try_from(sandbox_dir.path().to_path_buf())
+            .expect("absolute sandbox temp dir");
+        let manager = UnifiedExecProcessManager::default();
+        let runtime = UnifiedExecRuntime::new(&manager, UnifiedExecShellMode::Direct);
+        let request = UnifiedExecRequest {
+            command: vec!["pwd".to_string()],
+            shell_type: ShellType::Sh,
+            hook_command: "pwd".to_string(),
+            process_id: 1000,
+            cwd,
+            sandbox_cwd: sandbox_cwd.clone(),
+            environment: Arc::new(Environment::default_for_tests()),
+            env: HashMap::new(),
+            exec_server_env_config: None,
+            explicit_env_overrides: HashMap::new(),
+            network: None,
+            tty: false,
+            sandbox_permissions: SandboxPermissions::UseDefault,
+            additional_permissions: None,
+            #[cfg(unix)]
+            additional_permissions_preapproved: false,
+            justification: None,
+            exec_approval_requirement: ExecApprovalRequirement::Skip {
+                bypass_sandbox: false,
+                proposed_execpolicy_amendment: None,
+            },
+        };
+
+        assert_eq!(runtime.sandbox_cwd(&request), Some(&sandbox_cwd));
     }
 }

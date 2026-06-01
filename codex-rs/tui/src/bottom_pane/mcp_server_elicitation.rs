@@ -49,6 +49,8 @@ use crate::bottom_pane::selection_popup_common::menu_surface_inset;
 use crate::bottom_pane::selection_popup_common::menu_surface_padding_height;
 use crate::bottom_pane::selection_popup_common::render_menu_surface;
 use crate::bottom_pane::selection_popup_common::render_rows;
+use crate::key_hint::KeyBindingListExt;
+use crate::keymap::ListKeymap;
 use crate::render::renderable::Renderable;
 use crate::text_formatting::format_json_compact;
 use crate::text_formatting::truncate_text;
@@ -711,15 +713,35 @@ pub(crate) struct McpServerElicitationOverlay {
     current_idx: usize,
     done: bool,
     validation_error: Option<String>,
+    list_keymap: ListKeymap,
 }
 
 impl McpServerElicitationOverlay {
+    #[cfg(test)]
     pub(crate) fn new(
         request: McpServerElicitationFormRequest,
         app_event_tx: AppEventSender,
         has_input_focus: bool,
         enhanced_keys_supported: bool,
         disable_paste_burst: bool,
+    ) -> Self {
+        Self::new_with_keymap(
+            request,
+            app_event_tx,
+            has_input_focus,
+            enhanced_keys_supported,
+            disable_paste_burst,
+            crate::keymap::RuntimeKeymap::defaults().list,
+        )
+    }
+
+    pub(crate) fn new_with_keymap(
+        request: McpServerElicitationFormRequest,
+        app_event_tx: AppEventSender,
+        has_input_focus: bool,
+        enhanced_keys_supported: bool,
+        disable_paste_burst: bool,
+        list_keymap: ListKeymap,
     ) -> Self {
         let mut composer = ChatComposer::new_with_config(
             has_input_focus,
@@ -739,6 +761,7 @@ impl McpServerElicitationOverlay {
             current_idx: 0,
             done: false,
             validation_error: None,
+            list_keymap,
         };
         overlay.reset_for_request();
         overlay.restore_current_draft();
@@ -1529,7 +1552,18 @@ impl BottomPaneView for McpServerElicitationOverlay {
                 code: KeyCode::Left,
                 modifiers: KeyModifiers::NONE,
                 ..
+            }
+            | KeyEvent {
+                code: KeyCode::Char('h'),
+                modifiers: KeyModifiers::NONE,
+                ..
             } if self.current_field_is_select() => {
+                self.move_field(/*next*/ false);
+                return;
+            }
+            _ if self.current_field_is_select()
+                && self.list_keymap.move_left.is_pressed(key_event) =>
+            {
                 self.move_field(/*next*/ false);
                 return;
             }
@@ -1537,7 +1571,18 @@ impl BottomPaneView for McpServerElicitationOverlay {
                 code: KeyCode::Right,
                 modifiers: KeyModifiers::NONE,
                 ..
+            }
+            | KeyEvent {
+                code: KeyCode::Char('l'),
+                modifiers: KeyModifiers::NONE,
+                ..
             } if self.current_field_is_select() => {
+                self.move_field(/*next*/ true);
+                return;
+            }
+            _ if self.current_field_is_select()
+                && self.list_keymap.move_right.is_pressed(key_event) =>
+            {
                 self.move_field(/*next*/ true);
                 return;
             }
@@ -2153,6 +2198,43 @@ mod tests {
                 meta: None,
             }
         );
+    }
+
+    #[test]
+    fn horizontal_list_keys_move_between_select_fields() {
+        let (tx, _rx) = test_sender();
+        let request = from_form_request(
+            ThreadId::default(),
+            form_request(
+                "Choose values",
+                serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "first": {
+                            "type": "boolean",
+                            "title": "First",
+                        },
+                        "second": {
+                            "type": "boolean",
+                            "title": "Second",
+                        }
+                    },
+                    "required": ["first", "second"],
+                }),
+                /*meta*/ None,
+            ),
+        )
+        .expect("expected supported form");
+        let mut overlay = McpServerElicitationOverlay::new(
+            request, tx, /*has_input_focus*/ true, /*enhanced_keys_supported*/ false,
+            /*disable_paste_burst*/ false,
+        );
+
+        assert_eq!(overlay.current_idx, 0);
+        overlay.handle_key_event(KeyEvent::new(KeyCode::Char('l'), KeyModifiers::CONTROL));
+        assert_eq!(overlay.current_idx, 1);
+        overlay.handle_key_event(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::CONTROL));
+        assert_eq!(overlay.current_idx, 0);
     }
 
     #[test]

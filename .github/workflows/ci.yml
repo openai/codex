@@ -13,6 +13,9 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
 
       - name: Verify codex-rs Cargo manifests inherit workspace settings
         run: python3 .github/scripts/verify_cargo_workspace_manifests.py
@@ -22,6 +25,9 @@ jobs:
 
       - name: Verify Bazel clippy flags match Cargo workspace lints
         run: python3 .github/scripts/verify_bazel_clippy_lints.py
+
+      - name: Test Codex package builder
+        run: python3 -m unittest discover -s scripts/codex_package -p 'test_*.py'
 
       - name: Setup pnpm
         uses: pnpm/action-setup@a8198c4bff370c8506180b035930dea56dbd5288 # v5
@@ -36,9 +42,6 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      # stage_npm_packages.py requires DotSlash when staging releases.
-      - uses: facebook/install-dotslash@1e4e7b3e07eaca387acb98f1d4720e0bee8dbb6a # v2
-
       - name: Stage npm package
         id: stage_npm_package
         env:
@@ -49,15 +52,13 @@ jobs:
           # cross-platform native payload required by the npm package layout.
           # Passing the workflow URL directly avoids relying on old rust-v*
           # branches remaining discoverable via `gh run list --branch ...`.
-          CODEX_VERSION=0.125.0
-          WORKFLOW_URL="https://github.com/openai/codex/actions/runs/24901475298"
+          CODEX_VERSION=0.133.0-alpha.4
+          WORKFLOW_URL="https://github.com/openai/codex/actions/runs/26201494185"
           OUTPUT_DIR="${RUNNER_TEMP}"
-          # This reused workflow predates the standalone bwrap artifact.
           python3 ./scripts/stage_npm_packages.py \
             --release-version "$CODEX_VERSION" \
             --workflow-url "$WORKFLOW_URL" \
             --package codex \
-            --allow-missing-native-component bwrap \
             --output-dir "$OUTPUT_DIR"
           PACK_OUTPUT="${OUTPUT_DIR}/codex-npm-${CODEX_VERSION}.tgz"
           echo "pack_output=$PACK_OUTPUT" >> "$GITHUB_OUTPUT"
@@ -72,6 +73,16 @@ jobs:
         run: ./scripts/asciicheck.py README.md
       - name: Check root README ToC
         run: python3 scripts/readme_toc.py README.md
+
+      - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2.62.49
+        with:
+          tool: just
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.3"
+      - name: Ruff format Python scripts (run `just fmt` to fix)
+        run: just fmt-scripts-check
 
       - name: Prettier (run `pnpm run format:fix` to fix)
         run: pnpm run format

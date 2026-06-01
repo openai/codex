@@ -1,0 +1,7 @@
+---
+source: tui/src/chatwidget/tests/review_mode.rs
+expression: lines_to_single_string(last)
+---
+⚠ Steer messages aren't supported during /review. Send your message after the
+  review finishes, or press Ctrl+C now to cancel the review.
+

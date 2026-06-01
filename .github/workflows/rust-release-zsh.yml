@@ -46,6 +46,8 @@ jobs:
             libncursesw5-dev
 
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
 
       - name: Build, smoke-test, and stage zsh artifact
         shell: bash
@@ -67,6 +69,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - runner: macos-15-large
+            target: x86_64-apple-darwin
+            variant: macos-15
+            archive_name: codex-zsh-x86_64-apple-darwin.tar.gz
           - runner: macos-15-xlarge
             target: aarch64-apple-darwin
             variant: macos-15
@@ -82,6 +88,8 @@ jobs:
           fi
 
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
 
       - name: Build, smoke-test, and stage zsh artifact
         shell: bash

@@ -15,6 +15,7 @@ use std::sync::RwLock;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use tokio::sync::Semaphore;
+use tokio::sync::watch;
 
 use codex_agent_identity::decode_agent_identity_jwt;
 use codex_agent_identity::fetch_agent_identity_jwks;
@@ -83,6 +84,7 @@ struct ChatgptAuthState {
 }
 
 const TOKEN_REFRESH_INTERVAL: i64 = 8;
+const CHATGPT_ACCESS_TOKEN_REFRESH_WINDOW_MINUTES: i64 = 5;
 
 const REFRESH_TOKEN_EXPIRED_MESSAGE: &str = "Your access token could not be refreshed because your refresh token has expired. Please log out and sign in again.";
 const REFRESH_TOKEN_REUSED_MESSAGE: &str = "Your access token could not be refreshed because your refresh token was already used. Please log out and sign in again.";
@@ -592,11 +594,11 @@ pub fn save_auth(
     storage.save(auth)
 }
 
-/// Load CLI auth data using the configured credential store backend.
-/// Returns `None` when no credentials are stored. This function is
-/// provided only for tests. Production code should not directly load
-/// from the auth.json storage. It should use the AuthManager abstraction
-/// instead.
+/// Load the raw stored auth payload without applying environment overrides.
+///
+/// Returns `None` when no credentials are stored. Prefer `AuthManager` for
+/// ordinary production reads; this helper is for tests and write-side
+/// maintenance that must inspect the exact payload in storage.
 pub fn load_auth_dot_json(
     codex_home: &Path,
     auth_credentials_store_mode: AuthCredentialsStoreMode,
@@ -610,8 +612,8 @@ pub struct AuthConfig {
     pub codex_home: PathBuf,
     pub auth_credentials_store_mode: AuthCredentialsStoreMode,
     pub forced_login_method: Option<ForcedLoginMethod>,
-    pub forced_chatgpt_workspace_id: Option<String>,
     pub chatgpt_base_url: Option<String>,
+    pub forced_chatgpt_workspace_id: Option<Vec<String>>,
 }
 
 pub async fn enforce_login_restrictions(config: &AuthConfig) -> std::io::Result<()> {
@@ -653,9 +655,8 @@ pub async fn enforce_login_restrictions(config: &AuthConfig) -> std::io::Result<
         }
     }
 
-    if let Some(expected_account_id) = config.forced_chatgpt_workspace_id.as_deref() {
-        // workspace is the external identifier for account id.
-        let chatgpt_account_id = match auth {
+    if let Some(expected_account_ids) = config.forced_chatgpt_workspace_id.as_deref() {
+        let chatgpt_account_id = match &auth {
             CodexAuth::ApiKey(_) => return Ok(()),
             CodexAuth::AgentIdentity(_) => auth.get_account_id(),
             CodexAuth::Chatgpt(_) | CodexAuth::ChatgptAuthTokens(_) => {
@@ -674,13 +675,21 @@ pub async fn enforce_login_restrictions(config: &AuthConfig) -> std::io::Result<
                 token_data.id_token.chatgpt_account_id
             }
         };
-        if chatgpt_account_id.as_deref() != Some(expected_account_id) {
+
+        // workspace is the external identifier for account id.
+        let chatgpt_account_id = chatgpt_account_id.as_deref();
+        if !chatgpt_account_id.is_some_and(|actual| {
+            expected_account_ids
+                .iter()
+                .any(|expected| expected == actual)
+        }) {
+            let expected_workspaces = expected_account_ids.join(", ");
             let message = match chatgpt_account_id {
                 Some(actual) => format!(
-                    "Login is restricted to workspace {expected_account_id}, but current credentials belong to {actual}. Logging out."
+                    "Login is restricted to workspace(s) {expected_workspaces}, but current credentials belong to {actual}. Logging out."
                 ),
                 None => format!(
-                    "Login is restricted to workspace {expected_account_id}, but current credentials lack a workspace identifier. Logging out."
+                    "Login is restricted to workspace(s) {expected_workspaces}, but current credentials lack a workspace identifier. Logging out."
                 ),
             };
             return logout_with_message(
@@ -836,8 +845,8 @@ async fn request_chatgpt_token_refresh(
     } else {
         let body = response.text().await.unwrap_or_default();
         tracing::error!("Failed to refresh token: {status}: {body}");
-        if status == StatusCode::UNAUTHORIZED {
-            let failed = classify_refresh_token_failure(&body);
+        let failed = classify_refresh_token_failure(&body);
+        if status == StatusCode::UNAUTHORIZED || failed.reason != RefreshTokenFailedReason::Other {
             Err(RefreshTokenError::Permanent(failed))
         } else {
             let message = try_parse_error_message(&body);
@@ -863,7 +872,7 @@ fn classify_refresh_token_failure(body: &str) -> RefreshTokenFailedError {
         tracing::warn!(
             backend_code = normalized_code.as_deref(),
             backend_body = body,
-            "Encountered unknown 401 response while refreshing token"
+            "Encountered unknown response while refreshing token"
         );
     }
 
@@ -1245,9 +1254,10 @@ impl UnauthorizedRecovery {
 pub struct AuthManager {
     codex_home: PathBuf,
     inner: RwLock<CachedAuth>,
+    auth_change_tx: watch::Sender<u64>,
     enable_codex_api_key_env: bool,
     auth_credentials_store_mode: AuthCredentialsStoreMode,
-    forced_chatgpt_workspace_id: RwLock<Option<String>>,
+    forced_chatgpt_workspace_id: RwLock<Option<Vec<String>>>,
     chatgpt_base_url: Option<String>,
     refresh_lock: Semaphore,
     external_auth: RwLock<Option<Arc<dyn ExternalAuth>>>,
@@ -1266,8 +1276,8 @@ pub trait AuthManagerConfig {
     /// Returns the CLI auth credential storage mode for auth loading.
     fn cli_auth_credentials_store_mode(&self) -> AuthCredentialsStoreMode;
 
-    /// Returns the workspace ID that ChatGPT auth should be restricted to, if any.
-    fn forced_chatgpt_workspace_id(&self) -> Option<String>;
+    /// Returns the workspace IDs that ChatGPT auth should be restricted to, if any.
+    fn forced_chatgpt_workspace_id(&self) -> Option<Vec<String>>;
 
     /// Returns the ChatGPT backend base URL used for first-party backend authorization.
     fn chatgpt_base_url(&self) -> String;
@@ -1313,12 +1323,14 @@ impl AuthManager {
         .await
         .ok()
         .flatten();
+        let (auth_change_tx, _auth_change_rx) = watch::channel(0);
         Self {
             codex_home,
             inner: RwLock::new(CachedAuth {
                 auth: managed_auth,
                 permanent_refresh_failure: None,
             }),
+            auth_change_tx,
             enable_codex_api_key_env,
             auth_credentials_store_mode,
             forced_chatgpt_workspace_id: RwLock::new(None),
@@ -1334,10 +1346,12 @@ impl AuthManager {
             auth: Some(auth),
             permanent_refresh_failure: None,
         };
+        let (auth_change_tx, _auth_change_rx) = watch::channel(0);
 
         Arc::new(Self {
             codex_home: PathBuf::from("non-existent"),
             inner: RwLock::new(cached),
+            auth_change_tx,
             enable_codex_api_key_env: false,
             auth_credentials_store_mode: AuthCredentialsStoreMode::File,
             forced_chatgpt_workspace_id: RwLock::new(None),
@@ -1353,9 +1367,11 @@ impl AuthManager {
             auth: Some(auth),
             permanent_refresh_failure: None,
         };
+        let (auth_change_tx, _auth_change_rx) = watch::channel(0);
         Arc::new(Self {
             codex_home,
             inner: RwLock::new(cached),
+            auth_change_tx,
             enable_codex_api_key_env: false,
             auth_credentials_store_mode: AuthCredentialsStoreMode::File,
             forced_chatgpt_workspace_id: RwLock::new(None),
@@ -1366,12 +1382,14 @@ impl AuthManager {
     }
 
     pub fn external_bearer_only(config: ModelProviderAuthInfo) -> Arc<Self> {
+        let (auth_change_tx, _auth_change_rx) = watch::channel(0);
         Arc::new(Self {
             codex_home: PathBuf::from("non-existent"),
             inner: RwLock::new(CachedAuth {
                 auth: None,
                 permanent_refresh_failure: None,
             }),
+            auth_change_tx,
             enable_codex_api_key_env: false,
             auth_credentials_store_mode: AuthCredentialsStoreMode::File,
             forced_chatgpt_workspace_id: RwLock::new(None),
@@ -1388,6 +1406,11 @@ impl AuthManager {
         self.inner.read().ok().and_then(|c| c.auth.clone())
     }
 
+    /// Subscribes to cached auth changes that can affect request recovery.
+    pub fn auth_change_receiver(&self) -> watch::Receiver<u64> {
+        self.auth_change_tx.subscribe()
+    }
+
     pub fn refresh_failure_for_auth(&self, auth: &CodexAuth) -> Option<RefreshTokenFailedError> {
         self.inner.read().ok().and_then(|cached| {
             cached
@@ -1399,15 +1422,15 @@ impl AuthManager {
     }
 
     /// Current cached auth (clone). May be `None` if not logged in or load failed.
-    /// For stale managed ChatGPT auth, first performs a guarded reload and then
-    /// refreshes only if the on-disk auth is unchanged.
+    /// For managed ChatGPT auth that needs a proactive refresh, first performs
+    /// a guarded reload and then refreshes only if the on-disk auth is unchanged.
     pub async fn auth(&self) -> Option<CodexAuth> {
         if let Some(auth) = self.resolve_external_api_key_auth().await {
             return Some(auth);
         }
 
         let auth = self.auth_cached()?;
-        if Self::is_stale_for_proactive_refresh(&auth)
+        if Self::should_refresh_proactively(&auth)
             && let Err(err) = self.refresh_token().await
         {
             tracing::error!("Failed to refresh token: {}", err);
@@ -1530,6 +1553,9 @@ impl AuthManager {
             }
             tracing::info!("Reloaded auth, changed: {changed}");
             guard.auth = new_auth;
+            if auth_changed_for_refresh {
+                self.auth_change_tx.send_modify(|revision| *revision += 1);
+            }
             changed
         } else {
             false
@@ -1548,7 +1574,7 @@ impl AuthManager {
         }
     }
 
-    pub fn set_forced_chatgpt_workspace_id(&self, workspace_id: Option<String>) {
+    pub fn set_forced_chatgpt_workspace_id(&self, workspace_id: Option<Vec<String>>) {
         if let Ok(mut guard) = self.forced_chatgpt_workspace_id.write()
             && *guard != workspace_id
         {
@@ -1556,7 +1582,7 @@ impl AuthManager {
         }
     }
 
-    pub fn forced_chatgpt_workspace_id(&self) -> Option<String> {
+    pub fn forced_chatgpt_workspace_id(&self) -> Option<Vec<String>> {
         self.forced_chatgpt_workspace_id
             .read()
             .ok()
@@ -1783,7 +1809,7 @@ impl AuthManager {
         )
     }
 
-    fn is_stale_for_proactive_refresh(auth: &CodexAuth) -> bool {
+    fn should_refresh_proactively(auth: &CodexAuth) -> bool {
         let chatgpt_auth = match auth {
             CodexAuth::Chatgpt(chatgpt_auth) => chatgpt_auth,
             _ => return false,
@@ -1796,7 +1822,9 @@ impl AuthManager {
         if let Some(tokens) = auth_dot_json.tokens.as_ref()
             && let Ok(Some(expires_at)) = parse_jwt_expiration(&tokens.access_token)
         {
-            return expires_at <= Utc::now();
+            return expires_at
+                <= Utc::now()
+                    + chrono::Duration::minutes(CHATGPT_ACCESS_TOKEN_REFRESH_WINDOW_MINUTES);
         }
         let last_refresh = match auth_dot_json.last_refresh {
             Some(last_refresh) => last_refresh,
@@ -1836,13 +1864,13 @@ impl AuthManager {
                 "external auth refresh did not return ChatGPT metadata",
             )));
         };
-        if let Some(expected_workspace_id) = forced_chatgpt_workspace_id.as_deref()
-            && chatgpt_metadata.account_id != expected_workspace_id
+        if let Some(expected_workspace_ids) = forced_chatgpt_workspace_id.as_deref()
+            && !expected_workspace_ids.contains(&chatgpt_metadata.account_id)
         {
             return Err(RefreshTokenError::Transient(std::io::Error::other(
                 format!(
-                    "external auth refresh returned workspace {:?}, expected {expected_workspace_id:?}",
-                    chatgpt_metadata.account_id,
+                    "external auth refresh returned workspace {:?}, expected one of {:?}",
+                    chatgpt_metadata.account_id, expected_workspace_ids,
                 ),
             )));
         }

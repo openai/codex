@@ -151,76 +151,85 @@ pub async fn maybe_parse_apply_patch_verified(
     }
 
     match maybe_parse_apply_patch(argv) {
-        MaybeApplyPatch::Body(ApplyPatchArgs {
-            patch,
-            hunks,
-            workdir,
-        }) => {
-            let effective_cwd = workdir
-                .as_ref()
-                .map(|dir| cwd.join(Path::new(dir)))
-                .unwrap_or_else(|| cwd.clone());
-            let mut changes = HashMap::new();
-            for hunk in hunks {
-                let path = hunk.resolve_path(&effective_cwd);
-                match hunk {
-                    Hunk::AddFile { contents, .. } => {
-                        changes.insert(
-                            path.into_path_buf(),
-                            ApplyPatchFileChange::Add { content: contents },
-                        );
-                    }
-                    Hunk::DeleteFile { .. } => {
-                        let content = match fs.read_file_text(&path, sandbox).await {
-                            Ok(content) => content,
-                            Err(e) => {
-                                return MaybeApplyPatchVerified::CorrectnessError(
-                                    ApplyPatchError::IoError(IoError {
-                                        context: format!("Failed to read {}", path.display()),
-                                        source: e,
-                                    }),
-                                );
-                            }
-                        };
-                        changes.insert(
-                            path.into_path_buf(),
-                            ApplyPatchFileChange::Delete { content },
-                        );
-                    }
-                    Hunk::UpdateFile {
-                        move_path, chunks, ..
-                    } => {
-                        let ApplyPatchFileUpdate {
-                            unified_diff,
-                            content: contents,
-                            ..
-                        } = match unified_diff_from_chunks(&path, &chunks, fs, sandbox).await {
-                            Ok(diff) => diff,
-                            Err(e) => {
-                                return MaybeApplyPatchVerified::CorrectnessError(e);
-                            }
-                        };
-                        changes.insert(
-                            path.into_path_buf(),
-                            ApplyPatchFileChange::Update {
-                                unified_diff,
-                                move_path: move_path.map(|p| effective_cwd.join(p).into_path_buf()),
-                                new_content: contents,
-                            },
-                        );
-                    }
-                }
-            }
-            MaybeApplyPatchVerified::Body(ApplyPatchAction {
-                changes,
-                patch,
-                cwd: effective_cwd,
-            })
-        }
+        MaybeApplyPatch::Body(args) => verify_apply_patch_args(args, cwd, fs, sandbox).await,
         MaybeApplyPatch::ShellParseError(e) => MaybeApplyPatchVerified::ShellParseError(e),
         MaybeApplyPatch::PatchParseError(e) => MaybeApplyPatchVerified::CorrectnessError(e.into()),
         MaybeApplyPatch::NotApplyPatch => MaybeApplyPatchVerified::NotApplyPatch,
     }
+}
+
+pub async fn verify_apply_patch_args(
+    args: ApplyPatchArgs,
+    cwd: &AbsolutePathBuf,
+    fs: &dyn ExecutorFileSystem,
+    sandbox: Option<&codex_exec_server::FileSystemSandboxContext>,
+) -> MaybeApplyPatchVerified {
+    let ApplyPatchArgs {
+        patch,
+        hunks,
+        workdir,
+        ..
+    } = args;
+    let effective_cwd = workdir
+        .as_ref()
+        .map(|dir| cwd.join(Path::new(dir)))
+        .unwrap_or_else(|| cwd.clone());
+    let mut changes = HashMap::new();
+    for hunk in hunks {
+        let path = hunk.resolve_path(&effective_cwd);
+        match hunk {
+            Hunk::AddFile { contents, .. } => {
+                changes.insert(
+                    path.into_path_buf(),
+                    ApplyPatchFileChange::Add { content: contents },
+                );
+            }
+            Hunk::DeleteFile { .. } => {
+                let content = match fs.read_file_text(&path, sandbox).await {
+                    Ok(content) => content,
+                    Err(e) => {
+                        return MaybeApplyPatchVerified::CorrectnessError(
+                            ApplyPatchError::IoError(IoError {
+                                context: format!("Failed to read {}", path.display()),
+                                source: e,
+                            }),
+                        );
+                    }
+                };
+                changes.insert(
+                    path.into_path_buf(),
+                    ApplyPatchFileChange::Delete { content },
+                );
+            }
+            Hunk::UpdateFile {
+                move_path, chunks, ..
+            } => {
+                let ApplyPatchFileUpdate {
+                    unified_diff,
+                    content: contents,
+                    ..
+                } = match unified_diff_from_chunks(&path, &chunks, fs, sandbox).await {
+                    Ok(diff) => diff,
+                    Err(e) => {
+                        return MaybeApplyPatchVerified::CorrectnessError(e);
+                    }
+                };
+                changes.insert(
+                    path.into_path_buf(),
+                    ApplyPatchFileChange::Update {
+                        unified_diff,
+                        move_path: move_path.map(|p| effective_cwd.join(p).into_path_buf()),
+                        new_content: contents,
+                    },
+                );
+            }
+        }
+    }
+    MaybeApplyPatchVerified::Body(ApplyPatchAction {
+        changes,
+        patch,
+        cwd: effective_cwd,
+    })
 }
 
 /// Extract the heredoc body (and optional `cd` workdir) from a `bash -lc` script

@@ -3,10 +3,12 @@ use crate::outgoing_message::ConnectionRequestId;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadGoal;
 use codex_app_server_protocol::ThreadHistoryBuilder;
+use codex_app_server_protocol::ThreadSettings;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnError;
 use codex_core::CodexThread;
 use codex_core::ThreadConfigSnapshot;
+use codex_file_watcher::WatchRegistration;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::RolloutItem;
@@ -33,6 +35,9 @@ pub(crate) struct PendingThreadResumeRequest {
     pub(crate) emit_thread_goal_update: bool,
     pub(crate) thread_goal_state_db: Option<StateDbHandle>,
     pub(crate) include_turns: bool,
+    pub(crate) initial_turns_page:
+        Option<codex_app_server_protocol::ThreadResumeInitialTurnsPageParams>,
+    pub(crate) redact_resume_payloads: bool,
 }
 
 // ThreadListenerCommand is used to perform operations in the context of the thread listener, for serialization purposes.
@@ -74,9 +79,11 @@ pub(crate) struct ThreadState {
     pub(crate) cancel_tx: Option<oneshot::Sender<()>>,
     pub(crate) experimental_raw_events: bool,
     pub(crate) listener_generation: u64,
+    last_thread_settings: Option<ThreadSettings>,
     listener_command_tx: Option<mpsc::UnboundedSender<ThreadListenerCommand>>,
     current_turn_history: ThreadHistoryBuilder,
     listener_thread: Option<Weak<CodexThread>>,
+    watch_registration: WatchRegistration,
 }
 
 impl ThreadState {
@@ -91,14 +98,18 @@ impl ThreadState {
         &mut self,
         cancel_tx: oneshot::Sender<()>,
         conversation: &Arc<CodexThread>,
+        watch_registration: WatchRegistration,
+        thread_settings_baseline: ThreadSettings,
     ) -> (mpsc::UnboundedReceiver<ThreadListenerCommand>, u64) {
         if let Some(previous) = self.cancel_tx.replace(cancel_tx) {
             let _ = previous.send(());
         }
         self.listener_generation = self.listener_generation.wrapping_add(1);
+        self.last_thread_settings = Some(thread_settings_baseline);
         let (listener_command_tx, listener_command_rx) = mpsc::unbounded_channel();
         self.listener_command_tx = Some(listener_command_tx);
         self.listener_thread = Some(Arc::downgrade(conversation));
+        self.watch_registration = watch_registration;
         (listener_command_rx, self.listener_generation)
     }
 
@@ -109,6 +120,7 @@ impl ThreadState {
         self.listener_command_tx = None;
         self.current_turn_history.reset();
         self.listener_thread = None;
+        self.watch_registration = WatchRegistration::default();
     }
 
     pub(crate) fn set_experimental_raw_events(&mut self, enabled: bool) {
@@ -136,6 +148,12 @@ impl ThreadState {
             self.last_terminal_turn_id = Some(event_turn_id.to_string());
             self.current_turn_history.reset();
         }
+    }
+
+    pub(crate) fn note_thread_settings(&mut self, thread_settings: ThreadSettings) -> bool {
+        let changed = self.last_thread_settings.as_ref() != Some(&thread_settings);
+        self.last_thread_settings = Some(thread_settings);
+        changed
     }
 }
 
@@ -171,6 +189,60 @@ pub(crate) async fn resolve_server_request_on_thread_listener(
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use codex_app_server_protocol::ApprovalsReviewer;
+    use codex_app_server_protocol::AskForApproval;
+    use codex_app_server_protocol::SandboxPolicy;
+    use codex_protocol::config_types::CollaborationMode;
+    use codex_protocol::config_types::ModeKind;
+    use codex_protocol::config_types::Settings;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn note_thread_settings_reports_only_effective_changes() {
+        let mut state = ThreadState::default();
+        let initial = thread_settings("mock-model");
+        let updated = thread_settings("mock-model-2");
+
+        let results = vec![
+            state.note_thread_settings(initial.clone()),
+            state.note_thread_settings(initial),
+            state.note_thread_settings(updated.clone()),
+            state.note_thread_settings(updated),
+        ];
+
+        assert_eq!(results, vec![true, false, true, false]);
+    }
+
+    fn thread_settings(model: &str) -> ThreadSettings {
+        ThreadSettings {
+            cwd: AbsolutePathBuf::from_absolute_path("/tmp").expect("absolute path"),
+            approval_policy: AskForApproval::OnRequest,
+            approvals_reviewer: ApprovalsReviewer::User,
+            sandbox_policy: SandboxPolicy::ReadOnly {
+                network_access: false,
+            },
+            active_permission_profile: None,
+            model: model.to_string(),
+            model_provider: "mock_provider".to_string(),
+            service_tier: None,
+            effort: None,
+            summary: None,
+            collaboration_mode: CollaborationMode {
+                mode: ModeKind::Default,
+                settings: Settings {
+                    model: model.to_string(),
+                    reasoning_effort: None,
+                    developer_instructions: None,
+                },
+            },
+            personality: None,
+        }
+    }
+}
+
 struct ThreadEntry {
     state: Arc<Mutex<ThreadState>>,
     connection_ids: HashSet<ConnectionId>,
@@ -199,9 +271,14 @@ impl ThreadEntry {
 
 #[derive(Default)]
 struct ThreadStateManagerInner {
-    live_connections: HashSet<ConnectionId>,
+    live_connections: HashMap<ConnectionId, ConnectionCapabilities>,
     threads: HashMap<ThreadId, ThreadEntry>,
     thread_ids_by_connection: HashMap<ConnectionId, HashSet<ThreadId>>,
+}
+
+#[derive(Clone, Copy, Default)]
+pub(crate) struct ConnectionCapabilities {
+    pub(crate) request_attestation: bool,
 }
 
 #[derive(Clone, Default)]
@@ -214,12 +291,36 @@ impl ThreadStateManager {
         Self::default()
     }
 
-    pub(crate) async fn connection_initialized(&self, connection_id: ConnectionId) {
+    pub(crate) async fn connection_initialized(
+        &self,
+        connection_id: ConnectionId,
+        capabilities: ConnectionCapabilities,
+    ) {
         self.state
             .lock()
             .await
             .live_connections
-            .insert(connection_id);
+            .insert(connection_id, capabilities);
+    }
+
+    pub(crate) async fn first_attestation_capable_connection_for_thread(
+        &self,
+        thread_id: ThreadId,
+    ) -> Option<ConnectionId> {
+        let state = self.state.lock().await;
+        state
+            .threads
+            .get(&thread_id)?
+            .connection_ids
+            .iter()
+            .filter_map(|connection_id| {
+                state
+                    .live_connections
+                    .get(connection_id)?
+                    .request_attestation
+                    .then_some(*connection_id)
+            })
+            .min_by_key(|connection_id| connection_id.0)
     }
 
     pub(crate) async fn subscribed_connection_ids(&self, thread_id: ThreadId) -> Vec<ConnectionId> {
@@ -338,7 +439,7 @@ impl ThreadStateManager {
     ) -> Option<Arc<Mutex<ThreadState>>> {
         let thread_state = {
             let mut state = self.state.lock().await;
-            if !state.live_connections.contains(&connection_id) {
+            if !state.live_connections.contains_key(&connection_id) {
                 return None;
             }
             state
@@ -366,7 +467,7 @@ impl ThreadStateManager {
         connection_id: ConnectionId,
     ) -> bool {
         let mut state = self.state.lock().await;
-        if !state.live_connections.contains(&connection_id) {
+        if !state.live_connections.contains_key(&connection_id) {
             return false;
         }
         state

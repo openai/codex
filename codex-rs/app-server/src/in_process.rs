@@ -102,7 +102,10 @@ pub const DEFAULT_IN_PROCESS_CHANNEL_CAPACITY: usize = CHANNEL_CAPACITY;
 type PendingClientRequestResponse = std::result::Result<Result, JSONRPCErrorError>;
 
 fn server_notification_requires_delivery(notification: &ServerNotification) -> bool {
-    matches!(notification, ServerNotification::TurnCompleted(_))
+    matches!(
+        notification,
+        ServerNotification::TurnCompleted(_) | ServerNotification::ThreadSettingsUpdated(_)
+    )
 }
 
 /// Input needed to start an in-process app-server runtime.
@@ -119,6 +122,8 @@ pub struct InProcessStartArgs {
     pub cli_overrides: Vec<(String, TomlValue)>,
     /// Loader override knobs used by config API paths.
     pub loader_overrides: LoaderOverrides,
+    /// Whether config API paths should reject unknown config fields.
+    pub strict_config: bool,
     /// Preloaded cloud requirements provider.
     pub cloud_requirements: CloudRequirementsLoader,
     /// Loader used to fetch typed thread config sources before a thread starts.
@@ -409,6 +414,7 @@ async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClie
             args.config.codex_home.to_path_buf(),
             args.cli_overrides,
             args.loader_overrides,
+            args.strict_config,
             args.cloud_requirements,
             args.arg0_paths.clone(),
             args.thread_config_loader,
@@ -765,6 +771,7 @@ mod tests {
             config,
             cli_overrides: Vec::new(),
             loader_overrides: LoaderOverrides::default(),
+            strict_config: false,
             cloud_requirements: CloudRequirementsLoader::default(),
             thread_config_loader: Arc::new(codex_config::NoopThreadConfigLoader),
             feedback: CodexFeedback::new(),

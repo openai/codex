@@ -153,7 +153,6 @@ impl MemoryStartupContext {
 
         StageOneRequestContext {
             model_info,
-            turn_metadata_header,
             session_telemetry: self
                 .session_telemetry
                 .clone()
@@ -161,6 +160,7 @@ impl MemoryStartupContext {
             reasoning_effort: Some(reasoning_effort),
             reasoning_summary,
             service_tier: config_snapshot.service_tier,
+            turn_metadata_header,
         }
     }
 
@@ -171,18 +171,21 @@ impl MemoryStartupContext {
         context: &StageOneRequestContext,
     ) -> anyhow::Result<(String, Option<TokenUsage>)> {
         let installation_id = resolve_installation_id(&config.codex_home).await?;
-        let session_source = self.thread.config_snapshot().await.session_source;
+        let config_snapshot = self.thread.config_snapshot().await;
+        let session_source = config_snapshot.session_source;
         let model_client = ModelClient::new(
             Some(Arc::clone(&self.auth_manager)),
-            SessionId::from(self.thread_id),
+            SessionId::from(self.thread_id), // We use thread_id to detach this query from the foreground user session.
             self.thread_id,
             installation_id,
             config.model_provider.clone(),
             session_source,
+            config_snapshot.parent_thread_id,
             config.model_verbosity,
             config.features.enabled(Feature::EnableRequestCompression),
             config.features.enabled(Feature::RuntimeMetrics),
             /*beta_features_header*/ None,
+            /*attestation_provider*/ None,
         );
 
         let mut client_session = model_client.new_session();
@@ -260,6 +263,8 @@ impl MemoryStartupContext {
                 environments: None,
                 final_output_json_schema: None,
                 responsesapi_client_metadata: None,
+                additional_context: Default::default(),
+                thread_settings: Default::default(),
             })
             .await
         {

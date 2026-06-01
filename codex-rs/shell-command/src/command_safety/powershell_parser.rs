@@ -296,4 +296,18 @@ mod tests {
             ]),
         );
     }
+
+    #[test]
+    fn parser_process_rejects_stop_parsing_forms() {
+        let Some(powershell) = try_find_powershell_executable_blocking() else {
+            return;
+        };
+        let powershell = powershell.as_path().to_str().unwrap();
+        let mut parser = PowershellParserProcess::spawn(powershell).unwrap();
+
+        let parsed = parser
+            .parse("git log --% HEAD --output=codex_poc.txt")
+            .unwrap();
+        assert_eq!(parsed, PowershellParseOutcome::Unsupported);
+    }
 }

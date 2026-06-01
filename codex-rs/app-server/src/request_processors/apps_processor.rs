@@ -1,12 +1,13 @@
 use super::*;
 
-#[derive(Clone)]
 pub(crate) struct AppsRequestProcessor {
     auth_manager: Arc<AuthManager>,
     thread_manager: Arc<ThreadManager>,
     outgoing: Arc<OutgoingMessageSender>,
     config_manager: ConfigManager,
     workspace_settings_cache: Arc<workspace_settings::WorkspaceSettingsCache>,
+    shutdown_token: CancellationToken,
+    _shutdown_drop_guard: DropGuard,
 }
 
 impl AppsRequestProcessor {
@@ -16,13 +17,17 @@ impl AppsRequestProcessor {
         outgoing: Arc<OutgoingMessageSender>,
         config_manager: ConfigManager,
         workspace_settings_cache: Arc<workspace_settings::WorkspaceSettingsCache>,
+        shutdown_token: CancellationToken,
     ) -> Self {
+        let shutdown_drop_guard = shutdown_token.clone().drop_guard();
         Self {
             auth_manager,
             thread_manager,
             outgoing,
             config_manager,
             workspace_settings_cache,
+            shutdown_token,
+            _shutdown_drop_guard: shutdown_drop_guard,
         }
     }
 
@@ -41,11 +46,19 @@ impl AppsRequestProcessor {
         request_id: &ConnectionRequestId,
         params: AppsListParams,
     ) -> Result<Option<AppsListResponse>, JSONRPCErrorError> {
-        let mut config = self.load_latest_config(/*fallback_cwd*/ None).await?;
+        let thread = if let Some(thread_id) = params.thread_id.as_deref() {
+            let (_, loaded_thread) = self.load_thread(thread_id).await?;
+            Some(loaded_thread)
+        } else {
+            None
+        };
+        let fallback_cwd = match thread.as_ref() {
+            Some(thread) => Some(thread.config_snapshot().await.cwd.to_path_buf()),
+            None => None,
+        };
+        let mut config = self.load_latest_config(fallback_cwd).await?;
 
-        if let Some(thread_id) = params.thread_id.as_deref() {
-            let (_, thread) = self.load_thread(thread_id).await?;
-
+        if let Some(thread) = thread {
             let _ = config
                 .features
                 .set_enabled(Feature::Apps, thread.enabled(Feature::Apps));
@@ -75,10 +88,18 @@ impl AppsRequestProcessor {
         let request = request_id.clone();
         let outgoing = Arc::clone(&self.outgoing);
         let environment_manager = self.thread_manager.environment_manager();
+        let shutdown_token = self.shutdown_token.child_token();
         tokio::spawn(async move {
-            Self::apps_list_task(outgoing, request, params, config, environment_manager).await;
+            tokio::select! {
+                _ = shutdown_token.cancelled() => {}
+                _ = Self::apps_list_task(outgoing, request, params, config, environment_manager) => {}
+            }
         });
         Ok(None)
+    }
+
+    pub(crate) fn shutdown(&self) {
+        self.shutdown_token.cancel();
     }
 
     async fn apps_list_task(
@@ -88,8 +109,31 @@ impl AppsRequestProcessor {
         config: Config,
         environment_manager: Arc<EnvironmentManager>,
     ) {
+        let retry_params = params.clone();
+        let retry_config = config.clone();
+        let retry_environment_manager = Arc::clone(&environment_manager);
         let result = Self::apps_list_response(&outgoing, params, config, environment_manager).await;
-        outgoing.send_result(request_id, result).await;
+        let should_retry = result
+            .as_ref()
+            .is_ok_and(|(_, codex_apps_ready)| !codex_apps_ready);
+        outgoing
+            .send_result(request_id, result.map(|(response, _)| response))
+            .await;
+
+        if should_retry && !retry_params.force_refetch {
+            let mut retry_params = retry_params;
+            retry_params.force_refetch = true;
+            if let Err(err) = Self::apps_list_response(
+                &outgoing,
+                retry_params,
+                retry_config,
+                retry_environment_manager,
+            )
+            .await
+            {
+                warn!("failed to refresh app list after codex-apps readiness retry: {err:?}");
+            }
+        }
     }
 
     async fn apps_list_response(
@@ -97,7 +141,7 @@ impl AppsRequestProcessor {
         params: AppsListParams,
         config: Config,
         environment_manager: Arc<EnvironmentManager>,
-    ) -> Result<AppsListResponse, JSONRPCErrorError> {
+    ) -> Result<(AppsListResponse, bool), JSONRPCErrorError> {
         let AppsListParams {
             cursor,
             limit,
@@ -127,10 +171,9 @@ impl AppsRequestProcessor {
                 connectors::list_accessible_connectors_from_mcp_tools_with_environment_manager(
                     &accessible_config,
                     force_refetch,
-                    &environment_manager,
+                    Arc::clone(&environment_manager),
                 )
                 .await
-                .map(|status| status.connectors)
                 .map_err(|err| format!("failed to load accessible apps: {err}"));
             let _ = accessible_tx.send(AppListLoadResult::Accessible(result));
         });
@@ -146,6 +189,7 @@ impl AppsRequestProcessor {
         let app_list_deadline = tokio::time::Instant::now() + APP_LIST_LOAD_TIMEOUT;
         let mut accessible_loaded = false;
         let mut all_loaded = false;
+        let mut codex_apps_ready = true;
         let mut last_notified_apps = None;
 
         if accessible_connectors.is_some() || all_connectors.is_some() {
@@ -178,9 +222,10 @@ impl AppsRequestProcessor {
             };
 
             match result {
-                AppListLoadResult::Accessible(Ok(connectors)) => {
-                    accessible_connectors = Some(connectors);
+                AppListLoadResult::Accessible(Ok(status)) => {
+                    accessible_connectors = Some(status.connectors);
                     accessible_loaded = true;
+                    codex_apps_ready = status.codex_apps_ready;
                 }
                 AppListLoadResult::Accessible(Err(err)) => {
                     return Err(internal_error(err));
@@ -222,7 +267,8 @@ impl AppsRequestProcessor {
             }
 
             if accessible_loaded && all_loaded {
-                return paginate_apps(merged.as_slice(), start, limit);
+                let response = paginate_apps(merged.as_slice(), start, limit)?;
+                return Ok((response, codex_apps_ready));
             }
         }
     }
@@ -279,7 +325,7 @@ impl AppsRequestProcessor {
 const APP_LIST_LOAD_TIMEOUT: Duration = Duration::from_secs(90);
 
 enum AppListLoadResult {
-    Accessible(Result<Vec<AppInfo>, String>),
+    Accessible(Result<AccessibleConnectorsStatus, String>),
     Directory(Result<Vec<AppInfo>, String>),
 }
 

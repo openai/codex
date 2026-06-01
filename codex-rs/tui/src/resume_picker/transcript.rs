@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use crate::app_server_session::AppServerSession;
+use crate::git_action_directives::parse_assistant_markdown;
 use crate::history_cell::AgentMarkdownCell;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::PlainHistoryCell;
@@ -44,9 +45,14 @@ pub(crate) fn thread_to_transcript_cells(
     let mut cells: TranscriptCells = Vec::new();
     for item in thread.turns.iter().flat_map(|turn| turn.items.iter()) {
         match item {
-            ThreadItem::UserMessage { id, content } => {
+            ThreadItem::UserMessage {
+                id,
+                client_id,
+                content,
+            } => {
                 let item = UserMessageItem {
                     id: id.clone(),
+                    client_id: client_id.clone(),
                     content: content
                         .iter()
                         .cloned()
@@ -61,8 +67,12 @@ pub(crate) fn thread_to_transcript_cells(
                 }));
             }
             ThreadItem::AgentMessage { text, .. } => {
-                if !text.trim().is_empty() {
-                    cells.push(Arc::new(AgentMarkdownCell::new(text.clone(), cwd)));
+                let parsed = parse_assistant_markdown(text);
+                if !parsed.visible_markdown.trim().is_empty() {
+                    cells.push(Arc::new(AgentMarkdownCell::new(
+                        parsed.visible_markdown,
+                        cwd,
+                    )));
                 }
             }
             ThreadItem::Plan { text, .. } => {

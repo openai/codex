@@ -14,15 +14,15 @@ use std::path::Path;
 use std::time::Duration;
 use std::time::Instant;
 
-use ratatui::text::Line;
-
 use crate::markdown_stream::MarkdownStreamCollector;
+use crate::terminal_hyperlinks::HyperlinkLine;
 pub(crate) mod chunking;
 pub(crate) mod commit_tick;
 pub(crate) mod controller;
+mod table_holdback;
 
 struct QueuedLine {
-    line: Line<'static>,
+    line: HyperlinkLine,
     enqueued_at: Instant,
 }
 
@@ -52,7 +52,7 @@ impl StreamState {
         self.has_seen_delta = false;
     }
     /// Drains one queued line from the front of the queue.
-    pub(crate) fn step(&mut self) -> Vec<Line<'static>> {
+    pub(crate) fn step(&mut self) -> Vec<HyperlinkLine> {
         self.queued_lines
             .pop_front()
             .map(|queued| queued.line)
@@ -63,7 +63,7 @@ impl StreamState {
     ///
     /// Callers that pass very large values still get bounded behavior because this method clamps to
     /// the currently available queue length.
-    pub(crate) fn drain_n(&mut self, max_lines: usize) -> Vec<Line<'static>> {
+    pub(crate) fn drain_n(&mut self, max_lines: usize) -> Vec<HyperlinkLine> {
         let end = max_lines.min(self.queued_lines.len());
         self.queued_lines
             .drain(..end)
@@ -89,7 +89,7 @@ impl StreamState {
             .map(|queued| now.saturating_duration_since(queued.enqueued_at))
     }
     /// Appends committed lines to the queue with a shared enqueue timestamp.
-    pub(crate) fn enqueue(&mut self, lines: Vec<Line<'static>>) {
+    pub(crate) fn enqueue(&mut self, lines: Vec<HyperlinkLine>) {
         let now = Instant::now();
         self.queued_lines
             .extend(lines.into_iter().map(|line| QueuedLine {
@@ -103,6 +103,7 @@ impl StreamState {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+    use ratatui::text::Line;
     use std::path::PathBuf;
 
     fn test_cwd() -> PathBuf {
@@ -114,10 +115,10 @@ mod tests {
     #[test]
     fn drain_n_clamps_to_available_lines() {
         let mut state = StreamState::new(/*width*/ None, &test_cwd());
-        state.enqueue(vec![Line::from("one")]);
+        state.enqueue(vec![HyperlinkLine::new(Line::from("one"))]);
 
         let drained = state.drain_n(/*max_lines*/ 8);
-        assert_eq!(drained, vec![Line::from("one")]);
+        assert_eq!(drained, vec![HyperlinkLine::new(Line::from("one"))]);
         assert!(state.is_idle());
     }
 }

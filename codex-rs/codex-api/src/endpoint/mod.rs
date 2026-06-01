@@ -1,13 +1,16 @@
 pub(crate) mod compact;
+pub(crate) mod images;
 pub(crate) mod memories;
 pub(crate) mod models;
 pub(crate) mod realtime_call;
 pub(crate) mod realtime_websocket;
 pub(crate) mod responses;
 pub(crate) mod responses_websocket;
+pub(crate) mod search;
 mod session;
 
 pub use compact::CompactClient;
+pub use images::ImagesClient;
 pub use memories::MemoriesClient;
 pub use models::ModelsClient;
 pub use realtime_call::RealtimeCallClient;
@@ -24,4 +27,7 @@ pub use realtime_websocket::session_update_session_json;
 pub use responses::ResponsesClient;
 pub use responses::ResponsesOptions;
 pub use responses_websocket::ResponsesWebsocketClient;
+pub use responses_websocket::ResponsesWebsocketClose;
 pub use responses_websocket::ResponsesWebsocketConnection;
+pub use responses_websocket::ResponsesWebsocketProbe;
+pub use search::SearchClient;

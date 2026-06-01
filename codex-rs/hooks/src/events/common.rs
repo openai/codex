@@ -8,6 +8,13 @@ use codex_protocol::protocol::HookRunSummary;
 use crate::engine::ConfiguredHandler;
 use crate::engine::dispatcher;
 
+/// Identifies a thread-spawned subagent when a normal hook runs inside it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SubagentHookContext {
+    pub agent_id: String,
+    pub agent_type: String,
+}
+
 pub(crate) fn join_text_chunks(chunks: Vec<String>) -> Option<String> {
     if chunks.is_empty() {
         None
@@ -104,6 +111,8 @@ pub(crate) fn matcher_pattern_for_event(
         | HookEventName::PermissionRequest
         | HookEventName::PostToolUse
         | HookEventName::SessionStart
+        | HookEventName::SubagentStart
+        | HookEventName::SubagentStop
         | HookEventName::PreCompact
         | HookEventName::PostCompact => matcher,
         HookEventName::UserPromptSubmit | HookEventName::Stop => None,

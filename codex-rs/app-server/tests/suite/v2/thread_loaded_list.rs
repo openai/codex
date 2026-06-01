@@ -1,5 +1,5 @@
 use anyhow::Result;
-use app_test_support::McpProcess;
+use app_test_support::TestAppServer;
 use app_test_support::create_mock_responses_server_repeating_assistant;
 use app_test_support::to_response;
 use codex_app_server_protocol::JSONRPCResponse;
@@ -21,7 +21,7 @@ async fn thread_loaded_list_returns_loaded_thread_ids() -> Result<()> {
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let thread_id = start_thread(&mut mcp).await?;
@@ -51,7 +51,7 @@ async fn thread_loaded_list_paginates() -> Result<()> {
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let first = start_thread(&mut mcp).await?;
@@ -122,7 +122,7 @@ stream_max_retries = 0
     )
 }
 
-async fn start_thread(mcp: &mut McpProcess) -> Result<String> {
+async fn start_thread(mcp: &mut TestAppServer) -> Result<String> {
     let req_id = mcp
         .send_thread_start_request(ThreadStartParams {
             model: Some("gpt-5.2".to_string()),

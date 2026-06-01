@@ -13,6 +13,8 @@ use super::*;
 use crate::message_processor::ConnectionSessionState;
 use crate::message_processor::InitializedConnectionSessionState;
 
+const NON_ORIGINATING_CLIENT_NAMES: &[&str] = &["codex_app_server_daemon", "codex-backend"];
+
 #[derive(Clone)]
 pub(crate) struct InitializeRequestProcessor {
     outgoing: Arc<OutgoingMessageSender>,
@@ -65,15 +67,17 @@ impl InitializeRequestProcessor {
         // experimental API). Proposed direction is instance-global first-write-wins
         // with initialize-time mismatch rejection.
         let analytics_initialize_params = params.clone();
-        let (experimental_api_enabled, opt_out_notification_methods) = match params.capabilities {
-            Some(capabilities) => (
-                capabilities.experimental_api,
-                capabilities
-                    .opt_out_notification_methods
-                    .unwrap_or_default(),
-            ),
-            None => (false, Vec::new()),
-        };
+        let (experimental_api_enabled, request_attestation, opt_out_notification_methods) =
+            match params.capabilities {
+                Some(capabilities) => (
+                    capabilities.experimental_api,
+                    capabilities.request_attestation,
+                    capabilities
+                        .opt_out_notification_methods
+                        .unwrap_or_default(),
+                ),
+                None => (false, false, Vec::new()),
+            };
         let ClientInfo {
             name,
             title: _title,
@@ -88,6 +92,7 @@ impl InitializeRequestProcessor {
         }
         let originator = name.clone();
         let user_agent_suffix = format!("{name}; {version}");
+        let mutates_global_identity = !NON_ORIGINATING_CLIENT_NAMES.contains(&name.as_str());
         let codex_home = self.config.codex_home.clone();
         if session
             .initialize(InitializedConnectionSessionState {
@@ -95,27 +100,29 @@ impl InitializeRequestProcessor {
                 opted_out_notification_methods: opt_out_notification_methods.into_iter().collect(),
                 app_server_client_name: name.clone(),
                 client_version: version,
+                request_attestation,
             })
             .is_err()
         {
             return Err(invalid_request("Already initialized"));
         }
 
-        // Only the request that wins session initialization may mutate
-        // process-global client metadata.
-        if let Err(error) = set_default_originator(originator.clone()) {
-            match error {
-                SetOriginatorError::InvalidHeaderValue => {
-                    tracing::warn!(
-                        client_info_name = %name,
-                        "validated clientInfo.name was rejected while setting originator"
-                    );
-                }
-                SetOriginatorError::AlreadyInitialized => {
-                    // No-op. This is expected to happen if the originator is already set via env var.
-                    // TODO(owen): Once we remove support for CODEX_INTERNAL_ORIGINATOR_OVERRIDE,
-                    // this will be an unexpected state and we can return a JSON-RPC error indicating
-                    // internal server error.
+        if mutates_global_identity {
+            // Only real client initialization may mutate process-global client metadata.
+            if let Err(error) = set_default_originator(originator.clone()) {
+                match error {
+                    SetOriginatorError::InvalidHeaderValue => {
+                        tracing::warn!(
+                            client_info_name = %name,
+                            "validated clientInfo.name was rejected while setting originator"
+                        );
+                    }
+                    SetOriginatorError::AlreadyInitialized => {
+                        // No-op. This is expected to happen if the originator is already set via env var.
+                        // TODO(owen): Once we remove support for CODEX_INTERNAL_ORIGINATOR_OVERRIDE,
+                        // this will be an unexpected state and we can return a JSON-RPC error indicating
+                        // internal server error.
+                    }
                 }
             }
         }
@@ -126,7 +133,7 @@ impl InitializeRequestProcessor {
             self.rpc_transport,
         );
         set_default_client_residency_requirement(self.config.enforce_residency.value());
-        if let Ok(mut suffix) = USER_AGENT_SUFFIX.lock() {
+        if mutates_global_identity && let Ok(mut suffix) = USER_AGENT_SUFFIX.lock() {
             *suffix = Some(user_agent_suffix);
         }
 

@@ -1,16 +1,76 @@
 use super::*;
 use pretty_assertions::assert_eq;
 
+fn thread_settings_for_test(
+    model: &str,
+    thread_id: ThreadId,
+) -> codex_app_server_protocol::ThreadSettingsUpdatedNotification {
+    codex_app_server_protocol::ThreadSettingsUpdatedNotification {
+        thread_id: thread_id.to_string(),
+        thread_settings: codex_app_server_protocol::ThreadSettings {
+            cwd: test_path_buf("/tmp/thread-settings").abs(),
+            approval_policy: AskForApproval::OnRequest,
+            approvals_reviewer: codex_app_server_protocol::ApprovalsReviewer::AutoReview,
+            sandbox_policy: codex_app_server_protocol::SandboxPolicy::ReadOnly {
+                network_access: false,
+            },
+            active_permission_profile: Some(
+                codex_app_server_protocol::ActivePermissionProfile::read_only(),
+            ),
+            model: model.to_string(),
+            model_provider: "openai".to_string(),
+            service_tier: Some(ServiceTier::Fast.request_value().to_string()),
+            effort: Some(ReasoningEffortConfig::High),
+            summary: None,
+            collaboration_mode: CollaborationMode {
+                mode: ModeKind::Plan,
+                settings: codex_protocol::config_types::Settings {
+                    model: model.to_string(),
+                    reasoning_effort: Some(ReasoningEffortConfig::High),
+                    developer_instructions: None,
+                },
+            },
+            personality: Some(Personality::Pragmatic),
+        },
+    }
+}
+
+fn configured_thread_session(thread_id: ThreadId) -> crate::session_state::ThreadSessionState {
+    crate::session_state::ThreadSessionState {
+        thread_id,
+        forked_from_id: None,
+        fork_parent_title: None,
+        thread_name: None,
+        model: "gpt-5.3-codex".to_string(),
+        model_provider_id: "openai".to_string(),
+        service_tier: None,
+        approval_policy: AskForApproval::Never,
+        approvals_reviewer: ApprovalsReviewer::User,
+        permission_profile: PermissionProfile::read_only(),
+        active_permission_profile: None,
+        cwd: test_path_buf("/tmp/thread-settings").abs(),
+        runtime_workspace_roots: vec![test_path_buf("/tmp/thread-settings").abs()],
+        instruction_source_paths: Vec::new(),
+        reasoning_effort: None,
+        collaboration_mode: None,
+        personality: None,
+        message_history: None,
+        network_proxy: None,
+        rollout_path: None,
+    }
+}
+
 #[tokio::test]
 async fn invalid_url_elicitation_is_declined() {
     let (mut chat, _app_event_tx, mut rx, _op_rx) = make_chatwidget_manual_with_sender().await;
-    let thread_id = ThreadId::new();
-    chat.thread_id = Some(thread_id);
+    let visible_thread_id = ThreadId::new();
+    let request_thread_id = ThreadId::new();
+    chat.thread_id = Some(visible_thread_id);
 
     chat.handle_elicitation_request_now(
         codex_app_server_protocol::RequestId::Integer(9),
         codex_app_server_protocol::McpServerElicitationRequestParams {
-            thread_id: thread_id.to_string(),
+            thread_id: request_thread_id.to_string(),
             turn_id: Some("turn-auth".to_string()),
             server_name: "payments".to_string(),
             request: codex_app_server_protocol::McpServerElicitationRequest::Url {
@@ -33,7 +93,99 @@ async fn invalid_url_elicitation_is_declined() {
                 content: None,
                 meta: None,
             },
-        }) if op_thread_id == thread_id && server_name == "payments"
+        }) if op_thread_id == request_thread_id && server_name == "payments"
+    );
+}
+
+#[tokio::test]
+async fn thread_settings_updated_updates_visible_state_without_transcript() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
+    set_fast_mode_test_catalog(&mut chat);
+    let thread_id = ThreadId::new();
+    chat.handle_thread_session(configured_thread_session(thread_id));
+    let _ = drain_insert_history(&mut rx);
+
+    chat.handle_server_notification(
+        ServerNotification::ThreadSettingsUpdated(thread_settings_for_test("gpt-5.4", thread_id)),
+        /*replay_kind*/ None,
+    );
+
+    assert_eq!(chat.current_model(), "gpt-5.4");
+    assert_eq!(
+        chat.current_reasoning_effort(),
+        Some(ReasoningEffortConfig::High)
+    );
+    assert_eq!(
+        chat.current_service_tier(),
+        Some(ServiceTier::Fast.request_value())
+    );
+    assert_eq!(
+        chat.config_ref().permissions.approval_policy.value(),
+        AskForApproval::OnRequest.to_core()
+    );
+    assert_eq!(
+        chat.config_ref().approvals_reviewer,
+        ApprovalsReviewer::AutoReview
+    );
+    assert_eq!(
+        chat.config_ref()
+            .permissions
+            .active_permission_profile()
+            .expect("active profile")
+            .id,
+        codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_READ_ONLY
+    );
+    assert_eq!(chat.config_ref().personality, Some(Personality::Pragmatic));
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Plan);
+    assert!(
+        drain_insert_history(&mut rx).is_empty(),
+        "ThreadSettingsUpdated should not render transcript history"
+    );
+
+    chat.handle_server_notification(
+        ServerNotification::ThreadSettingsUpdated(thread_settings_for_test(
+            "gpt-5.2",
+            ThreadId::new(),
+        )),
+        /*replay_kind*/ None,
+    );
+
+    assert_eq!(chat.current_model(), "gpt-5.4");
+}
+
+#[tokio::test]
+async fn thread_settings_updated_preserves_default_settings_for_plan_mode() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
+    let thread_id = ThreadId::new();
+    let mut session = configured_thread_session(thread_id);
+    session.model = "gpt-default".to_string();
+    session.reasoning_effort = Some(ReasoningEffortConfig::Low);
+    chat.handle_thread_session(session);
+    let _ = drain_insert_history(&mut rx);
+    let default_mode = chat.current_collaboration_mode().clone();
+
+    chat.handle_server_notification(
+        ServerNotification::ThreadSettingsUpdated(thread_settings_for_test("gpt-plan", thread_id)),
+        /*replay_kind*/ None,
+    );
+
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Plan);
+    assert_eq!(chat.current_model(), "gpt-plan");
+    assert_eq!(
+        chat.current_reasoning_effort(),
+        Some(ReasoningEffortConfig::High)
+    );
+    assert_eq!(chat.current_collaboration_mode(), &default_mode);
+
+    let default_mask = collaboration_modes::default_mask(chat.model_catalog.as_ref())
+        .expect("expected default collaboration mode");
+    chat.set_collaboration_mask(default_mask);
+
+    assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Default);
+    assert_eq!(chat.current_model(), "gpt-default");
+    assert_eq!(
+        chat.current_reasoning_effort(),
+        Some(ReasoningEffortConfig::Low)
     );
 }
 
@@ -131,6 +283,7 @@ async fn live_app_server_user_message_item_completed_does_not_duplicate_rendered
             completed_at_ms: 0,
             item: AppServerThreadItem::UserMessage {
                 id: "user-1".to_string(),
+                client_id: None,
                 content: vec![AppServerUserInput::Text {
                     text: "Hi, are you there?".to_string(),
                     text_elements: Vec::new(),
@@ -637,6 +790,40 @@ async fn live_app_server_failed_turn_does_not_duplicate_error_history() {
 }
 
 #[tokio::test]
+async fn live_app_server_failed_turn_consolidates_streamed_answer() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    handle_turn_started(&mut chat, "turn-1");
+    while rx.try_recv().is_ok() {}
+
+    handle_agent_message_delta(&mut chat, "```diff\n+ streamed patch\n```\n");
+    chat.run_commit_tick();
+    while rx.try_recv().is_ok() {}
+
+    handle_error(
+        &mut chat,
+        "stream disconnected before completion",
+        /*codex_error_info*/ None,
+    );
+
+    let mut saw_consolidate = false;
+    while let Ok(event) = rx.try_recv() {
+        if let AppEvent::ConsolidateAgentMessage { source, .. } = event {
+            saw_consolidate = true;
+            assert!(
+                source.contains("streamed patch"),
+                "expected partial stream source to be consolidated, got {source:?}"
+            );
+        }
+    }
+
+    assert!(
+        saw_consolidate,
+        "failed turn should consolidate streamed cells before clearing the stream controller"
+    );
+}
+
+#[tokio::test]
 async fn live_app_server_stream_recovery_restores_previous_status_header() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
@@ -691,7 +878,7 @@ async fn live_app_server_stream_recovery_restores_previous_status_header() {
         .expect("status indicator should be visible");
     assert_eq!(status.header(), "Working");
     assert_eq!(status.details(), None);
-    assert!(chat.retry_status_header.is_none());
+    assert!(chat.status_state.retry_status_header.is_none());
 }
 
 #[tokio::test]
@@ -827,7 +1014,8 @@ async fn live_app_server_invalid_thread_name_update_is_ignored() {
 #[tokio::test]
 async fn live_app_server_thread_name_update_shows_resume_hint() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    let thread_id = ThreadId::new();
+    let thread_id =
+        ThreadId::from_string("123e4567-e89b-12d3-a456-426614174000").expect("thread id");
     chat.thread_id = Some(thread_id);
 
     chat.handle_server_notification(
@@ -844,8 +1032,7 @@ async fn live_app_server_thread_name_update_shows_resume_hint() {
     let cells = drain_insert_history(&mut rx);
     assert_eq!(cells.len(), 1);
     let rendered = lines_to_single_string(&cells[0]);
-    assert!(rendered.contains("Thread renamed to review-fix"));
-    assert!(rendered.contains("codex resume review-fix"));
+    assert_chatwidget_snapshot!("thread_name_update_resume_hint", rendered);
 }
 
 #[tokio::test]

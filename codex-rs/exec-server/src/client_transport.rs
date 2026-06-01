@@ -1,6 +1,4 @@
 use std::process::Stdio;
-use std::time::Duration;
-
 use tokio::io::AsyncBufReadExt;
 use tokio::io::BufReader;
 use tokio::process::Command;
@@ -9,37 +7,45 @@ use tokio_tungstenite::connect_async;
 use tracing::debug;
 use tracing::warn;
 
+use codex_utils_rustls_provider::ensure_rustls_crypto_provider;
+
 use crate::ExecServerClient;
 use crate::ExecServerError;
 use crate::client_api::RemoteExecServerConnectArgs;
 use crate::client_api::StdioExecServerCommand;
 use crate::client_api::StdioExecServerConnectArgs;
 use crate::connection::JsonRpcConnection;
+use crate::relay::harness_connection_from_websocket;
 
 const ENVIRONMENT_CLIENT_NAME: &str = "codex-environment";
-const ENVIRONMENT_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
-const ENVIRONMENT_INITIALIZE_TIMEOUT: Duration = Duration::from_secs(5);
 
 impl ExecServerClient {
     pub(crate) async fn connect_for_transport(
         transport_params: crate::client_api::ExecServerTransportParams,
     ) -> Result<Self, ExecServerError> {
         match transport_params {
-            crate::client_api::ExecServerTransportParams::WebSocketUrl(websocket_url) => {
+            crate::client_api::ExecServerTransportParams::WebSocketUrl {
+                websocket_url,
+                connect_timeout,
+                initialize_timeout,
+            } => {
                 Self::connect_websocket(RemoteExecServerConnectArgs {
                     websocket_url,
                     client_name: ENVIRONMENT_CLIENT_NAME.to_string(),
-                    connect_timeout: ENVIRONMENT_CONNECT_TIMEOUT,
-                    initialize_timeout: ENVIRONMENT_INITIALIZE_TIMEOUT,
+                    connect_timeout,
+                    initialize_timeout,
                     resume_session_id: None,
                 })
                 .await
             }
-            crate::client_api::ExecServerTransportParams::StdioCommand(command) => {
+            crate::client_api::ExecServerTransportParams::StdioCommand {
+                command,
+                initialize_timeout,
+            } => {
                 Self::connect_stdio_command(StdioExecServerConnectArgs {
                     command,
                     client_name: ENVIRONMENT_CLIENT_NAME.to_string(),
-                    initialize_timeout: ENVIRONMENT_INITIALIZE_TIMEOUT,
+                    initialize_timeout,
                     resume_session_id: None,
                 })
                 .await
@@ -50,6 +56,7 @@ impl ExecServerClient {
     pub async fn connect_websocket(
         args: RemoteExecServerConnectArgs,
     ) -> Result<Self, ExecServerError> {
+        ensure_rustls_crypto_provider();
         let websocket_url = args.websocket_url.clone();
         let connect_timeout = args.connect_timeout;
         let (stream, _) = timeout(connect_timeout, connect_async(websocket_url.as_str()))
@@ -63,14 +70,13 @@ impl ExecServerClient {
                 source,
             })?;
 
-        Self::connect(
-            JsonRpcConnection::from_websocket(
-                stream,
-                format!("exec-server websocket {websocket_url}"),
-            ),
-            args.into(),
-        )
-        .await
+        let connection_label = format!("exec-server websocket {websocket_url}");
+        let connection = if is_rendezvous_harness_url(&websocket_url) {
+            harness_connection_from_websocket(stream, connection_label)
+        } else {
+            JsonRpcConnection::from_websocket(stream, connection_label)
+        };
+        Self::connect(connection, args.into()).await
     }
 
     pub(crate) async fn connect_stdio_command(
@@ -112,6 +118,16 @@ impl ExecServerClient {
         )
         .await
     }
+}
+
+fn is_rendezvous_harness_url(websocket_url: &str) -> bool {
+    let Some((_path, query)) = websocket_url.split_once('?') else {
+        return false;
+    };
+    query
+        .split('&')
+        .filter_map(|pair| pair.split_once('='))
+        .any(|(key, value)| key == "role" && value == "harness")
 }
 
 fn stdio_command_process(stdio_command: &StdioExecServerCommand) -> Command {

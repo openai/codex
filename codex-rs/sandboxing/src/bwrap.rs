@@ -177,11 +177,12 @@ fn find_system_bwrap_in_search_paths(
 ) -> Option<PathBuf> {
     let search_path = std::env::join_paths(search_paths).ok()?;
     let cwd = std::fs::canonicalize(cwd).unwrap_or_else(|_| cwd.to_path_buf());
+    let cwd_is_root = cwd.parent().is_none();
     which::which_in_all(SYSTEM_BWRAP_PROGRAM, Some(search_path), &cwd)
         .ok()?
         .find_map(|path| {
             let path = std::fs::canonicalize(path).ok()?;
-            if path.starts_with(&cwd) {
+            if !cwd_is_root && path.starts_with(&cwd) {
                 None
             } else {
                 Some(path)

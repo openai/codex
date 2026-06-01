@@ -22,9 +22,20 @@ impl AvailablePluginsInstructions {
 }
 
 impl ContextualUserFragment for AvailablePluginsInstructions {
-    const ROLE: &'static str = "developer";
-    const START_MARKER: &'static str = PLUGINS_INSTRUCTIONS_OPEN_TAG;
-    const END_MARKER: &'static str = PLUGINS_INSTRUCTIONS_CLOSE_TAG;
+    fn role() -> &'static str {
+        "developer"
+    }
+
+    fn markers(&self) -> (&'static str, &'static str) {
+        Self::type_markers()
+    }
+
+    fn type_markers() -> (&'static str, &'static str) {
+        (
+            PLUGINS_INSTRUCTIONS_OPEN_TAG,
+            PLUGINS_INSTRUCTIONS_CLOSE_TAG,
+        )
+    }
 
     fn body(&self) -> String {
         let mut lines = vec![

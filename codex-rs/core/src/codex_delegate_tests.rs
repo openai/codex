@@ -129,6 +129,7 @@ async fn forward_ops_preserves_submission_trace_context() {
     let submission = Submission {
         id: "sub-1".to_string(),
         op: Op::Interrupt,
+        client_user_message_id: None,
         trace: Some(codex_protocol::protocol::W3cTraceContext {
             traceparent: Some(
                 "00-1234567890abcdef1234567890abcdef-1234567890abcdef-01".to_string(),
@@ -207,6 +208,7 @@ async fn handle_request_permissions_uses_tool_call_id_for_round_trip() {
         scope: PermissionGrantScope::Turn,
         strict_auto_review: false,
     };
+    #[allow(deprecated)]
     let delegated_cwd = parent_ctx.cwd.join("delegated-cwd");
     let cancel_token = CancellationToken::new();
     let request_call_id = call_id.clone();

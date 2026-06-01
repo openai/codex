@@ -28,6 +28,8 @@ pub type CodexTurnId = String;
 pub type ConversationItemId = String;
 /// Local ID for one outbound upstream inference request.
 pub type InferenceCallId = String;
+/// Globally unique ID for one concrete MCP backend request.
+pub type McpCallId = String;
 /// Reducer-owned ID for one runtime tool-call object.
 pub type ToolCallId = String;
 /// Responses `call_id` / custom-tool call ID visible in inference payloads.

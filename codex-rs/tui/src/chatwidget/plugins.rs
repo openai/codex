@@ -60,6 +60,18 @@ const PLUGIN_ROW_PREFIX_WIDTH: usize = 6;
 const LOADING_ANIMATION_DELAY: Duration = Duration::from_secs(1);
 const LOADING_ANIMATION_INTERVAL: Duration = Duration::from_millis(100);
 
+#[derive(Debug, Clone, Default)]
+pub(super) struct PluginListFetchState {
+    pub(super) cache_cwd: Option<PathBuf>,
+    pub(super) in_flight_cwd: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct PluginInstallAuthFlowState {
+    plugin_display_name: String,
+    next_app_index: usize,
+}
+
 struct DelayedLoadingHeader {
     started_at: Instant,
     frame_requester: FrameRequester,
@@ -474,7 +486,7 @@ impl ChatWidget {
                             self.plugin_install_apps_needing_auth.len()
                         )),
                     );
-                    self.plugin_install_auth_flow = Some(super::PluginInstallAuthFlowState {
+                    self.plugin_install_auth_flow = Some(PluginInstallAuthFlowState {
                         plugin_display_name,
                         next_app_index: 0,
                     });
@@ -2011,10 +2023,11 @@ fn marketplace_display_name(marketplace: &PluginMarketplaceEntry) -> String {
 }
 
 fn marketplace_is_user_configured(config: &Config, marketplace_name: &str) -> bool {
-    config
-        .config_layer_stack
-        .get_user_layer()
-        .and_then(|user_layer| user_layer.config.get("marketplaces"))
+    let Some(user_config) = config.config_layer_stack.effective_user_config() else {
+        return false;
+    };
+    user_config
+        .get("marketplaces")
         .and_then(toml::Value::as_table)
         .is_some_and(|marketplaces| marketplaces.contains_key(marketplace_name))
 }
@@ -2022,7 +2035,7 @@ fn marketplace_is_user_configured(config: &Config, marketplace_name: &str) -> bo
 fn marketplace_is_user_configured_git(config: &Config, marketplace_name: &str) -> bool {
     config
         .config_layer_stack
-        .get_user_layer()
+        .get_active_user_layer()
         .and_then(|user_layer| user_layer.config.get("marketplaces"))
         .and_then(toml::Value::as_table)
         .and_then(|marketplaces| marketplaces.get(marketplace_name))

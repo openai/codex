@@ -23,12 +23,11 @@ use codex_core::thread_store_from_config;
 use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::RemoveOptions;
-use codex_features::Feature;
+use codex_extension_api::empty_extension_registry;
 use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::built_in_model_providers;
 use codex_models_manager::bundled_models_response;
-use codex_protocol::config_types::ServiceTier;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::protocol::AskForApproval;
@@ -184,27 +183,20 @@ fn docker_command_capture_stdout<const N: usize>(args: [&str; N]) -> Result<Stri
     String::from_utf8(output.stdout).context("docker stdout must be utf-8")
 }
 
-/// A collection of different ways the model can output an apply_patch call
+/// Non-default apply_patch model output shapes used by compatibility tests.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ApplyPatchModelOutput {
-    Freeform,
-    Function,
-    Shell,
-    ShellViaHeredoc,
     ShellCommandViaHeredoc,
 }
 
 /// A collection of different ways the model can output an apply_patch call
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ShellModelOutput {
-    Shell,
     ShellCommand,
-    LocalShell,
     // UnifiedExec has its own set of tests
 }
 
-/// Returns the permission fields required by `Op::UserTurn` for tests that
-/// construct the op directly.
+/// Returns the permission fields required by test thread-settings overrides.
 pub fn turn_permission_fields(
     permission_profile: PermissionProfile,
     cwd: &Path,
@@ -300,11 +292,14 @@ impl TestCodexBuilder {
         };
         let base_url = format!("{}/v1", server.uri());
         let test_env = TestEnv::local().await?;
-        Box::pin(self.build_with_home_and_base_url(base_url, home, /*resume_from*/ None, test_env))
-            .await
+        Box::pin(self.build_with_home_and_base_url(
+            base_url, home, /*resume_from*/ None, test_env,
+            /*include_local_environment*/ false,
+        ))
+        .await
     }
 
-    pub async fn build_remote_aware(
+    pub async fn build_with_remote_env(
         &mut self,
         server: &wiremock::MockServer,
     ) -> anyhow::Result<TestCodex> {
@@ -314,8 +309,28 @@ impl TestCodexBuilder {
         };
         let base_url = format!("{}/v1", server.uri());
         let test_env = test_env().await?;
-        Box::pin(self.build_with_home_and_base_url(base_url, home, /*resume_from*/ None, test_env))
-            .await
+        Box::pin(self.build_with_home_and_base_url(
+            base_url, home, /*resume_from*/ None, test_env,
+            /*include_local_environment*/ false,
+        ))
+        .await
+    }
+
+    pub async fn build_with_remote_and_local_env(
+        &mut self,
+        server: &wiremock::MockServer,
+    ) -> anyhow::Result<TestCodex> {
+        let home = match self.home.clone() {
+            Some(home) => home,
+            None => Arc::new(TempDir::new()?),
+        };
+        let base_url = format!("{}/v1", server.uri());
+        let test_env = test_env().await?;
+        Box::pin(self.build_with_home_and_base_url(
+            base_url, home, /*resume_from*/ None, test_env,
+            /*include_local_environment*/ true,
+        ))
+        .await
     }
 
     pub async fn build_with_streaming_server(
@@ -333,6 +348,7 @@ impl TestCodexBuilder {
             home,
             /*resume_from*/ None,
             test_env,
+            /*include_local_environment*/ false,
         ))
         .await
     }
@@ -354,8 +370,11 @@ impl TestCodexBuilder {
             config.realtime.version = RealtimeWsVersion::V1;
         }));
         let test_env = TestEnv::local().await?;
-        Box::pin(self.build_with_home_and_base_url(base_url, home, /*resume_from*/ None, test_env))
-            .await
+        Box::pin(self.build_with_home_and_base_url(
+            base_url, home, /*resume_from*/ None, test_env,
+            /*include_local_environment*/ false,
+        ))
+        .await
     }
 
     pub async fn resume(
@@ -366,8 +385,14 @@ impl TestCodexBuilder {
     ) -> anyhow::Result<TestCodex> {
         let base_url = format!("{}/v1", server.uri());
         let test_env = TestEnv::local().await?;
-        Box::pin(self.build_with_home_and_base_url(base_url, home, Some(rollout_path), test_env))
-            .await
+        Box::pin(self.build_with_home_and_base_url(
+            base_url,
+            home,
+            Some(rollout_path),
+            test_env,
+            /*include_local_environment*/ false,
+        ))
+        .await
     }
 
     async fn build_with_home_and_base_url(
@@ -376,6 +401,7 @@ impl TestCodexBuilder {
         home: Arc<TempDir>,
         resume_from: Option<PathBuf>,
         test_env: TestEnv,
+        include_local_environment: bool,
     ) -> anyhow::Result<TestCodex> {
         let (config, fallback_cwd) = self
             .prepare_config(base_url, &home, test_env.cwd().clone())
@@ -384,17 +410,30 @@ impl TestCodexBuilder {
             .exec_server_url
             .clone()
             .or_else(|| test_env.exec_server_url.clone());
+        #[cfg(target_os = "linux")]
+        let codex_linux_sandbox_exe = Some(
+            crate::find_codex_linux_sandbox_exe()
+                .context("should find binary for codex-linux-sandbox")?,
+        );
+        #[cfg(not(target_os = "linux"))]
+        let codex_linux_sandbox_exe = None;
         let local_runtime_paths = codex_exec_server::ExecServerRuntimePaths::new(
             std::env::current_exe()?,
-            /*codex_linux_sandbox_exe*/ None,
+            codex_linux_sandbox_exe,
         )?;
-        let environment_manager = Arc::new(
-            codex_exec_server::EnvironmentManager::create_for_tests(
+        let environment_manager = Arc::new(if include_local_environment {
+            codex_exec_server::EnvironmentManager::create_for_tests_with_local(
                 exec_server_url,
                 local_runtime_paths,
             )
-            .await,
-        );
+            .await
+        } else {
+            codex_exec_server::EnvironmentManager::create_for_tests(
+                exec_server_url,
+                Some(local_runtime_paths),
+            )
+            .await
+        });
         let file_system = test_env.environment().get_filesystem();
         let mut workspace_setups = vec![];
         swap(&mut self.workspace_setups, &mut workspace_setups);
@@ -431,10 +470,12 @@ impl TestCodexBuilder {
             codex_core::test_support::auth_manager_from_auth(auth.clone()),
             SessionSource::Exec,
             Arc::clone(&environment_manager),
+            empty_extension_registry(),
             /*analytics_events_client*/ None,
             thread_store,
             state_db.clone(),
             installation_id,
+            /*attestation_provider*/ None,
         );
         let thread_manager = Arc::new(thread_manager);
         let user_shell_override = self.user_shell_override.clone();
@@ -536,12 +577,6 @@ impl TestCodexBuilder {
         }
         ensure_test_model_catalog(&mut config)?;
 
-        if config.include_apply_patch_tool {
-            config.features.enable(Feature::ApplyPatchFreeform)?;
-        } else {
-            config.features.disable(Feature::ApplyPatchFreeform)?;
-        }
-
         Ok((config, cwd))
     }
 }
@@ -631,13 +666,13 @@ impl TestCodex {
     pub async fn submit_turn_with_service_tier(
         &self,
         prompt: &str,
-        service_tier: Option<ServiceTier>,
+        service_tier: Option<&str>,
     ) -> Result<()> {
         self.submit_turn_with_permission_profile_context(
             prompt,
             AskForApproval::Never,
             PermissionProfile::Disabled,
-            Some(service_tier.map(|service_tier| service_tier.request_value().to_string())),
+            Some(service_tier.map(str::to_string)),
             /*environments*/ None,
         )
         .await
@@ -724,24 +759,31 @@ impl TestCodex {
             turn_permission_fields(permission_profile, self.config.cwd.as_path());
         let session_model = self.session_configured.model.clone();
         self.codex
-            .submit(Op::UserTurn {
-                environments,
+            .submit(Op::UserInput {
                 items: vec![UserInput::Text {
                     text: prompt.into(),
                     text_elements: Vec::new(),
                 }],
+                environments,
                 final_output_json_schema: None,
-                cwd: self.config.cwd.to_path_buf(),
-                approval_policy,
-                approvals_reviewer: None,
-                sandbox_policy,
-                permission_profile,
-                model: session_model,
-                effort: None,
-                summary: None,
-                service_tier,
-                collaboration_mode: None,
-                personality: None,
+                responsesapi_client_metadata: None,
+                additional_context: Default::default(),
+                thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+                    cwd: Some(self.config.cwd.to_path_buf()),
+                    approval_policy: Some(approval_policy),
+                    sandbox_policy: Some(sandbox_policy),
+                    permission_profile,
+                    service_tier,
+                    collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
+                        mode: codex_protocol::config_types::ModeKind::Default,
+                        settings: codex_protocol::config_types::Settings {
+                            model: session_model,
+                            reasoning_effort: None,
+                            developer_instructions: None,
+                        },
+                    }),
+                    ..Default::default()
+                },
             })
             .await?;
 
@@ -783,9 +825,9 @@ impl TestCodexHarness {
         Ok(Self { server, test })
     }
 
-    pub async fn with_remote_aware_builder(mut builder: TestCodexBuilder) -> Result<Self> {
+    pub async fn with_remote_env_builder(mut builder: TestCodexBuilder) -> Result<Self> {
         let server = start_mock_server().await;
-        let test = builder.build_remote_aware(&server).await?;
+        let test = builder.build_with_remote_env(&server).await?;
         Ok(Self { server, test })
     }
 
@@ -939,24 +981,8 @@ impl TestCodexHarness {
         custom_tool_call_output_text(&bodies, call_id)
     }
 
-    pub async fn apply_patch_output(
-        &self,
-        call_id: &str,
-        output_type: ApplyPatchModelOutput,
-    ) -> String {
-        // Box the awaited output helpers so callers do not inline request
-        // capture and response parsing into their own async state.
-        match output_type {
-            ApplyPatchModelOutput::Freeform => {
-                Box::pin(self.custom_tool_call_output(call_id)).await
-            }
-            ApplyPatchModelOutput::Function
-            | ApplyPatchModelOutput::Shell
-            | ApplyPatchModelOutput::ShellViaHeredoc
-            | ApplyPatchModelOutput::ShellCommandViaHeredoc => {
-                Box::pin(self.function_call_stdout(call_id)).await
-            }
-        }
+    pub async fn apply_patch_output(&self, call_id: &str) -> String {
+        self.custom_tool_call_output(call_id).await
     }
 }
 

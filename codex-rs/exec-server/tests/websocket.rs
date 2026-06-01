@@ -9,6 +9,12 @@ use codex_exec_server::InitializeParams;
 use codex_exec_server::InitializeResponse;
 use common::exec_server::exec_server;
 use pretty_assertions::assert_eq;
+use tokio_tungstenite::connect_async;
+use tokio_tungstenite::tungstenite::Error as WebSocketError;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tokio_tungstenite::tungstenite::http::HeaderValue;
+use tokio_tungstenite::tungstenite::http::StatusCode;
+use tokio_tungstenite::tungstenite::http::header::ORIGIN;
 use uuid::Uuid;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -56,6 +62,63 @@ async fn exec_server_reports_malformed_websocket_json_and_keeps_running() -> any
     assert_eq!(id, initialize_id);
     let initialize_response: InitializeResponse = serde_json::from_value(result)?;
     Uuid::parse_str(&initialize_response.session_id)?;
+
+    server.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn exec_server_accepts_binary_websocket_json() -> anyhow::Result<()> {
+    let mut server = exec_server().await?;
+    let initialize_id = codex_app_server_protocol::RequestId::Integer(1);
+    let initialize = JSONRPCMessage::Request(codex_app_server_protocol::JSONRPCRequest {
+        id: initialize_id.clone(),
+        method: "initialize".to_string(),
+        params: Some(serde_json::to_value(InitializeParams {
+            client_name: "exec-server-binary-test".to_string(),
+            resume_session_id: None,
+        })?),
+        trace: None,
+    });
+    server
+        .send_raw_binary(serde_json::to_vec(&initialize)?)
+        .await?;
+
+    let response = server
+        .wait_for_event(|event| {
+            matches!(
+                event,
+                JSONRPCMessage::Response(JSONRPCResponse { id, .. }) if id == &initialize_id
+            )
+        })
+        .await?;
+    let JSONRPCMessage::Response(JSONRPCResponse { id, result }) = response else {
+        panic!("expected initialize response for binary input");
+    };
+    assert_eq!(id, initialize_id);
+    let initialize_response: InitializeResponse = serde_json::from_value(result)?;
+    Uuid::parse_str(&initialize_response.session_id)?;
+
+    server.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn exec_server_rejects_browser_origin_websocket_handshake() -> anyhow::Result<()> {
+    let mut server = exec_server().await?;
+    let mut request = server.websocket_url().into_client_request()?;
+    request
+        .headers_mut()
+        .insert(ORIGIN, HeaderValue::from_static("https://evil.example"));
+
+    let error = match connect_async(request).await {
+        Ok(_) => anyhow::bail!("browser-origin websocket handshake should be rejected"),
+        Err(error) => error,
+    };
+    let WebSocketError::Http(response) = error else {
+        anyhow::bail!("browser-origin websocket handshake failed unexpectedly: {error}");
+    };
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
 
     server.shutdown().await?;
     Ok(())

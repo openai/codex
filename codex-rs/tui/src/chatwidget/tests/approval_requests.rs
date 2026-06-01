@@ -145,6 +145,129 @@ fn app_server_exec_approval_request_preserves_permissions_context() {
     );
 }
 
+#[tokio::test]
+async fn network_exec_approval_history_describes_session_host_allowance() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let request = exec_approval_request_from_params(
+        AppServerCommandExecutionRequestApprovalParams {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            item_id: "item-1".to_string(),
+            started_at_ms: 0,
+            approval_id: Some("approval-1".to_string()),
+            reason: None,
+            network_approval_context: Some(codex_app_server_protocol::NetworkApprovalContext {
+                host: "example.com".to_string(),
+                protocol: codex_app_server_protocol::NetworkApprovalProtocol::Https,
+            }),
+            command: Some("network-access https://example.com:8443".to_string()),
+            cwd: None,
+            command_actions: None,
+            additional_permissions: None,
+            proposed_execpolicy_amendment: None,
+            proposed_network_policy_amendments: None,
+            available_decisions: Some(vec![
+                codex_app_server_protocol::CommandExecutionApprovalDecision::AcceptForSession,
+                codex_app_server_protocol::CommandExecutionApprovalDecision::Cancel,
+            ]),
+        },
+        &test_path_buf("/tmp").abs(),
+    );
+
+    handle_exec_approval_request(&mut chat, "sub-network", request);
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
+
+    let decision = drain_insert_history(&mut rx)
+        .pop()
+        .expect("expected decision cell in history");
+    assert_snapshot!(
+        "network_exec_approval_history_session_host_allowance",
+        lines_to_single_string(&decision)
+    );
+}
+
+#[tokio::test]
+async fn network_exec_approval_history_describes_one_time_host_allowance() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let request = exec_approval_request_from_params(
+        AppServerCommandExecutionRequestApprovalParams {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            item_id: "item-1".to_string(),
+            started_at_ms: 0,
+            approval_id: Some("approval-1".to_string()),
+            reason: None,
+            network_approval_context: Some(codex_app_server_protocol::NetworkApprovalContext {
+                host: "example.com".to_string(),
+                protocol: codex_app_server_protocol::NetworkApprovalProtocol::Http,
+            }),
+            command: None,
+            cwd: None,
+            command_actions: None,
+            additional_permissions: None,
+            proposed_execpolicy_amendment: None,
+            proposed_network_policy_amendments: None,
+            available_decisions: Some(vec![
+                codex_app_server_protocol::CommandExecutionApprovalDecision::Accept,
+                codex_app_server_protocol::CommandExecutionApprovalDecision::Cancel,
+            ]),
+        },
+        &test_path_buf("/tmp").abs(),
+    );
+
+    handle_exec_approval_request(&mut chat, "sub-network", request);
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+
+    let decision = drain_insert_history(&mut rx)
+        .pop()
+        .expect("expected decision cell in history");
+    assert_snapshot!(
+        "network_exec_approval_history_one_time_host_allowance",
+        lines_to_single_string(&decision)
+    );
+}
+
+#[tokio::test]
+async fn network_exec_approval_history_describes_canceled_host_request() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let request = exec_approval_request_from_params(
+        AppServerCommandExecutionRequestApprovalParams {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            item_id: "item-1".to_string(),
+            started_at_ms: 0,
+            approval_id: Some("approval-1".to_string()),
+            reason: None,
+            network_approval_context: Some(codex_app_server_protocol::NetworkApprovalContext {
+                host: "example.com".to_string(),
+                protocol: codex_app_server_protocol::NetworkApprovalProtocol::Socks5Tcp,
+            }),
+            command: Some("network-access socks5-tcp://example.com:1080".to_string()),
+            cwd: None,
+            command_actions: None,
+            additional_permissions: None,
+            proposed_execpolicy_amendment: None,
+            proposed_network_policy_amendments: None,
+            available_decisions: Some(vec![
+                codex_app_server_protocol::CommandExecutionApprovalDecision::Accept,
+                codex_app_server_protocol::CommandExecutionApprovalDecision::Cancel,
+            ]),
+        },
+        &test_path_buf("/tmp").abs(),
+    );
+
+    handle_exec_approval_request(&mut chat, "sub-network", request);
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE));
+
+    let decision = drain_insert_history(&mut rx)
+        .pop()
+        .expect("expected decision cell in history");
+    assert_snapshot!(
+        "network_exec_approval_history_canceled_host_request",
+        lines_to_single_string(&decision)
+    );
+}
+
 #[test]
 fn app_server_request_permissions_preserves_file_system_permissions() {
     let read_path = AbsolutePathBuf::try_from(PathBuf::from(test_path_display("/tmp/read-only")))

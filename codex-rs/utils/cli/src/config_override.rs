@@ -37,6 +37,13 @@ pub struct CliConfigOverrides {
 }
 
 impl CliConfigOverrides {
+    /// Prepend root-level config flags so they have lower precedence than
+    /// command-specific flags parsed after a subcommand.
+    pub fn prepend_root_overrides(&mut self, root_overrides: Self) {
+        self.raw_overrides
+            .splice(0..0, root_overrides.raw_overrides);
+    }
+
     /// Parse the raw strings captured from the CLI into a list of `(path,
     /// value)` tuples where `value` is a `serde_json::Value`.
     pub fn parse_overrides(&self) -> Result<Vec<(String, Value)>, String> {
@@ -188,6 +195,24 @@ mod tests {
         let parsed = overrides.parse_overrides().expect("parse_overrides");
         assert_eq!(parsed[0].0.as_str(), "features.use_legacy_landlock");
         assert_eq!(parsed[0].1.as_bool(), Some(true));
+    }
+
+    #[test]
+    fn prepends_root_overrides() {
+        let mut subcommand_overrides = CliConfigOverrides {
+            raw_overrides: vec![r#"model="gpt-5.2""#.to_string()],
+        };
+        subcommand_overrides.prepend_root_overrides(CliConfigOverrides {
+            raw_overrides: vec![r#"model="gpt-5.1""#.to_string()],
+        });
+
+        assert_eq!(
+            subcommand_overrides.raw_overrides,
+            vec![
+                r#"model="gpt-5.1""#.to_string(),
+                r#"model="gpt-5.2""#.to_string(),
+            ]
+        );
     }
 
     #[test]

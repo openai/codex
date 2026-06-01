@@ -1,6 +1,3 @@
-#![cfg(target_os = "windows")]
-
-#[path = "wfp_filter_specs.rs"]
 mod filter_specs;
 
 use crate::to_wide;
@@ -9,23 +6,22 @@ use std::ffi::OsStr;
 use std::mem::zeroed;
 use std::ptr::null;
 use std::ptr::null_mut;
-use windows_sys::core::GUID;
 use windows_sys::Win32::Foundation::FWP_E_ALREADY_EXISTS;
 use windows_sys::Win32::Foundation::FWP_E_FILTER_NOT_FOUND;
 use windows_sys::Win32::Foundation::FWP_E_NOT_FOUND;
 use windows_sys::Win32::Foundation::HANDLE;
 use windows_sys::Win32::Foundation::HLOCAL;
 use windows_sys::Win32::Foundation::LocalFree;
-use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWP_ACTRL_MATCH_FILTER;
 use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWP_ACTION_BLOCK;
+use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWP_ACTRL_MATCH_FILTER;
 use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWP_BYTE_BLOB;
 use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWP_CONDITION_VALUE0;
 use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWP_CONDITION_VALUE0_0;
 use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWP_EMPTY;
 use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWP_MATCH_EQUAL;
 use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWP_SECURITY_DESCRIPTOR_TYPE;
-use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWP_UINT16;
 use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWP_UINT8;
+use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWP_UINT16;
 use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWP_VALUE0;
 use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWPM_ACTION0;
 use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWPM_ACTION0_0;
@@ -33,15 +29,15 @@ use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWPM_CONDIT
 use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWPM_CONDITION_IP_PROTOCOL;
 use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWPM_CONDITION_IP_REMOTE_PORT;
 use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWPM_DISPLAY_DATA0;
-use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWPM_FILTER0;
-use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWPM_FILTER0_0;
 use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWPM_FILTER_CONDITION0;
 use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWPM_FILTER_FLAG_PERSISTENT;
-use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWPM_PROVIDER0;
+use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWPM_FILTER0;
+use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWPM_FILTER0_0;
 use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWPM_PROVIDER_FLAG_PERSISTENT;
+use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWPM_PROVIDER0;
 use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWPM_SESSION0;
-use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWPM_SUBLAYER0;
 use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWPM_SUBLAYER_FLAG_PERSISTENT;
+use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWPM_SUBLAYER0;
 use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FwpmEngineClose0;
 use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FwpmEngineOpen0;
 use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FwpmFilterAdd0;
@@ -58,6 +54,7 @@ use windows_sys::Win32::Security::Authorization::GRANT_ACCESS;
 use windows_sys::Win32::Security::PSECURITY_DESCRIPTOR;
 use windows_sys::Win32::System::Rpc::RPC_C_AUTHN_DEFAULT;
 use windows_sys::Win32::System::Threading::INFINITE;
+use windows_sys::core::GUID;
 
 use filter_specs::ConditionSpec;
 use filter_specs::FILTER_SPECS;
@@ -267,7 +264,11 @@ fn ensure_sublayer(engine: HANDLE) -> Result<()> {
 }
 
 /// Adds one blocking WFP filter from the static filter spec list.
-fn add_filter(engine: HANDLE, spec: &FilterSpec, user_condition: &UserMatchCondition) -> Result<()> {
+fn add_filter(
+    engine: HANDLE,
+    spec: &FilterSpec,
+    user_condition: &UserMatchCondition,
+) -> Result<()> {
     let filter_name = to_wide(OsStr::new(spec.name));
     let filter_description = to_wide(OsStr::new(spec.description));
     let mut filter_conditions = build_conditions(spec.conditions, user_condition);
@@ -288,7 +289,9 @@ fn add_filter(engine: HANDLE, spec: &FilterSpec, user_condition: &UserMatchCondi
         filterCondition: filter_conditions.as_mut_ptr(),
         action: FWPM_ACTION0 {
             r#type: FWP_ACTION_BLOCK,
-            Anonymous: FWPM_ACTION0_0 { filterType: zero_guid() },
+            Anonymous: FWPM_ACTION0_0 {
+                filterType: zero_guid(),
+            },
         },
         Anonymous: FWPM_FILTER0_0 { rawContext: 0 },
         reserved: null_mut(),
@@ -396,14 +399,24 @@ mod tests {
     fn filter_keys_are_unique() {
         let keys = FILTER_SPECS
             .iter()
-            .map(|spec| (spec.key.data1, spec.key.data2, spec.key.data3, spec.key.data4))
+            .map(|spec| {
+                (
+                    spec.key.data1,
+                    spec.key.data2,
+                    spec.key.data3,
+                    spec.key.data4,
+                )
+            })
             .collect::<BTreeSet<_>>();
         assert_eq!(keys.len(), FILTER_SPECS.len());
     }
 
     #[test]
     fn filter_names_are_unique() {
-        let names = FILTER_SPECS.iter().map(|spec| spec.name).collect::<BTreeSet<_>>();
+        let names = FILTER_SPECS
+            .iter()
+            .map(|spec| spec.name)
+            .collect::<BTreeSet<_>>();
         assert_eq!(names.len(), FILTER_SPECS.len());
     }
 }

@@ -6,6 +6,8 @@ expression: "render_lines(&view, 112)"
   Hooks                                                                                                         
   Lifecycle hooks from config and enabled plugins.                                                              
                                                                                                                 
+  ⚠ 1 hook needs review before it can run.                                                                      
+                                                                                                                
   Event                 Installed   Active      Review      Description                                         
   PreToolUse            1           0           1           Before a tool executes                              
   PermissionRequest     0           0           0           When permission is requested                        
@@ -14,6 +16,8 @@ expression: "render_lines(&view, 112)"
   PostCompact           0           0           0           After context compaction                            
   SessionStart          0           0           0           When a new session starts                           
   UserPromptSubmit      0           0           0           When the user submits a prompt                      
+  SubagentStart         0           0           0           When a subagent is created                          
+  SubagentStop          0           0           0           Right before a subagent ends its turn               
   Stop                  0           0           0           Right before Codex ends its turn                    
                                                                                                                 
-  Press enter to view hooks; esc to close
+  Press t to trust all; enter to review hooks; esc to close

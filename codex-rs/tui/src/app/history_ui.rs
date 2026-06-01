@@ -41,7 +41,9 @@ impl App {
     }
 
     pub(super) fn queue_clear_ui_header(&mut self, tui: &mut tui::Tui) {
-        let width = tui.terminal.last_known_screen_size.width;
+        let width = self
+            .chat_widget
+            .history_wrap_width(tui.terminal.last_known_screen_size.width);
         let header_lines = self.clear_ui_header_lines(width);
         if !header_lines.is_empty() {
             tui.insert_history_lines(header_lines);

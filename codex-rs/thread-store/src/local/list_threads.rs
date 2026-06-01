@@ -107,7 +107,7 @@ pub(super) async fn list_threads(
     Ok(ThreadPage { items, next_cursor })
 }
 
-async fn list_rollout_threads(
+pub(super) async fn list_rollout_threads(
     state_db: Option<codex_rollout::StateDbHandle>,
     config: &RolloutConfig,
     default_model_provider_id: &str,
@@ -267,6 +267,7 @@ mod tests {
         let mut metadata = builder.build(config.default_model_provider_id.as_str());
         metadata.title = "needle title".to_string();
         metadata.first_user_message = Some("plain preview".to_string());
+        metadata.preview = metadata.first_user_message.clone();
         runtime
             .upsert_thread(&metadata)
             .await

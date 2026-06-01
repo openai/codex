@@ -948,10 +948,8 @@ impl ScanState {
             '(' => self.depth.paren += 1,
             ')' => self.depth.paren = (self.depth.paren - 1).max(0),
             '<' => self.depth.angle += 1,
-            '>' => {
-                if self.depth.angle > 0 {
-                    self.depth.angle -= 1;
-                }
+            '>' if self.depth.angle > 0 => {
+                self.depth.angle -= 1;
             }
             _ => {}
         }
@@ -2212,20 +2210,14 @@ mod tests {
                         continue;
                     }
                     match ch {
-                        '\\' => {
-                            if in_single || in_double {
-                                escape = true;
-                            }
+                        '\\' if (in_single || in_double) => {
+                            escape = true;
                         }
-                        '\'' => {
-                            if !in_double {
-                                in_single = !in_single;
-                            }
+                        '\'' if !in_double => {
+                            in_single = !in_single;
                         }
-                        '"' => {
-                            if !in_single {
-                                in_double = !in_double;
-                            }
+                        '"' if !in_single => {
+                            in_double = !in_double;
                         }
                         '{' if !in_single && !in_double => level_brace += 1,
                         '}' if !in_single && !in_double => level_brace -= 1,
@@ -2747,7 +2739,6 @@ export type Config = { stableField: Keep, unstableField: string | null } & ({ [k
         let _guard = TempDirGuard(output_dir.clone());
         let path = output_dir.join("CommandExecParams.ts");
         let content = r#"import type { CommandExecTerminalSize } from "./CommandExecTerminalSize";
-import type { PermissionProfile } from "./PermissionProfile";
 import type { SandboxPolicy } from "./SandboxPolicy";
 
 export type CommandExecParams = {/**
@@ -2770,12 +2761,12 @@ size?: CommandExecTerminalSize | null, /**
  */
 sandboxPolicy?: SandboxPolicy | null,
 /**
- * Optional full permissions profile for this command.
+ * Optional active permissions profile id for this command.
  *
  * Defaults to the user's configured permissions when omitted. Cannot be
  * combined with `sandboxPolicy`.
  */
-permissionProfile?: PermissionProfile | null};
+permissionProfile?: string | null};
 "#;
         fs::write(&path, content)?;
 
@@ -2788,14 +2779,7 @@ permissionProfile?: PermissionProfile | null};
         filter_experimental_type_fields_ts(&output_dir, &[&CUSTOM_FIELD])?;
 
         let filtered = fs::read_to_string(&path)?;
-        assert_eq!(
-            filtered.contains("permissionProfile?: PermissionProfile"),
-            false
-        );
-        assert_eq!(
-            filtered.contains(r#"import type { PermissionProfile } from "./PermissionProfile";"#),
-            false
-        );
+        assert_eq!(filtered.contains("permissionProfile?: string"), false);
         assert_eq!(filtered.contains("sandboxPolicy?: SandboxPolicy"), true);
         assert_eq!(
             filtered.contains(r#"import type { SandboxPolicy } from "./SandboxPolicy";"#),

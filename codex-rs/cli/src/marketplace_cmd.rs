@@ -6,11 +6,15 @@ use codex_core::config::Config;
 use codex_core::config::find_codex_home;
 use codex_core_plugins::PluginMarketplaceUpgradeOutcome;
 use codex_core_plugins::PluginsManager;
+use codex_core_plugins::marketplace::marketplace_root_dir;
 use codex_core_plugins::marketplace_add::MarketplaceAddRequest;
 use codex_core_plugins::marketplace_add::add_marketplace;
 use codex_core_plugins::marketplace_remove::MarketplaceRemoveRequest;
 use codex_core_plugins::marketplace_remove::remove_marketplace;
 use codex_utils_cli::CliConfigOverrides;
+use std::collections::HashSet;
+
+use crate::plugin_cmd::configured_marketplace_snapshot_issues;
 
 #[derive(Debug, Parser)]
 #[command(bin_name = "codex plugin marketplace")]
@@ -24,21 +28,36 @@ pub struct MarketplaceCli {
 
 #[derive(Debug, clap::Subcommand)]
 enum MarketplaceSubcommand {
+    /// Add a local or Git marketplace to the configured marketplace sources.
     Add(AddMarketplaceArgs),
+
+    /// List plugin marketplaces Codex is currently considering and their roots.
+    List,
+
+    /// Refresh configured Git marketplace snapshots.
+    ///
+    /// Omit MARKETPLACE_NAME to upgrade all configured Git marketplaces.
     Upgrade(UpgradeMarketplaceArgs),
+
+    /// Remove a configured marketplace source by name.
     Remove(RemoveMarketplaceArgs),
 }
 
 #[derive(Debug, Parser)]
-#[command(bin_name = "codex plugin marketplace add")]
+#[command(
+    bin_name = "codex plugin marketplace add",
+    after_help = "Examples:\n  codex plugin marketplace add ./path/to/marketplace\n  codex plugin marketplace add owner/repo --ref main\n  codex plugin marketplace add https://github.com/owner/repo --sparse plugins/foo"
+)]
 struct AddMarketplaceArgs {
-    /// Marketplace source. Supports owner/repo[@ref], HTTP(S) Git URLs, SSH URLs,
-    /// or local marketplace root directories.
+    /// Marketplace source: a local path, owner/repo[@ref], HTTPS Git URL, or SSH Git URL.
+    #[arg(value_name = "SOURCE")]
     source: String,
 
+    /// Git ref to fetch for Git marketplace sources.
     #[arg(long = "ref", value_name = "REF")]
     ref_name: Option<String>,
 
+    /// Sparse checkout path for Git marketplace sources. Can be repeated.
     #[arg(
         long = "sparse",
         value_name = "PATH",
@@ -48,15 +67,24 @@ struct AddMarketplaceArgs {
 }
 
 #[derive(Debug, Parser)]
-#[command(bin_name = "codex plugin marketplace upgrade")]
+#[command(
+    bin_name = "codex plugin marketplace upgrade",
+    after_help = "Examples:\n  codex plugin marketplace upgrade\n  codex plugin marketplace upgrade debug"
+)]
 struct UpgradeMarketplaceArgs {
+    /// Optional configured marketplace name to upgrade. Omit to upgrade all Git marketplaces.
+    #[arg(value_name = "MARKETPLACE_NAME")]
     marketplace_name: Option<String>,
 }
 
 #[derive(Debug, Parser)]
-#[command(bin_name = "codex plugin marketplace remove")]
+#[command(
+    bin_name = "codex plugin marketplace remove",
+    after_help = "Example:\n  codex plugin marketplace remove debug"
+)]
 struct RemoveMarketplaceArgs {
     /// Configured marketplace name to remove.
+    #[arg(value_name = "MARKETPLACE_NAME")]
     marketplace_name: String,
 }
 
@@ -73,6 +101,7 @@ impl MarketplaceCli {
 
         match subcommand {
             MarketplaceSubcommand::Add(args) => run_add(args).await?,
+            MarketplaceSubcommand::List => run_list(overrides).await?,
             MarketplaceSubcommand::Upgrade(args) => run_upgrade(overrides, args).await?,
             MarketplaceSubcommand::Remove(args) => run_remove(args).await?,
         }
@@ -114,6 +143,86 @@ async fn run_add(args: AddMarketplaceArgs) -> Result<()> {
         "Installed marketplace root: {}",
         outcome.installed_root.as_path().display()
     );
+
+    Ok(())
+}
+
+async fn run_list(overrides: Vec<(String, toml::Value)>) -> Result<()> {
+    let config = Config::load_with_cli_overrides(overrides)
+        .await
+        .context("failed to load configuration")?;
+    let manager = PluginsManager::new(config.codex_home.to_path_buf());
+    let plugins_input = config.plugins_config_input();
+    let marketplace_listing = manager
+        .discover_marketplaces_for_config(&plugins_input, &[])
+        .context("failed to list plugin marketplaces")?;
+    let mut load_issues = configured_marketplace_snapshot_issues(
+        config.codex_home.as_path(),
+        &plugins_input,
+        &marketplace_listing.errors,
+        /*marketplace_name*/ None,
+    );
+    let mut issue_paths = load_issues
+        .iter()
+        .map(|issue| issue.path.clone())
+        .collect::<HashSet<_>>();
+    for error in &marketplace_listing.errors {
+        if issue_paths.insert(error.path.to_path_buf()) {
+            load_issues.push(crate::plugin_cmd::ConfiguredMarketplaceSnapshotIssue {
+                marketplace_name: error.path.display().to_string(),
+                path: error.path.to_path_buf(),
+                message: error.message.clone(),
+            });
+        }
+    }
+    if !load_issues.is_empty() {
+        let issue_lines = load_issues
+            .iter()
+            .map(|issue| {
+                format!(
+                    "- `{}` at {}: {}",
+                    issue.marketplace_name,
+                    issue.path.display(),
+                    issue.message
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        bail!("failed to load marketplace(s):\n{issue_lines}");
+    }
+    let marketplaces = marketplace_listing.marketplaces;
+    if marketplaces.is_empty() {
+        println!("No plugin marketplaces in scope.");
+        return Ok(());
+    }
+
+    let mut seen_roots = HashSet::new();
+    let mut rows = Vec::new();
+    for marketplace in marketplaces {
+        let Ok(root) = marketplace_root_dir(&marketplace.path) else {
+            continue;
+        };
+        if !seen_roots.insert(root.clone()) {
+            continue;
+        }
+        rows.push((marketplace.name, root));
+    }
+
+    let marketplace_width = rows
+        .iter()
+        .map(|(name, _)| name.len())
+        .max()
+        .unwrap_or("MARKETPLACE".len())
+        .max("MARKETPLACE".len());
+
+    println!("{:<marketplace_width$}  ROOT", "MARKETPLACE");
+    for (marketplace_name, root) in rows {
+        println!(
+            "{:<marketplace_width$}  {}",
+            marketplace_name,
+            root.display()
+        );
+    }
 
     Ok(())
 }

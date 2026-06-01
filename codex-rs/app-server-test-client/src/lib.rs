@@ -734,6 +734,7 @@ async fn trigger_zsh_fork_multi_cmd_approval(
 
             let mut turn_params = TurnStartParams {
                 thread_id: thread_response.thread.id.clone(),
+                client_user_message_id: None,
                 input: vec![V2UserInput::Text {
                     text: message,
                     text_elements: Vec::new(),
@@ -818,6 +819,7 @@ async fn resume_message_v2(
 
         let turn_response = client.turn_start(TurnStartParams {
             thread_id: resume_response.thread.id.clone(),
+            client_user_message_id: None,
             input: vec![V2UserInput::Text {
                 text: user_message,
                 text_elements: Vec::new(),
@@ -959,6 +961,7 @@ async fn send_message_v2_with_policies(
             println!("< thread/start response: {thread_response:?}");
             let mut turn_params = TurnStartParams {
                 thread_id: thread_response.thread.id.clone(),
+                client_user_message_id: None,
                 input: vec![V2UserInput::Text {
                     text: user_message,
                     // Test client sends plain text without UI element ranges.
@@ -999,6 +1002,7 @@ async fn send_follow_up_v2(
 
         let first_turn_params = TurnStartParams {
             thread_id: thread_response.thread.id.clone(),
+            client_user_message_id: None,
             input: vec![V2UserInput::Text {
                 text: first_message,
                 // Test client sends plain text without UI element ranges.
@@ -1012,6 +1016,7 @@ async fn send_follow_up_v2(
 
         let follow_up_params = TurnStartParams {
             thread_id: thread_response.thread.id.clone(),
+            client_user_message_id: None,
             input: vec![V2UserInput::Text {
                 text: follow_up_message,
                 // Test client sends plain text without UI element ranges.
@@ -1255,6 +1260,7 @@ fn live_elicitation_timeout_pause(
     let started_at = Instant::now();
     let turn_response = client.turn_start(TurnStartParams {
         thread_id: thread_id.clone(),
+        client_user_message_id: None,
         input: vec![V2UserInput::Text {
             text: prompt,
             text_elements: Vec::new(),
@@ -1551,6 +1557,7 @@ impl CodexClient {
                 },
                 capabilities: Some(InitializeCapabilities {
                     experimental_api,
+                    request_attestation: false,
                     opt_out_notification_methods: Some(
                         NOTIFICATIONS_TO_OPT_OUT
                             .iter()

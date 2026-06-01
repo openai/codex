@@ -256,7 +256,10 @@ fn test_create_amazon_bedrock_provider() {
             }),
             wire_api: WireApi::Responses,
             query_params: None,
-            http_headers: None,
+            http_headers: Some(maplit::hashmap! {
+                AMAZON_BEDROCK_MANTLE_CLIENT_AGENT_HEADER.to_string() =>
+                    AMAZON_BEDROCK_MANTLE_CLIENT_AGENT_VALUE.to_string(),
+            }),
             env_http_headers: None,
             request_max_retries: None,
             stream_max_retries: None,
@@ -265,6 +268,21 @@ fn test_create_amazon_bedrock_provider() {
             requires_openai_auth: false,
             supports_websockets: false,
         }
+    );
+}
+
+#[test]
+fn test_amazon_bedrock_provider_adds_mantle_client_agent_header() {
+    let api_provider = ModelProviderInfo::create_amazon_bedrock_provider(/*aws*/ None)
+        .to_api_provider(/*auth_mode*/ None)
+        .expect("Amazon Bedrock provider should build API provider");
+
+    assert_eq!(
+        api_provider
+            .headers
+            .get(AMAZON_BEDROCK_MANTLE_CLIENT_AGENT_HEADER)
+            .and_then(|value| value.to_str().ok()),
+        Some(AMAZON_BEDROCK_MANTLE_CLIENT_AGENT_VALUE)
     );
 }
 

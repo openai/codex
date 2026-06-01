@@ -1,3 +1,4 @@
+mod accepted_lines;
 mod client;
 mod events;
 mod facts;
@@ -6,6 +7,8 @@ mod reducer;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
+pub use accepted_lines::accepted_line_fingerprints_from_unified_diff;
+pub use accepted_lines::fingerprint_hash;
 pub use client::AnalyticsEventsClient;
 pub use events::AppServerRpcTransport;
 pub use events::GuardianApprovalRequestSource;
@@ -17,6 +20,7 @@ pub use events::GuardianReviewSessionKind;
 pub use events::GuardianReviewTerminalStatus;
 pub use events::GuardianReviewTrackContext;
 pub use events::GuardianReviewedAction;
+pub use facts::AcceptedLineFingerprint;
 pub use facts::AnalyticsJsonRpcError;
 pub use facts::AppInvocation;
 pub use facts::CodexCompactionEvent;

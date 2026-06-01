@@ -1,4 +1,5 @@
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use std::marker::PhantomData;
 
@@ -38,37 +39,34 @@ impl<T: ContextualUserFragment> FragmentRegistration for FragmentRegistrationPro
 /// in which case the default helpers render only the body and never match
 /// arbitrary text.
 pub trait ContextualUserFragment {
-    const ROLE: &'static str;
-    const START_MARKER: &'static str;
-    const END_MARKER: &'static str;
+    fn role() -> &'static str
+    where
+        Self: Sized;
+
+    fn markers(&self) -> (&'static str, &'static str);
 
     fn body(&self) -> String;
+
+    fn type_markers() -> (&'static str, &'static str)
+    where
+        Self: Sized;
 
     fn matches_text(text: &str) -> bool
     where
         Self: Sized,
     {
-        if Self::START_MARKER.is_empty() || Self::END_MARKER.is_empty() {
-            return false;
-        }
-
-        let trimmed = text.trim_start();
-        let starts_with_marker = trimmed
-            .get(..Self::START_MARKER.len())
-            .is_some_and(|candidate| candidate.eq_ignore_ascii_case(Self::START_MARKER));
-        let trimmed = trimmed.trim_end();
-        let ends_with_marker = trimmed
-            .get(trimmed.len().saturating_sub(Self::END_MARKER.len())..)
-            .is_some_and(|candidate| candidate.eq_ignore_ascii_case(Self::END_MARKER));
-        starts_with_marker && ends_with_marker
+        let (start_marker, end_marker) = Self::type_markers();
+        matches_marked_text(start_marker, end_marker, text)
     }
 
     fn render(&self) -> String {
-        if Self::START_MARKER.is_empty() && Self::END_MARKER.is_empty() {
-            return self.body();
+        let (start_marker, end_marker) = self.markers();
+        let body = self.body();
+        if start_marker.is_empty() && end_marker.is_empty() {
+            return body;
         }
 
-        format!("{}{}{}", Self::START_MARKER, self.body(), Self::END_MARKER)
+        format!("{start_marker}{body}{end_marker}")
     }
 
     fn into(self) -> ResponseItem
@@ -77,11 +75,40 @@ pub trait ContextualUserFragment {
     {
         ResponseItem::Message {
             id: None,
-            role: Self::ROLE.to_string(),
+            role: Self::role().to_string(),
             content: vec![ContentItem::InputText {
                 text: self.render(),
             }],
             phase: None,
         }
     }
+
+    fn into_response_input_item(self) -> ResponseInputItem
+    where
+        Self: Sized,
+    {
+        ResponseInputItem::Message {
+            role: Self::role().to_string(),
+            content: vec![ContentItem::InputText {
+                text: self.render(),
+            }],
+            phase: None,
+        }
+    }
+}
+
+fn matches_marked_text(start_marker: &str, end_marker: &str, text: &str) -> bool {
+    if start_marker.is_empty() || end_marker.is_empty() {
+        return false;
+    }
+
+    let trimmed = text.trim_start();
+    let starts_with_marker = trimmed
+        .get(..start_marker.len())
+        .is_some_and(|candidate| candidate.eq_ignore_ascii_case(start_marker));
+    let trimmed = trimmed.trim_end();
+    let ends_with_marker = trimmed
+        .get(trimmed.len().saturating_sub(end_marker.len())..)
+        .is_some_and(|candidate| candidate.eq_ignore_ascii_case(end_marker));
+    starts_with_marker && ends_with_marker
 }

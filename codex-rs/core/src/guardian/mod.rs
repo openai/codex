@@ -12,6 +12,7 @@
 //! 4. Apply the guardian's explicit allow/deny outcome.
 
 mod approval_request;
+mod metrics;
 mod prompt;
 mod review;
 mod review_session;
@@ -26,6 +27,7 @@ use serde::Serialize;
 pub(crate) use approval_request::GuardianApprovalRequest;
 pub(crate) use approval_request::GuardianMcpAnnotations;
 pub(crate) use approval_request::GuardianNetworkAccessTrigger;
+#[cfg(test)]
 pub(crate) use approval_request::guardian_approval_request_to_json;
 pub(crate) use review::guardian_rejection_message;
 pub(crate) use review::guardian_timeout_message;
@@ -39,12 +41,13 @@ pub(crate) use review::review_approval_request_with_cancel;
 pub(crate) use review::routes_approval_to_guardian;
 pub(crate) use review::spawn_approval_request_review;
 pub(crate) use review_session::GuardianReviewSessionManager;
+pub(crate) use review_session::prompt_cache_key_override_for_review_session;
 
-const GUARDIAN_PREFERRED_MODEL: &str = "codex-auto-review";
 pub(crate) const GUARDIAN_REVIEW_TIMEOUT: Duration = Duration::from_secs(90);
 pub(crate) const GUARDIAN_REVIEWER_NAME: &str = "guardian";
 pub(crate) const MAX_CONSECUTIVE_GUARDIAN_DENIALS_PER_TURN: u32 = 3;
-pub(crate) const MAX_TOTAL_GUARDIAN_DENIALS_PER_TURN: u32 = 10;
+pub(crate) const MAX_RECENT_AUTO_REVIEW_DENIALS_PER_TURN: u32 = 10;
+pub(crate) const AUTO_REVIEW_DENIAL_WINDOW_SIZE: usize = 50;
 pub(crate) const AUTO_REVIEW_DENIED_ACTION_APPROVAL_DEVELOPER_PREFIX: &str =
     "The user has manually approved a specific action that was previously `Rejected`.";
 const GUARDIAN_MAX_MESSAGE_TRANSCRIPT_TOKENS: usize = 10_000;
@@ -78,7 +81,7 @@ pub(crate) struct GuardianRejectionCircuitBreaker {
 #[derive(Debug, Default)]
 struct GuardianRejectionCircuitBreakerTurn {
     consecutive_denials: u32,
-    total_denials: u32,
+    recent_denials: std::collections::VecDeque<bool>,
     interrupt_triggered: bool,
 }
 
@@ -87,7 +90,7 @@ pub(crate) enum GuardianRejectionCircuitBreakerAction {
     Continue,
     InterruptTurn {
         consecutive_denials: u32,
-        total_denials: u32,
+        recent_denials: u32,
     },
 }
 
@@ -99,15 +102,16 @@ impl GuardianRejectionCircuitBreaker {
     pub(crate) fn record_denial(&mut self, turn_id: &str) -> GuardianRejectionCircuitBreakerAction {
         let turn = self.turns.entry(turn_id.to_string()).or_default();
         turn.consecutive_denials = turn.consecutive_denials.saturating_add(1);
-        turn.total_denials = turn.total_denials.saturating_add(1);
+        Self::record_recent_review(turn, /*denied*/ true);
+        let recent_denials = turn.recent_denials.iter().filter(|denied| **denied).count() as u32;
         if !turn.interrupt_triggered
             && (turn.consecutive_denials >= MAX_CONSECUTIVE_GUARDIAN_DENIALS_PER_TURN
-                || turn.total_denials >= MAX_TOTAL_GUARDIAN_DENIALS_PER_TURN)
+                || recent_denials >= MAX_RECENT_AUTO_REVIEW_DENIALS_PER_TURN)
         {
             turn.interrupt_triggered = true;
             GuardianRejectionCircuitBreakerAction::InterruptTurn {
                 consecutive_denials: turn.consecutive_denials,
-                total_denials: turn.total_denials,
+                recent_denials,
             }
         } else {
             GuardianRejectionCircuitBreakerAction::Continue
@@ -117,6 +121,14 @@ impl GuardianRejectionCircuitBreaker {
     pub(crate) fn record_non_denial(&mut self, turn_id: &str) {
         let turn = self.turns.entry(turn_id.to_string()).or_default();
         turn.consecutive_denials = 0;
+        Self::record_recent_review(turn, /*denied*/ false);
+    }
+
+    fn record_recent_review(turn: &mut GuardianRejectionCircuitBreakerTurn, denied: bool) {
+        turn.recent_denials.push_back(denied);
+        if turn.recent_denials.len() > AUTO_REVIEW_DENIAL_WINDOW_SIZE {
+            turn.recent_denials.pop_front();
+        }
     }
 }
 
@@ -136,6 +148,8 @@ use prompt::GuardianTranscriptEntry;
 use prompt::GuardianTranscriptEntryKind;
 #[cfg(test)]
 use prompt::build_guardian_prompt_items;
+#[cfg(test)]
+use prompt::build_guardian_prompt_items_with_parent_turn;
 #[cfg(test)]
 use prompt::collect_guardian_transcript_entries;
 #[cfg(test)]

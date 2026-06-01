@@ -494,6 +494,70 @@ def test_reactions_count_toward_attention_markers():
     assert summary["new_comments"][0]["new_upvotes"] == 0
 
 
+def test_user_interactions_are_deduped_by_human_login():
+    since = collect_issue_digest.parse_timestamp("2026-04-25T00:00:00Z", "--since")
+    until = collect_issue_digest.parse_timestamp("2026-04-26T00:00:00Z", "--until")
+
+    def comment(comment_id, login):
+        return {
+            "id": comment_id,
+            "created_at": f"2026-04-25T0{comment_id + 1}:00:00Z",
+            "updated_at": f"2026-04-25T0{comment_id + 1}:00:00Z",
+            "user": {"login": login},
+            "body": "same issue",
+        }
+
+    def reaction(content, login, created_at="2026-04-25T10:00:00Z"):
+        return {
+            "content": content,
+            "created_at": created_at,
+            "user": {"login": login},
+        }
+
+    issue = {
+        "number": 790,
+        "title": "Repeated pings should not boost attention",
+        "html_url": "https://github.com/openai/codex/issues/790",
+        "state": "open",
+        "created_at": "2026-04-25T01:00:00Z",
+        "updated_at": "2026-04-25T12:00:00Z",
+        "user": {"login": "Alice"},
+        "labels": [{"name": "bug"}, {"name": "tui"}],
+    }
+    comments = [comment(1, "alice"), comment(2, "ALICE"), comment(3, "bob")]
+    comments.append(comment(4, "github-actions[bot]"))
+    issue_reactions = [
+        reaction("+1", "alice"),
+        reaction("rocket", "Alice"),
+        reaction("+1", "bob"),
+        reaction("+1", "github-actions[bot]"),
+        reaction("+1", "carol", created_at="2026-04-24T23:00:00Z"),
+    ]
+    comment_reactions_by_id = {
+        1: [reaction("heart", "alice")],
+        2: [reaction("+1", "bob")],
+        3: [reaction("eyes", "carol")],
+    }
+
+    summary = collect_issue_digest.summarize_issue(
+        issue,
+        comments,
+        ["tui"],
+        since,
+        until,
+        body_chars=100,
+        comment_chars=100,
+        issue_reaction_events=issue_reactions,
+        comment_reactions_by_id=comment_reactions_by_id,
+    )
+
+    assert summary["activity"]["new_human_comments"] == 3
+    assert summary["new_reactions"] == 6
+    assert summary["user_interactions"] == 3
+    assert summary["attention"] is False
+    assert summary["attention_marker"] == ""
+
+
 def test_digest_rows_are_table_ready_with_concise_descriptions():
     rows = collect_issue_digest.digest_rows(
         [

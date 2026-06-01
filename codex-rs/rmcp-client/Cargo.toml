@@ -11,8 +11,10 @@ workspace = true
 anyhow = "1"
 axum = { workspace = true, default-features = false, features = [
     "http1",
+    "json",
     "tokio",
 ] }
+base64 = { workspace = true }
 codex-api = { workspace = true }
 codex-client = { workspace = true }
 codex-config = { workspace = true }
@@ -25,10 +27,10 @@ bytes = { workspace = true }
 futures = { workspace = true, default-features = false, features = ["std"] }
 keyring = { workspace = true, features = ["crypto-rust"] }
 oauth2 = "5"
-reqwest = { version = "0.12", default-features = false, features = [
+reqwest = { version = "0.13", default-features = false, features = [
     "json",
     "stream",
-    "rustls-tls",
+    "rustls",
 ] }
 rmcp = { workspace = true, default-features = false, features = [
     "auth",

@@ -34,7 +34,7 @@ pub fn trusted_config_layer_stack(
     hooks: Vec<HookListEntry>,
 ) -> ConfigLayerStack {
     let mut user_config = config_layer_stack
-        .get_user_layer()
+        .get_active_user_layer()
         .map(|layer| layer.config.clone())
         .unwrap_or_else(|| TomlValue::Table(Default::default()));
     let Some(user_table) = user_config.as_table_mut() else {

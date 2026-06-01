@@ -53,6 +53,7 @@ fn model_from_preset(preset: ModelPreset) -> Model {
                 description: service_tier.description,
             })
             .collect(),
+        default_service_tier: preset.default_service_tier,
         is_default: preset.is_default,
     }
 }

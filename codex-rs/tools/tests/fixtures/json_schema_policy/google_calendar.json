@@ -1,0 +1,85 @@
+{
+  "source": "standard/google_calendar/tools",
+  "tools": [
+    {
+      "name": "google_calendar_create_event",
+      "description": "Create a calendar event.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "event": {
+            "$ref": "#/definitions/Event"
+          },
+          "notify_attendees": {
+            "type": "boolean",
+            "description": "Whether attendees should receive notifications."
+          }
+        },
+        "required": [
+          "event"
+        ],
+        "definitions": {
+          "Event": {
+            "type": "object",
+            "description": "Calendar event payload.",
+            "properties": {
+              "title": {
+                "type": "string",
+                "description": "Event title."
+              },
+              "start": {
+                "anyOf": [
+                  {
+                    "$ref": "#/definitions/DateTime"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            }
+          },
+          "DateTime": {
+            "type": "object",
+            "description": "Calendar date-time.",
+            "properties": {
+              "dateTime": {
+                "type": "string",
+                "format": "date-time",
+                "description": "RFC3339 date-time."
+              },
+              "timeZone": {
+                "type": "string",
+                "enum": [
+                  "UTC",
+                  "America/Los_Angeles"
+                ],
+                "description": "IANA time zone."
+              }
+            }
+          },
+          "UnusedCalendarResource": {
+            "type": "string",
+            "description": "Unreachable calendar resource."
+          }
+        }
+      },
+      "expected_preserved": [
+        {
+          "pointer": "/properties/event/$ref",
+          "value": "#/definitions/Event"
+        },
+        {
+          "pointer": "/definitions/DateTime/properties/timeZone/enum/1",
+          "value": "America/Los_Angeles"
+        }
+      ],
+      "expected_pruned": [
+        "/definitions/UnusedCalendarResource"
+      ],
+      "expected_dropped_fields": [
+        "/definitions/DateTime/properties/dateTime/format"
+      ]
+    }
+  ]
+}

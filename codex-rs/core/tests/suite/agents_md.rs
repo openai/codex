@@ -16,7 +16,7 @@ async fn agents_instructions(mut builder: TestCodexBuilder) -> Result<String> {
     )
     .await;
 
-    let test = builder.build_remote_aware(&server).await?;
+    let test = builder.build_with_remote_env(&server).await?;
     test.submit_turn("hello").await?;
 
     let request = resp_mock.single_request();

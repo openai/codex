@@ -1,6 +1,7 @@
 use super::AppServerTransport;
 use super::CHANNEL_CAPACITY;
 use super::TransportEvent;
+use super::acquire_app_server_startup_lock;
 use super::app_server_control_socket_path;
 use super::start_control_socket_acceptor;
 use codex_app_server_protocol::JSONRPCMessage;
@@ -140,6 +141,28 @@ async fn control_socket_acceptor_upgrades_and_forwards_websocket_text_messages_a
     assert_socket_path_removed(socket_path.as_path());
 }
 
+#[tokio::test]
+async fn app_server_startup_lock_serializes_waiters() {
+    let temp_dir = tempfile::TempDir::new().expect("temp dir");
+    let lock_path = test_startup_lock_path(temp_dir.path());
+    let first_lock = acquire_app_server_startup_lock(lock_path.clone())
+        .await
+        .expect("first startup lock should succeed");
+    let mut second_lock = tokio::spawn(acquire_app_server_startup_lock(lock_path));
+
+    assert!(
+        timeout(Duration::from_millis(100), &mut second_lock)
+            .await
+            .is_err()
+    );
+
+    drop(first_lock);
+    second_lock
+        .await
+        .expect("second startup lock task should join")
+        .expect("second startup lock should succeed");
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn control_socket_file_is_private_after_bind() {
@@ -183,6 +206,15 @@ fn test_socket_path(temp_dir: &Path) -> AbsolutePathBuf {
             .join("app-server-control.sock"),
     )
     .expect("socket path should resolve")
+}
+
+fn test_startup_lock_path(temp_dir: &Path) -> AbsolutePathBuf {
+    AbsolutePathBuf::from_absolute_path(
+        temp_dir
+            .join("app-server-control")
+            .join("app-server-startup.lock"),
+    )
+    .expect("startup lock path should resolve")
 }
 
 async fn connect_to_socket(socket_path: &Path) -> IoResult<UnixStream> {

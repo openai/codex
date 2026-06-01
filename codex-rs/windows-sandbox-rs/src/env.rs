@@ -1,10 +1,13 @@
-use anyhow::{anyhow, Result};
+use anyhow::Result;
+use anyhow::anyhow;
 use dirs_next::home_dir;
 use std::collections::HashMap;
 use std::env;
-use std::fs::{self, File};
+use std::fs::File;
+use std::fs::{self};
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+use std::path::PathBuf;
 
 pub fn normalize_null_device_env(env_map: &mut HashMap<String, String>) {
     let keys: Vec<String> = env_map.keys().cloned().collect();

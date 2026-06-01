@@ -12,7 +12,6 @@ use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::collections::VecDeque;
-use std::ffi::CStr;
 use std::path::Path;
 use std::path::PathBuf;
 use tracing::warn;
@@ -725,7 +724,6 @@ pub fn create_seatbelt_command_args(args: CreateSeatbeltCommandArgsParams<'_>) -
     let dir_params = [
         file_read_dir_params,
         file_write_dir_params,
-        macos_dir_params(),
         unix_socket_dir_params(&proxy),
     ]
     .concat();
@@ -740,32 +738,6 @@ pub fn create_seatbelt_command_args(args: CreateSeatbeltCommandArgsParams<'_>) -
     seatbelt_args.push("--".to_string());
     seatbelt_args.extend(command);
     seatbelt_args
-}
-
-/// Wraps libc::confstr to return a String.
-fn confstr(name: libc::c_int) -> Option<String> {
-    let mut buf = vec![0_i8; (libc::PATH_MAX as usize) + 1];
-    let len = unsafe { libc::confstr(name, buf.as_mut_ptr(), buf.len()) };
-    if len == 0 {
-        return None;
-    }
-    // confstr guarantees NUL-termination when len > 0.
-    let cstr = unsafe { CStr::from_ptr(buf.as_ptr()) };
-    cstr.to_str().ok().map(ToString::to_string)
-}
-
-/// Wraps confstr to return a canonicalized PathBuf.
-fn confstr_path(name: libc::c_int) -> Option<PathBuf> {
-    let s = confstr(name)?;
-    let path = PathBuf::from(s);
-    path.canonicalize().ok().or(Some(path))
-}
-
-fn macos_dir_params() -> Vec<(String, PathBuf)> {
-    if let Some(p) = confstr_path(libc::_CS_DARWIN_USER_CACHE_DIR) {
-        return vec![("DARWIN_USER_CACHE_DIR".to_string(), p)];
-    }
-    vec![]
 }
 
 #[cfg(test)]

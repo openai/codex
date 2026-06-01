@@ -16,6 +16,8 @@ pub(crate) enum StatusSurfacePreviewItem {
     GitBranch,
     PullRequestNumber,
     BranchChanges,
+    Permissions,
+    ApprovalMode,
     ContextRemaining,
     ContextUsed,
     FiveHourLimit,
@@ -30,6 +32,7 @@ pub(crate) enum StatusSurfacePreviewItem {
     RawOutput,
     Model,
     ModelWithReasoning,
+    Reasoning,
     TaskProgress,
 }
 
@@ -45,10 +48,12 @@ impl StatusSurfacePreviewItem {
             StatusSurfacePreviewItem::GitBranch => "feat/awesome-feature",
             StatusSurfacePreviewItem::PullRequestNumber => "PR #123",
             StatusSurfacePreviewItem::BranchChanges => "+12 -3",
+            StatusSurfacePreviewItem::Permissions => "Workspace",
+            StatusSurfacePreviewItem::ApprovalMode => "on-request",
             StatusSurfacePreviewItem::ContextRemaining => "Context 0% left",
             StatusSurfacePreviewItem::ContextUsed => "Context 0% used",
-            StatusSurfacePreviewItem::FiveHourLimit => "5h 0%",
-            StatusSurfacePreviewItem::WeeklyLimit => "weekly 0%",
+            StatusSurfacePreviewItem::FiveHourLimit => "primary 0%",
+            StatusSurfacePreviewItem::WeeklyLimit => "secondary 0%",
             StatusSurfacePreviewItem::CodexVersion => "0.0.0",
             StatusSurfacePreviewItem::ContextWindowSize => "0 window",
             StatusSurfacePreviewItem::UsedTokens => "0 used",
@@ -59,6 +64,7 @@ impl StatusSurfacePreviewItem {
             StatusSurfacePreviewItem::RawOutput => "raw output",
             StatusSurfacePreviewItem::Model => "gpt-5.2-codex",
             StatusSurfacePreviewItem::ModelWithReasoning => "gpt-5.2-codex medium",
+            StatusSurfacePreviewItem::Reasoning => "medium",
             StatusSurfacePreviewItem::TaskProgress => "Tasks 0/0",
         }
     }
@@ -74,6 +80,8 @@ impl StatusSurfacePreviewItem {
             Self::GitBranch,
             Self::PullRequestNumber,
             Self::BranchChanges,
+            Self::Permissions,
+            Self::ApprovalMode,
             Self::ContextRemaining,
             Self::ContextUsed,
             Self::FiveHourLimit,
@@ -88,6 +96,7 @@ impl StatusSurfacePreviewItem {
             Self::RawOutput,
             Self::Model,
             Self::ModelWithReasoning,
+            Self::Reasoning,
             Self::TaskProgress,
         ]
         .into_iter()
@@ -163,8 +172,47 @@ impl StatusSurfacePreviewData {
         );
     }
 
+    pub(crate) fn suppress_placeholder(&mut self, item: StatusSurfacePreviewItem) {
+        if self
+            .values
+            .get(&item)
+            .is_some_and(|value| value.is_placeholder)
+        {
+            self.values.remove(&item);
+        }
+    }
+
+    pub(crate) fn rate_limit_item_name(
+        &self,
+        item: StatusSurfacePreviewItem,
+        fallback: &str,
+    ) -> String {
+        self.live_value_for(item)
+            .and_then(rate_limit_preview_copy)
+            .map(|copy| copy.name.to_string())
+            .unwrap_or_else(|| fallback.to_string())
+    }
+
+    pub(crate) fn rate_limit_item_description(
+        &self,
+        item: StatusSurfacePreviewItem,
+        fallback: &str,
+    ) -> String {
+        self.live_value_for(item)
+            .and_then(rate_limit_preview_copy)
+            .map(|copy| copy.description.to_string())
+            .unwrap_or_else(|| fallback.to_string())
+    }
+
     pub(crate) fn value_for(&self, item: StatusSurfacePreviewItem) -> Option<&str> {
         self.values.get(&item).map(|value| value.text.as_str())
+    }
+
+    fn live_value_for(&self, item: StatusSurfacePreviewItem) -> Option<&str> {
+        self.values
+            .get(&item)
+            .filter(|value| !value.is_placeholder)
+            .map(|value| value.text.as_str())
     }
 
     pub(crate) fn status_line_for_items<I>(
@@ -180,5 +228,52 @@ impl StatusSurfacePreviewData {
                 .map(|value| (item, value.to_string()))
         });
         status_line_from_segments(segments, use_theme_colors)
+    }
+}
+
+struct RateLimitPreviewCopy {
+    name: &'static str,
+    description: &'static str,
+}
+
+fn rate_limit_preview_copy(value: &str) -> Option<RateLimitPreviewCopy> {
+    let value = value.trim_start();
+    if value.starts_with("secondary usage ") {
+        Some(RateLimitPreviewCopy {
+            name: "secondary-usage-limit",
+            description: "Remaining usage on the secondary usage limit (omitted when unavailable)",
+        })
+    } else if value.starts_with("usage ") {
+        Some(RateLimitPreviewCopy {
+            name: "usage-limit",
+            description: "Remaining usage on the primary usage limit (omitted when unavailable)",
+        })
+    } else if value.starts_with("5h ") {
+        Some(RateLimitPreviewCopy {
+            name: "five-hour-limit",
+            description: "Remaining usage on the 5-hour usage limit (omitted when unavailable)",
+        })
+    } else if value.starts_with("daily ") {
+        Some(RateLimitPreviewCopy {
+            name: "daily-limit",
+            description: "Remaining usage on the daily usage limit (omitted when unavailable)",
+        })
+    } else if value.starts_with("weekly ") {
+        Some(RateLimitPreviewCopy {
+            name: "weekly-limit",
+            description: "Remaining usage on the weekly usage limit (omitted when unavailable)",
+        })
+    } else if value.starts_with("monthly ") {
+        Some(RateLimitPreviewCopy {
+            name: "monthly-limit",
+            description: "Remaining usage on the monthly usage limit (omitted when unavailable)",
+        })
+    } else if value.starts_with("annual ") {
+        Some(RateLimitPreviewCopy {
+            name: "annual-limit",
+            description: "Remaining usage on the annual usage limit (omitted when unavailable)",
+        })
+    } else {
+        None
     }
 }

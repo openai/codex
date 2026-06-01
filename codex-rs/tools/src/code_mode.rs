@@ -136,8 +136,7 @@ fn code_mode_tool_definitions_for_spec(spec: &ToolSpec) -> Vec<CodeModeToolDefin
                 }
             })
             .collect(),
-        ToolSpec::LocalShell {}
-        | ToolSpec::ImageGeneration { .. }
+        ToolSpec::ImageGeneration { .. }
         | ToolSpec::ToolSearch { .. }
         | ToolSpec::WebSearch { .. } => Vec::new(),
     }
@@ -148,7 +147,7 @@ pub fn code_mode_name_for_tool_name(tool_name: &ToolName) -> String {
         Some(namespace) if namespace.ends_with('_') || tool_name.name.starts_with('_') => {
             format!("{namespace}{}", tool_name.name)
         }
-        Some(namespace) => format!("{namespace}_{}", tool_name.name),
+        Some(namespace) => format!("{namespace}__{}", tool_name.name),
         None => tool_name.name.clone(),
     }
 }

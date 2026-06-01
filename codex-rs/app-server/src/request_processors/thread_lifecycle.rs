@@ -12,6 +12,7 @@ pub(super) struct ListenerTaskContext {
     pub(super) thread_list_state_permit: Arc<Semaphore>,
     pub(super) fallback_model_provider: String,
     pub(super) codex_home: PathBuf,
+    pub(super) skills_watcher: Arc<SkillsWatcher>,
 }
 
 struct UnloadingState {
@@ -226,12 +227,29 @@ pub(super) async fn ensure_listener_task_running(
             "thread {conversation_id} is closing; retry after the thread is closed"
         )));
     };
+    let config = conversation.config().await;
+    let environments = conversation.environment_selections().await;
+    let watch_registration = listener_task_context
+        .skills_watcher
+        .register_thread_config(
+            config.as_ref(),
+            listener_task_context.thread_manager.as_ref(),
+            &environments,
+        )
+        .await;
+    let thread_settings_baseline =
+        thread_settings_from_config_snapshot(&conversation.config_snapshot().await);
     let (mut listener_command_rx, listener_generation) = {
         let mut thread_state = thread_state.lock().await;
         if thread_state.listener_matches(&conversation) {
             return Ok(());
         }
-        thread_state.set_listener(cancel_tx, &conversation)
+        thread_state.set_listener(
+            cancel_tx,
+            &conversation,
+            watch_registration,
+            thread_settings_baseline,
+        )
     };
     let ListenerTaskContext {
         outgoing,
@@ -242,6 +260,7 @@ pub(super) async fn ensure_listener_task_running(
         thread_list_state_permit,
         fallback_model_provider,
         codex_home,
+        ..
     } = listener_task_context;
     let outgoing_for_task = Arc::clone(&outgoing);
     tokio::spawn(async move {
@@ -545,6 +564,30 @@ pub(super) async fn handle_pending_thread_resume_request(
         thread_status,
         has_live_in_progress_turn,
     );
+    let token_usage_thread = pending.include_turns.then(|| thread.clone());
+    let mut initial_turns_page = if let Some(params) = pending.initial_turns_page.as_ref() {
+        match super::thread_processor::build_thread_resume_initial_turns_page(
+            &pending.history_items,
+            thread.status.clone(),
+            has_live_in_progress_turn,
+            active_turn,
+            params,
+        ) {
+            Ok(page) => Some(page),
+            Err(error) => {
+                outgoing.send_error(request_id, error).await;
+                return;
+            }
+        }
+    } else {
+        None
+    };
+    if pending.redact_resume_payloads {
+        redact_thread_resume_payloads(&mut thread.turns);
+        if let Some(initial_turns_page) = initial_turns_page.as_mut() {
+            redact_thread_resume_payloads(&mut initial_turns_page.data);
+        }
+    }
 
     {
         let pending_thread_unloads = pending_thread_unloads.lock().await;
@@ -588,6 +631,7 @@ pub(super) async fn handle_pending_thread_resume_request(
         permission_profile,
         active_permission_profile,
         cwd,
+        workspace_roots,
         reasoning_effort,
         ..
     } = pending.config_snapshot;
@@ -604,15 +648,15 @@ pub(super) async fn handle_pending_thread_resume_request(
         model_provider: model_provider_id,
         service_tier,
         cwd,
+        runtime_workspace_roots: workspace_roots,
         instruction_sources,
         approval_policy: approval_policy.into(),
         approvals_reviewer: approvals_reviewer.into(),
         sandbox,
-        permission_profile: Some(permission_profile.into()),
         active_permission_profile,
         reasoning_effort,
+        initial_turns_page,
     };
-    let token_usage_thread = pending.include_turns.then(|| response.thread.clone());
     outgoing.send_response(request_id, response).await;
     // Match cold resume: metadata-only resume should attach the listener without
     // paying the cost of turn reconstruction for historical usage replay.
@@ -660,7 +704,7 @@ pub(super) async fn send_thread_goal_snapshot_notification(
     thread_id: ThreadId,
     state_db: &StateDbHandle,
 ) {
-    match state_db.get_thread_goal(thread_id).await {
+    match state_db.thread_goals().get_thread_goal(thread_id).await {
         Ok(Some(goal)) => {
             outgoing
                 .send_server_notification(ServerNotification::ThreadGoalUpdated(

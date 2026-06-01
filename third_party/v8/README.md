@@ -20,27 +20,39 @@ artifact contract.
 
 Current pinned versions:
 
-- Rust crate: `v8 = =146.4.0`
-- Embedded upstream V8 source for musl release builds: `14.6.202.9`
+- Rust crate: `v8 = =147.4.0`
+- Embedded upstream V8 source for Bazel-produced release builds: `14.7.173.20`
 
-When bumping the Rust crate version, keep the checked-in checksum manifest and
-`MODULE.bazel` in sync:
+## Updating to a new `v8` release
+
+Use this as the maintainer flow for a version bump:
+
+1. Bump the `v8` crate version and refresh `codex-rs/Cargo.lock`.
+2. Update the Bazel versioned inputs in `MODULE.bazel`, then refresh the
+   matching checksum manifest and generated checksums as described below.
+3. Publish a release-candidate PR and validate that `v8-canary` passes.
+4. If the canary is green, publish the release tag and release build.
+5. Once the release build completes, rerun the build on the candidate branch
+   and verify that the final artifact builds and tests pass.
+
+When changing the remaining prebuilt `rusty_v8` `http_file` inputs, keep the
+checked-in checksum manifest and `MODULE.bazel` in sync:
 
 ```bash
 python3 .github/scripts/rusty_v8_bazel.py update-module-bazel
 python3 .github/scripts/rusty_v8_bazel.py check-module-bazel
 ```
 
-The commands read `third_party/v8/rusty_v8_<crate_version>.sha256` by default
-and validate every matching `rusty_v8_<crate_version>` `http_file` entry.
-CI runs the check command to block checksum drift.
+The commands default to the single `rusty_v8_*` `http_file` version still
+present in `MODULE.bazel` and validate every matching entry. CI runs the check
+command to block checksum drift.
 
 The consumer-facing selectors are:
 
 - `//third_party/v8:rusty_v8_archive_for_target`
 - `//third_party/v8:rusty_v8_binding_for_target`
 
-Musl release assets are expected at the tag:
+Published release assets are expected at the tag:
 
 - `rusty-v8-v<crate_version>`
 
@@ -49,18 +61,50 @@ with these raw asset names:
 - `librusty_v8_release_<target>.a.gz`
 - `src_binding_release_<target>.rs`
 
-The dedicated publishing workflow is `.github/workflows/rusty-v8-release.yml`.
-It builds musl release pairs from source and keeps the release artifacts as the
-statically linked form:
+During the sandbox rollout, sandbox-enabled assets are published alongside those
+current assets on the same tag, with the Rust crate's sandbox feature suffix in
+their raw names:
 
+- `librusty_v8_ptrcomp_sandbox_release_<target>.a.gz`
+- `src_binding_ptrcomp_sandbox_release_<target>.rs`
+
+The dedicated publishing workflow is `.github/workflows/rusty-v8-release.yml`.
+Tagged runs build release artifacts from the Bazel graph itself:
+
+- `//third_party/v8:rusty_v8_release_pair_x86_64_apple_darwin`
+- `//third_party/v8:rusty_v8_release_pair_aarch64_apple_darwin`
+- `//third_party/v8:rusty_v8_release_pair_x86_64_unknown_linux_gnu`
+- `//third_party/v8:rusty_v8_release_pair_aarch64_unknown_linux_gnu`
 - `//third_party/v8:rusty_v8_release_pair_x86_64_unknown_linux_musl`
 - `//third_party/v8:rusty_v8_release_pair_aarch64_unknown_linux_musl`
 
-Cargo musl builds use `RUSTY_V8_ARCHIVE` plus a downloaded
-`RUSTY_V8_SRC_BINDING_PATH` to point at those `openai/codex` release assets
-directly. We do not use `RUSTY_V8_MIRROR` for musl because the upstream `v8`
-crate hardcodes a `v<crate_version>` tag layout, while our musl artifacts are
-published under `rusty-v8-v<crate_version>`.
+The same run also builds the matching sandbox pair targets:
+
+- `//third_party/v8:rusty_v8_sandbox_release_pair_x86_64_apple_darwin`
+- `//third_party/v8:rusty_v8_sandbox_release_pair_aarch64_apple_darwin`
+- `//third_party/v8:rusty_v8_sandbox_release_pair_x86_64_unknown_linux_gnu`
+- `//third_party/v8:rusty_v8_sandbox_release_pair_aarch64_unknown_linux_gnu`
+- `//third_party/v8:rusty_v8_sandbox_release_pair_x86_64_unknown_linux_musl`
+- `//third_party/v8:rusty_v8_sandbox_release_pair_aarch64_unknown_linux_musl`
+
+The Bazel graph pins the same libc++, libc++abi, and llvm-libc source revisions
+used by `rusty_v8 v147.4.0`, compiles published artifact targets with
+`--config=rusty-v8-upstream-libcxx`, and folds the matching runtime objects into
+the final static archive so Cargo consumers can link it with the `v8` crate's
+default `use_custom_libcxx` feature. The config keeps the object files and the
+bundled runtime on Chromium's `std::__Cr` ABI namespace instead of mixing those
+objects with the toolchain libc++ default namespace.
+
+MSVC is not part of the Bazel-produced matrix yet. The repository's current
+hermetic Windows C++ platform is `windows-gnullvm`/`x86_64-w64-windows-gnu`, so
+it cannot truthfully reproduce upstream's `*-pc-windows-msvc` archives until we
+add a real MSVC-targeting C++ toolchain to the Bazel graph.
+
+Release and CI Cargo builds for Darwin and Linux use `RUSTY_V8_ARCHIVE` plus a
+downloaded `RUSTY_V8_SRC_BINDING_PATH` to point at those `openai/codex` release
+assets directly. We do not use `RUSTY_V8_MIRROR` because the upstream `v8` crate
+hardcodes a `v<crate_version>` tag layout, while our artifacts are published
+under `rusty-v8-v<crate_version>`.
 
 Do not mix artifacts across crate versions. The archive and binding must match
 the exact resolved `v8` crate version in `codex-rs/Cargo.lock`.

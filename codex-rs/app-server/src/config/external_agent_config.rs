@@ -507,7 +507,7 @@ impl ExternalAgentConfigService {
                 Ok(config) => {
                     let configured_plugin_ids = config
                         .config_layer_stack
-                        .get_user_layer()
+                        .get_active_user_layer()
                         .and_then(|user_layer| user_layer.config.get("plugins"))
                         .and_then(|plugins| {
                             match plugins.clone().try_into::<HashMap<String, PluginConfig>>() {

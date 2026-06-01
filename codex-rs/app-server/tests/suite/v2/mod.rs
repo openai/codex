@@ -1,6 +1,7 @@
 mod account;
 mod analytics;
 mod app_list;
+mod attestation;
 mod client_metadata;
 mod collaboration_mode_list;
 #[cfg(unix)]
@@ -28,6 +29,7 @@ mod memory_reset;
 mod model_list;
 mod model_provider_capabilities_read;
 mod output_schema;
+mod permission_profile_list;
 mod plan_item;
 mod plugin_install;
 mod plugin_list;
@@ -37,6 +39,7 @@ mod plugin_uninstall;
 mod process_exec;
 mod rate_limits;
 mod realtime_conversation;
+mod remote_control;
 #[cfg(debug_assertions)]
 mod remote_thread_store;
 mod request_permissions;
@@ -55,6 +58,7 @@ mod thread_name_websocket;
 mod thread_read;
 mod thread_resume;
 mod thread_rollback;
+mod thread_settings_update;
 mod thread_shell_command;
 mod thread_start;
 mod thread_status;
@@ -64,4 +68,5 @@ mod turn_interrupt;
 mod turn_start;
 mod turn_start_zsh_fork;
 mod turn_steer;
+mod web_search;
 mod windows_sandbox_setup;

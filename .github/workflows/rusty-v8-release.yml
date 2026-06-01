@@ -18,6 +18,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
 
       - name: Set up Python
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
@@ -44,14 +46,14 @@ jobs:
           expected_release_tag="rusty-v8-v${V8_VERSION}"
           release_tag="${GITHUB_REF_NAME}"
           if [[ "${release_tag}" != "${expected_release_tag}" ]]; then
-            echo "Tag ${release_tag} does not match resolved v8 crate version ${V8_VERSION}." >&2
+            echo "Tag ${release_tag} does not match expected release tag ${expected_release_tag}." >&2
             exit 1
           fi
 
           echo "release_tag=${release_tag}" >> "$GITHUB_OUTPUT"
 
   build:
-    name: Build ${{ matrix.target }}
+    name: Build ${{ matrix.variant }} ${{ matrix.target }}
     needs: metadata
     runs-on: ${{ matrix.runner }}
     permissions:
@@ -62,14 +64,82 @@ jobs:
       matrix:
         include:
           - runner: ubuntu-24.04
-            platform: linux_amd64_musl
-            target: x86_64-unknown-linux-musl
+            bazel_config: ci-v8
+            platform: linux_amd64
+            sandbox: false
+            target: x86_64-unknown-linux-gnu
+            variant: release
+          - runner: ubuntu-24.04
+            bazel_config: ci-v8
+            platform: linux_amd64
+            sandbox: true
+            target: x86_64-unknown-linux-gnu
+            variant: ptrcomp-sandbox
           - runner: ubuntu-24.04-arm
+            bazel_config: ci-v8
+            platform: linux_arm64
+            sandbox: false
+            target: aarch64-unknown-linux-gnu
+            variant: release
+          - runner: ubuntu-24.04-arm
+            bazel_config: ci-v8
+            platform: linux_arm64
+            sandbox: true
+            target: aarch64-unknown-linux-gnu
+            variant: ptrcomp-sandbox
+          - runner: macos-15-xlarge
+            bazel_config: ci-macos
+            platform: macos_amd64
+            sandbox: false
+            target: x86_64-apple-darwin
+            variant: release
+          - runner: macos-15-xlarge
+            bazel_config: ci-macos
+            platform: macos_amd64
+            sandbox: true
+            target: x86_64-apple-darwin
+            variant: ptrcomp-sandbox
+          - runner: macos-15-xlarge
+            bazel_config: ci-macos
+            platform: macos_arm64
+            sandbox: false
+            target: aarch64-apple-darwin
+            variant: release
+          - runner: macos-15-xlarge
+            bazel_config: ci-macos
+            platform: macos_arm64
+            sandbox: true
+            target: aarch64-apple-darwin
+            variant: ptrcomp-sandbox
+          - runner: ubuntu-24.04
+            bazel_config: ci-v8
+            platform: linux_amd64_musl
+            sandbox: false
+            target: x86_64-unknown-linux-musl
+            variant: release
+          - runner: ubuntu-24.04-arm
+            bazel_config: ci-v8
             platform: linux_arm64_musl
+            sandbox: false
             target: aarch64-unknown-linux-musl
+            variant: release
+          - runner: ubuntu-24.04
+            bazel_config: ci-v8
+            platform: linux_amd64_musl
+            sandbox: true
+            target: x86_64-unknown-linux-musl
+            variant: ptrcomp-sandbox
+          - runner: ubuntu-24.04-arm
+            bazel_config: ci-v8
+            platform: linux_arm64_musl
+            sandbox: true
+            target: aarch64-unknown-linux-musl
+            variant: ptrcomp-sandbox
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
 
       - name: Set up Bazel
         uses: ./.github/actions/setup-bazel-ci
@@ -81,61 +151,115 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Set up Rust toolchain for Cargo smoke
+        uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+        with:
+          toolchain: "1.95.0"
+
       - name: Build Bazel V8 release pair
         env:
           BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
           PLATFORM: ${{ matrix.platform }}
+          SANDBOX: ${{ matrix.sandbox }}
           TARGET: ${{ matrix.target }}
         shell: bash
         run: |
           set -euo pipefail
 
           target_suffix="${TARGET//-/_}"
-          pair_target="//third_party/v8:rusty_v8_release_pair_${target_suffix}"
-          extra_targets=()
-          if [[ "${TARGET}" == *-unknown-linux-musl ]]; then
-            extra_targets=(
-              "@llvm//runtimes/libcxx:libcxx.static"
-              "@llvm//runtimes/libcxx:libcxxabi.static"
-            )
+          pair_kind="release_pair"
+          if [[ "${SANDBOX}" == "true" ]]; then
+            pair_kind="sandbox_release_pair"
           fi
+          pair_target="//third_party/v8:rusty_v8_${pair_kind}_${target_suffix}"
 
           bazel_args=(
             build
             -c
             opt
             "--platforms=@llvm//platforms:${PLATFORM}"
-            --config=v8-release-compat
+            --config=rusty-v8-upstream-libcxx
             "${pair_target}"
-            "${extra_targets[@]}"
             --build_metadata=COMMIT_SHA=$(git rev-parse HEAD)
           )
+          if [[ "${SANDBOX}" != "true" ]]; then
+            bazel_args+=(--config=v8-release-compat)
+          fi
 
           bazel \
             --noexperimental_remote_repo_contents_cache \
             "${bazel_args[@]}" \
-            --config=ci-v8 \
+            "--config=${{ matrix.bazel_config }}" \
             "--remote_header=x-buildbuddy-api-key=${BUILDBUDDY_API_KEY}"
 
       - name: Stage release pair
         env:
+          BAZEL_CONFIG: ${{ matrix.bazel_config }}
+          BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
           PLATFORM: ${{ matrix.platform }}
+          SANDBOX: ${{ matrix.sandbox }}
           TARGET: ${{ matrix.target }}
         shell: bash
         run: |
           set -euo pipefail
 
-          python3 .github/scripts/rusty_v8_bazel.py stage-release-pair \
-            --platform "${PLATFORM}" \
-            --target "${TARGET}" \
-            --compilation-mode opt \
-            --bazel-config v8-release-compat \
+          stage_args=(
+            --platform "${PLATFORM}"
+            --target "${TARGET}"
+            --compilation-mode opt
             --output-dir "dist/${TARGET}"
+            --bazel-config "${BAZEL_CONFIG}"
+          )
+          if [[ "${SANDBOX}" == "true" ]]; then
+            stage_args+=(--sandbox)
+          else
+            stage_args+=(--bazel-config v8-release-compat)
+          fi
 
-      - name: Upload staged musl artifacts
+          python3 .github/scripts/rusty_v8_bazel.py stage-release-pair "${stage_args[@]}"
+
+      - name: Smoke test staged artifact with Cargo
+        env:
+          SANDBOX: ${{ matrix.sandbox }}
+          TARGET: ${{ matrix.target }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          host_arch="$(uname -m)"
+          case "${TARGET}:${host_arch}" in
+            x86_64-apple-darwin:x86_64|aarch64-apple-darwin:arm64|x86_64-unknown-linux-gnu:x86_64|aarch64-unknown-linux-gnu:aarch64)
+              ;;
+            *)
+              echo "Skipping non-native Cargo smoke for ${TARGET} on ${host_arch}."
+              exit 0
+              ;;
+          esac
+
+          archive="$(find "dist/${TARGET}" -maxdepth 1 -type f -name 'librusty_v8_*.a.gz' -print -quit)"
+          binding="$(find "dist/${TARGET}" -maxdepth 1 -type f -name 'src_binding_*.rs' -print -quit)"
+          if [[ -z "${archive}" || -z "${binding}" ]]; then
+            echo "Missing staged archive or binding for ${TARGET}." >&2
+            exit 1
+          fi
+
+          cargo_args=(test -p codex-v8-poc)
+          if [[ "${SANDBOX}" == "true" ]]; then
+            cargo_args+=(--features sandbox)
+          fi
+
+          (
+            cd codex-rs
+            CARGO_TARGET_DIR="${RUNNER_TEMP}/rusty-v8-cargo-smoke-${TARGET}-${SANDBOX}" \
+            RUSTY_V8_ARCHIVE="${GITHUB_WORKSPACE}/${archive}" \
+            RUSTY_V8_SRC_BINDING_PATH="${GITHUB_WORKSPACE}/${binding}" \
+            cargo "${cargo_args[@]}"
+          )
+
+      - name: Upload staged artifacts
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
-          name: rusty-v8-${{ needs.metadata.outputs.v8_version }}-${{ matrix.target }}
+          name: rusty-v8-${{ needs.metadata.outputs.v8_version }}-${{ matrix.variant }}-${{ matrix.target }}
           path: dist/${{ matrix.target }}/*
 
   publish-release:
@@ -148,7 +272,8 @@ jobs:
       actions: read
 
     steps:
-      - name: Ensure release tag is new
+      - name: Check whether release already exists
+        id: release
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ needs.metadata.outputs.release_tag }}
@@ -157,8 +282,9 @@ jobs:
           set -euo pipefail
 
           if gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" > /dev/null 2>&1; then
-            echo "Release tag ${RELEASE_TAG} already exists; musl artifact tags are immutable." >&2
-            exit 1
+            echo "exists=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "exists=false" >> "${GITHUB_OUTPUT}"
           fi
 
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -166,10 +292,22 @@ jobs:
           path: dist
 
       - name: Create GitHub Release
+        if: ${{ steps.release.outputs.exists != 'true' }}
         uses: softprops/action-gh-release@153bb8e04406b158c6c84fc1615b65b24149a1fe # v2.6.1
         with:
           tag_name: ${{ needs.metadata.outputs.release_tag }}
           name: ${{ needs.metadata.outputs.release_tag }}
           files: dist/**
+          # Keep V8 artifact releases out of Codex's normal "latest release" channel.
+          prerelease: true
+
+      - name: Amend existing GitHub Release
+        if: ${{ steps.release.outputs.exists == 'true' }}
+        uses: softprops/action-gh-release@153bb8e04406b158c6c84fc1615b65b24149a1fe # v2.6.1
+        with:
+          tag_name: ${{ needs.metadata.outputs.release_tag }}
+          name: ${{ needs.metadata.outputs.release_tag }}
+          files: dist/**
+          overwrite_files: true
           # Keep V8 artifact releases out of Codex's normal "latest release" channel.
           prerelease: true

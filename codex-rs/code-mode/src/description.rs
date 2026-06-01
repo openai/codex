@@ -7,10 +7,8 @@ use std::collections::BTreeMap;
 use crate::PUBLIC_TOOL_NAME;
 
 const MAX_JS_SAFE_INTEGER: u64 = (1_u64 << 53) - 1;
-const CODE_MODE_ONLY_PREFACE: &str =
-    "Use `exec/wait` tool to run all other tools, do not attempt to use any other tools directly";
-const DEFERRED_NESTED_TOOLS_GUIDANCE: &str = r#"Some nested MCP/app tools may be omitted from this description. They are still available on the global `tools` object and listed in `ALL_TOOLS`.
-To find one, filter `ALL_TOOLS` by `name` and `description`; do not print the full `ALL_TOOLS` array. Print only a small set of relevant matches if you need to inspect them."#;
+const DEFERRED_NESTED_TOOLS_GUIDANCE: &str = r#"Some deferred nested tools may be omitted from this description. They are still available on the global `tools` object and listed in `ALL_TOOLS`.
+To find one, filter `ALL_TOOLS` by `name` and `description`."#;
 const EXEC_DESCRIPTION_TEMPLATE: &str = r#"Run JavaScript code to orchestrate/compose tool calls
 - Evaluates the provided JavaScript code in a fresh V8 isolate as an async module.
 - All nested tools are available on the global `tools` object, for example `await tools.exec_command(...)`. Tool names are exposed as normalized JavaScript identifiers, for example `await tools.mcp__ologs__get_profile(...)`.
@@ -19,8 +17,8 @@ const EXEC_DESCRIPTION_TEMPLATE: &str = r#"Run JavaScript code to orchestrate/co
 - Runs raw JavaScript -- no Node, no file system, no network access, no console.
 - Accepts raw JavaScript source text, not JSON, quoted strings, or markdown code fences.
 - You may optionally start the tool input with a first-line pragma like `// @exec: {"yield_time_ms": 10000, "max_output_tokens": 1000}`.
-- `yield_time_ms` asks `exec` to yield early after that many milliseconds if the script is still running.
-- `max_output_tokens` sets the token budget for direct `exec` results. By default the result is truncated to 10000 tokens.
+- `yield_time_ms` asks `exec` to yield early if the script is still running. Defaults to 10000 ms.
+- `max_output_tokens` sets the token budget for direct `exec` results. Defaults to 10000 tokens.
 - When the JS code is fully evaluated, the isolate's lifetime ends and unawaited promises are silently discarded.
 
 - Global helpers:
@@ -36,9 +34,9 @@ const EXEC_DESCRIPTION_TEMPLATE: &str = r#"Run JavaScript code to orchestrate/co
 - `yield_control()`: yields the accumulated output to the model immediately while the script keeps running."#;
 const WAIT_DESCRIPTION_TEMPLATE: &str = r#"- Use `wait` only after `exec` returns `Script running with cell ID ...`.
 - `cell_id` identifies the running `exec` cell to resume.
-- `yield_time_ms` controls how long to wait for more output before yielding again. If omitted, `wait` uses its default wait timeout.
-- `max_tokens` limits how much new output this wait call returns.
-- `terminate: true` stops the running cell instead of waiting for more output.
+- `yield_time_ms` controls how long to wait for more output before yielding again. Defaults to 10000 ms.
+- `max_tokens` limits how much new output this wait call returns. Defaults to 10000 tokens.
+- `terminate: true` stops the running cell; false or omitted waits for output.
 - `wait` returns only the new output since the last yield, or the final completion or termination result for that cell.
 - If the cell is still running, `wait` may yield again with the same `cell_id`.
 - If the cell has already finished, `wait` returns the completed result and closes the cell."#;
@@ -256,9 +254,6 @@ pub fn build_exec_tool_description(
     deferred_tools_available: bool,
 ) -> String {
     let mut sections = Vec::new();
-    if code_mode_only {
-        sections.push(CODE_MODE_ONLY_PREFACE.to_string());
-    }
     sections.push(EXEC_DESCRIPTION_TEMPLATE.to_string());
     if deferred_tools_available {
         sections.push(DEFERRED_NESTED_TOOLS_GUIDANCE.to_string());
@@ -654,7 +649,7 @@ fn render_json_schema_object(map: &serde_json::Map<String, JsonValue>) -> String
         .unwrap_or_default();
 
     let mut sorted_properties = properties.iter().collect::<Vec<_>>();
-    sorted_properties.sort_unstable_by(|(name_a, _), (name_b, _)| name_a.cmp(name_b));
+    sorted_properties.sort_unstable_by_key(|(name_a, _)| *name_a);
     if sorted_properties
         .iter()
         .any(|(_, value)| has_property_description(value))
@@ -875,6 +870,7 @@ mod tests {
             "### `foo`
 bar"
         ));
+        assert!(!description.contains("do not attempt to use any other tools directly"));
     }
 
     #[test]
@@ -1095,7 +1091,8 @@ bar"
             /*deferred_tools_available*/ true,
         );
 
-        assert!(description.contains("Some nested MCP/app tools may be omitted"));
+        assert!(description.contains("Some deferred nested tools may be omitted"));
         assert!(description.contains("filter `ALL_TOOLS` by `name` and `description`"));
+        assert!(!description.contains("do not print the full `ALL_TOOLS` array"));
     }
 }

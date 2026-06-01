@@ -1,0 +1,15 @@
+---
+source: tui/src/startup_hooks_review.rs
+expression: "render_lines(&view, 80)"
+---
+                                                                                
+  Hooks need review                                                             
+  2 hooks are new or changed.                                                   
+  Hooks can run outside the sandbox after you trust them.                       
+  Failed to trust hooks: disk full                                              
+                                                                                
+› 1. Review hooks                                                               
+  2. Trust all and continue                                                     
+  3. Continue without trusting (hooks won't run)                                
+                                                                                
+  Press enter to confirm or esc to go back

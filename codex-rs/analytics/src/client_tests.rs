@@ -1,11 +1,17 @@
 use super::AnalyticsEventsClient;
 use super::AnalyticsEventsQueue;
+use super::track_event_request_batches;
+use crate::events::CodexAcceptedLineFingerprintsEventParams;
+use crate::events::CodexAcceptedLineFingerprintsEventRequest;
+use crate::events::SkillInvocationEventParams;
+use crate::events::SkillInvocationEventRequest;
+use crate::events::TrackEventRequest;
 use crate::facts::AnalyticsFact;
+use crate::facts::InvocationType;
 use codex_app_server_protocol::ApprovalsReviewer as AppServerApprovalsReviewer;
 use codex_app_server_protocol::AskForApproval as AppServerAskForApproval;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ClientResponsePayload;
-use codex_app_server_protocol::PermissionProfile as AppServerPermissionProfile;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SandboxPolicy as AppServerSandboxPolicy;
 use codex_app_server_protocol::SessionSource as AppServerSessionSource;
@@ -22,7 +28,6 @@ use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStatus as AppServerTurnStatus;
 use codex_app_server_protocol::TurnSteerParams;
 use codex_app_server_protocol::TurnSteerResponse;
-use codex_protocol::models::PermissionProfile as CorePermissionProfile;
 use codex_utils_absolute_path::test_support::PathBufExt;
 use codex_utils_absolute_path::test_support::test_path_buf;
 use std::collections::HashSet;
@@ -30,6 +35,44 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TryRecvError;
+
+fn sample_accepted_line_fingerprint_event(thread_id: &str) -> TrackEventRequest {
+    TrackEventRequest::AcceptedLineFingerprints(Box::new(
+        CodexAcceptedLineFingerprintsEventRequest {
+            event_type: "codex_accepted_line_fingerprints",
+            event_params: CodexAcceptedLineFingerprintsEventParams {
+                event_type: "codex.accepted_line_fingerprints",
+                turn_id: "turn-1".to_string(),
+                thread_id: thread_id.to_string(),
+                product_surface: Some("codex".to_string()),
+                model_slug: Some("gpt-5.1-codex".to_string()),
+                completed_at: 1,
+                repo_hash: None,
+                accepted_added_lines: 1,
+                accepted_deleted_lines: 0,
+                line_fingerprints: Vec::new(),
+            },
+        },
+    ))
+}
+
+fn sample_regular_track_event(thread_id: &str) -> TrackEventRequest {
+    TrackEventRequest::SkillInvocation(SkillInvocationEventRequest {
+        event_type: "skill_invocation",
+        skill_id: format!("skill-{thread_id}"),
+        skill_name: "doc".to_string(),
+        event_params: SkillInvocationEventParams {
+            product_client_id: None,
+            skill_scope: None,
+            plugin_id: None,
+            repo_url: None,
+            thread_id: Some(thread_id.to_string()),
+            turn_id: Some("turn-1".to_string()),
+            invoke_type: Some(InvocationType::Explicit),
+            model_slug: Some("gpt-5.1-codex".to_string()),
+        },
+    })
+}
 
 fn client_with_receiver() -> (AnalyticsEventsClient, mpsc::Receiver<AnalyticsFact>) {
     let (sender, receiver) = mpsc::channel(8);
@@ -46,6 +89,7 @@ fn sample_turn_start_request() -> ClientRequest {
         request_id: RequestId::Integer(1),
         params: TurnStartParams {
             thread_id: "thread-1".to_string(),
+            client_user_message_id: None,
             input: Vec::new(),
             ..Default::default()
         },
@@ -58,8 +102,10 @@ fn sample_turn_steer_request() -> ClientRequest {
         params: TurnSteerParams {
             thread_id: "thread-1".to_string(),
             expected_turn_id: "turn-1".to_string(),
+            client_user_message_id: None,
             input: Vec::new(),
             responsesapi_client_metadata: None,
+            additional_context: None,
         },
     }
 }
@@ -78,6 +124,7 @@ fn sample_thread(thread_id: &str) -> Thread {
         id: thread_id.to_string(),
         session_id: format!("session-{thread_id}"),
         forked_from_id: None,
+        parent_thread_id: None,
         preview: "first prompt".to_string(),
         ephemeral: false,
         model_provider: "openai".to_string(),
@@ -97,10 +144,6 @@ fn sample_thread(thread_id: &str) -> Thread {
     }
 }
 
-fn sample_permission_profile() -> AppServerPermissionProfile {
-    CorePermissionProfile::Disabled.into()
-}
-
 fn sample_thread_start_response() -> ClientResponsePayload {
     ClientResponsePayload::ThreadStart(ThreadStartResponse {
         thread: sample_thread("thread-1"),
@@ -108,11 +151,11 @@ fn sample_thread_start_response() -> ClientResponsePayload {
         model_provider: "openai".to_string(),
         service_tier: None,
         cwd: test_path_buf("/tmp").abs(),
+        runtime_workspace_roots: Vec::new(),
         instruction_sources: Vec::new(),
         approval_policy: AppServerAskForApproval::OnFailure,
         approvals_reviewer: AppServerApprovalsReviewer::User,
         sandbox: AppServerSandboxPolicy::DangerFullAccess,
-        permission_profile: Some(sample_permission_profile()),
         active_permission_profile: None,
         reasoning_effort: None,
     })
@@ -125,13 +168,14 @@ fn sample_thread_resume_response() -> ClientResponsePayload {
         model_provider: "openai".to_string(),
         service_tier: None,
         cwd: test_path_buf("/tmp").abs(),
+        runtime_workspace_roots: Vec::new(),
         instruction_sources: Vec::new(),
         approval_policy: AppServerAskForApproval::OnFailure,
         approvals_reviewer: AppServerApprovalsReviewer::User,
         sandbox: AppServerSandboxPolicy::DangerFullAccess,
-        permission_profile: Some(sample_permission_profile()),
         active_permission_profile: None,
         reasoning_effort: None,
+        initial_turns_page: None,
     })
 }
 
@@ -142,11 +186,11 @@ fn sample_thread_fork_response() -> ClientResponsePayload {
         model_provider: "openai".to_string(),
         service_tier: None,
         cwd: test_path_buf("/tmp").abs(),
+        runtime_workspace_roots: Vec::new(),
         instruction_sources: Vec::new(),
         approval_policy: AppServerAskForApproval::OnFailure,
         approvals_reviewer: AppServerApprovalsReviewer::User,
         sandbox: AppServerSandboxPolicy::DangerFullAccess,
-        permission_profile: Some(sample_permission_profile()),
         active_permission_profile: None,
         reasoning_effort: None,
     })
@@ -221,4 +265,24 @@ fn track_response_only_enqueues_analytics_relevant_responses() {
         ClientResponsePayload::ThreadArchive(ThreadArchiveResponse {}),
     );
     assert!(matches!(receiver.try_recv(), Err(TryRecvError::Empty)));
+}
+
+#[test]
+fn track_event_request_batches_only_isolates_accepted_line_fingerprint_events() {
+    let batches = track_event_request_batches(vec![
+        sample_regular_track_event("thread-1"),
+        sample_regular_track_event("thread-2"),
+        sample_accepted_line_fingerprint_event("thread-3"),
+        sample_accepted_line_fingerprint_event("thread-4"),
+        sample_regular_track_event("thread-5"),
+        sample_regular_track_event("thread-6"),
+    ]);
+
+    assert_eq!(batches.len(), 4);
+    assert_eq!(batches[0].len(), 2);
+    assert_eq!(batches[1].len(), 1);
+    assert_eq!(batches[2].len(), 1);
+    assert_eq!(batches[3].len(), 2);
+    assert!(batches[1][0].should_send_in_isolated_request());
+    assert!(batches[2][0].should_send_in_isolated_request());
 }

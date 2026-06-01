@@ -10,6 +10,9 @@ codex_rust_crate(
     # they install process-global test-binary dispatch state, and the remote
     # exec-server cases already rely on serialization around the full CLI path.
     integration_test_args = ["--test-threads=1"],
+    integration_compile_data_extra = [
+        "src/proto/codex.exec_server.relay.v1.rs",
+    ],
     extra_binaries = [
         "//codex-rs/bwrap:bwrap",
     ],

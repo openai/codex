@@ -2,12 +2,11 @@ from __future__ import annotations
 
 import contextlib
 import importlib.util
-import os
 import sys
 import tempfile
 import zlib
 from pathlib import Path
-from typing import Iterable, Iterator
+from typing import Any, Iterator
 
 _SDK_PYTHON_DIR = Path(__file__).resolve().parents[1]
 _SDK_PYTHON_STR = str(_SDK_PYTHON_DIR)
@@ -35,7 +34,7 @@ def ensure_local_sdk_src() -> Path:
     """Add sdk/python/src to sys.path so examples run without installing the package."""
     sdk_python_dir = _SDK_PYTHON_DIR
     src_dir = sdk_python_dir / "src"
-    package_dir = src_dir / "codex_app_server"
+    package_dir = src_dir / "openai_codex"
     if not package_dir.exists():
         raise RuntimeError(f"Could not locate local SDK package at {package_dir}")
 
@@ -48,11 +47,11 @@ def ensure_local_sdk_src() -> Path:
 
 
 def runtime_config():
-    """Return an example-friendly AppServerConfig for repo-source SDK usage."""
-    from codex_app_server import AppServerConfig
+    """Return an example-friendly CodexConfig for repo-source SDK usage."""
+    from openai_codex import CodexConfig
 
     ensure_runtime_package_installed(sys.executable, _SDK_PYTHON_DIR)
-    return AppServerConfig()
+    return CodexConfig()
 
 
 def _png_chunk(chunk_type: bytes, data: bytes) -> bytes:
@@ -104,49 +103,5 @@ def temporary_sample_image_path() -> Iterator[Path]:
         yield image_path
 
 
-def server_label(metadata: object) -> str:
-    server = getattr(metadata, "serverInfo", None)
-    server_name = ((getattr(server, "name", None) or "") if server is not None else "").strip()
-    server_version = ((getattr(server, "version", None) or "") if server is not None else "").strip()
-    if server_name and server_version:
-        return f"{server_name} {server_version}"
-
-    user_agent = ((getattr(metadata, "userAgent", None) or "") if metadata is not None else "").strip()
-    return user_agent or "unknown"
-
-
-def find_turn_by_id(turns: Iterable[object] | None, turn_id: str) -> object | None:
-    for turn in turns or []:
-        if getattr(turn, "id", None) == turn_id:
-            return turn
-    return None
-
-
-def assistant_text_from_turn(turn: object | None) -> str:
-    if turn is None:
-        return ""
-
-    chunks: list[str] = []
-    for item in getattr(turn, "items", []) or []:
-        raw_item = item.model_dump(mode="json") if hasattr(item, "model_dump") else item
-        if not isinstance(raw_item, dict):
-            continue
-
-        item_type = raw_item.get("type")
-        if item_type == "agentMessage":
-            text = raw_item.get("text")
-            if isinstance(text, str) and text:
-                chunks.append(text)
-            continue
-
-        if item_type != "message" or raw_item.get("role") != "assistant":
-            continue
-
-        for content in raw_item.get("content") or []:
-            if not isinstance(content, dict) or content.get("type") != "output_text":
-                continue
-            text = content.get("text")
-            if isinstance(text, str) and text:
-                chunks.append(text)
-
-    return "".join(chunks)
+def server_label(metadata: Any) -> str:
+    return f"{metadata.serverInfo.name} {metadata.serverInfo.version}"

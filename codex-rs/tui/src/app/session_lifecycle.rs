@@ -268,6 +268,7 @@ impl App {
         if chat_widget.last_terminal_title.is_none() {
             chat_widget.last_terminal_title = previous_terminal_title;
         }
+        chat_widget.remote_connection = self.chat_widget.remote_connection.clone();
         for (thread_id, entry) in self.agent_navigation.ordered_threads() {
             chat_widget.set_collab_agent_metadata(
                 thread_id,
@@ -418,8 +419,46 @@ impl App {
         self.primary_session_configured = None;
         self.pending_primary_events.clear();
         self.pending_app_server_requests.clear();
+        self.pending_startup_thread_start = false;
         self.chat_widget.set_pending_thread_approvals(Vec::new());
         self.sync_active_agent_label();
+    }
+
+    pub(super) async fn handle_startup_thread_started(
+        &mut self,
+        app_server: &mut AppServerSession,
+        result: Result<AppServerStartedThread, String>,
+    ) -> Result<()> {
+        if !self.pending_startup_thread_start {
+            if let Ok(started) = result {
+                let thread_id = started.session.thread_id;
+                if let Err(err) = app_server.thread_unsubscribe(thread_id).await {
+                    tracing::warn!(
+                        thread_id = %thread_id,
+                        "failed to unsubscribe stale startup thread: {err}"
+                    );
+                }
+                self.discard_thread_local_state(thread_id).await;
+            }
+            return Ok(());
+        }
+
+        self.pending_startup_thread_start = false;
+        self.chat_widget
+            .set_queue_submissions_until_session_configured(/*queue*/ false);
+        match result {
+            Ok(started) => {
+                self.enqueue_primary_thread_session(started.session, started.turns)
+                    .await?;
+                self.chat_widget.maybe_send_next_queued_input();
+            }
+            Err(err) => {
+                return Err(color_eyre::eyre::eyre!(
+                    "Failed to start a fresh session through the app server: {err}"
+                ));
+            }
+        }
+        Ok(())
     }
 
     pub(super) async fn start_fresh_session_with_summary_hint(
@@ -473,7 +512,7 @@ impl App {
                     if let Some(usage_line) = summary.usage_line {
                         lines.push(usage_line.into());
                     }
-                    if let Some(command) = summary.resume_command {
+                    if let Some(command) = summary.resume_hint {
                         let spans = vec!["To continue this session, run ".into(), command.cyan()];
                         lines.push(spans.into());
                     }
@@ -617,11 +656,7 @@ impl App {
 
     pub(super) fn fresh_session_config(&self) -> Config {
         let mut config = self.config.clone();
-        config.service_tier = self
-            .chat_widget
-            .configured_service_tier()
-            .map(|service_tier| service_tier.request_value().to_string());
-        config.notices.fast_default_opt_out = self.chat_widget.fast_default_opt_out();
+        config.service_tier = self.chat_widget.configured_service_tier();
         config
     }
     pub(super) async fn resume_target_session(
@@ -636,7 +671,7 @@ impl App {
         }
 
         let current_cwd = self.config.cwd.to_path_buf();
-        let resume_cwd = if self.remote_app_server_url.is_some() {
+        let resume_cwd = if self.app_server_target.uses_remote_workspace() {
             current_cwd.clone()
         } else {
             match crate::session_resume::resolve_cwd_for_resume_or_fork(
@@ -704,7 +739,7 @@ impl App {
                             if let Some(usage_line) = summary.usage_line {
                                 lines.push(usage_line.into());
                             }
-                            if let Some(command) = summary.resume_command {
+                            if let Some(command) = summary.resume_hint {
                                 let spans =
                                     vec!["To continue this session, run ".into(), command.cyan()];
                                 lines.push(spans.into());

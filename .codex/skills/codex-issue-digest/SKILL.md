@@ -53,7 +53,7 @@ Use `--window "past week"` or `--window-hours 168` when the user asks for a non-
 ## Summary
 No major issues reported by users.
 
-Source: collector v4, git `abc123def456`, window `2026-04-27T00:00:00Z` to `2026-04-28T00:00:00Z`.
+Source: collector v5, git `abc123def456`, window `2026-04-27T00:00:00Z` to `2026-04-28T00:00:00Z`.
 Want details? I can expand this into the issue table.
 ```
 
@@ -65,7 +65,7 @@ Two issues are being surfaced by users:
 🔥🔥 Terminal launch hangs on startup [1](https://github.com/openai/codex/issues/123)
 🔥 Resume switches model providers unexpectedly [2](https://github.com/openai/codex/issues/456)
 
-Source: collector v4, git `abc123def456`, window `2026-04-27T00:00:00Z` to `2026-04-28T00:00:00Z`.
+Source: collector v5, git `abc123def456`, window `2026-04-27T00:00:00Z` to `2026-04-28T00:00:00Z`.
 Want details? I can expand this into the issue table.
 ```
 5. In `## Details`, when details are requested, include a compact table only when useful:
@@ -76,7 +76,7 @@ Want details? I can expand this into the issue table.
    - A clear quiet/no-concern sentence when there is no meaningful signal.
 6. Use the JSON `attention_marker` exactly. It is empty for normal rows, `🔥` for elevated rows, and `🔥🔥` for very high-attention rows. The actual cutoffs are in `attention_thresholds`.
 7. Use inline numbered references where a row or bullet points to issues, for example `Compaction bugs [1](https://github.com/openai/codex/issues/123), [2](https://github.com/openai/codex/issues/456)`. Do not add a separate footnotes section.
-8. Label `interactions` as `Interactions`; it counts posts/comments/reactions during the requested window, not unique people.
+8. Label `interactions` as `Interactions`; it counts unique human GitHub users who created a new issue, added a new comment, or reacted during the requested window. Multiple posts/reactions from the same user on the same issue count once.
 9. Mention the collector `script_version`, repo checkout `git_head`, and time window in one compact source line. In default mode, put this before the details prompt so the final line still asks whether the user wants details. In details-upfront mode, it can be the footer.
 
 ## Reaction Handling
@@ -89,7 +89,7 @@ GitHub issue search is still seeded by issue `updated_at`, so a purely reaction-
 
 ## Attention Markers
 
-The collector scales attention markers by the requested time window. The baseline is 5 human user interactions for `🔥` and 10 for `🔥🔥` over 24 hours; longer or shorter windows scale those cutoffs linearly and round up. For example, a one-week report uses 35 and 70 interactions. Human user interactions are human-authored new issue posts, human-authored new comments, and human reactions created during the window, including upvotes. Bot posts and bot reactions are excluded. In prose, explain this as high user interaction rather than naming the emoji.
+The collector scales attention markers by the requested time window. The baseline is 5 unique human users for `🔥` and 10 unique human users for `🔥🔥` over 24 hours; longer or shorter windows scale those cutoffs linearly and round up. For example, a one-week report uses 35 and 70 interactions. Unique human users are users who authored a new issue, authored a new comment, or reacted during the window, including upvotes. Multiple actions from the same user on the same issue count once. Bot posts and bot reactions are excluded. In prose, explain this as high user interaction rather than naming the emoji.
 
 ## Freshness
 

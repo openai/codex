@@ -74,7 +74,7 @@ commands that would enter the bubblewrap path.
   [permissions.workspace.filesystem]
   glob_scan_max_depth = 2
 
-  [permissions.workspace.filesystem.":project_roots"]
+  [permissions.workspace.filesystem.":workspace_roots"]
   "**/*.env" = "none"
   ```
 
@@ -94,4 +94,4 @@ commands that would enter the bubblewrap path.
   you can skip this in restrictive container environments with `--no-proc`.
 
 **Notes**
-- The CLI surface still uses legacy names like `codex debug landlock`.
+- The CLI surface is `codex sandbox`; the host OS selects the sandbox backend.

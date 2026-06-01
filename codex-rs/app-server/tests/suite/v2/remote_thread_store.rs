@@ -75,6 +75,7 @@ async fn thread_start_with_non_local_thread_store_does_not_create_local_persiste
         config: Arc::new(config),
         cli_overrides: Vec::new(),
         loader_overrides,
+        strict_config: false,
         cloud_requirements: CloudRequirementsLoader::default(),
         thread_config_loader: Arc::new(NoopThreadConfigLoader),
         feedback: CodexFeedback::new(),
@@ -112,6 +113,7 @@ async fn thread_start_with_non_local_thread_store_does_not_create_local_persiste
             request_id: RequestId::Integer(2),
             params: TurnStartParams {
                 thread_id: thread.id.clone(),
+                client_user_message_id: None,
                 input: vec![V2UserInput::Text {
                     text: "Hello".to_string(),
                     text_elements: Vec::new(),
@@ -227,7 +229,6 @@ fn assert_no_local_persistence_artifacts(codex_home: &Path) -> Result<()> {
         BTreeSet::from([
             "config.toml".to_string(),
             "installation_id".to_string(),
-            "memories".to_string(),
             "skills".to_string(),
         ]),
         "non-local thread persistence should not create unexpected files in codex_home"

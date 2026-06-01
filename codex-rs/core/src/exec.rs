@@ -56,6 +56,7 @@ const SIGKILL_CODE: i32 = 9;
 const TIMEOUT_CODE: i32 = 64;
 const EXIT_CODE_SIGNAL_BASE: i32 = 128; // conventional shell: 128 + signal
 const EXEC_TIMEOUT_EXIT_CODE: i32 = 124; // conventional timeout exit code
+const CANCELLATION_TERMINATION_GRACE_PERIOD: Duration = Duration::from_millis(50);
 
 // I/O buffer sizing
 const READ_CHUNK_SIZE: usize = 8192; // bytes per read
@@ -97,17 +98,19 @@ pub struct ExecParams {
 
 /// Resolved filesystem overrides for the Windows sandbox backends.
 ///
-/// The unelevated restricted-token backend only consumes extra deny-write
-/// carveouts on top of the legacy `WorkspaceWrite` allow set. The elevated
-/// backend can also consume explicit read and write roots during setup/refresh.
-/// Read-root overrides are layered on top of the baseline helper roots that the
-/// elevated setup path needs to launch the sandboxed command. Split policies
-/// that opt into platform defaults carry that explicitly with the override.
+/// The elevated Windows backend consumes extra deny-read paths plus explicit
+/// read and write roots during setup/refresh. The unelevated restricted-token
+/// backend only consumes extra deny-write carveouts on top of the legacy
+/// `WorkspaceWrite` allow set. Read-root overrides are layered on top of the
+/// baseline helper roots that the elevated setup path needs to launch the
+/// sandboxed command; split policies that opt into platform defaults carry
+/// that explicitly with the override.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct WindowsSandboxFilesystemOverrides {
     pub(crate) read_roots_override: Option<Vec<PathBuf>>,
     pub(crate) read_roots_include_platform_defaults: bool,
     pub(crate) write_roots_override: Option<Vec<PathBuf>>,
+    pub(crate) additional_deny_read_paths: Vec<AbsolutePathBuf>,
     pub(crate) additional_deny_write_paths: Vec<AbsolutePathBuf>,
 }
 
@@ -222,6 +225,17 @@ impl ExecExpiration {
         }
     }
 
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    pub(crate) fn cancellation_token(&self) -> Option<CancellationToken> {
+        match self {
+            ExecExpiration::Timeout(_) | ExecExpiration::DefaultTimeout => None,
+            ExecExpiration::Cancellation(cancellation)
+            | ExecExpiration::TimeoutOrCancellation { cancellation, .. } => {
+                Some(cancellation.clone())
+            }
+        }
+    }
+
     pub(crate) fn with_cancellation(self, cancellation: CancellationToken) -> Self {
         match self {
             ExecExpiration::Timeout(timeout) => ExecExpiration::TimeoutOrCancellation {
@@ -294,6 +308,7 @@ pub async fn process_exec_tool_call(
     params: ExecParams,
     permission_profile: &PermissionProfile,
     sandbox_cwd: &AbsolutePathBuf,
+    windows_sandbox_workspace_roots: &[AbsolutePathBuf],
     codex_linux_sandbox_exe: &Option<PathBuf>,
     use_legacy_landlock: bool,
     stdout_stream: Option<StdoutStream>,
@@ -302,6 +317,7 @@ pub async fn process_exec_tool_call(
         params,
         permission_profile,
         sandbox_cwd,
+        windows_sandbox_workspace_roots,
         codex_linux_sandbox_exe,
         use_legacy_landlock,
     )?;
@@ -316,6 +332,7 @@ pub fn build_exec_request(
     params: ExecParams,
     permission_profile: &PermissionProfile,
     sandbox_cwd: &AbsolutePathBuf,
+    windows_sandbox_workspace_roots: &[AbsolutePathBuf],
     codex_linux_sandbox_exe: &Option<PathBuf>,
     use_legacy_landlock: bool,
 ) -> Result<ExecRequest> {
@@ -385,7 +402,17 @@ pub fn build_exec_request(
         .map(|request| {
             let windows_sandbox_policy_cwd = AbsolutePathBuf::try_from(sandbox_cwd.to_path_buf())
                 .unwrap_or_else(|_| request.cwd.clone());
-            ExecRequest::from_sandbox_exec_request(request, options, windows_sandbox_policy_cwd)
+            let windows_sandbox_workspace_roots = if windows_sandbox_workspace_roots.is_empty() {
+                vec![windows_sandbox_policy_cwd.clone()]
+            } else {
+                windows_sandbox_workspace_roots.to_vec()
+            };
+            ExecRequest::from_sandbox_exec_request(
+                request,
+                options,
+                windows_sandbox_policy_cwd,
+                windows_sandbox_workspace_roots,
+            )
         })
         .map_err(CodexErr::from)?;
     let use_windows_elevated_backend = windows_sandbox_uses_elevated_backend(
@@ -421,7 +448,6 @@ pub(crate) async fn execute_exec_request(
     stdout_stream: Option<StdoutStream>,
     after_spawn: Option<Box<dyn FnOnce() + Send>>,
 ) -> Result<ExecToolCallOutput> {
-    let sandbox_policy = exec_request.compatibility_sandbox_policy();
     let ExecRequest {
         command,
         cwd,
@@ -431,10 +457,11 @@ pub(crate) async fn execute_exec_request(
         expiration,
         capture_policy,
         sandbox,
-        windows_sandbox_policy_cwd: _,
+        windows_sandbox_policy_cwd,
+        windows_sandbox_workspace_roots,
         windows_sandbox_level,
         windows_sandbox_private_desktop,
-        permission_profile: _,
+        permission_profile,
         file_system_sandbox_policy: _,
         network_sandbox_policy,
         windows_sandbox_filesystem_overrides,
@@ -462,7 +489,9 @@ pub(crate) async fn execute_exec_request(
         stdout_stream,
         after_spawn,
         sandbox,
-        &sandbox_policy,
+        &permission_profile,
+        &windows_sandbox_policy_cwd,
+        &windows_sandbox_workspace_roots,
         windows_sandbox_filesystem_overrides.as_ref(),
     )
     .await;
@@ -470,21 +499,31 @@ pub(crate) async fn execute_exec_request(
     finalize_exec_result(raw_output_result, sandbox, duration)
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn get_raw_output_result(
     params: ExecParams,
     network_sandbox_policy: NetworkSandboxPolicy,
     stdout_stream: Option<StdoutStream>,
     after_spawn: Option<Box<dyn FnOnce() + Send>>,
     #[cfg_attr(not(windows), allow(unused_variables))] sandbox: SandboxType,
-    #[cfg_attr(not(windows), allow(unused_variables))] sandbox_policy: &SandboxPolicy,
+    #[cfg_attr(not(windows), allow(unused_variables))] permission_profile: &PermissionProfile,
+    #[cfg_attr(not(windows), allow(unused_variables))] windows_sandbox_policy_cwd: &AbsolutePathBuf,
+    #[cfg_attr(not(windows), allow(unused_variables))]
+    windows_sandbox_workspace_roots: &[AbsolutePathBuf],
     #[cfg_attr(not(windows), allow(unused_variables))] windows_sandbox_filesystem_overrides: Option<
         &WindowsSandboxFilesystemOverrides,
     >,
 ) -> Result<RawExecToolCallOutput> {
     #[cfg(target_os = "windows")]
     if sandbox == SandboxType::WindowsRestrictedToken {
-        return exec_windows_sandbox(params, sandbox_policy, windows_sandbox_filesystem_overrides)
-            .await;
+        return exec_windows_sandbox(
+            params,
+            permission_profile,
+            windows_sandbox_policy_cwd,
+            windows_sandbox_workspace_roots,
+            windows_sandbox_filesystem_overrides,
+        )
+        .await;
     }
 
     exec(params, network_sandbox_policy, stdout_stream, after_spawn).await
@@ -559,12 +598,14 @@ fn record_windows_sandbox_spawn_failure(
 #[cfg(target_os = "windows")]
 async fn exec_windows_sandbox(
     params: ExecParams,
-    sandbox_policy: &SandboxPolicy,
+    permission_profile: &PermissionProfile,
+    windows_sandbox_policy_cwd: &AbsolutePathBuf,
+    windows_sandbox_workspace_roots: &[AbsolutePathBuf],
     windows_sandbox_filesystem_overrides: Option<&WindowsSandboxFilesystemOverrides>,
 ) -> Result<RawExecToolCallOutput> {
     use crate::config::find_codex_home;
-    use codex_windows_sandbox::run_windows_sandbox_capture_elevated;
-    use codex_windows_sandbox::run_windows_sandbox_capture_with_extra_deny_write_paths;
+    use codex_windows_sandbox::run_windows_sandbox_capture_for_permission_profile_elevated;
+    use codex_windows_sandbox::run_windows_sandbox_capture_with_filesystem_overrides;
 
     let ExecParams {
         command,
@@ -581,20 +622,24 @@ async fn exec_windows_sandbox(
         network.apply_to_env(&mut env);
     }
 
-    // TODO(iceweasel-oai): run_windows_sandbox_capture should support all
-    // variants of ExecExpiration, not just timeout.
-    let timeout_ms = if capture_policy.uses_expiration() {
-        expiration.timeout_ms()
+    // Windows sandbox capture still receives timeout and cancellation separately.
+    let (cancellation, timeout_ms) = if capture_policy.uses_expiration() {
+        let cancellation = expiration.cancellation_token().map(|token| {
+            codex_windows_sandbox::WindowsSandboxCancellationToken::new(move || {
+                token.is_cancelled()
+            })
+        });
+        (cancellation, expiration.timeout_ms())
     } else {
-        None
+        (None, None)
     };
 
-    let policy_str = serde_json::to_string(sandbox_policy).map_err(|err| {
-        CodexErr::Io(io::Error::other(format!(
-            "failed to serialize Windows sandbox policy: {err}"
-        )))
-    })?;
-    let sandbox_cwd = cwd.clone();
+    let workspace_roots = if windows_sandbox_workspace_roots.is_empty() {
+        vec![windows_sandbox_policy_cwd.clone()]
+    } else {
+        windows_sandbox_workspace_roots.to_vec()
+    };
+    let permission_profile = permission_profile.clone();
     let codex_home = find_codex_home().map_err(|err| {
         CodexErr::Io(io::Error::other(format!(
             "windows sandbox: failed to resolve codex_home: {err}"
@@ -605,13 +650,10 @@ async fn exec_windows_sandbox(
     let proxy_enforced = network.is_some();
     let use_elevated = windows_sandbox_uses_elevated_backend(sandbox_level, proxy_enforced);
     let additional_deny_write_paths = windows_sandbox_filesystem_overrides
-        .map(|overrides| {
-            overrides
-                .additional_deny_write_paths
-                .iter()
-                .map(AbsolutePathBuf::to_path_buf)
-                .collect::<Vec<_>>()
-        })
+        .map(|overrides| overrides.additional_deny_write_paths.clone())
+        .unwrap_or_default();
+    let additional_deny_read_paths = windows_sandbox_filesystem_overrides
+        .map(|overrides| overrides.additional_deny_read_paths.clone())
         .unwrap_or_default();
     let elevated_read_roots_override = windows_sandbox_filesystem_overrides
         .and_then(|overrides| overrides.read_roots_override.clone());
@@ -619,44 +661,39 @@ async fn exec_windows_sandbox(
         .is_some_and(|overrides| overrides.read_roots_include_platform_defaults);
     let elevated_write_roots_override = windows_sandbox_filesystem_overrides
         .and_then(|overrides| overrides.write_roots_override.clone());
-    let elevated_deny_write_paths = windows_sandbox_filesystem_overrides
-        .map(|overrides| {
-            overrides
-                .additional_deny_write_paths
-                .iter()
-                .map(AbsolutePathBuf::to_path_buf)
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
     let spawn_res = tokio::task::spawn_blocking(move || {
         if use_elevated {
-            run_windows_sandbox_capture_elevated(
-                codex_windows_sandbox::ElevatedSandboxCaptureRequest {
-                    policy_json_or_preset: policy_str.as_str(),
-                    sandbox_policy_cwd: &sandbox_cwd,
+            run_windows_sandbox_capture_for_permission_profile_elevated(
+                codex_windows_sandbox::ElevatedSandboxProfileCaptureRequest {
+                    permission_profile: &permission_profile,
+                    workspace_roots: workspace_roots.as_slice(),
                     codex_home: codex_home.as_ref(),
                     command,
                     cwd: &cwd,
                     env_map: env,
                     timeout_ms,
+                    cancellation,
                     use_private_desktop: windows_sandbox_private_desktop,
                     proxy_enforced,
                     read_roots_override: elevated_read_roots_override.as_deref(),
                     read_roots_include_platform_defaults:
                         elevated_read_roots_include_platform_defaults,
                     write_roots_override: elevated_write_roots_override.as_deref(),
-                    deny_write_paths_override: &elevated_deny_write_paths,
+                    deny_read_paths_override: &additional_deny_read_paths,
+                    deny_write_paths_override: &additional_deny_write_paths,
                 },
             )
         } else {
-            run_windows_sandbox_capture_with_extra_deny_write_paths(
-                policy_str.as_str(),
-                &sandbox_cwd,
+            run_windows_sandbox_capture_with_filesystem_overrides(
+                &permission_profile,
+                workspace_roots.as_slice(),
                 codex_home.as_ref(),
                 command,
                 &cwd,
                 env,
                 timeout_ms,
+                cancellation,
+                &additional_deny_read_paths,
                 &additional_deny_write_paths,
                 windows_sandbox_private_desktop,
             )
@@ -1049,22 +1086,24 @@ pub(crate) fn resolve_windows_restricted_token_filesystem_overrides(
         ));
     }
 
-    if !file_system_sandbox_policy.has_full_disk_read_access() {
+    // The restricted-token backend can still enforce split write restrictions,
+    // but its WRITE_RESTRICTED token does not make capability SID deny-read ACEs
+    // participate in read access checks. Read restrictions therefore require the
+    // elevated backend, even when the filesystem root remains readable.
+    if !windows_policy_has_root_read_access(file_system_sandbox_policy, sandbox_policy_cwd) {
         return Err(
             "windows unelevated restricted-token sandbox cannot enforce split filesystem read restrictions directly; refusing to run unsandboxed"
                 .to_string(),
         );
     }
 
-    if !file_system_sandbox_policy
-        .get_unreadable_roots_with_cwd(sandbox_policy_cwd)
-        .is_empty()
-        || !file_system_sandbox_policy
-            .get_unreadable_globs_with_cwd(sandbox_policy_cwd)
-            .is_empty()
-    {
+    let additional_deny_read_paths = codex_windows_sandbox::resolve_windows_deny_read_paths(
+        file_system_sandbox_policy,
+        sandbox_policy_cwd,
+    )?;
+    if !additional_deny_read_paths.is_empty() {
         return Err(
-            "windows unelevated restricted-token sandbox cannot enforce unreadable split filesystem carveouts directly; refusing to run unsandboxed"
+            "windows unelevated restricted-token sandbox cannot enforce deny-read restrictions directly; refusing to run unsandboxed"
                 .to_string(),
         );
     }
@@ -1131,7 +1170,7 @@ pub(crate) fn resolve_windows_restricted_token_filesystem_overrides(
         }
     }
 
-    if additional_deny_write_paths.is_empty() {
+    if additional_deny_read_paths.is_empty() && additional_deny_write_paths.is_empty() {
         return Ok(None);
     }
 
@@ -1139,6 +1178,7 @@ pub(crate) fn resolve_windows_restricted_token_filesystem_overrides(
         read_roots_override: None,
         read_roots_include_platform_defaults: false,
         write_roots_override: None,
+        additional_deny_read_paths,
         additional_deny_write_paths: additional_deny_write_paths
             .into_iter()
             .map(|path| AbsolutePathBuf::from_absolute_path(path).map_err(|err| err.to_string()))
@@ -1150,6 +1190,16 @@ fn normalize_windows_override_path(path: &Path) -> std::result::Result<PathBuf, 
     AbsolutePathBuf::from_absolute_path(dunce::simplified(path))
         .map(AbsolutePathBuf::into_path_buf)
         .map_err(|err| err.to_string())
+}
+
+fn windows_policy_has_root_read_access(
+    file_system_sandbox_policy: &FileSystemSandboxPolicy,
+    cwd: &AbsolutePathBuf,
+) -> bool {
+    let Some(root) = cwd.as_path().ancestors().last() else {
+        return false;
+    };
+    file_system_sandbox_policy.can_read_path_with_cwd(root, cwd.as_path())
 }
 
 pub(crate) fn resolve_windows_elevated_filesystem_overrides(
@@ -1175,18 +1225,10 @@ pub(crate) fn resolve_windows_elevated_filesystem_overrides(
         ));
     }
 
-    if !file_system_sandbox_policy
-        .get_unreadable_roots_with_cwd(sandbox_policy_cwd)
-        .is_empty()
-        || !file_system_sandbox_policy
-            .get_unreadable_globs_with_cwd(sandbox_policy_cwd)
-            .is_empty()
-    {
-        return Err(
-            "windows elevated sandbox cannot enforce unreadable split filesystem carveouts directly; refusing to run unsandboxed"
-                .to_string(),
-        );
-    }
+    let additional_deny_read_paths = codex_windows_sandbox::resolve_windows_deny_read_paths(
+        file_system_sandbox_policy,
+        sandbox_policy_cwd,
+    )?;
 
     let split_writable_roots =
         file_system_sandbox_policy.get_writable_roots_with_cwd(sandbox_policy_cwd);
@@ -1217,7 +1259,13 @@ pub(crate) fn resolve_windows_elevated_filesystem_overrides(
         .collect();
     let split_root_path_set: BTreeSet<PathBuf> = split_root_paths.iter().cloned().collect();
 
-    let read_roots_override = if file_system_sandbox_policy.has_full_disk_read_access() {
+    // `has_full_disk_read_access()` is intentionally false when deny-read
+    // entries exist. For Windows setup overrides, the important question is
+    // whether the baseline still reads from the filesystem root and only needs
+    // additional deny ACLs layered on top.
+    let split_has_root_read_access =
+        windows_policy_has_root_read_access(file_system_sandbox_policy, sandbox_policy_cwd);
+    let read_roots_override = if split_has_root_read_access {
         None
     } else {
         Some(split_readable_roots)
@@ -1265,6 +1313,7 @@ pub(crate) fn resolve_windows_elevated_filesystem_overrides(
 
     if read_roots_override.is_none()
         && write_roots_override.is_none()
+        && additional_deny_read_paths.is_empty()
         && additional_deny_write_paths.is_empty()
     {
         return Ok(None);
@@ -1275,6 +1324,7 @@ pub(crate) fn resolve_windows_elevated_filesystem_overrides(
             && file_system_sandbox_policy.include_platform_defaults(),
         read_roots_override,
         write_roots_override,
+        additional_deny_read_paths,
         additional_deny_write_paths,
     }))
 }
@@ -1349,15 +1399,49 @@ async fn consume_output(
             (exit_status, false)
         }
         outcome = &mut expiration_wait => {
-            kill_child_process_group(&mut child)?;
-            child.start_kill()?;
-            let timed_out = matches!(outcome, Some(ExecExpirationOutcome::TimedOut));
-            let exit_status = if timed_out {
-                synthetic_exit_status(EXIT_CODE_SIGNAL_BASE + TIMEOUT_CODE)
-            } else {
-                synthetic_exit_status_for_code(/*code*/ 1)
-            };
-            (exit_status, timed_out)
+            match outcome {
+                Some(ExecExpirationOutcome::TimedOut) => {
+                    kill_child_process_group(&mut child)?;
+                    child.start_kill()?;
+                    (
+                        synthetic_exit_status(EXIT_CODE_SIGNAL_BASE + TIMEOUT_CODE),
+                        true,
+                    )
+                }
+                Some(ExecExpirationOutcome::Cancelled) => {
+                    // Let TERM-aware processes run cleanup briefly, then kill any
+                    // remaining members of the original process group.
+                    let process_group_id = child.id();
+                    let should_escalate = if let Some(process_group_id) = process_group_id {
+                        codex_utils_pty::process_group::terminate_process_group(process_group_id)?
+                    } else {
+                        false
+                    };
+                    match tokio::time::timeout(
+                        CANCELLATION_TERMINATION_GRACE_PERIOD,
+                        child.wait(),
+                    )
+                    .await
+                    {
+                        Ok(status) => {
+                            status?;
+                            if should_escalate
+                                && let Some(process_group_id) = process_group_id
+                            {
+                                codex_utils_pty::process_group::kill_process_group(
+                                    process_group_id,
+                                )?;
+                            }
+                        }
+                        Err(_) => {
+                            kill_child_process_group(&mut child)?;
+                            child.start_kill()?;
+                        }
+                    }
+                    (synthetic_exit_status_for_code(/*code*/ 1), false)
+                }
+                None => unreachable!("expiration wait only resolves while expiration is active"),
+            }
         }
         _ = tokio::signal::ctrl_c() => {
             kill_child_process_group(&mut child)?;

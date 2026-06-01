@@ -1,15 +1,14 @@
 use super::threads::ThreadFilterOptions;
 use super::threads::push_thread_filters;
-use super::threads::push_thread_order_and_limit;
 use super::*;
 use crate::SortDirection;
 use crate::model::Phase2JobClaimOutcome;
 use crate::model::Stage1JobClaim;
 use crate::model::Stage1JobClaimOutcome;
 use crate::model::Stage1Output;
-use crate::model::Stage1OutputRow;
 use crate::model::Stage1StartupClaimParams;
 use crate::model::ThreadRow;
+use chrono::DateTime;
 use chrono::Duration;
 use sqlx::Executor;
 use sqlx::QueryBuilder;
@@ -20,39 +19,29 @@ const JOB_KIND_MEMORY_STAGE1: &str = "memory_stage1";
 const JOB_KIND_MEMORY_CONSOLIDATE_GLOBAL: &str = "memory_consolidate_global";
 const MEMORY_CONSOLIDATION_JOB_KEY: &str = "global";
 const PHASE2_SUCCESS_COOLDOWN_SECONDS: i64 = 6 * 60 * 60;
+const PHASE2_INPUT_SELECTION_PAGE_SIZE: usize = 512;
 
 const DEFAULT_RETRY_REMAINING: i64 = 3;
 
-impl StateRuntime {
+/// Store for generated memory state and memory extraction/consolidation jobs.
+#[derive(Clone)]
+pub struct MemoryStore {
+    pool: Arc<SqlitePool>,
+    state_pool: Arc<SqlitePool>,
+}
+
+impl MemoryStore {
+    pub(crate) fn new(pool: Arc<SqlitePool>, state_pool: Arc<SqlitePool>) -> Self {
+        Self { pool, state_pool }
+    }
+
     /// Deletes all persisted memory state in one transaction.
     ///
     /// This removes every `stage1_outputs` row and all `jobs` rows for the
     /// stage-1 (`memory_stage1`) and phase-2 (`memory_consolidate_global`)
     /// memory pipelines.
     pub async fn clear_memory_data(&self) -> anyhow::Result<()> {
-        let mut tx = self.pool.begin().await?;
-
-        sqlx::query(
-            r#"
-DELETE FROM stage1_outputs
-            "#,
-        )
-        .execute(&mut *tx)
-        .await?;
-
-        sqlx::query(
-            r#"
-DELETE FROM jobs
-WHERE kind = ? OR kind = ?
-            "#,
-        )
-        .bind(JOB_KIND_MEMORY_STAGE1)
-        .bind(JOB_KIND_MEMORY_CONSOLIDATE_GLOBAL)
-        .execute(&mut *tx)
-        .await?;
-
-        tx.commit().await?;
-        Ok(())
+        clear_memory_data_in_pool(self.pool.as_ref()).await
     }
 
     /// Record usage for cited stage-1 outputs.
@@ -92,6 +81,51 @@ WHERE thread_id = ?
         Ok(updated_rows)
     }
 
+    async fn stage1_source_needs_update(
+        &self,
+        thread_id: ThreadId,
+        source_updated_at: i64,
+    ) -> anyhow::Result<bool> {
+        let thread_id = thread_id.to_string();
+        let existing_output = sqlx::query(
+            r#"
+SELECT source_updated_at
+FROM stage1_outputs
+WHERE thread_id = ?
+            "#,
+        )
+        .bind(thread_id.as_str())
+        .fetch_optional(self.pool.as_ref())
+        .await?;
+        if let Some(existing_output) = existing_output {
+            let existing_source_updated_at: i64 = existing_output.try_get("source_updated_at")?;
+            if existing_source_updated_at >= source_updated_at {
+                return Ok(false);
+            }
+        }
+
+        let existing_job = sqlx::query(
+            r#"
+SELECT last_success_watermark
+FROM jobs
+WHERE kind = ? AND job_key = ?
+            "#,
+        )
+        .bind(JOB_KIND_MEMORY_STAGE1)
+        .bind(thread_id.as_str())
+        .fetch_optional(self.pool.as_ref())
+        .await?;
+        if let Some(existing_job) = existing_job {
+            let last_success_watermark =
+                existing_job.try_get::<Option<i64>, _>("last_success_watermark")?;
+            if last_success_watermark.is_some_and(|watermark| watermark >= source_updated_at) {
+                return Ok(false);
+            }
+        }
+
+        Ok(true)
+    }
+
     /// Selects and claims stage-1 startup jobs for stale threads.
     ///
     /// Query behavior:
@@ -100,8 +134,9 @@ WHERE thread_id = ?
     /// - excludes threads with `memory_mode != 'enabled'`
     /// - excludes the current thread id
     /// - keeps only threads whose millisecond `updated_at` is in the age window
-    /// - keeps only threads whose memory is stale compared to millisecond `updated_at`
-    /// - orders by `updated_at_ms DESC` and applies `scan_limit`
+    /// - checks memory staleness against the memories DB
+    /// - orders by `updated_at_ms DESC` and applies `scan_limit` to bound
+    ///   state-DB work before probing the memories DB
     ///
     /// For each selected thread, this function calls [`Self::try_claim_stage1_job`]
     /// with `source_updated_at = thread.updated_at.timestamp()` and returns up to
@@ -147,6 +182,7 @@ SELECT
     threads.cwd,
     threads.cli_version,
     threads.title,
+    threads.preview,
     threads.sandbox_policy,
     threads.approval_mode,
     threads.tokens_used,
@@ -156,16 +192,6 @@ SELECT
     threads.git_branch,
     threads.git_origin_url
 FROM threads
-LEFT JOIN stage1_outputs
-    ON stage1_outputs.thread_id = threads.id
-LEFT JOIN jobs
-    ON jobs.kind = 
-            "#,
-        );
-        builder.push_bind(JOB_KIND_MEMORY_STAGE1);
-        builder.push(
-            r#"
-   AND jobs.job_key = threads.id
             "#,
         );
         push_thread_filters(
@@ -195,31 +221,28 @@ LEFT JOIN jobs
             .push("threads.updated_at_ms")
             .push(" <= ")
             .push_bind(idle_cutoff);
-        let updated_at = "threads.updated_at_ms";
-        builder.push(" AND ((COALESCE(stage1_outputs.source_updated_at, -1) + 1) * 1000) <= ");
-        builder.push(updated_at);
-        builder.push(" AND ((COALESCE(jobs.last_success_watermark, -1) + 1) * 1000) <= ");
-        builder.push(updated_at);
-        push_thread_order_and_limit(
-            &mut builder,
-            SortKey::UpdatedAt,
-            SortDirection::Desc,
-            scan_limit,
-        );
+        let scan_limit_i64 = i64::try_from(scan_limit).unwrap_or(i64::MAX);
+        builder.push(" ORDER BY threads.updated_at_ms DESC LIMIT ");
+        builder.push_bind(scan_limit_i64);
 
         let items = builder
             .build()
-            .fetch_all(self.pool.as_ref())
+            .fetch_all(self.state_pool.as_ref())
             .await?
             .into_iter()
             .map(|row| ThreadRow::try_from_row(&row).and_then(ThreadMetadata::try_from))
             .collect::<Result<Vec<_>, _>>()?;
 
         let mut claimed = Vec::new();
-
         for item in items {
             if claimed.len() >= max_claimed {
                 break;
+            }
+            if !self
+                .stage1_source_needs_update(item.id, item.updated_at.timestamp())
+                .await?
+            {
+                continue;
             }
 
             if let Stage1JobClaimOutcome::Claimed { ownership_token } = self
@@ -242,13 +265,64 @@ LEFT JOIN jobs
         Ok(claimed)
     }
 
+    pub(super) async fn delete_thread_memory(&self, thread_id: ThreadId) -> anyhow::Result<()> {
+        let now = Utc::now().timestamp();
+        let thread_id = thread_id.to_string();
+        let mut tx = self.pool.begin().await?;
+
+        let existing_output = sqlx::query(
+            r#"
+SELECT selected_for_phase2
+FROM stage1_outputs
+WHERE thread_id = ?
+            "#,
+        )
+        .bind(thread_id.as_str())
+        .fetch_optional(&mut *tx)
+        .await?;
+        let was_selected_for_phase2 = existing_output
+            .map(|row| row.try_get::<i64, _>("selected_for_phase2"))
+            .transpose()?
+            .is_some_and(|selected| selected != 0);
+
+        let deleted_rows = sqlx::query(
+            r#"
+DELETE FROM stage1_outputs
+WHERE thread_id = ?
+            "#,
+        )
+        .bind(thread_id.as_str())
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+
+        sqlx::query(
+            r#"
+DELETE FROM jobs
+WHERE kind = ? AND job_key = ?
+            "#,
+        )
+        .bind(JOB_KIND_MEMORY_STAGE1)
+        .bind(thread_id.as_str())
+        .execute(&mut *tx)
+        .await?;
+
+        if deleted_rows > 0 && was_selected_for_phase2 {
+            enqueue_global_consolidation_with_executor(&mut *tx, now).await?;
+        }
+
+        tx.commit().await?;
+        Ok(())
+    }
+
     /// Lists the most recent non-empty stage-1 outputs for global consolidation.
     ///
     /// Query behavior:
     /// - filters out rows where both `raw_memory` and `rollout_summary` are blank
-    /// - joins `threads` to include thread `cwd`, `rollout_path`, and `git_branch`
+    /// - hydrates thread `cwd`, `rollout_path`, and `git_branch` from the state DB
+    /// - filters out missing or non-enabled threads
     /// - orders by `source_updated_at DESC, thread_id DESC`
-    /// - applies `LIMIT n`
+    /// - returns the first `n` visible outputs
     pub async fn list_stage1_outputs_for_global(
         &self,
         n: usize,
@@ -261,30 +335,30 @@ LEFT JOIN jobs
             r#"
 SELECT
     so.thread_id,
-    COALESCE(t.rollout_path, '') AS rollout_path,
     so.source_updated_at,
     so.raw_memory,
     so.rollout_summary,
     so.rollout_slug,
-    so.generated_at,
-    COALESCE(t.cwd, '') AS cwd,
-    t.git_branch AS git_branch
+    so.generated_at
 FROM stage1_outputs AS so
-LEFT JOIN threads AS t
-    ON t.id = so.thread_id
-WHERE t.memory_mode = 'enabled'
-  AND (length(trim(so.raw_memory)) > 0 OR length(trim(so.rollout_summary)) > 0)
+WHERE length(trim(so.raw_memory)) > 0 OR length(trim(so.rollout_summary)) > 0
 ORDER BY so.source_updated_at DESC, so.thread_id DESC
-LIMIT ?
             "#,
         )
-        .bind(n as i64)
         .fetch_all(self.pool.as_ref())
         .await?;
 
-        rows.into_iter()
-            .map(|row| Stage1OutputRow::try_from_row(&row).and_then(Stage1Output::try_from))
-            .collect::<Result<Vec<_>, _>>()
+        let mut outputs = Vec::new();
+        for row in rows {
+            if let Some(output) = self.stage1_output_from_row_if_thread_enabled(&row).await? {
+                outputs.push(output);
+                if outputs.len() >= n {
+                    break;
+                }
+            }
+        }
+
+        Ok(outputs)
     }
 
     /// Prunes stale stage-1 outputs while preserving the latest phase-2
@@ -355,62 +429,148 @@ WHERE thread_id IN (
         }
         let cutoff = (Utc::now() - Duration::days(max_unused_days.max(0))).timestamp();
 
-        let current_rows = sqlx::query(
-            r#"
-SELECT
-    selected.thread_id,
-    selected.rollout_path,
-    selected.source_updated_at,
-    selected.raw_memory,
-    selected.rollout_summary,
-    selected.rollout_slug,
-    selected.generated_at,
-    selected.cwd,
-    selected.git_branch
-FROM (
-    SELECT
-        so.thread_id,
-        COALESCE(t.rollout_path, '') AS rollout_path,
-        so.source_updated_at,
-        so.raw_memory,
-        so.rollout_summary,
-        so.rollout_slug,
-        so.generated_at,
-        COALESCE(t.cwd, '') AS cwd,
-        t.git_branch AS git_branch
-    FROM stage1_outputs AS so
-    LEFT JOIN threads AS t
-        ON t.id = so.thread_id
-    WHERE t.memory_mode = 'enabled'
-      AND (length(trim(so.raw_memory)) > 0 OR length(trim(so.rollout_summary)) > 0)
-      AND (
-            (so.last_usage IS NOT NULL AND so.last_usage >= ?)
-            OR (so.last_usage IS NULL AND so.source_updated_at >= ?)
-      )
-    ORDER BY
-        COALESCE(so.usage_count, 0) DESC,
-        COALESCE(so.last_usage, so.source_updated_at) DESC,
-        so.source_updated_at DESC,
-        so.thread_id DESC
-    LIMIT ?
-) AS selected
-ORDER BY selected.thread_id ASC
-            "#,
-        )
-        .bind(cutoff)
-        .bind(cutoff)
-        .bind(n as i64)
-        .fetch_all(self.pool.as_ref())
-        .await?;
+        let page_size = n.clamp(1, PHASE2_INPUT_SELECTION_PAGE_SIZE);
+        let page_size_i64 = i64::try_from(page_size).unwrap_or(i64::MAX);
+        let mut offset = 0_i64;
+        let mut selected_keys = Vec::with_capacity(n);
 
-        let mut selected = Vec::with_capacity(current_rows.len());
-        for row in current_rows {
-            selected.push(Stage1Output::try_from(Stage1OutputRow::try_from_row(
-                &row,
-            )?)?);
+        while selected_keys.len() < n {
+            let candidate_rows = sqlx::query(
+                r#"
+SELECT
+    so.thread_id,
+    so.source_updated_at
+FROM stage1_outputs AS so
+WHERE (length(trim(so.raw_memory)) > 0 OR length(trim(so.rollout_summary)) > 0)
+  AND (
+        (so.last_usage IS NOT NULL AND so.last_usage >= ?)
+        OR (so.last_usage IS NULL AND so.source_updated_at >= ?)
+  )
+ORDER BY
+    COALESCE(so.usage_count, 0) DESC,
+    COALESCE(so.last_usage, so.source_updated_at) DESC,
+    so.source_updated_at DESC,
+    so.thread_id DESC
+LIMIT ? OFFSET ?
+            "#,
+            )
+            .bind(cutoff)
+            .bind(cutoff)
+            .bind(page_size_i64)
+            .bind(offset)
+            .fetch_all(self.pool.as_ref())
+            .await?;
+
+            if candidate_rows.is_empty() {
+                break;
+            }
+
+            let candidate_count = i64::try_from(candidate_rows.len()).unwrap_or(i64::MAX);
+            for row in candidate_rows {
+                let thread_id: String = row.try_get("thread_id")?;
+                let source_updated_at: i64 = row.try_get("source_updated_at")?;
+                if self
+                    .enabled_thread_metadata(ThreadId::try_from(thread_id.as_str())?)
+                    .await?
+                    .is_some()
+                {
+                    selected_keys.push((thread_id, source_updated_at));
+                    if selected_keys.len() >= n {
+                        break;
+                    }
+                }
+            }
+
+            offset = offset.saturating_add(candidate_count);
         }
 
+        let mut selected = Vec::with_capacity(selected_keys.len());
+        for (thread_id, source_updated_at) in selected_keys {
+            let Some(row) = sqlx::query(
+                r#"
+SELECT
+    so.thread_id,
+    so.source_updated_at,
+    so.raw_memory,
+    so.rollout_summary,
+    so.rollout_slug,
+    so.generated_at
+FROM stage1_outputs AS so
+WHERE so.thread_id = ? AND so.source_updated_at = ?
+            "#,
+            )
+            .bind(thread_id.as_str())
+            .bind(source_updated_at)
+            .fetch_optional(self.pool.as_ref())
+            .await?
+            else {
+                continue;
+            };
+            if let Some(output) = self.stage1_output_from_row_if_thread_enabled(&row).await? {
+                selected.push(output);
+            }
+        }
+
+        selected.sort_by_key(|entry| entry.thread_id.to_string());
+
         Ok(selected)
+    }
+
+    async fn stage1_output_from_row_if_thread_enabled(
+        &self,
+        row: &sqlx::sqlite::SqliteRow,
+    ) -> anyhow::Result<Option<Stage1Output>> {
+        let thread_id: String = row.try_get("thread_id")?;
+        let Some(thread) = self
+            .enabled_thread_metadata(ThreadId::try_from(thread_id.as_str())?)
+            .await?
+        else {
+            return Ok(None);
+        };
+        Ok(Some(stage1_output_from_row_and_thread(row, thread)?))
+    }
+
+    async fn enabled_thread_metadata(
+        &self,
+        thread_id: ThreadId,
+    ) -> anyhow::Result<Option<ThreadMetadata>> {
+        let row = sqlx::query(
+            r#"
+SELECT
+    threads.id,
+    threads.rollout_path,
+    threads.created_at_ms AS created_at,
+    threads.updated_at_ms AS updated_at,
+    threads.source,
+    threads.thread_source,
+    threads.agent_nickname,
+    threads.agent_role,
+    threads.agent_path,
+    threads.model_provider,
+    threads.model,
+    threads.reasoning_effort,
+    threads.cwd,
+    threads.cli_version,
+    threads.title,
+    threads.preview,
+    threads.sandbox_policy,
+    threads.approval_mode,
+    threads.tokens_used,
+    threads.first_user_message,
+    threads.archived_at,
+    threads.git_sha,
+    threads.git_branch,
+    threads.git_origin_url
+FROM threads
+WHERE threads.id = ? AND threads.memory_mode = 'enabled'
+            "#,
+        )
+        .bind(thread_id.to_string())
+        .fetch_optional(self.state_pool.as_ref())
+        .await?;
+
+        row.map(|row| ThreadRow::try_from_row(&row).and_then(ThreadMetadata::try_from))
+            .transpose()
     }
 
     /// Marks a thread as polluted and enqueues phase-2 forgetting when the
@@ -421,24 +581,6 @@ ORDER BY selected.thread_id ASC
     ) -> anyhow::Result<bool> {
         let now = Utc::now().timestamp();
         let thread_id = thread_id.to_string();
-        let mut tx = self.pool.begin().await?;
-        let rows_affected = sqlx::query(
-            r#"
-UPDATE threads
-SET memory_mode = 'polluted'
-WHERE id = ? AND memory_mode != 'polluted'
-            "#,
-        )
-        .bind(thread_id.as_str())
-        .execute(&mut *tx)
-        .await?
-        .rows_affected();
-
-        if rows_affected == 0 {
-            tx.commit().await?;
-            return Ok(false);
-        }
-
         let selected_for_phase2 = sqlx::query_scalar::<_, i64>(
             r#"
 SELECT selected_for_phase2
@@ -447,15 +589,26 @@ WHERE thread_id = ?
             "#,
         )
         .bind(thread_id.as_str())
-        .fetch_optional(&mut *tx)
+        .fetch_optional(self.pool.as_ref())
         .await?
         .unwrap_or(0);
+        let rows_affected = sqlx::query(
+            r#"
+UPDATE threads
+SET memory_mode = 'polluted'
+WHERE id = ? AND memory_mode != 'polluted'
+            "#,
+        )
+        .bind(thread_id.as_str())
+        .execute(self.state_pool.as_ref())
+        .await?
+        .rows_affected();
+
         if selected_for_phase2 != 0 {
-            enqueue_global_consolidation_with_executor(&mut *tx, now).await?;
+            self.enqueue_global_consolidation(now).await?;
         }
 
-        tx.commit().await?;
-        Ok(true)
+        Ok(rows_affected > 0)
     }
 
     /// Attempts to claim a stage-1 job for a thread at `source_updated_at`.
@@ -1220,6 +1373,58 @@ WHERE kind = ? AND job_key = ?
     Ok(rows_affected)
 }
 
+pub(super) async fn clear_memory_data_in_pool(pool: &SqlitePool) -> anyhow::Result<()> {
+    let mut tx = pool.begin().await?;
+
+    sqlx::query(
+        r#"
+DELETE FROM stage1_outputs
+            "#,
+    )
+    .execute(&mut *tx)
+    .await?;
+
+    sqlx::query(
+        r#"
+DELETE FROM jobs
+WHERE kind = ? OR kind = ?
+            "#,
+    )
+    .bind(JOB_KIND_MEMORY_STAGE1)
+    .bind(JOB_KIND_MEMORY_CONSOLIDATE_GLOBAL)
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+    Ok(())
+}
+
+fn stage1_output_from_row_and_thread(
+    row: &sqlx::sqlite::SqliteRow,
+    thread: ThreadMetadata,
+) -> anyhow::Result<Stage1Output> {
+    let source_updated_at: i64 = row.try_get("source_updated_at")?;
+    let generated_at: i64 = row.try_get("generated_at")?;
+    let source_updated_at = datetime_from_epoch_seconds(source_updated_at)?;
+    let generated_at = datetime_from_epoch_seconds(generated_at)?;
+    Ok(Stage1Output {
+        thread_id: thread.id,
+        rollout_path: thread.rollout_path,
+        source_updated_at,
+        raw_memory: row.try_get("raw_memory")?,
+        rollout_summary: row.try_get("rollout_summary")?,
+        rollout_slug: row.try_get("rollout_slug")?,
+        cwd: thread.cwd,
+        git_branch: thread.git_branch,
+        generated_at,
+    })
+}
+
+fn datetime_from_epoch_seconds(secs: i64) -> anyhow::Result<DateTime<Utc>> {
+    DateTime::<Utc>::from_timestamp(secs, 0)
+        .ok_or_else(|| anyhow::anyhow!("invalid unix timestamp: {secs}"))
+}
+
 async fn enqueue_global_consolidation_with_executor<'e, E>(
     executor: E,
     input_watermark: i64,
@@ -1272,6 +1477,181 @@ ON CONFLICT(kind, job_key) DO UPDATE SET
 }
 
 #[cfg(test)]
+impl StateRuntime {
+    async fn clear_memory_data(&self) -> anyhow::Result<()> {
+        self.memories.clear_memory_data().await
+    }
+
+    async fn record_stage1_output_usage(&self, thread_ids: &[ThreadId]) -> anyhow::Result<usize> {
+        self.memories.record_stage1_output_usage(thread_ids).await
+    }
+
+    async fn claim_stage1_jobs_for_startup(
+        &self,
+        current_thread_id: ThreadId,
+        params: Stage1StartupClaimParams<'_>,
+    ) -> anyhow::Result<Vec<Stage1JobClaim>> {
+        self.memories
+            .claim_stage1_jobs_for_startup(current_thread_id, params)
+            .await
+    }
+
+    async fn list_stage1_outputs_for_global(&self, n: usize) -> anyhow::Result<Vec<Stage1Output>> {
+        self.memories.list_stage1_outputs_for_global(n).await
+    }
+
+    async fn prune_stage1_outputs_for_retention(
+        &self,
+        max_unused_days: i64,
+        limit: usize,
+    ) -> anyhow::Result<usize> {
+        self.memories
+            .prune_stage1_outputs_for_retention(max_unused_days, limit)
+            .await
+    }
+
+    async fn get_phase2_input_selection(
+        &self,
+        n: usize,
+        max_unused_days: i64,
+    ) -> anyhow::Result<Vec<Stage1Output>> {
+        self.memories
+            .get_phase2_input_selection(n, max_unused_days)
+            .await
+    }
+
+    async fn mark_thread_memory_mode_polluted(&self, thread_id: ThreadId) -> anyhow::Result<bool> {
+        self.memories
+            .mark_thread_memory_mode_polluted(thread_id)
+            .await
+    }
+
+    async fn try_claim_stage1_job(
+        &self,
+        thread_id: ThreadId,
+        worker_id: ThreadId,
+        source_updated_at: i64,
+        lease_seconds: i64,
+        max_running_jobs: usize,
+    ) -> anyhow::Result<Stage1JobClaimOutcome> {
+        self.memories
+            .try_claim_stage1_job(
+                thread_id,
+                worker_id,
+                source_updated_at,
+                lease_seconds,
+                max_running_jobs,
+            )
+            .await
+    }
+
+    async fn mark_stage1_job_succeeded(
+        &self,
+        thread_id: ThreadId,
+        ownership_token: &str,
+        source_updated_at: i64,
+        raw_memory: &str,
+        rollout_summary: &str,
+        rollout_slug: Option<&str>,
+    ) -> anyhow::Result<bool> {
+        self.memories
+            .mark_stage1_job_succeeded(
+                thread_id,
+                ownership_token,
+                source_updated_at,
+                raw_memory,
+                rollout_summary,
+                rollout_slug,
+            )
+            .await
+    }
+
+    async fn mark_stage1_job_succeeded_no_output(
+        &self,
+        thread_id: ThreadId,
+        ownership_token: &str,
+    ) -> anyhow::Result<bool> {
+        self.memories
+            .mark_stage1_job_succeeded_no_output(thread_id, ownership_token)
+            .await
+    }
+
+    async fn mark_stage1_job_failed(
+        &self,
+        thread_id: ThreadId,
+        ownership_token: &str,
+        failure_reason: &str,
+        retry_delay_seconds: i64,
+    ) -> anyhow::Result<bool> {
+        self.memories
+            .mark_stage1_job_failed(
+                thread_id,
+                ownership_token,
+                failure_reason,
+                retry_delay_seconds,
+            )
+            .await
+    }
+
+    async fn enqueue_global_consolidation(&self, input_watermark: i64) -> anyhow::Result<()> {
+        self.memories
+            .enqueue_global_consolidation(input_watermark)
+            .await
+    }
+
+    async fn try_claim_global_phase2_job(
+        &self,
+        worker_id: ThreadId,
+        lease_seconds: i64,
+    ) -> anyhow::Result<Phase2JobClaimOutcome> {
+        self.memories
+            .try_claim_global_phase2_job(worker_id, lease_seconds)
+            .await
+    }
+
+    async fn mark_global_phase2_job_succeeded(
+        &self,
+        ownership_token: &str,
+        completed_watermark: i64,
+        selected_outputs: &[Stage1Output],
+    ) -> anyhow::Result<bool> {
+        self.memories
+            .mark_global_phase2_job_succeeded(
+                ownership_token,
+                completed_watermark,
+                selected_outputs,
+            )
+            .await
+    }
+
+    async fn mark_global_phase2_job_failed(
+        &self,
+        ownership_token: &str,
+        failure_reason: &str,
+        retry_delay_seconds: i64,
+    ) -> anyhow::Result<bool> {
+        self.memories
+            .mark_global_phase2_job_failed(ownership_token, failure_reason, retry_delay_seconds)
+            .await
+    }
+
+    async fn mark_global_phase2_job_failed_if_unowned(
+        &self,
+        ownership_token: &str,
+        failure_reason: &str,
+        retry_delay_seconds: i64,
+    ) -> anyhow::Result<bool> {
+        self.memories
+            .mark_global_phase2_job_failed_if_unowned(
+                ownership_token,
+                failure_reason,
+                retry_delay_seconds,
+            )
+            .await
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::JOB_KIND_MEMORY_CONSOLIDATE_GLOBAL;
     use super::JOB_KIND_MEMORY_STAGE1;
@@ -1295,12 +1675,16 @@ mod tests {
         ThreadId::from_string(value).expect("thread id")
     }
 
+    fn memory_pool(runtime: &StateRuntime) -> &sqlx::SqlitePool {
+        runtime.memories().pool.as_ref()
+    }
+
     async fn age_phase2_success_beyond_cooldown(runtime: &StateRuntime) {
         sqlx::query("UPDATE jobs SET finished_at = ? WHERE kind = ? AND job_key = ?")
             .bind(Utc::now().timestamp() - PHASE2_SUCCESS_COOLDOWN_SECONDS - 1)
             .bind(JOB_KIND_MEMORY_CONSOLIDATE_GLOBAL)
             .bind(MEMORY_CONSOLIDATION_JOB_KEY)
-            .execute(runtime.pool.as_ref())
+            .execute(memory_pool(runtime))
             .await
             .expect("age phase2 success beyond cooldown");
     }
@@ -1409,7 +1793,7 @@ mod tests {
 
         sqlx::query("UPDATE jobs SET lease_until = 0 WHERE kind = 'memory_stage1' AND job_key = ?")
             .bind(thread_id.to_string())
-            .execute(runtime.pool.as_ref())
+            .execute(memory_pool(&runtime))
             .await
             .expect("force stale lease");
 
@@ -1655,7 +2039,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn claim_stage1_jobs_prefilters_threads_with_up_to_date_memory() {
+    async fn claim_stage1_jobs_bounds_state_scan_before_memory_probes() {
         let codex_home = unique_temp_dir();
         let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
             .await
@@ -1733,7 +2117,7 @@ mod tests {
             .expect("upsert stale thread");
 
         let allowed_sources = vec!["cli".to_string()];
-        let claims = runtime
+        let claims_with_one_scanned_thread = runtime
             .claim_stage1_jobs_for_startup(
                 current_thread_id,
                 Stage1StartupClaimParams {
@@ -1747,6 +2131,22 @@ mod tests {
             )
             .await
             .expect("claim stage1 startup jobs");
+        assert_eq!(claims_with_one_scanned_thread.len(), 0);
+
+        let claims = runtime
+            .claim_stage1_jobs_for_startup(
+                current_thread_id,
+                Stage1StartupClaimParams {
+                    scan_limit: 2,
+                    max_claimed: 1,
+                    max_age_days: 30,
+                    min_rollout_idle_hours: 12,
+                    allowed_sources: allowed_sources.as_slice(),
+                    lease_seconds: 3600,
+                },
+            )
+            .await
+            .expect("claim stage1 startup jobs with wider scan");
         assert_eq!(claims.len(), 1);
         assert_eq!(claims[0].thread.id, stale_thread_id);
 
@@ -1900,7 +2300,7 @@ mod tests {
             .expect("clear memory data");
 
         let stage1_outputs_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM stage1_outputs")
-            .fetch_one(runtime.pool.as_ref())
+            .fetch_one(memory_pool(&runtime))
             .await
             .expect("count stage1 outputs");
         assert_eq!(stage1_outputs_count, 0);
@@ -1909,7 +2309,7 @@ mod tests {
             sqlx::query_scalar("SELECT COUNT(*) FROM jobs WHERE kind = ? OR kind = ?")
                 .bind(JOB_KIND_MEMORY_STAGE1)
                 .bind(JOB_KIND_MEMORY_CONSOLIDATE_GLOBAL)
-                .fetch_one(runtime.pool.as_ref())
+                .fetch_one(memory_pool(&runtime))
                 .await
                 .expect("count memory jobs");
         assert_eq!(memory_jobs_count, 0);
@@ -2000,7 +2400,7 @@ INSERT INTO jobs (
                 .bind(lease_until)
                 .bind(3)
                 .bind(metadata.updated_at.timestamp())
-                .execute(runtime.pool.as_ref())
+                .execute(memory_pool(&runtime))
                 .await
                 .expect("seed running stage1 job");
             }
@@ -2034,7 +2434,7 @@ WHERE kind = 'memory_stage1'
             "#,
         )
         .bind(Utc::now().timestamp())
-        .fetch_one(runtime.pool.as_ref())
+        .fetch_one(memory_pool(&runtime))
         .await
         .expect("count running stage1 jobs")
         .try_get::<i64, _>("count")
@@ -2148,7 +2548,7 @@ WHERE kind = 'memory_stage1'
     }
 
     #[tokio::test]
-    async fn stage1_output_cascades_on_thread_delete() {
+    async fn delete_thread_removes_stage1_output_and_enqueues_phase2_when_selected() {
         let codex_home = unique_temp_dir();
         let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
             .await
@@ -2191,28 +2591,83 @@ WHERE kind = 'memory_stage1'
         let count_before =
             sqlx::query("SELECT COUNT(*) AS count FROM stage1_outputs WHERE thread_id = ?")
                 .bind(thread_id.to_string())
-                .fetch_one(runtime.pool.as_ref())
+                .fetch_one(memory_pool(&runtime))
                 .await
                 .expect("count before delete")
                 .try_get::<i64, _>("count")
                 .expect("count value");
         assert_eq!(count_before, 1);
 
-        sqlx::query("DELETE FROM threads WHERE id = ?")
-            .bind(thread_id.to_string())
-            .execute(runtime.pool.as_ref())
+        let phase2_claim = runtime
+            .try_claim_global_phase2_job(owner, /*lease_seconds*/ 3600)
             .await
-            .expect("delete thread");
+            .expect("claim phase2");
+        let (phase2_token, input_watermark) = match phase2_claim {
+            Phase2JobClaimOutcome::Claimed {
+                ownership_token,
+                input_watermark,
+            } => (ownership_token, input_watermark),
+            other => panic!("unexpected phase2 claim outcome: {other:?}"),
+        };
+        let selected_outputs = runtime
+            .list_stage1_outputs_for_global(/*n*/ 10)
+            .await
+            .expect("list stage1 outputs");
+        assert!(
+            runtime
+                .mark_global_phase2_job_succeeded(
+                    phase2_token.as_str(),
+                    input_watermark,
+                    &selected_outputs,
+                )
+                .await
+                .expect("mark phase2 succeeded"),
+            "phase2 success should mark selected stage1 output"
+        );
+
+        let before_delete = Utc::now().timestamp();
+        assert_eq!(
+            runtime
+                .delete_thread(thread_id)
+                .await
+                .expect("delete thread"),
+            1
+        );
 
         let count_after =
             sqlx::query("SELECT COUNT(*) AS count FROM stage1_outputs WHERE thread_id = ?")
                 .bind(thread_id.to_string())
-                .fetch_one(runtime.pool.as_ref())
+                .fetch_one(memory_pool(&runtime))
                 .await
                 .expect("count after delete")
                 .try_get::<i64, _>("count")
                 .expect("count value");
         assert_eq!(count_after, 0);
+
+        let phase2_job = sqlx::query(
+            r#"
+SELECT status, input_watermark
+FROM jobs
+WHERE kind = ? AND job_key = ?
+            "#,
+        )
+        .bind(JOB_KIND_MEMORY_CONSOLIDATE_GLOBAL)
+        .bind(MEMORY_CONSOLIDATION_JOB_KEY)
+        .fetch_one(memory_pool(&runtime))
+        .await
+        .expect("load phase2 job after delete");
+        let status: String = phase2_job.try_get("status").expect("status");
+        let input_watermark: i64 = phase2_job
+            .try_get("input_watermark")
+            .expect("input watermark");
+        assert_eq!(status, "pending");
+        assert!(input_watermark >= before_delete);
+
+        let visible_outputs = runtime
+            .list_stage1_outputs_for_global(/*n*/ 10)
+            .await
+            .expect("list stage1 outputs after thread delete");
+        assert_eq!(visible_outputs.len(), 0);
 
         let _ = tokio::fs::remove_dir_all(codex_home).await;
     }
@@ -2258,7 +2713,7 @@ WHERE kind = 'memory_stage1'
         let output_row_count =
             sqlx::query("SELECT COUNT(*) AS count FROM stage1_outputs WHERE thread_id = ?")
                 .bind(thread_id.to_string())
-                .fetch_one(runtime.pool.as_ref())
+                .fetch_one(memory_pool(&runtime))
                 .await
                 .expect("load stage1 output count")
                 .try_get::<i64, _>("count")
@@ -2279,7 +2734,7 @@ WHERE kind = 'memory_stage1'
 
         let global_job_row_count = sqlx::query("SELECT COUNT(*) AS count FROM jobs WHERE kind = ?")
             .bind("memory_consolidate_global")
-            .fetch_one(runtime.pool.as_ref())
+            .fetch_one(memory_pool(&runtime))
             .await
             .expect("load phase2 job row count")
             .try_get::<i64, _>("count")
@@ -2383,7 +2838,7 @@ WHERE kind = 'memory_stage1'
         let output_row_count =
             sqlx::query("SELECT COUNT(*) AS count FROM stage1_outputs WHERE thread_id = ?")
                 .bind(thread_id.to_string())
-                .fetch_one(runtime.pool.as_ref())
+                .fetch_one(memory_pool(&runtime))
                 .await
                 .expect("load stage1 output count after delete")
                 .try_get::<i64, _>("count")
@@ -2494,7 +2949,7 @@ WHERE kind = 'memory_stage1'
         )
         .bind("memory_stage1")
         .bind(thread_id.to_string())
-        .fetch_one(runtime.pool.as_ref())
+        .fetch_one(memory_pool(&runtime))
         .await
         .expect("load stage1 job row after newer-source claim");
         assert_eq!(
@@ -2620,7 +3075,7 @@ WHERE kind = 'memory_stage1'
             sqlx::query("SELECT retry_remaining FROM jobs WHERE kind = ? AND job_key = ?")
                 .bind("memory_consolidate_global")
                 .bind("global")
-                .fetch_one(runtime.pool.as_ref())
+                .fetch_one(memory_pool(&runtime))
                 .await
                 .expect("load phase2 job row after retry exhaustion");
         assert_eq!(
@@ -2787,7 +3242,7 @@ VALUES (?, ?, ?, ?, ?)
         .bind("raw memory")
         .bind("summary")
         .bind(100_i64)
-        .execute(runtime.pool.as_ref())
+        .execute(memory_pool(&runtime))
         .await
         .expect("insert non-empty stage1 output");
         sqlx::query(
@@ -2801,7 +3256,7 @@ VALUES (?, ?, ?, ?, ?)
         .bind("")
         .bind("")
         .bind(101_i64)
-        .execute(runtime.pool.as_ref())
+        .execute(memory_pool(&runtime))
         .await
         .expect("insert empty stage1 output");
 
@@ -3183,6 +3638,101 @@ VALUES (?, ?, ?, ?, ?)
     }
 
     #[tokio::test]
+    async fn mark_thread_memory_mode_polluted_enqueues_phase2_when_already_polluted() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
+            .await
+            .expect("initialize runtime");
+
+        let thread_id = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("thread id");
+        let owner = ThreadId::from_string(&Uuid::new_v4().to_string()).expect("owner id");
+        runtime
+            .upsert_thread(&test_thread_metadata(
+                &codex_home,
+                thread_id,
+                codex_home.join("workspace"),
+            ))
+            .await
+            .expect("upsert thread");
+
+        let claim = runtime
+            .try_claim_stage1_job(
+                thread_id, owner, /*source_updated_at*/ 100, /*lease_seconds*/ 3600,
+                /*max_running_jobs*/ 64,
+            )
+            .await
+            .expect("claim stage1");
+        let ownership_token = match claim {
+            Stage1JobClaimOutcome::Claimed { ownership_token } => ownership_token,
+            other => panic!("unexpected stage1 claim outcome: {other:?}"),
+        };
+        assert!(
+            runtime
+                .mark_stage1_job_succeeded(
+                    thread_id,
+                    ownership_token.as_str(),
+                    /*source_updated_at*/ 100,
+                    "raw",
+                    "summary",
+                    /*rollout_slug*/ None,
+                )
+                .await
+                .expect("mark stage1 succeeded"),
+            "stage1 success should persist output"
+        );
+
+        let phase2_claim = runtime
+            .try_claim_global_phase2_job(owner, /*lease_seconds*/ 3600)
+            .await
+            .expect("claim phase2");
+        let (phase2_token, input_watermark) = match phase2_claim {
+            Phase2JobClaimOutcome::Claimed {
+                ownership_token,
+                input_watermark,
+            } => (ownership_token, input_watermark),
+            other => panic!("unexpected phase2 claim outcome: {other:?}"),
+        };
+        let selected_outputs = runtime
+            .list_stage1_outputs_for_global(/*n*/ 10)
+            .await
+            .expect("list stage1 outputs");
+        assert!(
+            runtime
+                .mark_global_phase2_job_succeeded(
+                    phase2_token.as_str(),
+                    input_watermark,
+                    &selected_outputs,
+                )
+                .await
+                .expect("mark phase2 success"),
+            "phase2 success should persist selected rows"
+        );
+
+        sqlx::query("UPDATE threads SET memory_mode = 'polluted' WHERE id = ?")
+            .bind(thread_id.to_string())
+            .execute(runtime.pool.as_ref())
+            .await
+            .expect("mark thread polluted before memory enqueue");
+
+        assert!(
+            !runtime
+                .mark_thread_memory_mode_polluted(thread_id)
+                .await
+                .expect("mark already polluted thread"),
+            "already polluted thread should not report a state transition"
+        );
+
+        age_phase2_success_beyond_cooldown(&runtime).await;
+        let next_claim = runtime
+            .try_claim_global_phase2_job(owner, /*lease_seconds*/ 3600)
+            .await
+            .expect("claim phase2 after already-polluted enqueue");
+        assert!(matches!(next_claim, Phase2JobClaimOutcome::Claimed { .. }));
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
     async fn get_phase2_input_selection_returns_regenerated_selected_rows() {
         let codex_home = unique_temp_dir();
         let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
@@ -3292,7 +3842,7 @@ VALUES (?, ?, ?, ?, ?)
                 "SELECT selected_for_phase2, selected_for_phase2_source_updated_at FROM stage1_outputs WHERE thread_id = ?",
             )
         .bind(thread_id.to_string())
-        .fetch_one(runtime.pool.as_ref())
+        .fetch_one(memory_pool(&runtime))
         .await
         .expect("load selected_for_phase2");
         assert_eq!(selected_for_phase2, 1);
@@ -3585,7 +4135,7 @@ VALUES (?, ?, ?, ?, ?)
                 "SELECT selected_for_phase2, selected_for_phase2_source_updated_at FROM stage1_outputs WHERE thread_id = ?",
             )
             .bind(thread_id.to_string())
-            .fetch_one(runtime.pool.as_ref())
+            .fetch_one(memory_pool(&runtime))
             .await
             .expect("load selected snapshot after phase2");
         assert_eq!(selected_for_phase2, 1);
@@ -3698,7 +4248,7 @@ VALUES (?, ?, ?, ?, ?)
                 "SELECT selected_for_phase2, selected_for_phase2_source_updated_at FROM stage1_outputs WHERE thread_id = ?",
             )
             .bind(thread_id.to_string())
-            .fetch_one(runtime.pool.as_ref())
+            .fetch_one(memory_pool(&runtime))
             .await
             .expect("load selected_for_phase2");
         assert_eq!(selected_for_phase2, 0);
@@ -3802,13 +4352,13 @@ VALUES (?, ?, ?, ?, ?)
         let row_a =
             sqlx::query("SELECT usage_count, last_usage FROM stage1_outputs WHERE thread_id = ?")
                 .bind(thread_a.to_string())
-                .fetch_one(runtime.pool.as_ref())
+                .fetch_one(memory_pool(&runtime))
                 .await
                 .expect("load stage1 usage row a");
         let row_b =
             sqlx::query("SELECT usage_count, last_usage FROM stage1_outputs WHERE thread_id = ?")
                 .bind(thread_b.to_string())
-                .fetch_one(runtime.pool.as_ref())
+                .fetch_one(memory_pool(&runtime))
                 .await
                 .expect("load stage1 usage row b");
 
@@ -3908,7 +4458,7 @@ VALUES (?, ?, ?, ?, ?)
             .bind(usage_count)
             .bind(last_usage.timestamp())
             .bind(thread_id.to_string())
-            .execute(runtime.pool.as_ref())
+            .execute(memory_pool(&runtime))
             .await
             .expect("update usage metadata");
         }
@@ -4004,7 +4554,7 @@ VALUES (?, ?, ?, ?, ?)
             .bind(usage_count)
             .bind(last_usage.map(|value| value.timestamp()))
             .bind(thread_id.to_string())
-            .execute(runtime.pool.as_ref())
+            .execute(memory_pool(&runtime))
             .await
             .expect("update usage metadata");
         }
@@ -4089,13 +4639,13 @@ VALUES (?, ?, ?, ?, ?)
         sqlx::query("UPDATE stage1_outputs SET generated_at = ? WHERE thread_id = ?")
             .bind(300_i64)
             .bind(older_thread.to_string())
-            .execute(runtime.pool.as_ref())
+            .execute(memory_pool(&runtime))
             .await
             .expect("update older generated_at");
         sqlx::query("UPDATE stage1_outputs SET generated_at = ? WHERE thread_id = ?")
             .bind(150_i64)
             .bind(newer_thread.to_string())
-            .execute(runtime.pool.as_ref())
+            .execute(memory_pool(&runtime))
             .await
             .expect("update newer generated_at");
 
@@ -4201,14 +4751,14 @@ VALUES (?, ?, ?, ?, ?)
         .bind(3_i64)
         .bind(now - Duration::days(40).num_seconds())
         .bind(stale_used.to_string())
-        .execute(runtime.pool.as_ref())
+        .execute(memory_pool(&runtime))
         .await
         .expect("set stale used metadata");
         sqlx::query(
             "UPDATE stage1_outputs SET selected_for_phase2 = 1, selected_for_phase2_source_updated_at = source_updated_at WHERE thread_id = ?",
         )
         .bind(stale_selected.to_string())
-        .execute(runtime.pool.as_ref())
+        .execute(memory_pool(&runtime))
         .await
         .expect("mark selected for phase2");
         sqlx::query(
@@ -4217,13 +4767,13 @@ VALUES (?, ?, ?, ?, ?)
         .bind(8_i64)
         .bind(now - Duration::days(2).num_seconds())
         .bind(fresh_used.to_string())
-        .execute(runtime.pool.as_ref())
+        .execute(memory_pool(&runtime))
         .await
         .expect("set fresh used metadata");
 
         let before_jobs_count =
             sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM jobs WHERE kind = 'memory_stage1'")
-                .fetch_one(runtime.pool.as_ref())
+                .fetch_one(memory_pool(&runtime))
                 .await
                 .expect("count stage1 jobs before prune");
 
@@ -4236,7 +4786,7 @@ VALUES (?, ?, ?, ?, ?)
         let remaining = sqlx::query_scalar::<_, String>(
             "SELECT thread_id FROM stage1_outputs ORDER BY thread_id",
         )
-        .fetch_all(runtime.pool.as_ref())
+        .fetch_all(memory_pool(&runtime))
         .await
         .expect("load remaining stage1 outputs");
         let mut expected_remaining = vec![fresh_used.to_string(), stale_selected.to_string()];
@@ -4245,7 +4795,7 @@ VALUES (?, ?, ?, ?, ?)
 
         let after_jobs_count =
             sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM jobs WHERE kind = 'memory_stage1'")
-                .fetch_one(runtime.pool.as_ref())
+                .fetch_one(memory_pool(&runtime))
                 .await
                 .expect("count stage1 jobs after prune");
         assert_eq!(after_jobs_count, before_jobs_count);
@@ -4323,7 +4873,7 @@ VALUES (?, ?, ?, ?, ?)
         assert_eq!(pruned, 2);
 
         let remaining_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM stage1_outputs")
-            .fetch_one(runtime.pool.as_ref())
+            .fetch_one(memory_pool(&runtime))
             .await
             .expect("count remaining stage1 outputs");
         assert_eq!(remaining_count, 1);
@@ -4539,7 +5089,7 @@ VALUES (?, ?, ?, ?, ?)
             .bind(Utc::now().timestamp() - 1)
             .bind("memory_consolidate_global")
             .bind("global")
-            .execute(runtime.pool.as_ref())
+            .execute(memory_pool(&runtime))
             .await
             .expect("expire global consolidation lease");
 
@@ -4675,7 +5225,7 @@ VALUES (?, ?, ?, ?, ?)
         sqlx::query("UPDATE jobs SET ownership_token = NULL WHERE kind = ? AND job_key = ?")
             .bind("memory_consolidate_global")
             .bind("global")
-            .execute(runtime.pool.as_ref())
+            .execute(memory_pool(&runtime))
             .await
             .expect("clear ownership token");
 

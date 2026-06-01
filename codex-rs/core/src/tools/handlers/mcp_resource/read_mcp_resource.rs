@@ -1,12 +1,12 @@
 use std::time::Instant;
 
 use crate::function_tool::FunctionCallError;
-use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
+use crate::tools::context::boxed_tool_output;
 use crate::tools::handlers::mcp_resource_spec::create_read_mcp_resource_tool;
-use crate::tools::registry::ToolHandler;
-use crate::tools::registry::ToolKind;
+use crate::tools::registry::CoreToolRuntime;
+use crate::tools::registry::ToolExecutor;
 use codex_protocol::models::function_call_output_content_items_to_text;
 use codex_protocol::protocol::McpInvocation;
 use codex_tools::ToolName;
@@ -26,26 +26,24 @@ use super::serialize_function_output;
 
 pub struct ReadMcpResourceHandler;
 
-impl ToolHandler for ReadMcpResourceHandler {
-    type Output = FunctionToolOutput;
-
+#[async_trait::async_trait]
+impl ToolExecutor<ToolInvocation> for ReadMcpResourceHandler {
     fn tool_name(&self) -> ToolName {
         ToolName::plain("read_mcp_resource")
     }
 
-    fn spec(&self) -> Option<ToolSpec> {
-        Some(create_read_mcp_resource_tool())
+    fn spec(&self) -> ToolSpec {
+        create_read_mcp_resource_tool()
     }
 
     fn supports_parallel_tool_calls(&self) -> bool {
         true
     }
 
-    fn kind(&self) -> ToolKind {
-        ToolKind::Function
-    }
-
-    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
+    async fn handle(
+        &self,
+        invocation: ToolInvocation,
+    ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
         let ToolInvocation {
             session,
             turn,
@@ -80,13 +78,7 @@ impl ToolHandler for ReadMcpResourceHandler {
 
         let payload_result: Result<ReadResourcePayload, FunctionCallError> = async {
             let result = session
-                .read_resource(
-                    &server,
-                    ReadResourceRequestParams {
-                        meta: None,
-                        uri: uri.clone(),
-                    },
-                )
+                .read_resource(&server, ReadResourceRequestParams::new(uri.clone()))
                 .await
                 .map_err(|err| {
                     FunctionCallError::RespondToModel(format!("resources/read failed: {err:#}"))
@@ -115,7 +107,7 @@ impl ToolHandler for ReadMcpResourceHandler {
                         Ok(call_tool_result_from_content(&content, output.success)),
                     )
                     .await;
-                    Ok(output)
+                    Ok(boxed_tool_output(output))
                 }
                 Err(err) => {
                     let duration = start.elapsed();
@@ -149,3 +141,5 @@ impl ToolHandler for ReadMcpResourceHandler {
         }
     }
 }
+
+impl CoreToolRuntime for ReadMcpResourceHandler {}

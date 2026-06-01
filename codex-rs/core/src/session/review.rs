@@ -1,5 +1,5 @@
-use super::turn_context::image_generation_tool_auth_allowed;
 use super::*;
+use codex_protocol::openai_models::ToolMode;
 use std::sync::atomic::AtomicBool;
 
 /// Spawn a review thread using the given prompt.
@@ -23,49 +23,20 @@ pub(super) async fn spawn_review_thread(
     let mut review_features = sess.features.clone();
     let _ = review_features.disable(Feature::WebSearchRequest);
     let _ = review_features.disable(Feature::WebSearchCached);
+    let _ = review_features.disable(Feature::Goals);
     let review_web_search_mode = WebSearchMode::Disabled;
-    let goal_tools_supported = !config.ephemeral && parent_turn_context.tools_config.goal_tools;
-    let provider_capabilities = parent_turn_context.provider.capabilities();
-    let tools_config = ToolsConfig::new(&ToolsConfigParams {
-        model_info: &review_model_info,
-        available_models: &sess
-            .services
-            .models_manager
-            .list_models(RefreshStrategy::OnlineIfUncached)
-            .await,
-        features: &review_features,
-        image_generation_tool_auth_allowed: image_generation_tool_auth_allowed(Some(
-            sess.services.auth_manager.as_ref(),
-        )),
-        web_search_mode: Some(review_web_search_mode),
-        session_source: parent_turn_context.session_source.clone(),
-        permission_profile: &parent_turn_context.permission_profile,
-        windows_sandbox_level: parent_turn_context.windows_sandbox_level,
-    })
-    .with_namespace_tools_capability(provider_capabilities.namespace_tools)
-    .with_image_generation_capability(provider_capabilities.image_generation)
-    .with_web_search_capability(provider_capabilities.web_search)
-    .with_unified_exec_shell_mode_for_session(
-        crate::tools::spec::tool_user_shell_type(sess.services.user_shell.as_ref()),
+    let goal_tools_supported = !config.ephemeral && parent_turn_context.goal_tools_enabled();
+    let available_models = sess
+        .services
+        .models_manager
+        .list_models(RefreshStrategy::OnlineIfUncached)
+        .await;
+    let unified_exec_shell_mode = UnifiedExecShellMode::for_session(
+        codex_tools::unified_exec_feature_mode_for_features(review_features.get()),
+        crate::tools::tool_user_shell_type(sess.services.user_shell.as_ref()),
         sess.services.shell_zsh_path.as_ref(),
         sess.services.main_execve_wrapper_exe.as_ref(),
-    )
-    .with_web_search_config(/*web_search_config*/ None)
-    .with_allow_login_shell(config.permissions.allow_login_shell)
-    .with_environment_mode(parent_turn_context.tools_config.environment_mode)
-    .with_spawn_agent_usage_hint(config.multi_agent_v2.usage_hint_enabled)
-    .with_spawn_agent_usage_hint_text(config.multi_agent_v2.usage_hint_text.clone())
-    .with_hide_spawn_agent_metadata(config.multi_agent_v2.hide_spawn_agent_metadata)
-    .with_goal_tools_allowed(goal_tools_supported)
-    .with_max_concurrent_threads_per_session(config.agent_max_threads)
-    .with_wait_agent_min_timeout_ms(
-        review_features
-            .enabled(Feature::MultiAgentV2)
-            .then_some(config.multi_agent_v2.min_wait_timeout_ms),
-    )
-    .with_agent_type_description(crate::agent::role::spawn_tool_spec::build(
-        &config.agent_roles,
-    ));
+    );
 
     let review_prompt = resolved.prompt.clone();
     let provider = parent_turn_context.provider.clone();
@@ -76,6 +47,15 @@ pub(super) async fn spawn_review_thread(
     let mut per_turn_config = (*config).clone();
     per_turn_config.model = Some(model.clone());
     per_turn_config.features = review_features.clone();
+    let tool_mode = model_info.tool_mode.unwrap_or_else(|| {
+        if per_turn_config.features.enabled(Feature::CodeModeOnly) {
+            ToolMode::CodeModeOnly
+        } else if per_turn_config.features.enabled(Feature::CodeMode) {
+            ToolMode::CodeMode
+        } else {
+            ToolMode::Direct
+        }
+    });
     if let Err(err) = per_turn_config.web_search_mode.set(review_web_search_mode) {
         let fallback_value = per_turn_config.web_search_mode.value();
         tracing::warn!(
@@ -98,14 +78,22 @@ pub(super) async fn spawn_review_thread(
         .model_reasoning_summary
         .unwrap_or(model_info.default_reasoning_summary);
     let session_source = parent_turn_context.session_source.clone();
+    let forked_from_thread_id = {
+        let state = sess.state.lock().await;
+        state.session_configuration.forked_from_thread_id
+    };
 
     let per_turn_config = Arc::new(per_turn_config);
     let review_turn_id = sub_id.to_string();
     let turn_metadata_state = Arc::new(TurnMetadataState::new(
         sess.session_id().to_string(),
         sess.thread_id().to_string(),
+        forked_from_thread_id,
+        parent_turn_context.parent_thread_id,
+        &session_source,
         parent_turn_context.thread_source,
         review_turn_id.clone(),
+        #[allow(deprecated)]
         parent_turn_context.cwd.clone(),
         &parent_turn_context.permission_profile,
         parent_turn_context.windows_sandbox_level,
@@ -113,21 +101,25 @@ pub(super) async fn spawn_review_thread(
     ));
 
     let review_turn_context = TurnContext {
-        sub_id: review_turn_id,
+        sub_id: review_turn_id.clone(),
         trace_id: current_span_trace_id(),
         realtime_active: parent_turn_context.realtime_active,
         config: per_turn_config,
         auth_manager: auth_manager_for_context,
         model_info: model_info.clone(),
+        tool_mode,
         session_telemetry: session_telemetry_for_context,
         provider: provider_for_context,
         reasoning_effort,
         reasoning_summary,
         session_source,
+        parent_thread_id: parent_turn_context.parent_thread_id,
         thread_source: parent_turn_context.thread_source,
         environments: parent_turn_context.environments.clone(),
-        tools_config,
-        features: parent_turn_context.features.clone(),
+        available_models,
+        unified_exec_shell_mode,
+        goal_tools_supported,
+        features: review_features,
         ghost_snapshot: parent_turn_context.ghost_snapshot.clone(),
         current_date: parent_turn_context.current_date.clone(),
         timezone: parent_turn_context.timezone.clone(),
@@ -142,14 +134,15 @@ pub(super) async fn spawn_review_thread(
         network: parent_turn_context.network.clone(),
         windows_sandbox_level: parent_turn_context.windows_sandbox_level,
         shell_environment_policy: parent_turn_context.shell_environment_policy.clone(),
+        #[allow(deprecated)]
         cwd: parent_turn_context.cwd.clone(),
         final_output_json_schema: None,
         codex_self_exe: parent_turn_context.codex_self_exe.clone(),
         codex_linux_sandbox_exe: parent_turn_context.codex_linux_sandbox_exe.clone(),
-        tool_call_gate: Arc::new(ReadinessFlag::new()),
         dynamic_tools: parent_turn_context.dynamic_tools.clone(),
         truncation_policy: model_info.truncation_policy.into(),
         turn_metadata_state,
+        extension_data: Arc::new(codex_extension_api::ExtensionData::new(review_turn_id)),
         turn_skills: TurnSkillsContext::new(parent_turn_context.turn_skills.outcome.clone()),
         turn_timing_state: Arc::new(TurnTimingState::default()),
         server_model_warning_emitted: AtomicBool::new(false),
@@ -157,10 +150,13 @@ pub(super) async fn spawn_review_thread(
     };
 
     // Seed the child task with the review prompt as the initial user message.
-    let input: Vec<UserInput> = vec![UserInput::Text {
-        text: review_prompt,
-        // Review prompt is synthesized; no UI element ranges to preserve.
-        text_elements: Vec::new(),
+    let input = vec![TurnInput::UserInput {
+        content: vec![UserInput::Text {
+            text: review_prompt,
+            // Review prompt is synthesized; no UI element ranges to preserve.
+            text_elements: Vec::new(),
+        }],
+        client_id: None,
     }];
     let tc = Arc::new(review_turn_context);
     tc.turn_metadata_state.spawn_git_enrichment_task();

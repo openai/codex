@@ -11,6 +11,10 @@ export type InitializeCapabilities = {
  */
 experimentalApi: boolean,
 /**
+ * Opt into `attestation/generate` requests for upstream `x-oai-attestation`.
+ */
+requestAttestation: boolean,
+/**
  * Exact notification method names that should be suppressed for this
  * connection (for example `thread/started`).
  */
