@@ -1509,7 +1509,7 @@ impl PluginRequestProcessor {
 
         let environment_manager = self.thread_manager.environment_manager();
         let (all_connectors_result, accessible_connectors_result) = tokio::join!(
-            connectors::list_all_connectors_with_options(config, /*force_refetch*/ true),
+            connectors::list_all_connectors_with_options(config, /*force_refetch*/ false),
             connectors::list_accessible_connectors_from_mcp_tools_with_environment_manager(
                 config,
                 /*force_refetch*/ true,

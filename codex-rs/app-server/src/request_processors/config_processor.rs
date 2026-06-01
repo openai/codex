@@ -30,6 +30,7 @@ use codex_app_server_protocol::NetworkRequirements;
 use codex_app_server_protocol::NetworkUnixSocketPermission;
 use codex_app_server_protocol::SandboxMode;
 use codex_app_server_protocol::ServerNotification;
+use codex_app_server_protocol::WindowsSandboxSetupMode;
 use codex_chatgpt::connectors;
 use codex_config::ConfigRequirementsToml;
 use codex_config::HookEventsToml;
@@ -54,6 +55,7 @@ const SUPPORTED_EXPERIMENTAL_FEATURE_ENABLEMENT: &[&str] = &[
     "mentions_v2",
     "plugins",
     "remote_control",
+    "remote_plugin",
     "tool_suggest",
     "tool_call_mcp_elicitation",
 ];
@@ -419,6 +421,23 @@ fn map_requirements_toml_to_api(requirements: ConfigRequirementsToml) -> ConfigR
                 .filter_map(map_sandbox_mode_requirement_to_api)
                 .collect()
         }),
+        allowed_windows_sandbox_implementations: requirements.windows.and_then(|windows| {
+            windows
+                .allowed_sandbox_implementations
+                .map(|implementations| {
+                    implementations
+                        .into_iter()
+                        .map(|implementation| match implementation {
+                            codex_config::types::WindowsSandboxModeToml::Elevated => {
+                                WindowsSandboxSetupMode::Elevated
+                            }
+                            codex_config::types::WindowsSandboxModeToml::Unelevated => {
+                                WindowsSandboxSetupMode::Unelevated
+                            }
+                        })
+                        .collect()
+                })
+        }),
         allowed_permissions: requirements.allowed_permissions,
         allowed_web_search_modes: requirements.allowed_web_search_modes.map(|modes| {
             let mut normalized = modes
@@ -431,6 +450,7 @@ fn map_requirements_toml_to_api(requirements: ConfigRequirementsToml) -> ConfigR
             normalized
         }),
         allow_managed_hooks_only: requirements.allow_managed_hooks_only,
+        allow_appshots: requirements.allow_appshots,
         computer_use: requirements
             .computer_use
             .map(map_computer_use_requirements_to_api),
@@ -609,7 +629,7 @@ fn map_network_unix_socket_permission_to_api(
 ) -> NetworkUnixSocketPermission {
     match permission {
         codex_config::NetworkUnixSocketPermissionToml::Allow => NetworkUnixSocketPermission::Allow,
-        codex_config::NetworkUnixSocketPermissionToml::None => NetworkUnixSocketPermission::None,
+        codex_config::NetworkUnixSocketPermissionToml::Deny => NetworkUnixSocketPermission::Deny,
     }
 }
 
@@ -632,8 +652,10 @@ fn config_write_error(code: ConfigWriteErrorCode, message: impl Into<String>) ->
 #[cfg(test)]
 mod tests {
     use super::map_requirements_toml_to_api;
+    use codex_app_server_protocol::WindowsSandboxSetupMode;
     use codex_config::ComputerUseRequirementsToml;
     use codex_config::ConfigRequirementsToml;
+    use codex_config::WindowsRequirementsToml;
     use pretty_assertions::assert_eq;
 
     #[test]
@@ -659,6 +681,17 @@ mod tests {
     }
 
     #[test]
+    fn requirements_api_includes_allow_appshots() {
+        let mapped = map_requirements_toml_to_api(ConfigRequirementsToml {
+            allow_appshots: Some(false),
+            ..ConfigRequirementsToml::default()
+        });
+
+        assert_eq!(mapped.allow_appshots, Some(false));
+        assert_eq!(mapped.hooks, None);
+    }
+
+    #[test]
     fn requirements_api_includes_computer_use_requirements() {
         let mapped = map_requirements_toml_to_api(ConfigRequirementsToml {
             computer_use: Some(ComputerUseRequirementsToml {
@@ -672,6 +705,27 @@ mod tests {
                 .computer_use
                 .and_then(|requirements| requirements.allow_locked_computer_use),
             Some(false)
+        );
+    }
+
+    #[test]
+    fn requirements_api_includes_allowed_windows_sandbox_implementations() {
+        let mapped = map_requirements_toml_to_api(ConfigRequirementsToml {
+            windows: Some(WindowsRequirementsToml {
+                allowed_sandbox_implementations: Some(vec![
+                    codex_config::types::WindowsSandboxModeToml::Elevated,
+                    codex_config::types::WindowsSandboxModeToml::Unelevated,
+                ]),
+            }),
+            ..ConfigRequirementsToml::default()
+        });
+
+        assert_eq!(
+            mapped.allowed_windows_sandbox_implementations,
+            Some(vec![
+                WindowsSandboxSetupMode::Elevated,
+                WindowsSandboxSetupMode::Unelevated,
+            ])
         );
     }
 }

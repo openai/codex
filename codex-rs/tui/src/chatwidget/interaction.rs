@@ -112,8 +112,7 @@ impl ChatWidget {
             return;
         }
 
-        if matches!(key_event.code, KeyCode::Esc)
-            && matches!(key_event.kind, KeyEventKind::Press | KeyEventKind::Repeat)
+        if self.chat_keymap.interrupt_turn.is_pressed(key_event)
             && !self.input_queue.pending_steers.is_empty()
             && self.bottom_pane.is_task_running()
             && self.bottom_pane.no_modal_or_popup_active()

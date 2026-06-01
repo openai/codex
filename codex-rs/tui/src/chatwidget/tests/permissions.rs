@@ -1,4 +1,6 @@
 use super::*;
+use crate::legacy_core::config::CustomPermissionProfileSummary;
+use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::models::ManagedFileSystemPermissions;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
@@ -46,6 +48,25 @@ fn app_server_workspace_write_profile(extra_root: AbsolutePathBuf) -> Permission
     }
 }
 
+fn windows_sandbox_requirements_stack(
+    allowed_sandbox_implementations: Vec<WindowsSandboxModeToml>,
+) -> ConfigLayerStack {
+    let requirements_toml = codex_config::ConfigRequirementsToml {
+        windows: Some(codex_config::WindowsRequirementsToml {
+            allowed_sandbox_implementations: Some(allowed_sandbox_implementations),
+        }),
+        ..Default::default()
+    };
+    let mut requirements_with_sources = codex_config::ConfigRequirementsWithSources::default();
+    requirements_with_sources
+        .merge_unset_fields(RequirementSource::Unknown, requirements_toml.clone());
+    let requirements = codex_config::ConfigRequirements::try_from(requirements_with_sources)
+        .expect("windows sandbox requirements");
+
+    ConfigLayerStack::new(Vec::new(), requirements, requirements_toml)
+        .expect("test config layer stack")
+}
+
 #[tokio::test]
 async fn approvals_selection_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
@@ -63,6 +84,183 @@ async fn approvals_selection_popup_snapshot() {
     assert_chatwidget_snapshot!("approvals_selection_popup", popup);
 }
 
+#[tokio::test]
+async fn profile_permissions_selection_popup_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.config.explicit_permission_profile_mode = true;
+    chat.config
+        .permissions
+        .set_permission_profile_from_session_snapshot(PermissionProfileSnapshot::active(
+            PermissionProfile::workspace_write(),
+            ActivePermissionProfile::new(":workspace"),
+        ))
+        .expect("set active profile");
+
+    chat.open_permissions_popup();
+
+    assert_chatwidget_snapshot!(
+        "profile_permissions_selection_popup",
+        render_bottom_popup(&chat, /*width*/ 80)
+    );
+}
+
+#[tokio::test]
+async fn profile_permissions_selection_popup_with_custom_profiles_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.config.explicit_permission_profile_mode = true;
+    chat.config.custom_permission_profiles = vec![
+        CustomPermissionProfileSummary {
+            id: "locked-down".to_string(),
+            description: Some("Inspect and patch only approved workspace files.".to_string()),
+        },
+        CustomPermissionProfileSummary {
+            id: "web-enabled".to_string(),
+            description: Some("Workspace profile with network access.".to_string()),
+        },
+    ];
+    chat.config
+        .permissions
+        .set_permission_profile_from_session_snapshot(PermissionProfileSnapshot::active(
+            PermissionProfile::workspace_write(),
+            ActivePermissionProfile::new("locked-down"),
+        ))
+        .expect("set active profile");
+
+    chat.open_permissions_popup();
+
+    assert_chatwidget_snapshot!(
+        "profile_permissions_selection_popup_with_custom_profiles",
+        render_bottom_popup(&chat, /*width*/ 80)
+    );
+}
+
+#[tokio::test]
+async fn profile_permissions_selection_emits_named_profile_event_only() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    #[cfg(target_os = "windows")]
+    {
+        chat.set_windows_sandbox_mode(Some(WindowsSandboxModeToml::Unelevated));
+    }
+    chat.config.explicit_permission_profile_mode = true;
+    chat.config
+        .permissions
+        .set_permission_profile_from_session_snapshot(PermissionProfileSnapshot::active(
+            PermissionProfile::workspace_write(),
+            ActivePermissionProfile::new(":workspace"),
+        ))
+        .expect("set active profile");
+
+    chat.open_permissions_popup();
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert_eq!(events.len(), 1);
+    assert!(matches!(
+        &events[0],
+        AppEvent::SelectPermissionProfile(PermissionProfileSelection {
+            profile_id,
+            approval_policy: Some(AskForApproval::OnRequest),
+            approvals_reviewer: Some(ApprovalsReviewer::User),
+            display_label,
+        }) if profile_id == ":workspace" && display_label == "Ask for approval"
+    ));
+}
+
+#[tokio::test]
+async fn profile_permissions_selection_emits_active_custom_profile() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.config.explicit_permission_profile_mode = true;
+    chat.config.custom_permission_profiles = vec![CustomPermissionProfileSummary {
+        id: "locked-down".to_string(),
+        description: None,
+    }];
+    chat.config
+        .permissions
+        .set_permission_profile_from_session_snapshot(PermissionProfileSnapshot::active(
+            PermissionProfile::workspace_write(),
+            ActivePermissionProfile::new("locked-down"),
+        ))
+        .expect("set active profile");
+
+    chat.open_permissions_popup();
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert_eq!(events.len(), 1);
+    assert!(matches!(
+        &events[0],
+        AppEvent::SelectPermissionProfile(PermissionProfileSelection {
+            profile_id,
+            approval_policy: None,
+            approvals_reviewer: None,
+            display_label,
+        }) if profile_id == "locked-down" && display_label == "locked-down"
+    ));
+}
+
+#[tokio::test]
+async fn profile_permissions_selection_emits_auto_review_mode_event() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    #[cfg(target_os = "windows")]
+    {
+        chat.set_windows_sandbox_mode(Some(WindowsSandboxModeToml::Unelevated));
+    }
+    chat.config.explicit_permission_profile_mode = true;
+    chat.config
+        .permissions
+        .set_permission_profile_from_session_snapshot(PermissionProfileSnapshot::active(
+            PermissionProfile::workspace_write(),
+            ActivePermissionProfile::new(":workspace"),
+        ))
+        .expect("set active profile");
+
+    chat.open_permissions_popup();
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert_eq!(events.len(), 1);
+    assert!(matches!(
+        &events[0],
+        AppEvent::SelectPermissionProfile(PermissionProfileSelection {
+            profile_id,
+            approval_policy: Some(AskForApproval::OnRequest),
+            approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
+            display_label,
+        }) if profile_id == ":workspace" && display_label == "Approve for me"
+    ));
+}
+
+#[tokio::test]
+async fn profile_permissions_full_access_opens_confirmation() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.config.explicit_permission_profile_mode = true;
+    chat.set_feature_enabled(Feature::GuardianApproval, /*enabled*/ false);
+    chat.config.notices.hide_full_access_warning = None;
+
+    chat.open_permissions_popup();
+    chat.handle_key_event(KeyEvent::from(KeyCode::Up));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+    assert_eq!(events.len(), 1);
+    assert!(matches!(
+        &events[0],
+        AppEvent::OpenFullAccessConfirmation {
+            preset,
+            return_to_permissions: true,
+            profile_selection: Some(PermissionProfileSelection {
+                profile_id,
+                approval_policy: Some(AskForApproval::Never),
+                approvals_reviewer: Some(ApprovalsReviewer::User),
+                display_label,
+            }),
+        } if preset.id == "full-access"
+            && profile_id == ":danger-no-sandbox"
+            && display_label == "Full Access"
+    ));
+}
+
 #[cfg(target_os = "windows")]
 #[tokio::test]
 #[serial]
@@ -77,7 +275,7 @@ async fn approvals_selection_popup_snapshot_windows_degraded_sandbox() {
 
     let popup = render_bottom_popup(&chat, /*width*/ 80);
     assert!(
-        popup.contains("Default (non-admin sandbox)"),
+        popup.contains("Ask for approval (non-admin sandbox)"),
         "expected degraded sandbox label in approvals popup: {popup}"
     );
     assert!(
@@ -106,7 +304,7 @@ async fn preset_matching_accepts_workspace_write_with_extra_roots() {
             cwd.as_path(),
             &preset
         ),
-        "WorkspaceWrite with extra roots should still match the Default preset"
+        "WorkspaceWrite with extra roots should still match the Ask for approval preset"
     );
     assert!(
         !ChatWidget::preset_matches_current(
@@ -223,6 +421,148 @@ async fn startup_prompts_for_windows_sandbox_when_agent_requested() {
         popup.contains("Quit"),
         "expected startup prompt to offer quit action: {popup}"
     );
+}
+
+#[cfg(target_os = "windows")]
+#[tokio::test]
+async fn startup_windows_sandbox_prompt_blocks_disallowed_unelevated_fallback() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.set_feature_enabled(Feature::WindowsSandbox, /*enabled*/ false);
+    chat.set_feature_enabled(Feature::WindowsSandboxElevated, /*enabled*/ false);
+    chat.config.config_layer_stack =
+        windows_sandbox_requirements_stack(vec![WindowsSandboxModeToml::Elevated]);
+
+    chat.maybe_prompt_windows_sandbox_enable(/*show_now*/ true);
+
+    let popup = render_bottom_popup(&chat, /*width*/ 120);
+    assert!(
+        popup.contains("Your organization requires the default Codex agent sandbox"),
+        "expected required sandbox prompt copy: {popup}"
+    );
+    assert!(
+        !popup.contains("Use non-admin sandbox"),
+        "expected required sandbox prompt to hide non-admin fallback: {popup}"
+    );
+}
+
+#[tokio::test]
+async fn windows_sandbox_required_enable_prompt_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.config.config_layer_stack =
+        windows_sandbox_requirements_stack(vec![WindowsSandboxModeToml::Elevated]);
+    let preset = builtin_approval_presets()
+        .into_iter()
+        .find(|preset| preset.id == "auto")
+        .expect("auto preset");
+
+    chat.open_windows_sandbox_enable_prompt(preset, /*profile_selection*/ None);
+
+    assert_chatwidget_snapshot!(
+        "windows_sandbox_required_enable_prompt",
+        render_bottom_popup(&chat, /*width*/ 120)
+    );
+}
+
+#[tokio::test]
+async fn windows_sandbox_required_enable_prompt_reopens_on_cancel_when_unelevated_allowed() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.config.permissions.windows_sandbox_mode = Some(WindowsSandboxModeToml::Elevated);
+    chat.config.config_layer_stack = windows_sandbox_requirements_stack(vec![
+        WindowsSandboxModeToml::Elevated,
+        WindowsSandboxModeToml::Unelevated,
+    ]);
+    let preset = builtin_approval_presets()
+        .into_iter()
+        .find(|preset| preset.id == "auto")
+        .expect("auto preset");
+
+    chat.open_windows_sandbox_enable_prompt(preset, /*profile_selection*/ None);
+    chat.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(AppEvent::OpenWindowsSandboxEnablePrompt { .. })
+    ));
+}
+
+#[tokio::test]
+async fn required_windows_sandbox_setup_defers_configured_initial_prompt() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let initial_prompt = "fix required sandbox startup".to_string();
+
+    chat.config.permissions.windows_sandbox_mode = Some(WindowsSandboxModeToml::Elevated);
+    chat.config.config_layer_stack = windows_sandbox_requirements_stack(vec![
+        WindowsSandboxModeToml::Elevated,
+        WindowsSandboxModeToml::Unelevated,
+    ]);
+    chat.initial_user_message =
+        create_initial_user_message(Some(initial_prompt.clone()), Vec::new(), Vec::new());
+
+    chat.handle_thread_session(crate::session_state::ThreadSessionState {
+        thread_id: ThreadId::new(),
+        forked_from_id: None,
+        fork_parent_title: None,
+        thread_name: None,
+        model: "gpt-test".to_string(),
+        model_provider_id: "test-provider".to_string(),
+        service_tier: None,
+        approval_policy: AskForApproval::OnRequest,
+        approvals_reviewer: ApprovalsReviewer::User,
+        permission_profile: PermissionProfile::workspace_write(),
+        active_permission_profile: None,
+        cwd: test_project_path().abs(),
+        runtime_workspace_roots: Vec::new(),
+        instruction_source_paths: Vec::new(),
+        reasoning_effort: None,
+        collaboration_mode: None,
+        personality: None,
+        message_history: None,
+        network_proxy: None,
+        rollout_path: Some(PathBuf::new()),
+    });
+    drain_insert_history(&mut rx);
+
+    assert!(chat.initial_user_message.is_some());
+    while let Ok(op) = op_rx.try_recv() {
+        assert!(
+            !matches!(op, Op::UserTurn { .. }),
+            "required sandbox setup should hold the configured initial prompt"
+        );
+    }
+
+    chat.set_windows_sandbox_mode(Some(WindowsSandboxModeToml::Unelevated));
+    chat.submit_initial_user_message_if_pending();
+
+    let Op::UserTurn { items, .. } = next_submit_op(&mut op_rx) else {
+        panic!("expected initial prompt submission after setup is no longer required");
+    };
+    assert_eq!(
+        items,
+        vec![UserInput::Text {
+            text: initial_prompt,
+            text_elements: Vec::new(),
+        }]
+    );
+}
+
+#[tokio::test]
+async fn windows_sandbox_required_fallback_prompt_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.config.config_layer_stack =
+        windows_sandbox_requirements_stack(vec![WindowsSandboxModeToml::Elevated]);
+    let preset = builtin_approval_presets()
+        .into_iter()
+        .find(|preset| preset.id == "auto")
+        .expect("auto preset");
+
+    chat.open_windows_sandbox_fallback_prompt(preset, /*profile_selection*/ None);
+
+    let popup = render_bottom_popup(&chat, /*width*/ 120);
+    assert_chatwidget_snapshot!("windows_sandbox_required_fallback_prompt", popup);
 }
 
 #[cfg(target_os = "windows")]
@@ -450,7 +790,7 @@ async fn permissions_selection_history_snapshot_full_access_to_default() {
     chat.open_permissions_popup();
     let popup = render_bottom_popup(&chat, /*width*/ 120);
     chat.handle_key_event(KeyEvent::from(KeyCode::Up));
-    if popup.contains("Auto-review") {
+    if popup.contains("Approve for me") {
         chat.handle_key_event(KeyEvent::from(KeyCode::Up));
     }
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
@@ -520,8 +860,8 @@ async fn permissions_selection_hides_auto_review_when_feature_disabled() {
     let popup = render_bottom_popup(&chat, /*width*/ 120);
 
     assert!(
-        !popup.contains("Auto-review"),
-        "expected Auto-review to stay hidden until the feature is enabled: {popup}"
+        !popup.contains("Approve for me"),
+        "expected Approve for me to stay hidden until the feature is enabled: {popup}"
     );
 }
 
@@ -551,8 +891,8 @@ async fn permissions_selection_hides_auto_review_when_feature_disabled_even_if_a
     let popup = render_bottom_popup(&chat, /*width*/ 120);
 
     assert!(
-        !popup.contains("Auto-review"),
-        "expected Auto-review to stay hidden when the feature is disabled: {popup}"
+        !popup.contains("Approve for me"),
+        "expected Approve for me to stay hidden when the feature is disabled: {popup}"
     );
 }
 
@@ -597,8 +937,8 @@ async fn permissions_selection_marks_auto_review_current_after_session_configure
     let popup = render_bottom_popup(&chat, /*width*/ 120);
 
     assert!(
-        popup.contains("Auto-review (current)"),
-        "expected Auto-review to be current after SessionConfigured sync: {popup}"
+        popup.contains("Approve for me (current)"),
+        "expected Approve for me to be current after SessionConfigured sync: {popup}"
     );
 }
 
@@ -647,8 +987,8 @@ async fn permissions_selection_marks_auto_review_current_with_custom_workspace_w
     let popup = render_bottom_popup(&chat, /*width*/ 120);
 
     assert!(
-        popup.contains("Auto-review (current)"),
-        "expected Auto-review to be current even with custom workspace-write details: {popup}"
+        popup.contains("Approve for me (current)"),
+        "expected Approve for me to be current even with custom workspace-write details: {popup}"
     );
 }
 
@@ -682,7 +1022,7 @@ async fn permissions_selection_can_disable_auto_review() {
             event,
             AppEvent::UpdateApprovalsReviewer(ApprovalsReviewer::User)
         )),
-        "expected selecting Default from Auto-review to switch back to manual approval review: {events:?}"
+        "expected selecting Ask for approval from Approve for me to switch back to manual approval review: {events:?}"
     );
     assert!(
         !events
@@ -727,8 +1067,8 @@ async fn permissions_selection_sends_approvals_reviewer_in_override_turn_context
     assert!(
         popup
             .lines()
-            .any(|line| line.contains("Auto-review") && line.contains('›')),
-        "expected one Down from Default to select Auto-review: {popup}"
+            .any(|line| line.contains("Approve for me") && line.contains('›')),
+        "expected one Down from Ask for approval to select Approve for me: {popup}"
     );
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
 

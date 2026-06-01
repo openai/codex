@@ -6,6 +6,7 @@ use codex_model_provider::SharedModelProvider;
 use codex_model_provider::create_model_provider;
 use codex_protocol::SessionId;
 use codex_protocol::models::AdditionalPermissionProfile;
+use codex_protocol::openai_models::ToolMode;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_sandboxing::compatibility_sandbox_policy_for_permission_profile;
@@ -55,6 +56,7 @@ pub struct TurnContext {
     pub config: Arc<Config>,
     pub(crate) auth_manager: Option<Arc<AuthManager>>,
     pub(crate) model_info: ModelInfo,
+    pub(crate) tool_mode: ToolMode,
     pub(crate) session_telemetry: SessionTelemetry,
     pub(crate) provider: SharedModelProvider,
     pub(crate) reasoning_effort: Option<ReasoningEffortConfig>,
@@ -172,6 +174,15 @@ impl TurnContext {
         let model_info = models_manager
             .get_model_info(model.as_str(), &config.to_models_manager_config())
             .await;
+        let tool_mode = model_info.tool_mode.unwrap_or_else(|| {
+            if config.features.enabled(Feature::CodeModeOnly) {
+                ToolMode::CodeModeOnly
+            } else if config.features.enabled(Feature::CodeMode) {
+                ToolMode::CodeMode
+            } else {
+                ToolMode::Direct
+            }
+        });
         let truncation_policy = model_info.truncation_policy.into();
         let supported_reasoning_levels = model_info
             .supported_reasoning_levels
@@ -212,6 +223,7 @@ impl TurnContext {
             config: Arc::new(config),
             auth_manager: self.auth_manager.clone(),
             model_info: model_info.clone(),
+            tool_mode,
             session_telemetry: self
                 .session_telemetry
                 .clone()
@@ -322,10 +334,12 @@ impl TurnContext {
     }
 
     pub(crate) fn to_turn_context_item(&self) -> TurnContextItem {
+        let workspace_roots = self.config.effective_workspace_roots();
         TurnContextItem {
             turn_id: Some(self.sub_id.clone()),
             #[allow(deprecated)]
             cwd: self.cwd.to_path_buf(),
+            workspace_roots: (!workspace_roots.is_empty()).then_some(workspace_roots),
             current_date: self.current_date.clone(),
             timezone: self.timezone.clone(),
             approval_policy: self.approval_policy.value(),
@@ -473,6 +487,15 @@ impl Session {
         );
 
         let mut per_turn_config = per_turn_config;
+        let tool_mode = model_info.tool_mode.unwrap_or_else(|| {
+            if per_turn_config.features.enabled(Feature::CodeModeOnly) {
+                ToolMode::CodeModeOnly
+            } else if per_turn_config.features.enabled(Feature::CodeMode) {
+                ToolMode::CodeMode
+            } else {
+                ToolMode::Direct
+            }
+        });
         per_turn_config.service_tier = get_service_tier(
             per_turn_config.service_tier,
             per_turn_config.features.enabled(Feature::FastMode),
@@ -482,6 +505,8 @@ impl Session {
         let turn_metadata_state = Arc::new(TurnMetadataState::new(
             session_id.to_string(),
             thread_id.to_string(),
+            session_configuration.forked_from_thread_id,
+            &session_configuration.session_source,
             session_configuration.thread_source,
             sub_id.clone(),
             cwd.clone(),
@@ -498,6 +523,7 @@ impl Session {
             config: per_turn_config.clone(),
             auth_manager: auth_manager_for_context,
             model_info: model_info.clone(),
+            tool_mode,
             session_telemetry: session_telemetry_for_context,
             provider: provider_for_context,
             reasoning_effort,

@@ -168,11 +168,13 @@ pub(crate) fn thread_initialized_event(payload: &Value) -> Result<&Value> {
 pub(crate) fn assert_basic_thread_initialized_event(
     event: &Value,
     thread_id: &str,
+    session_id: &str,
     expected_model: &str,
     initialization_mode: &str,
     expected_thread_source: &str,
 ) {
     assert_eq!(event["event_params"]["thread_id"], thread_id);
+    assert_eq!(event["event_params"]["session_id"], session_id);
     assert_eq!(
         event["event_params"]["app_server_client"]["product_client_id"],
         DEFAULT_CLIENT_NAME

@@ -73,6 +73,12 @@
     },
     "ConfigRequirements": {
       "properties": {
+        "allowAppshots": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "allowManagedHooksOnly": {
           "type": [
             "boolean",
@@ -109,6 +115,15 @@
         "allowedWebSearchModes": {
           "items": {
             "$ref": "#/definitions/WebSearchMode"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "allowedWindowsSandboxImplementations": {
+          "items": {
+            "$ref": "#/definitions/WindowsSandboxSetupMode"
           },
           "type": [
             "array",
@@ -454,7 +469,7 @@
     "NetworkUnixSocketPermission": {
       "enum": [
         "allow",
-        "none"
+        "deny"
       ],
       "type": "string"
     },
@@ -477,6 +492,13 @@
         "disabled",
         "cached",
         "live"
+      ],
+      "type": "string"
+    },
+    "WindowsSandboxSetupMode": {
+      "enum": [
+        "elevated",
+        "unelevated"
       ],
       "type": "string"
     }

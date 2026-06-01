@@ -55,7 +55,7 @@ use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
-use core_test_support::wait_for_event_with_timeout;
+use core_test_support::wait_for_mcp_server;
 use reqwest::Client;
 use reqwest::StatusCode;
 use serde_json::Value;
@@ -102,9 +102,27 @@ fn read_only_user_turn_with_model(
     text: impl Into<String>,
     model: String,
 ) -> Op {
+    user_turn_with_permission_profile(fixture, text, model, PermissionProfile::read_only())
+}
+
+fn auto_approved_user_turn(fixture: &TestCodex, text: impl Into<String>) -> Op {
+    user_turn_with_permission_profile(
+        fixture,
+        text,
+        fixture.session_configured.model.clone(),
+        PermissionProfile::Disabled,
+    )
+}
+
+fn user_turn_with_permission_profile(
+    fixture: &TestCodex,
+    text: impl Into<String>,
+    model: String,
+    permission_profile: PermissionProfile,
+) -> Op {
     let cwd = fixture.cwd.path().to_path_buf();
     let (sandbox_policy, permission_profile) =
-        turn_permission_fields(PermissionProfile::read_only(), cwd.as_path());
+        turn_permission_fields(permission_profile, cwd.as_path());
     Op::UserInput {
         items: vec![UserInput::Text {
             text: text.into(),
@@ -113,6 +131,7 @@ fn read_only_user_turn_with_model(
         environments: None,
         final_output_json_schema: None,
         responsesapi_client_metadata: None,
+        additional_context: Default::default(),
         thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
             cwd: Some(cwd),
             approval_policy: Some(AskForApproval::Never),
@@ -249,44 +268,6 @@ fn copy_binary_to_remote_env(
     Ok(remote_path)
 }
 
-async fn wait_for_mcp_server(fixture: &TestCodex, server_name: &str) -> anyhow::Result<()> {
-    let startup_event = wait_for_event_with_timeout(
-        &fixture.codex,
-        |ev| match ev {
-            EventMsg::McpStartupComplete(summary) => {
-                summary.ready.iter().any(|server| server == server_name)
-                    || summary
-                        .failed
-                        .iter()
-                        .any(|failure| failure.server == server_name)
-                    || summary.cancelled.iter().any(|server| server == server_name)
-            }
-            _ => false,
-        },
-        Duration::from_secs(70),
-    )
-    .await;
-    let EventMsg::McpStartupComplete(summary) = startup_event else {
-        unreachable!("event guard guarantees McpStartupComplete");
-    };
-    if let Some(failure) = summary
-        .failed
-        .iter()
-        .find(|failure| failure.server == server_name)
-    {
-        let error = &failure.error;
-        anyhow::bail!("MCP server {server_name} failed to start: {error}");
-    }
-    if summary.cancelled.iter().any(|server| server == server_name) {
-        anyhow::bail!("MCP server {server_name} startup was cancelled");
-    }
-    ensure!(
-        summary.ready.iter().any(|server| server == server_name),
-        "expected MCP server {server_name} to be ready; startup summary: {summary:?}"
-    );
-    Ok(())
-}
-
 struct TestMcpServerOptions {
     environment_id: String,
     supports_parallel_tool_calls: bool,
@@ -364,7 +345,7 @@ async fn call_cwd_tool(
     server_name: &str,
     call_id: &str,
 ) -> anyhow::Result<Value> {
-    let namespace = format!("mcp__{server_name}__");
+    let namespace = format!("mcp__{server_name}");
     mount_sse_once(
         server,
         responses::sse(vec![
@@ -449,7 +430,7 @@ async fn stdio_server_round_trip() -> anyhow::Result<()> {
 
     let call_id = "call-123";
     let server_name = "rmcp";
-    let namespace = format!("mcp__{server_name}__");
+    let namespace = format!("mcp__{server_name}");
 
     let call_mock = mount_sse_once(
         &server,
@@ -498,6 +479,8 @@ async fn stdio_server_round_trip() -> anyhow::Result<()> {
         })
         .build_with_remote_env(&server)
         .await?;
+    wait_for_mcp_server(&fixture.codex, server_name).await?;
+
     fixture
         .codex
         .submit(read_only_user_turn(&fixture, "call the rmcp echo tool"))
@@ -621,6 +604,7 @@ async fn stdio_server_uses_configured_cwd_before_runtime_fallback() -> anyhow::R
         })
         .build_with_remote_env(&server)
         .await?;
+    wait_for_mcp_server(&fixture.codex, server_name).await?;
 
     let expected_cwd = expected_cwd
         .lock()
@@ -683,6 +667,7 @@ async fn local_stdio_server_uses_runtime_fallback_cwd_when_config_omits_cwd() ->
         })
         .build(&server)
         .await?;
+    wait_for_mcp_server(&fixture.codex, server_name).await?;
 
     let expected_cwd = expected_cwd
         .lock()
@@ -705,7 +690,7 @@ async fn stdio_mcp_tool_call_includes_sandbox_state_meta() -> anyhow::Result<()>
 
     let call_id = "sandbox-meta-call";
     let server_name = "rmcp";
-    let namespace = format!("mcp__{server_name}__");
+    let namespace = format!("mcp__{server_name}");
 
     let call_mock = mount_sse_once(
         &server,
@@ -741,7 +726,7 @@ async fn stdio_mcp_tool_call_includes_sandbox_state_meta() -> anyhow::Result<()>
         .build_with_remote_env(&server)
         .await?;
 
-    wait_for_mcp_server(&fixture, server_name).await?;
+    wait_for_mcp_server(&fixture.codex, server_name).await?;
 
     fixture
         .submit_turn_with_permission_profile(
@@ -799,7 +784,7 @@ async fn stdio_mcp_parallel_tool_calls_default_false_runs_serially() -> anyhow::
     let first_call_id = "sync-serial-1";
     let second_call_id = "sync-serial-2";
     let server_name = "rmcp";
-    let namespace = format!("mcp__{server_name}__");
+    let namespace = format!("mcp__{server_name}");
     let args = json!({ "sleep_after_ms": 100 }).to_string();
 
     mount_sse_once(
@@ -838,9 +823,14 @@ async fn stdio_mcp_parallel_tool_calls_default_false_runs_serially() -> anyhow::
         })
         .build_with_remote_env(&server)
         .await?;
+    wait_for_mcp_server(&fixture.codex, server_name).await?;
+
     fixture
         .codex
-        .submit(read_only_user_turn(
+        // Keep this baseline on the mutable sync tool so read-only hints do not
+        // make the call parallel-safe. Bypass read-only turn permissions so
+        // approval behavior does not block the scheduling assertion.
+        .submit(auto_approved_user_turn(
             &fixture,
             "call the rmcp sync tool twice",
         ))
@@ -900,6 +890,104 @@ async fn stdio_mcp_parallel_tool_calls_default_false_runs_serially() -> anyhow::
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn stdio_mcp_read_only_tool_calls_run_concurrently_without_server_opt_in()
+-> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+
+    let first_call_id = "sync-read-only-1";
+    let second_call_id = "sync-read-only-2";
+    let server_name = "rmcp";
+    let namespace = format!("mcp__{server_name}");
+    // The stdio MCP test server holds each sync call at this barrier until both
+    // calls arrive. A serial scheduler times out inside the server instead of
+    // returning the structured `{ "result": "ok" }` result asserted below.
+    let args = json!({
+        "sleep_after_ms": 100,
+        "barrier": {
+            "id": "stdio-mcp-read-only-tool-calls",
+            "participants": 2,
+            "timeout_ms": 1_000
+        }
+    })
+    .to_string();
+
+    mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_response_created("resp-1"),
+            responses::ev_function_call_with_namespace(
+                first_call_id,
+                &namespace,
+                "sync_readonly",
+                &args,
+            ),
+            responses::ev_function_call_with_namespace(
+                second_call_id,
+                &namespace,
+                "sync_readonly",
+                &args,
+            ),
+            responses::ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let final_mock = mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_assistant_message("msg-1", "rmcp sync tools completed successfully."),
+            responses::ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+
+    let rmcp_test_server_bin = remote_aware_stdio_server_bin()?;
+
+    let fixture = test_codex()
+        .with_config(move |config| {
+            insert_mcp_server(
+                config,
+                server_name,
+                stdio_transport(rmcp_test_server_bin, /*env*/ None, Vec::new()),
+                TestMcpServerOptions {
+                    environment_id: remote_aware_environment_id(),
+                    tool_timeout_sec: Some(Duration::from_secs(2)),
+                    ..Default::default()
+                },
+            );
+        })
+        .build_with_remote_env(&server)
+        .await?;
+    wait_for_mcp_server(&fixture.codex, server_name).await?;
+
+    fixture
+        .codex
+        .submit(read_only_user_turn(
+            &fixture,
+            "call the rmcp sync_readonly tool twice",
+        ))
+        .await?;
+
+    wait_for_event(&fixture.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let request = final_mock.single_request();
+    for call_id in [first_call_id, second_call_id] {
+        let output_text = request
+            .function_call_output_text(call_id)
+            .expect("function_call_output present for rmcp sync call");
+        let wrapped_payload = split_wall_time_wrapped_output(&output_text);
+        let output_json: Value = serde_json::from_str(wrapped_payload)
+            .expect("wrapped MCP output should preserve structured JSON");
+        assert_eq!(output_json, json!({ "result": "ok" }));
+    }
+
+    server.verify().await;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn stdio_mcp_parallel_tool_calls_opt_in_runs_concurrently() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -908,7 +996,7 @@ async fn stdio_mcp_parallel_tool_calls_opt_in_runs_concurrently() -> anyhow::Res
     let first_call_id = "sync-1";
     let second_call_id = "sync-2";
     let server_name = "rmcp";
-    let namespace = format!("mcp__{server_name}__");
+    let namespace = format!("mcp__{server_name}");
     let args = json!({
         "sleep_after_ms": 100,
         "barrier": {
@@ -955,9 +1043,14 @@ async fn stdio_mcp_parallel_tool_calls_opt_in_runs_concurrently() -> anyhow::Res
         })
         .build_with_remote_env(&server)
         .await?;
+    wait_for_mcp_server(&fixture.codex, server_name).await?;
+
     fixture
         .codex
-        .submit(read_only_user_turn(
+        // Exercise the server opt-in with the mutable sync tool rather than the
+        // read-only sync_readonly tool. Bypass read-only turn permissions so
+        // approval behavior does not block the scheduling assertion.
+        .submit(auto_approved_user_turn(
             &fixture,
             "call the rmcp sync tool twice",
         ))
@@ -990,7 +1083,7 @@ async fn stdio_image_responses_round_trip() -> anyhow::Result<()> {
 
     let call_id = "img-1";
     let server_name = "rmcp";
-    let namespace = format!("mcp__{server_name}__");
+    let namespace = format!("mcp__{server_name}");
 
     // First stream: model decides to call the image tool.
     mount_sse_once(
@@ -1036,7 +1129,7 @@ async fn stdio_image_responses_round_trip() -> anyhow::Result<()> {
         })
         .build_with_remote_env(&server)
         .await?;
-    wait_for_mcp_server(&fixture, server_name).await?;
+    wait_for_mcp_server(&fixture.codex, server_name).await?;
 
     fixture
         .codex
@@ -1127,7 +1220,7 @@ async fn stdio_image_responses_preserve_original_detail_metadata() -> anyhow::Re
 
     let call_id = "img-original-detail-1";
     let server_name = "rmcp";
-    let namespace = format!("mcp__{server_name}__");
+    let namespace = format!("mcp__{server_name}");
 
     mount_sse_once(
         &server,
@@ -1169,7 +1262,7 @@ async fn stdio_image_responses_preserve_original_detail_metadata() -> anyhow::Re
         })
         .build_with_remote_env(&server)
         .await?;
-    wait_for_mcp_server(&fixture, server_name).await?;
+    wait_for_mcp_server(&fixture.codex, server_name).await?;
 
     fixture
         .codex
@@ -1213,7 +1306,7 @@ async fn stdio_image_responses_are_sanitized_for_text_only_model() -> anyhow::Re
 
     let call_id = "img-text-only-1";
     let server_name = "rmcp";
-    let namespace = format!("mcp__{server_name}__");
+    let namespace = format!("mcp__{server_name}");
     let text_only_model_slug = "rmcp-text-only-model";
 
     let models_mock = mount_models_once(
@@ -1256,6 +1349,7 @@ async fn stdio_image_responses_are_sanitized_for_text_only_model() -> anyhow::Re
                 input_modalities: vec![InputModality::Text],
                 used_fallback_model_metadata: false,
                 supports_search_tool: false,
+                tool_mode: None,
             }],
         },
     )
@@ -1305,6 +1399,7 @@ async fn stdio_image_responses_are_sanitized_for_text_only_model() -> anyhow::Re
         })
         .build_with_remote_env(&server)
         .await?;
+    wait_for_mcp_server(&fixture.codex, server_name).await?;
 
     fixture
         .thread_manager
@@ -1360,7 +1455,7 @@ async fn stdio_server_propagates_whitelisted_env_vars() -> anyhow::Result<()> {
 
     let call_id = "call-1234";
     let server_name = "rmcp_whitelist";
-    let namespace = format!("mcp__{server_name}__");
+    let namespace = format!("mcp__{server_name}");
 
     mount_sse_once(
         &server,
@@ -1407,6 +1502,8 @@ async fn stdio_server_propagates_whitelisted_env_vars() -> anyhow::Result<()> {
         })
         .build_with_remote_env(&server)
         .await?;
+    wait_for_mcp_server(&fixture.codex, server_name).await?;
+
     fixture
         .codex
         .submit(read_only_user_turn(&fixture, "call the rmcp echo tool"))
@@ -1474,7 +1571,7 @@ async fn stdio_server_propagates_explicit_local_env_var_source() -> anyhow::Resu
     let server = responses::start_mock_server().await;
     let call_id = "call-local-source";
     let server_name = "rmcp_local_source";
-    let namespace = format!("mcp__{server_name}__");
+    let namespace = format!("mcp__{server_name}");
     let env_name = "MCP_TEST_LOCAL_SOURCE";
     let expected_env_value = "propagated-explicit-local-source";
 
@@ -1525,6 +1622,7 @@ async fn stdio_server_propagates_explicit_local_env_var_source() -> anyhow::Resu
         })
         .build_with_remote_env(&server)
         .await?;
+    wait_for_mcp_server(&fixture.codex, server_name).await?;
 
     fixture
         .codex
@@ -1567,7 +1665,7 @@ async fn remote_stdio_env_var_source_does_not_copy_local_env() -> anyhow::Result
     let server = responses::start_mock_server().await;
     let call_id = "call-remote-source";
     let server_name = "rmcp_remote_source";
-    let namespace = format!("mcp__{server_name}__");
+    let namespace = format!("mcp__{server_name}");
     let env_name = "MCP_TEST_REMOTE_SOURCE_ONLY";
 
     mount_sse_once(
@@ -1617,6 +1715,7 @@ async fn remote_stdio_env_var_source_does_not_copy_local_env() -> anyhow::Result
         })
         .build_with_remote_env(&server)
         .await?;
+    wait_for_mcp_server(&fixture.codex, server_name).await?;
 
     fixture
         .codex
@@ -1739,7 +1838,7 @@ async fn streamable_http_tool_call_round_trip() -> anyhow::Result<()> {
 
     let call_id = "call-456";
     let server_name = "rmcp_http";
-    let namespace = format!("mcp__{server_name}__");
+    let namespace = format!("mcp__{server_name}");
 
     mount_sse_once(
         &server,
@@ -1800,6 +1899,8 @@ async fn streamable_http_tool_call_round_trip() -> anyhow::Result<()> {
         })
         .build_with_remote_env(&server)
         .await?;
+    wait_for_mcp_server(&fixture.codex, server_name).await?;
+
     // Phase 4: submit the user turn that should trigger the MCP tool call.
     fixture
         .codex
@@ -1906,7 +2007,7 @@ async fn streamable_http_with_oauth_round_trip_impl() -> anyhow::Result<()> {
 
     let call_id = "call-789";
     let server_name = "rmcp_http_oauth";
-    let namespace = format!("mcp__{server_name}__");
+    let namespace = format!("mcp__{server_name}");
 
     mount_sse_once(
         &server,
@@ -1988,7 +2089,7 @@ async fn streamable_http_with_oauth_round_trip_impl() -> anyhow::Result<()> {
         .await?;
     // Phase 5: wait for MCP startup before the turn is submitted, which keeps
     // failures tied to server startup/discovery.
-    wait_for_mcp_server(&fixture, server_name).await?;
+    wait_for_mcp_server(&fixture.codex, server_name).await?;
 
     // Phase 6: submit the user turn that should invoke the OAuth-backed tool.
     fixture

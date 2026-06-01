@@ -76,7 +76,8 @@ fn apply_turn_context(metadata: &mut ThreadMetadata, turn_ctx: &TurnContextItem)
     }
     metadata.model = Some(turn_ctx.model.clone());
     metadata.reasoning_effort = turn_ctx.effort;
-    metadata.sandbox_policy = enum_to_string(&turn_ctx.sandbox_policy);
+    metadata.sandbox_policy =
+        serde_json::to_string(&turn_ctx.permission_profile()).unwrap_or_default();
     metadata.approval_mode = enum_to_string(&turn_ctx.approval_policy);
 }
 
@@ -157,6 +158,7 @@ mod tests {
     use chrono::Utc;
     use codex_protocol::ThreadId;
     use codex_protocol::models::ContentItem;
+    use codex_protocol::models::PermissionProfile;
     use codex_protocol::models::ResponseItem;
     use codex_protocol::openai_models::ReasoningEffort;
     use codex_protocol::protocol::AskForApproval;
@@ -200,6 +202,7 @@ mod tests {
     fn event_msg_user_messages_set_title_and_first_user_message() {
         let mut metadata = metadata_for_test();
         let item = RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+            client_id: None,
             message: format!("{USER_MESSAGE_BEGIN} actual user request"),
             images: Some(vec![]),
             local_images: vec![],
@@ -221,6 +224,7 @@ mod tests {
     fn event_msg_image_only_user_message_sets_image_placeholder_preview() {
         let mut metadata = metadata_for_test();
         let item = RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+            client_id: None,
             message: String::new(),
             images: Some(vec!["https://example.com/image.png".to_string()]),
             local_images: vec![],
@@ -245,6 +249,7 @@ mod tests {
     fn event_msg_blank_user_message_without_images_keeps_first_user_message_empty() {
         let mut metadata = metadata_for_test();
         let item = RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+            client_id: None,
             message: "   ".to_string(),
             images: Some(vec![]),
             local_images: vec![],
@@ -285,6 +290,7 @@ mod tests {
         assert_eq!(metadata.title, "");
 
         let user_item = RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+            client_id: None,
             message: format!("{USER_MESSAGE_BEGIN} next normal prompt"),
             images: Some(vec![]),
             local_images: vec![],
@@ -339,6 +345,7 @@ mod tests {
             &RolloutItem::TurnContext(TurnContextItem {
                 turn_id: Some("turn-1".to_string()),
                 cwd: PathBuf::from("/parent/workspace"),
+                workspace_roots: None,
                 current_date: None,
                 timezone: None,
                 approval_policy: AskForApproval::Never,
@@ -359,9 +366,44 @@ mod tests {
         assert_eq!(metadata.cwd, PathBuf::from("/child/worktree"));
         assert_eq!(
             metadata.sandbox_policy,
-            super::enum_to_string(&SandboxPolicy::DangerFullAccess)
+            serde_json::to_string(&PermissionProfile::Disabled)
+                .expect("serialize permission profile")
         );
         assert_eq!(metadata.approval_mode, "never");
+    }
+
+    #[test]
+    fn turn_context_sets_permission_profile_metadata() {
+        let mut metadata = metadata_for_test();
+        let permission_profile = PermissionProfile::workspace_write();
+
+        apply_rollout_item(
+            &mut metadata,
+            &RolloutItem::TurnContext(TurnContextItem {
+                turn_id: Some("turn-1".to_string()),
+                cwd: PathBuf::from("/workspace"),
+                workspace_roots: None,
+                current_date: None,
+                timezone: None,
+                approval_policy: AskForApproval::OnRequest,
+                sandbox_policy: SandboxPolicy::DangerFullAccess,
+                permission_profile: Some(permission_profile.clone()),
+                network: None,
+                file_system_sandbox_policy: None,
+                model: "gpt-5".to_string(),
+                personality: None,
+                collaboration_mode: None,
+                realtime_active: None,
+                effort: None,
+                summary: codex_protocol::config_types::ReasoningSummary::Auto,
+            }),
+            "test-provider",
+        );
+
+        assert_eq!(
+            metadata.sandbox_policy,
+            serde_json::to_string(&permission_profile).expect("serialize permission profile")
+        );
     }
 
     #[test]
@@ -374,6 +416,7 @@ mod tests {
             &RolloutItem::TurnContext(TurnContextItem {
                 turn_id: Some("turn-1".to_string()),
                 cwd: PathBuf::from("/fallback/workspace"),
+                workspace_roots: None,
                 current_date: None,
                 timezone: None,
                 approval_policy: AskForApproval::OnRequest,
@@ -403,6 +446,7 @@ mod tests {
             &RolloutItem::TurnContext(TurnContextItem {
                 turn_id: Some("turn-1".to_string()),
                 cwd: PathBuf::from("/fallback/workspace"),
+                workspace_roots: None,
                 current_date: None,
                 timezone: None,
                 approval_policy: AskForApproval::OnRequest,

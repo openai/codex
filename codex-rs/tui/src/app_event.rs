@@ -209,6 +209,9 @@ pub(crate) enum AppEvent {
     /// Resume a thread by UUID or thread name inside the running TUI session.
     ResumeSessionByIdOrName(String),
 
+    /// Archive the current active main thread and exit after it succeeds.
+    ArchiveCurrentThread,
+
     /// Fork the current session into a new thread.
     ForkCurrentSession,
 
@@ -545,12 +548,14 @@ pub(crate) enum AppEvent {
     /// Fetch MCP inventory via app-server RPCs and render it into history.
     FetchMcpInventory {
         detail: McpServerStatusDetail,
+        thread_id: Option<ThreadId>,
     },
 
     /// Result of fetching MCP inventory via app-server RPCs.
     McpInventoryLoaded {
         result: Result<Vec<McpServerStatus>, String>,
         detail: McpServerStatusDetail,
+        thread_id: Option<ThreadId>,
     },
 
     /// Result of the startup skills refresh that runs after the first frame is scheduled.

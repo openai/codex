@@ -16,8 +16,6 @@ sandbox = ["v8/v8_enable_sandbox"]
 workspace = true
 
 [dependencies]
-async-channel = { workspace = true }
-async-trait = { workspace = true }
 codex-protocol = { workspace = true }
 deno_core_icudata = { workspace = true }
 serde = { workspace = true, features = ["derive"] }

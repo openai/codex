@@ -1,4 +1,5 @@
 use super::*;
+use codex_protocol::openai_models::ToolMode;
 use std::sync::atomic::AtomicBool;
 
 /// Spawn a review thread using the given prompt.
@@ -47,6 +48,15 @@ pub(super) async fn spawn_review_thread(
     let mut per_turn_config = (*config).clone();
     per_turn_config.model = Some(model.clone());
     per_turn_config.features = review_features.clone();
+    let tool_mode = model_info.tool_mode.unwrap_or_else(|| {
+        if per_turn_config.features.enabled(Feature::CodeModeOnly) {
+            ToolMode::CodeModeOnly
+        } else if per_turn_config.features.enabled(Feature::CodeMode) {
+            ToolMode::CodeMode
+        } else {
+            ToolMode::Direct
+        }
+    });
     if let Err(err) = per_turn_config.web_search_mode.set(review_web_search_mode) {
         let fallback_value = per_turn_config.web_search_mode.value();
         tracing::warn!(
@@ -69,12 +79,18 @@ pub(super) async fn spawn_review_thread(
         .model_reasoning_summary
         .unwrap_or(model_info.default_reasoning_summary);
     let session_source = parent_turn_context.session_source.clone();
+    let forked_from_thread_id = {
+        let state = sess.state.lock().await;
+        state.session_configuration.forked_from_thread_id
+    };
 
     let per_turn_config = Arc::new(per_turn_config);
     let review_turn_id = sub_id.to_string();
     let turn_metadata_state = Arc::new(TurnMetadataState::new(
         sess.session_id().to_string(),
         sess.thread_id().to_string(),
+        forked_from_thread_id,
+        &session_source,
         parent_turn_context.thread_source,
         review_turn_id.clone(),
         #[allow(deprecated)]
@@ -91,6 +107,7 @@ pub(super) async fn spawn_review_thread(
         config: per_turn_config,
         auth_manager: auth_manager_for_context,
         model_info: model_info.clone(),
+        tool_mode,
         session_telemetry: session_telemetry_for_context,
         provider: provider_for_context,
         reasoning_effort,
@@ -132,10 +149,13 @@ pub(super) async fn spawn_review_thread(
     };
 
     // Seed the child task with the review prompt as the initial user message.
-    let input: Vec<UserInput> = vec![UserInput::Text {
-        text: review_prompt,
-        // Review prompt is synthesized; no UI element ranges to preserve.
-        text_elements: Vec::new(),
+    let input = vec![TurnInput::UserInput {
+        content: vec![UserInput::Text {
+            text: review_prompt,
+            // Review prompt is synthesized; no UI element ranges to preserve.
+            text_elements: Vec::new(),
+        }],
+        client_id: None,
     }];
     let tc = Arc::new(review_turn_context);
     tc.turn_metadata_state.spawn_git_enrichment_task();

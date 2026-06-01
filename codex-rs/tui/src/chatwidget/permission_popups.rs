@@ -14,6 +14,11 @@ impl ChatWidget {
 
     /// Open a popup to choose the permissions mode.
     pub(crate) fn open_permissions_popup(&mut self) {
+        if self.config.explicit_permission_profile_mode {
+            self.open_permission_profiles_popup();
+            return;
+        }
+
         let include_read_only = cfg!(target_os = "windows");
         let current_approval =
             AskForApproval::from(self.config.permissions.approval_policy.value());
@@ -51,7 +56,9 @@ impl ChatWidget {
                 continue;
             }
             let base_name = if preset.id == "auto" && windows_degraded_sandbox_enabled {
-                "Default (non-admin sandbox)".to_string()
+                format!("{ASK_FOR_APPROVAL_LABEL} (non-admin sandbox)")
+            } else if preset.id == "auto" {
+                ASK_FOR_APPROVAL_LABEL.to_string()
             } else {
                 preset.label.to_string()
             };
@@ -95,7 +102,7 @@ impl ChatWidget {
 
                 if guardian_approval_enabled {
                     items.push(SelectionItem {
-                        name: "Auto-review".to_string(),
+                        name: APPROVE_FOR_ME_LABEL.to_string(),
                         description: Some(AUTO_REVIEW_DESCRIPTION.to_string()),
                         is_current: current_review_policy == ApprovalsReviewer::AutoReview
                             && Self::preset_matches_current(
@@ -106,7 +113,7 @@ impl ChatWidget {
                             ),
                         actions: self.permission_mode_actions(
                             &preset,
-                            "Auto-review".to_string(),
+                            APPROVE_FOR_ME_LABEL.to_string(),
                             ApprovalsReviewer::AutoReview,
                             /*profile_selection*/ None,
                             /*return_to_permissions*/ !include_read_only,

@@ -20,7 +20,7 @@ pub fn create_test_sync_tool() -> ToolSpec {
         (
             "timeout_ms".to_string(),
             JsonSchema::number(Some(
-                "Maximum time in milliseconds to wait at the barrier".to_string(),
+                "Maximum barrier wait in milliseconds. Defaults to 1000.".to_string(),
             )),
         ),
     ]);
@@ -29,13 +29,13 @@ pub fn create_test_sync_tool() -> ToolSpec {
         (
             "sleep_before_ms".to_string(),
             JsonSchema::number(Some(
-                "Optional delay in milliseconds before any other action".to_string(),
+                "Delay before any other action. Defaults to no delay.".to_string(),
             )),
         ),
         (
             "sleep_after_ms".to_string(),
             JsonSchema::number(Some(
-                "Optional delay in milliseconds after completing the barrier".to_string(),
+                "Delay after completing the barrier. Defaults to no delay.".to_string(),
             )),
         ),
         (

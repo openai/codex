@@ -247,15 +247,17 @@ fn send_message_tool_requires_message_and_has_no_output_schema() {
 }
 
 #[test]
-fn followup_task_tool_requires_message_and_has_no_output_schema() {
+fn assign_task_tool_requires_message_and_has_no_output_schema() {
     let ToolSpec::Function(ResponsesApiTool {
+        name,
         parameters,
         output_schema,
         ..
-    }) = create_followup_task_tool()
+    }) = create_assign_task_tool()
     else {
-        panic!("followup_task should be a function tool");
+        panic!("assign_task should be a function tool");
     };
+    assert_eq!(name, "assign_task");
     assert_eq!(
         parameters.schema_type,
         Some(JsonSchemaType::Single(JsonSchemaPrimitiveType::Object))
@@ -263,7 +265,7 @@ fn followup_task_tool_requires_message_and_has_no_output_schema() {
     let properties = parameters
         .properties
         .as_ref()
-        .expect("followup_task should use object params");
+        .expect("assign_task should use object params");
     assert!(properties.contains_key("target"));
     assert!(properties.contains_key("message"));
     assert!(!properties.contains_key("items"));
@@ -306,7 +308,7 @@ fn wait_agent_tool_v2_uses_timeout_only_summary_output() {
         properties
             .get("timeout_ms")
             .and_then(|schema| schema.description.as_deref()),
-        Some("Optional timeout in milliseconds. Defaults to 30000, min 10000, max 3600000.")
+        Some("Timeout in milliseconds. Defaults to 30000, min 10000, max 3600000.")
     );
     assert_eq!(parameters.required.as_ref(), None);
     assert_eq!(
@@ -338,9 +340,7 @@ fn list_agents_tool_includes_path_prefix_and_agent_fields() {
         properties
             .get("path_prefix")
             .and_then(|schema| schema.description.as_deref()),
-        Some(
-            "Optional task-path prefix (not ending with trailing slash). Accepts the same relative or absolute task-path syntax."
-        )
+        Some("Task-path prefix filter without a trailing slash. Omit to list all live agents.")
     );
     assert_eq!(
         output_schema.expect("list_agents output schema")["properties"]["agents"]["items"]["required"],

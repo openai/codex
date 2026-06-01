@@ -716,6 +716,30 @@
             },
             "method": {
               "enum": [
+                "skills/extraRoots/set"
+              ],
+              "title": "Skills/extraRoots/setRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/SkillsExtraRootsSetParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Skills/extraRoots/setRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
                 "hooks/list"
               ],
               "title": "Hooks/listRequestMethod",
@@ -5768,6 +5792,28 @@
         ],
         "type": "string"
       },
+      "AdditionalContextEntry": {
+        "properties": {
+          "kind": {
+            "$ref": "#/definitions/v2/AdditionalContextKind"
+          },
+          "value": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "value"
+        ],
+        "type": "object"
+      },
+      "AdditionalContextKind": {
+        "enum": [
+          "untrusted",
+          "application"
+        ],
+        "type": "string"
+      },
       "AdditionalFileSystemPermissions": {
         "properties": {
           "entries": {
@@ -7361,19 +7407,6 @@
               }
             ]
           },
-          "profile": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "profiles": {
-            "additionalProperties": {
-              "$ref": "#/definitions/v2/ProfileV2"
-            },
-            "default": {},
-            "type": "object"
-          },
           "review_model": {
             "type": [
               "string",
@@ -7571,6 +7604,33 @@
             "type": "object"
           },
           {
+            "description": "Enterprise-managed config layer delivered by the cloud config bundle.",
+            "properties": {
+              "id": {
+                "description": "Stable identifier for the delivered layer.",
+                "type": "string"
+              },
+              "name": {
+                "description": "Admin-facing name for the delivered layer. This is surfaced in diagnostics so users know which cloud layer needs administrator attention.",
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "enterpriseManaged"
+                ],
+                "title": "EnterpriseManagedConfigLayerSourceType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "type"
+            ],
+            "title": "EnterpriseManagedConfigLayerSource",
+            "type": "object"
+          },
+          {
             "description": "User config layer from $CODEX_HOME/config.toml. This layer is special in that it is expected to be: - writable by the user - generally outside the workspace directory",
             "properties": {
               "file": {
@@ -7691,7 +7751,6 @@
             ]
           },
           "includeLayers": {
-            "default": false,
             "type": "boolean"
           }
         },
@@ -7729,6 +7788,12 @@
       },
       "ConfigRequirements": {
         "properties": {
+          "allowAppshots": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
           "allowManagedHooksOnly": {
             "type": [
               "boolean",
@@ -7765,6 +7830,15 @@
           "allowedWebSearchModes": {
             "items": {
               "$ref": "#/definitions/v2/WebSearchMode"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "allowedWindowsSandboxImplementations": {
+            "items": {
+              "$ref": "#/definitions/v2/WindowsSandboxSetupMode"
             },
             "type": [
               "array",
@@ -8593,8 +8667,7 @@
           }
         },
         "required": [
-          "classification",
-          "includeLogs"
+          "classification"
         ],
         "title": "FeedbackUploadParams",
         "type": "object"
@@ -9370,7 +9443,6 @@
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
           "refreshToken": {
-            "default": false,
             "description": "When `true`, requests a proactive token refresh before returning.\n\nIn managed auth mode this triggers the normal refresh-token flow. In external auth mode this flag is ignored. Clients should refresh tokens themselves and call `account/login/start` with `chatgptAuthTokens`.",
             "type": "boolean"
           }
@@ -10046,6 +10118,7 @@
           "sessionFlags",
           "plugin",
           "cloudRequirements",
+          "cloudManagedConfig",
           "legacyManagedConfigFile",
           "legacyManagedConfigMdm",
           "unknown"
@@ -10148,6 +10221,8 @@
       },
       "ImageDetail": {
         "enum": [
+          "auto",
+          "low",
           "high",
           "original"
         ],
@@ -10351,6 +10426,12 @@
             "minimum": 0.0,
             "type": [
               "integer",
+              "null"
+            ]
+          },
+          "threadId": {
+            "type": [
+              "string",
               "null"
             ]
           }
@@ -10944,6 +11025,47 @@
         "title": "McpResourceReadResponse",
         "type": "object"
       },
+      "McpServerInfo": {
+        "description": "Presentation metadata advertised by an initialized MCP server.",
+        "properties": {
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "icons": {
+            "items": true,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "version": {
+            "type": "string"
+          },
+          "websiteUrl": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "version"
+        ],
+        "type": "object"
+      },
       "McpServerMigration": {
         "properties": {
           "name": {
@@ -11053,6 +11175,16 @@
               "$ref": "#/definitions/v2/Resource"
             },
             "type": "array"
+          },
+          "serverInfo": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/McpServerInfo"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "tools": {
             "additionalProperties": {
@@ -11774,7 +11906,7 @@
       "NetworkUnixSocketPermission": {
         "enum": [
           "allow",
-          "none"
+          "deny"
         ],
         "type": "string"
       },
@@ -13171,107 +13303,6 @@
           "cols",
           "rows"
         ],
-        "type": "object"
-      },
-      "ProfileV2": {
-        "additionalProperties": true,
-        "properties": {
-          "approval_policy": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/AskForApproval"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "approvals_reviewer": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/ApprovalsReviewer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "[UNSTABLE] Optional profile-level override for where approval requests are routed for review. If omitted, the enclosing config default is used."
-          },
-          "chatgpt_base_url": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "model": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "model_provider": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "model_reasoning_effort": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/ReasoningEffort"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "model_reasoning_summary": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/ReasoningSummary"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "model_verbosity": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/Verbosity"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "service_tier": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "tools": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/ToolsV2"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "web_search": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/WebSearchMode"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          }
-        },
         "type": "object"
       },
       "RateLimitReachedType": {
@@ -15151,6 +15182,27 @@
         "title": "SkillsConfigWriteResponse",
         "type": "object"
       },
+      "SkillsExtraRootsSetParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "extraRoots": {
+            "items": {
+              "$ref": "#/definitions/v2/AbsolutePathBuf"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "extraRoots"
+        ],
+        "title": "SkillsExtraRootsSetParams",
+        "type": "object"
+      },
+      "SkillsExtraRootsSetResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "SkillsExtraRootsSetResponse",
+        "type": "object"
+      },
       "SkillsListEntry": {
         "properties": {
           "cwd": {
@@ -16026,6 +16078,12 @@
         "oneOf": [
           {
             "properties": {
+              "clientId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "content": {
                 "items": {
                   "$ref": "#/definitions/v2/UserInput"
@@ -16965,7 +17023,6 @@
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
           "includeTurns": {
-            "default": false,
             "description": "When true, include turns and their items from rollout history.",
             "type": "boolean"
           },
@@ -17230,6 +17287,42 @@
           "threadId"
         ],
         "title": "ThreadRealtimeTranscriptDoneNotification",
+        "type": "object"
+      },
+      "ThreadResumeInitialTurnsPageParams": {
+        "properties": {
+          "itemsView": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/TurnItemsView"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "How much item detail to include for each returned turn; defaults to summary."
+          },
+          "limit": {
+            "description": "Optional turn page size.",
+            "format": "uint32",
+            "minimum": 0.0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "sortDirection": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/SortDirection"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional turn pagination direction; defaults to descending."
+          }
+        },
         "type": "object"
       },
       "ThreadResumeParams": {
@@ -18408,6 +18501,12 @@
             ],
             "description": "Override where approval requests are routed for review on this turn and subsequent turns."
           },
+          "clientUserMessageId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "cwd": {
             "description": "Override the working directory for this turn and subsequent turns.",
             "type": [
@@ -18535,6 +18634,12 @@
       "TurnSteerParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
+          "clientUserMessageId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "expectedTurnId": {
             "description": "Required active turn id precondition. The request fails when it does not match the currently active turn.",
             "type": "string"
@@ -18568,6 +18673,32 @@
           "turnId"
         ],
         "title": "TurnSteerResponse",
+        "type": "object"
+      },
+      "TurnsPage": {
+        "properties": {
+          "backwardsCursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "data": {
+            "items": {
+              "$ref": "#/definitions/v2/Turn"
+            },
+            "type": "array"
+          },
+          "nextCursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "data"
+        ],
         "type": "object"
       },
       "UserInput": {

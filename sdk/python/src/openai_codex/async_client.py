@@ -6,7 +6,7 @@ from typing import AsyncIterator, Callable, ParamSpec, TypeVar
 
 from pydantic import BaseModel
 
-from .client import AppServerClient, AppServerConfig
+from .client import CodexClient, CodexConfig
 from .generated.v2_all import (
     AccountLoginCompletedNotification,
     AgentMessageDeltaNotification,
@@ -43,20 +43,20 @@ ParamsT = ParamSpec("ParamsT")
 ReturnT = TypeVar("ReturnT")
 
 
-class AsyncAppServerClient:
-    """Async wrapper around AppServerClient using thread offloading."""
+class AsyncCodexClient:
+    """Async wrapper around CodexClient using thread offloading."""
 
-    def __init__(self, config: AppServerConfig | None = None) -> None:
+    def __init__(self, config: CodexConfig | None = None) -> None:
         """Create the wrapped sync client that owns the transport process."""
-        self._sync = AppServerClient(config=config)
+        self._sync = CodexClient(config=config)
 
-    async def __aenter__(self) -> "AsyncAppServerClient":
-        """Start the app-server process when entering an async context."""
+    async def __aenter__(self) -> "AsyncCodexClient":
+        """Start the Codex process when entering an async context."""
         await self.start()
         return self
 
     async def __aexit__(self, _exc_type, _exc, _tb) -> None:
-        """Close the app-server process when leaving an async context."""
+        """Close the Codex process when leaving an async context."""
         await self.close()
 
     async def _call_sync(
@@ -88,7 +88,7 @@ class AsyncAppServerClient:
         await self._call_sync(self._sync.close)
 
     async def initialize(self) -> InitializeResponse:
-        """Initialize the app-server session."""
+        """Initialize the Codex session."""
         return await self._call_sync(self._sync.initialize)
 
     def register_turn_notifications(self, turn_id: str) -> None:

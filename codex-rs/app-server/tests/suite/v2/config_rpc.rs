@@ -894,19 +894,14 @@ async fn config_batch_write_applies_multiple_edits() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn config_batch_write_preserves_dotted_profile_names() -> Result<()> {
+async fn config_batch_write_rejects_legacy_profile_tables() -> Result<()> {
     let tmp_dir = TempDir::new()?;
     let codex_home = tmp_dir.path().canonicalize()?;
     write_config(
         &tmp_dir,
         r#"
-profile = "team.prod"
-
 [profiles."team.prod"]
 model = "gpt-5.3-spark"
-
-[profiles.team.prod]
-model = "should-stay-put"
 "#,
     )?;
 
@@ -932,28 +927,30 @@ model = "should-stay-put"
             reload_user_config: false,
         })
         .await?;
-    let batch_resp: JSONRPCResponse = timeout(
+    let err: JSONRPCError = timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(batch_id)),
+        mcp.read_stream_until_error_message(RequestId::Integer(batch_id)),
     )
     .await??;
-    let batch_write: ConfigWriteResponse = to_response(batch_resp)?;
-    assert_eq!(batch_write.status, WriteStatus::Ok);
+    let code = err
+        .error
+        .data
+        .as_ref()
+        .and_then(|data| data.get("config_write_error_code"))
+        .and_then(|value| value.as_str());
+    assert_eq!(code, Some("configValidationError"));
+    assert!(
+        err.error.message.contains("`profiles`"),
+        "unexpected error: {err:?}"
+    );
 
     let config: toml::Value =
         toml::from_str(&std::fs::read_to_string(codex_home.join("config.toml"))?)?;
     assert_eq!(
         config["profiles"]["team.prod"]["model"].as_str(),
-        Some("gpt-5.5")
+        Some("gpt-5.3-spark")
     );
-    assert_eq!(
-        config["profiles"]["team"]["prod"]["model"].as_str(),
-        Some("should-stay-put")
-    );
-    assert_eq!(
-        config["items"]["sample@catalog"]["enabled"].as_bool(),
-        Some(true)
-    );
+    assert_eq!(config.get("items"), None);
 
     Ok(())
 }

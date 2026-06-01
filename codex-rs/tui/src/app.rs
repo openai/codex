@@ -473,7 +473,7 @@ struct SessionSummary {
 
 #[derive(Debug, Default)]
 struct InitialHistoryReplayBuffer {
-    retained_lines: VecDeque<Line<'static>>,
+    retained_lines: VecDeque<crate::terminal_hyperlinks::HyperlinkLine>,
     render_from_transcript_tail: bool,
 }
 
@@ -486,7 +486,6 @@ pub(crate) struct App {
     /// Config is stored here so we can recreate ChatWidgets as needed.
     pub(crate) config: Config,
     pub(crate) state_db: Option<StateDbHandle>,
-    pub(crate) active_profile: Option<String>,
     cli_kv_overrides: Vec<(String, TomlValue)>,
     harness_overrides: ConfigOverrides,
     loader_overrides: LoaderOverrides,
@@ -499,7 +498,7 @@ pub(crate) struct App {
 
     // Pager overlay state (Transcript or Static like Diff)
     pub(crate) overlay: Option<Overlay>,
-    pub(crate) deferred_history_lines: Vec<Line<'static>>,
+    pub(crate) deferred_history_lines: Vec<crate::terminal_hyperlinks::HyperlinkLine>,
     has_emitted_history_lines: bool,
     transcript_reflow: TranscriptReflowState,
     initial_history_replay_buffer: Option<InitialHistoryReplayBuffer>,
@@ -653,6 +652,31 @@ fn active_turn_steer_race(error: &TypedRequestError) -> Option<ActiveTurnSteerRa
     Some(ActiveTurnSteerRace::ExpectedTurnMismatch { actual_turn_id })
 }
 
+fn session_start_error(
+    action: &str,
+    target_session: &SessionTarget,
+    err: color_eyre::eyre::Report,
+) -> color_eyre::eyre::Report {
+    if let Some(message) = archived_session_guidance(&err) {
+        return color_eyre::eyre::eyre!("{message}");
+    }
+
+    let target_label = target_session.display_label();
+    color_eyre::eyre::eyre!("Failed to {action} session from {target_label}: {err}")
+}
+
+fn archived_session_guidance(err: &color_eyre::eyre::Report) -> Option<String> {
+    let err = err.to_string();
+    let message = &err[err.find("session ")?..];
+    if !message.contains(" is archived. Run `codex unarchive ") {
+        return None;
+    }
+    let message = message
+        .split_once(" (code ")
+        .map_or(message, |(message, _)| message);
+    Some(message.to_string())
+}
+
 impl App {
     pub fn chatwidget_init_for_forked_or_resumed_thread(
         &self,
@@ -693,7 +717,6 @@ impl App {
         cli_kv_overrides: Vec<(String, TomlValue)>,
         harness_overrides: ConfigOverrides,
         loader_overrides: LoaderOverrides,
-        active_profile: Option<String>,
         initial_prompt: Option<String>,
         initial_images: Vec<PathBuf>,
         session_selection: SessionSelection,
@@ -756,6 +779,10 @@ impl App {
         let bootstrap_ms = bootstrap_started_at.elapsed().as_millis();
         let mut model = bootstrap.default_model;
         let available_models = bootstrap.available_models;
+        let remote_connection = crate::status::remote_connection::remote_connection_status_value(
+            &app_server_target,
+            app_server.server_version(),
+        );
         let exit_info = handle_model_migration_prompt_if_needed(
             tui,
             &mut config,
@@ -870,10 +897,7 @@ impl App {
                 let resumed = app_server
                     .resume_thread(config.clone(), target_session.thread_id)
                     .await
-                    .wrap_err_with(|| {
-                        let target_label = target_session.display_label();
-                        format!("Failed to resume session from {target_label}")
-                    })?;
+                    .map_err(|err| session_start_error("resume", &target_session, err))?;
                 let init = crate::chatwidget::ChatWidgetInit {
                     config: config.clone(),
                     frame_requester: tui.frame_requester(),
@@ -911,10 +935,7 @@ impl App {
                 let forked = app_server
                     .fork_thread(config.clone(), target_session.thread_id)
                     .await
-                    .wrap_err_with(|| {
-                        let target_label = target_session.display_label();
-                        format!("Failed to fork session from {target_label}")
-                    })?;
+                    .map_err(|err| session_start_error("fork", &target_session, err))?;
                 let init = crate::chatwidget::ChatWidgetInit {
                     config: config.clone(),
                     frame_requester: tui.frame_requester(),
@@ -944,6 +965,7 @@ impl App {
                 (ChatWidget::new_with_app_event(init), Some(forked))
             }
         };
+        chat_widget.remote_connection = remote_connection;
         let thread_and_widget_ms = thread_and_widget_started_at.elapsed().as_millis();
         if let Some(message) = external_agent_config_migration_message {
             chat_widget.add_info_message(message, /*hint*/ None);
@@ -971,7 +993,6 @@ See the Codex keymap documentation for supported actions and examples."
             workspace_command_runner: Some(workspace_command_runner),
             config,
             state_db,
-            active_profile,
             cli_kv_overrides,
             harness_overrides,
             loader_overrides,
@@ -1043,11 +1064,13 @@ See the Codex keymap documentation for supported actions and examples."
                     .unwrap_or(false);
             if should_check {
                 let cwd = app.config.cwd.clone();
+                let workspace_roots = app.config.effective_workspace_roots();
                 let env_map: std::collections::HashMap<String, String> = std::env::vars().collect();
                 let tx = app.app_event_tx.clone();
                 let logs_base_dir = app.config.codex_home.clone();
                 Self::spawn_world_writable_scan(
                     cwd,
+                    workspace_roots,
                     env_map,
                     logs_base_dir,
                     startup_permission_profile,

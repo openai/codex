@@ -610,6 +610,11 @@ client_request_definitions! {
         serialization: global_shared_read("config"),
         response: v2::SkillsListResponse,
     },
+    SkillsExtraRootsSet => "skills/extraRoots/set" {
+        params: v2::SkillsExtraRootsSetParams,
+        serialization: global("config"),
+        response: v2::SkillsExtraRootsSetResponse,
+    },
     HooksList => "hooks/list" {
         params: v2::HooksListParams,
         serialization: global("config"),
@@ -1721,6 +1726,17 @@ mod tests {
             Some(ClientRequestSerializationScope::GlobalSharedRead("config"))
         );
 
+        let skills_extra_roots_set = ClientRequest::SkillsExtraRootsSet {
+            request_id: request_id(),
+            params: v2::SkillsExtraRootsSetParams {
+                extra_roots: vec![absolute_path("/tmp/skills")],
+            },
+        };
+        assert_eq!(
+            skills_extra_roots_set.serialization_scope(),
+            Some(ClientRequestSerializationScope::Global("config"))
+        );
+
         let plugin_list = ClientRequest::PluginList {
             request_id: request_id(),
             params: v2::PluginListParams {
@@ -2547,8 +2563,22 @@ mod tests {
             json!({
                 "method": "account/read",
                 "id": 6,
+                "params": {}
+            }),
+            serde_json::to_value(&request)?,
+        );
+        let request = ClientRequest::GetAccount {
+            request_id: RequestId::Integer(7),
+            params: v2::GetAccountParams {
+                refresh_token: true,
+            },
+        };
+        assert_eq!(
+            json!({
+                "method": "account/read",
+                "id": 7,
                 "params": {
-                    "refreshToken": false
+                    "refreshToken": true
                 }
             }),
             serde_json::to_value(&request)?,

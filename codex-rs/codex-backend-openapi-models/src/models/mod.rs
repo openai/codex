@@ -4,8 +4,20 @@
 // The process for this will change
 
 // Config
+pub(crate) mod config_bundle_response;
+pub use self::config_bundle_response::ConfigBundleResponse;
+
 pub(crate) mod config_file_response;
 pub use self::config_file_response::ConfigFileResponse;
+
+pub(crate) mod delivered_config_toml;
+pub use self::delivered_config_toml::DeliveredConfigToml;
+
+pub(crate) mod delivered_requirements_toml;
+pub use self::delivered_requirements_toml::DeliveredRequirementsToml;
+
+pub(crate) mod delivered_toml_fragment;
+pub use self::delivered_toml_fragment::DeliveredTomlFragment;
 
 // Cloud Tasks
 pub(crate) mod code_task_details_response;

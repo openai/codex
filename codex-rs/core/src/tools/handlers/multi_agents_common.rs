@@ -105,7 +105,7 @@ pub(crate) fn build_wait_agent_statuses(
             status: status.clone(),
         })
         .collect::<Vec<_>>();
-    extras.sort_by(|left, right| left.thread_id.to_string().cmp(&right.thread_id.to_string()));
+    extras.sort_by_key(|entry| entry.thread_id.to_string());
     entries.extend(extras);
     entries
 }

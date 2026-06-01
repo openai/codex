@@ -7,6 +7,7 @@
 //! - a local HTTP client that issues requests from the orchestrator, or
 //! - a remote HTTP client that forwards requests to the remote runtime
 
+use std::collections::HashMap;
 use std::io;
 use std::sync::Arc;
 
@@ -27,13 +28,19 @@ use reqwest::header::CONTENT_TYPE;
 use reqwest::header::HeaderMap;
 use reqwest::header::HeaderName;
 use rmcp::model::ClientJsonRpcMessage;
+use rmcp::model::JsonRpcMessage;
 use rmcp::model::ServerJsonRpcMessage;
 use rmcp::transport::streamable_http_client::AuthRequiredError;
+use rmcp::transport::streamable_http_client::InsufficientScopeError;
 use rmcp::transport::streamable_http_client::StreamableHttpClient;
 use rmcp::transport::streamable_http_client::StreamableHttpError;
 use rmcp::transport::streamable_http_client::StreamableHttpPostResponse;
 use sse_stream::Sse;
 use sse_stream::SseStream;
+
+mod www_authenticate;
+
+use self::www_authenticate::insufficient_scope_challenge;
 
 const EVENT_STREAM_MIME_TYPE: &str = "text/event-stream";
 const JSON_MIME_TYPE: &str = "application/json";
@@ -80,8 +87,12 @@ impl StreamableHttpClient for StreamableHttpClientAdapter {
         message: ClientJsonRpcMessage,
         session_id: Option<Arc<str>>,
         auth_token: Option<String>,
+        custom_headers: HashMap<HeaderName, reqwest::header::HeaderValue>,
     ) -> std::result::Result<StreamableHttpPostResponse, StreamableHttpError<Self::Error>> {
+        let (mcp_method, mcp_request_id) = client_jsonrpc_message_fields(&message);
+        let has_session_id = session_id.is_some();
         let mut headers = self.default_headers.clone();
+        headers.extend(custom_headers);
         self.add_auth_headers(&mut headers);
         insert_header(
             &mut headers,
@@ -113,7 +124,8 @@ impl StreamableHttpClient for StreamableHttpClientAdapter {
         }
 
         let body = serde_json::to_vec(&message).map_err(StreamableHttpError::Deserialize)?;
-        let (response, mut body_stream) = self
+        let has_authorization_header = headers.contains_key(AUTHORIZATION);
+        let response = self
             .http_client
             .http_request_stream(HttpRequestParams {
                 method: "POST".to_string(),
@@ -124,9 +136,22 @@ impl StreamableHttpClient for StreamableHttpClientAdapter {
                 request_id: "buffered-request".to_string(),
                 stream_response: true,
             })
-            .await
-            .map_err(StreamableHttpClientAdapterError::from)
-            .map_err(StreamableHttpError::Client)?;
+            .await;
+        let (response, mut body_stream) = match response {
+            Ok(response) => response,
+            Err(error) => {
+                log_post_message_http_error(
+                    &uri,
+                    mcp_method.as_deref(),
+                    mcp_request_id.as_deref(),
+                    has_session_id,
+                    has_authorization_header,
+                );
+                return Err(StreamableHttpError::Client(
+                    StreamableHttpClientAdapterError::from(error),
+                ));
+            }
+        };
 
         if response.status == StatusCode::NOT_FOUND.as_u16() && session_id.is_some() {
             return Err(StreamableHttpError::Client(
@@ -137,9 +162,19 @@ impl StreamableHttpClient for StreamableHttpClientAdapter {
             && let Some(header) =
                 response_header(&response.headers, reqwest::header::WWW_AUTHENTICATE)
         {
-            return Err(StreamableHttpError::AuthRequired(AuthRequiredError {
-                www_authenticate_header: header,
-            }));
+            return Err(StreamableHttpError::AuthRequired(AuthRequiredError::new(
+                header,
+            )));
+        }
+        if response.status == StatusCode::FORBIDDEN.as_u16()
+            && let Some(challenge) = insufficient_scope_challenge(&response.headers)
+        {
+            return Err(StreamableHttpError::InsufficientScope(
+                InsufficientScopeError::new(
+                    challenge.www_authenticate_header,
+                    challenge.required_scope,
+                ),
+            ));
         }
         if matches!(
             StatusCode::from_u16(response.status).ok(),
@@ -177,8 +212,10 @@ impl StreamableHttpClient for StreamableHttpClientAdapter {
         uri: Arc<str>,
         session: Arc<str>,
         auth_token: Option<String>,
+        custom_headers: HashMap<HeaderName, reqwest::header::HeaderValue>,
     ) -> std::result::Result<(), StreamableHttpError<Self::Error>> {
         let mut headers = self.default_headers.clone();
+        headers.extend(custom_headers);
         self.add_auth_headers(&mut headers);
         if let Some(auth_token) = auth_token {
             insert_header(
@@ -227,11 +264,13 @@ impl StreamableHttpClient for StreamableHttpClientAdapter {
         session_id: Arc<str>,
         last_event_id: Option<String>,
         auth_token: Option<String>,
+        custom_headers: HashMap<HeaderName, reqwest::header::HeaderValue>,
     ) -> std::result::Result<
         BoxStream<'static, std::result::Result<Sse, sse_stream::Error>>,
         StreamableHttpError<Self::Error>,
     > {
         let mut headers = self.default_headers.clone();
+        headers.extend(custom_headers);
         self.add_auth_headers(&mut headers);
         insert_header(
             &mut headers,
@@ -330,6 +369,50 @@ fn body_preview(body: impl Into<String>) -> String {
         ));
     }
     body_preview
+}
+
+fn client_jsonrpc_message_fields(
+    message: &ClientJsonRpcMessage,
+) -> (Option<String>, Option<String>) {
+    match message {
+        JsonRpcMessage::Request(request) => (
+            Some(request.request.method().to_string()),
+            Some(request.id.to_string()),
+        ),
+        JsonRpcMessage::Response(response) => (None, Some(response.id.to_string())),
+        JsonRpcMessage::Notification(_) => (None, None),
+        JsonRpcMessage::Error(error) => (None, error.id.as_ref().map(ToString::to_string)),
+    }
+}
+
+fn log_post_message_http_error(
+    uri: &str,
+    mcp_method: Option<&str>,
+    mcp_request_id: Option<&str>,
+    has_session_id: bool,
+    has_authorization_header: bool,
+) {
+    let parsed_url = reqwest::Url::parse(uri).ok();
+    tracing::warn!(
+        endpoint_scheme = parsed_url
+            .as_ref()
+            .map(reqwest::Url::scheme)
+            .unwrap_or("<invalid>"),
+        endpoint_host = parsed_url
+            .as_ref()
+            .and_then(reqwest::Url::host_str)
+            .unwrap_or("<invalid>"),
+        endpoint_path = parsed_url
+            .as_ref()
+            .map(reqwest::Url::path)
+            .unwrap_or("<invalid>"),
+        endpoint_has_query = parsed_url.as_ref().is_some_and(|url| url.query().is_some()),
+        mcp_method = mcp_method.unwrap_or("<none>"),
+        mcp_request_id = mcp_request_id.unwrap_or("<none>"),
+        has_session_id = has_session_id,
+        has_authorization_header = has_authorization_header,
+        "streamable HTTP post_message failed"
+    );
 }
 
 fn insert_header<Error>(

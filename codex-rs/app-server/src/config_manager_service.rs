@@ -125,7 +125,6 @@ impl ConfigManager {
         };
 
         let effective = layers.effective_config();
-
         let effective_config_toml: ConfigToml = effective
             .try_into()
             .map_err(|err| ConfigManagerError::toml("invalid configuration", err))?;
@@ -238,6 +237,23 @@ impl ConfigManager {
             let segments = parse_key_path(&key_path).map_err(|message| {
                 ConfigManagerError::write(ConfigWriteErrorCode::ConfigValidationError, message)
             })?;
+            if !value.is_null() {
+                match segments.as_slice() {
+                    [segment] if segment == "profile" => {
+                        return Err(ConfigManagerError::write(
+                            ConfigWriteErrorCode::ConfigValidationError,
+                            "`profile` is a legacy config selector and can no longer be written; use `--profile <name>` with `<name>.config.toml` instead",
+                        ));
+                    }
+                    [segment, ..] if segment == "profiles" => {
+                        return Err(ConfigManagerError::write(
+                            ConfigWriteErrorCode::ConfigValidationError,
+                            "`profiles` contains legacy config profile tables and can no longer be written; use `--profile <name>` with `<name>.config.toml` instead",
+                        ));
+                    }
+                    _ => {}
+                }
+            }
             let original_value = value_at_path(&user_config, &segments).cloned();
             let parsed_value = parse_value(value).map_err(|message| {
                 ConfigManagerError::write(ConfigWriteErrorCode::ConfigValidationError, message)
@@ -607,6 +623,9 @@ fn override_message(layer: &ConfigLayerSource) -> String {
         }
         ConfigLayerSource::System { file } => {
             format!("Overridden by managed config (system): {}", file.display())
+        }
+        ConfigLayerSource::EnterpriseManaged { id: _, name } => {
+            format!("Overridden by enterprise-managed config: {name}")
         }
         ConfigLayerSource::Project { dot_codex_folder } => format!(
             "Overridden by project config: {}/{CONFIG_TOML_FILE}",
