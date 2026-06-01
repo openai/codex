@@ -3410,6 +3410,7 @@ impl ChatComposer {
             esc_backtrack_hint: self.footer.esc_backtrack_hint,
             use_shift_enter_hint: self.footer.use_shift_enter_hint,
             is_task_running: self.is_task_running,
+            queue_submissions: self.queue_submissions,
             quit_shortcut_key: self.footer.quit_shortcut_key,
             collaboration_modes_enabled: self.collaboration_modes_enabled,
             is_wsl,
@@ -4686,6 +4687,16 @@ mod tests {
             /*enhanced_keys_supported*/ true,
             |composer| {
                 composer.set_esc_backtrack_hint(/*show*/ true);
+                let _ = composer
+                    .handle_key_event(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE));
+            },
+        );
+
+        snapshot_composer_state(
+            "footer_mode_shortcut_overlay_queue_submissions",
+            /*enhanced_keys_supported*/ true,
+            |composer| {
+                composer.set_queue_submissions(/*queue_submissions*/ true);
                 let _ = composer
                     .handle_key_event(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE));
             },
