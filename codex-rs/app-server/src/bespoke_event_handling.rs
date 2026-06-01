@@ -2170,6 +2170,7 @@ mod tests {
             thread_id,
             rollout_path: None,
             forked_from_id: None,
+            parent_thread_id: None,
             preview: "fallback preview".to_string(),
             name: Some("Rollback thread".to_string()),
             model_provider: "openai".to_string(),

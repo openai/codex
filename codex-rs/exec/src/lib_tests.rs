@@ -307,6 +307,7 @@ fn turn_items_for_thread_returns_matching_turn_items() {
         id: "thread-1".to_string(),
         session_id: "thread-1".to_string(),
         forked_from_id: None,
+        parent_thread_id: None,
         preview: String::new(),
         ephemeral: false,
         model_provider: "openai".to_string(),
@@ -585,12 +586,33 @@ async fn session_configured_from_thread_response_preserves_thread_source() {
     );
 }
 
+#[tokio::test]
+async fn session_configured_from_thread_response_preserves_parent_thread_id() {
+    let codex_home = tempdir().expect("create temp codex home");
+    let cwd = tempdir().expect("create temp cwd");
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(cwd.path().to_path_buf()))
+        .build()
+        .await
+        .expect("build config");
+    let parent_thread_id = ThreadId::new();
+    let mut response = sample_thread_start_response();
+    response.thread.parent_thread_id = Some(parent_thread_id.to_string());
+
+    let event = session_configured_from_thread_start_response(&response, &config)
+        .expect("build bootstrap session configured event");
+
+    assert_eq!(event.parent_thread_id, Some(parent_thread_id));
+}
+
 fn sample_thread_start_response() -> ThreadStartResponse {
     ThreadStartResponse {
         thread: codex_app_server_protocol::Thread {
             id: "67e55044-10b1-426f-9247-bb680e5fe0c8".to_string(),
             session_id: "67e55044-10b1-426f-9247-bb680e5fe0c7".to_string(),
             forked_from_id: None,
+            parent_thread_id: None,
             preview: String::new(),
             ephemeral: false,
             model_provider: "openai".to_string(),

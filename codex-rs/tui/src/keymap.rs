@@ -21,6 +21,7 @@
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
 use codex_config::types::KeybindingsSpec;
+use codex_config::types::MAX_FUNCTION_KEY;
 use codex_config::types::TuiKeymap;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyModifiers;
@@ -1939,7 +1940,7 @@ fn parse_keybinding(spec: &str) -> Option<KeyBinding> {
         other if other.len() == 1 => KeyCode::Char(char::from(other.as_bytes()[0])),
         other if other.starts_with('f') => {
             let number = other[1..].parse::<u8>().ok()?;
-            if (1..=12).contains(&number) {
+            if (1..=MAX_FUNCTION_KEY).contains(&number) {
                 KeyCode::F(number)
             } else {
                 return None;
@@ -2636,7 +2637,11 @@ mod tests {
             parse_keybinding("f1").map(|binding| binding.parts()),
             Some((KeyCode::F(1), KeyModifiers::NONE))
         );
-        assert_eq!(parse_keybinding("f13"), None);
+        assert_eq!(
+            parse_keybinding("f24").map(|binding| binding.parts()),
+            Some((KeyCode::F(24), KeyModifiers::NONE))
+        );
+        assert_eq!(parse_keybinding("f25"), None);
     }
 
     #[test]

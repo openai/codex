@@ -1023,6 +1023,7 @@ mod tests {
         CreateThreadParams {
             thread_id,
             forked_from_id: None,
+            parent_thread_id: None,
             source: SessionSource::Exec,
             thread_source: None,
             base_instructions: BaseInstructions::default(),
