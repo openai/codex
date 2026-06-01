@@ -48,7 +48,7 @@ pub(super) struct StartRemoteControlPairingResponse {
     pub(super) pairing_code: String,
     pub(super) manual_pairing_code: Option<String>,
     #[serde(rename = "server_id")]
-    pub(super) _server_id: String,
+    pub(super) server_id: String,
     pub(super) environment_id: String,
     pub(super) expires_at: String,
 }

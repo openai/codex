@@ -29,6 +29,8 @@ use std::fmt;
 use std::io;
 use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::sync::watch;
@@ -53,6 +55,7 @@ pub(super) struct QueuedServerEnvelope {
 #[derive(Clone)]
 pub struct RemoteControlHandle {
     enabled_tx: Arc<watch::Sender<bool>>,
+    pairing_generation: Arc<AtomicU64>,
     status_tx: Arc<watch::Sender<RemoteControlStatusChangedNotification>>,
     state_db_available: bool,
     server: SharedRemoteControlServer,
@@ -86,6 +89,9 @@ impl RemoteControlHandle {
             *state = true;
             changed
         });
+        if enabled_changed {
+            self.pairing_generation.fetch_add(1, Ordering::AcqRel);
+        }
 
         let status = self.status();
         info!(
@@ -112,6 +118,9 @@ impl RemoteControlHandle {
             *state = false;
             changed
         });
+        if enabled_changed {
+            self.pairing_generation.fetch_add(1, Ordering::AcqRel);
+        }
 
         let status = self.status();
         info!(
@@ -137,10 +146,18 @@ impl RemoteControlHandle {
         &self,
         params: RemoteControlPairingStartParams,
     ) -> io::Result<RemoteControlPairingStartResponse> {
+        let pairing_generation = self.pairing_generation.load(Ordering::Acquire);
         if !*self.enabled_tx.borrow() {
             return Err(remote_control_pairing_disabled_error());
         }
-        self.server.start_pairing(params).await
+        let pairing_response = self.server.start_pairing(params).await;
+        if self.pairing_generation.load(Ordering::Acquire) != pairing_generation {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "remote control pairing was interrupted by remote control enablement change",
+            ));
+        }
+        pairing_response
     }
 
     fn publish_status(
@@ -323,6 +340,7 @@ pub async fn start_remote_control(
         join_handle,
         RemoteControlHandle {
             enabled_tx: Arc::new(enabled_tx),
+            pairing_generation: Arc::new(AtomicU64::new(0)),
             status_tx: Arc::new(status_tx),
             state_db_available,
             server,

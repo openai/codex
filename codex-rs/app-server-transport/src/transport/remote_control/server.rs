@@ -389,10 +389,16 @@ impl RemoteControlServer {
         let StartRemoteControlPairingResponse {
             pairing_code,
             manual_pairing_code,
-            _server_id: _,
+            server_id,
             environment_id,
             expires_at,
         } = pairing;
+        if server_id != self.server_id || environment_id != self.environment_id {
+            return Err(io::Error::other(format!(
+                "remote control pairing returned mismatched enrollment: expected server_id={}, environment_id={}; got server_id={}, environment_id={}",
+                self.server_id, self.environment_id, server_id, environment_id
+            )));
+        }
         let expires_at = OffsetDateTime::parse(&expires_at, &Rfc3339)
             .map_err(|err| {
                 io::Error::new(

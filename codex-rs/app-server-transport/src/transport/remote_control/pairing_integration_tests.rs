@@ -70,6 +70,44 @@ async fn remote_control_pairing_posts_server_token_and_maps_response() {
 }
 
 #[tokio::test]
+async fn remote_control_pairing_rejects_mismatched_enrollment_response() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("listener should bind");
+    let remote_control_target = remote_control_target_for_listener(&listener);
+    let pairing_server = tokio::spawn(async move {
+        let pairing_request = accept_http_request(&listener).await;
+        respond_with_json(
+            pairing_request.stream,
+            json!({
+                "pairing_code": "pairing-code",
+                "manual_pairing_code": null,
+                "server_id": "other-server-id",
+                "environment_id": "environment-id",
+                "expires_at": "3026-05-22T12:34:56Z",
+            }),
+        )
+        .await
+    });
+
+    assert_eq!(
+        remote_control_server_state(
+            OffsetDateTime::from_unix_timestamp(33_336_362_096)
+                .expect("future timestamp should parse"),
+        )
+        .start_pairing(
+            &remote_control_target,
+            StartRemoteControlPairingRequest { manual_code: false },
+        )
+        .await
+        .expect_err("pairing response should be bound to current enrollment")
+        .to_string(),
+        "remote control pairing returned mismatched enrollment: expected server_id=server-id, environment_id=environment-id; got server_id=other-server-id, environment_id=environment-id"
+    );
+    pairing_server.await.expect("pairing server should join");
+}
+
+#[tokio::test]
 async fn remote_control_pairing_preserves_backend_error_context() {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
@@ -353,6 +391,88 @@ async fn remote_control_auth_change_cancels_in_flight_pairing() {
             .to_string(),
         "remote control pairing is unavailable until enrollment completes"
     );
+}
+
+#[tokio::test]
+async fn remote_control_enablement_change_rejects_in_flight_pairing() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("listener should bind");
+    let remote_control_url = remote_control_url_for_listener(&listener);
+    let codex_home = TempDir::new().expect("temp dir should create");
+    let (transport_event_tx, _transport_event_rx) =
+        mpsc::channel::<TransportEvent>(CHANNEL_CAPACITY);
+    let shutdown_token = CancellationToken::new();
+    let (remote_task, remote_handle) = start_remote_control(
+        RemoteControlStartConfig {
+            remote_control_url,
+            installation_id: TEST_INSTALLATION_ID.to_string(),
+        },
+        Some(remote_control_state_runtime(&codex_home).await),
+        remote_control_auth_manager(),
+        transport_event_tx,
+        shutdown_token.clone(),
+        /*app_server_client_name_rx*/ None,
+        /*initial_enabled*/ true,
+    )
+    .await
+    .expect("remote control should start");
+
+    let enroll_request = accept_http_request(&listener).await;
+    respond_with_json(
+        enroll_request.stream,
+        remote_control_server_token_response(
+            "srv_e_initial",
+            "env_initial",
+            TEST_REMOTE_CONTROL_SERVER_TOKEN,
+        ),
+    )
+    .await;
+    let stalled_websocket_request = accept_http_request(&listener).await;
+    assert_eq!(
+        stalled_websocket_request.request_line,
+        "GET /backend-api/wham/remote/control/server HTTP/1.1"
+    );
+
+    let pairing_task = tokio::spawn({
+        let remote_handle = remote_handle.clone();
+        async move {
+            remote_handle
+                .start_pairing(RemoteControlPairingStartParams::default())
+                .await
+        }
+    });
+    let stalled_pairing_request = accept_http_request(&listener).await;
+    assert_eq!(
+        stalled_pairing_request.request_line,
+        "POST /backend-api/wham/remote/control/server/pair HTTP/1.1"
+    );
+    remote_handle.disable();
+    remote_handle.enable().expect("enable should succeed");
+    respond_with_json(
+        stalled_pairing_request.stream,
+        json!({
+            "pairing_code": "stale-pairing-code",
+            "manual_pairing_code": null,
+            "server_id": "srv_e_initial",
+            "environment_id": "env_initial",
+            "expires_at": "3026-05-22T12:34:56Z",
+        }),
+    )
+    .await;
+
+    assert_eq!(
+        pairing_task
+            .await
+            .expect("pairing task should join")
+            .expect_err("stale pairing should be discarded")
+            .to_string(),
+        "remote control pairing was interrupted by remote control enablement change"
+    );
+
+    drop(stalled_websocket_request);
+    shutdown_token.cancel();
+    let _ = remote_task.await;
 }
 
 fn remote_control_target_for_listener(listener: &TcpListener) -> RemoteControlTarget {
