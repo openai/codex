@@ -1103,8 +1103,11 @@ fn analytics_rpc_transport(transport: &AppServerTransport) -> AppServerRpcTransp
 #[cfg(test)]
 mod tests {
     use super::LogFormat;
+    #[cfg(unix)]
     use super::analytics_rpc_transport;
+    #[cfg(unix)]
     use crate::transport::AppServerTransport;
+    #[cfg(unix)]
     use codex_analytics::AppServerRpcTransport;
     use pretty_assertions::assert_eq;
 
