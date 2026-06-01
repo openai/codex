@@ -138,6 +138,89 @@ pub struct CancelLoginAccountResponse {
     pub status: CancelLoginAccountStatus,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct AccountSessionsAddParams {
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub switch_to_added_account: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct AccountSessionsListParams {
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub refresh_workspace_metadata: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct AccountSessionsLogoutParams {
+    pub session_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct AccountSessionsSwitchParams {
+    pub session_id: String,
+    pub account_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct AccountSessionsResponse {
+    pub active_session_id: Option<String>,
+    pub sessions: Vec<AccountSession>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct AccountSession {
+    pub session_id: String,
+    pub email: Option<String>,
+    pub user_id: Option<String>,
+    pub display_name: Option<String>,
+    pub image_url: Option<String>,
+    pub plan: Option<String>,
+    pub last_used_at: i64,
+    pub is_active: bool,
+    pub selected_workspace_account_id: Option<String>,
+    pub workspaces: Vec<AccountSessionWorkspace>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct AccountSessionWorkspace {
+    pub account_id: String,
+    pub name: Option<String>,
+    pub image_url: Option<String>,
+    pub kind: Option<AccountSessionWorkspaceKind>,
+    pub status: AccountSessionWorkspaceStatus,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub enum AccountSessionWorkspaceKind {
+    Personal,
+    Workspace,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub enum AccountSessionWorkspaceStatus {
+    Active,
+    Disabled,
+    Deactivated,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
