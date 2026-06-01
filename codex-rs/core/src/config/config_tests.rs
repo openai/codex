@@ -816,6 +816,10 @@ async fn sandbox_workspace_write_allow_limited_git_writes_keeps_config_and_hooks
                 exclude_tmpdir_env_var: true,
                 exclude_slash_tmp: true,
             }),
+            windows: Some(WindowsToml {
+                sandbox: Some(WindowsSandboxModeToml::Elevated),
+                sandbox_private_desktop: None,
+            }),
             ..Default::default()
         },
         ConfigOverrides {
@@ -827,9 +831,13 @@ async fn sandbox_workspace_write_allow_limited_git_writes_keeps_config_and_hooks
     .await?;
     let file_system = config.permissions.file_system_sandbox_policy();
     let cwd = config.cwd.as_path();
-    assert!(file_system.can_write_path_with_cwd(Path::new(".git/index"), cwd));
-    assert!(!file_system.can_write_path_with_cwd(Path::new(".git/config"), cwd));
-    assert!(!file_system.can_write_path_with_cwd(Path::new(".git/hooks/pre-commit"), cwd));
+    let git_dir = config.cwd.join(".git");
+    let git_config = git_dir.join("config");
+    let git_hooks = git_dir.join("hooks");
+
+    assert!(file_system.can_write_path_with_cwd(git_dir.join("index").as_path(), cwd));
+    assert!(!file_system.can_write_path_with_cwd(git_config.as_path(), cwd));
+    assert!(!file_system.can_write_path_with_cwd(git_hooks.join("pre-commit").as_path(), cwd));
     Ok(())
 }
 
