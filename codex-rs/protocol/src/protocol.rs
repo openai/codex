@@ -1129,6 +1129,7 @@ impl SandboxPolicy {
 
                 // For each root, compute subpaths that should remain read-only.
                 let cwd_root = AbsolutePathBuf::from_absolute_path(cwd).ok();
+                let raw_roots = roots.clone();
                 let mut roots = roots
                     .into_iter()
                     .map(|writable_root| {
@@ -1147,7 +1148,7 @@ impl SandboxPolicy {
                     })
                     .collect::<Vec<_>>();
                 if *allow_limited_git_writes {
-                    add_limited_git_writable_roots(&mut roots);
+                    add_limited_git_writable_roots(&mut roots, &raw_roots);
                 }
                 roots
             }
