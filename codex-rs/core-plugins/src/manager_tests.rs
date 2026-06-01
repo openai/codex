@@ -960,6 +960,43 @@ async fn load_plugins_ignores_manifest_component_paths_without_dot_slash() {
 }
 
 #[tokio::test]
+async fn load_plugins_ignores_invalid_manifest_skills_shape() {
+    let codex_home = TempDir::new().unwrap();
+    let plugin_root = codex_home
+        .path()
+        .join("plugins/cache")
+        .join("test/sample/local");
+
+    write_file(
+        &plugin_root.join(".codex-plugin/plugin.json"),
+        r#"{
+  "name": "sample",
+  "skills": ["./custom-skills/"]
+}"#,
+    );
+    write_file(
+        &plugin_root.join("skills/default-skill/SKILL.md"),
+        "---\nname: default-skill\ndescription: default skill\n---\n",
+    );
+    write_file(
+        &plugin_root.join("custom-skills/custom-skill/SKILL.md"),
+        "---\nname: custom-skill\ndescription: custom skill\n---\n",
+    );
+
+    let outcome = load_plugins_from_config(
+        &plugin_config_toml(/*enabled*/ true, /*plugins_feature_enabled*/ true),
+        codex_home.path(),
+    )
+    .await;
+
+    assert_eq!(outcome.plugins()[0].error, None);
+    assert_eq!(
+        outcome.plugins()[0].skill_roots,
+        vec![plugin_root.join("skills").abs()]
+    );
+}
+
+#[tokio::test]
 async fn load_plugins_preserves_disabled_plugins_without_effective_contributions() {
     let codex_home = TempDir::new().unwrap();
     let plugin_root = codex_home
