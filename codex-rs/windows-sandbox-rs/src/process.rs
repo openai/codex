@@ -37,8 +37,20 @@ pub struct CreatedProcess {
 }
 
 pub fn make_env_block(env: &HashMap<String, String>) -> Vec<u16> {
-    let mut items: Vec<(String, String)> =
-        env.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+    let mut deduped: HashMap<String, (String, String)> = HashMap::new();
+    for (key, value) in env {
+        let folded = key.to_uppercase();
+        match deduped.get_mut(&folded) {
+            Some(existing) if prefer_env_key(key, &existing.0) => {
+                *existing = (key.clone(), value.clone());
+            }
+            Some(_) => {}
+            None => {
+                deduped.insert(folded, (key.clone(), value.clone()));
+            }
+        }
+    }
+    let mut items: Vec<(String, String)> = deduped.into_values().collect();
     items.sort_by(|a, b| {
         a.0.to_uppercase()
             .cmp(&b.0.to_uppercase())
@@ -53,6 +65,15 @@ pub fn make_env_block(env: &HashMap<String, String>) -> Vec<u16> {
     }
     w.push(0);
     w
+}
+
+fn prefer_env_key(candidate: &str, existing: &str) -> bool {
+    let candidate_is_upper = candidate == candidate.to_uppercase();
+    let existing_is_upper = existing == existing.to_uppercase();
+    if candidate_is_upper != existing_is_upper {
+        return candidate_is_upper;
+    }
+    candidate < existing
 }
 
 unsafe fn ensure_inheritable_stdio(si: &mut STARTUPINFOW) -> Result<()> {
@@ -352,4 +373,33 @@ where
             CloseHandle(handle);
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::make_env_block;
+    use std::collections::HashMap;
+
+    fn decode_env_block(block: &[u16]) -> Vec<String> {
+        block
+            .split(|unit| *unit == 0)
+            .filter(|entry| !entry.is_empty())
+            .map(|entry| String::from_utf16(entry).expect("valid UTF-16"))
+            .collect()
+    }
+
+    #[test]
+    fn make_env_block_prefers_uppercase_duplicate_keys() {
+        let env = HashMap::from([
+            ("Path".to_string(), r"C:\Windows".to_string()),
+            ("PATH".to_string(), r"C:\Codex\bin;C:\Windows".to_string()),
+            ("PATHEXT".to_string(), ".CMD;.EXE".to_string()),
+        ]);
+
+        let block = make_env_block(&env);
+        let entries = decode_env_block(&block);
+
+        assert!(entries.contains(&"PATH=C:\\Codex\\bin;C:\\Windows".to_string()));
+        assert!(!entries.iter().any(|entry| entry.starts_with("Path=")));
+    }
 }
