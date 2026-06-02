@@ -72,6 +72,7 @@ use codex_tools::ToolEnvironmentMode;
 use codex_tools::ToolExecutor;
 use codex_tools::ToolName;
 use codex_tools::ToolOutput;
+use codex_tools::ToolSearchInfo;
 use codex_tools::ToolSpec;
 use codex_tools::UnifiedExecShellMode;
 use codex_tools::can_request_original_image_detail;
@@ -937,6 +938,10 @@ impl ToolExecutor<ToolInvocation> for MultiAgentV2NamespaceOverride {
         self.handler.supports_parallel_tool_calls()
     }
 
+    fn search_info(&self) -> Option<ToolSearchInfo> {
+        self.handler.search_info()
+    }
+
     async fn handle(
         &self,
         invocation: ToolInvocation,
@@ -948,10 +953,6 @@ impl ToolExecutor<ToolInvocation> for MultiAgentV2NamespaceOverride {
 impl CoreToolRuntime for MultiAgentV2NamespaceOverride {
     fn matches_kind(&self, payload: &crate::tools::context::ToolPayload) -> bool {
         self.handler.matches_kind(payload)
-    }
-
-    fn search_info(&self) -> Option<crate::tools::tool_search_entry::ToolSearchInfo> {
-        self.handler.search_info()
     }
 
     fn create_diff_consumer(

@@ -17,6 +17,7 @@ mod tool_discovery;
 mod tool_executor;
 mod tool_output;
 mod tool_payload;
+mod tool_search;
 mod tool_spec;
 
 pub use code_mode::augment_tool_spec_for_code_mode;
@@ -97,6 +98,9 @@ pub use tool_executor::ToolExposure;
 pub use tool_output::JsonToolOutput;
 pub use tool_output::ToolOutput;
 pub use tool_payload::ToolPayload;
+pub use tool_search::ToolSearchEntry;
+pub use tool_search::ToolSearchInfo;
+pub use tool_search::default_tool_search_text;
 pub use tool_spec::ResponsesApiWebSearchFilters;
 pub use tool_spec::ResponsesApiWebSearchUserLocation;
 pub use tool_spec::ToolSpec;
