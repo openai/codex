@@ -819,11 +819,6 @@ async fn load_auth(
         return Ok(Some(auth));
     }
 
-    // If the caller explicitly requested ephemeral auth, there is no persisted fallback.
-    if auth_credentials_store_mode == AuthCredentialsStoreMode::Ephemeral {
-        return Ok(None);
-    }
-
     if let Some(access_token) = read_codex_access_token_from_env() {
         let auth = match classify_codex_access_token(&access_token) {
             CodexAccessToken::PersonalAccessToken(access_token) => {
@@ -834,6 +829,11 @@ async fn load_auth(
             }
         };
         return Ok(Some(auth));
+    }
+
+    // If the caller explicitly requested ephemeral auth, there is no persisted fallback.
+    if auth_credentials_store_mode == AuthCredentialsStoreMode::Ephemeral {
+        return Ok(None);
     }
 
     // Fall back to the configured persistent store (file/keyring/auto) for managed auth.

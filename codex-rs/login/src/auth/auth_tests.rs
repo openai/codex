@@ -856,33 +856,38 @@ async fn load_auth_reads_personal_access_token_from_env() {
                 /*email*/ None,
             )),
         )
-        .expect(1)
+        .expect(2)
         .mount(&server)
         .await;
     let _authapi_guard = EnvVarGuard::set("CODEX_AUTHAPI_BASE_URL", &server.uri());
     let _access_token_guard = EnvVarGuard::set(CODEX_ACCESS_TOKEN_ENV_VAR, "at-env-test");
 
-    let auth = super::load_auth(
-        codex_home.path(),
-        /*enable_codex_api_key_env*/ false,
+    for auth_credentials_store_mode in [
         AuthCredentialsStoreMode::File,
-        /*chatgpt_base_url*/ None,
-    )
-    .await
-    .expect("env auth should load")
-    .expect("env auth should be present");
+        AuthCredentialsStoreMode::Ephemeral,
+    ] {
+        let auth = super::load_auth(
+            codex_home.path(),
+            /*enable_codex_api_key_env*/ false,
+            auth_credentials_store_mode,
+            /*chatgpt_base_url*/ None,
+        )
+        .await
+        .expect("env auth should load")
+        .expect("env auth should be present");
 
-    assert_eq!(auth.api_auth_mode(), AuthMode::Chatgpt);
-    assert_eq!(
-        auth.get_token()
-            .expect("personal access token should be exposed"),
-        "at-env-test"
-    );
-    assert_eq!(auth.get_account_id().as_deref(), Some(WORKSPACE_ID_ALLOWED));
-    assert_eq!(auth.get_chatgpt_user_id().as_deref(), Some("user-123"));
-    assert_eq!(auth.get_account_email(), None);
-    assert_eq!(auth.account_plan_type(), Some(AccountPlanType::Business));
-    assert!(auth.is_fedramp_account());
+        assert_eq!(auth.api_auth_mode(), AuthMode::Chatgpt);
+        assert_eq!(
+            auth.get_token()
+                .expect("personal access token should be exposed"),
+            "at-env-test"
+        );
+        assert_eq!(auth.get_account_id().as_deref(), Some(WORKSPACE_ID_ALLOWED));
+        assert_eq!(auth.get_chatgpt_user_id().as_deref(), Some("user-123"));
+        assert_eq!(auth.get_account_email(), None);
+        assert_eq!(auth.account_plan_type(), Some(AccountPlanType::Business));
+        assert!(auth.is_fedramp_account());
+    }
     assert!(
         !get_auth_file(codex_home.path()).exists(),
         "env auth should not write auth.json"

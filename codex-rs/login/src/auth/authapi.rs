@@ -5,9 +5,14 @@ const CODEX_AUTHAPI_BASE_URL_ENV_VAR: &str = "CODEX_AUTHAPI_BASE_URL";
 const LEGACY_CODEX_AGENT_IDENTITY_AUTHAPI_BASE_URL_ENV_VAR: &str =
     "CODEX_AGENT_IDENTITY_AUTHAPI_BASE_URL";
 
-pub(super) fn authapi_base_url() -> String {
+pub(super) fn agent_identity_authapi_base_url() -> String {
     read_non_empty_env_var(CODEX_AUTHAPI_BASE_URL_ENV_VAR)
         .or_else(|| read_non_empty_env_var(LEGACY_CODEX_AGENT_IDENTITY_AUTHAPI_BASE_URL_ENV_VAR))
+        .unwrap_or_else(|| PROD_AUTHAPI_BASE_URL.to_string())
+}
+
+pub(super) fn personal_access_token_authapi_base_url() -> String {
+    read_non_empty_env_var(CODEX_AUTHAPI_BASE_URL_ENV_VAR)
         .unwrap_or_else(|| PROD_AUTHAPI_BASE_URL.to_string())
 }
 

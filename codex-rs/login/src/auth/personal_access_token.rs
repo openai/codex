@@ -4,7 +4,7 @@ use codex_protocol::auth::PlanType as InternalPlanType;
 use serde::Deserialize;
 use std::fmt;
 
-use super::authapi::authapi_base_url;
+use super::authapi::personal_access_token_authapi_base_url;
 use crate::default_client::create_client;
 
 const PERSONAL_ACCESS_TOKEN_PREFIX: &str = "at-";
@@ -36,7 +36,12 @@ impl fmt::Debug for PersonalAccessTokenAuth {
 
 impl PersonalAccessTokenAuth {
     pub(super) async fn load(access_token: &str) -> std::io::Result<Self> {
-        hydrate_personal_access_token(&create_client(), &authapi_base_url(), access_token).await
+        hydrate_personal_access_token(
+            &create_client(),
+            &personal_access_token_authapi_base_url(),
+            access_token,
+        )
+        .await
     }
 
     pub fn access_token(&self) -> &str {
