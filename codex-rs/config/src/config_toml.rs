@@ -738,11 +738,11 @@ impl ConfigToml {
             .or(if sandbox_mode_was_explicit {
                 None
             } else {
-                // If no sandbox_mode is set but this directory has a trust decision,
-                // default to workspace-write except on unsandboxed Windows where we
+                // If no sandbox_mode is set for a trusted directory, default
+                // to workspace-write except on unsandboxed Windows where we
                 // default to read-only.
                 active_project.and_then(|p| {
-                    if p.is_trusted() || p.is_untrusted() {
+                    if p.is_trusted() {
                         if cfg!(target_os = "windows")
                             && windows_sandbox_level == WindowsSandboxLevel::Disabled
                         {
