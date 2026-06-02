@@ -412,6 +412,10 @@ enum InstructionSource {
 
 impl InstructionSource {
     fn separator_after(&self, previous: &Self) -> &'static str {
+        // The project-doc marker tells the model where workspace-scoped
+        // instructions begin. It belongs only before the first project entry;
+        // subsequent project docs and trailing internal guidance are part of
+        // an already established instruction section.
         match (previous, self) {
             (Self::User(_) | Self::Internal, Self::Project(_)) => AGENTS_MD_SEPARATOR,
             _ => "\n\n",
