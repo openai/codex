@@ -3719,6 +3719,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-skills-extension"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "codex-core",
+ "codex-extension-api",
+]
+
+[[package]]
 name = "codex-state"
 version = "0.0.0"
 dependencies = [
