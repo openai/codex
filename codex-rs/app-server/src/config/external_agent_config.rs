@@ -2,6 +2,7 @@ use codex_config::types::PluginConfig;
 use codex_config::with_config_write_lock;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
+use codex_core::path_utils::write_atomically;
 use codex_core_plugins::PluginInstallRequest;
 use codex_core_plugins::PluginsManager;
 use codex_core_plugins::marketplace::MarketplacePluginInstallPolicy;
@@ -1529,7 +1530,7 @@ fn merge_missing_toml_file(target_config: &Path, incoming: &TomlValue) -> io::Re
 fn write_toml_file(path: &Path, value: &TomlValue) -> io::Result<()> {
     let serialized = toml::to_string_pretty(value)
         .map_err(|err| invalid_data_error(format!("failed to serialize config.toml: {err}")))?;
-    fs::write(path, format!("{}\n", serialized.trim_end()))
+    write_atomically(path, &format!("{}\n", serialized.trim_end()))
 }
 
 fn migrated_mcp_server_names(value: &TomlValue) -> Vec<String> {

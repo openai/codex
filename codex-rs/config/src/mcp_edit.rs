@@ -4,6 +4,7 @@ use std::io::ErrorKind;
 use std::path::Path;
 use std::path::PathBuf;
 
+use codex_utils_path::write_atomically;
 use tokio::task;
 use toml::Value as TomlValue;
 use toml_edit::DocumentMut;
@@ -99,7 +100,7 @@ impl ConfigEditsBuilder {
                 replace_mcp_servers(&mut doc, servers);
             }
             fs::create_dir_all(&self.codex_home)?;
-            fs::write(&write_paths.write_path, doc.to_string())
+            write_atomically(&write_paths.write_path, &doc.to_string())
         })
     }
 }

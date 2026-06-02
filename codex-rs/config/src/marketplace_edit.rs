@@ -2,6 +2,7 @@ use std::fs;
 use std::io::ErrorKind;
 use std::path::Path;
 
+use codex_utils_path::write_atomically;
 use toml_edit::DocumentMut;
 use toml_edit::Item as TomlItem;
 use toml_edit::Table as TomlTable;
@@ -42,7 +43,7 @@ pub fn record_user_marketplace(
         )?;
         upsert_marketplace(&mut doc, marketplace_name, update);
         fs::create_dir_all(codex_home)?;
-        fs::write(&write_paths.write_path, doc.to_string())
+        write_atomically(&write_paths.write_path, &doc.to_string())
     })
 }
 
@@ -78,7 +79,7 @@ pub fn remove_user_marketplace_config(
         }
 
         fs::create_dir_all(codex_home)?;
-        fs::write(&write_paths.write_path, doc.to_string())?;
+        write_atomically(&write_paths.write_path, &doc.to_string())?;
         Ok(RemoveMarketplaceConfigOutcome::Removed)
     })
 }
