@@ -660,7 +660,7 @@ async fn parse_skill_file(
         policy,
     } = load_skill_metadata(fs, path, plugin_root).await;
 
-    validate_len(&name, MAX_NAME_LEN, "name")?;
+    validate_len(&base_name, MAX_NAME_LEN, "name")?;
     validate_len(&description, MAX_DESCRIPTION_LEN, "description")?;
     if let Some(short_description) = short_description.as_deref() {
         validate_len(
