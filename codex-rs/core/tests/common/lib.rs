@@ -33,12 +33,9 @@ pub mod test_codex_exec;
 pub mod tracing;
 pub mod zsh_fork;
 
-/// Creates loaded user instructions with a stable synthetic AGENTS.md source path.
+/// Creates source-less loaded user instructions for integration tests.
 pub fn loaded_instructions(text: impl Into<String>) -> LoadedAgentsMd {
-    LoadedAgentsMd::new(
-        text.into(),
-        AbsolutePathBuf::from_absolute_path("/tmp/test-AGENTS.md").expect("absolute path"),
-    )
+    LoadedAgentsMd::from_text(text.into())
 }
 
 static TEST_ARG0_PATH_ENTRY: OnceLock<Option<Arg0PathEntryGuard>> = OnceLock::new();

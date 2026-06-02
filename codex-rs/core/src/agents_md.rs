@@ -328,6 +328,16 @@ impl LoadedAgentsMd {
         }
     }
 
+    /// Creates source-less user instructions.
+    pub fn from_text(contents: String) -> Self {
+        Self {
+            instructions: vec![LoadedInstruction {
+                contents,
+                source: InstructionSource::Internal,
+            }],
+        }
+    }
+
     fn append_project_docs(&mut self, project_docs: Self) {
         self.instructions.extend(project_docs.instructions);
     }
@@ -376,14 +386,14 @@ enum InstructionSource {
     /// Workspace instructions discovered from project AGENTS.md files.
     Project(AbsolutePathBuf),
 
-    /// Instructions defined internally by Codex.
+    /// Instructions without a file source, including internally defined guidance.
     Internal,
 }
 
 impl InstructionSource {
     fn separator_after(&self, previous: &Self) -> &'static str {
         match (previous, self) {
-            (Self::User(_), Self::Project(_)) => AGENTS_MD_SEPARATOR,
+            (Self::User(_) | Self::Internal, Self::Project(_)) => AGENTS_MD_SEPARATOR,
             _ => "\n\n",
         }
     }

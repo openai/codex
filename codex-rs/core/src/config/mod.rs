@@ -1,5 +1,5 @@
 use crate::agents_md::AgentsMdManager;
-use crate::agents_md::LoadedAgentsMd;
+pub use crate::agents_md::LoadedAgentsMd;
 use crate::config::edit::ConfigEdit;
 use crate::config::edit::ConfigEditsBuilder;
 use crate::path_utils::normalize_for_native_workdir;
@@ -644,7 +644,7 @@ pub struct Config {
     /// Defaults to `false`.
     pub show_raw_agent_reasoning: bool,
 
-    /// User-provided instructions loaded from AGENTS.md.
+    /// User-provided instructions, including those loaded from AGENTS.md.
     pub user_instructions: Option<LoadedAgentsMd>,
 
     /// Base instructions override.

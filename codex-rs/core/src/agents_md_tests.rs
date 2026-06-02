@@ -273,6 +273,31 @@ async fn merges_existing_instructions_with_agents_md() {
     assert_eq!(res, expected);
 }
 
+#[tokio::test]
+async fn source_less_user_instructions_preserve_separator_without_reporting_a_source() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    fs::write(tmp.path().join("AGENTS.md"), "project doc").unwrap();
+
+    let mut cfg = make_config(&tmp, /*limit*/ 4096, /*instructions*/ None).await;
+    cfg.user_instructions = Some(LoadedAgentsMd::from_text("user instructions".to_string()));
+
+    let mut warnings = Vec::new();
+    let loaded = AgentsMdManager::new(&cfg)
+        .user_instructions_with_fs(LOCAL_FS.as_ref(), &mut warnings)
+        .await
+        .expect("instructions expected");
+    let project_agents = AbsolutePathBuf::try_from(
+        dunce::canonicalize(cfg.cwd.join("AGENTS.md")).expect("canonical project doc path"),
+    )
+    .expect("absolute project doc path");
+
+    assert_eq!(
+        loaded.text(),
+        format!("user instructions{AGENTS_MD_SEPARATOR}project doc")
+    );
+    assert_eq!(loaded.sources().collect::<Vec<_>>(), vec![&project_agents]);
+}
+
 /// If there are existing system instructions but AGENTS.md docs are
 /// missing we expect the original instructions to be returned unchanged.
 #[tokio::test]
