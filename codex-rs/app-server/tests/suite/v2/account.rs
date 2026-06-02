@@ -315,7 +315,7 @@ async fn set_auth_token_updates_account_and_notifies() -> Result<()> {
         account,
         GetAccountResponse {
             account: Some(Account::Chatgpt {
-                email: "embedded@example.com".to_string(),
+                email: Some("embedded@example.com".to_string()),
                 plan_type: AccountPlanType::Pro,
             }),
             requires_openai_auth: true,
@@ -383,7 +383,7 @@ async fn account_read_refresh_token_is_noop_in_external_mode() -> Result<()> {
         account,
         GetAccountResponse {
             account: Some(Account::Chatgpt {
-                email: "embedded@example.com".to_string(),
+                email: Some("embedded@example.com".to_string()),
                 plan_type: AccountPlanType::Pro,
             }),
             requires_openai_auth: true,
@@ -1713,7 +1713,7 @@ async fn get_account_with_chatgpt() -> Result<()> {
 
     let expected = GetAccountResponse {
         account: Some(Account::Chatgpt {
-            email: "user@example.com".to_string(),
+            email: Some("user@example.com".to_string()),
             plan_type: AccountPlanType::Pro,
         }),
         requires_openai_auth: true,
@@ -1840,7 +1840,7 @@ async fn get_account_with_chatgpt_missing_plan_claim_returns_unknown() -> Result
 
     let expected = GetAccountResponse {
         account: Some(Account::Chatgpt {
-            email: "user@example.com".to_string(),
+            email: Some("user@example.com".to_string()),
             plan_type: AccountPlanType::Unknown,
         }),
         requires_openai_auth: true,

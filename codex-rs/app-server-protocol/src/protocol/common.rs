@@ -36,6 +36,11 @@ pub enum AuthMode {
     #[ts(rename = "agentIdentity")]
     #[strum(serialize = "agentIdentity")]
     AgentIdentity,
+    /// Programmatic Codex auth backed by an opaque personal access token.
+    #[serde(rename = "personalAccessToken")]
+    #[ts(rename = "personalAccessToken")]
+    #[strum(serialize = "personalAccessToken")]
+    PersonalAccessToken,
 }
 
 macro_rules! experimental_reason_expr {
@@ -2696,7 +2701,7 @@ mod tests {
         );
 
         let chatgpt = v2::Account::Chatgpt {
-            email: "user@example.com".to_string(),
+            email: Some("user@example.com".to_string()),
             plan_type: PlanType::Plus,
         };
         assert_eq!(
@@ -2706,6 +2711,19 @@ mod tests {
                 "planType": "plus",
             }),
             serde_json::to_value(&chatgpt)?,
+        );
+
+        let phone_only_chatgpt = v2::Account::Chatgpt {
+            email: None,
+            plan_type: PlanType::Plus,
+        };
+        assert_eq!(
+            json!({
+                "type": "chatgpt",
+                "email": null,
+                "planType": "plus",
+            }),
+            serde_json::to_value(&phone_only_chatgpt)?,
         );
 
         Ok(())

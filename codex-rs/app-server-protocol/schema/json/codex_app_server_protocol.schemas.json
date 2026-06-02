@@ -5704,7 +5704,10 @@
           {
             "properties": {
               "email": {
-                "type": "string"
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "planType": {
                 "$ref": "#/definitions/v2/PlanType"
@@ -5718,7 +5721,6 @@
               }
             },
             "required": [
-              "email",
               "planType",
               "type"
             ],
@@ -6675,6 +6677,13 @@
             "description": "Programmatic Codex auth backed by a registered Agent Identity.",
             "enum": [
               "agentIdentity"
+            ],
+            "type": "string"
+          },
+          {
+            "description": "Programmatic Codex auth backed by an opaque personal access token.",
+            "enum": [
+              "personalAccessToken"
             ],
             "type": "string"
           }

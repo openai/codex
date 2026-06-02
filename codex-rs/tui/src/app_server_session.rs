@@ -295,16 +295,19 @@ impl AppServerSession {
                 false,
             ),
             Some(Account::Chatgpt { email, plan_type }) => {
-                let feedback_audience = if email.ends_with("@openai.com") {
+                let feedback_audience = if email
+                    .as_deref()
+                    .is_some_and(|email| email.ends_with("@openai.com"))
+                {
                     FeedbackAudience::OpenAiEmployee
                 } else {
                     FeedbackAudience::External
                 };
                 (
-                    Some(email.clone()),
+                    email.clone(),
                     Some(TelemetryAuthMode::Chatgpt),
                     Some(StatusAccountDisplay::ChatGpt {
-                        email: Some(email),
+                        email,
                         plan: Some(plan_type_display_name(plan_type)),
                     }),
                     Some(plan_type),
@@ -1191,7 +1194,8 @@ pub(crate) fn status_account_display_from_auth_mode(
         Some(AuthMode::ApiKey) => Some(StatusAccountDisplay::ApiKey),
         Some(AuthMode::Chatgpt)
         | Some(AuthMode::ChatgptAuthTokens)
-        | Some(AuthMode::AgentIdentity) => Some(StatusAccountDisplay::ChatGpt {
+        | Some(AuthMode::AgentIdentity)
+        | Some(AuthMode::PersonalAccessToken) => Some(StatusAccountDisplay::ChatGpt {
             email: None,
             plan: plan_type.map(plan_type_display_name),
         }),

@@ -825,9 +825,9 @@ impl AccountRequestProcessor {
         );
         let account_state = match provider.account_state() {
             Ok(account_state) => account_state,
-            Err(ProviderAccountError::MissingChatgptAccountDetails) => {
+            Err(ProviderAccountError::MissingChatgptPlanType) => {
                 return Err(invalid_request(
-                    "email and plan type are required for chatgpt authentication",
+                    "plan type is required for chatgpt authentication",
                 ));
             }
         };

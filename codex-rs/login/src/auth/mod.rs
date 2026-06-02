@@ -1,6 +1,8 @@
 mod agent_identity;
+mod authapi;
 pub mod default_client;
 pub mod error;
+mod personal_access_token;
 mod storage;
 mod util;
 

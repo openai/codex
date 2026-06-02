@@ -22,7 +22,10 @@
         {
           "properties": {
             "email": {
-              "type": "string"
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "planType": {
               "$ref": "#/definitions/PlanType"
@@ -36,7 +39,6 @@
             }
           },
           "required": [
-            "email",
             "planType",
             "type"
           ],

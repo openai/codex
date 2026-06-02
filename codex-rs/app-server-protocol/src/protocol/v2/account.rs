@@ -24,7 +24,10 @@ pub enum Account {
 
     #[serde(rename = "chatgpt", rename_all = "camelCase")]
     #[ts(rename = "chatgpt", rename_all = "camelCase")]
-    Chatgpt { email: String, plan_type: PlanType },
+    Chatgpt {
+        email: Option<String>,
+        plan_type: PlanType,
+    },
 
     #[serde(rename = "amazonBedrock", rename_all = "camelCase")]
     #[ts(rename = "amazonBedrock", rename_all = "camelCase")]

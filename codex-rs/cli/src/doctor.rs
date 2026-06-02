@@ -1308,6 +1308,7 @@ fn stored_auth_mode(auth: &codex_login::AuthDotJson) -> &'static str {
         codex_app_server_protocol::AuthMode::Chatgpt => "chatgpt",
         codex_app_server_protocol::AuthMode::ChatgptAuthTokens => "chatgpt_auth_tokens",
         codex_app_server_protocol::AuthMode::AgentIdentity => "agent_identity",
+        codex_app_server_protocol::AuthMode::PersonalAccessToken => "personal_access_token",
     }
 }
 
@@ -1378,6 +1379,15 @@ fn stored_auth_issues(
                 .is_none_or(|token| token.trim().is_empty())
             {
                 issues.push("agent identity auth is missing an agent identity token");
+            }
+        }
+        codex_app_server_protocol::AuthMode::PersonalAccessToken => {
+            if auth
+                .personal_access_token
+                .as_deref()
+                .is_none_or(|token| token.trim().is_empty())
+            {
+                issues.push("personal access token auth is missing a personal access token");
             }
         }
     }
@@ -2408,6 +2418,7 @@ fn auth_mode_name(auth: &CodexAuth) -> &'static str {
         codex_app_server_protocol::AuthMode::Chatgpt => "chatgpt",
         codex_app_server_protocol::AuthMode::ChatgptAuthTokens => "chatgpt_auth_tokens",
         codex_app_server_protocol::AuthMode::AgentIdentity => "agent_identity",
+        codex_app_server_protocol::AuthMode::PersonalAccessToken => "personal_access_token",
     }
 }
 
@@ -2541,7 +2552,8 @@ fn provider_auth_reachability_mode_from_auth(
         Some(
             codex_app_server_protocol::AuthMode::Chatgpt
             | codex_app_server_protocol::AuthMode::ChatgptAuthTokens
-            | codex_app_server_protocol::AuthMode::AgentIdentity,
+            | codex_app_server_protocol::AuthMode::AgentIdentity
+            | codex_app_server_protocol::AuthMode::PersonalAccessToken,
         )
         | None => ProviderAuthReachabilityMode::Chatgpt,
     }
@@ -3401,6 +3413,7 @@ mod tests {
             tokens: None,
             last_refresh: None,
             agent_identity: None,
+            personal_access_token: None,
         };
 
         assert_eq!(
@@ -3418,6 +3431,7 @@ mod tests {
             tokens: None,
             last_refresh: None,
             agent_identity: None,
+            personal_access_token: None,
         };
 
         assert_eq!(
@@ -3437,6 +3451,7 @@ mod tests {
             tokens: None,
             last_refresh: None,
             agent_identity: None,
+            personal_access_token: None,
         };
 
         assert_eq!(

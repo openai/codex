@@ -330,7 +330,11 @@ impl OpenAiModelsManager {
             && self.auth_manager.as_ref().is_some_and(|auth_manager| {
                 matches!(
                     auth_manager.auth_mode(),
-                    Some(AuthMode::Chatgpt | AuthMode::ChatgptAuthTokens)
+                    Some(
+                        AuthMode::Chatgpt
+                            | AuthMode::ChatgptAuthTokens
+                            | AuthMode::PersonalAccessToken
+                    )
                 )
             });
         if should_use_remote_models_only {

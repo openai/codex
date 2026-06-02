@@ -822,6 +822,7 @@ pub(crate) async fn persist_tokens_async(
             tokens: Some(tokens),
             last_refresh: Some(Utc::now()),
             agent_identity: None,
+            personal_access_token: None,
         };
         save_auth(&codex_home, &auth, auth_credentials_store_mode)?;
         Ok::<_, io::Error>((previous_auth, auth))
@@ -1311,6 +1312,7 @@ mod tests {
             }),
             last_refresh: None,
             agent_identity: None,
+            personal_access_token: None,
         }
     }
 
