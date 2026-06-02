@@ -4,7 +4,7 @@ use std::time::Duration;
 use anyhow::Context;
 use anyhow::Result;
 use app_test_support::ChatGptAuthFixture;
-use app_test_support::McpProcess;
+use app_test_support::TestAppServer;
 use app_test_support::to_response;
 use app_test_support::write_chatgpt_auth;
 use codex_app_server_protocol::ItemCompletedNotification;
@@ -76,7 +76,8 @@ async fn standalone_image_generation_returns_saved_path_hint_to_model() -> Resul
         AuthCredentialsStoreMode::File,
     )?;
 
-    let mut mcp = McpProcess::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+    let mut mcp =
+        TestAppServer::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let thread_req = mcp
@@ -163,7 +164,7 @@ async fn standalone_image_generation_returns_saved_path_hint_to_model() -> Resul
 }
 
 async fn wait_for_image_generation_completed(
-    mcp: &mut McpProcess,
+    mcp: &mut TestAppServer,
 ) -> Result<ItemCompletedNotification> {
     loop {
         let notification = mcp
