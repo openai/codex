@@ -854,6 +854,7 @@ impl Session {
                 ShellSnapshot::new(
                     config.codex_home.clone(),
                     thread_id,
+                    config.permissions.shell_environment_policy.clone(),
                     session_telemetry.clone(),
                     state_db_ctx.clone(),
                 )

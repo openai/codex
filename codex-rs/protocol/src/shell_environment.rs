@@ -43,6 +43,15 @@ where
     env_map
 }
 
+/// Returns whether the policy explicitly opts into inheriting `RUST_LOG`.
+pub fn policy_explicitly_includes_inherited_rust_log(policy: &ShellEnvironmentPolicy) -> bool {
+    !policy.include_only.is_empty()
+        && policy
+            .include_only
+            .iter()
+            .any(|pattern| pattern.matches("RUST_LOG"))
+}
+
 pub fn populate_env<I>(
     vars: I,
     policy: &ShellEnvironmentPolicy,
@@ -79,9 +88,7 @@ where
     // Step 2 - Harnesses like Codex Desktop and the VS Code extension spawn the
     // app-server with `RUST_LOG=warn` by default. Do not pass that inherited
     // value to subprocesses unless the user explicitly includes it.
-    let include_inherited_rust_log =
-        !policy.include_only.is_empty() && matches_any("RUST_LOG", &policy.include_only);
-    if !include_inherited_rust_log {
+    if !policy_explicitly_includes_inherited_rust_log(policy) {
         env_map.retain(|key, _| !is_rust_log(key));
     }
 
