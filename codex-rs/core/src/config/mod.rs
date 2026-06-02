@@ -2936,7 +2936,6 @@ impl Config {
             let mut permission_profile = cfg
                 .derive_permission_profile(
                     sandbox_mode,
-                    /*profile_sandbox_mode*/ None,
                     windows_sandbox_level,
                     Some(&active_project),
                     Some(&constrained_permission_profile),
