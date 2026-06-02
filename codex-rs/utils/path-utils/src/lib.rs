@@ -5,7 +5,19 @@ pub use env::is_wsl;
 
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::HashSet;
+#[cfg(unix)]
+use std::ffi::CString;
+#[cfg(unix)]
+use std::fs::File;
 use std::io;
+#[cfg(unix)]
+use std::os::fd::AsRawFd;
+#[cfg(unix)]
+use std::os::fd::FromRawFd;
+#[cfg(unix)]
+use std::os::unix::ffi::OsStrExt;
+#[cfg(unix)]
+use std::path::Component;
 use std::path::Path;
 use std::path::PathBuf;
 use tempfile::NamedTempFile;
@@ -130,6 +142,84 @@ pub fn write_atomically(write_path: &Path, contents: &str) -> io::Result<()> {
     std::fs::write(tmp.path(), contents)?;
     tmp.persist(write_path)?;
     Ok(())
+}
+
+/// Opens a file for writing without following symlinks in any path component.
+#[cfg(unix)]
+pub fn open_file_for_write_no_follow(path: &Path) -> io::Result<File> {
+    open_file_no_follow(
+        path,
+        libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC,
+        /*mode*/ 0o666,
+    )
+}
+
+#[cfg(unix)]
+fn open_file_no_follow(path: &Path, flags: libc::c_int, mode: libc::mode_t) -> io::Result<File> {
+    let components = path
+        .components()
+        .filter_map(|component| match component {
+            Component::RootDir | Component::CurDir => None,
+            Component::ParentDir => Some(Ok(std::ffi::OsStr::new(".."))),
+            Component::Normal(component) => Some(Ok(component)),
+            Component::Prefix(_) => Some(Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("unsupported path prefix in {}", path.display()),
+            ))),
+        })
+        .collect::<io::Result<Vec<_>>>()?;
+    let Some((file_name, parent_components)) = components.split_last() else {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("path {} does not name a file", path.display()),
+        ));
+    };
+
+    let mut current_dir = if path.is_absolute() {
+        File::open("/")?
+    } else {
+        File::open(".")?
+    };
+    for component in parent_components {
+        current_dir = openat(
+            &current_dir,
+            component,
+            libc::O_RDONLY | libc::O_CLOEXEC | libc::O_DIRECTORY | libc::O_NOFOLLOW,
+            /*mode*/ 0,
+        )?;
+    }
+    openat(
+        &current_dir,
+        file_name,
+        flags | libc::O_CLOEXEC | libc::O_NOFOLLOW,
+        mode,
+    )
+}
+
+#[cfg(unix)]
+fn openat(
+    directory: &File,
+    path: &std::ffi::OsStr,
+    flags: libc::c_int,
+    mode: libc::mode_t,
+) -> io::Result<File> {
+    let path = CString::new(path.as_bytes())
+        .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?;
+    // SAFETY: `path` is NUL-terminated, `directory` owns a valid fd, and the
+    // returned fd is transferred into a `File` exactly once.
+    let fd = unsafe {
+        libc::openat(
+            directory.as_raw_fd(),
+            path.as_ptr(),
+            flags,
+            libc::c_uint::from(mode),
+        )
+    };
+    if fd == -1 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: `openat` returned a new owned file descriptor.
+    Ok(unsafe { File::from_raw_fd(fd) })
 }
 
 fn normalize_for_wsl(path: PathBuf) -> PathBuf {

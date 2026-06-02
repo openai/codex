@@ -1,3 +1,5 @@
+#[cfg(unix)]
+use std::io::Write;
 use std::path::Path;
 
 use codex_app_server_protocol::ServerNotification;
@@ -41,8 +43,23 @@ pub(crate) fn handle_last_message(last_agent_message: Option<&str>, output_file:
 
 fn write_last_message_file(contents: &str, last_message_path: Option<&Path>) {
     if let Some(path) = last_message_path
-        && let Err(e) = std::fs::write(path, contents)
+        && let Err(e) = write_last_message_to_path(path, contents)
     {
         eprintln!("Failed to write last message file {path:?}: {e}");
     }
 }
+
+#[cfg(unix)]
+fn write_last_message_to_path(path: &Path, contents: &str) -> std::io::Result<()> {
+    let mut file = codex_utils_path::open_file_for_write_no_follow(path)?;
+    file.write_all(contents.as_bytes())
+}
+
+#[cfg(not(unix))]
+fn write_last_message_to_path(path: &Path, contents: &str) -> std::io::Result<()> {
+    std::fs::write(path, contents)
+}
+
+#[cfg(test)]
+#[path = "event_processor_tests.rs"]
+mod tests;
