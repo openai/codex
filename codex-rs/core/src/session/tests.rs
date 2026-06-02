@@ -5399,6 +5399,10 @@ async fn request_permissions_emits_event_when_granular_policy_allows_requests() 
         panic!("expected request_permissions event");
     };
     assert_eq!(request.call_id, call_id);
+    assert_eq!(
+        request.environment_id.as_deref(),
+        Some(codex_exec_server::LOCAL_ENVIRONMENT_ID)
+    );
     #[allow(deprecated)]
     let turn_cwd = turn_context.cwd.clone();
     assert_eq!(request.cwd, Some(turn_cwd));
@@ -5499,6 +5503,7 @@ async fn request_permissions_tool_resolves_relative_paths_against_selected_envir
         }),
         ..Default::default()
     };
+    assert_eq!(request.environment_id.as_deref(), Some("remote"));
     assert_eq!(request.permissions, expected_permissions);
 
     session
@@ -5616,6 +5621,10 @@ async fn request_permissions_response_materializes_session_cwd_grants_before_rec
     let EventMsg::RequestPermissions(request) = request_event.msg else {
         panic!("expected request_permissions event");
     };
+    assert_eq!(
+        request.environment_id.as_deref(),
+        Some(codex_exec_server::LOCAL_ENVIRONMENT_ID)
+    );
     let request_cwd = request.cwd.clone().expect("request cwd");
 
     session

@@ -835,6 +835,7 @@ fn sample_permissions_approval_request(request_id: i64) -> ServerRequest {
             thread_id: "thread-1".to_string(),
             turn_id: "turn-1".to_string(),
             item_id: "permissions-1".to_string(),
+            environment_id: None,
             started_at_ms: 1_000,
             cwd: test_path_buf("/tmp").abs(),
             reason: Some("need network".to_string()),

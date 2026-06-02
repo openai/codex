@@ -2251,6 +2251,7 @@ impl Session {
         let event = EventMsg::RequestPermissions(RequestPermissionsEvent {
             call_id: call_id.clone(),
             turn_id: turn_context.sub_id.clone(),
+            environment_id: Some(environment.environment_id.clone()),
             started_at_ms: now_unix_timestamp_ms(),
             reason: args.reason,
             permissions: requested_permissions,
@@ -2279,14 +2280,22 @@ impl Session {
         cwd: AbsolutePathBuf,
         cancellation_token: CancellationToken,
     ) -> Option<RequestPermissionsResponse> {
-        let Some(primary_environment) = turn_context.environments.primary() else {
+        let turn_environment = match args.environment_id.as_deref() {
+            Some(environment_id) => turn_context
+                .environments
+                .turn_environments
+                .iter()
+                .find(|environment| environment.environment_id == environment_id),
+            None => turn_context.environments.primary(),
+        };
+        let Some(turn_environment) = turn_environment else {
             return Some(RequestPermissionsResponse {
                 permissions: RequestPermissionProfile::default(),
                 scope: PermissionGrantScope::Turn,
                 strict_auto_review: false,
             });
         };
-        let mut environment = primary_environment.selection();
+        let mut environment = turn_environment.selection();
         environment.cwd = cwd;
         self.request_permissions_for_environment(
             turn_context,

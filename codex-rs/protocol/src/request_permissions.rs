@@ -79,6 +79,15 @@ pub struct RequestPermissionsEvent {
     /// Uses `#[serde(default)]` for backwards compatibility.
     #[serde(default)]
     pub turn_id: String,
+    #[serde(
+        default,
+        rename = "environmentId",
+        alias = "environment_id",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[ts(optional)]
+    #[ts(rename = "environmentId")]
+    pub environment_id: Option<String>,
     #[ts(type = "number")]
     pub started_at_ms: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
