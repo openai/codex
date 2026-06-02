@@ -266,8 +266,8 @@ use codex_backend_client::AddCreditsNudgeCreditType as BackendAddCreditsNudgeCre
 use codex_backend_client::Client as BackendClient;
 use codex_chatgpt::connectors;
 use codex_chatgpt::workspace_settings;
-use codex_config::CloudRequirementsLoadError;
-use codex_config::CloudRequirementsLoadErrorCode;
+use codex_config::CloudConfigBundleLoadError;
+use codex_config::CloudConfigBundleLoadErrorCode;
 use codex_config::ConfigLayerStack;
 use codex_config::loader::project_trust_key;
 use codex_config::types::McpServerTransportConfig;

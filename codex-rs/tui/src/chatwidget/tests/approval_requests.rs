@@ -281,6 +281,7 @@ fn app_server_request_permissions_preserves_file_system_permissions() {
         thread_id: "thread-1".to_string(),
         turn_id: "turn-1".to_string(),
         item_id: "item-1".to_string(),
+        environment_id: Some("remote".to_string()),
         started_at_ms: 0,
         cwd: cwd.clone(),
         reason: Some("Select a workspace root".to_string()),
@@ -310,6 +311,7 @@ fn app_server_request_permissions_preserves_file_system_permissions() {
         }
     );
     assert_eq!(request.cwd, Some(cwd));
+    assert_eq!(request.environment_id.as_deref(), Some("remote"));
 }
 
 #[tokio::test]

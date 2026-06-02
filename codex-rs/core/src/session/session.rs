@@ -9,8 +9,10 @@ use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSpecialPath;
+use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TurnEnvironmentSelection;
+use std::sync::OnceLock;
 use tokio::sync::Semaphore;
 
 /// Context for an initialized model agent
@@ -29,6 +31,7 @@ pub(crate) struct Session {
     /// The set of enabled features should be invariant for the lifetime of the
     /// session.
     pub(super) features: ManagedFeatures,
+    pub(super) multi_agent_version: OnceLock<MultiAgentVersion>,
     pub(super) pending_mcp_server_refresh_config: Mutex<Option<McpServerRefreshConfig>>,
     pub(crate) conversation: Arc<RealtimeConversationManager>,
     pub(crate) active_turn: Mutex<Option<ActiveTurn>>,
@@ -503,6 +506,7 @@ impl Session {
         thread_store: Arc<dyn ThreadStore>,
         parent_rollout_thread_trace: ThreadTraceContext,
         attestation_provider: Option<Arc<dyn AttestationProvider>>,
+        multi_agent_version: Option<MultiAgentVersion>,
     ) -> anyhow::Result<Arc<Self>> {
         debug!(
             "Configuring session: model={}; provider={:?}",
@@ -517,6 +521,8 @@ impl Session {
             .parent_thread_id
             .or_else(|| initial_history.get_resumed_parent_thread_id());
         session_configuration.parent_thread_id = parent_thread_id;
+        let multi_agent_version = multi_agent_version.map(OnceLock::from).unwrap_or_default();
+        let initial_multi_agent_version = multi_agent_version.get().copied();
 
         let thread_id = match &initial_history {
             InitialHistory::New | InitialHistory::Cleared | InitialHistory::Forked(_) => {
@@ -558,6 +564,7 @@ impl Session {
                                     text: session_configuration.base_instructions.clone(),
                                 },
                                 dynamic_tools: session_configuration.dynamic_tools.clone(),
+                                multi_agent_version: initial_multi_agent_version,
                                 metadata: ThreadPersistenceMetadata {
                                     cwd: Some(config.cwd.to_path_buf()),
                                     model_provider: config.model_provider_id.clone(),
@@ -1062,6 +1069,7 @@ impl Session {
                 state: Mutex::new(state),
                 managed_network_proxy_refresh_lock: Semaphore::new(/*permits*/ 1),
                 features: config.features.clone(),
+                multi_agent_version,
                 pending_mcp_server_refresh_config: Mutex::new(None),
                 conversation: Arc::new(RealtimeConversationManager::new()),
                 active_turn: Mutex::new(None),

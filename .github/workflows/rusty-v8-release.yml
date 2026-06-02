@@ -5,6 +5,11 @@ on:
     tags:
       - "rusty-v8-v*.*.*"
 
+# Cargo's libgit2 transport has been flaky when fetching git dependencies with
+# nested submodules. Prefer the system git CLI for Cargo smoke tests.
+env:
+  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+
 concurrency:
   group: ${{ github.workflow }}::${{ github.ref_name }}
   cancel-in-progress: false

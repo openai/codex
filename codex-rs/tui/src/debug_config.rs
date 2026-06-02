@@ -628,7 +628,7 @@ mod tests {
         let requirements = ConfigRequirements {
             approval_policy: ConstrainedWithSource::new(
                 Constrained::allow_any(AskForApproval::OnRequest.to_core()),
-                Some(RequirementSource::CloudRequirements),
+                Some(RequirementSource::LegacyManagedConfigTomlFromMdm),
             ),
             approvals_reviewer: ConstrainedWithSource::new(
                 Constrained::allow_any(ApprovalsReviewer::AutoReview),
@@ -653,25 +653,25 @@ mod tests {
             )),
             enforce_residency: ConstrainedWithSource::new(
                 Constrained::allow_any(Some(ResidencyRequirement::Us)),
-                Some(RequirementSource::CloudRequirements),
+                Some(RequirementSource::LegacyManagedConfigTomlFromMdm),
             ),
             web_search_mode: ConstrainedWithSource::new(
                 Constrained::allow_any(WebSearchMode::Cached),
-                Some(RequirementSource::CloudRequirements),
+                Some(RequirementSource::LegacyManagedConfigTomlFromMdm),
             ),
             allow_managed_hooks_only: Some(Sourced::new(
                 /*value*/ true,
-                RequirementSource::CloudRequirements,
+                RequirementSource::LegacyManagedConfigTomlFromMdm,
             )),
             allow_appshots: Some(Sourced::new(
                 /*value*/ false,
-                RequirementSource::CloudRequirements,
+                RequirementSource::LegacyManagedConfigTomlFromMdm,
             )),
             feature_requirements: Some(Sourced::new(
                 FeatureRequirementsToml {
                     entries: BTreeMap::from([("guardian_approval".to_string(), true)]),
                 },
-                RequirementSource::CloudRequirements,
+                RequirementSource::LegacyManagedConfigTomlFromMdm,
             )),
             network: Some(Sourced::new(
                 NetworkConstraints {
@@ -684,7 +684,7 @@ mod tests {
                     }),
                     ..Default::default()
                 },
-                RequirementSource::CloudRequirements,
+                RequirementSource::LegacyManagedConfigTomlFromMdm,
             )),
             filesystem: Some(Sourced::new(
                 FilesystemConstraints {
@@ -694,7 +694,7 @@ mod tests {
                     file: requirements_file.clone(),
                 },
             )),
-            guardian_policy_config_source: Some(RequirementSource::CloudRequirements),
+            guardian_policy_config_source: Some(RequirementSource::LegacyManagedConfigTomlFromMdm),
             ..ConfigRequirements::default()
         };
 
@@ -749,9 +749,10 @@ mod tests {
         .expect("config layer stack");
 
         let rendered = render_to_text(&render_debug_config_lines(&stack));
-        assert!(
-            rendered.contains("allowed_approval_policies: on-request (source: cloud requirements)")
-        );
+        let requirements_source = (RequirementSource::LegacyManagedConfigTomlFromMdm).to_string();
+        assert!(rendered.contains(&format!(
+            "allowed_approval_policies: on-request (source: {requirements_source})"
+        )));
         assert!(rendered.contains(
             "allowed_approvals_reviewers: guardian_subagent (source: MDM managed_config.toml (legacy))"
         ));
@@ -764,22 +765,28 @@ mod tests {
                 .as_str(),
             )
         );
-        assert!(
-            rendered.contains(
-                "allowed_web_search_modes: cached, disabled (source: cloud requirements)"
-            )
-        );
-        assert!(rendered.contains("allow_managed_hooks_only: true (source: cloud requirements)"));
-        assert!(rendered.contains("allow_appshots: false (source: cloud requirements)"));
-        assert!(
-            rendered.contains("guardian_policy_config: configured (source: cloud requirements)")
-        );
-        assert!(rendered.contains("features: guardian_approval=true (source: cloud requirements)"));
+        assert!(rendered.contains(&format!(
+            "allowed_web_search_modes: cached, disabled (source: {requirements_source})"
+        )));
+        assert!(rendered.contains(&format!(
+            "allow_managed_hooks_only: true (source: {requirements_source})"
+        )));
+        assert!(rendered.contains(&format!(
+            "allow_appshots: false (source: {requirements_source})"
+        )));
+        assert!(rendered.contains(&format!(
+            "guardian_policy_config: configured (source: {requirements_source})"
+        )));
+        assert!(rendered.contains(&format!(
+            "features: guardian_approval=true (source: {requirements_source})"
+        )));
         assert!(rendered.contains("mcp_servers: docs (source: MDM managed_config.toml (legacy))"));
-        assert!(rendered.contains("enforce_residency: us (source: cloud requirements)"));
-        assert!(rendered.contains(
-            "experimental_network: enabled=true, domains={example.com=allow} (source: cloud requirements)"
-        ));
+        assert!(rendered.contains(&format!(
+            "enforce_residency: us (source: {requirements_source})"
+        )));
+        assert!(rendered.contains(&format!(
+            "experimental_network: enabled=true, domains={{example.com=allow}} (source: {requirements_source})"
+        )));
         assert!(
             rendered.contains(
                 format!(
@@ -834,7 +841,7 @@ mod tests {
                     }),
                     ..Default::default()
                 },
-                RequirementSource::CloudRequirements,
+                RequirementSource::LegacyManagedConfigTomlFromMdm,
             )),
             ..ConfigRequirements::default()
         };
@@ -844,9 +851,10 @@ mod tests {
                 .expect("config layer stack");
 
         let rendered = render_to_text(&render_debug_config_lines(&stack));
-        assert!(rendered.contains(
-            "experimental_network: unix_sockets={/tmp/blocked.sock=deny, /tmp/codex.sock=allow} (source: cloud requirements)"
-        ));
+        let requirements_source = (RequirementSource::LegacyManagedConfigTomlFromMdm).to_string();
+        assert!(rendered.contains(&format!(
+            "experimental_network: unix_sockets={{/tmp/blocked.sock=deny, /tmp/codex.sock=allow}} (source: {requirements_source})"
+        )));
     }
 
     #[test]
@@ -956,7 +964,7 @@ approval_policy = "never"
         let requirements = ConfigRequirements {
             web_search_mode: ConstrainedWithSource::new(
                 Constrained::allow_any(WebSearchMode::Disabled),
-                Some(RequirementSource::CloudRequirements),
+                Some(RequirementSource::LegacyManagedConfigTomlFromMdm),
             ),
             ..ConfigRequirements::default()
         };
@@ -988,9 +996,10 @@ approval_policy = "never"
             .expect("config layer stack");
 
         let rendered = render_to_text(&render_debug_config_lines(&stack));
-        assert!(
-            rendered.contains("allowed_web_search_modes: disabled (source: cloud requirements)")
-        );
+        let requirements_source = (RequirementSource::LegacyManagedConfigTomlFromMdm).to_string();
+        assert!(rendered.contains(&format!(
+            "allowed_web_search_modes: disabled (source: {requirements_source})"
+        )));
     }
 
     #[test]
@@ -1018,7 +1027,7 @@ approval_policy = "never"
                         ..Default::default()
                     },
                 }),
-                Some(RequirementSource::CloudRequirements),
+                Some(RequirementSource::LegacyManagedConfigTomlFromMdm),
             )),
             ..ConfigRequirements::default()
         };
@@ -1033,9 +1042,10 @@ approval_policy = "never"
             .expect("config layer stack");
 
         let rendered = render_to_text(&render_debug_config_lines(&stack));
+        let requirements_source = (RequirementSource::LegacyManagedConfigTomlFromMdm).to_string();
         assert!(rendered.contains("hooks:"));
         assert!(rendered.contains("handlers=1"));
-        assert!(rendered.contains("(source: cloud requirements)"));
+        assert!(rendered.contains(&format!("(source: {requirements_source})")));
     }
 
     #[test]

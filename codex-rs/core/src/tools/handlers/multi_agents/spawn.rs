@@ -116,7 +116,6 @@ async fn handle_spawn_agent(
     )
     .await?;
     apply_spawn_agent_runtime_overrides(&mut config, turn.as_ref())?;
-    apply_spawn_agent_overrides(&mut config, child_depth);
 
     let result = Box::pin(session.services.agent_control.spawn_agent_with_metadata(
         config,
