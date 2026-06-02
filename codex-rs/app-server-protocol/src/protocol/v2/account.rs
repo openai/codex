@@ -36,6 +36,7 @@ impl From<ProviderAccount> for Account {
         match account {
             ProviderAccount::ApiKey => Self::ApiKey {},
             ProviderAccount::Chatgpt { email, plan_type } => Self::Chatgpt {
+                // Preserve the stable app-server wire type when PAT metadata omits email.
                 email: email.unwrap_or_default(),
                 plan_type,
             },
