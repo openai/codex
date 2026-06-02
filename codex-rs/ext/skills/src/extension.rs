@@ -18,17 +18,9 @@ use crate::providers::SkillProviders;
 use crate::state::SkillsExtensionConfig;
 use crate::state::SkillsTurnState;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 struct SkillsExtension {
     providers: SkillProviders,
-}
-
-impl Default for SkillsExtension {
-    fn default() -> Self {
-        Self {
-            providers: SkillProviders::default(),
-        }
-    }
 }
 
 #[async_trait::async_trait]

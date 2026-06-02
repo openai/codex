@@ -184,7 +184,6 @@ codex-lmstudio = { path = "lmstudio" }
 codex-login = { path = "login" }
 codex-message-history = { path = "message-history" }
 codex-memories-extension = { path = "ext/memories" }
-codex-skills-extension = { path = "ext/skills" }
 codex-web-search-extension = { path = "ext/web-search" }
 codex-memories-read = { path = "memories/read" }
 codex-memories-write = { path = "memories/write" }
