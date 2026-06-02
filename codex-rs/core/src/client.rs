@@ -62,6 +62,8 @@ use codex_api::build_session_headers;
 use codex_api::create_text_param_for_request;
 use codex_api::response_create_client_metadata;
 use codex_app_server_protocol::AuthMode;
+use codex_client::NativeIntegrityStateContext;
+use codex_client::NativeIntegritySurface;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_login::RefreshTokenError;
@@ -120,6 +122,7 @@ use codex_login::auth_env_telemetry::AuthEnvTelemetry;
 use codex_login::auth_env_telemetry::collect_auth_env_telemetry;
 use codex_model_provider::SharedModelProvider;
 use codex_model_provider::create_model_provider;
+use codex_model_provider::with_native_integrity_state;
 #[cfg(test)]
 use codex_model_provider_info::DEFAULT_WEBSOCKET_CONNECT_TIMEOUT_MS;
 use codex_model_provider_info::ModelProviderInfo;
@@ -180,6 +183,7 @@ struct ModelClientState {
     beta_features_header: Option<String>,
     include_attestation: bool,
     attestation_provider: Option<Arc<dyn AttestationProvider>>,
+    native_integrity_state: Option<NativeIntegrityStateContext>,
     disable_websockets: AtomicBool,
     cached_websocket_session: StdMutex<WebsocketSession>,
 }
@@ -329,6 +333,12 @@ impl ModelClient {
         beta_features_header: Option<String>,
         attestation_provider: Option<Arc<dyn AttestationProvider>>,
     ) -> Self {
+        let native_integrity_state = auth_manager.as_ref().map(|auth_manager| {
+            NativeIntegrityStateContext::new(
+                auth_manager.codex_home().to_path_buf(),
+                native_integrity_surface_for_session_source(&session_source),
+            )
+        });
         let model_provider = create_model_provider(provider_info, auth_manager);
         let codex_api_key_env_enabled = model_provider
             .auth_manager()
@@ -353,6 +363,7 @@ impl ModelClient {
                 beta_features_header,
                 include_attestation,
                 attestation_provider,
+                native_integrity_state,
                 disable_websockets: AtomicBool::new(false),
                 cached_websocket_session: StdMutex::new(WebsocketSession::default()),
             }),
@@ -388,6 +399,31 @@ impl ModelClient {
 
     pub(crate) fn auth_manager(&self) -> Option<Arc<AuthManager>> {
         self.state.provider.auth_manager()
+    }
+
+    pub(crate) fn set_app_server_client_name(&self, client_name: Option<&str>) {
+        let surface = client_name
+            .map(NativeIntegritySurface::from_app_server_client_name)
+            .unwrap_or(NativeIntegritySurface::CodexCli);
+        self.set_native_integrity_surface(surface);
+    }
+
+    pub(crate) fn native_integrity_surface(&self) -> Option<NativeIntegritySurface> {
+        self.state
+            .native_integrity_state
+            .as_ref()
+            .map(NativeIntegrityStateContext::surface)
+    }
+
+    pub(crate) fn set_native_integrity_surface(&self, surface: NativeIntegritySurface) {
+        if self
+            .state
+            .native_integrity_state
+            .as_ref()
+            .is_some_and(|state| state.set_surface(surface))
+        {
+            self.store_cached_websocket_session(WebsocketSession::default());
+        }
     }
 
     pub(crate) fn set_window_generation(&self, window_generation: u64) {
@@ -812,7 +848,11 @@ impl ModelClient {
     async fn current_client_setup(&self) -> Result<CurrentClientSetup> {
         let auth = self.state.provider.auth().await;
         let api_provider = self.state.provider.api_provider().await?;
-        let api_auth = self.state.provider.api_auth().await?;
+        let api_auth = with_native_integrity_state(
+            self.state.provider.api_auth().await?,
+            auth.as_ref(),
+            self.state.native_integrity_state.clone(),
+        );
         Ok(CurrentClientSetup {
             auth,
             api_provider,
@@ -1733,6 +1773,21 @@ fn subagent_header_value(session_source: &SessionSource) -> Option<String> {
         | SessionSource::Mcp
         | SessionSource::Custom(_)
         | SessionSource::Unknown => None,
+    }
+}
+
+fn native_integrity_surface_for_session_source(
+    session_source: &SessionSource,
+) -> NativeIntegritySurface {
+    match session_source {
+        SessionSource::Cli => NativeIntegritySurface::CodexTui,
+        SessionSource::Exec => NativeIntegritySurface::CodexExec,
+        SessionSource::VSCode => NativeIntegritySurface::CodexVscode,
+        SessionSource::SubAgent(_)
+        | SessionSource::Internal(_)
+        | SessionSource::Mcp
+        | SessionSource::Custom(_)
+        | SessionSource::Unknown => NativeIntegritySurface::CodexCli,
     }
 }
 

@@ -110,6 +110,17 @@ pub(crate) async fn run_codex_thread_interactive(
     }))
     .or_cancel(&cancel_token)
     .await??;
+    if let Some(surface) = parent_session
+        .services
+        .model_client
+        .native_integrity_surface()
+    {
+        codex
+            .session
+            .services
+            .model_client
+            .set_native_integrity_surface(surface);
+    }
     let thread_config = codex.thread_config_snapshot().await;
     let client_metadata = parent_session.app_server_client_metadata().await;
     emit_subagent_session_started(

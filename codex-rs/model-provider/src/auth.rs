@@ -5,6 +5,7 @@ use codex_agent_identity::AgentTaskAuthorizationTarget;
 use codex_agent_identity::authorization_header_for_agent_task;
 use codex_api::AuthProvider;
 use codex_api::SharedAuthProvider;
+use codex_client::NativeIntegrityStateContext;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderInfo;
@@ -12,6 +13,7 @@ use http::HeaderMap;
 use http::HeaderValue;
 
 use crate::bearer_auth_provider::BearerAuthProvider;
+use crate::bearer_auth_provider::NativeIntegrityAuthProvider;
 
 #[derive(Clone, Debug)]
 struct AgentIdentityAuthProvider {
@@ -117,6 +119,21 @@ pub fn auth_provider_from_auth(auth: &CodexAuth) -> SharedAuthProvider {
             })
         }
     }
+}
+
+/// Decorates first-party ChatGPT auth with native integrity-state transport.
+pub fn with_native_integrity_state(
+    auth_provider: SharedAuthProvider,
+    auth: Option<&CodexAuth>,
+    state: Option<NativeIntegrityStateContext>,
+) -> SharedAuthProvider {
+    let Some(state) = state else {
+        return auth_provider;
+    };
+    let Some(CodexAuth::Chatgpt(_) | CodexAuth::ChatgptAuthTokens(_)) = auth else {
+        return auth_provider;
+    };
+    Arc::new(NativeIntegrityAuthProvider::new(auth_provider, state))
 }
 
 #[cfg(test)]
