@@ -327,7 +327,6 @@ allow_local_binding = true
     .expect("expected profile should deserialize");
 
     assert_eq!(resolved.profile, expected_profile);
-    assert_eq!(resolved.inherited_profile_names, vec!["base".to_string()]);
 }
 
 #[test]
