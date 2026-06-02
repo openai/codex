@@ -1975,6 +1975,7 @@ mod cache_tests {
     use codex_config::CloudRequirementsFragment;
     use codex_config::CloudRequirementsTomlBundle;
     use pretty_assertions::assert_eq;
+    use std::path::Path;
     use tempfile::tempdir;
 
     fn test_bundle() -> CloudConfigBundle {

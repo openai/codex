@@ -455,15 +455,13 @@ approvals_reviewer = "user"
 "#,
     )
     .expect("write config");
-    let requirements = ConfigRequirementsToml {
-        allowed_approvals_reviewers: Some(vec![ApprovalsReviewer::AutoReview]),
-        ..Default::default()
-    };
     let config = ConfigBuilder::default()
         .codex_home(codex_home.path().to_path_buf())
-        .cloud_requirements(CloudRequirementsLoader::new(async move {
-            Ok(Some(requirements))
-        }))
+        .cloud_config_bundle(
+            CloudConfigBundleFixture::loader_with_enterprise_requirement(
+                r#"allowed_approvals_reviewers = ["auto_review"]"#,
+            ),
+        )
         .build()
         .await
         .expect("config should build");
