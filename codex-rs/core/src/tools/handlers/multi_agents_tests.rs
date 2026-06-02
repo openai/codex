@@ -52,6 +52,7 @@ use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::TurnCompleteEvent;
 use codex_protocol::user_input::UserInput;
+use codex_state::DirectionalThreadSpawnEdgeStatus;
 use core_test_support::TempDirExt;
 use pretty_assertions::assert_eq;
 use serde::Deserialize;
@@ -1477,7 +1478,9 @@ async fn multi_agent_v2_followup_task_rejects_root_target_from_child() {
 
     assert_eq!(
         err,
-        FunctionCallError::RespondToModel("Tasks can't be assigned to the root agent".to_string())
+        FunctionCallError::RespondToModel(
+            "Follow-up tasks can't target the root agent".to_string()
+        )
     );
     let root_ops = manager
         .captured_ops()
@@ -2592,6 +2595,7 @@ async fn send_input_accepts_structured_items() {
         ],
         final_output_json_schema: None,
         responsesapi_client_metadata: None,
+        additional_context: Default::default(),
         thread_settings: Default::default(),
     };
     let captured = manager
@@ -2703,7 +2707,6 @@ async fn resume_agent_restores_closed_agent_and_accepts_send_input() {
                 phase: None,
             })]),
             AuthManager::from_auth_for_testing(CodexAuth::from_api_key("dummy")),
-            /*persist_extended_history*/ false,
             /*parent_trace*/ None,
         )
         .await
@@ -3748,6 +3751,126 @@ async fn multi_agent_v2_close_agent_accepts_task_name_target() {
         manager.agent_control().get_status(agent_id).await,
         AgentStatus::NotFound
     );
+}
+
+#[tokio::test]
+async fn multi_agent_v2_close_agent_reaps_stale_task_name_target() {
+    let (mut session, mut turn) = make_session_and_context().await;
+    let mut config = (*turn.config).clone();
+    config.agent_max_threads = Some(1);
+    config
+        .features
+        .enable(Feature::MultiAgentV2)
+        .expect("test config should allow feature update");
+    config
+        .features
+        .enable(Feature::Sqlite)
+        .expect("test config should allow sqlite");
+    let state_db = init_state_db(&config)
+        .await
+        .expect("sqlite state db should initialize");
+    let manager = ThreadManager::with_models_provider_home_and_state_for_tests(
+        CodexAuth::from_api_key("dummy"),
+        config.model_provider.clone(),
+        config.codex_home.to_path_buf(),
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+        Some(state_db.clone()),
+    );
+    let root = manager
+        .start_thread(config.clone())
+        .await
+        .expect("root thread should start");
+    session.services.agent_control = manager.agent_control();
+    session.conversation_id = root.thread_id;
+    turn.config = Arc::new(config.clone());
+
+    let session = Arc::new(session);
+    let turn = Arc::new(turn);
+    SpawnAgentHandlerV2::default()
+        .handle(invocation(
+            session.clone(),
+            turn.clone(),
+            "spawn_agent",
+            function_payload(json!({
+                "message": "inspect this repo",
+                "task_name": "worker"
+            })),
+        ))
+        .await
+        .expect("spawn_agent should succeed");
+
+    let agent_id = session
+        .services
+        .agent_control
+        .resolve_agent_reference(session.conversation_id, &turn.session_source, "worker")
+        .await
+        .expect("worker path should resolve");
+    let stale_thread = manager
+        .remove_thread(&agent_id)
+        .await
+        .expect("worker thread should be loaded before removal");
+    stale_thread
+        .submit(Op::Shutdown {})
+        .await
+        .expect("removed worker thread should still accept shutdown");
+    stale_thread.wait_until_terminated().await;
+
+    let output = CloseAgentHandlerV2
+        .handle(invocation(
+            session.clone(),
+            turn.clone(),
+            "close_agent",
+            function_payload(json!({"target": "worker"})),
+        ))
+        .await
+        .expect("close_agent should reap stale v2 task names");
+    let (content, success) = expect_text_output(output);
+    let result: close_agent::CloseAgentResult =
+        serde_json::from_str(&content).expect("close_agent result should be json");
+    assert_eq!(result.previous_status, AgentStatus::NotFound);
+    assert_eq!(success, Some(true));
+
+    let open_children = state_db
+        .list_thread_spawn_children_with_status(
+            root.thread_id,
+            DirectionalThreadSpawnEdgeStatus::Open,
+        )
+        .await
+        .expect("open children should load");
+    assert_eq!(open_children, Vec::<ThreadId>::new());
+    let closed_children = state_db
+        .list_thread_spawn_children_with_status(
+            root.thread_id,
+            DirectionalThreadSpawnEdgeStatus::Closed,
+        )
+        .await
+        .expect("closed children should load");
+    assert_eq!(closed_children, vec![agent_id]);
+
+    SpawnAgentHandlerV2::default()
+        .handle(invocation(
+            session.clone(),
+            turn.clone(),
+            "spawn_agent",
+            function_payload(json!({
+                "message": "inspect this repo again",
+                "task_name": "replacement"
+            })),
+        ))
+        .await
+        .expect("spawn_agent should succeed after stale close releases the slot");
+    let replacement_id = session
+        .services
+        .agent_control
+        .resolve_agent_reference(session.conversation_id, &turn.session_source, "replacement")
+        .await
+        .expect("replacement path should resolve");
+    let _ = session
+        .services
+        .agent_control
+        .shutdown_live_agent(replacement_id)
+        .await
+        .expect("replacement should shut down");
 }
 
 #[tokio::test]

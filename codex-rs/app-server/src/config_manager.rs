@@ -1,5 +1,5 @@
 use codex_arg0::Arg0DispatchPaths;
-use codex_cloud_requirements::cloud_requirements_loader;
+use codex_cloud_config::cloud_requirements_loader;
 use codex_config::CloudRequirementsLoader;
 use codex_config::ConfigLayerStack;
 use codex_config::LoaderOverrides;

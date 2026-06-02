@@ -11,12 +11,18 @@ use crate::ExecutorFileSystem;
 use crate::RemoveOptions;
 use crate::local_file_system::LocalFileSystem;
 use crate::protocol::FS_WRITE_FILE_METHOD;
+use crate::protocol::FsCanonicalizeParams;
+use crate::protocol::FsCanonicalizeResponse;
 use crate::protocol::FsCopyParams;
 use crate::protocol::FsCopyResponse;
 use crate::protocol::FsCreateDirectoryParams;
 use crate::protocol::FsCreateDirectoryResponse;
 use crate::protocol::FsGetMetadataParams;
 use crate::protocol::FsGetMetadataResponse;
+use crate::protocol::FsJoinParams;
+use crate::protocol::FsJoinResponse;
+use crate::protocol::FsParentParams;
+use crate::protocol::FsParentResponse;
 use crate::protocol::FsReadDirectoryEntry;
 use crate::protocol::FsReadDirectoryParams;
 use crate::protocol::FsReadDirectoryResponse;
@@ -104,6 +110,42 @@ impl FileSystemHandler {
             created_at_ms: metadata.created_at_ms,
             modified_at_ms: metadata.modified_at_ms,
         })
+    }
+
+    pub(crate) async fn canonicalize(
+        &self,
+        params: FsCanonicalizeParams,
+    ) -> Result<FsCanonicalizeResponse, JSONRPCErrorError> {
+        let path = self
+            .file_system
+            .canonicalize(&params.path, params.sandbox.as_ref())
+            .await
+            .map_err(map_fs_error)?;
+        Ok(FsCanonicalizeResponse { path })
+    }
+
+    pub(crate) async fn join(
+        &self,
+        params: FsJoinParams,
+    ) -> Result<FsJoinResponse, JSONRPCErrorError> {
+        let path = self
+            .file_system
+            .join(&params.base_path, &params.path)
+            .await
+            .map_err(map_fs_error)?;
+        Ok(FsJoinResponse { path })
+    }
+
+    pub(crate) async fn parent(
+        &self,
+        params: FsParentParams,
+    ) -> Result<FsParentResponse, JSONRPCErrorError> {
+        let path = self
+            .file_system
+            .parent(&params.path)
+            .await
+            .map_err(map_fs_error)?;
+        Ok(FsParentResponse { path })
     }
 
     pub(crate) async fn read_directory(

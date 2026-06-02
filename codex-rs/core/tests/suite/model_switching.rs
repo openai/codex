@@ -48,6 +48,7 @@ fn read_only_user_turn(test: &TestCodex, items: Vec<UserInput>, model: String) -
         environments: None,
         final_output_json_schema: None,
         responsesapi_client_metadata: None,
+        additional_context: Default::default(),
         thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
             cwd: Some(test.cwd_path().to_path_buf()),
             approval_policy: Some(AskForApproval::Never),
@@ -111,6 +112,8 @@ fn test_model_info(
         input_modalities,
         used_fallback_model_metadata: false,
         supports_search_tool: false,
+        auto_review_model_override: None,
+        tool_mode: None,
         priority: 1,
         additional_speed_tiers: Vec::new(),
         service_tiers: Vec::new(),
@@ -554,19 +557,6 @@ async fn model_change_from_image_to_text_strips_prior_image_content() -> Result<
             .any(|text| text == "image content omitted because you do not support image input"),
         "second request should include the image-omitted placeholder text"
     );
-    assert!(
-        second_user_texts
-            .iter()
-            .any(|text| text == &codex_protocol::models::image_open_tag_text()),
-        "second request should preserve the image open tag text"
-    );
-    assert!(
-        second_user_texts
-            .iter()
-            .any(|text| text == &codex_protocol::models::image_close_tag_text()),
-        "second request should preserve the image close tag text"
-    );
-
     Ok(())
 }
 
@@ -941,6 +931,8 @@ async fn model_switch_to_smaller_model_updates_token_context_window() -> Result<
         input_modalities: default_input_modalities(),
         used_fallback_model_metadata: false,
         supports_search_tool: false,
+        auto_review_model_override: None,
+        tool_mode: None,
         priority: 1,
         additional_speed_tiers: Vec::new(),
         service_tiers: Vec::new(),

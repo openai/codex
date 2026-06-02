@@ -9,7 +9,6 @@ use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::ToolExecutor;
 use crate::tools::registry::ToolExposure;
-use crate::tools::tool_search_entry::ToolSearchInfo;
 use crate::turn_timing::now_unix_timestamp_ms;
 use codex_protocol::dynamic_tools::DynamicToolCallRequest;
 use codex_protocol::dynamic_tools::DynamicToolResponse;
@@ -20,6 +19,7 @@ use codex_protocol::protocol::EventMsg;
 use codex_tools::ResponsesApiNamespace;
 use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::ToolName;
+use codex_tools::ToolSearchInfo;
 use codex_tools::ToolSearchSourceInfo;
 use codex_tools::ToolSpec;
 use codex_tools::default_namespace_description;
@@ -75,6 +75,17 @@ impl ToolExecutor<ToolInvocation> for DynamicToolHandler {
         self.exposure
     }
 
+    fn search_info(&self) -> Option<ToolSearchInfo> {
+        ToolSearchInfo::from_spec(
+            self.search_text.clone(),
+            self.spec(),
+            Some(ToolSearchSourceInfo {
+                name: "Dynamic tools".to_string(),
+                description: Some("Tools provided by the current Codex thread.".to_string()),
+            }),
+        )
+    }
+
     async fn handle(
         &self,
         invocation: ToolInvocation,
@@ -126,18 +137,7 @@ impl ToolExecutor<ToolInvocation> for DynamicToolHandler {
     }
 }
 
-impl CoreToolRuntime for DynamicToolHandler {
-    fn search_info(&self) -> Option<ToolSearchInfo> {
-        ToolSearchInfo::from_spec(
-            self.search_text.clone(),
-            self.spec(),
-            Some(ToolSearchSourceInfo {
-                name: "Dynamic tools".to_string(),
-                description: Some("Tools provided by the current Codex thread.".to_string()),
-            }),
-        )
-    }
-}
+impl CoreToolRuntime for DynamicToolHandler {}
 
 #[expect(
     clippy::await_holding_invalid_type,

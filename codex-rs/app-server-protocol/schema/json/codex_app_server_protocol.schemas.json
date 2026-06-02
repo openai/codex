@@ -716,6 +716,30 @@
             },
             "method": {
               "enum": [
+                "skills/extraRoots/set"
+              ],
+              "title": "Skills/extraRoots/setRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/SkillsExtraRootsSetParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Skills/extraRoots/setRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
                 "hooks/list"
               ],
               "title": "Hooks/listRequestMethod",
@@ -5768,6 +5792,28 @@
         ],
         "type": "string"
       },
+      "AdditionalContextEntry": {
+        "properties": {
+          "kind": {
+            "$ref": "#/definitions/v2/AdditionalContextKind"
+          },
+          "value": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "value"
+        ],
+        "type": "object"
+      },
+      "AdditionalContextKind": {
+        "enum": [
+          "untrusted",
+          "application"
+        ],
+        "type": "string"
+      },
       "AdditionalFileSystemPermissions": {
         "properties": {
           "entries": {
@@ -7558,6 +7604,33 @@
             "type": "object"
           },
           {
+            "description": "Enterprise-managed config layer delivered by the cloud config bundle.",
+            "properties": {
+              "id": {
+                "description": "Stable identifier for the delivered layer.",
+                "type": "string"
+              },
+              "name": {
+                "description": "Admin-facing name for the delivered layer. This is surfaced in diagnostics so users know which cloud layer needs administrator attention.",
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "enterpriseManaged"
+                ],
+                "title": "EnterpriseManagedConfigLayerSourceType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "type"
+            ],
+            "title": "EnterpriseManagedConfigLayerSource",
+            "type": "object"
+          },
+          {
             "description": "User config layer from $CODEX_HOME/config.toml. This layer is special in that it is expected to be: - writable by the user - generally outside the workspace directory",
             "properties": {
               "file": {
@@ -7757,6 +7830,15 @@
           "allowedWebSearchModes": {
             "items": {
               "$ref": "#/definitions/v2/WebSearchMode"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "allowedWindowsSandboxImplementations": {
+            "items": {
+              "$ref": "#/definitions/v2/WindowsSandboxSetupMode"
             },
             "type": [
               "array",
@@ -10036,6 +10118,7 @@
           "sessionFlags",
           "plugin",
           "cloudRequirements",
+          "cloudManagedConfig",
           "legacyManagedConfigFile",
           "legacyManagedConfigMdm",
           "unknown"
@@ -10138,6 +10221,8 @@
       },
       "ImageDetail": {
         "enum": [
+          "auto",
+          "low",
           "high",
           "original"
         ],
@@ -10940,6 +11025,47 @@
         "title": "McpResourceReadResponse",
         "type": "object"
       },
+      "McpServerInfo": {
+        "description": "Presentation metadata advertised by an initialized MCP server.",
+        "properties": {
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "icons": {
+            "items": true,
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "version": {
+            "type": "string"
+          },
+          "websiteUrl": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "version"
+        ],
+        "type": "object"
+      },
       "McpServerMigration": {
         "properties": {
           "name": {
@@ -11049,6 +11175,16 @@
               "$ref": "#/definitions/v2/Resource"
             },
             "type": "array"
+          },
+          "serverInfo": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/McpServerInfo"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "tools": {
             "additionalProperties": {
@@ -11770,7 +11906,7 @@
       "NetworkUnixSocketPermission": {
         "enum": [
           "allow",
-          "none"
+          "deny"
         ],
         "type": "string"
       },
@@ -15046,6 +15182,27 @@
         "title": "SkillsConfigWriteResponse",
         "type": "object"
       },
+      "SkillsExtraRootsSetParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "extraRoots": {
+            "items": {
+              "$ref": "#/definitions/v2/AbsolutePathBuf"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "extraRoots"
+        ],
+        "title": "SkillsExtraRootsSetParams",
+        "type": "object"
+      },
+      "SkillsExtraRootsSetResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "SkillsExtraRootsSetResponse",
+        "type": "object"
+      },
       "SkillsListEntry": {
         "properties": {
           "cwd": {
@@ -15351,6 +15508,13 @@
           },
           "name": {
             "description": "Optional user-facing thread title.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "parentThreadId": {
+            "description": "The ID of the parent thread. This will only be set if this thread is a subagent.",
             "type": [
               "string",
               "null"
@@ -15921,6 +16085,12 @@
         "oneOf": [
           {
             "properties": {
+              "clientId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "content": {
                 "items": {
                   "$ref": "#/definitions/v2/UserInput"
@@ -17126,6 +17296,42 @@
         "title": "ThreadRealtimeTranscriptDoneNotification",
         "type": "object"
       },
+      "ThreadResumeInitialTurnsPageParams": {
+        "properties": {
+          "itemsView": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/TurnItemsView"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "How much item detail to include for each returned turn; defaults to summary."
+          },
+          "limit": {
+            "description": "Optional turn page size.",
+            "format": "uint32",
+            "minimum": 0.0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "sortDirection": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/SortDirection"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional turn pagination direction; defaults to descending."
+          }
+        },
+        "type": "object"
+      },
       "ThreadResumeParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "description": "There are three ways to resume a thread: 1. By thread_id: load the thread from disk by thread_id and resume it. 2. By history: instantiate the thread from memory and resume it. 3. By path: load the thread from disk by path and resume it.\n\nFor non-running threads, the precedence is: history > non-empty path > thread_id. If using history or a non-empty path for a non-running thread, the thread_id param will be ignored.\n\nIf thread_id identifies a running thread, app-server rejoins that thread and treats a non-empty path as a consistency check against the active rollout path. Empty string path values are treated as absent.\n\nPrefer using thread_id whenever possible.",
@@ -18302,6 +18508,12 @@
             ],
             "description": "Override where approval requests are routed for review on this turn and subsequent turns."
           },
+          "clientUserMessageId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "cwd": {
             "description": "Override the working directory for this turn and subsequent turns.",
             "type": [
@@ -18429,6 +18641,12 @@
       "TurnSteerParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
+          "clientUserMessageId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "expectedTurnId": {
             "description": "Required active turn id precondition. The request fails when it does not match the currently active turn.",
             "type": "string"
@@ -18462,6 +18680,32 @@
           "turnId"
         ],
         "title": "TurnSteerResponse",
+        "type": "object"
+      },
+      "TurnsPage": {
+        "properties": {
+          "backwardsCursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "data": {
+            "items": {
+              "$ref": "#/definitions/v2/Turn"
+            },
+            "type": "array"
+          },
+          "nextCursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "data"
+        ],
         "type": "object"
       },
       "UserInput": {

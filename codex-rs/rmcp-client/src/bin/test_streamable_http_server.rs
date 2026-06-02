@@ -11,12 +11,14 @@ use axum::body::Body;
 use axum::extract::Json;
 use axum::extract::State;
 use axum::http::HeaderMap;
+use axum::http::HeaderValue;
 use axum::http::Method;
 use axum::http::Request;
 use axum::http::StatusCode;
 use axum::http::header::AUTHORIZATION;
 use axum::http::header::CONTENT_TYPE;
 use axum::http::header::HOST;
+use axum::http::header::WWW_AUTHENTICATE;
 use axum::middleware;
 use axum::middleware::Next;
 use axum::response::Response;
@@ -72,12 +74,17 @@ struct SessionFailureState {
 struct ArmedFailure {
     status: StatusCode,
     remaining: usize,
+    /// Raw `WWW-Authenticate` challenge header field values returned with the failure.
+    www_authenticate_headers: Vec<HeaderValue>,
 }
 
 #[derive(Debug, Deserialize)]
 struct ArmSessionPostFailureRequest {
     status: u16,
     remaining: usize,
+    /// Raw `WWW-Authenticate` challenge header field values to add to the failure.
+    #[serde(default)]
+    www_authenticate_headers: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -174,14 +181,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 impl ServerHandler for TestToolServer {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            capabilities: ServerCapabilities::builder()
+        ServerInfo::new(
+            ServerCapabilities::builder()
                 .enable_tools()
                 .enable_tool_list_changed()
                 .enable_resources()
                 .build(),
-            ..ServerInfo::default()
-        }
+        )
     }
 
     fn list_tools(
@@ -232,14 +238,14 @@ impl ServerHandler for TestToolServer {
         _context: rmcp::service::RequestContext<rmcp::service::RoleServer>,
     ) -> Result<ReadResourceResult, McpError> {
         if uri == MEMO_URI {
-            Ok(ReadResourceResult {
-                contents: vec![ResourceContents::TextResourceContents {
+            Ok(ReadResourceResult::new(vec![
+                ResourceContents::TextResourceContents {
                     uri,
                     mime_type: Some("text/plain".to_string()),
                     text: Self::memo_text().to_string(),
                     meta: None,
-                }],
-            })
+                },
+            ]))
         } else {
             Err(McpError::resource_not_found(
                 "resource_not_found",
@@ -274,12 +280,9 @@ impl ServerHandler for TestToolServer {
                     "env": env_snapshot.get("MCP_TEST_VALUE"),
                 });
 
-                Ok(CallToolResult {
-                    content: Vec::new(),
-                    structured_content: Some(structured_content),
-                    is_error: Some(false),
-                    meta: None,
-                })
+                let mut result = CallToolResult::success(Vec::new());
+                result.structured_content = Some(structured_content);
+                Ok(result)
             }
             other => Err(McpError::invalid_params(
                 format!("unknown tool: {other}"),
@@ -405,12 +408,18 @@ async fn arm_session_post_failure(
     Json(request): Json<ArmSessionPostFailureRequest>,
 ) -> Result<StatusCode, StatusCode> {
     let status = StatusCode::from_u16(request.status).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let www_authenticate_headers = request
+        .www_authenticate_headers
+        .into_iter()
+        .map(|value| HeaderValue::from_str(&value).map_err(|_| StatusCode::BAD_REQUEST))
+        .collect::<Result<Vec<_>, _>>()?;
     let armed_failure = if request.remaining == 0 {
         None
     } else {
         Some(ArmedFailure {
             status,
             remaining: request.remaining,
+            www_authenticate_headers,
         })
     };
     *state.armed_failure.lock().await = armed_failure;
@@ -436,6 +445,7 @@ async fn fail_session_post_when_armed(
         {
             failure.remaining -= 1;
             let status = failure.status;
+            let www_authenticate_headers = failure.www_authenticate_headers.clone();
             if failure.remaining == 0 {
                 *armed_failure = None;
             }
@@ -443,6 +453,11 @@ async fn fail_session_post_when_armed(
                 "forced session failure with status {status}"
             )));
             *response.status_mut() = status;
+            for www_authenticate_header in www_authenticate_headers {
+                response
+                    .headers_mut()
+                    .append(WWW_AUTHENTICATE, www_authenticate_header);
+            }
             return response;
         }
     }

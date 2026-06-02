@@ -1,7 +1,7 @@
 use anyhow::Result;
 use anyhow::bail;
 use app_test_support::ChatGptAuthFixture;
-use app_test_support::McpProcess;
+use app_test_support::TestAppServer;
 use app_test_support::to_response;
 use app_test_support::write_chatgpt_auth;
 use codex_app_server_protocol::AttestationGenerateResponse;
@@ -76,7 +76,8 @@ async fn attestation_generate_round_trip_adds_header_to_responses_websocket_hand
         AuthCredentialsStoreMode::File,
     )?;
 
-    let mut mcp = McpProcess::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+    let mut mcp =
+        TestAppServer::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
     let initialized = timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.initialize_with_capabilities(
@@ -110,6 +111,7 @@ async fn attestation_generate_round_trip_adds_header_to_responses_websocket_hand
     let turn_request_id = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id,
+            client_user_message_id: None,
             input: vec![V2UserInput::Text {
                 text: "Hello".to_string(),
                 text_elements: Vec::new(),

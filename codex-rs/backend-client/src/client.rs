@@ -1,4 +1,5 @@
 use crate::types::CodeTaskDetailsResponse;
+use crate::types::ConfigBundleResponse;
 use crate::types::ConfigFileResponse;
 use crate::types::ListCredentialRoutesResponse;
 use crate::types::PaginatedListTaskListItem;
@@ -421,6 +422,23 @@ impl Client {
             PathStyle::CodexApi => format!("{}/api/codex/credential_routes/proxy", self.base_url),
             PathStyle::ChatGptApi => format!("{}/ps/credential_routes/proxy", self.base_url),
         }
+    }
+
+    /// Fetch the selected cloud-managed config bundle from codex-backend.
+    ///
+    /// `GET /api/codex/config/bundle` (Codex API style) or
+    /// `GET /wham/config/bundle` (ChatGPT backend-api style).
+    pub async fn get_config_bundle(
+        &self,
+    ) -> std::result::Result<ConfigBundleResponse, RequestError> {
+        let url = match self.path_style {
+            PathStyle::CodexApi => format!("{}/api/codex/config/bundle", self.base_url),
+            PathStyle::ChatGptApi => format!("{}/wham/config/bundle", self.base_url),
+        };
+        let req = self.http.get(&url).headers(self.headers());
+        let (body, ct) = self.exec_request_detailed(req, "GET", &url).await?;
+        self.decode_json::<ConfigBundleResponse>(&url, &ct, &body)
+            .map_err(RequestError::from)
     }
 
     /// Create a new task (user turn) by POSTing to the appropriate backend path

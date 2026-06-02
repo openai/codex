@@ -1400,6 +1400,77 @@ async fn apps_popup_stays_loading_until_final_snapshot_updates() {
 }
 
 #[tokio::test]
+async fn apps_notification_update_excludes_inaccessible_apps_from_mentions() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    set_chatgpt_auth(&mut chat);
+    chat.config
+        .features
+        .enable(Feature::Apps)
+        .expect("test config should allow feature update");
+    chat.bottom_pane.set_connectors_enabled(/*enabled*/ true);
+    chat.bottom_pane
+        .set_composer_text("$".to_string(), Vec::new(), Vec::new());
+
+    chat.on_connectors_loaded(
+        Ok(ConnectorsSnapshot {
+            connectors: vec![
+                AppInfo {
+                    id: "google_drive".to_string(),
+                    name: "Google Drive".to_string(),
+                    description: Some("Connected files".to_string()),
+                    logo_url: None,
+                    logo_url_dark: None,
+                    distribution_channel: None,
+                    branding: None,
+                    app_metadata: None,
+                    labels: None,
+                    install_url: Some("https://example.test/google-drive".to_string()),
+                    is_accessible: true,
+                    is_enabled: true,
+                    plugin_display_names: Vec::new(),
+                },
+                AppInfo {
+                    id: "arabica_uae".to_string(),
+                    name: "% Arabica UAE".to_string(),
+                    description: Some("Directory-only app".to_string()),
+                    logo_url: None,
+                    logo_url_dark: None,
+                    distribution_channel: None,
+                    branding: None,
+                    app_metadata: None,
+                    labels: None,
+                    install_url: Some("https://example.test/arabica".to_string()),
+                    is_accessible: false,
+                    is_enabled: true,
+                    plugin_display_names: Vec::new(),
+                },
+            ],
+        }),
+        /*is_final*/ false,
+    );
+
+    assert_matches!(
+        &chat.connectors.partial_snapshot,
+        Some(snapshot)
+            if snapshot
+                .connectors
+                .iter()
+                .find(|connector| connector.id == "arabica_uae")
+                .is_some_and(|connector| !connector.is_accessible)
+    );
+
+    let popup = render_bottom_popup(&chat, /*width*/ 80);
+    assert!(
+        popup.contains("Google Drive"),
+        "expected accessible apps to appear in the mention popup, got:\n{popup}"
+    );
+    assert!(
+        !popup.contains("% Arabica UAE"),
+        "did not expect an inaccessible directory app in the mention popup, got:\n{popup}"
+    );
+}
+
+#[tokio::test]
 async fn apps_refresh_failure_keeps_existing_full_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     set_chatgpt_auth(&mut chat);
@@ -2129,7 +2200,7 @@ async fn memories_settings_popup_snapshot() {
 
     chat.open_memories_popup();
 
-    let popup = render_bottom_popup(&chat, /*width*/ 80);
+    let popup = strip_osc8_for_snapshot(&render_bottom_popup(&chat, /*width*/ 80));
     assert_chatwidget_snapshot!("memories_settings_popup", popup);
 }
 
@@ -2550,6 +2621,7 @@ async fn feedback_upload_consent_popup_snapshot() {
         crate::app_event::FeedbackCategory::Bug,
         chat.current_rollout_path.clone(),
         Some("auto-review-rollout-thread-1.jsonl".to_string()),
+        /*include_windows_sandbox_log*/ true,
         &codex_feedback::FeedbackDiagnostics::new(vec![codex_feedback::FeedbackDiagnostic {
             headline: "Proxy environment variables are set and may affect connectivity."
                 .to_string(),
@@ -2570,6 +2642,7 @@ async fn feedback_good_result_consent_popup_includes_connectivity_diagnostics_fi
         crate::app_event::FeedbackCategory::GoodResult,
         chat.current_rollout_path.clone(),
         Some("auto-review-rollout-thread-1.jsonl".to_string()),
+        /*include_windows_sandbox_log*/ false,
         &codex_feedback::FeedbackDiagnostics::new(vec![codex_feedback::FeedbackDiagnostic {
             headline: "Proxy environment variables are set and may affect connectivity."
                 .to_string(),

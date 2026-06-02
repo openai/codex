@@ -108,6 +108,8 @@ pub struct Thread {
     pub session_id: String,
     /// Source thread id when this thread was created by forking another thread.
     pub forked_from_id: Option<String>,
+    /// The ID of the parent thread. This will only be set if this thread is a subagent.
+    pub parent_thread_id: Option<String>,
     /// Usually the first user message in the thread, if available.
     pub preview: String,
     /// Whether the thread is ephemeral and should not be materialized on disk.

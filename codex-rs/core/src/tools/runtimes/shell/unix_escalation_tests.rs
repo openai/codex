@@ -66,6 +66,23 @@ fn read_only_file_system_sandbox_policy() -> FileSystemSandboxPolicy {
     }])
 }
 
+fn denied_read_file_system_sandbox_policy() -> FileSystemSandboxPolicy {
+    FileSystemSandboxPolicy::restricted(vec![
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Special {
+                value: FileSystemSpecialPath::Root,
+            },
+            access: FileSystemAccessMode::Read,
+        },
+        FileSystemSandboxEntry {
+            path: FileSystemPath::GlobPattern {
+                pattern: "**/*.env".to_string(),
+            },
+            access: FileSystemAccessMode::Deny,
+        },
+    ])
+}
+
 fn test_sandbox_cwd() -> AbsolutePathBuf {
     AbsolutePathBuf::try_from(host_absolute_path(&["workspace"])).unwrap()
 }
@@ -289,11 +306,13 @@ fn shell_request_escalation_execution_is_explicit() {
         &file_system_sandbox_policy,
         network_sandbox_policy,
     );
+    let read_only_file_system_policy = read_only_file_system_sandbox_policy();
 
     assert_eq!(
         CoreShellActionProvider::shell_request_escalation_execution(
             crate::sandboxing::SandboxPermissions::UseDefault,
             &permission_profile,
+            &file_system_sandbox_policy,
             /*additional_permissions*/ None,
         ),
         EscalationExecution::TurnDefault,
@@ -302,14 +321,25 @@ fn shell_request_escalation_execution_is_explicit() {
         CoreShellActionProvider::shell_request_escalation_execution(
             crate::sandboxing::SandboxPermissions::RequireEscalated,
             &permission_profile,
+            &read_only_file_system_policy,
             /*additional_permissions*/ None,
         ),
         EscalationExecution::Unsandboxed,
     );
     assert_eq!(
         CoreShellActionProvider::shell_request_escalation_execution(
+            crate::sandboxing::SandboxPermissions::RequireEscalated,
+            &permission_profile,
+            &file_system_sandbox_policy,
+            /*additional_permissions*/ None,
+        ),
+        EscalationExecution::TurnDefault,
+    );
+    assert_eq!(
+        CoreShellActionProvider::shell_request_escalation_execution(
             crate::sandboxing::SandboxPermissions::WithAdditionalPermissions,
             &permission_profile,
+            &file_system_sandbox_policy,
             Some(&requested_permissions),
         ),
         EscalationExecution::Permissions(EscalationPermissions::ResolvedPermissionProfile(
@@ -612,6 +642,102 @@ host_executable(name = "git", paths = ["{git_path_literal}"])
         &evaluation.matched_rules,
         evaluation.decision
     ));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn denied_reads_keep_prefix_rule_allow_inside_sandbox() -> anyhow::Result<()> {
+    let cat_path = host_absolute_path(&["usr", "bin", "cat"]);
+    let cat_path_literal = starlark_string(&cat_path);
+    let policy_src = format!(
+        r#"
+prefix_rule(pattern = ["{cat_path_literal}"], decision = "allow")
+"#
+    );
+    let mut parser = PolicyParser::new();
+    parser.parse("test.rules", &policy_src).unwrap();
+    let policy = parser.build();
+
+    let (session, turn_context) = make_session_and_context().await;
+    let file_system_sandbox_policy = denied_read_file_system_sandbox_policy();
+    let permission_profile = PermissionProfile::from_runtime_permissions(
+        &file_system_sandbox_policy,
+        NetworkSandboxPolicy::Restricted,
+    );
+    let workdir = test_sandbox_cwd();
+    let provider = CoreShellActionProvider {
+        policy: Arc::new(RwLock::new(policy)),
+        session: Arc::new(session),
+        turn: Arc::new(turn_context),
+        call_id: "deny-read-prefix-allow".to_string(),
+        tool_name: GuardianCommandSource::Shell,
+        approval_policy: AskForApproval::OnRequest,
+        permission_profile,
+        file_system_sandbox_policy,
+        sandbox_policy_cwd: workdir.clone(),
+        sandbox_permissions: SandboxPermissions::UseDefault,
+        approval_sandbox_permissions: SandboxPermissions::UseDefault,
+        prompt_permissions: None,
+        stopwatch: codex_shell_escalation::Stopwatch::new(Duration::from_secs(1)),
+    };
+
+    let action = codex_shell_escalation::EscalationPolicy::determine_action(
+        &provider,
+        &AbsolutePathBuf::try_from(cat_path).unwrap(),
+        &["cat".to_string(), "/tmp/visible.txt".to_string()],
+        &workdir,
+    )
+    .await?;
+
+    assert_eq!(action, codex_shell_escalation::EscalationDecision::Run);
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn denied_reads_keep_granular_sandbox_rejection_for_escalation() -> anyhow::Result<()> {
+    let (session, turn_context) = make_session_and_context().await;
+    let file_system_sandbox_policy = denied_read_file_system_sandbox_policy();
+    let permission_profile = PermissionProfile::from_runtime_permissions(
+        &file_system_sandbox_policy,
+        NetworkSandboxPolicy::Restricted,
+    );
+    let workdir = test_sandbox_cwd();
+    let provider = CoreShellActionProvider {
+        policy: Arc::new(RwLock::new(PolicyParser::new().build())),
+        session: Arc::new(session),
+        turn: Arc::new(turn_context),
+        call_id: "deny-read-granular-sandbox-reject".to_string(),
+        tool_name: GuardianCommandSource::Shell,
+        approval_policy: AskForApproval::Granular(GranularApprovalConfig {
+            sandbox_approval: false,
+            rules: true,
+            skill_approval: true,
+            request_permissions: true,
+            mcp_elicitations: true,
+        }),
+        permission_profile,
+        file_system_sandbox_policy,
+        sandbox_policy_cwd: workdir.clone(),
+        sandbox_permissions: SandboxPermissions::RequireEscalated,
+        approval_sandbox_permissions: SandboxPermissions::RequireEscalated,
+        prompt_permissions: None,
+        stopwatch: codex_shell_escalation::Stopwatch::new(Duration::from_secs(1)),
+    };
+
+    let action = codex_shell_escalation::EscalationPolicy::determine_action(
+        &provider,
+        &AbsolutePathBuf::try_from(host_absolute_path(&["usr", "bin", "printf"])).unwrap(),
+        &["printf".to_string(), "hello".to_string()],
+        &workdir,
+    )
+    .await?;
+
+    assert_eq!(
+        action,
+        codex_shell_escalation::EscalationDecision::Deny {
+            reason: Some("Execution forbidden by policy".to_string())
+        }
+    );
+    Ok(())
 }
 
 #[test]

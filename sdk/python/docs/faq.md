@@ -1,5 +1,17 @@
 # FAQ
 
+## Is the Python SDK stable?
+
+`openai-codex` is a public beta. Install it with
+`pip install openai-codex`; public APIs may change before `1.0`. While beta
+releases are the only published SDK releases, pip selects the latest beta.
+After a stable release exists, pass `--pre` to opt into newer prereleases.
+
+## Why does the SDK install a runtime package?
+
+The SDK and runtime packages are versioned independently. Each SDK release
+pins and installs one compatible runtime dependency automatically.
+
 ## Thread vs turn
 
 - A `Thread` is conversation state.
@@ -48,7 +60,26 @@ If you are migrating older code, update these names:
 - `sortKey` -> `sort_key`
 - `sourceKinds` -> `source_kinds`
 - `outputSchema` -> `output_schema`
-- `sandboxPolicy` -> `sandbox_policy`
+
+## How do I choose sandbox access?
+
+Use the same `sandbox=` keyword for threads and turns:
+
+```python
+from openai_codex import Sandbox
+
+thread = codex.thread_start(sandbox=Sandbox.workspace_write)
+result = thread.run("Review only.", sandbox=Sandbox.read_only)
+```
+
+The presets are:
+
+- `Sandbox.read_only`: read files without allowing writes.
+- `Sandbox.workspace_write`: the normal default for projects with a recorded trust decision; read files and write inside the workspace and configured writable roots.
+- `Sandbox.full_access`: run without filesystem access restrictions.
+
+When `sandbox=` is omitted, Codex uses its configured default. A turn
+sandbox override applies to that turn and subsequent turns.
 
 ## Why only `thread_start(...)` and `thread_resume(...)`?
 
@@ -65,9 +96,9 @@ This avoids duplicate ways to do the same operation and keeps behavior explicit.
 
 Common causes:
 
-- published runtime package (`openai-codex-cli-bin`) is not installed
+- installation is incomplete and the pinned `openai-codex-cli-bin` dependency is missing
 - local `codex_bin` override points to a missing file
-- app-server version older than the SDK schema
+- a custom local Codex executable does not support the SDK operation being used
 
 ## Why does a turn "hang"?
 
@@ -80,7 +111,8 @@ A turn is complete only when `turn/completed` arrives for that turn ID.
 
 Use `retry_on_overload(...)` for transient overload failures (`ServerBusyError`).
 
-Do not blindly retry all errors. For `InvalidParamsError` or `MethodNotFoundError`, fix inputs or update the runtime/schema version instead.
+Do not blindly retry all errors. For `InvalidParamsError` or
+`MethodNotFoundError`, fix the input or use the runtime pinned by the SDK.
 
 ## Common pitfalls
 

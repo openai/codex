@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use app_test_support::ChatGptAuthFixture;
-use app_test_support::McpProcess;
+use app_test_support::TestAppServer;
 use app_test_support::to_response;
 use app_test_support::write_chatgpt_auth;
 use axum::Json;
@@ -116,7 +116,7 @@ async fn mcp_server_elicitation_round_trip() -> Result<()> {
         AuthCredentialsStoreMode::File,
     )?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let thread_start_id = mcp
@@ -135,6 +135,7 @@ async fn mcp_server_elicitation_round_trip() -> Result<()> {
     let warmup_turn_start_id = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
+            client_user_message_id: None,
             input: vec![V2UserInput::Text {
                 text: "Warm up connectors.".to_string(),
                 text_elements: Vec::new(),
@@ -167,6 +168,7 @@ async fn mcp_server_elicitation_round_trip() -> Result<()> {
     let turn_start_id = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id.clone(),
+            client_user_message_id: None,
             input: vec![V2UserInput::Text {
                 text: "Use [$calendar](app://calendar) to run the calendar tool.".to_string(),
                 text_elements: Vec::new(),
@@ -308,11 +310,8 @@ struct ElicitationAppsMcpServer;
 
 impl ServerHandler for ElicitationAppsMcpServer {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            protocol_version: rmcp::model::ProtocolVersion::V_2025_06_18,
-            capabilities: ServerCapabilities::builder().enable_tools().build(),
-            ..ServerInfo::default()
-        }
+        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+            .with_protocol_version(rmcp::model::ProtocolVersion::V_2025_06_18)
     }
 
     async fn list_tools(

@@ -43,8 +43,7 @@ def resolve_codex_v8_cargo_env(
         return {}
     if archive_override or binding_override:
         raise RuntimeError(
-            "Cargo package builds need RUSTY_V8_ARCHIVE and "
-            "RUSTY_V8_SRC_BINDING_PATH set together."
+            "Cargo package builds need RUSTY_V8_ARCHIVE and RUSTY_V8_SRC_BINDING_PATH set together."
         )
 
     artifacts = fetch_codex_v8_artifacts(spec, cache_root=cache_root)
@@ -61,12 +60,13 @@ def fetch_codex_v8_artifacts(
     cache_root: Path | None = None,
 ) -> RustyV8ArtifactPair:
     if spec.is_windows:
-        raise RuntimeError(f"No Codex-built V8 release artifacts for target: {spec.target}")
+        raise RuntimeError(
+            f"No Codex-built V8 release artifacts for target: {spec.target}"
+        )
 
     version = version or resolved_v8_crate_version()
     release_url = (
-        "https://github.com/openai/codex/releases/download/"
-        f"rusty-v8-v{version}"
+        f"https://github.com/openai/codex/releases/download/rusty-v8-v{version}"
     )
     target = spec.target
     cache_dir = (cache_root or default_cache_root()) / f"rusty-v8-{version}-{target}"
@@ -98,7 +98,9 @@ def resolved_v8_crate_version() -> str:
         }
     )
     if len(versions) != 1:
-        raise RuntimeError(f"Expected exactly one resolved v8 version, found: {versions}")
+        raise RuntimeError(
+            f"Expected exactly one resolved v8 version, found: {versions}"
+        )
     return versions[0]
 
 
@@ -111,18 +113,21 @@ def load_checksums(checksums_path: Path, artifact_names: set[str]) -> dict[str, 
     lines = checksums_path.read_text(encoding="utf-8").splitlines()
     if len(lines) != len(artifact_names):
         raise RuntimeError(
-            f"Expected {len(artifact_names)} V8 checksums in {checksums_path}, "
-            f"found {len(lines)}."
+            f"Expected {len(artifact_names)} V8 checksums in {checksums_path}, found {len(lines)}."
         )
 
     for line in lines:
         parts = line.split(maxsplit=1)
         if len(parts) != 2:
-            raise RuntimeError(f"Invalid V8 checksum line in {checksums_path}: {line!r}")
+            raise RuntimeError(
+                f"Invalid V8 checksum line in {checksums_path}: {line!r}"
+            )
 
         digest, artifact_name = parts[0], parts[1].strip()
         if len(digest) != 64 or any(char not in "0123456789abcdef" for char in digest):
-            raise RuntimeError(f"Invalid V8 checksum digest in {checksums_path}: {digest}")
+            raise RuntimeError(
+                f"Invalid V8 checksum digest in {checksums_path}: {digest}"
+            )
         if artifact_name not in artifact_names:
             raise RuntimeError(
                 f"Unexpected V8 checksum artifact in {checksums_path}: {artifact_name}"
@@ -146,7 +151,9 @@ def ensure_valid_artifact(artifact: Path, checksum: str, url: str) -> None:
         return
 
     artifact.unlink(missing_ok=True)
-    raise RuntimeError(f"Codex-built V8 artifact {artifact} failed checksum validation.")
+    raise RuntimeError(
+        f"Codex-built V8 artifact {artifact} failed checksum validation."
+    )
 
 
 def has_checksum(path: Path, expected: str) -> bool:

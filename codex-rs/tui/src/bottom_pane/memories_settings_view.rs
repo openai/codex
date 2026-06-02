@@ -421,6 +421,7 @@ impl Renderable for MemoriesSettingsView {
         }
         if self.reset_confirmation.is_none() {
             self.docs_link.clone().render(docs_area, buf);
+            crate::terminal_hyperlinks::mark_url_hyperlink(buf, docs_area, MEMORIES_DOC_URL);
         }
 
         let hint_area = Rect {

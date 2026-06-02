@@ -8,7 +8,17 @@ export type ConfigLayerSource = { "type": "mdm", domain: string, key: string, } 
  * This is the path to the system config.toml file, though it is not
  * guaranteed to exist.
  */
-file: AbsolutePathBuf, } | { "type": "user",
+file: AbsolutePathBuf, } | { "type": "enterpriseManaged",
+/**
+ * Stable identifier for the delivered layer.
+ */
+id: string,
+/**
+ * Admin-facing name for the delivered layer. This is surfaced in
+ * diagnostics so users know which cloud layer needs administrator
+ * attention.
+ */
+name: string, } | { "type": "user",
 /**
  * This is the path to the user's config.toml file, though it is not
  * guaranteed to exist.

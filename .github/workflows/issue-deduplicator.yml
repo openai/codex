@@ -12,6 +12,7 @@ jobs:
     # Prevent runs on forks (requires OpenAI API key, wastes Actions minutes)
     if: github.repository == 'openai/codex' && (github.event.action == 'opened' || (github.event.action == 'labeled' && github.event.label.name == 'codex-deduplicate'))
     runs-on: ubuntu-latest
+    environment: issue-triage
     permissions:
       contents: read
     outputs:
@@ -157,6 +158,7 @@ jobs:
     needs: normalize-duplicates-all
     if: ${{ needs.normalize-duplicates-all.result == 'success' && needs.normalize-duplicates-all.outputs.has_matches != 'true' }}
     runs-on: ubuntu-latest
+    environment: issue-triage
     permissions:
       contents: read
     outputs:

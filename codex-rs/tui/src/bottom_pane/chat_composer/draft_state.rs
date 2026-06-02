@@ -40,6 +40,7 @@ impl DraftState {
 
 #[derive(Clone, Debug)]
 pub(super) struct ComposerMentionBinding {
+    pub(super) sigil: char,
     pub(super) mention: String,
     pub(super) path: String,
 }

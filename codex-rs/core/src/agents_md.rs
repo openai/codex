@@ -25,14 +25,12 @@ use codex_exec_server::Environment;
 use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::LOCAL_FS;
 use codex_features::Feature;
+use codex_prompts::HIERARCHICAL_AGENTS_MESSAGE;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use dunce::canonicalize as normalize_path;
 use std::io;
 use toml::Value as TomlValue;
 use tracing::error;
-
-pub(crate) const HIERARCHICAL_AGENTS_MESSAGE: &str =
-    include_str!("../hierarchical_agents_message.md");
 
 /// Default filename scanned for AGENTS.md instructions.
 pub const DEFAULT_AGENTS_MD_FILENAME: &str = "AGENTS.md";

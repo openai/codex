@@ -15,6 +15,7 @@ use ratatui::widgets::Widget;
 use super::selection_popup_common::render_menu_surface;
 use super::selection_popup_common::wrap_styled_line;
 use crate::app_event_sender::AppEventSender;
+use crate::clipboard_paste::normalize_pasted_search_query;
 use crate::key_hint::KeyBinding;
 use crate::key_hint::KeyBindingListExt;
 use crate::key_hint::is_plain_text_key_event;
@@ -1016,6 +1017,18 @@ impl BottomPaneView for ListSelectionView {
         }
     }
 
+    fn handle_paste(&mut self, pasted: String) -> bool {
+        if !self.is_searchable {
+            return false;
+        }
+        let Some(pasted) = normalize_pasted_search_query(&pasted) else {
+            return false;
+        };
+        self.search_query.push_str(&pasted);
+        self.apply_filter();
+        true
+    }
+
     fn is_complete(&self) -> bool {
         self.completion.is_some()
     }
@@ -1670,6 +1683,61 @@ mod tests {
             lines.contains("filters"),
             "expected search query line to include rendered query, got {lines:?}"
         );
+    }
+
+    #[test]
+    fn paste_appends_to_search_query_and_filters_items() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut view = new_view(
+            SelectionViewParams {
+                items: vec![
+                    SelectionItem {
+                        name: "main -> feature/other".to_string(),
+                        search_value: Some("feature/other".to_string()),
+                        ..Default::default()
+                    },
+                    SelectionItem {
+                        name: "main -> feature/paste-support".to_string(),
+                        search_value: Some("feature/paste-support".to_string()),
+                        ..Default::default()
+                    },
+                ],
+                is_searchable: true,
+                ..Default::default()
+            },
+            tx,
+        );
+        view.handle_key_event(KeyEvent::new(KeyCode::Char('f'), KeyModifiers::NONE));
+
+        assert!(view.handle_paste("eature/paste-support\n".to_string()));
+
+        assert_eq!(view.search_query, "feature/paste-support");
+        assert_eq!(view.filtered_indices, vec![1]);
+        assert_eq!(view.selected_actual_idx(), Some(1));
+    }
+
+    #[test]
+    fn whitespace_only_paste_is_ignored() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut view = new_view(
+            SelectionViewParams {
+                items: vec![SelectionItem {
+                    name: "main".to_string(),
+                    search_value: Some("main".to_string()),
+                    ..Default::default()
+                }],
+                is_searchable: true,
+                ..Default::default()
+            },
+            tx,
+        );
+
+        assert!(!view.handle_paste(" \n\t ".to_string()));
+
+        assert_eq!(view.search_query, "");
+        assert_eq!(view.filtered_indices, vec![0]);
     }
 
     #[test]

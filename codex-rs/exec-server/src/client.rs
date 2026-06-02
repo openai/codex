@@ -41,19 +41,28 @@ use crate::protocol::ExecExitedNotification;
 use crate::protocol::ExecOutputDeltaNotification;
 use crate::protocol::ExecParams;
 use crate::protocol::ExecResponse;
+use crate::protocol::FS_CANONICALIZE_METHOD;
 use crate::protocol::FS_COPY_METHOD;
 use crate::protocol::FS_CREATE_DIRECTORY_METHOD;
 use crate::protocol::FS_GET_METADATA_METHOD;
+use crate::protocol::FS_JOIN_METHOD;
+use crate::protocol::FS_PARENT_METHOD;
 use crate::protocol::FS_READ_DIRECTORY_METHOD;
 use crate::protocol::FS_READ_FILE_METHOD;
 use crate::protocol::FS_REMOVE_METHOD;
 use crate::protocol::FS_WRITE_FILE_METHOD;
+use crate::protocol::FsCanonicalizeParams;
+use crate::protocol::FsCanonicalizeResponse;
 use crate::protocol::FsCopyParams;
 use crate::protocol::FsCopyResponse;
 use crate::protocol::FsCreateDirectoryParams;
 use crate::protocol::FsCreateDirectoryResponse;
 use crate::protocol::FsGetMetadataParams;
 use crate::protocol::FsGetMetadataResponse;
+use crate::protocol::FsJoinParams;
+use crate::protocol::FsJoinResponse;
+use crate::protocol::FsParentParams;
+use crate::protocol::FsParentResponse;
 use crate::protocol::FsReadDirectoryParams;
 use crate::protocol::FsReadDirectoryResponse;
 use crate::protocol::FsReadFileParams;
@@ -218,7 +227,7 @@ impl LazyRemoteExecServerClient {
         }
 
         let next_client = match self.cached_client() {
-            Some(client)
+            Some(_client)
                 if matches!(
                     &self.transport_params,
                     ExecServerTransportParams::WebSocketUrl { .. }
@@ -412,6 +421,24 @@ impl ExecServerClient {
         params: FsGetMetadataParams,
     ) -> Result<FsGetMetadataResponse, ExecServerError> {
         self.call(FS_GET_METADATA_METHOD, &params).await
+    }
+
+    pub async fn fs_canonicalize(
+        &self,
+        params: FsCanonicalizeParams,
+    ) -> Result<FsCanonicalizeResponse, ExecServerError> {
+        self.call(FS_CANONICALIZE_METHOD, &params).await
+    }
+
+    pub async fn fs_join(&self, params: FsJoinParams) -> Result<FsJoinResponse, ExecServerError> {
+        self.call(FS_JOIN_METHOD, &params).await
+    }
+
+    pub async fn fs_parent(
+        &self,
+        params: FsParentParams,
+    ) -> Result<FsParentResponse, ExecServerError> {
+        self.call(FS_PARENT_METHOD, &params).await
     }
 
     pub async fn fs_read_directory(
