@@ -2319,6 +2319,7 @@ dependencies = [
  "async-trait",
  "bytes",
  "codex-utils-cargo-bin",
+ "codex-utils-path",
  "codex-utils-rustls-provider",
  "eventsource-stream",
  "futures",
