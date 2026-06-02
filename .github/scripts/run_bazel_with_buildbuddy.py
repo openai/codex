@@ -2,6 +2,7 @@
 
 import json
 import os
+import subprocess
 import sys
 from collections.abc import Mapping
 from collections.abc import Sequence
@@ -133,8 +134,12 @@ def main() -> None:
         )
 
     command = bazel_command(*sys.argv[1:])
-    # Replace the wrapper so Bazel receives signals directly and supplies the
-    # command exit status; a subprocess parent would have no remaining work.
+    if os.name == "nt":
+        # Windows CRT exec can split arguments containing spaces and lose the
+        # eventual child exit status. Wait for Bazel and propagate its status.
+        result = subprocess.run(command, check=False)
+        raise SystemExit(result.returncode)
+
     os.execvp(command[0], command)
 
 

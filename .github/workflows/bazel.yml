@@ -158,6 +158,11 @@ jobs:
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
 
+      - name: Test BuildBuddy Bazel wrapper
+        if: matrix.shard == 1
+        shell: pwsh
+        run: python .github/scripts/test_run_bazel_with_buildbuddy.py
+
       - name: Prepare Bazel CI
         id: prepare_bazel
         uses: ./.github/actions/prepare-bazel-ci
