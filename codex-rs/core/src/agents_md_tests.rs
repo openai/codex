@@ -132,13 +132,40 @@ fn empty_loaded_instructions_are_empty() {
         AbsolutePathBuf::from_absolute_path("/tmp/AGENTS.md").expect("absolute source path");
 
     assert_eq!(
-        LoadedAgentsMd::new_user(String::new(), source),
+        LoadedAgentsMd::new_user(String::new(), source.clone()),
+        LoadedAgentsMd::default()
+    );
+    assert_eq!(
+        LoadedAgentsMd::new_user(" \n\t".to_string(), source),
         LoadedAgentsMd::default()
     );
     assert_eq!(
         LoadedAgentsMd::from_text_for_testing(String::new()),
         LoadedAgentsMd::default()
     );
+    assert_eq!(
+        LoadedAgentsMd::from_text_for_testing(" \n\t"),
+        LoadedAgentsMd::default()
+    );
+}
+
+#[test]
+fn loaded_instructions_with_only_empty_or_whitespace_entries_are_empty() {
+    let empty = LoadedAgentsMd {
+        instructions: vec![LoadedInstruction {
+            contents: String::new(),
+            source: InstructionSource::Internal,
+        }],
+    };
+    let whitespace = LoadedAgentsMd {
+        instructions: vec![LoadedInstruction {
+            contents: " \n\t".to_string(),
+            source: InstructionSource::Internal,
+        }],
+    };
+
+    assert!(empty.is_empty());
+    assert!(whitespace.is_empty());
 }
 
 /// Small file within the byte-limit is returned unmodified.

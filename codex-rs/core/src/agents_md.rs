@@ -328,7 +328,7 @@ pub struct LoadedAgentsMd {
 impl LoadedAgentsMd {
     /// Creates loaded instructions containing one user-level AGENTS.md entry.
     pub fn new_user(contents: String, path: AbsolutePathBuf) -> Self {
-        if contents.is_empty() {
+        if contents.trim().is_empty() {
             return Self::default();
         }
         Self {
@@ -345,7 +345,7 @@ impl LoadedAgentsMd {
     /// compile `codex-core` as a normal dependency without that configuration.
     pub fn from_text_for_testing(contents: impl Into<String>) -> Self {
         let contents = contents.into();
-        if contents.is_empty() {
+        if contents.trim().is_empty() {
             return Self::default();
         }
         Self {
@@ -361,7 +361,9 @@ impl LoadedAgentsMd {
     }
 
     fn is_empty(&self) -> bool {
-        self.instructions.is_empty()
+        self.instructions
+            .iter()
+            .all(|instruction| instruction.contents.trim().is_empty())
     }
 
     /// Returns the concatenated model-visible instruction text.
