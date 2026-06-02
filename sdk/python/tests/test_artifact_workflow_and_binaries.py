@@ -265,9 +265,8 @@ def test_schema_normalization_only_flattens_string_literal_oneofs(
         "AuthMode",
         "InputModality",
         "ExperimentalFeatureStage",
-        "AutoCompactTokenLimitScope",
-        "CommandExecOutputStream",
         "ProcessOutputStream",
+        "CommandExecOutputStream",
     ]
 
 
@@ -358,10 +357,10 @@ def test_source_sdk_template_pins_published_runtime() -> None:
         "dependencies": pyproject["project"]["dependencies"],
     } == {
         "sdk_template_version": "0.0.0-dev",
-        "runtime_pin": "0.136.0",
+        "runtime_pin": "0.132.0",
         "dependencies": [
             "pydantic>=2.12",
-            "openai-codex-cli-bin==0.136.0",
+            "openai-codex-cli-bin==0.132.0",
         ],
     }
 
@@ -436,7 +435,7 @@ def test_runtime_setup_reads_independent_runtime_pin_and_release_tags() -> None:
     } == {
         "package_name": "openai-codex-cli-bin",
         "sdk_template_version": "0.0.0-dev",
-        "runtime_pin": "0.136.0",
+        "runtime_pin": "0.132.0",
         "normalized_release_version": "0.116.0a1",
         "release_tag": "rust-v0.116.0-alpha.1",
     }
@@ -595,11 +594,11 @@ def test_stage_runtime_release_can_pin_wheel_platform_tag(tmp_path: Path) -> Non
         tmp_path / "runtime-stage",
         "0.116.0a1",
         package_archive,
-        platform_tag="manylinux_2_17_x86_64",
+        platform_tag="musllinux_1_1_x86_64",
     )
 
     pyproject = (staged / "pyproject.toml").read_text()
-    assert 'platform-tag = "manylinux_2_17_x86_64"' in pyproject
+    assert 'platform-tag = "musllinux_1_1_x86_64"' in pyproject
 
 
 def test_stage_runtime_release_rejects_incomplete_package_layout(tmp_path: Path) -> None:
@@ -651,7 +650,7 @@ def test_stage_sdk_release_preserves_reviewed_runtime_pin(tmp_path: Path) -> Non
         "version": "0.1.0b1",
         "dependencies": [
             "pydantic>=2.12",
-            "openai-codex-cli-bin==0.136.0",
+            "openai-codex-cli-bin==0.132.0",
         ],
     }
     assert (
@@ -688,7 +687,7 @@ def test_sdk_beta_release_can_pin_stable_runtime(tmp_path: Path) -> None:
     )
     runtime_stage = script.stage_python_runtime_package(
         tmp_path / "runtime-stage",
-        "0.136.0",
+        "0.132.0",
         package_archive,
     )
 
@@ -701,10 +700,10 @@ def test_sdk_beta_release_can_pin_stable_runtime(tmp_path: Path) -> None:
         "sdk_dependencies": sdk_pyproject["project"]["dependencies"],
     } == {
         "sdk_version": "0.1.0b1",
-        "runtime_version": "0.136.0",
+        "runtime_version": "0.132.0",
         "sdk_dependencies": [
             "pydantic>=2.12",
-            "openai-codex-cli-bin==0.136.0",
+            "openai-codex-cli-bin==0.132.0",
         ],
     }
 
@@ -763,7 +762,7 @@ def test_stage_runtime_stages_package_without_type_generation(tmp_path: Path) ->
             "--codex-version",
             "rust-v0.116.0-alpha.1",
             "--platform-tag",
-            "manylinux_2_17_x86_64",
+            "musllinux_1_1_x86_64",
         ]
     )
 
@@ -794,7 +793,7 @@ def test_stage_runtime_stages_package_without_type_generation(tmp_path: Path) ->
 
     script.run_command(args, ops)
 
-    assert calls == ["stage_runtime:0.116.0a1:manylinux_2_17_x86_64:codex-package.tar.gz"]
+    assert calls == ["stage_runtime:0.116.0a1:musllinux_1_1_x86_64:codex-package.tar.gz"]
 
 
 def test_default_runtime_is_resolved_from_installed_runtime_package(
