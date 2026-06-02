@@ -176,7 +176,7 @@ pub fn arg0_dispatch() -> Option<Arg0PathEntryGuard> {
 pub fn arg0_dispatch_or_else<F, Fut>(main_fn: F) -> anyhow::Result<()>
 where
     F: FnOnce(Arg0DispatchPaths) -> Fut + Send + 'static,
-    Fut: Future<Output = anyhow::Result<()>> + Send + 'static,
+    Fut: Future<Output = anyhow::Result<()>>,
 {
     // Retain the TempDir so it exists for the lifetime of the invocation of
     // this executable. Admittedly, we could invoke `keep()` on it, but it
@@ -479,6 +479,7 @@ mod tests {
     use std::fs::File;
     use std::path::Path;
     use std::path::PathBuf;
+    use std::rc::Rc;
     use tempfile::TempDir;
 
     fn create_lock(dir: &Path) -> std::io::Result<File> {
@@ -593,5 +594,16 @@ mod tests {
 
         assert!(!dir.exists());
         Ok(())
+    }
+
+    #[allow(dead_code)]
+    fn arg0_dispatch_or_else_accepts_non_send_main_future() {
+        let _ = super::arg0_dispatch_or_else(|_paths| {
+            let state = Rc::new(());
+            async move {
+                let _state = state;
+                Ok(())
+            }
+        });
     }
 }
