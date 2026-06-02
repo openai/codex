@@ -16,6 +16,12 @@ use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::util::SubscriberInitExt;
 
 #[test]
+fn ci_test_intentionally_fails() {
+    println!("running intentionally failing codex-core CI test");
+    panic!("intentional codex-core CI test failure");
+}
+
+#[test]
 fn feedback_tags_macro_compiles() {
     #[derive(Debug)]
     struct OnlyDebug;

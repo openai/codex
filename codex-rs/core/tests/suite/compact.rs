@@ -538,7 +538,7 @@ async fn summarize_context_three_requests_and_instructions() {
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::ShutdownComplete)).await;
 
     // Verify rollout contains user-turn TurnContext entries and a Compacted entry.
-    println!("rollout path: {}", rollout_path.display());
+    println!("compacted rollout path: {}", rollout_path.display());
     let text = std::fs::read_to_string(&rollout_path).unwrap_or_else(|e| {
         panic!(
             "failed to read rollout file {}: {e}",
