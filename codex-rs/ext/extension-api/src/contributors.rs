@@ -89,6 +89,7 @@ pub trait TurnLifecycleContributor: Send + Sync {
     async fn on_turn_error(&self, _input: TurnErrorInput<'_>) {}
 }
 
+/// WARNING: DO NOT USE YET
 /// Extension contribution that can add turn-local model input.
 ///
 /// Implementations should resolve only the model-visible input they own and
