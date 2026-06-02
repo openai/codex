@@ -2,11 +2,13 @@ use codex_client::CodexHttpClient;
 use codex_protocol::account::PlanType as AccountPlanType;
 use codex_protocol::auth::PlanType as InternalPlanType;
 use serde::Deserialize;
+use std::env;
 use std::fmt;
 
-use super::authapi::personal_access_token_authapi_base_url;
 use crate::default_client::create_client;
 
+const PROD_AUTHAPI_BASE_URL: &str = "https://auth.openai.com/api/accounts";
+const CODEX_AUTHAPI_BASE_URL_ENV_VAR: &str = "CODEX_AUTHAPI_BASE_URL";
 const PERSONAL_ACCESS_TOKEN_PREFIX: &str = "at-";
 const WHOAMI_PATH: &str = "/v1/user-auth-credential/whoami";
 
@@ -36,12 +38,12 @@ impl fmt::Debug for PersonalAccessTokenAuth {
 
 impl PersonalAccessTokenAuth {
     pub(super) async fn load(access_token: &str) -> std::io::Result<Self> {
-        hydrate_personal_access_token(
-            &create_client(),
-            &personal_access_token_authapi_base_url(),
-            access_token,
-        )
-        .await
+        let authapi_base_url = env::var(CODEX_AUTHAPI_BASE_URL_ENV_VAR)
+            .ok()
+            .map(|base_url| base_url.trim().trim_end_matches('/').to_string())
+            .filter(|base_url| !base_url.is_empty())
+            .unwrap_or_else(|| PROD_AUTHAPI_BASE_URL.to_string());
+        hydrate_personal_access_token(&create_client(), &authapi_base_url, access_token).await
     }
 
     pub fn access_token(&self) -> &str {
