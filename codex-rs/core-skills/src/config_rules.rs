@@ -5,6 +5,7 @@ use codex_config::ConfigLayerStack;
 use codex_config::ConfigLayerStackOrdering;
 use codex_config::SkillConfig;
 use codex_config::SkillsConfig;
+use codex_exec_server::EnvironmentPathRef;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use tracing::warn;
 
@@ -71,23 +72,29 @@ pub fn skill_config_rules_from_stack(config_layer_stack: &ConfigLayerStack) -> S
 pub fn resolve_disabled_skill_paths(
     skills: &[SkillMetadata],
     rules: &SkillConfigRules,
-) -> HashSet<AbsolutePathBuf> {
+) -> HashSet<EnvironmentPathRef> {
     let mut disabled_paths = HashSet::new();
 
     for entry in &rules.entries {
         match &entry.selector {
             SkillConfigRuleSelector::Path(path) => {
-                if entry.enabled {
-                    disabled_paths.remove(path);
-                } else {
-                    disabled_paths.insert(path.clone());
+                for path in skills
+                    .iter()
+                    .filter(|skill| skill.path_to_skills_md == *path)
+                    .map(|skill| skill.source_path.clone())
+                {
+                    if entry.enabled {
+                        disabled_paths.remove(&path);
+                    } else {
+                        disabled_paths.insert(path);
+                    }
                 }
             }
             SkillConfigRuleSelector::Name(name) => {
                 for path in skills
                     .iter()
                     .filter(|skill| skill.name == *name)
-                    .map(|skill| skill.path_to_skills_md.clone())
+                    .map(|skill| skill.source_path.clone())
                 {
                     if entry.enabled {
                         disabled_paths.remove(&path);

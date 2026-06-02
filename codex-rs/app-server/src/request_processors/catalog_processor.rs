@@ -16,13 +16,11 @@ pub(crate) struct CatalogRequestProcessor {
 const SKILLS_LIST_CWD_CONCURRENCY: usize = 5;
 
 fn skills_to_info(
-    skills: &[codex_core::skills::SkillMetadata],
-    disabled_paths: &HashSet<AbsolutePathBuf>,
+    outcome: &codex_core::skills::SkillLoadOutcome,
 ) -> Vec<codex_app_server_protocol::SkillMetadata> {
-    skills
-        .iter()
-        .map(|skill| {
-            let enabled = !disabled_paths.contains(&skill.path_to_skills_md);
+    outcome
+        .skills_with_enabled()
+        .map(|(skill, enabled)| {
             codex_app_server_protocol::SkillMetadata {
                 name: skill.name.clone(),
                 description: skill.description.clone(),
@@ -563,7 +561,7 @@ impl CatalogRequestProcessor {
                         .skills_for_cwd(&skills_input, force_reload, fs)
                         .await;
                     let errors = errors_to_info(&outcome.errors);
-                    let skills = skills_to_info(&outcome.skills, &outcome.disabled_paths);
+                    let skills = skills_to_info(&outcome);
                     (
                         index,
                         codex_app_server_protocol::SkillsListEntry {

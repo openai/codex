@@ -1,6 +1,5 @@
 use crate::model::SkillDependencies;
 use crate::model::SkillError;
-use crate::model::SkillFileSystemsByPath;
 use crate::model::SkillInterface;
 use crate::model::SkillLoadOutcome;
 use crate::model::SkillMetadata;
@@ -164,13 +163,12 @@ where
     I: IntoIterator<Item = SkillRoot>,
 {
     let mut outcome = SkillLoadOutcome::default();
-    let mut skill_roots: Vec<AbsolutePathBuf> = Vec::new();
-    let mut skill_root_by_path: HashMap<AbsolutePathBuf, AbsolutePathBuf> = HashMap::new();
-    let mut file_systems_by_skill_path: HashMap<AbsolutePathBuf, Arc<dyn ExecutorFileSystem>> =
-        HashMap::new();
+    let mut skill_roots: Vec<EnvironmentPathRef> = Vec::new();
+    let mut skill_root_by_path: HashMap<EnvironmentPathRef, EnvironmentPathRef> = HashMap::new();
     for root in roots {
         let root_path = canonicalize_for_skill_identity(&root.path);
         let fs = root.file_system;
+        let root_source_path = EnvironmentPathRef::new(Arc::clone(&fs), root_path.clone());
         let skills_before_root = outcome.skills.len();
         discover_skills_under_root(
             Arc::clone(&fs),
@@ -182,34 +180,29 @@ where
         )
         .await;
         for skill in &outcome.skills[skills_before_root..] {
-            if !skill_roots.contains(&root_path) {
-                skill_roots.push(root_path.clone());
+            if !skill_roots.contains(&root_source_path) {
+                skill_roots.push(root_source_path.clone());
             }
             skill_root_by_path
-                .entry(skill.path_to_skills_md.clone())
-                .or_insert_with(|| root_path.clone());
-            file_systems_by_skill_path
-                .entry(skill.path_to_skills_md.clone())
-                .or_insert_with(|| Arc::clone(&fs));
+                .entry(skill.source_path.clone())
+                .or_insert_with(|| root_source_path.clone());
         }
     }
 
-    let mut seen: HashSet<AbsolutePathBuf> = HashSet::new();
+    let mut seen: HashSet<EnvironmentPathRef> = HashSet::new();
     outcome
         .skills
-        .retain(|skill| seen.insert(skill.path_to_skills_md.clone()));
-    let retained_skill_paths: HashSet<AbsolutePathBuf> = outcome
+        .retain(|skill| seen.insert(skill.source_path.clone()));
+    let retained_skill_paths: HashSet<EnvironmentPathRef> = outcome
         .skills
         .iter()
-        .map(|skill| skill.path_to_skills_md.clone())
+        .map(|skill| skill.source_path.clone())
         .collect();
     skill_root_by_path.retain(|path, _| retained_skill_paths.contains(path));
-    let used_roots: HashSet<AbsolutePathBuf> = skill_root_by_path.values().cloned().collect();
+    let used_roots: HashSet<EnvironmentPathRef> = skill_root_by_path.values().cloned().collect();
     skill_roots.retain(|root| used_roots.contains(root));
-    file_systems_by_skill_path.retain(|path, _| retained_skill_paths.contains(path));
     outcome.skill_roots = skill_roots;
     outcome.skill_root_by_path = Arc::new(skill_root_by_path);
-    outcome.file_systems_by_skill_path = SkillFileSystemsByPath::new(file_systems_by_skill_path);
 
     fn scope_rank(scope: SkillScope) -> u8 {
         // Higher-priority scopes first (matches root scan order for dedupe).
@@ -467,8 +460,13 @@ fn dirs_between_project_root_and_cwd(
 }
 
 fn dedupe_skill_roots_by_path(roots: &mut Vec<SkillRoot>) {
-    let mut seen: HashSet<AbsolutePathBuf> = HashSet::new();
-    roots.retain(|root| seen.insert(root.path.clone()));
+    let mut seen: HashSet<EnvironmentPathRef> = HashSet::new();
+    roots.retain(|root| {
+        seen.insert(EnvironmentPathRef::new(
+            Arc::clone(&root.file_system),
+            root.path.clone(),
+        ))
+    });
 }
 
 fn canonicalize_for_skill_identity(path: &AbsolutePathBuf) -> AbsolutePathBuf {

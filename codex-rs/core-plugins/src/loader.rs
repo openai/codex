@@ -665,7 +665,11 @@ pub async fn load_plugin_skills(
         .into_iter()
         .filter(|skill| skill.matches_product_restriction_for_product(restriction_product))
         .collect::<Vec<_>>();
-    let disabled_skill_paths = resolve_disabled_skill_paths(&skills, skill_config_rules);
+    // Local plugin summaries still expose raw disabled paths outside core-skills.
+    let disabled_skill_paths = resolve_disabled_skill_paths(&skills, skill_config_rules)
+        .into_iter()
+        .map(|path| path.path().clone())
+        .collect();
 
     ResolvedPluginSkills {
         skills,

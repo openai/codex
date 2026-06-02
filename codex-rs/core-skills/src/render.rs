@@ -5,6 +5,7 @@ use std::path::Path;
 
 use crate::model::SkillLoadOutcome;
 use crate::model::SkillMetadata;
+use codex_exec_server::EnvironmentPathRef;
 use codex_otel::SessionTelemetry;
 use codex_otel::THREAD_SKILLS_DESCRIPTION_TRUNCATED_CHARS_METRIC;
 use codex_otel::THREAD_SKILLS_ENABLED_TOTAL_METRIC;
@@ -665,8 +666,8 @@ struct SkillPathAliases {
 
 struct AliasPlan {
     aliases: SkillPathAliases,
-    root_aliases: HashMap<AbsolutePathBuf, String>,
-    alias_root_by_path: HashMap<AbsolutePathBuf, AbsolutePathBuf>,
+    root_aliases: HashMap<EnvironmentPathRef, String>,
+    alias_root_by_path: HashMap<EnvironmentPathRef, EnvironmentPathRef>,
     table_cost: usize,
 }
 
@@ -677,7 +678,7 @@ fn build_alias_plan(
 ) -> Option<AliasPlan> {
     let skill_paths = skills
         .iter()
-        .map(|skill| skill.path_to_skills_md.clone())
+        .map(|skill| skill.source_path.clone())
         .collect::<HashSet<_>>();
     let skill_root_by_path = outcome
         .skill_root_by_path
@@ -736,9 +737,9 @@ fn build_alias_plan(
 }
 
 fn ordered_alias_roots(
-    used_roots: &[AbsolutePathBuf],
-    alias_root_by_skill_root: &HashMap<AbsolutePathBuf, AbsolutePathBuf>,
-) -> Option<Vec<AbsolutePathBuf>> {
+    used_roots: &[EnvironmentPathRef],
+    alias_root_by_skill_root: &HashMap<EnvironmentPathRef, EnvironmentPathRef>,
+) -> Option<Vec<EnvironmentPathRef>> {
     let mut seen = HashSet::new();
     let mut alias_roots = Vec::new();
     for root in used_roots {
@@ -751,10 +752,10 @@ fn ordered_alias_roots(
 }
 
 fn alias_root_for_skill_root(
-    root: &AbsolutePathBuf,
+    root: &EnvironmentPathRef,
     plugin_version_skill_counts: &HashMap<AbsolutePathBuf, usize>,
-) -> AbsolutePathBuf {
-    let Some(plugin_version_base) = plugin_version_base(root.as_path()) else {
+) -> EnvironmentPathRef {
+    let Some(plugin_version_base) = plugin_version_base(root.path().as_path()) else {
         return root.clone();
     };
     let skill_count = plugin_version_skill_counts
@@ -764,16 +765,18 @@ fn alias_root_for_skill_root(
     if skill_count > 1 {
         root.clone()
     } else {
-        plugin_marketplace_base(root.as_path()).unwrap_or_else(|| root.clone())
+        root.with_path(
+            plugin_marketplace_base(root.path().as_path()).unwrap_or_else(|| root.path().clone()),
+        )
     }
 }
 
 fn plugin_version_skill_counts_for_skill_roots<'a>(
-    skill_roots: impl Iterator<Item = &'a AbsolutePathBuf>,
+    skill_roots: impl Iterator<Item = &'a EnvironmentPathRef>,
 ) -> HashMap<AbsolutePathBuf, usize> {
     let mut counts = HashMap::new();
     for root in skill_roots {
-        if let Some(plugin_version_base) = plugin_version_base(root.as_path()) {
+        if let Some(plugin_version_base) = plugin_version_base(root.path().as_path()) {
             let count = counts.entry(plugin_version_base).or_insert(0usize);
             *count = count.saturating_add(1);
         }
@@ -793,12 +796,12 @@ fn aliased_metadata_overhead_cost(
         .saturating_sub(budget.cost(&absolute_body))
 }
 
-fn build_skill_root_lines(roots: &[AbsolutePathBuf]) -> Vec<String> {
+fn build_skill_root_lines(roots: &[EnvironmentPathRef]) -> Vec<String> {
     roots
         .iter()
         .enumerate()
         .map(|(index, root)| {
-            let root_str = root.to_string_lossy().replace('\\', "/");
+            let root_str = root.path().to_string_lossy().replace('\\', "/");
             format!("- `r{index}` = `{root_str}`")
         })
         .collect()
@@ -840,12 +843,13 @@ fn render_skill_path_with_aliases(skill: &SkillMetadata, plan: &AliasPlan) -> St
 }
 
 fn outcome_relative_skill_path(skill: &SkillMetadata, plan: &AliasPlan) -> Option<String> {
-    let alias_root = plan.alias_root_by_path.get(&skill.path_to_skills_md)?;
+    let alias_root = plan.alias_root_by_path.get(&skill.source_path)?;
     let alias = plan.root_aliases.get(alias_root)?;
     let relative_path = skill
-        .path_to_skills_md
+        .source_path
+        .path()
         .as_path()
-        .strip_prefix(alias_root.as_path())
+        .strip_prefix(alias_root.path().as_path())
         .ok()?;
     let relative_path = relative_path.to_string_lossy().replace('\\', "/");
     Some(format!("{alias}/{relative_path}"))
@@ -950,6 +954,10 @@ mod tests {
         skills: Vec<SkillMetadata>,
         roots: Vec<AbsolutePathBuf>,
     ) -> SkillLoadOutcome {
+        let roots = roots
+            .into_iter()
+            .map(EnvironmentPathRef::local)
+            .collect::<Vec<_>>();
         let skill_root_by_path = skills
             .iter()
             .filter_map(|skill| {
@@ -959,9 +967,9 @@ mod tests {
                         skill
                             .path_to_skills_md
                             .as_path()
-                            .starts_with(root.as_path())
+                            .starts_with(root.path().as_path())
                     })
-                    .map(|root| (skill.path_to_skills_md.clone(), root.clone()))
+                    .map(|root| (skill.source_path.clone(), root.clone()))
             })
             .collect::<HashMap<_, _>>();
         SkillLoadOutcome {
