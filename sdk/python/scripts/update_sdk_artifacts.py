@@ -1267,7 +1267,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--platform-tag",
         help=(
             "Optional wheel platform tag override, for example "
-            "macosx_11_0_arm64 or musllinux_1_1_x86_64."
+            "macosx_11_0_arm64 or manylinux_2_17_x86_64."
         ),
     )
     return parser
