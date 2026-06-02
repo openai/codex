@@ -282,7 +282,6 @@ async fn forked_compacted_history_inherits_effective_generation_on_resume() -> R
             initial.config.clone(),
             rollout_path,
             /*thread_source*/ None,
-            /*persist_extended_history*/ false,
             /*parent_trace*/ None,
         )
         .await?;

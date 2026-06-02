@@ -1,8 +1,12 @@
 use anyhow::Result;
 use codex_features::Feature;
+use codex_login::CodexAuth;
 use codex_protocol::config_types::ServiceTier;
+use codex_protocol::protocol::CompactedItem;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::RolloutItem;
 use core_test_support::responses::WebSocketConnectionConfig;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -122,6 +126,67 @@ async fn websocket_first_turn_uses_startup_prewarm_and_create() -> Result<()> {
     )?;
     assert_eq!(turn_metadata["request_kind"].as_str(), Some("turn"));
 
+    server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn websocket_forked_history_prewarm_uses_effective_window_generation() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_websocket_server(vec![
+        vec![vec![
+            ev_response_created("warm-initial"),
+            ev_completed("warm-initial"),
+        ]],
+        vec![vec![
+            ev_response_created("warm-fork"),
+            ev_completed("warm-fork"),
+        ]],
+    ])
+    .await;
+
+    let mut builder = test_codex();
+    let initial = builder.build_with_websocket_server(&server).await?;
+    server
+        .wait_for_request(/*connection_index*/ 0, /*request_index*/ 0)
+        .await;
+    initial.codex.shutdown_and_wait().await?;
+
+    let forked = initial
+        .thread_manager
+        .resume_thread_with_history(
+            initial.config.clone(),
+            InitialHistory::Forked(vec![RolloutItem::Compacted(CompactedItem {
+                message: "summary".to_string(),
+                replacement_history: Some(Vec::new()),
+            })]),
+            codex_core::test_support::auth_manager_from_auth(CodexAuth::from_api_key("dummy")),
+            /*parent_trace*/ None,
+        )
+        .await?;
+    let warmup = server
+        .wait_for_request(/*connection_index*/ 1, /*request_index*/ 0)
+        .await
+        .body_json();
+
+    assert_eq!(warmup["generate"].as_bool(), Some(false));
+    let window_id = warmup["client_metadata"]["x-codex-window-id"]
+        .as_str()
+        .expect("warmup window id");
+    assert_eq!(
+        window_id.rsplit_once(':').map(|(_, generation)| generation),
+        Some("1")
+    );
+    let metadata: Value = serde_json::from_str(
+        warmup["client_metadata"]["x-codex-turn-metadata"]
+            .as_str()
+            .expect("warmup turn metadata"),
+    )?;
+    assert_eq!(metadata["request_kind"].as_str(), Some("prewarm"));
+    assert_eq!(metadata["window_id"].as_str(), Some(window_id));
+
+    forked.thread.shutdown_and_wait().await?;
     server.shutdown().await;
     Ok(())
 }

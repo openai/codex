@@ -2,6 +2,7 @@ use super::AuthRequestTelemetryContext;
 use super::ModelClient;
 use super::PendingUnauthorizedRetry;
 use super::UnauthorizedRecoveryExecution;
+use super::WebsocketSession;
 use super::X_CODEX_INSTALLATION_ID_HEADER;
 use super::X_CODEX_PARENT_THREAD_ID_HEADER;
 use super::X_CODEX_TURN_METADATA_HEADER;
@@ -323,6 +324,34 @@ fn build_ws_client_metadata_includes_window_lineage_and_turn_metadata() {
             ),
         ])
     );
+}
+
+#[test]
+fn restore_window_generation_preserves_cached_websocket_session() {
+    let client = test_model_client(SessionSource::Cli);
+    let websocket_session = WebsocketSession::default();
+    websocket_session.set_connection_reused(/*connection_reused*/ true);
+    client.store_cached_websocket_session(websocket_session);
+
+    client.restore_window_generation(/*window_generation*/ 2);
+
+    assert_eq!(
+        client.current_window_id(),
+        format!("{}:2", client.state.thread_id)
+    );
+    assert!(client.take_cached_websocket_session().connection_reused());
+
+    let websocket_session = WebsocketSession::default();
+    websocket_session.set_connection_reused(/*connection_reused*/ true);
+    client.store_cached_websocket_session(websocket_session);
+
+    client.set_window_generation(/*window_generation*/ 3);
+
+    assert_eq!(
+        client.current_window_id(),
+        format!("{}:3", client.state.thread_id)
+    );
+    assert!(!client.take_cached_websocket_session().connection_reused());
 }
 
 #[tokio::test]

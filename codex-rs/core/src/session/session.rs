@@ -517,17 +517,6 @@ impl Session {
             }
             InitialHistory::Resumed(resumed_history) => resumed_history.conversation_id,
         };
-        let window_generation = match &initial_history {
-            InitialHistory::Resumed(resumed_history) => {
-                super::rollout_reconstruction::effective_window_generation_from_rollout(
-                    &resumed_history.history,
-                )
-            }
-            InitialHistory::Forked(history) => {
-                super::rollout_reconstruction::effective_window_generation_from_rollout(history)
-            }
-            InitialHistory::New | InitialHistory::Cleared => 0,
-        };
         // Kick off independent async setup tasks in parallel to reduce startup latency.
         //
         // - initialize thread persistence with new or resumed session info
@@ -666,6 +655,9 @@ impl Session {
             );
         }
 
+        let initial_history =
+            super::rollout_reconstruction::PreparedInitialHistory::new(initial_history);
+        let window_generation = initial_history.window_generation();
         let mut live_thread_init =
             LiveThreadInitGuard::new(thread_persistence_result.map_err(|e| {
                 error!("failed to initialize thread persistence: {e:#}");
@@ -1076,7 +1068,7 @@ impl Session {
             }
             // Dispatch the SessionConfiguredEvent first and then report any errors.
             // If resuming, include converted initial messages in the payload so UIs can render them immediately.
-            let initial_messages = initial_history.get_event_msgs();
+            let initial_messages = initial_history.history().get_event_msgs();
             let events = std::iter::once(Event {
                 id: INITIAL_SUBMIT_ID.to_owned(),
                 msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
@@ -1219,7 +1211,7 @@ impl Session {
             }
             sess.schedule_startup_prewarm(session_configuration.base_instructions.clone())
                 .await;
-            let session_start_source = match &initial_history {
+            let session_start_source = match initial_history.history() {
                 InitialHistory::Resumed(_) => codex_hooks::SessionStartSource::Resume,
                 InitialHistory::New | InitialHistory::Forked(_) => {
                     codex_hooks::SessionStartSource::Startup
@@ -1227,8 +1219,9 @@ impl Session {
                 InitialHistory::Cleared => codex_hooks::SessionStartSource::Clear,
             };
 
-            // record_initial_history can emit events. We record only after the SessionConfiguredEvent is emitted.
-            Box::pin(sess.record_initial_history(initial_history)).await;
+            // record_prepared_initial_history can emit events. We record only after the
+            // SessionConfiguredEvent is emitted.
+            Box::pin(sess.record_prepared_initial_history(initial_history)).await;
             {
                 let mut state = sess.state.lock().await;
                 state.queue_pending_session_start_source(session_start_source);

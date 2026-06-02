@@ -398,6 +398,14 @@ impl ModelClient {
         self.state
             .window_generation
             .store(window_generation, Ordering::Relaxed);
+        self.store_cached_websocket_session(WebsocketSession::default());
+    }
+
+    /// Restores persisted window lineage without changing WebSocket continuation state.
+    pub(crate) fn restore_window_generation(&self, window_generation: u64) {
+        self.state
+            .window_generation
+            .store(window_generation, Ordering::Relaxed);
     }
 
     pub(crate) fn advance_window_generation(&self) {

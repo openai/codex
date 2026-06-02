@@ -622,7 +622,6 @@ impl Codex {
             inherited_shell_snapshot,
             user_shell_override,
         };
-
         // Generate a unique ID for the lifetime of this Codex session.
         let session_source_clone = session_configuration.session_source.clone();
         let (agent_status_tx, agent_status_rx) = watch::channel(AgentStatus::PendingInit);
@@ -1202,7 +1201,18 @@ impl Session {
         state.clear_connector_selection();
     }
 
+    #[cfg(test)]
     async fn record_initial_history(&self, conversation_history: InitialHistory) {
+        let initial_history =
+            rollout_reconstruction::PreparedInitialHistory::new(conversation_history);
+        self.record_prepared_initial_history(initial_history).await;
+    }
+
+    async fn record_prepared_initial_history(
+        &self,
+        initial_history: rollout_reconstruction::PreparedInitialHistory,
+    ) {
+        let (conversation_history, reconstruction_plan) = initial_history.into_parts();
         let is_subagent = {
             let state = self.state.lock().await;
             state
@@ -1215,18 +1225,22 @@ impl Session {
             let mut state = self.state.lock().await;
             state.set_next_turn_is_first(!has_prior_user_turns);
         }
-        match conversation_history {
-            InitialHistory::New | InitialHistory::Cleared => {
+        match (conversation_history, reconstruction_plan) {
+            (InitialHistory::New | InitialHistory::Cleared, None) => {
                 // Defer initial context insertion until the first real turn starts so
                 // turn/start overrides can be merged before we write model-visible context.
                 self.set_previous_turn_settings(/*previous_turn_settings*/ None)
                     .await;
             }
-            InitialHistory::Resumed(resumed_history) => {
+            (InitialHistory::Resumed(resumed_history), Some(reconstruction_plan)) => {
                 let turn_context = self.new_default_turn().await;
                 let rollout_items = resumed_history.history;
                 let previous_turn_settings = self
-                    .apply_rollout_reconstruction(&turn_context, &rollout_items)
+                    .apply_rollout_reconstruction_plan(
+                        &turn_context,
+                        &rollout_items,
+                        reconstruction_plan,
+                    )
                     .await;
 
                 // If resuming, warn when the last recorded model differs from the current one.
@@ -1262,10 +1276,14 @@ impl Session {
                     let _ = self.flush_rollout().await;
                 }
             }
-            InitialHistory::Forked(rollout_items) => {
+            (InitialHistory::Forked(rollout_items), Some(reconstruction_plan)) => {
                 let turn_context = self.new_default_turn().await;
-                self.apply_rollout_reconstruction(&turn_context, &rollout_items)
-                    .await;
+                self.apply_rollout_reconstruction_plan(
+                    &turn_context,
+                    &rollout_items,
+                    reconstruction_plan,
+                )
+                .await;
 
                 // Seed usage info from the recorded rollout so UIs can show token counts
                 // immediately on resume/fork.
@@ -1287,6 +1305,7 @@ impl Session {
                     let _ = self.flush_rollout().await;
                 }
             }
+            _ => unreachable!("prepared initial history must match its reconstruction"),
         }
     }
 
@@ -1298,7 +1317,34 @@ impl Session {
         let reconstructed_rollout = self
             .reconstruct_history_from_rollout(turn_context, rollout_items)
             .await;
+        self.apply_reconstructed_rollout(turn_context, reconstructed_rollout)
+            .await
+    }
+
+    async fn apply_rollout_reconstruction_plan(
+        &self,
+        turn_context: &TurnContext,
+        rollout_items: &[RolloutItem],
+        reconstruction_plan: rollout_reconstruction::RolloutReconstructionPlan,
+    ) -> Option<PreviousTurnSettings> {
+        let reconstructed_rollout = Self::materialize_rollout_reconstruction(
+            turn_context.truncation_policy,
+            rollout_items,
+            reconstruction_plan,
+        );
+        self.apply_reconstructed_rollout(turn_context, reconstructed_rollout)
+            .await
+    }
+
+    async fn apply_reconstructed_rollout(
+        &self,
+        turn_context: &TurnContext,
+        reconstructed_rollout: rollout_reconstruction::RolloutReconstruction,
+    ) -> Option<PreviousTurnSettings> {
         let previous_turn_settings = reconstructed_rollout.previous_turn_settings.clone();
+        self.services
+            .model_client
+            .restore_window_generation(reconstructed_rollout.window_generation);
         self.replace_history(
             reconstructed_rollout.history,
             reconstructed_rollout.reference_context_item,

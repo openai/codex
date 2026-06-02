@@ -796,6 +796,10 @@ async fn record_initial_history_resumed_rollback_drops_incomplete_user_turn_comp
             codex_protocol::protocol::ThreadRolledBackEvent { num_turns: 1 },
         )),
     ];
+    let reconstructed = session
+        .reconstruct_history_from_rollout(&turn_context, &rollout_items)
+        .await;
+    assert_eq!(reconstructed.window_generation, 0);
 
     session
         .record_initial_history(InitialHistory::Resumed(ResumedHistory {
