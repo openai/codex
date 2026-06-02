@@ -108,6 +108,7 @@ async fn login_with_access_token_writes_only_token() {
         dir.path(),
         &agent_identity,
         AuthCredentialsStoreMode::File,
+        /*forced_chatgpt_workspace_id*/ None,
         Some(&chatgpt_base_url),
     )
     .await
@@ -146,11 +147,13 @@ async fn login_with_access_token_writes_only_personal_access_token() {
         .mount(&server)
         .await;
     let _authapi_guard = EnvVarGuard::set("CODEX_AUTHAPI_BASE_URL", &server.uri());
+    let allowed_workspaces = [WORKSPACE_ID_ALLOWED.to_string()];
 
     super::login_with_access_token(
         dir.path(),
         "at-login-test",
         AuthCredentialsStoreMode::File,
+        Some(&allowed_workspaces),
         /*chatgpt_base_url*/ None,
     )
     .await
@@ -176,6 +179,44 @@ async fn login_with_access_token_writes_only_personal_access_token() {
 
 #[tokio::test]
 #[serial(codex_auth_env)]
+async fn login_with_access_token_rejects_personal_access_token_workspace_mismatch() {
+    let dir = tempdir().unwrap();
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/v1/user-auth-credential/whoami"))
+        .and(header("authorization", "Bearer at-workspace-mismatch"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(personal_access_token_whoami(
+                WORKSPACE_ID_DISALLOWED,
+                /*email*/ None,
+            )),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let _authapi_guard = EnvVarGuard::set("CODEX_AUTHAPI_BASE_URL", &server.uri());
+    let allowed_workspaces = [WORKSPACE_ID_ALLOWED.to_string()];
+
+    let err = super::login_with_access_token(
+        dir.path(),
+        "at-workspace-mismatch",
+        AuthCredentialsStoreMode::File,
+        Some(&allowed_workspaces),
+        /*chatgpt_base_url*/ None,
+    )
+    .await
+    .expect_err("personal access token workspace mismatch should fail");
+
+    assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied);
+    assert!(
+        !get_auth_file(dir.path()).exists(),
+        "workspace mismatch should not write auth.json"
+    );
+    server.verify().await;
+}
+
+#[tokio::test]
+#[serial(codex_auth_env)]
 async fn login_with_access_token_rejects_invalid_personal_access_token() {
     let dir = tempdir().unwrap();
     let server = MockServer::start().await;
@@ -191,6 +232,7 @@ async fn login_with_access_token_rejects_invalid_personal_access_token() {
         dir.path(),
         "at-invalid-login",
         AuthCredentialsStoreMode::File,
+        /*forced_chatgpt_workspace_id*/ None,
         /*chatgpt_base_url*/ None,
     )
     .await
@@ -212,6 +254,7 @@ async fn login_with_access_token_rejects_invalid_jwt() {
         dir.path(),
         "not-a-jwt",
         AuthCredentialsStoreMode::File,
+        /*forced_chatgpt_workspace_id*/ None,
         /*chatgpt_base_url*/ None,
     )
     .await
@@ -242,6 +285,7 @@ async fn login_with_access_token_rejects_unsigned_jwt() {
         dir.path(),
         &agent_identity,
         AuthCredentialsStoreMode::File,
+        /*forced_chatgpt_workspace_id*/ None,
         Some(&chatgpt_base_url),
     )
     .await
@@ -917,6 +961,7 @@ async fn enforce_login_restrictions_logs_out_for_personal_access_token_workspace
         codex_home.path(),
         "at-workspace-mismatch",
         AuthCredentialsStoreMode::File,
+        /*forced_chatgpt_workspace_id*/ None,
         /*chatgpt_base_url*/ None,
     )
     .await

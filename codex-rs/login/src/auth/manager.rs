@@ -598,11 +598,19 @@ pub async fn login_with_access_token(
     codex_home: &Path,
     access_token: &str,
     auth_credentials_store_mode: AuthCredentialsStoreMode,
+    forced_chatgpt_workspace_id: Option<&[String]>,
     chatgpt_base_url: Option<&str>,
 ) -> std::io::Result<()> {
     let auth_dot_json = match classify_codex_access_token(access_token) {
         CodexAccessToken::PersonalAccessToken(access_token) => {
-            PersonalAccessTokenAuth::load(access_token).await?;
+            let auth = PersonalAccessTokenAuth::load(access_token).await?;
+            crate::server::ensure_workspace_account_allowed(
+                forced_chatgpt_workspace_id,
+                auth.account_id(),
+            )
+            .map_err(|message| {
+                std::io::Error::new(std::io::ErrorKind::PermissionDenied, message)
+            })?;
             AuthDotJson {
                 auth_mode: Some(ApiAuthMode::PersonalAccessToken),
                 openai_api_key: None,

@@ -941,6 +941,17 @@ pub(crate) fn ensure_workspace_allowed(
         return Err("Login is restricted to a specific workspace, but the token did not include an chatgpt_account_id claim.".to_string());
     };
 
+    ensure_workspace_account_allowed(Some(expected), actual)
+}
+
+pub(crate) fn ensure_workspace_account_allowed(
+    expected: Option<&[String]>,
+    actual: &str,
+) -> Result<(), String> {
+    let Some(expected) = expected else {
+        return Ok(());
+    };
+
     if expected.iter().any(|workspace_id| workspace_id == actual) {
         Ok(())
     } else {
