@@ -1189,6 +1189,26 @@ mod tests {
     }
 
     #[test]
+    fn setup_exe_lookup_prefers_resource_dir_for_nested_runtime_exe() {
+        let tmp = TempDir::new().expect("tempdir");
+        let package_dir = tmp.path().join("package");
+        let runtime_dir = package_dir.join(BIN_DIRNAME).join("runtime-hash");
+        let resources_dir = package_dir.join(RESOURCES_DIRNAME);
+        fs::create_dir_all(&runtime_dir).expect("create runtime dir");
+        fs::create_dir_all(&resources_dir).expect("create resources dir");
+        let exe = runtime_dir.join("node.exe");
+        let sibling_setup = runtime_dir.join("codex-windows-sandbox-setup.exe");
+        let packaged_setup = resources_dir.join("codex-windows-sandbox-setup.exe");
+        fs::write(&exe, b"node").expect("write exe");
+        fs::write(&sibling_setup, b"stale runtime setup").expect("write sibling setup");
+        fs::write(&packaged_setup, b"packaged setup").expect("write packaged setup");
+
+        let resolved = find_setup_exe_for_current_exe(&exe).expect("setup exe");
+
+        assert_eq!(resolved, packaged_setup);
+    }
+
+    #[test]
     fn loopback_proxy_url_parsing_rejects_non_loopback_and_zero_port() {
         assert_eq!(
             loopback_proxy_port_from_url("http://example.com:3128"),

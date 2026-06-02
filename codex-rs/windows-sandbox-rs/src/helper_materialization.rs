@@ -2,6 +2,7 @@ use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::fs;
 use std::io::Write;
@@ -181,30 +182,83 @@ fn sibling_source_path(kind: HelperExecutable) -> Result<PathBuf> {
     let exe = std::env::current_exe().context("resolve current executable for helper lookup")?;
     bundled_executable_path_for_exe(&exe, kind.file_name()).ok_or_else(|| {
         anyhow!(
-            "helper not found next to current executable or under {RESOURCES_DIRNAME}: {}",
+            "helper not found next to current executable or under adjacent {RESOURCES_DIRNAME} directories: {}",
             exe.display()
         )
     })
 }
 
 pub(crate) fn bundled_executable_path_for_exe(exe: &Path, file_name: &str) -> Option<PathBuf> {
-    let dir = exe.parent()?;
-    let direct_candidate = dir.join(file_name);
-    if direct_candidate.is_file() {
-        return Some(direct_candidate);
+    let mut seen = HashSet::new();
+    let mut candidates = helper_lookup_candidates(exe, file_name, &mut seen);
+
+    if let Ok(canonical_exe) = exe.canonicalize()
+        && canonical_exe != exe
+    {
+        candidates.extend(helper_lookup_candidates(
+            &canonical_exe,
+            file_name,
+            &mut seen,
+        ));
     }
 
-    if dir.file_name() == Some(OsStr::new(BIN_DIRNAME))
-        && let Some(package_dir) = dir.parent()
-    {
-        let package_resource_candidate = package_dir.join(RESOURCES_DIRNAME).join(file_name);
-        if package_resource_candidate.is_file() {
-            return Some(package_resource_candidate);
+    candidates.into_iter().find(|candidate| candidate.is_file())
+}
+
+fn helper_lookup_candidates(
+    exe: &Path,
+    file_name: &str,
+    seen: &mut HashSet<PathBuf>,
+) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    let Some(dir) = exe.parent() else {
+        return candidates;
+    };
+
+    // Nested runtimes like `node.exe` can carry stale sibling helpers; prefer packaged helpers
+    // first and only fall back to the sibling copy if we cannot find a resource-backed binary.
+    let prefer_resource_dirs = exe.file_name() != Some(OsStr::new("codex.exe"));
+    if prefer_resource_dirs {
+        push_resource_candidates(&mut candidates, seen, dir, file_name);
+        push_candidate(&mut candidates, seen, dir.join(file_name));
+    } else {
+        push_candidate(&mut candidates, seen, dir.join(file_name));
+        push_resource_candidates(&mut candidates, seen, dir, file_name);
+    }
+
+    candidates
+}
+
+fn push_resource_candidates(
+    candidates: &mut Vec<PathBuf>,
+    seen: &mut HashSet<PathBuf>,
+    dir: &Path,
+    file_name: &str,
+) {
+    // Walk a few ancestors so helper discovery still works when the current executable lives
+    // under nested runtime directories such as `bin/<hash>/node.exe`.
+    for ancestor in dir.ancestors().take(4) {
+        push_candidate(
+            candidates,
+            seen,
+            ancestor.join(RESOURCES_DIRNAME).join(file_name),
+        );
+        if ancestor.file_name() == Some(OsStr::new(BIN_DIRNAME))
+            && let Some(package_dir) = ancestor.parent()
+        {
+            push_candidate(
+                candidates,
+                seen,
+                package_dir.join(RESOURCES_DIRNAME).join(file_name),
+            );
         }
     }
+}
 
-    let resource_candidate = dir.join(RESOURCES_DIRNAME).join(file_name);
-    resource_candidate.is_file().then_some(resource_candidate)
+fn push_candidate(candidates: &mut Vec<PathBuf>, seen: &mut HashSet<PathBuf>, path: PathBuf) {
+    if seen.insert(path.clone()) {
+        candidates.push(path);
+    }
 }
 
 fn helper_destination_for_source(
@@ -537,6 +591,28 @@ mod tests {
                 .expect("helper path");
 
         assert_eq!(resolved, sibling_helper);
+    }
+
+    #[test]
+    fn helper_source_lookup_prefers_resource_dir_for_nested_runtime_exe() {
+        let tmp = TempDir::new().expect("tempdir");
+        let package_dir = tmp.path().join("package");
+        let runtime_dir = package_dir.join(BIN_DIRNAME).join("runtime-hash");
+        let resources_dir = package_dir.join(RESOURCES_DIRNAME);
+        fs::create_dir_all(&runtime_dir).expect("create runtime dir");
+        fs::create_dir_all(&resources_dir).expect("create resources dir");
+        let exe = runtime_dir.join("node.exe");
+        let sibling_helper = runtime_dir.join("codex-command-runner.exe");
+        let resource_helper = resources_dir.join("codex-command-runner.exe");
+        fs::write(&exe, b"node").expect("write exe");
+        fs::write(&sibling_helper, b"stale runtime runner").expect("write sibling helper");
+        fs::write(&resource_helper, b"package runner").expect("write resource helper");
+
+        let resolved =
+            bundled_executable_path_for_exe(&exe, /*file_name*/ "codex-command-runner.exe")
+                .expect("helper path");
+
+        assert_eq!(resolved, resource_helper);
     }
 
     #[test]
