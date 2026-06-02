@@ -9,6 +9,7 @@ use toml_edit::Value as TomlValue;
 use toml_edit::value;
 
 use crate::CONFIG_TOML_FILE;
+use crate::with_config_write_lock;
 
 pub struct MarketplaceConfigUpdate<'a> {
     pub last_updated: &'a str,
@@ -32,10 +33,17 @@ pub fn record_user_marketplace(
     update: &MarketplaceConfigUpdate<'_>,
 ) -> std::io::Result<()> {
     let config_path = codex_home.join(CONFIG_TOML_FILE);
-    let mut doc = read_or_create_document(&config_path)?;
-    upsert_marketplace(&mut doc, marketplace_name, update);
-    fs::create_dir_all(codex_home)?;
-    fs::write(config_path, doc.to_string())
+    with_config_write_lock(&config_path, |write_paths| {
+        let mut doc = read_or_create_document(
+            write_paths
+                .read_path
+                .as_deref()
+                .unwrap_or(&write_paths.write_path),
+        )?;
+        upsert_marketplace(&mut doc, marketplace_name, update);
+        fs::create_dir_all(codex_home)?;
+        fs::write(&write_paths.write_path, doc.to_string())
+    })
 }
 
 pub fn remove_user_marketplace(codex_home: &Path, marketplace_name: &str) -> std::io::Result<bool> {
@@ -48,24 +56,31 @@ pub fn remove_user_marketplace_config(
     marketplace_name: &str,
 ) -> std::io::Result<RemoveMarketplaceConfigOutcome> {
     let config_path = codex_home.join(CONFIG_TOML_FILE);
-    let mut doc = match fs::read_to_string(&config_path) {
-        Ok(raw) => raw
-            .parse::<DocumentMut>()
-            .map_err(|err| std::io::Error::new(ErrorKind::InvalidData, err))?,
-        Err(err) if err.kind() == ErrorKind::NotFound => {
-            return Ok(RemoveMarketplaceConfigOutcome::NotFound);
+    with_config_write_lock(&config_path, |write_paths| {
+        let mut doc = match fs::read_to_string(
+            write_paths
+                .read_path
+                .as_deref()
+                .unwrap_or(&write_paths.write_path),
+        ) {
+            Ok(raw) => raw
+                .parse::<DocumentMut>()
+                .map_err(|err| std::io::Error::new(ErrorKind::InvalidData, err))?,
+            Err(err) if err.kind() == ErrorKind::NotFound => {
+                return Ok(RemoveMarketplaceConfigOutcome::NotFound);
+            }
+            Err(err) => return Err(err),
+        };
+
+        let outcome = remove_marketplace(&mut doc, marketplace_name);
+        if outcome != RemoveMarketplaceConfigOutcome::Removed {
+            return Ok(outcome);
         }
-        Err(err) => return Err(err),
-    };
 
-    let outcome = remove_marketplace(&mut doc, marketplace_name);
-    if outcome != RemoveMarketplaceConfigOutcome::Removed {
-        return Ok(outcome);
-    }
-
-    fs::create_dir_all(codex_home)?;
-    fs::write(config_path, doc.to_string())?;
-    Ok(RemoveMarketplaceConfigOutcome::Removed)
+        fs::create_dir_all(codex_home)?;
+        fs::write(&write_paths.write_path, doc.to_string())?;
+        Ok(RemoveMarketplaceConfigOutcome::Removed)
+    })
 }
 
 fn read_or_create_document(config_path: &Path) -> std::io::Result<DocumentMut> {

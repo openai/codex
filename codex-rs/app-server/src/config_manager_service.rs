@@ -18,6 +18,7 @@ use codex_config::ConfigLayerStackOrdering;
 use codex_config::ConfigRequirementsToml;
 use codex_config::config_toml::ConfigToml;
 use codex_config::merge_toml_values;
+use codex_config::with_config_write_lock;
 use codex_core::config::deserialize_config_toml_with_base;
 use codex_core::config::edit::ConfigEdit;
 use codex_core::config::edit::ConfigEditsBuilder;
@@ -399,10 +400,14 @@ async fn create_empty_user_layer(
 }
 
 async fn write_empty_user_config(write_path: PathBuf) -> Result<(), ConfigManagerError> {
-    task::spawn_blocking(move || write_atomically(&write_path, ""))
-        .await
-        .map_err(|err| ConfigManagerError::anyhow("config persistence task panicked", err.into()))?
-        .map_err(|err| ConfigManagerError::io("failed to create empty user config.toml", err))
+    task::spawn_blocking(move || {
+        with_config_write_lock(&write_path, |write_paths| {
+            write_atomically(&write_paths.write_path, "")
+        })
+    })
+    .await
+    .map_err(|err| ConfigManagerError::anyhow("config persistence task panicked", err.into()))?
+    .map_err(|err| ConfigManagerError::io("failed to create empty user config.toml", err))
 }
 
 fn parse_value(value: JsonValue) -> Result<Option<TomlValue>, String> {

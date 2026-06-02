@@ -16,6 +16,7 @@ use crate::CONFIG_TOML_FILE;
 use crate::McpServerConfig;
 use crate::McpServerEnvVar;
 use crate::McpServerTransportConfig;
+use crate::with_config_write_lock;
 
 pub async fn load_global_mcp_servers(
     codex_home: &Path,
@@ -87,12 +88,19 @@ impl ConfigEditsBuilder {
 
     fn apply_blocking(self) -> std::io::Result<()> {
         let config_path = self.codex_home.join(CONFIG_TOML_FILE);
-        let mut doc = read_or_create_document(&config_path)?;
-        if let Some(servers) = self.mcp_servers.as_ref() {
-            replace_mcp_servers(&mut doc, servers);
-        }
-        fs::create_dir_all(&self.codex_home)?;
-        fs::write(config_path, doc.to_string())
+        with_config_write_lock(&config_path, |write_paths| {
+            let mut doc = read_or_create_document(
+                write_paths
+                    .read_path
+                    .as_deref()
+                    .unwrap_or(&write_paths.write_path),
+            )?;
+            if let Some(servers) = self.mcp_servers.as_ref() {
+                replace_mcp_servers(&mut doc, servers);
+            }
+            fs::create_dir_all(&self.codex_home)?;
+            fs::write(&write_paths.write_path, doc.to_string())
+        })
     }
 }
 

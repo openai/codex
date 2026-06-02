@@ -1,4 +1,5 @@
 use codex_config::types::PluginConfig;
+use codex_config::with_config_write_lock;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core_plugins::PluginInstallRequest;
@@ -793,30 +794,7 @@ impl ExternalAgentConfigService {
             return Ok(());
         }
 
-        let Some(target_parent) = target_config.parent() else {
-            return Err(invalid_data_error("config target path has no parent"));
-        };
-        fs::create_dir_all(target_parent)?;
-        if !target_config.exists() {
-            write_toml_file(&target_config, &migrated)?;
-            return Ok(());
-        }
-
-        let existing_raw = fs::read_to_string(&target_config)?;
-        let mut existing = if existing_raw.trim().is_empty() {
-            TomlValue::Table(Default::default())
-        } else {
-            toml::from_str::<TomlValue>(&existing_raw)
-                .map_err(|err| invalid_data_error(format!("invalid existing config.toml: {err}")))?
-        };
-
-        let changed = merge_missing_toml_values(&mut existing, &migrated)?;
-        if !changed {
-            return Ok(());
-        }
-
-        write_toml_file(&target_config, &existing)?;
-        Ok(())
+        merge_missing_toml_file(&target_config, &migrated)
     }
 
     fn import_mcp_server_config(&self, cwd: Option<&Path>) -> io::Result<()> {
@@ -847,26 +825,7 @@ impl ExternalAgentConfigService {
             return Ok(());
         }
 
-        let Some(target_parent) = target_config.parent() else {
-            return Err(invalid_data_error("config target path has no parent"));
-        };
-        fs::create_dir_all(target_parent)?;
-        if !target_config.exists() {
-            write_toml_file(&target_config, &migrated)?;
-            return Ok(());
-        }
-
-        let existing_raw = fs::read_to_string(&target_config)?;
-        let mut existing = if existing_raw.trim().is_empty() {
-            TomlValue::Table(Default::default())
-        } else {
-            toml::from_str::<TomlValue>(&existing_raw)
-                .map_err(|err| invalid_data_error(format!("invalid existing config.toml: {err}")))?
-        };
-        if merge_missing_toml_values(&mut existing, &migrated)? {
-            write_toml_file(&target_config, &existing)?;
-        }
-        Ok(())
+        merge_missing_toml_file(&target_config, &migrated)
     }
 
     fn import_subagents(&self, cwd: Option<&Path>) -> io::Result<usize> {
@@ -1536,6 +1495,35 @@ fn merge_missing_toml_values(existing: &mut TomlValue, incoming: &TomlValue) -> 
             "expected TOML table while merging migrated config values",
         )),
     }
+}
+
+fn merge_missing_toml_file(target_config: &Path, incoming: &TomlValue) -> io::Result<()> {
+    with_config_write_lock(target_config, |write_paths| {
+        let Some(target_parent) = write_paths.write_path.parent() else {
+            return Err(invalid_data_error("config target path has no parent"));
+        };
+        fs::create_dir_all(target_parent)?;
+        let Some(read_path) = write_paths.read_path.as_deref() else {
+            return write_toml_file(&write_paths.write_path, incoming);
+        };
+        let existing_raw = match fs::read_to_string(read_path) {
+            Ok(raw) => raw,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {
+                return write_toml_file(&write_paths.write_path, incoming);
+            }
+            Err(err) => return Err(err),
+        };
+        let mut existing = if existing_raw.trim().is_empty() {
+            TomlValue::Table(Default::default())
+        } else {
+            toml::from_str::<TomlValue>(&existing_raw)
+                .map_err(|err| invalid_data_error(format!("invalid existing config.toml: {err}")))?
+        };
+        if merge_missing_toml_values(&mut existing, incoming)? {
+            write_toml_file(&write_paths.write_path, &existing)?;
+        }
+        Ok(())
+    })
 }
 
 fn write_toml_file(path: &Path, value: &TomlValue) -> io::Result<()> {
