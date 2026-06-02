@@ -6,7 +6,6 @@ export type { AccountRateLimitsUpdatedNotification } from "./AccountRateLimitsUp
 export type { AccountSession } from "./AccountSession";
 export type { AccountSessionWorkspace } from "./AccountSessionWorkspace";
 export type { AccountSessionWorkspaceKind } from "./AccountSessionWorkspaceKind";
-export type { AccountSessionWorkspaceStatus } from "./AccountSessionWorkspaceStatus";
 export type { AccountSessionsAddParams } from "./AccountSessionsAddParams";
 export type { AccountSessionsListParams } from "./AccountSessionsListParams";
 export type { AccountSessionsLogoutParams } from "./AccountSessionsLogoutParams";

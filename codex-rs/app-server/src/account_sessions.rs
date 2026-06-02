@@ -3,21 +3,16 @@ use chrono::Utc;
 use codex_app_server_protocol::AccountSession;
 use codex_app_server_protocol::AccountSessionWorkspace;
 use codex_app_server_protocol::AccountSessionWorkspaceKind;
-use codex_app_server_protocol::AccountSessionWorkspaceStatus;
 use codex_app_server_protocol::AccountSessionsResponse;
 use codex_backend_client::AccountEntry;
 use codex_backend_client::Client as BackendClient;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_login::AuthDotJson;
 use codex_login::CodexAuth;
-use codex_login::delete_account_session_auth;
-use codex_login::load_account_session_auth;
 use codex_login::load_auth_dot_json;
 use codex_login::logout;
-use codex_login::revoke_account_session_auth;
-use codex_login::save_account_session_auth;
+use codex_login::revoke_auth_dot_json;
 use codex_login::save_auth;
-use codex_login::token_data::parse_chatgpt_jwt_claims;
 use serde::Deserialize;
 use serde::Serialize;
 use std::fs::OpenOptions;
@@ -47,13 +42,11 @@ struct StoredAccountSessions {
 #[serde(rename_all = "camelCase")]
 struct StoredAccountSession {
     session_id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    auth_json: Option<AuthDotJson>,
+    auth_json: AuthDotJson,
     email: Option<String>,
     user_id: Option<String>,
     display_name: Option<String>,
     image_url: Option<String>,
-    plan: Option<String>,
     last_used_at: i64,
     selected_workspace_account_id: Option<String>,
     workspaces: Vec<AccountSessionWorkspace>,
@@ -115,8 +108,8 @@ impl<'a> AccountSessionsStore<'a> {
                 .session_id
                 .clone_from(&stored.sessions[index].session_id);
         }
+        session.auth_json = auth_json.clone();
         let added_session_id = session.session_id.clone();
-        self.save_session_auth(&added_session_id, &auth_json)?;
         if let Some(index) = existing_index {
             stored.sessions[index] = session;
         } else {
@@ -131,7 +124,16 @@ impl<'a> AccountSessionsStore<'a> {
                 self.auth_credentials_store_mode,
             )?;
         } else if let Some(active_session_id) = stored.active_session_id.as_deref() {
-            self.save_active_session_auth(active_session_id)?;
+            let active_session = stored
+                .sessions
+                .iter()
+                .find(|session| session.session_id == active_session_id)
+                .ok_or_else(|| std::io::Error::other("Saved ChatGPT account session not found"))?;
+            save_auth(
+                self.codex_home,
+                &active_session.auth_json,
+                self.auth_credentials_store_mode,
+            )?;
         }
 
         self.save(&stored)?;
@@ -146,12 +148,10 @@ impl<'a> AccountSessionsStore<'a> {
         let mut stored = self.load()?;
         if refresh_workspace_metadata {
             for session in &mut stored.sessions {
-                let Some(mut auth_json) = self.load_session_auth(&session.session_id)? else {
-                    continue;
-                };
+                let mut auth_json = session.auth_json.clone();
                 self.refresh_workspace_metadata(session, &mut auth_json)
                     .await;
-                self.save_session_auth(&session.session_id, &auth_json)?;
+                session.auth_json = auth_json;
             }
             self.save(&stored)?;
         }
@@ -170,20 +170,9 @@ impl<'a> AccountSessionsStore<'a> {
             .position(|session| session.session_id == session_id)
             .ok_or_else(|| std::io::Error::other("Saved ChatGPT account session not found"))?;
         let removed = stored.sessions.remove(index);
-        if let Err(err) = revoke_account_session_auth(
-            self.codex_home,
-            &removed.session_id,
-            self.auth_credentials_store_mode,
-        )
-        .await
-        {
+        if let Err(err) = revoke_auth_dot_json(&removed.auth_json).await {
             tracing::warn!("failed to revoke saved account session during logout: {err}");
         }
-        delete_account_session_auth(
-            self.codex_home,
-            &removed.session_id,
-            self.auth_credentials_store_mode,
-        )?;
 
         if stored.active_session_id.as_deref() == Some(session_id) {
             let newest = stored
@@ -192,7 +181,11 @@ impl<'a> AccountSessionsStore<'a> {
                 .max_by_key(|session| session.last_used_at);
             stored.active_session_id = newest.map(|session| session.session_id.clone());
             match newest {
-                Some(session) => self.save_active_session_auth(&session.session_id)?,
+                Some(session) => save_auth(
+                    self.codex_home,
+                    &session.auth_json,
+                    self.auth_credentials_store_mode,
+                )?,
                 None => {
                     logout(self.codex_home, self.auth_credentials_store_mode)?;
                 }
@@ -215,12 +208,9 @@ impl<'a> AccountSessionsStore<'a> {
             .iter()
             .position(|session| session.session_id == session_id)
             .ok_or_else(|| std::io::Error::other("Saved ChatGPT account session not found"))?;
-        let mut auth_json = self
-            .load_session_auth(&stored.sessions[index].session_id)?
-            .ok_or_else(|| std::io::Error::other("Saved ChatGPT account session has no tokens"))?;
-        let auth = CodexAuth::from_account_session_auth_dot_json(
+        let mut auth_json = stored.sessions[index].auth_json.clone();
+        let auth = CodexAuth::from_auth_dot_json(
             self.codex_home,
-            &stored.sessions[index].session_id,
             auth_json.clone(),
             self.auth_credentials_store_mode,
             Some(self.chatgpt_base_url),
@@ -235,11 +225,6 @@ impl<'a> AccountSessionsStore<'a> {
             .switch_workspace_token(account_id)
             .await
             .map_err(std::io::Error::other)?;
-        // The exchange does not return a replacement ID token. Refresh the workspace-specific
-        // plan from the new access token and keep the saved ID token intact.
-        let plan = parse_chatgpt_jwt_claims(&replacement.access_token)
-            .ok()
-            .and_then(|claims| claims.get_chatgpt_plan_type_raw());
         let tokens = auth_json
             .tokens
             .as_mut()
@@ -252,13 +237,10 @@ impl<'a> AccountSessionsStore<'a> {
         tokens.account_id = Some(account_id.to_string());
         auth_json.last_refresh = Some(Utc::now());
         let session = &mut stored.sessions[index];
-        if let Some(plan) = plan {
-            session.plan = Some(plan);
-        }
         session.selected_workspace_account_id = Some(account_id.to_string());
         session.last_used_at = Utc::now().timestamp();
+        session.auth_json = auth_json.clone();
         stored.active_session_id = Some(session_id.to_string());
-        self.save_session_auth(session_id, &auth_json)?;
         save_auth(
             self.codex_home,
             &auth_json,
@@ -270,9 +252,6 @@ impl<'a> AccountSessionsStore<'a> {
 
     pub(crate) fn sync_active_auth(&self) -> std::io::Result<()> {
         let mut stored = self.load()?;
-        if self.migrate_legacy_auth(&mut stored)? {
-            self.save(&stored)?;
-        }
         let Some(active_session_id) = stored.active_session_id.as_ref() else {
             return Ok(());
         };
@@ -292,19 +271,18 @@ impl<'a> AccountSessionsStore<'a> {
             return Ok(());
         }
 
-        let saved_auth_json = self.load_session_auth(&session.session_id)?;
         let selected_workspace_account_id = auth_json
             .tokens
             .as_ref()
             .and_then(|tokens| tokens.account_id.clone());
-        if saved_auth_json.as_ref() == Some(&auth_json)
+        if session.auth_json == auth_json
             && (selected_workspace_account_id.is_none()
                 || session.selected_workspace_account_id == selected_workspace_account_id)
         {
             return Ok(());
         }
 
-        self.save_session_auth(&session.session_id, &auth_json)?;
+        session.auth_json = auth_json;
         if selected_workspace_account_id.is_some() {
             session.selected_workspace_account_id = selected_workspace_account_id;
         }
@@ -312,37 +290,18 @@ impl<'a> AccountSessionsStore<'a> {
     }
 
     pub(crate) async fn revoke_all_and_clear(&self) -> std::io::Result<()> {
-        let Some(mut stored) = self.read()? else {
-            return self.clear();
-        };
-        self.migrate_legacy_auth(&mut stored)?;
+        let stored = self.load()?;
         for session in stored.sessions {
-            if let Err(err) = revoke_account_session_auth(
-                self.codex_home,
-                &session.session_id,
-                self.auth_credentials_store_mode,
-            )
-            .await
-            {
+            if let Err(err) = revoke_auth_dot_json(&session.auth_json).await {
                 tracing::warn!("failed to revoke saved account session during logout: {err}");
             }
-            delete_account_session_auth(
-                self.codex_home,
-                &session.session_id,
-                self.auth_credentials_store_mode,
-            )?;
         }
         self.clear()
     }
 
     fn load(&self) -> std::io::Result<StoredAccountSessions> {
         match self.read()? {
-            Some(mut stored) => {
-                if self.migrate_legacy_auth(&mut stored)? {
-                    self.save(&stored)?;
-                }
-                Ok(stored)
-            }
+            Some(stored) => Ok(stored),
             None => {
                 let auth_json =
                     load_auth_dot_json(self.codex_home, self.auth_credentials_store_mode)?;
@@ -352,7 +311,6 @@ impl<'a> AccountSessionsStore<'a> {
                 let Some(session) = Self::session_from_auth_json(&auth_json) else {
                     return Ok(StoredAccountSessions::default());
                 };
-                self.save_session_auth(&session.session_id, &auth_json)?;
                 let stored = StoredAccountSessions {
                     active_session_id: Some(session.session_id.clone()),
                     sessions: vec![session],
@@ -361,45 +319,6 @@ impl<'a> AccountSessionsStore<'a> {
                 Ok(stored)
             }
         }
-    }
-
-    fn migrate_legacy_auth(&self, stored: &mut StoredAccountSessions) -> std::io::Result<bool> {
-        let mut migrated = false;
-        for session in &mut stored.sessions {
-            if let Some(auth_json) = session.auth_json.take() {
-                self.save_session_auth(&session.session_id, &auth_json)?;
-                migrated = true;
-            }
-        }
-        Ok(migrated)
-    }
-
-    fn load_session_auth(&self, session_id: &str) -> std::io::Result<Option<AuthDotJson>> {
-        load_account_session_auth(
-            self.codex_home,
-            session_id,
-            self.auth_credentials_store_mode,
-        )
-    }
-
-    fn save_session_auth(&self, session_id: &str, auth_json: &AuthDotJson) -> std::io::Result<()> {
-        save_account_session_auth(
-            self.codex_home,
-            session_id,
-            auth_json,
-            self.auth_credentials_store_mode,
-        )
-    }
-
-    fn save_active_session_auth(&self, session_id: &str) -> std::io::Result<()> {
-        let auth_json = self
-            .load_session_auth(session_id)?
-            .ok_or_else(|| std::io::Error::other("Saved ChatGPT account session has no tokens"))?;
-        save_auth(
-            self.codex_home,
-            &auth_json,
-            self.auth_credentials_store_mode,
-        )
     }
 
     fn clear(&self) -> std::io::Result<()> {
@@ -441,9 +360,8 @@ impl<'a> AccountSessionsStore<'a> {
         session: &mut StoredAccountSession,
         auth_json: &mut AuthDotJson,
     ) {
-        let Ok(auth) = CodexAuth::from_account_session_auth_dot_json(
+        let Ok(auth) = CodexAuth::from_auth_dot_json(
             self.codex_home,
-            &session.session_id,
             auth_json.clone(),
             self.auth_credentials_store_mode,
             Some(self.chatgpt_base_url),
@@ -490,18 +408,16 @@ impl<'a> AccountSessionsStore<'a> {
                     name: None,
                     image_url: None,
                     kind: None,
-                    status: AccountSessionWorkspaceStatus::Active,
                 }]
             })
             .unwrap_or_default();
         Some(StoredAccountSession {
             session_id: Uuid::now_v7().to_string(),
-            auth_json: None,
+            auth_json: auth_json.clone(),
             email: tokens.id_token.email.clone(),
             user_id: tokens.id_token.chatgpt_user_id.clone(),
             display_name: claims.profile.name,
             image_url: claims.profile.picture.or(claims.profile.image),
-            plan: tokens.id_token.get_chatgpt_plan_type_raw(),
             last_used_at: Utc::now().timestamp(),
             selected_workspace_account_id,
             workspaces,
@@ -546,7 +462,6 @@ impl<'a> AccountSessionsStore<'a> {
             name: account.name,
             image_url: account.profile_picture_url,
             kind,
-            status: AccountSessionWorkspaceStatus::Active,
         }
     }
 
@@ -562,7 +477,6 @@ impl<'a> AccountSessionsStore<'a> {
                 user_id: session.user_id,
                 display_name: session.display_name,
                 image_url: session.image_url,
-                plan: session.plan,
                 last_used_at: session.last_used_at,
                 selected_workspace_account_id: session.selected_workspace_account_id,
                 workspaces: session.workspaces,
