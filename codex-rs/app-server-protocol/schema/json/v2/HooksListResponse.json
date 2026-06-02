@@ -61,6 +61,12 @@
         "enabled": {
           "type": "boolean"
         },
+        "environmentId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "eventName": {
           "$ref": "#/definitions/HookEventName"
         },

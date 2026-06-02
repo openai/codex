@@ -424,7 +424,10 @@ async fn assert_exec_process_write_then_read(use_remote: bool) -> Result<()> {
     assert_eq!(session.process.process_id().as_str(), process_id);
 
     tokio::time::sleep(Duration::from_millis(200)).await;
-    session.process.write(b"hello\n".to_vec()).await?;
+    session
+        .process
+        .write(Some(b"hello\n".to_vec()), /*close_stdin*/ false)
+        .await?;
     let StartedExecProcess { process } = session;
     let wake_rx = process.subscribe_wake();
     let (output, exit_code, closed) = collect_process_output_from_reads(process, wake_rx).await?;
@@ -461,13 +464,49 @@ async fn assert_exec_process_write_then_read_without_tty(use_remote: bool) -> Re
     assert_eq!(session.process.process_id().as_str(), process_id);
 
     tokio::time::sleep(Duration::from_millis(200)).await;
-    let write_response = session.process.write(b"hello\n".to_vec()).await?;
+    let write_response = session
+        .process
+        .write(Some(b"hello\n".to_vec()), /*close_stdin*/ false)
+        .await?;
     assert_eq!(write_response.status, WriteStatus::Accepted);
     let StartedExecProcess { process } = session;
     let wake_rx = process.subscribe_wake();
     let actual = collect_process_output_from_reads(process, wake_rx).await?;
 
     assert_eq!(actual, ("from-stdin:hello\n".to_string(), Some(0), true));
+    Ok(())
+}
+
+async fn assert_exec_process_write_can_close_stdin(use_remote: bool) -> Result<()> {
+    let context = create_process_context(use_remote).await?;
+    let session = context
+        .backend
+        .start(ExecParams {
+            process_id: ProcessId::from("proc-stdin-eof"),
+            argv: vec![
+                "/bin/sh".to_string(),
+                "-c".to_string(),
+                "cat; printf ':eof\\n'".to_string(),
+            ],
+            cwd: std::env::current_dir()?,
+            env_policy: None,
+            env: Default::default(),
+            tty: false,
+            pipe_stdin: true,
+            arg0: None,
+        })
+        .await?;
+
+    let write_response = session
+        .process
+        .write(Some(b"hello".to_vec()), /*close_stdin*/ true)
+        .await?;
+    assert_eq!(write_response.status, WriteStatus::Accepted);
+    let StartedExecProcess { process } = session;
+    let wake_rx = process.subscribe_wake();
+    let actual = collect_process_output_from_reads(process, wake_rx).await?;
+
+    assert_eq!(actual, ("hello:eof\n".to_string(), Some(0), true));
     Ok(())
 }
 
@@ -493,7 +532,10 @@ async fn assert_exec_process_rejects_write_without_pipe_stdin(use_remote: bool) 
         .await?;
     assert_eq!(session.process.process_id().as_str(), process_id);
 
-    let write_response = session.process.write(b"ignored\n".to_vec()).await?;
+    let write_response = session
+        .process
+        .write(Some(b"ignored\n".to_vec()), /*close_stdin*/ false)
+        .await?;
     assert_eq!(write_response.status, WriteStatus::StdinClosed);
     let StartedExecProcess { process } = session;
     let wake_rx = process.subscribe_wake();
@@ -613,7 +655,9 @@ async fn remote_exec_process_reports_transport_disconnect() -> Result<()> {
 
     let write_result = timeout(
         Duration::from_secs(2),
-        session.process.write(b"hello".to_vec()),
+        session
+            .process
+            .write(Some(b"hello".to_vec()), /*close_stdin*/ false),
     )
     .await
     .context("timed out waiting for write after disconnect")?;
@@ -691,6 +735,14 @@ async fn exec_process_write_then_read(use_remote: bool) -> Result<()> {
 #[serial_test::serial(remote_exec_server)]
 async fn exec_process_write_then_read_without_tty(use_remote: bool) -> Result<()> {
     assert_exec_process_write_then_read_without_tty(use_remote).await
+}
+
+#[test_case(false ; "local")]
+#[test_case(true ; "remote")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[serial_test::serial(remote_exec_server)]
+async fn exec_process_write_can_close_stdin(use_remote: bool) -> Result<()> {
+    assert_exec_process_write_can_close_stdin(use_remote).await
 }
 
 #[test_case(false ; "local")]

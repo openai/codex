@@ -27,6 +27,7 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use core_test_support::PathBufExt;
 use core_test_support::PathExt;
 use core_test_support::get_remote_test_env;
+use core_test_support::hooks::trust_discovered_hooks;
 use core_test_support::responses::ev_apply_patch_custom_tool_call;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -336,6 +337,121 @@ async fn exec_command_routes_to_selected_remote_environment() -> Result<()> {
             &remote_cwd,
             RemoveOptions {
                 recursive: true,
+                force: true,
+            },
+            /*sandbox*/ None,
+        )
+        .await?;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn structured_hook_routes_to_explicit_remote_environment() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let Some(_remote_env) = get_remote_test_env() else {
+        return Ok(());
+    };
+
+    let server = start_mock_server().await;
+    let response_mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_function_call(
+                    "call-1",
+                    "exec_command",
+                    &serde_json::to_string(&json!({
+                        "shell": "/bin/sh",
+                        "cmd": "printf done",
+                        "login": false,
+                        "yield_time_ms": 1_000,
+                        "environment_id": REMOTE_ENVIRONMENT_ID,
+                    }))?,
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-1", "done"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+    let hook_input_path = format!(
+        "/tmp/codex-remote-hook-input-{}.json",
+        SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis()
+    );
+    let hook_input_path_for_config = hook_input_path.clone();
+    let mut builder = test_codex()
+        .with_pre_build_hook(move |home| {
+            let hooks = json!({
+                "hooks": {
+                    "PreToolUse": [{
+                        "matcher": ".*",
+                        "hooks": [{
+                            "type": "command",
+                            "command": format!("cat > {hook_input_path_for_config}; printf '{{\"hookSpecificOutput\":{{\"hookEventName\":\"PreToolUse\",\"additionalContext\":\"remote-hook\"}}}}'"),
+                            "environmentId": REMOTE_ENVIRONMENT_ID,
+                        }]
+                    }]
+                }
+            });
+            fs::write(home.join("hooks.json"), hooks.to_string()).expect("write hooks");
+        })
+        .with_config(trust_discovered_hooks);
+    let test = builder.build_with_remote_and_local_env(&server).await?;
+    let remote_cwd = PathBuf::from(format!(
+        "/tmp/codex-remote-hook-{}",
+        SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis()
+    ))
+    .abs();
+    test.fs()
+        .create_directory(
+            &remote_cwd,
+            CreateDirectoryOptions { recursive: true },
+            /*sandbox*/ None,
+        )
+        .await?;
+    test.submit_turn_with_environments(
+        "run remote hook",
+        Some(vec![TurnEnvironmentSelection {
+            environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
+            cwd: remote_cwd.clone(),
+        }]),
+    )
+    .await?;
+
+    let output = response_mock
+        .function_call_output_text("call-1")
+        .context("missing exec output")?;
+    assert!(output.contains("done"));
+    assert!(
+        test.fs()
+            .read_file_text(
+                &AbsolutePathBuf::from_absolute_path(&hook_input_path)?,
+                /*sandbox*/ None,
+            )
+            .await?
+            .contains("\"hook_event_name\":\"PreToolUse\"")
+    );
+    test.fs()
+        .remove(
+            &remote_cwd,
+            RemoveOptions {
+                recursive: true,
+                force: true,
+            },
+            /*sandbox*/ None,
+        )
+        .await?;
+    test.fs()
+        .remove(
+            &AbsolutePathBuf::from_absolute_path(&hook_input_path)?,
+            RemoveOptions {
+                recursive: false,
                 force: true,
             },
             /*sandbox*/ None,

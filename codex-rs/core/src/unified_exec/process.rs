@@ -137,7 +137,10 @@ impl UnifiedExecProcess {
                 .await
                 .map_err(|_| UnifiedExecError::WriteToStdin),
             ProcessHandle::ExecServer(process_handle) => {
-                match process_handle.write(data.to_vec()).await {
+                match process_handle
+                    .write(Some(data.to_vec()), /*close_stdin*/ false)
+                    .await
+                {
                     Ok(response) => match response.status {
                         WriteStatus::Accepted => Ok(()),
                         WriteStatus::UnknownProcess | WriteStatus::StdinClosed => {

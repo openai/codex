@@ -3010,8 +3010,10 @@ name = "codex-hooks"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "chrono",
  "codex-config",
+ "codex-exec-server",
  "codex-plugin",
  "codex-protocol",
  "codex-utils-absolute-path",

@@ -452,6 +452,9 @@ pub enum ConfiguredHookHandler {
         #[serde(rename = "commandWindows")]
         #[ts(rename = "commandWindows")]
         command_windows: Option<String>,
+        #[serde(rename = "environmentId")]
+        #[ts(rename = "environmentId")]
+        environment_id: Option<String>,
         #[serde(rename = "timeoutSec")]
         #[ts(rename = "timeoutSec")]
         timeout_sec: Option<u64>,

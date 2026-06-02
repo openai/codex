@@ -176,7 +176,11 @@ pub trait ExecProcess: Send + Sync {
         wait_ms: Option<u64>,
     ) -> Result<ReadResponse, ExecServerError>;
 
-    async fn write(&self, chunk: Vec<u8>) -> Result<WriteResponse, ExecServerError>;
+    async fn write(
+        &self,
+        chunk: Option<Vec<u8>>,
+        close_stdin: bool,
+    ) -> Result<WriteResponse, ExecServerError>;
 
     async fn terminate(&self) -> Result<(), ExecServerError>;
 }

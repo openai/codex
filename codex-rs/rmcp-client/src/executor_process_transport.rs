@@ -135,7 +135,10 @@ impl Transport<RoleClient> for ExecutorProcessTransport {
             // the wire is JSON plus one newline delimiter.
             let mut bytes = to_vec(&item).map_err(io::Error::other)?;
             bytes.push(b'\n');
-            let response = process.write(bytes).await.map_err(io::Error::other)?;
+            let response = process
+                .write(Some(bytes), /*close_stdin*/ false)
+                .await
+                .map_err(io::Error::other)?;
             match response.status {
                 WriteStatus::Accepted => Ok(()),
                 WriteStatus::UnknownProcess => {

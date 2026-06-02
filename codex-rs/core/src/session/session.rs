@@ -942,8 +942,13 @@ impl Session {
                     (None, None)
                 };
 
-            let hooks =
-                build_hooks_for_config(&config, plugins_manager.as_ref(), &default_shell).await;
+            let hooks = build_hooks_for_config(
+                &config,
+                plugins_manager.as_ref(),
+                &default_shell,
+                Arc::clone(&environment_manager),
+            )
+            .await;
             for warning in hooks.startup_warnings() {
                 post_session_configured_events.push(Event {
                     id: INITIAL_SUBMIT_ID.to_owned(),

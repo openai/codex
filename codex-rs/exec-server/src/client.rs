@@ -370,13 +370,15 @@ impl ExecServerClient {
     pub async fn write(
         &self,
         process_id: &ProcessId,
-        chunk: Vec<u8>,
+        chunk: Option<Vec<u8>>,
+        close_stdin: bool,
     ) -> Result<WriteResponse, ExecServerError> {
         self.call(
             EXEC_WRITE_METHOD,
             &WriteParams {
                 process_id: process_id.clone(),
-                chunk: chunk.into(),
+                chunk: chunk.map(Into::into),
+                close_stdin,
             },
         )
         .await
@@ -747,8 +749,14 @@ impl Session {
         }
     }
 
-    pub(crate) async fn write(&self, chunk: Vec<u8>) -> Result<WriteResponse, ExecServerError> {
-        self.client.write(&self.process_id, chunk).await
+    pub(crate) async fn write(
+        &self,
+        chunk: Option<Vec<u8>>,
+        close_stdin: bool,
+    ) -> Result<WriteResponse, ExecServerError> {
+        self.client
+            .write(&self.process_id, chunk, close_stdin)
+            .await
     }
 
     pub(crate) async fn terminate(&self) -> Result<(), ExecServerError> {

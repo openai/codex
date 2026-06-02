@@ -102,7 +102,9 @@ impl Default for LocalProcess {
     fn default() -> Self {
         let (outgoing_tx, mut outgoing_rx) =
             mpsc::channel::<RpcServerOutboundMessage>(NOTIFICATION_CHANNEL_CAPACITY);
-        tokio::spawn(async move { while outgoing_rx.recv().await.is_some() {} });
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn(async move { while outgoing_rx.recv().await.is_some() {} });
+        }
         Self::new(RpcNotificationSender::new(outgoing_tx))
     }
 }
@@ -352,7 +354,11 @@ impl LocalProcess {
         params: WriteParams,
     ) -> Result<WriteResponse, JSONRPCErrorError> {
         let _process_id = params.process_id.clone();
-        let _input_bytes = params.chunk.0.len();
+        if params.chunk.is_none() && !params.close_stdin {
+            return Err(invalid_params(
+                "process/write requires chunk, closeStdin, or both".to_string(),
+            ));
+        }
         let writer_tx = {
             let process_map = self.inner.processes.lock().await;
             let Some(process) = process_map.get(&params.process_id) else {
@@ -370,13 +376,28 @@ impl LocalProcess {
                     status: WriteStatus::StdinClosed,
                 });
             }
-            process.session.writer_sender()
+            params
+                .chunk
+                .as_ref()
+                .map(|_| process.session.writer_sender())
         };
 
-        writer_tx
-            .send(params.chunk.into_inner())
-            .await
-            .map_err(|_| internal_error("failed to write to process stdin".to_string()))?;
+        if let Some(chunk) = params.chunk {
+            writer_tx
+                .ok_or_else(|| internal_error("missing process stdin writer".to_string()))?
+                .send(chunk.into_inner())
+                .await
+                .map_err(|_| internal_error("failed to write to process stdin".to_string()))?;
+        }
+        if params.close_stdin {
+            let process_map = self.inner.processes.lock().await;
+            let Some(ProcessEntry::Running(process)) = process_map.get(&params.process_id) else {
+                return Ok(WriteResponse {
+                    status: WriteStatus::UnknownProcess,
+                });
+            };
+            process.session.close_stdin();
+        }
 
         Ok(WriteResponse {
             status: WriteStatus::Accepted,
@@ -479,8 +500,14 @@ impl ExecProcess for LocalExecProcess {
             .await
     }
 
-    async fn write(&self, chunk: Vec<u8>) -> Result<WriteResponse, ExecServerError> {
-        self.backend.write(&self.process_id, chunk).await
+    async fn write(
+        &self,
+        chunk: Option<Vec<u8>>,
+        close_stdin: bool,
+    ) -> Result<WriteResponse, ExecServerError> {
+        self.backend
+            .write(&self.process_id, chunk, close_stdin)
+            .await
     }
 
     async fn terminate(&self) -> Result<(), ExecServerError> {
@@ -509,11 +536,13 @@ impl LocalProcess {
     async fn write(
         &self,
         process_id: &ProcessId,
-        chunk: Vec<u8>,
+        chunk: Option<Vec<u8>>,
+        close_stdin: bool,
     ) -> Result<WriteResponse, ExecServerError> {
         self.exec_write(WriteParams {
             process_id: process_id.clone(),
-            chunk: chunk.into(),
+            chunk: chunk.map(Into::into),
+            close_stdin,
         })
         .await
         .map_err(map_handler_error)

@@ -130,7 +130,9 @@ pub struct ReadResponse {
 #[serde(rename_all = "camelCase")]
 pub struct WriteParams {
     pub process_id: ProcessId,
-    pub chunk: ByteChunk,
+    pub chunk: Option<ByteChunk>,
+    #[serde(default)]
+    pub close_stdin: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

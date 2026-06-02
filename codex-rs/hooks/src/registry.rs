@@ -1,5 +1,8 @@
 use codex_config::ConfigLayerStack;
+use codex_exec_server::EnvironmentManager;
 use codex_plugin::PluginHookSource;
+use codex_utils_absolute_path::AbsolutePathBuf;
+use std::sync::Arc;
 use tokio::process::Command;
 
 use crate::engine::ClaudeHooksEngine;
@@ -26,7 +29,7 @@ use crate::types::HookEvent;
 use crate::types::HookPayload;
 use crate::types::HookResponse;
 
-#[derive(Default, Clone)]
+#[derive(Clone)]
 pub struct HooksConfig {
     pub legacy_notify_argv: Option<Vec<String>>,
     pub feature_enabled: bool,
@@ -36,6 +39,27 @@ pub struct HooksConfig {
     pub plugin_hook_load_warnings: Vec<String>,
     pub shell_program: Option<String>,
     pub shell_args: Vec<String>,
+    pub local_cwd: AbsolutePathBuf,
+    pub environment_manager: Arc<EnvironmentManager>,
+}
+
+impl Default for HooksConfig {
+    fn default() -> Self {
+        Self {
+            legacy_notify_argv: None,
+            feature_enabled: false,
+            bypass_hook_trust: false,
+            config_layer_stack: None,
+            plugin_hook_sources: Vec::new(),
+            plugin_hook_load_warnings: Vec::new(),
+            shell_program: None,
+            shell_args: Vec::new(),
+            local_cwd: AbsolutePathBuf::current_dir().unwrap_or_else(|err| {
+                panic!("test hook config should resolve current directory: {err}")
+            }),
+            environment_manager: Arc::new(EnvironmentManager::default_for_tests()),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -73,6 +97,8 @@ impl Hooks {
             CommandShell {
                 program: config.shell_program.unwrap_or_default(),
                 args: config.shell_args,
+                local_cwd: config.local_cwd,
+                environment_manager: config.environment_manager,
             },
         );
         Self {
@@ -208,6 +234,14 @@ impl Hooks {
 pub fn list_hooks(config: HooksConfig) -> HookListOutcome {
     if !config.feature_enabled {
         return HookListOutcome::default();
+    }
+    if config.environment_manager.try_local_environment().is_none() {
+        return HookListOutcome {
+            hooks: Vec::new(),
+            warnings: vec![
+                "structured command hooks require a local execution environment".to_string(),
+            ],
+        };
     }
 
     let discovered = crate::engine::discovery::discover_handlers(

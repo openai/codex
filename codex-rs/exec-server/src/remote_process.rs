@@ -71,9 +71,13 @@ impl ExecProcess for RemoteExecProcess {
         self.session.read(after_seq, max_bytes, wait_ms).await
     }
 
-    async fn write(&self, chunk: Vec<u8>) -> Result<WriteResponse, ExecServerError> {
+    async fn write(
+        &self,
+        chunk: Option<Vec<u8>>,
+        close_stdin: bool,
+    ) -> Result<WriteResponse, ExecServerError> {
         trace!("exec process write");
-        self.session.write(chunk).await
+        self.session.write(chunk, close_stdin).await
     }
 
     async fn terminate(&self) -> Result<(), ExecServerError> {

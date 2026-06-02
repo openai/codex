@@ -563,6 +563,7 @@ async fn preview_session_start_hooks(
         hooks.preview_session_start(&codex_hooks::SessionStartRequest {
             session_id: ThreadId::new(),
             cwd: config.cwd.clone(),
+            environment_cwds: Default::default(),
             transcript_path: None,
             model: "gpt-5.2".to_string(),
             permission_mode: "default".to_string(),
@@ -1334,6 +1335,7 @@ async fn reload_user_config_layer_refreshes_hooks() -> anyhow::Result<()> {
     let request = codex_hooks::SessionStartRequest {
         session_id: session.conversation_id,
         cwd: session.get_config().await.cwd.clone(),
+        environment_cwds: Default::default(),
         transcript_path: None,
         model: "gpt-5.2".to_string(),
         permission_mode: "default".to_string(),
@@ -1411,6 +1413,7 @@ async fn refresh_runtime_config_refreshes_hooks() -> anyhow::Result<()> {
                 hooks: vec![codex_config::HookHandlerConfig::Command {
                     command: "python3 /tmp/user.py".to_string(),
                     command_windows: None,
+                    environment_id: None,
                     timeout_sec: Some(600),
                     r#async: false,
                     status_message: None,
@@ -1441,6 +1444,7 @@ async fn refresh_runtime_config_refreshes_hooks() -> anyhow::Result<()> {
     let request = codex_hooks::SessionStartRequest {
         session_id: session.conversation_id,
         cwd: session.get_config().await.cwd.clone(),
+        environment_cwds: Default::default(),
         transcript_path: None,
         model: "gpt-5.2".to_string(),
         permission_mode: "default".to_string(),

@@ -41,6 +41,7 @@ fn hooks_file_deserializes_existing_json_shape() {
                     hooks: vec![HookHandlerConfig::Command {
                         command: "python3 /tmp/pre.py".to_string(),
                         command_windows: None,
+                        environment_id: None,
                         timeout_sec: Some(10),
                         r#async: false,
                         status_message: Some("checking".to_string()),
@@ -76,6 +77,7 @@ statusMessage = "checking"
                 hooks: vec![HookHandlerConfig::Command {
                     command: "python3 /tmp/pre.py".to_string(),
                     command_windows: None,
+                    environment_id: None,
                     timeout_sec: Some(10),
                     r#async: false,
                     status_message: Some("checking".to_string()),
@@ -113,6 +115,7 @@ command = "python3 /tmp/pre.py"
                     hooks: vec![HookHandlerConfig::Command {
                         command: "python3 /tmp/pre.py".to_string(),
                         command_windows: None,
+                        environment_id: None,
                         timeout_sec: None,
                         r#async: false,
                         status_message: None,
@@ -158,6 +161,7 @@ command = "python3 /enterprise/place/pre.py"
                     hooks: vec![HookHandlerConfig::Command {
                         command: "python3 /enterprise/place/pre.py".to_string(),
                         command_windows: None,
+                        environment_id: None,
                         timeout_sec: None,
                         r#async: false,
                         status_message: None,
@@ -194,6 +198,7 @@ command_windows = "powershell -File C:\\enterprise\\hooks\\pre.ps1"
                     command_windows: Some(
                         r"powershell -File C:\enterprise\hooks\pre.ps1".to_string(),
                     ),
+                    environment_id: None,
                     timeout_sec: None,
                     r#async: false,
                     status_message: None,
@@ -229,6 +234,7 @@ commandWindows = "powershell -File C:\\enterprise\\hooks\\pre.ps1"
                     command_windows: Some(
                         r"powershell -File C:\enterprise\hooks\pre.ps1".to_string(),
                     ),
+                    environment_id: None,
                     timeout_sec: None,
                     r#async: false,
                     status_message: None,
@@ -236,5 +242,33 @@ commandWindows = "powershell -File C:\\enterprise\\hooks\\pre.ps1"
             }],
             ..Default::default()
         }
+    );
+}
+
+#[test]
+fn hook_events_deserialize_environment_id_from_toml() {
+    let parsed: HookEventsToml = toml::from_str(
+        r#"
+[[PreToolUse]]
+matcher = "^Bash$"
+
+[[PreToolUse.hooks]]
+type = "command"
+command = "echo remote"
+environment_id = "devbox"
+"#,
+    )
+    .expect("hook environment TOML should deserialize");
+
+    assert_eq!(
+        parsed.pre_tool_use[0].hooks,
+        vec![HookHandlerConfig::Command {
+            command: "echo remote".to_string(),
+            command_windows: None,
+            environment_id: Some("devbox".to_string()),
+            timeout_sec: None,
+            r#async: false,
+            status_message: None,
+        }]
     );
 }

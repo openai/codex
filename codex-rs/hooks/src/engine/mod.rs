@@ -22,6 +22,7 @@ use crate::events::user_prompt_submit::UserPromptSubmitOutcome;
 use crate::events::user_prompt_submit::UserPromptSubmitRequest;
 use crate::output_spill::HookOutputSpiller;
 use codex_config::ConfigLayerStack;
+use codex_exec_server::EnvironmentManager;
 use codex_plugin::PluginHookSource;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::HookEventName;
@@ -31,11 +32,14 @@ use codex_protocol::protocol::HookSource;
 use codex_protocol::protocol::HookTrustStatus;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 #[derive(Debug, Clone)]
 pub(crate) struct CommandShell {
     pub program: String,
     pub args: Vec<String>,
+    pub local_cwd: AbsolutePathBuf,
+    pub environment_manager: Arc<EnvironmentManager>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -43,6 +47,7 @@ pub(crate) struct ConfiguredHandler {
     pub event_name: codex_protocol::protocol::HookEventName,
     pub matcher: Option<String>,
     pub command: String,
+    pub environment_id: Option<String>,
     pub timeout_sec: u64,
     pub status_message: Option<String>,
     pub source_path: AbsolutePathBuf,
@@ -84,6 +89,7 @@ pub struct HookListEntry {
     pub handler_type: HookHandlerType,
     pub matcher: Option<String>,
     pub command: Option<String>,
+    pub environment_id: Option<String>,
     pub timeout_sec: u64,
     pub status_message: Option<String>,
     pub source_path: AbsolutePathBuf,
@@ -117,6 +123,16 @@ impl ClaudeHooksEngine {
             return Self {
                 handlers: Vec::new(),
                 warnings: Vec::new(),
+                shell,
+                output_spiller: HookOutputSpiller::new(),
+            };
+        }
+        if shell.environment_manager.try_local_environment().is_none() {
+            return Self {
+                handlers: Vec::new(),
+                warnings: vec![
+                    "structured command hooks require a local execution environment".to_string(),
+                ],
                 shell,
                 output_spiller: HookOutputSpiller::new(),
             };

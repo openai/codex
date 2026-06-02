@@ -1,5 +1,3 @@
-use std::path::Path;
-
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
 
@@ -90,7 +88,10 @@ pub(crate) async fn execute_handlers<T>(
     shell: &CommandShell,
     handlers: Vec<ConfiguredHandler>,
     input_json: String,
-    cwd: &Path,
+    environment_cwds: &std::collections::HashMap<
+        String,
+        codex_utils_absolute_path::AbsolutePathBuf,
+    >,
     turn_id: Option<String>,
     parse: fn(&ConfiguredHandler, CommandRunResult, Option<String>) -> ParsedHandler<T>,
 ) -> Vec<ParsedHandler<T>> {
@@ -98,8 +99,9 @@ pub(crate) async fn execute_handlers<T>(
     for (configured_order, handler) in handlers.into_iter().enumerate() {
         let input_json = input_json.clone();
         let turn_id = turn_id.clone();
+        let environment_cwds = environment_cwds.clone();
         pending.push(async move {
-            let result = run_command(shell, &handler, &input_json, cwd).await;
+            let result = run_command(shell, &handler, &input_json, &environment_cwds).await;
             (configured_order, parse(&handler, result, turn_id))
         });
     }
@@ -174,6 +176,7 @@ mod tests {
             event_name,
             matcher: matcher.map(str::to_owned),
             command: command.to_string(),
+            environment_id: None,
             timeout_sec: 5,
             status_message: None,
             source_path: test_path_buf("/tmp/hooks.json").abs(),

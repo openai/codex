@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
@@ -43,6 +44,17 @@ use crate::event_mapping::parse_turn_item;
 use crate::session::TurnInput;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
+
+fn hook_environment_cwds(
+    turn_context: &TurnContext,
+) -> HashMap<String, codex_utils_absolute_path::AbsolutePathBuf> {
+    turn_context
+        .environments
+        .turn_environments
+        .iter()
+        .map(|environment| (environment.environment_id.clone(), environment.cwd.clone()))
+        .collect()
+}
 use crate::tools::hook_names::HookToolName;
 use crate::tools::sandboxing::PermissionRequestPayload;
 
@@ -128,6 +140,7 @@ pub(crate) async fn run_pending_session_start_hooks(
             session_id: sess.session_id().into(),
             #[allow(deprecated)]
             cwd: turn_context.cwd.clone(),
+            environment_cwds: hook_environment_cwds(turn_context),
             transcript_path: sess.hook_transcript_path().await,
             model: turn_context.model_info.slug.clone(),
             permission_mode: hook_permission_mode(turn_context),
@@ -170,6 +183,7 @@ pub(crate) async fn run_pre_tool_use_hooks(
         subagent: thread_spawn_subagent_hook_context(sess, turn_context),
         #[allow(deprecated)]
         cwd: turn_context.cwd.clone(),
+        environment_cwds: hook_environment_cwds(turn_context),
         transcript_path: sess.hook_transcript_path().await,
         model: turn_context.model_info.slug.clone(),
         permission_mode: hook_permission_mode(turn_context),
@@ -231,6 +245,7 @@ pub(crate) async fn run_permission_request_hooks(
         subagent: thread_spawn_subagent_hook_context(sess, turn_context),
         #[allow(deprecated)]
         cwd: turn_context.cwd.to_path_buf(),
+        environment_cwds: hook_environment_cwds(turn_context),
         transcript_path: sess.hook_transcript_path().await,
         model: turn_context.model_info.slug.clone(),
         permission_mode: hook_permission_mode(turn_context),
@@ -273,6 +288,7 @@ pub(crate) async fn run_post_tool_use_hooks(
         subagent: thread_spawn_subagent_hook_context(sess, turn_context),
         #[allow(deprecated)]
         cwd: turn_context.cwd.clone(),
+        environment_cwds: hook_environment_cwds(turn_context),
         transcript_path: sess.hook_transcript_path().await,
         model: turn_context.model_info.slug.clone(),
         permission_mode: hook_permission_mode(turn_context),
@@ -346,6 +362,7 @@ pub(crate) async fn run_turn_stop_hooks(
         turn_id: turn_context.sub_id.clone(),
         #[allow(deprecated)]
         cwd: turn_context.cwd.clone(),
+        environment_cwds: hook_environment_cwds(turn_context),
         transcript_path,
         model: turn_context.model_info.slug.clone(),
         permission_mode: hook_permission_mode(turn_context),
@@ -372,6 +389,7 @@ pub(crate) async fn run_pre_compact_hooks(
         subagent: thread_spawn_subagent_hook_context(sess, turn_context),
         #[allow(deprecated)]
         cwd: turn_context.cwd.clone(),
+        environment_cwds: hook_environment_cwds(turn_context),
         transcript_path: sess.hook_transcript_path().await,
         model: turn_context.model_info.slug.clone(),
         trigger: compaction_trigger_label(trigger).to_string(),
@@ -411,6 +429,7 @@ pub(crate) async fn run_post_compact_hooks(
         subagent: thread_spawn_subagent_hook_context(sess, turn_context),
         #[allow(deprecated)]
         cwd: turn_context.cwd.clone(),
+        environment_cwds: hook_environment_cwds(turn_context),
         transcript_path: sess.hook_transcript_path().await,
         model: turn_context.model_info.slug.clone(),
         trigger: compaction_trigger_label(trigger).to_string(),
@@ -507,6 +526,7 @@ pub(crate) async fn inspect_pending_input(
                 subagent: thread_spawn_subagent_hook_context(sess, turn_context),
                 #[allow(deprecated)]
                 cwd: turn_context.cwd.clone(),
+                environment_cwds: hook_environment_cwds(turn_context),
                 transcript_path: sess.hook_transcript_path().await,
                 model: turn_context.model_info.slug.clone(),
                 permission_mode: hook_permission_mode(turn_context),

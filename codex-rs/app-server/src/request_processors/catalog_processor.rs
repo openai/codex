@@ -70,6 +70,7 @@ fn hooks_to_info(hooks: &[codex_hooks::HookListEntry]) -> Vec<HookMetadata> {
             handler_type: hook.handler_type.into(),
             matcher: hook.matcher.clone(),
             command: hook.command.clone(),
+            environment_id: hook.environment_id.clone(),
             timeout_sec: hook.timeout_sec,
             status_message: hook.status_message.clone(),
             source_path: hook.source_path.clone(),
@@ -659,6 +660,8 @@ impl CatalogRequestProcessor {
                 config_layer_stack: Some(config.config_layer_stack),
                 plugin_hook_sources: plugin_outcome.effective_plugin_hook_sources(),
                 plugin_hook_load_warnings: plugin_outcome.effective_plugin_hook_warnings(),
+                local_cwd: config.cwd.clone(),
+                environment_manager: self.thread_manager.environment_manager(),
                 ..Default::default()
             });
             data.push(codex_app_server_protocol::HooksListEntry {

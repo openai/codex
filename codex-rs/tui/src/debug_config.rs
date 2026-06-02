@@ -1010,6 +1010,7 @@ approval_policy = "never"
                             hooks: vec![HookHandlerConfig::Command {
                                 command: "python3 /enterprise/hooks/pre.py".to_string(),
                                 command_windows: None,
+                                environment_id: None,
                                 timeout_sec: Some(10),
                                 r#async: false,
                                 status_message: Some("checking".to_string()),

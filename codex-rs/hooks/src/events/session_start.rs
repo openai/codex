@@ -42,6 +42,7 @@ impl SessionStartSource {
 pub struct SessionStartRequest {
     pub session_id: ThreadId,
     pub cwd: AbsolutePathBuf,
+    pub environment_cwds: std::collections::HashMap<String, AbsolutePathBuf>,
     pub transcript_path: Option<PathBuf>,
     pub model: String,
     pub permission_mode: String,
@@ -184,7 +185,7 @@ pub(crate) async fn run(
         shell,
         matched,
         input_json,
-        request.cwd.as_path(),
+        &request.environment_cwds,
         turn_id,
         parse_completed,
     )
@@ -517,6 +518,7 @@ mod tests {
             event_name,
             matcher: None,
             command: "echo hook".to_string(),
+            environment_id: None,
             timeout_sec: 600,
             status_message: None,
             source_path: test_path_buf("/tmp/hooks.json").abs(),

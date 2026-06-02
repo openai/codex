@@ -511,6 +511,7 @@ pub struct HookMetadata {
     pub handler_type: HookHandlerType,
     pub matcher: Option<String>,
     pub command: Option<String>,
+    pub environment_id: Option<String>,
     pub timeout_sec: u64,
     pub status_message: Option<String>,
     pub source_path: AbsolutePathBuf,

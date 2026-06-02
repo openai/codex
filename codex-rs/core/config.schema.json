@@ -1032,6 +1032,10 @@
               "default": null,
               "type": "string"
             },
+            "environmentId": {
+              "default": null,
+              "type": "string"
+            },
             "statusMessage": {
               "default": null,
               "type": "string"
