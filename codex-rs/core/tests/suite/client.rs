@@ -365,7 +365,7 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
         .with_home(codex_home.clone())
         .with_config(|config| {
             // Ensure user instructions are NOT delivered on resume.
-            config.user_instructions = Some(LoadedAgentsMd::from_text("be nice"));
+            config.user_instructions = Some(LoadedAgentsMd::from_text_for_testing("be nice"));
         });
     let test = builder
         .resume(&server, codex_home, session_path.clone())
@@ -1181,7 +1181,7 @@ async fn includes_user_instructions_message_in_request() {
     let mut builder = test_codex()
         .with_auth(CodexAuth::from_api_key("Test API Key"))
         .with_config(|config| {
-            config.user_instructions = Some(LoadedAgentsMd::from_text("be nice"));
+            config.user_instructions = Some(LoadedAgentsMd::from_text_for_testing("be nice"));
         });
     let codex = builder
         .build(&server)
@@ -2213,7 +2213,7 @@ async fn includes_developer_instructions_message_in_request() {
     let mut builder = test_codex()
         .with_auth(CodexAuth::from_api_key("Test API Key"))
         .with_config(|config| {
-            config.user_instructions = Some(LoadedAgentsMd::from_text("be nice"));
+            config.user_instructions = Some(LoadedAgentsMd::from_text_for_testing("be nice"));
             config.developer_instructions = Some("be useful".to_string());
         });
     let codex = builder

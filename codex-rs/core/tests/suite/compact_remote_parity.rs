@@ -518,7 +518,9 @@ async fn build_harness_inner(
             FIXED_CWD,
         ))
         .expect("fixed cwd should be absolute");
-        config.user_instructions = Some(LoadedAgentsMd::from_text("PARITY_USER_INSTRUCTIONS"));
+        config.user_instructions = Some(LoadedAgentsMd::from_text_for_testing(
+            "PARITY_USER_INSTRUCTIONS",
+        ));
         config.developer_instructions = Some("PARITY_DEVELOPER_INSTRUCTIONS".to_string());
         if settings.service_tier_fast {
             config.service_tier = Some(ServiceTier::Fast.request_value().to_string());

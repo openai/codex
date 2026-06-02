@@ -136,7 +136,7 @@ fn empty_loaded_instructions_are_empty() {
         LoadedAgentsMd::default()
     );
     assert_eq!(
-        LoadedAgentsMd::from_text(String::new()),
+        LoadedAgentsMd::from_text_for_testing(String::new()),
         LoadedAgentsMd::default()
     );
 }
@@ -294,7 +294,9 @@ async fn source_less_user_instructions_preserve_separator_without_reporting_a_so
     fs::write(tmp.path().join("AGENTS.md"), "project doc").unwrap();
 
     let mut cfg = make_config(&tmp, /*limit*/ 4096, /*instructions*/ None).await;
-    cfg.user_instructions = Some(LoadedAgentsMd::from_text("user instructions".to_string()));
+    cfg.user_instructions = Some(LoadedAgentsMd::from_text_for_testing(
+        "user instructions".to_string(),
+    ));
 
     let mut warnings = Vec::new();
     let loaded = AgentsMdManager::new(&cfg)

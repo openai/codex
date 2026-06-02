@@ -22,7 +22,7 @@ async fn build_prompt_input_includes_context_and_user_message() -> Result<()> {
         })
         .build()
         .await?;
-    config.user_instructions = Some(LoadedAgentsMd::from_text(
+    config.user_instructions = Some(LoadedAgentsMd::from_text_for_testing(
         "Project-specific test instructions",
     ));
 
