@@ -16,16 +16,15 @@ use codex_config::ConfigLayerEntry;
 use codex_config::ConfigLayerStack;
 use codex_config::ConfigLayerStackOrdering;
 use codex_config::ConfigRequirementsToml;
+use codex_config::ConfigWriteGuard;
+use codex_config::ConfigWriteLock;
 use codex_config::config_toml::ConfigToml;
 use codex_config::merge_toml_values;
-use codex_config::with_config_write_lock;
 use codex_core::config::deserialize_config_toml_with_base;
 use codex_core::config::edit::ConfigEdit;
 use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config::validate_feature_requirements_for_config_toml;
 use codex_core::path_utils;
-use codex_core::path_utils::SymlinkWritePaths;
-use codex_core::path_utils::resolve_symlink_write_paths;
 use codex_core::path_utils::write_atomically;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use serde_json::Value as JsonValue;
@@ -111,6 +110,7 @@ impl ConfigManager {
         &self,
         params: ConfigReadParams,
     ) -> Result<ConfigReadResponse, ConfigManagerError> {
+        let _config_write_guard = self.lock_user_config().await?;
         let layers = match params.cwd.as_deref() {
             Some(cwd) => {
                 let cwd = AbsolutePathBuf::try_from(PathBuf::from(cwd)).map_err(|err| {
@@ -154,6 +154,7 @@ impl ConfigManager {
     pub(crate) async fn read_requirements(
         &self,
     ) -> Result<Option<ConfigRequirementsToml>, ConfigManagerError> {
+        let _config_write_guard = self.lock_user_config().await?;
         let layers = self
             .load_thread_agnostic_config()
             .await
@@ -212,13 +213,17 @@ impl ConfigManager {
             ));
         }
 
+        let config_write_guard = ConfigWriteLock::new(provided_path.as_path())
+            .map_err(|err| ConfigManagerError::io("failed to resolve user config path", err))?
+            .lock()
+            .await;
         let layers = self
             .load_thread_agnostic_config()
             .await
             .map_err(|err| ConfigManagerError::io("failed to load configuration", err))?;
         let user_layer = match layers.get_active_user_layer() {
             Some(layer) => Cow::Borrowed(layer),
-            None => Cow::Owned(create_empty_user_layer(&allowed_path).await?),
+            None => Cow::Owned(create_empty_user_layer(&allowed_path, &config_write_guard).await?),
         };
 
         if let Some(expected) = expected_version.as_deref()
@@ -325,7 +330,7 @@ impl ConfigManager {
         if !config_edits.is_empty() {
             ConfigEditsBuilder::for_config_path(provided_path.as_path())
                 .with_edits(config_edits)
-                .apply()
+                .apply_with_write_lock(config_write_guard)
                 .await
                 .map_err(|err| ConfigManagerError::anyhow("failed to persist config.toml", err))?;
         }
@@ -359,23 +364,31 @@ impl ConfigManager {
     async fn load_thread_agnostic_config(&self) -> std::io::Result<ConfigLayerStack> {
         self.load_config_layers(/*cwd*/ None).await
     }
+
+    async fn lock_user_config(&self) -> Result<ConfigWriteGuard, ConfigManagerError> {
+        let user_config_path = self
+            .user_config_path()
+            .map_err(|err| ConfigManagerError::io("failed to resolve user config path", err))?;
+        Ok(ConfigWriteLock::new(user_config_path.as_path())
+            .map_err(|err| ConfigManagerError::io("failed to resolve user config path", err))?
+            .lock()
+            .await)
+    }
 }
 
 async fn create_empty_user_layer(
     config_toml: &AbsolutePathBuf,
+    config_write_guard: &ConfigWriteGuard,
 ) -> Result<ConfigLayerEntry, ConfigManagerError> {
-    let SymlinkWritePaths {
-        read_path,
-        write_path,
-    } = resolve_symlink_write_paths(config_toml.as_path())
-        .map_err(|err| ConfigManagerError::io("failed to resolve user config path", err))?;
+    let write_paths = config_write_guard.write_paths();
+    let read_path = write_paths.read_path.as_ref();
     let toml_value = match read_path {
         Some(path) => match tokio::fs::read_to_string(&path).await {
             Ok(contents) => toml::from_str(&contents).map_err(|e| {
                 ConfigManagerError::toml("failed to parse existing user config.toml", e)
             })?,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-                write_empty_user_config(write_path.clone()).await?;
+                write_empty_user_config(config_write_guard).await?;
                 TomlValue::Table(toml::map::Map::new())
             }
             Err(err) => {
@@ -386,7 +399,7 @@ async fn create_empty_user_layer(
             }
         },
         None => {
-            write_empty_user_config(write_path).await?;
+            write_empty_user_config(config_write_guard).await?;
             TomlValue::Table(toml::map::Map::new())
         }
     };
@@ -399,15 +412,14 @@ async fn create_empty_user_layer(
     ))
 }
 
-async fn write_empty_user_config(write_path: PathBuf) -> Result<(), ConfigManagerError> {
-    task::spawn_blocking(move || {
-        with_config_write_lock(&write_path, |write_paths| {
-            write_atomically(&write_paths.write_path, "")
-        })
-    })
-    .await
-    .map_err(|err| ConfigManagerError::anyhow("config persistence task panicked", err.into()))?
-    .map_err(|err| ConfigManagerError::io("failed to create empty user config.toml", err))
+async fn write_empty_user_config(
+    config_write_guard: &ConfigWriteGuard,
+) -> Result<(), ConfigManagerError> {
+    let write_path = config_write_guard.write_paths().write_path.clone();
+    task::spawn_blocking(move || write_atomically(&write_path, ""))
+        .await
+        .map_err(|err| ConfigManagerError::anyhow("config persistence task panicked", err.into()))?
+        .map_err(|err| ConfigManagerError::io("failed to create empty user config.toml", err))
 }
 
 fn parse_value(value: JsonValue) -> Result<Option<TomlValue>, String> {

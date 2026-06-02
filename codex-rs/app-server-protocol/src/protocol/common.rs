@@ -999,7 +999,7 @@ client_request_definitions! {
 
     ConfigRead => "config/read" {
         params: v2::ConfigReadParams,
-        serialization: global_shared_read("config"),
+        serialization: global_shared_read("config-file"),
         response: v2::ConfigReadResponse,
     },
     ExternalAgentConfigDetect => "externalAgentConfig/detect" {
@@ -1014,20 +1014,20 @@ client_request_definitions! {
     },
     ConfigValueWrite => "config/value/write" {
         params: v2::ConfigValueWriteParams,
-        serialization: global("config"),
+        serialization: global("config-file"),
         manual_payload_conversion: manual,
         response: v2::ConfigWriteResponse,
     },
     ConfigBatchWrite => "config/batchWrite" {
         params: v2::ConfigBatchWriteParams,
-        serialization: global("config"),
+        serialization: global("config-file"),
         manual_payload_conversion: manual,
         response: v2::ConfigWriteResponse,
     },
 
     ConfigRequirementsRead => "configRequirements/read" {
         params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
-        serialization: global("config"),
+        serialization: global_shared_read("config-file"),
         response: v2::ConfigRequirementsReadResponse,
     },
 
@@ -1815,7 +1815,49 @@ mod tests {
         };
         assert_eq!(
             config_read.serialization_scope(),
-            Some(ClientRequestSerializationScope::GlobalSharedRead("config"))
+            Some(ClientRequestSerializationScope::GlobalSharedRead(
+                "config-file"
+            ))
+        );
+
+        let config_value_write = ClientRequest::ConfigValueWrite {
+            request_id: request_id(),
+            params: v2::ConfigValueWriteParams {
+                key_path: "model".to_string(),
+                value: json!("gpt-5"),
+                merge_strategy: v2::MergeStrategy::Replace,
+                file_path: None,
+                expected_version: None,
+            },
+        };
+        assert_eq!(
+            config_value_write.serialization_scope(),
+            Some(ClientRequestSerializationScope::Global("config-file"))
+        );
+
+        let config_batch_write = ClientRequest::ConfigBatchWrite {
+            request_id: request_id(),
+            params: v2::ConfigBatchWriteParams {
+                edits: Vec::new(),
+                file_path: None,
+                expected_version: None,
+                reload_user_config: false,
+            },
+        };
+        assert_eq!(
+            config_batch_write.serialization_scope(),
+            Some(ClientRequestSerializationScope::Global("config-file"))
+        );
+
+        let config_requirements_read = ClientRequest::ConfigRequirementsRead {
+            request_id: request_id(),
+            params: None,
+        };
+        assert_eq!(
+            config_requirements_read.serialization_scope(),
+            Some(ClientRequestSerializationScope::GlobalSharedRead(
+                "config-file"
+            ))
         );
 
         let account_read = ClientRequest::GetAccount {

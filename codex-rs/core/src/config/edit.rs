@@ -1,6 +1,7 @@
 use crate::path_utils::write_atomically;
 use anyhow::Context;
 use codex_config::CONFIG_TOML_FILE;
+use codex_config::ConfigWriteGuard;
 use codex_config::types::McpServerConfig;
 use codex_config::types::SessionPickerViewMode;
 use codex_config::types::ToolSuggestDisabledTool;
@@ -10,6 +11,8 @@ use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::openai_models::ReasoningEffort;
+use codex_utils_path::SymlinkWritePaths;
+use codex_utils_path::resolve_symlink_write_paths;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -702,43 +705,48 @@ fn apply_blocking_to_resolved_file(
     }
 
     with_config_write_lock(resolved_config_file, |write_paths| {
-        let serialized = match write_paths.read_path.as_ref() {
-            Some(path) => match std::fs::read_to_string(path) {
-                Ok(contents) => contents,
-                Err(err) if err.kind() == std::io::ErrorKind::NotFound => String::new(),
-                Err(err) => return Err(err.into()),
-            },
-            None => String::new(),
-        };
-
-        let doc = if serialized.is_empty() {
-            DocumentMut::new()
-        } else {
-            serialized.parse::<DocumentMut>()?
-        };
-
-        let mut document = ConfigDocument::new(doc);
-        let mut mutated = false;
-
-        for edit in edits {
-            mutated |= document.apply(edit)?;
-        }
-
-        if !mutated {
-            return Ok(());
-        }
-
-        write_atomically(&write_paths.write_path, &document.doc.to_string()).with_context(
-            || {
-                format!(
-                    "failed to persist config at {}",
-                    write_paths.write_path.display()
-                )
-            },
-        )?;
-
-        Ok(())
+        apply_blocking_to_write_paths(write_paths, edits)
     })
+}
+
+fn apply_blocking_to_write_paths(
+    write_paths: &SymlinkWritePaths,
+    edits: &[ConfigEdit],
+) -> anyhow::Result<()> {
+    let serialized = match write_paths.read_path.as_ref() {
+        Some(path) => match std::fs::read_to_string(path) {
+            Ok(contents) => contents,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => String::new(),
+            Err(err) => return Err(err.into()),
+        },
+        None => String::new(),
+    };
+
+    let doc = if serialized.is_empty() {
+        DocumentMut::new()
+    } else {
+        serialized.parse::<DocumentMut>()?
+    };
+
+    let mut document = ConfigDocument::new(doc);
+    let mut mutated = false;
+
+    for edit in edits {
+        mutated |= document.apply(edit)?;
+    }
+
+    if !mutated {
+        return Ok(());
+    }
+
+    write_atomically(&write_paths.write_path, &document.doc.to_string()).with_context(|| {
+        format!(
+            "failed to persist config at {}",
+            write_paths.write_path.display()
+        )
+    })?;
+
+    Ok(())
 }
 
 /// Persist edits asynchronously by offloading the blocking writer.
@@ -982,6 +990,19 @@ impl ConfigEditsBuilder {
     pub async fn apply(self) -> anyhow::Result<()> {
         task::spawn_blocking(move || {
             apply_blocking_to_resolved_file(&self.config_path, &self.edits)
+        })
+        .await
+        .context("config persistence task panicked")?
+    }
+
+    /// Apply edits using a config write guard already acquired for this builder's path.
+    pub async fn apply_with_write_lock(self, write_guard: ConfigWriteGuard) -> anyhow::Result<()> {
+        task::spawn_blocking(move || {
+            let write_paths = resolve_symlink_write_paths(&self.config_path)?;
+            if write_paths.write_path != write_guard.write_paths().write_path {
+                anyhow::bail!("config write guard does not match builder path");
+            }
+            apply_blocking_to_write_paths(write_guard.write_paths(), &self.edits)
         })
         .await
         .context("config persistence task panicked")?

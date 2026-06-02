@@ -1286,6 +1286,30 @@ model_reasoning_effort = "high"
     assert_eq!(contents, expected);
 }
 
+#[tokio::test]
+async fn builder_rejects_write_guard_for_different_config_path() {
+    let tmp = tempdir().expect("tmpdir");
+    let first_path = tmp.path().join("first.toml");
+    let second_path = tmp.path().join("second.toml");
+    let write_guard = codex_config::ConfigWriteLock::new(&first_path)
+        .expect("write lock")
+        .lock()
+        .await;
+
+    let error = ConfigEditsBuilder::for_config_path(&second_path)
+        .set_model(Some("gpt-5.4"), Some(ReasoningEffort::High))
+        .apply_with_write_lock(write_guard)
+        .await
+        .expect_err("mismatched write guard should fail");
+
+    assert_eq!(
+        error.to_string(),
+        "config write guard does not match builder path"
+    );
+    assert!(!first_path.exists());
+    assert!(!second_path.exists());
+}
+
 #[test]
 fn blocking_builder_set_model_round_trips_back_and_forth() {
     let tmp = tempdir().expect("tmpdir");

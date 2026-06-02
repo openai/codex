@@ -538,6 +538,59 @@ async fn version_conflict_rejected() {
 }
 
 #[tokio::test]
+async fn concurrent_writes_with_same_version_allow_only_one_success() {
+    let tmp = tempdir().expect("tempdir");
+    let user_path = tmp.path().join(CONFIG_TOML_FILE);
+    std::fs::write(&user_path, "model = \"user\"").unwrap();
+
+    let service = ConfigManager::without_managed_config_for_tests(tmp.path().to_path_buf());
+    let read = service
+        .read(ConfigReadParams {
+            include_layers: false,
+            cwd: None,
+        })
+        .await
+        .expect("read config");
+    let version = read
+        .origins
+        .get("model")
+        .expect("model origin")
+        .version
+        .clone();
+    let first = service.write_value(ConfigValueWriteParams {
+        file_path: Some(user_path.display().to_string()),
+        key_path: "model".to_string(),
+        value: serde_json::json!("gpt-first"),
+        merge_strategy: MergeStrategy::Replace,
+        expected_version: Some(version.clone()),
+    });
+    let second = service.write_value(ConfigValueWriteParams {
+        file_path: Some(user_path.display().to_string()),
+        key_path: "model".to_string(),
+        value: serde_json::json!("gpt-second"),
+        merge_strategy: MergeStrategy::Replace,
+        expected_version: Some(version),
+    });
+
+    let outcomes = tokio::join!(first, second);
+    assert_eq!(
+        [&outcomes.0, &outcomes.1]
+            .into_iter()
+            .filter(|outcome| outcome.is_ok())
+            .count(),
+        1
+    );
+    assert_eq!(
+        [&outcomes.0, &outcomes.1]
+            .into_iter()
+            .filter_map(|outcome| outcome.as_ref().err())
+            .map(ConfigManagerError::write_error_code)
+            .collect::<Vec<_>>(),
+        vec![Some(ConfigWriteErrorCode::ConfigVersionConflict)]
+    );
+}
+
+#[tokio::test]
 async fn write_value_defaults_to_user_config_path() {
     let tmp = tempdir().expect("tempdir");
     std::fs::write(tmp.path().join(CONFIG_TOML_FILE), "").unwrap();
