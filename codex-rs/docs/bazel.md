@@ -63,17 +63,16 @@ the credential.
 ### Selecting a remote build configuration
 
 OpenAI employees should default to the OpenAI host with remote execution unless
-they have a reason to choose another configuration. Add the following
-Codex-specific configuration to `%workspace%/user.bazelrc`:
+they have a reason to choose another configuration. Add the following configuration
+to `%workspace%/user.bazelrc`:
 
 ```bazelrc
 common --config=buildbuddy-openai-rbe
 ```
 
-External users should use `buildbuddy-generic-rbe`, or `buildbuddy-generic`
-without the `-rbe` suffix if they want cache, build event upload, and downloads
-without remote execution. OpenAI employees can likewise use
-`buildbuddy-openai` without the `-rbe` suffix.
+OpenAI employees who don't want remote execution can use `buildbuddy-openai`. External users
+should use `buildbuddy-generic-rbe` or `buildbuddy-generic`. See below for details on these
+configurations.
 
 ### All remote configurations
 
