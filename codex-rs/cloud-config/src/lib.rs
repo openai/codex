@@ -1452,7 +1452,9 @@ deny_read = [{deny_read:?}]
             r#"
 [apps.connector_5f3c8c41a1e54ad7a76272c89e2554fa]
 enabled = false
-allowed_approvals_reviewers = ["user"]
+
+[apps.connector_5f3c8c41a1e54ad7a76272c89e2554fa.allowed_approvals_reviewers]
+user = true
 "#,
         ));
 
@@ -1464,9 +1466,10 @@ allowed_approvals_reviewers = ["user"]
                         "connector_5f3c8c41a1e54ad7a76272c89e2554fa".to_string(),
                         codex_config::AppRequirementToml {
                             enabled: Some(false),
-                            allowed_approvals_reviewers: Some(vec![
+                            allowed_approvals_reviewers: Some(BTreeMap::from([(
                                 codex_protocol::config_types::ApprovalsReviewer::User,
-                            ]),
+                                true,
+                            )])),
                             ..Default::default()
                         },
                     )]),

@@ -148,6 +148,7 @@ impl<T> std::ops::DerefMut for ConstrainedWithSource<T> {
 pub struct ConfigRequirements {
     pub approval_policy: ConstrainedWithSource<AskForApproval>,
     pub approvals_reviewer: ConstrainedWithSource<ApprovalsReviewer>,
+    pub app_approvals_reviewers: BTreeMap<String, ConstrainedWithSource<ApprovalsReviewer>>,
     pub permission_profile: ConstrainedWithSource<PermissionProfile>,
     pub windows_sandbox_mode: ConstrainedWithSource<Option<WindowsSandboxModeToml>>,
     pub web_search_mode: ConstrainedWithSource<WebSearchMode>,
@@ -179,6 +180,7 @@ impl Default for ConfigRequirements {
                 Constrained::allow_any_from_default(),
                 /*source*/ None,
             ),
+            app_approvals_reviewers: BTreeMap::new(),
             permission_profile: ConstrainedWithSource::new(
                 Constrained::allow_any(PermissionProfile::read_only()),
                 /*source*/ None,
@@ -213,6 +215,15 @@ impl Default for ConfigRequirements {
 impl ConfigRequirements {
     pub fn exec_policy_source(&self) -> Option<&RequirementSource> {
         self.exec_policy.as_ref().map(|policy| &policy.source)
+    }
+
+    pub fn approvals_reviewer_constraint_for_app(
+        &self,
+        connector_id: Option<&str>,
+    ) -> &ConstrainedWithSource<ApprovalsReviewer> {
+        connector_id
+            .and_then(|connector_id| self.app_approvals_reviewers.get(connector_id))
+            .unwrap_or(&self.approvals_reviewer)
     }
 }
 
@@ -764,7 +775,7 @@ impl AppToolsRequirementsToml {
 #[derive(Deserialize, Debug, Clone, Default, PartialEq, Eq)]
 pub struct AppRequirementToml {
     pub enabled: Option<bool>,
-    pub allowed_approvals_reviewers: Option<Vec<ApprovalsReviewer>>,
+    pub allowed_approvals_reviewers: Option<BTreeMap<ApprovalsReviewer, bool>>,
     pub tools: Option<AppToolsRequirementsToml>,
 }
 
@@ -793,8 +804,8 @@ impl AppsRequirementsToml {
 
 /// Merge app requirements from a lower-precedence source into an existing higher-precedence set.
 /// This lets managed sources (for example Cloud/MDM) enforce setting disablement across layers,
-/// while app reviewer constraints and exact tool approval settings keep the higher-precedence
-/// value when present.
+/// while app reviewer constraints merge by reviewer and exact tool approval settings keep the
+/// higher-precedence value when present.
 pub(crate) fn merge_app_requirements_descending(
     base: &mut AppsRequirementsToml,
     incoming: AppsRequirementsToml,
@@ -810,9 +821,13 @@ pub(crate) fn merge_app_requirements_descending(
                 higher_precedence.or(lower_precedence)
             };
 
-        if base_requirement.allowed_approvals_reviewers.is_none() {
-            base_requirement.allowed_approvals_reviewers =
-                incoming_requirement.allowed_approvals_reviewers;
+        if let Some(incoming_reviewers) = incoming_requirement.allowed_approvals_reviewers {
+            let base_reviewers = base_requirement
+                .allowed_approvals_reviewers
+                .get_or_insert_with(Default::default);
+            for (reviewer, allowed) in incoming_reviewers {
+                base_reviewers.entry(reviewer).or_insert(allowed);
+            }
         }
         let Some(incoming_tools) = incoming_requirement.tools else {
             continue;
@@ -1144,28 +1159,39 @@ impl ConfigRequirementsToml {
     }
 }
 
-fn validate_app_approvals_reviewers_are_subsets(
+fn validate_app_approvals_reviewers(
     allowed_approvals_reviewers: Option<&Sourced<Vec<ApprovalsReviewer>>>,
     apps: Option<&Sourced<AppsRequirementsToml>>,
 ) -> Result<(), ConstraintError> {
-    let (Some(allowed_approvals_reviewers), Some(apps)) = (allowed_approvals_reviewers, apps)
-    else {
+    let Some(apps) = apps else {
         return Ok(());
     };
-    if allowed_approvals_reviewers.value.is_empty() {
-        return Ok(());
-    }
 
     for (app_id, app_requirement) in &apps.value.apps {
         let Some(app_allowed_approvals_reviewers) =
-            app_requirement.allowed_approvals_reviewers.as_deref()
+            app_requirement.allowed_approvals_reviewers.as_ref()
         else {
             continue;
         };
 
-        if let Some(reviewer) = app_allowed_approvals_reviewers
-            .iter()
-            .find(|reviewer| !allowed_approvals_reviewers.value.contains(reviewer))
+        if !app_allowed_approvals_reviewers
+            .values()
+            .any(|allowed| *allowed)
+        {
+            return Err(ConstraintError::empty_field(format!(
+                "apps.{app_id}.allowed_approvals_reviewers"
+            )));
+        }
+
+        if let Some(allowed_approvals_reviewers) =
+            allowed_approvals_reviewers.filter(|reviewers| !reviewers.value.is_empty())
+            && let Some(reviewer) =
+                app_allowed_approvals_reviewers
+                    .iter()
+                    .find_map(|(reviewer, allowed)| {
+                        (*allowed && !allowed_approvals_reviewers.value.contains(reviewer))
+                            .then_some(reviewer)
+                    })
         {
             return Err(ConstraintError::InvalidValue {
                 field_name: "apps.*.allowed_approvals_reviewers",
@@ -1179,11 +1205,64 @@ fn validate_app_approvals_reviewers_are_subsets(
     Ok(())
 }
 
+fn build_app_approvals_reviewer_constraints(
+    apps: Option<&Sourced<AppsRequirementsToml>>,
+    global_constraint: &ConstrainedWithSource<ApprovalsReviewer>,
+) -> Result<BTreeMap<String, ConstrainedWithSource<ApprovalsReviewer>>, ConstraintError> {
+    let Some(apps) = apps else {
+        return Ok(BTreeMap::new());
+    };
+
+    let mut constraints = BTreeMap::new();
+    for (app_id, app_requirement) in &apps.value.apps {
+        let Some(reviewer_map) = app_requirement.allowed_approvals_reviewers.as_ref() else {
+            continue;
+        };
+
+        let allowed = reviewer_map
+            .iter()
+            .filter_map(|(reviewer, allowed)| allowed.then_some(*reviewer))
+            .collect::<Vec<_>>();
+        let field_name = format!("apps.{app_id}.allowed_approvals_reviewers");
+        let Some(initial_value) = allowed
+            .iter()
+            .copied()
+            .find(|reviewer| global_constraint.can_set(reviewer).is_ok())
+        else {
+            return Err(ConstraintError::empty_field(field_name));
+        };
+
+        let allowed_for_validator = allowed.clone();
+        let global_constraint_for_validator = global_constraint.clone();
+        let requirement_source_for_error = apps.source.clone();
+        let app_id_for_error = app_id.clone();
+        let constrained = Constrained::new(initial_value, move |candidate| {
+            global_constraint_for_validator.can_set(candidate)?;
+            if allowed_for_validator.contains(candidate) {
+                Ok(())
+            } else {
+                Err(ConstraintError::InvalidValue {
+                    field_name: "apps.*.allowed_approvals_reviewers",
+                    candidate: format!("{candidate:?} for app {app_id_for_error:?}"),
+                    allowed: format!("{allowed_for_validator:?}"),
+                    requirement_source: requirement_source_for_error.clone(),
+                })
+            }
+        })?;
+        constraints.insert(
+            app_id.clone(),
+            ConstrainedWithSource::new(constrained, Some(apps.source.clone())),
+        );
+    }
+
+    Ok(constraints)
+}
+
 impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
     type Error = ConstraintError;
 
     fn try_from(toml: ConfigRequirementsWithSources) -> Result<Self, Self::Error> {
-        validate_app_approvals_reviewers_are_subsets(
+        validate_app_approvals_reviewers(
             toml.allowed_approvals_reviewers.as_ref(),
             toml.apps.as_ref(),
         )?;
@@ -1205,7 +1284,7 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             hooks,
             mcp_servers,
             plugins,
-            apps: _apps,
+            apps,
             rules,
             enforce_residency,
             network,
@@ -1272,6 +1351,8 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
                 /*source*/ None,
             ),
         };
+        let app_approvals_reviewers =
+            build_app_approvals_reviewer_constraints(apps.as_ref(), &approvals_reviewer)?;
 
         let default_permission_profile = PermissionProfile::read_only();
         let permission_profile = match allowed_sandbox_modes {
@@ -1472,6 +1553,7 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
         Ok(ConfigRequirements {
             approval_policy,
             approvals_reviewer,
+            app_approvals_reviewers,
             permission_profile,
             windows_sandbox_mode,
             web_search_mode,
@@ -2095,7 +2177,10 @@ allowed_approvals_reviewers = ["user"]
         let toml_str = r#"
             [apps.connector_123123]
             enabled = false
-            allowed_approvals_reviewers = ["user"]
+
+            [apps.connector_123123.allowed_approvals_reviewers]
+            user = true
+            auto_review = false
         "#;
         let requirements: ConfigRequirementsToml = from_str(toml_str)?;
 
@@ -2106,7 +2191,10 @@ allowed_approvals_reviewers = ["user"]
                     "connector_123123".to_string(),
                     AppRequirementToml {
                         enabled: Some(false),
-                        allowed_approvals_reviewers: Some(vec![ApprovalsReviewer::User]),
+                        allowed_approvals_reviewers: Some(BTreeMap::from([
+                            (ApprovalsReviewer::User, true),
+                            (ApprovalsReviewer::AutoReview, false),
+                        ])),
                         ..Default::default()
                     },
                 )]),
@@ -2300,12 +2388,15 @@ allowed_approvals_reviewers = ["user"]
     }
 
     #[test]
-    fn merge_app_requirements_descending_preserves_higher_app_reviewer_constraint() {
+    fn merge_app_requirements_descending_merges_app_reviewer_constraints_by_reviewer() {
         let mut merged = AppsRequirementsToml {
             apps: BTreeMap::from([(
                 "connector_123123".to_string(),
                 AppRequirementToml {
-                    allowed_approvals_reviewers: Some(vec![ApprovalsReviewer::User]),
+                    allowed_approvals_reviewers: Some(BTreeMap::from([(
+                        ApprovalsReviewer::User,
+                        true,
+                    )])),
                     ..Default::default()
                 },
             )]),
@@ -2314,7 +2405,10 @@ allowed_approvals_reviewers = ["user"]
             apps: BTreeMap::from([(
                 "connector_123123".to_string(),
                 AppRequirementToml {
-                    allowed_approvals_reviewers: Some(vec![ApprovalsReviewer::AutoReview]),
+                    allowed_approvals_reviewers: Some(BTreeMap::from([
+                        (ApprovalsReviewer::User, false),
+                        (ApprovalsReviewer::AutoReview, false),
+                    ])),
                     ..Default::default()
                 },
             )]),
@@ -2328,7 +2422,10 @@ allowed_approvals_reviewers = ["user"]
                 apps: BTreeMap::from([(
                     "connector_123123".to_string(),
                     AppRequirementToml {
-                        allowed_approvals_reviewers: Some(vec![ApprovalsReviewer::User]),
+                        allowed_approvals_reviewers: Some(BTreeMap::from([
+                            (ApprovalsReviewer::User, true),
+                            (ApprovalsReviewer::AutoReview, false),
+                        ])),
                         ..Default::default()
                     },
                 )]),
@@ -2623,8 +2720,8 @@ allowed_approvals_reviewers = ["user"]
         let toml_str = r#"
             allowed_approvals_reviewers = ["auto_review"]
 
-            [apps.calendar]
-            allowed_approvals_reviewers = ["user"]
+            [apps.calendar.allowed_approvals_reviewers]
+            user = true
         "#;
         let config: ConfigRequirementsToml = from_str(toml_str)?;
         let err = ConfigRequirements::try_from(with_unknown_source(config))
@@ -2638,6 +2735,60 @@ allowed_approvals_reviewers = ["user"]
                 allowed: "[AutoReview]".to_string(),
                 requirement_source: RequirementSource::Unknown,
             }
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn app_allowed_approvals_reviewers_requires_an_explicit_allowed_reviewer() -> Result<()> {
+        for toml_str in [
+            r#"
+                allowed_approvals_reviewers = ["auto_review"]
+
+                [apps.calendar.allowed_approvals_reviewers]
+                user = false
+            "#,
+            r#"
+                [apps.calendar.allowed_approvals_reviewers]
+            "#,
+        ] {
+            let config: ConfigRequirementsToml = from_str(toml_str)?;
+            let err = ConfigRequirements::try_from(with_unknown_source(config))
+                .expect_err("app reviewer map should explicitly allow at least one reviewer");
+
+            assert_eq!(
+                err,
+                ConstraintError::EmptyField {
+                    field_name: "apps.calendar.allowed_approvals_reviewers".to_string(),
+                }
+            );
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn app_allowed_approvals_reviewers_builds_normalized_constraint() -> Result<()> {
+        let toml_str = r#"
+            allowed_approvals_reviewers = ["user", "auto_review"]
+
+            [apps.calendar.allowed_approvals_reviewers]
+            user = false
+            auto_review = true
+        "#;
+        let config: ConfigRequirementsToml = from_str(toml_str)?;
+        let requirements = ConfigRequirements::try_from(with_unknown_source(config))?;
+        let constraint = requirements.approvals_reviewer_constraint_for_app(Some("calendar"));
+
+        assert_eq!(constraint.value(), ApprovalsReviewer::AutoReview);
+        assert!(constraint.can_set(&ApprovalsReviewer::AutoReview).is_ok());
+        assert!(constraint.can_set(&ApprovalsReviewer::User).is_err());
+        assert!(
+            requirements
+                .approvals_reviewer_constraint_for_app(Some("drive"))
+                .can_set(&ApprovalsReviewer::User)
+                .is_ok()
         );
 
         Ok(())

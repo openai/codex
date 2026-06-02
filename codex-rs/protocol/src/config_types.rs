@@ -154,7 +154,9 @@ impl fmt::Display for ProfileV2Name {
     }
 }
 
-#[derive(Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Display, TS)]
+#[derive(
+    Deserialize, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default, Serialize, Display, TS,
+)]
 #[strum(serialize_all = "snake_case")]
 #[ts(type = r#""user" | "auto_review" | "guardian_subagent""#)]
 /// Configures who approval requests are routed to for review. Examples

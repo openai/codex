@@ -24,7 +24,6 @@ use crate::config::Config;
 use crate::mcp::McpManager;
 use crate::plugins::list_tool_suggest_discoverable_plugins;
 use crate::session::INITIAL_SUBMIT_ID;
-use codex_config::AppRequirementToml;
 use codex_config::AppsRequirementsToml;
 use codex_config::types::AppToolApproval;
 use codex_config::types::ApprovalsReviewer;
@@ -587,52 +586,24 @@ pub(crate) fn mcp_approvals_reviewer(
             .and_then(|connector_id| apps_config.apps.get(connector_id))
             .and_then(|app| app.approvals_reviewer)
     });
-    let app_requirement = config
+    let reviewer_constraint = config
         .config_layer_stack
-        .requirements_toml()
-        .apps
-        .as_ref()
-        .and_then(|apps| connector_id.and_then(|connector_id| apps.apps.get(connector_id)));
+        .requirements()
+        .approvals_reviewer_constraint_for_app(connector_id);
 
-    app_approvals_reviewer(config, app_reviewer, app_requirement)
+    app_approvals_reviewer(config, app_reviewer, reviewer_constraint)
 }
 
 fn app_approvals_reviewer(
     config: &Config,
     configured: Option<ApprovalsReviewer>,
-    requirement: Option<&AppRequirementToml>,
+    reviewer_constraint: &codex_config::ConstrainedWithSource<ApprovalsReviewer>,
 ) -> ApprovalsReviewer {
-    let global_requirement = &config.config_layer_stack.requirements().approvals_reviewer;
-    let resolved_app_allowed =
-        requirement.and_then(|requirement| requirement.allowed_approvals_reviewers.as_deref());
-
-    if let Some(resolved_app_allowed) = resolved_app_allowed {
-        return configured
-            .into_iter()
-            .chain([config.approvals_reviewer])
-            .find(|reviewer| {
-                resolved_app_allowed.contains(reviewer)
-                    && global_requirement.can_set(reviewer).is_ok()
-            })
-            .or_else(|| {
-                resolved_app_allowed
-                    .iter()
-                    .copied()
-                    .find(|reviewer| global_requirement.can_set(reviewer).is_ok())
-            })
-            // Invalid or stale requirements must not widen the global managed constraint.
-            .unwrap_or_else(|| {
-                if global_requirement.can_set(&ApprovalsReviewer::User).is_ok() {
-                    ApprovalsReviewer::User
-                } else {
-                    config.approvals_reviewer
-                }
-            });
-    }
-
     configured
-        .filter(|reviewer| global_requirement.can_set(reviewer).is_ok())
-        .unwrap_or(config.approvals_reviewer)
+        .into_iter()
+        .chain([config.approvals_reviewer])
+        .find(|reviewer| reviewer_constraint.can_set(reviewer).is_ok())
+        .unwrap_or_else(|| reviewer_constraint.value())
 }
 
 fn read_apps_config(config: &Config) -> Option<AppsConfigToml> {

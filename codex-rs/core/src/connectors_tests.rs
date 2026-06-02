@@ -475,7 +475,7 @@ approvals_reviewer = "user"
 }
 
 #[tokio::test]
-async fn app_approvals_reviewer_uses_first_resolved_app_requirement_within_global_constraint() {
+async fn app_approvals_reviewer_uses_allowed_fallback_within_global_constraint() {
     let codex_home = tempdir().expect("tempdir should succeed");
     std::fs::write(
         codex_home.path().join(CONFIG_TOML_FILE),
@@ -493,7 +493,10 @@ approvals_reviewer = "user"
             apps: BTreeMap::from([(
                 "calendar".to_string(),
                 AppRequirementToml {
-                    allowed_approvals_reviewers: Some(vec![ApprovalsReviewer::AutoReview]),
+                    allowed_approvals_reviewers: Some(BTreeMap::from([
+                        (ApprovalsReviewer::User, false),
+                        (ApprovalsReviewer::AutoReview, true),
+                    ])),
                     ..Default::default()
                 },
             )]),
@@ -516,70 +519,28 @@ approvals_reviewer = "user"
 }
 
 #[tokio::test]
-async fn app_approvals_reviewer_does_not_widen_global_reviewer_requirement() {
-    let codex_home = tempdir().expect("tempdir should succeed");
-    std::fs::write(
-        codex_home.path().join(CONFIG_TOML_FILE),
-        r#"
-approvals_reviewer = "auto_review"
-"#,
-    )
-    .expect("write config");
-    let requirements = ConfigRequirementsToml {
-        allowed_approvals_reviewers: Some(vec![ApprovalsReviewer::AutoReview]),
-        ..Default::default()
-    };
-    let config = ConfigBuilder::default()
-        .codex_home(codex_home.path().to_path_buf())
-        .cloud_requirements(CloudRequirementsLoader::new(async move {
-            Ok(Some(requirements))
-        }))
-        .build()
-        .await
-        .expect("config should build");
-    let invalid_app_requirement = AppRequirementToml {
-        allowed_approvals_reviewers: Some(vec![ApprovalsReviewer::User]),
-        ..Default::default()
-    };
-    let empty_app_requirement = AppRequirementToml {
-        allowed_approvals_reviewers: Some(Vec::new()),
-        ..Default::default()
-    };
-
-    assert_eq!(
-        app_approvals_reviewer(
-            &config,
-            Some(ApprovalsReviewer::User),
-            Some(&invalid_app_requirement),
-        ),
-        ApprovalsReviewer::AutoReview
-    );
-    assert_eq!(
-        app_approvals_reviewer(&config, None, Some(&empty_app_requirement)),
-        ApprovalsReviewer::AutoReview
-    );
-}
-
-#[tokio::test]
 async fn app_approvals_reviewer_respects_app_reviewer_requirements() {
-    for (global, allowed, expected_global, expected_app) in [
+    for (global, overrides, expected_global, expected_app) in [
         (
             "auto_review",
-            vec![ApprovalsReviewer::User],
+            BTreeMap::from([(ApprovalsReviewer::User, true)]),
             ApprovalsReviewer::AutoReview,
             ApprovalsReviewer::User,
         ),
         (
             "user",
-            vec![ApprovalsReviewer::AutoReview],
+            BTreeMap::from([(ApprovalsReviewer::AutoReview, true)]),
             ApprovalsReviewer::User,
             ApprovalsReviewer::AutoReview,
         ),
         (
             "auto_review",
-            Vec::new(),
+            BTreeMap::from([
+                (ApprovalsReviewer::User, true),
+                (ApprovalsReviewer::AutoReview, true),
+            ]),
             ApprovalsReviewer::AutoReview,
-            ApprovalsReviewer::User,
+            ApprovalsReviewer::AutoReview,
         ),
     ] {
         let codex_home = tempdir().expect("tempdir should succeed");
@@ -597,7 +558,7 @@ approvals_reviewer = "{global}"
                 apps: BTreeMap::from([(
                     "calendar".to_string(),
                     AppRequirementToml {
-                        allowed_approvals_reviewers: Some(allowed),
+                        allowed_approvals_reviewers: Some(overrides),
                         ..Default::default()
                     },
                 )]),
