@@ -191,10 +191,11 @@ jobs:
             bazel_args+=(--config=v8-release-compat)
           fi
 
-          ./.github/scripts/run_bazel_with_buildbuddy.py \
+          bazel \
             --noexperimental_remote_repo_contents_cache \
             "${bazel_args[@]}" \
-            "--config=${{ matrix.bazel_config }}"
+            "--config=${{ matrix.bazel_config }}" \
+            "--remote_header=x-buildbuddy-api-key=${BUILDBUDDY_API_KEY}"
 
       - name: Stage release pair
         env:
