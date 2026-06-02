@@ -4,6 +4,7 @@ use std::io::IsTerminal;
 use std::io::Read;
 use std::io::Write;
 use std::sync::Arc;
+use std::sync::Weak;
 
 use anyhow::Context;
 use anyhow::bail;
@@ -20,9 +21,11 @@ use codex_core_api::CodexThread;
 use codex_core_api::Config;
 use codex_core_api::ConfigLayerStack;
 use codex_core_api::Constrained;
+use codex_core_api::ContentItem;
 use codex_core_api::EnvironmentManager;
 use codex_core_api::EventMsg;
 use codex_core_api::ExecServerRuntimePaths;
+use codex_core_api::ExtensionRegistryBuilder;
 use codex_core_api::Features;
 use codex_core_api::GhostSnapshotConfig;
 use codex_core_api::History;
@@ -40,9 +43,13 @@ use codex_core_api::Permissions;
 use codex_core_api::ProjectConfig;
 use codex_core_api::RealtimeAudioConfig;
 use codex_core_api::RealtimeConfig;
+use codex_core_api::ResponseItem;
 use codex_core_api::SessionPickerViewMode;
 use codex_core_api::SessionSource;
 use codex_core_api::TerminalResizeReflowConfig;
+use codex_core_api::ThreadId;
+use codex_core_api::ThreadIdleInput;
+use codex_core_api::ThreadLifecycleContributor;
 use codex_core_api::ThreadManager;
 use codex_core_api::ThreadStoreConfig;
 use codex_core_api::ToolSuggestConfig;
@@ -53,6 +60,7 @@ use codex_core_api::UriBasedFileOpener;
 use codex_core_api::UserInput;
 use codex_core_api::WebSearchMode;
 use codex_core_api::arg0_dispatch_or_else;
+use codex_core_api::async_trait;
 use codex_core_api::built_in_model_providers;
 use codex_core_api::empty_extension_registry;
 use codex_core_api::find_codex_home;
@@ -65,16 +73,67 @@ use codex_core_api::thread_store_from_config;
 #[derive(Debug, Parser)]
 #[command(
     name = "codex-thread-manager-sample",
-    about = "Run one Codex turn through ThreadManager and print mapped notifications as newline-delimited JSON."
+    about = "Run Codex turns through ThreadManager and print mapped notifications as newline-delimited JSON."
 )]
 struct Args {
     /// Override the model for this run.
     #[arg(long, value_name = "MODEL")]
     model: Option<String>,
 
+    /// Install a demo extension that sends one "keep going" message when the thread becomes idle.
+    #[arg(long)]
+    keep_going_on_idle: bool,
+
     /// Prompt text. If omitted, the prompt is read from piped stdin.
     #[arg(value_name = "PROMPT", num_args = 0.., trailing_var_arg = true)]
     prompt: Vec<String>,
+}
+
+struct KeepGoingOnIdleExtension {
+    thread_manager: Weak<ThreadManager>,
+}
+
+impl KeepGoingOnIdleExtension {
+    fn new(thread_manager: Weak<ThreadManager>) -> Self {
+        Self { thread_manager }
+    }
+
+    async fn send_keep_going_if_idle(&self, input: ThreadIdleInput<'_>) {
+        let Ok(thread_id) = ThreadId::from_string(input.thread_store.level_id()) else {
+            tracing::warn!(
+                "thread idle extension saw invalid thread id {}",
+                input.thread_store.level_id()
+            );
+            return;
+        };
+        let Some(thread_manager) = self.thread_manager.upgrade() else {
+            tracing::debug!("skipping idle keep-going because thread manager was dropped");
+            return;
+        };
+        let Ok(thread) = thread_manager.get_thread(thread_id).await else {
+            tracing::debug!("skipping idle keep-going because live thread is unavailable");
+            return;
+        };
+        let item = ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "keep going".to_string(),
+            }],
+            phase: None,
+        };
+
+        if thread.try_start_turn_if_idle(vec![item]).await.is_err() {
+            tracing::debug!("skipping idle keep-going because the thread is no longer idle");
+        }
+    }
+}
+
+#[async_trait]
+impl ThreadLifecycleContributor<Config> for KeepGoingOnIdleExtension {
+    async fn on_thread_idle(&self, input: ThreadIdleInput<'_>) {
+        self.send_keep_going_if_idle(input).await;
+    }
 }
 
 fn main() -> anyhow::Result<()> {
@@ -87,6 +146,7 @@ async fn run_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
     }
 
     let args = Args::parse();
+    let keep_going_on_idle = args.keep_going_on_idle;
     let prompt = if args.prompt.is_empty() {
         if std::io::stdin().is_terminal() {
             bail!("no prompt provided; pass a prompt argument or pipe one into stdin");
@@ -120,18 +180,29 @@ async fn run_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             .await?,
     );
     let installation_id = resolve_installation_id(&config.codex_home).await?;
-    let thread_manager = ThreadManager::new(
-        &config,
-        auth_manager,
-        SessionSource::Exec,
-        environment_manager,
-        empty_extension_registry(),
-        /*analytics_events_client*/ None,
-        Arc::clone(&thread_store),
-        state_db,
-        installation_id,
-        /*attestation_provider*/ None,
-    );
+    let thread_manager: Arc<ThreadManager> = Arc::new_cyclic(|thread_manager| {
+        let extensions = if keep_going_on_idle {
+            let mut builder = ExtensionRegistryBuilder::<Config>::new();
+            builder.thread_lifecycle_contributor(Arc::new(KeepGoingOnIdleExtension::new(
+                thread_manager.clone(),
+            )));
+            Arc::new(builder.build())
+        } else {
+            empty_extension_registry()
+        };
+        ThreadManager::new(
+            &config,
+            auth_manager,
+            SessionSource::Exec,
+            environment_manager,
+            extensions,
+            /*analytics_events_client*/ None,
+            Arc::clone(&thread_store),
+            state_db,
+            installation_id,
+            /*attestation_provider*/ None,
+        )
+    });
 
     let NewThread {
         thread_id, thread, ..
@@ -141,7 +212,7 @@ async fn run_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
         .context("start Codex thread")?;
 
     let thread_id_string = thread_id.to_string();
-    let turn_output = run_turn(&thread, &thread_id_string, prompt).await;
+    let turn_output = run_turn(&thread, &thread_id_string, prompt, keep_going_on_idle).await;
     let shutdown_result = thread.shutdown_and_wait().await;
     let _ = thread_manager.remove_thread(&thread_id).await;
 
@@ -288,7 +359,12 @@ fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::R
     Ok(config)
 }
 
-async fn run_turn(thread: &CodexThread, thread_id: &str, prompt: String) -> anyhow::Result<()> {
+async fn run_turn(
+    thread: &CodexThread,
+    thread_id: &str,
+    prompt: String,
+    keep_running_after_turn_complete: bool,
+) -> anyhow::Result<()> {
     thread
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
@@ -358,7 +434,9 @@ async fn run_turn(thread: &CodexThread, thread_id: &str, prompt: String) -> anyh
 
         match event.msg {
             EventMsg::TurnComplete(_) => {
-                return Ok(());
+                if !keep_running_after_turn_complete {
+                    return Ok(());
+                }
             }
             EventMsg::Error(event) => {
                 bail!(event.message);

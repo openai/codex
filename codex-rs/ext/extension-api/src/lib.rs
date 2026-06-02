@@ -3,6 +3,7 @@ mod contributors;
 mod registry;
 mod state;
 
+pub use async_trait::async_trait;
 pub use capabilities::AgentSpawnFuture;
 pub use capabilities::AgentSpawner;
 pub use capabilities::ExtensionEventSink;
