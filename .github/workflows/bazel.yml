@@ -66,7 +66,7 @@ jobs:
         shell: bash
         run: |
           python3 .github/scripts/rusty_v8_bazel.py check-module-bazel
-          just test-scripts
+          just test-github-scripts
 
       - name: Prepare Bazel CI
         id: prepare_bazel
