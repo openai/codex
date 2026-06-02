@@ -186,7 +186,6 @@ pub struct AccountSession {
     pub user_id: Option<String>,
     pub display_name: Option<String>,
     pub image_url: Option<String>,
-    pub plan: Option<String>,
     pub last_used_at: i64,
     pub is_active: bool,
     pub selected_workspace_account_id: Option<String>,
@@ -201,7 +200,6 @@ pub struct AccountSessionWorkspace {
     pub name: Option<String>,
     pub image_url: Option<String>,
     pub kind: Option<AccountSessionWorkspaceKind>,
-    pub status: AccountSessionWorkspaceStatus,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
@@ -210,15 +208,6 @@ pub struct AccountSessionWorkspace {
 pub enum AccountSessionWorkspaceKind {
     Personal,
     Workspace,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub enum AccountSessionWorkspaceStatus {
-    Active,
-    Disabled,
-    Deactivated,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
