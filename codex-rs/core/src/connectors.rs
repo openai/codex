@@ -129,10 +129,21 @@ pub(crate) async fn list_tool_suggest_discoverable_tools_with_auth(
         )
         .into_iter()
         .map(DiscoverableTool::from);
+    let accessible_enabled_connector_ids = accessible_connectors
+        .iter()
+        .filter(|connector| connector.is_accessible && connector.is_enabled)
+        .map(|connector| connector.id.as_str())
+        .collect::<HashSet<_>>();
     let discoverable_plugins =
         list_tool_suggest_discoverable_plugins(config, loaded_plugin_app_connector_ids)
             .await?
             .into_iter()
+            .filter(|plugin| {
+                plugin.app_connector_ids.is_empty()
+                    || plugin.app_connector_ids.iter().any(|connector_id| {
+                        accessible_enabled_connector_ids.contains(connector_id.as_str())
+                    })
+            })
             .map(DiscoverableTool::from);
     Ok(discoverable_connectors
         .chain(discoverable_plugins)

@@ -16,6 +16,7 @@ use codex_config::types::AppsDefaultConfig;
 use codex_connectors::merge::plugin_connector_to_app_info;
 use codex_connectors::metadata::connector_install_url;
 use codex_connectors::metadata::sanitize_name;
+use codex_core_plugins::startup_sync::curated_plugins_repo_path;
 use codex_features::Feature;
 use codex_login::CodexAuth;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
@@ -1283,5 +1284,86 @@ apps = true
         vec![DiscoverableTool::from(plugin_connector_to_app_info(
             "asdk_app_databricks_workspace".to_string(),
         ))]
+    );
+}
+
+#[tokio::test]
+async fn tool_suggest_omits_plugin_candidates_without_accessible_enabled_app() {
+    let codex_home = tempdir().expect("tempdir should succeed");
+    let curated_root = curated_plugins_repo_path(codex_home.path());
+    crate::plugins::test_support::write_openai_curated_marketplace(&curated_root, &["hubspot"]);
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"[features]
+apps = true
+plugins = true
+"#,
+    )
+    .expect("write config");
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .build()
+        .await
+        .expect("config should load");
+    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+    let loaded_plugin_app_connector_ids = vec!["connector_calendar".to_string()];
+
+    let discoverable_tools = list_tool_suggest_discoverable_tools_with_auth(
+        &config,
+        Some(&auth),
+        &[],
+        &loaded_plugin_app_connector_ids,
+    )
+    .await
+    .expect("discoverable tools should load");
+
+    assert_eq!(
+        discoverable_tools,
+        vec![DiscoverableTool::from(plugin_connector_to_app_info(
+            "connector_calendar".to_string(),
+        ))]
+    );
+}
+
+#[tokio::test]
+async fn tool_suggest_includes_plugin_candidates_with_accessible_enabled_app() {
+    let codex_home = tempdir().expect("tempdir should succeed");
+    let curated_root = curated_plugins_repo_path(codex_home.path());
+    crate::plugins::test_support::write_openai_curated_marketplace(&curated_root, &["hubspot"]);
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"[features]
+apps = true
+plugins = true
+"#,
+    )
+    .expect("write config");
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .build()
+        .await
+        .expect("config should load");
+    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+    let loaded_plugin_app_connector_ids = vec!["connector_calendar".to_string()];
+
+    let discoverable_tools = list_tool_suggest_discoverable_tools_with_auth(
+        &config,
+        Some(&auth),
+        &[AppInfo {
+            is_accessible: true,
+            is_enabled: true,
+            ..app("connector_calendar")
+        }],
+        &loaded_plugin_app_connector_ids,
+    )
+    .await
+    .expect("discoverable tools should load");
+
+    assert_eq!(
+        discoverable_tools
+            .iter()
+            .map(DiscoverableTool::id)
+            .collect::<Vec<_>>(),
+        vec!["hubspot@openai-curated"]
     );
 }
