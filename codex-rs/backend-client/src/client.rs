@@ -16,6 +16,7 @@ use codex_protocol::protocol::CreditsSnapshot;
 use codex_protocol::protocol::RateLimitReachedType;
 use codex_protocol::protocol::RateLimitSnapshot;
 use codex_protocol::protocol::RateLimitWindow;
+use codex_protocol::protocol::SpendControlLimitSnapshot;
 use reqwest::StatusCode;
 use reqwest::header::CONTENT_TYPE;
 use reqwest::header::HeaderMap;
@@ -470,11 +471,17 @@ impl Client {
             .rate_limit_reached_type
             .flatten()
             .and_then(|details| Self::map_rate_limit_reached_type(details.kind));
+        let individual_limit = payload
+            .spend_control
+            .flatten()
+            .and_then(|details| details.individual_limit.flatten())
+            .map(|details| Self::map_individual_limit(*details));
         let mut snapshots = vec![Self::make_rate_limit_snapshot(
             Some("codex".to_string()),
             /*limit_name*/ None,
             payload.rate_limit.flatten().map(|details| *details),
             payload.credits.flatten().map(|details| *details),
+            individual_limit,
             plan_type,
             rate_limit_reached_type,
         )];
@@ -485,6 +492,7 @@ impl Client {
                     Some(details.limit_name),
                     details.rate_limit.flatten().map(|rate_limit| *rate_limit),
                     /*credits*/ None,
+                    /*individual_limit*/ None,
                     plan_type,
                     /*rate_limit_reached_type*/ None,
                 )
@@ -498,6 +506,7 @@ impl Client {
         limit_name: Option<String>,
         rate_limit: Option<crate::types::RateLimitStatusDetails>,
         credits: Option<crate::types::CreditStatusDetails>,
+        individual_limit: Option<SpendControlLimitSnapshot>,
         plan_type: Option<AccountPlanType>,
         rate_limit_reached_type: Option<RateLimitReachedType>,
     ) -> RateLimitSnapshot {
@@ -514,6 +523,7 @@ impl Client {
             primary,
             secondary,
             credits: Self::map_credits(credits),
+            individual_limit,
             plan_type,
             rate_limit_reached_type,
         }
@@ -580,6 +590,17 @@ impl Client {
             unlimited: details.unlimited,
             balance: details.balance.flatten(),
         })
+    }
+
+    fn map_individual_limit(
+        details: crate::types::SpendControlLimitDetails,
+    ) -> SpendControlLimitSnapshot {
+        SpendControlLimitSnapshot {
+            limit: details.limit,
+            used: details.used,
+            remaining_percent: details.remaining_percent,
+            resets_at: i64::from(details.reset_at),
+        }
     }
 
     fn map_plan_type(plan_type: crate::types::PlanType) -> AccountPlanType {
@@ -676,6 +697,23 @@ mod tests {
                 balance: Some(Some("9.99".to_string())),
                 ..Default::default()
             }))),
+            spend_control: Some(Some(Box::new(
+                codex_backend_openapi_models::models::SpendControlStatusDetails {
+                    reached: false,
+                    individual_limit: Some(Some(Box::new(
+                        crate::types::SpendControlLimitDetails {
+                            source: None,
+                            limit: "25000".to_string(),
+                            used: "8000".to_string(),
+                            remaining: "17000".to_string(),
+                            used_percent: 32,
+                            remaining_percent: 68,
+                            reset_after_seconds: 3600,
+                            reset_at: 789,
+                        },
+                    ))),
+                },
+            ))),
             rate_limit_reached_type: Some(Some(BackendRateLimitReachedType {
                 kind: RateLimitReachedKind::WorkspaceMemberCreditsDepleted,
             })),
@@ -707,6 +745,15 @@ mod tests {
             snapshots[0].rate_limit_reached_type,
             Some(RateLimitReachedType::WorkspaceMemberCreditsDepleted)
         );
+        assert_eq!(
+            snapshots[0].individual_limit,
+            Some(SpendControlLimitSnapshot {
+                limit: "25000".to_string(),
+                used: "8000".to_string(),
+                remaining_percent: 68,
+                resets_at: 789,
+            })
+        );
 
         assert_eq!(snapshots[1].limit_id.as_deref(), Some("codex_other"));
         assert_eq!(snapshots[1].limit_name.as_deref(), Some("codex_other"));
@@ -715,6 +762,7 @@ mod tests {
             Some(70.0)
         );
         assert_eq!(snapshots[1].credits, None);
+        assert_eq!(snapshots[1].individual_limit, None);
         assert_eq!(snapshots[1].plan_type, Some(AccountPlanType::Pro));
         assert_eq!(snapshots[1].rate_limit_reached_type, None);
     }
@@ -730,6 +778,7 @@ mod tests {
                 rate_limit: None,
             }])),
             credits: None,
+            spend_control: None,
             rate_limit_reached_type: None,
         };
 
@@ -755,6 +804,7 @@ mod tests {
                 }),
                 secondary: None,
                 credits: None,
+                individual_limit: None,
                 plan_type: Some(AccountPlanType::Pro),
                 rate_limit_reached_type: None,
             },
@@ -768,6 +818,7 @@ mod tests {
                 }),
                 secondary: None,
                 credits: None,
+                individual_limit: None,
                 plan_type: Some(AccountPlanType::Pro),
                 rate_limit_reached_type: None,
             },
@@ -812,6 +863,7 @@ mod tests {
                 plan_type: crate::types::PlanType::Plus,
                 rate_limit: None,
                 credits: None,
+                spend_control: None,
                 additional_rate_limits: None,
                 rate_limit_reached_type: Some(Some(BackendRateLimitReachedType { kind })),
             };
@@ -827,6 +879,7 @@ mod tests {
             plan_type: crate::types::PlanType::Plus,
             rate_limit: None,
             credits: None,
+            spend_control: None,
             additional_rate_limits: None,
             rate_limit_reached_type: None,
         };

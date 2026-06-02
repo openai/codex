@@ -132,6 +132,7 @@ fn reference_context_item() -> TurnContextItem {
         model: "gpt-test".to_string(),
         personality: None,
         collaboration_mode: None,
+        multi_agent_version: None,
         realtime_active: Some(false),
         effort: None,
         summary: codex_protocol::config_types::ReasoningSummary::Auto,

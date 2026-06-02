@@ -110,6 +110,7 @@ const SKILLS_METADATA_DIR: &str = "agents";
 const SKILLS_METADATA_FILENAME: &str = "openai.yaml";
 const SKILLS_DIR_NAME: &str = "skills";
 const MAX_NAME_LEN: usize = 64;
+const MAX_QUALIFIED_NAME_LEN: usize = 128;
 const MAX_DESCRIPTION_LEN: usize = 1024;
 const MAX_SHORT_DESCRIPTION_LEN: usize = MAX_DESCRIPTION_LEN;
 const MAX_DEFAULT_PROMPT_LEN: usize = MAX_DESCRIPTION_LEN;
@@ -660,7 +661,8 @@ async fn parse_skill_file(
         policy,
     } = load_skill_metadata(fs, path, plugin_root).await;
 
-    validate_len(&name, MAX_NAME_LEN, "name")?;
+    validate_len(&base_name, MAX_NAME_LEN, "name")?;
+    validate_len(&name, MAX_QUALIFIED_NAME_LEN, "qualified name")?;
     validate_len(&description, MAX_DESCRIPTION_LEN, "description")?;
     if let Some(short_description) = short_description.as_deref() {
         validate_len(

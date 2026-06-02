@@ -662,6 +662,7 @@ impl PluginRequestProcessor {
                 &remote_plugin_service_config,
                 auth.as_ref(),
                 &remote_sources,
+                /*global_catalog_cache_path*/ Some(config.codex_home.as_path()),
             )
             .await
             {

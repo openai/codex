@@ -77,7 +77,7 @@ impl App {
             }
             ServerNotification::AccountRateLimitsUpdated(notification) => {
                 self.chat_widget
-                    .on_rate_limit_snapshot(Some(notification.rate_limits.clone()));
+                    .on_rolling_rate_limit_snapshot(notification.rate_limits.clone());
                 return;
             }
             ServerNotification::AccountUpdated(notification) => {

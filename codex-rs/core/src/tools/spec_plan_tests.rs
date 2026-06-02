@@ -215,6 +215,7 @@ fn set_feature(turn: &mut TurnContext, feature: Feature, enabled: bool) {
             .disable(feature)
             .expect("test feature should be disableable in config");
     }
+    turn.multi_agent_version = config.multi_agent_version_from_features();
     turn.config = Arc::new(config);
     turn.tool_mode = turn.model_info.tool_mode.unwrap_or_else(|| {
         if turn.config.features.enabled(Feature::CodeModeOnly) {
