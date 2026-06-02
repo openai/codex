@@ -231,10 +231,10 @@ enabled = true
     mount_remote_installed_plugins(&server, "WORKSPACE", empty_remote_installed_plugins_body())
         .await;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
-    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+    let mut app_server = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, app_server.initialize()).await??;
 
-    let request_id = mcp
+    let request_id = app_server
         .send_plugin_installed_request(PluginInstalledParams {
             cwds: None,
             install_suggestion_plugin_names: None,
@@ -243,7 +243,7 @@ enabled = true
 
     let response: JSONRPCResponse = timeout(
         DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+        app_server.read_stream_until_response_message(RequestId::Integer(request_id)),
     )
     .await??;
     let response: PluginInstalledResponse = to_response(response)?;
@@ -1899,6 +1899,23 @@ async fn plugin_list_includes_remote_marketplaces_when_remote_plugin_enabled() -
             "issue-tracking".to_string(),
             "project management".to_string()
         ]
+    );
+    let cache_files = std::fs::read_dir(codex_home.path().join("cache/remote_plugin_catalog"))?
+        .map(|entry| entry.map(|entry| entry.path()))
+        .collect::<Result<Vec<_>, _>>()?;
+    assert_eq!(cache_files.len(), 1);
+    let cached_catalog: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&cache_files[0])?)?;
+    assert_eq!(cached_catalog["schema_version"], serde_json::json!(1));
+    let cached_plugin_ids = cached_catalog["plugins"]
+        .as_array()
+        .expect("cached plugins should be an array")
+        .iter()
+        .map(|plugin| plugin["id"].as_str().expect("cached plugin id").to_string())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        cached_plugin_ids,
+        vec!["plugins~Plugin_00000000000000000000000000000000".to_string()]
     );
     assert_eq!(response.featured_plugin_ids, Vec::<String>::new());
     assert!(

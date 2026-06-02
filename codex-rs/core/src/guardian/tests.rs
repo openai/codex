@@ -1100,6 +1100,20 @@ async fn routes_approval_to_guardian_requires_guardian_reviewer() {
 }
 
 #[tokio::test]
+async fn routes_approval_to_guardian_can_use_app_reviewer_override() {
+    let (_session, turn) = crate::session::tests::make_session_and_context().await;
+
+    assert!(!routes_approval_to_guardian_with_reviewer(
+        &turn,
+        ApprovalsReviewer::User
+    ));
+    assert!(routes_approval_to_guardian_with_reviewer(
+        &turn,
+        ApprovalsReviewer::AutoReview
+    ));
+}
+
+#[tokio::test]
 async fn routes_approval_to_guardian_allows_granular_review_policy() {
     let (_session, mut turn) = crate::session::tests::make_session_and_context().await;
     let mut config = (*turn.config).clone();

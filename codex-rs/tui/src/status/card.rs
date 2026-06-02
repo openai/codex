@@ -471,6 +471,7 @@ impl StatusHistoryCell {
                 StatusRateLimitValue::Window {
                     percent_used,
                     resets_at,
+                    details,
                 } => {
                     let percent_remaining = (100.0 - percent_used).clamp(0.0, 100.0);
                     let summary = format_status_limit_summary(percent_remaining);
@@ -521,6 +522,18 @@ impl StatusHistoryCell {
                         }
                     } else {
                         lines.push(base_line);
+                    }
+                    if let Some(details) = details {
+                        let detail_width = formatter.value_width(available_inner_width).max(1);
+                        let wrap_options = textwrap::Options::new(detail_width).break_words(false);
+                        lines.extend(
+                            textwrap::wrap(details.as_str(), wrap_options)
+                                .into_iter()
+                                .map(|wrapped| {
+                                    formatter
+                                        .continuation(vec![Span::from(wrapped.into_owned()).dim()])
+                                }),
+                        );
                     }
                 }
                 StatusRateLimitValue::Text(text) => {

@@ -2580,6 +2580,7 @@ async fn token_count_includes_rate_limits_snapshot() {
                     "resets_at": 1704074400
                 },
                 "credits": null,
+                "individual_limit": null,
                 "plan_type": null,
                 "rate_limit_reached_type": null
             }
@@ -2655,6 +2656,7 @@ async fn usage_limit_error_emits_rate_limit_event() -> anyhow::Result<()> {
             "resets_at": null
         },
         "credits": null,
+        "individual_limit": null,
         "plan_type": null,
         "rate_limit_reached_type": null
     });

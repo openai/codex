@@ -16,7 +16,8 @@ use codex_app_server_protocol::Thread as AppServerThread;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadSortKey;
 use codex_arg0::Arg0DispatchPaths;
-use codex_cloud_requirements::cloud_requirements_loader_for_storage;
+use codex_cloud_config::cloud_config_bundle_loader_for_storage;
+use codex_config::CloudConfigBundleLoader;
 use codex_config::ConfigLoadOptions;
 use codex_config::LoaderOverrides;
 use codex_exec_server::EnvironmentManager;
@@ -251,6 +252,7 @@ async fn start_app_server_for_archive_command(
         ConfigLoadOptions {
             loader_overrides: loader_overrides.clone(),
             strict_config,
+            cloud_config_bundle: CloudConfigBundleLoader::default(),
         },
     )
     .await
@@ -259,7 +261,7 @@ async fn start_app_server_for_archive_command(
         .chatgpt_base_url
         .clone()
         .unwrap_or_else(|| "https://chatgpt.com/backend-api/".to_string());
-    let cloud_requirements = cloud_requirements_loader_for_storage(
+    let cloud_config_bundle = cloud_config_bundle_loader_for_storage(
         codex_home.to_path_buf(),
         /*enable_codex_api_key_env*/ false,
         config_toml.cli_auth_credentials_store.unwrap_or_default(),
@@ -298,7 +300,7 @@ async fn start_app_server_for_archive_command(
         })
         .loader_overrides(loader_overrides.clone())
         .strict_config(strict_config)
-        .cloud_requirements(cloud_requirements.clone())
+        .cloud_config_bundle(cloud_config_bundle.clone())
         .build()
         .await
         .wrap_err("failed to load configuration")?;
@@ -312,7 +314,7 @@ async fn start_app_server_for_archive_command(
         cli_kv_overrides,
         loader_overrides,
         strict_config,
-        cloud_requirements,
+        cloud_config_bundle,
         codex_feedback::CodexFeedback::new(),
         /*log_db*/ None,
         state_db,

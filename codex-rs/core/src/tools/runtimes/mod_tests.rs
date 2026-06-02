@@ -8,6 +8,7 @@ use crate::tools::sandboxing::SandboxAttempt;
 use crate::tools::sandboxing::managed_network_for_sandbox_permissions;
 #[cfg(target_os = "macos")]
 use codex_network_proxy::CODEX_PROXY_GIT_SSH_COMMAND_MARKER;
+use codex_network_proxy::CUSTOM_CA_ENV_KEYS;
 use codex_network_proxy::ConfigReloader;
 use codex_network_proxy::ConfigState;
 use codex_network_proxy::NetworkProxy;
@@ -134,6 +135,9 @@ async fn explicit_escalation_prepares_exec_without_managed_network() -> anyhow::
     for key in PROXY_ENV_KEYS {
         assert_eq!(exec_request.env.get(*key), None, "{key} should be unset");
     }
+    for key in CUSTOM_CA_ENV_KEYS {
+        assert_eq!(exec_request.env.get(key), None, "{key} should be unset");
+    }
     #[cfg(target_os = "macos")]
     assert_eq!(exec_request.env.get(PROXY_GIT_SSH_COMMAND_ENV_KEY), None);
     assert_eq!(
@@ -142,6 +146,24 @@ async fn explicit_escalation_prepares_exec_without_managed_network() -> anyhow::
     );
 
     Ok(())
+}
+
+#[test]
+fn explicit_escalation_preserves_user_ca_env() {
+    let env = HashMap::from([
+        (PROXY_ACTIVE_ENV_KEY.to_string(), "1".to_string()),
+        (
+            "SSL_CERT_FILE".to_string(),
+            "/tmp/custom-ca.pem".to_string(),
+        ),
+    ]);
+
+    let env = exec_env_for_sandbox_permissions(&env, SandboxPermissions::RequireEscalated);
+
+    assert_eq!(
+        env.get("SSL_CERT_FILE"),
+        Some(&"/tmp/custom-ca.pem".to_string())
+    );
 }
 
 #[cfg(unix)]

@@ -59,6 +59,27 @@ fn layers_are_returned_in_stack_order() {
 }
 
 #[test]
+fn strict_layers_reject_unknown_config_fields() {
+    let base_dir = base_dir();
+    let err = cloud_config_layers_from_fragments_strict(
+        vec![fragment("strict", "Strict layer", "unknown_key = true")],
+        &base_dir,
+    )
+    .expect_err("strict config should reject unknown fields");
+
+    assert_eq!(
+        err,
+        CloudConfigLayerError::Invalid {
+            fragment: CloudConfigFragmentSource {
+                id: "strict".to_string(),
+                name: "Strict layer".to_string(),
+            },
+            message: "unknown configuration field `unknown_key`".to_string(),
+        }
+    );
+}
+
+#[test]
 fn enterprise_layers_precede_user_and_override_system() {
     let base_dir = base_dir();
     let mut layers = vec![ConfigLayerEntry::new(

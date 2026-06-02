@@ -52,6 +52,7 @@ use codex_git_utils::collect_git_info;
 use codex_git_utils::get_git_repo_root;
 use codex_protocol::protocol::GitInfo as ProtocolGitInfo;
 use codex_protocol::protocol::InitialHistory;
+use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::ResumedHistory;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
@@ -87,6 +88,7 @@ pub enum RolloutRecorderParams {
         thread_source: Option<ThreadSource>,
         base_instructions: BaseInstructions,
         dynamic_tools: Vec<DynamicToolSpec>,
+        multi_agent_version: Option<MultiAgentVersion>,
     },
     Resume {
         path: PathBuf,
@@ -172,7 +174,22 @@ impl RolloutRecorderParams {
             thread_source,
             base_instructions,
             dynamic_tools,
+            multi_agent_version: None,
         }
+    }
+
+    pub fn with_multi_agent_version(
+        mut self,
+        multi_agent_version: Option<MultiAgentVersion>,
+    ) -> Self {
+        if let Self::Create {
+            multi_agent_version: version,
+            ..
+        } = &mut self
+        {
+            *version = multi_agent_version;
+        }
+        self
     }
 
     pub fn resume(path: PathBuf) -> Self {
@@ -661,6 +678,7 @@ impl RolloutRecorder {
                 thread_source,
                 base_instructions,
                 dynamic_tools,
+                multi_agent_version,
             } => {
                 let log_file_info = precompute_log_file_info(config, conversation_id)?;
                 let path = log_file_info.path.clone();
@@ -696,6 +714,7 @@ impl RolloutRecorder {
                         Some(dynamic_tools)
                     },
                     memory_mode: (!config.generate_memories()).then_some("disabled".to_string()),
+                    multi_agent_version,
                 };
 
                 (None, Some(log_file_info), path, Some(session_meta))

@@ -12,10 +12,12 @@ use crate::shell::ShellType;
 use crate::tools::sandboxing::ToolError;
 #[cfg(target_os = "macos")]
 use codex_network_proxy::CODEX_PROXY_GIT_SSH_COMMAND_MARKER;
+use codex_network_proxy::CUSTOM_CA_ENV_KEYS;
 use codex_network_proxy::PROXY_ACTIVE_ENV_KEY;
 use codex_network_proxy::PROXY_ENV_KEYS;
 #[cfg(target_os = "macos")]
 use codex_network_proxy::PROXY_GIT_SSH_COMMAND_ENV_KEY;
+use codex_network_proxy::is_managed_mitm_ca_trust_bundle_path;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_sandboxing::SandboxCommand;
@@ -57,19 +59,31 @@ pub(crate) fn exec_env_for_sandbox_permissions(
     if sandbox_permissions.requires_escalated_permissions()
         && env.contains_key(PROXY_ACTIVE_ENV_KEY)
     {
-        for key in PROXY_ENV_KEYS {
-            env.remove(*key);
-        }
-        // Only macOS injects a Codex-owned SSH wrapper for the managed SOCKS proxy.
-        #[cfg(target_os = "macos")]
-        if env
-            .get(PROXY_GIT_SSH_COMMAND_ENV_KEY)
-            .is_some_and(|command| command.starts_with(CODEX_PROXY_GIT_SSH_COMMAND_MARKER))
-        {
-            env.remove(PROXY_GIT_SSH_COMMAND_ENV_KEY);
-        }
+        strip_managed_proxy_env(&mut env);
     }
     env
+}
+
+pub(crate) fn strip_managed_proxy_env(env: &mut HashMap<String, String>) {
+    for key in PROXY_ENV_KEYS {
+        env.remove(*key);
+    }
+    for key in CUSTOM_CA_ENV_KEYS {
+        if env
+            .get(key)
+            .is_some_and(|value| is_managed_mitm_ca_trust_bundle_path(value))
+        {
+            env.remove(key);
+        }
+    }
+    // Only macOS injects a Codex-owned SSH wrapper for the managed SOCKS proxy.
+    #[cfg(target_os = "macos")]
+    if env
+        .get(PROXY_GIT_SSH_COMMAND_ENV_KEY)
+        .is_some_and(|command| command.starts_with(CODEX_PROXY_GIT_SSH_COMMAND_MARKER))
+    {
+        env.remove(PROXY_GIT_SSH_COMMAND_ENV_KEY);
+    }
 }
 
 #[cfg(unix)]
@@ -235,6 +249,7 @@ fn build_proxy_env_exports() -> (String, String) {
     let mut keys = PROXY_ENV_KEYS
         .iter()
         .copied()
+        .chain(CUSTOM_CA_ENV_KEYS)
         .filter(|key| is_valid_shell_variable_name(key))
         .collect::<Vec<_>>();
     keys.sort_unstable();

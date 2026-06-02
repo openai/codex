@@ -374,16 +374,9 @@ impl Default for PermissionProfile {
 impl PermissionProfile {
     /// Managed read-only filesystem access with restricted network access.
     pub fn read_only() -> Self {
+        let file_system = FileSystemSandboxPolicy::read_only();
         Self::Managed {
-            file_system: ManagedFileSystemPermissions::Restricted {
-                entries: vec![FileSystemSandboxEntry {
-                    path: FileSystemPath::Special {
-                        value: FileSystemSpecialPath::Root,
-                    },
-                    access: FileSystemAccessMode::Read,
-                }],
-                glob_scan_max_depth: None,
-            },
+            file_system: ManagedFileSystemPermissions::from_sandbox_policy(&file_system),
             network: NetworkSandboxPolicy::Restricted,
         }
     }

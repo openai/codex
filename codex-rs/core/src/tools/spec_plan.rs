@@ -1,3 +1,5 @@
+use crate::agent::exceeds_thread_spawn_depth_limit;
+use crate::agent::next_thread_spawn_depth;
 use crate::session::turn_context::TurnContext;
 use crate::tools::code_mode::execute_spec::create_code_mode_tool;
 use crate::tools::context::ToolInvocation;
@@ -61,6 +63,7 @@ use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ToolMode;
+use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_tools::DiscoverableTool;
@@ -72,6 +75,7 @@ use codex_tools::ToolEnvironmentMode;
 use codex_tools::ToolExecutor;
 use codex_tools::ToolName;
 use codex_tools::ToolOutput;
+use codex_tools::ToolSearchInfo;
 use codex_tools::ToolSpec;
 use codex_tools::UnifiedExecShellMode;
 use codex_tools::can_request_original_image_detail;
@@ -287,11 +291,18 @@ fn namespace_tools_enabled(turn_context: &TurnContext) -> bool {
 }
 
 fn multi_agent_v2_enabled(turn_context: &TurnContext) -> bool {
-    turn_context.features.get().enabled(Feature::MultiAgentV2)
+    turn_context.multi_agent_version == MultiAgentVersion::V2
 }
 
 fn collab_tools_enabled(turn_context: &TurnContext) -> bool {
-    multi_agent_v2_enabled(turn_context) || turn_context.features.get().enabled(Feature::Collab)
+    match turn_context.multi_agent_version {
+        MultiAgentVersion::Disabled => false,
+        MultiAgentVersion::V1 => !exceeds_thread_spawn_depth_limit(
+            next_thread_spawn_depth(&turn_context.session_source),
+            turn_context.config.agent_max_depth,
+        ),
+        MultiAgentVersion::V2 => true,
+    }
 }
 
 fn goal_tools_enabled(turn_context: &TurnContext) -> bool {
@@ -303,7 +314,7 @@ fn goal_tools_enabled(turn_context: &TurnContext) -> bool {
 }
 
 fn agent_jobs_tools_enabled(turn_context: &TurnContext) -> bool {
-    turn_context.features.get().enabled(Feature::SpawnCsv)
+    turn_context.features.get().enabled(Feature::SpawnCsv) && collab_tools_enabled(turn_context)
 }
 
 fn agent_jobs_worker_tools_enabled(turn_context: &TurnContext) -> bool {
@@ -937,6 +948,10 @@ impl ToolExecutor<ToolInvocation> for MultiAgentV2NamespaceOverride {
         self.handler.supports_parallel_tool_calls()
     }
 
+    fn search_info(&self) -> Option<ToolSearchInfo> {
+        self.handler.search_info()
+    }
+
     async fn handle(
         &self,
         invocation: ToolInvocation,
@@ -948,10 +963,6 @@ impl ToolExecutor<ToolInvocation> for MultiAgentV2NamespaceOverride {
 impl CoreToolRuntime for MultiAgentV2NamespaceOverride {
     fn matches_kind(&self, payload: &crate::tools::context::ToolPayload) -> bool {
         self.handler.matches_kind(payload)
-    }
-
-    fn search_info(&self) -> Option<crate::tools::tool_search_entry::ToolSearchInfo> {
-        self.handler.search_info()
     }
 
     fn create_diff_consumer(

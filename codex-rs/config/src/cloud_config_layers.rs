@@ -7,8 +7,13 @@
 use crate::ConfigLayerEntry;
 use crate::ConfigLayerSource;
 use crate::TomlValue;
+use crate::config_toml::ConfigToml;
 use crate::loader::resolve_relative_paths_in_config_toml;
+use crate::strict_config::config_error_from_ignored_toml_value_fields_for_source_name;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_absolute_path::AbsolutePathBufGuard;
+use serde::Deserialize;
+use serde::Serialize;
 use std::fmt;
 use std::io;
 use thiserror::Error;
@@ -18,7 +23,7 @@ use thiserror::Error;
 /// The bundle orders fragments from highest precedence to lowest precedence.
 /// This module returns config layers in stack order, so callers can append the
 /// result between system and user config without re-sorting.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct CloudConfigFragment {
     pub id: String,
     pub name: String,
@@ -64,6 +69,21 @@ pub fn cloud_config_layers_from_fragments(
     fragments: impl IntoIterator<Item = CloudConfigFragment>,
     base_dir: &AbsolutePathBuf,
 ) -> Result<Vec<ConfigLayerEntry>, CloudConfigLayerError> {
+    cloud_config_layers_from_fragments_impl(fragments, base_dir, /*strict_config*/ false)
+}
+
+pub(crate) fn cloud_config_layers_from_fragments_strict(
+    fragments: impl IntoIterator<Item = CloudConfigFragment>,
+    base_dir: &AbsolutePathBuf,
+) -> Result<Vec<ConfigLayerEntry>, CloudConfigLayerError> {
+    cloud_config_layers_from_fragments_impl(fragments, base_dir, /*strict_config*/ true)
+}
+
+fn cloud_config_layers_from_fragments_impl(
+    fragments: impl IntoIterator<Item = CloudConfigFragment>,
+    base_dir: &AbsolutePathBuf,
+    strict_config: bool,
+) -> Result<Vec<ConfigLayerEntry>, CloudConfigLayerError> {
     let mut layers = Vec::new();
     for fragment in fragments {
         let source_ref = fragment.source_ref();
@@ -73,6 +93,9 @@ pub fn cloud_config_layers_from_fragments(
                 fragment: source_ref.clone(),
                 message: err.to_string(),
             })?;
+        if strict_config {
+            validate_fragment_strictly(&source_ref, &raw_toml, &value, base_dir)?;
+        }
         let resolved =
             resolve_relative_paths_in_config_toml(value, base_dir.as_path()).map_err(|err| {
                 CloudConfigLayerError::Invalid {
@@ -95,6 +118,26 @@ pub fn cloud_config_layers_from_fragments(
     // folds lowest-priority to highest-priority.
     layers.reverse();
     Ok(layers)
+}
+
+fn validate_fragment_strictly(
+    source_ref: &CloudConfigFragmentSource,
+    raw_toml: &str,
+    value: &TomlValue,
+    base_dir: &AbsolutePathBuf,
+) -> Result<(), CloudConfigLayerError> {
+    let _guard = AbsolutePathBufGuard::new(base_dir.as_path());
+    if let Some(config_error) = config_error_from_ignored_toml_value_fields_for_source_name::<
+        ConfigToml,
+    >(&source_ref.to_string(), raw_toml, value.clone())
+    {
+        return Err(CloudConfigLayerError::Invalid {
+            fragment: source_ref.clone(),
+            message: config_error.message,
+        });
+    }
+
+    Ok(())
 }
 
 impl From<CloudConfigLayerError> for io::Error {

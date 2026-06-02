@@ -23,7 +23,7 @@ use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput;
 use codex_arg0::Arg0DispatchPaths;
-use codex_config::CloudRequirementsLoader;
+use codex_config::CloudConfigBundleLoader;
 use codex_config::LoaderOverrides;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
@@ -240,7 +240,7 @@ async fn build_test_processor(
         Vec::new(),
         LoaderOverrides::default(),
         /*strict_config*/ false,
-        CloudRequirementsLoader::default(),
+        CloudConfigBundleLoader::default(),
         Arg0DispatchPaths::default(),
         Arc::new(codex_config::NoopThreadConfigLoader),
     );

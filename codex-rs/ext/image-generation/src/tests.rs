@@ -26,7 +26,6 @@ use crate::IMAGE_GEN_NAMESPACE;
 use crate::IMAGEGEN_TOOL_NAME;
 
 const RESULT: &str = "cG5n";
-const OUTPUT_HINT: &str = "Generated images are saved to /tmp as /tmp/call-1.png by default.";
 
 #[test]
 fn uses_reserved_image_gen_namespace() {
@@ -55,10 +54,9 @@ fn generate_uses_fixed_request_defaults() {
 }
 
 #[test]
-fn generated_output_returns_image_input_and_output_hint() {
+fn generated_output_returns_image_input() {
     let output = GeneratedImageOutput {
         result: RESULT.to_string(),
-        output_hint: Some(OUTPUT_HINT.to_string()),
     };
 
     let ResponseInputItem::FunctionCallOutput {
@@ -73,15 +71,10 @@ fn generated_output_returns_image_input_and_output_hint() {
     };
     assert_eq!(
         content_items,
-        vec![
-            FunctionCallOutputContentItem::InputImage {
-                image_url: format!("data:image/png;base64,{RESULT}"),
-                detail: Some(DEFAULT_IMAGE_DETAIL),
-            },
-            FunctionCallOutputContentItem::InputText {
-                text: OUTPUT_HINT.to_string(),
-            },
-        ]
+        vec![FunctionCallOutputContentItem::InputImage {
+            image_url: format!("data:image/png;base64,{RESULT}"),
+            detail: Some(DEFAULT_IMAGE_DETAIL),
+        }]
     );
 }
 

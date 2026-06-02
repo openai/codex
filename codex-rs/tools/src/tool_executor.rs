@@ -1,6 +1,7 @@
 use crate::FunctionCallError;
 use crate::ToolName;
 use crate::ToolOutput;
+use crate::ToolSearchInfo;
 use crate::ToolSpec;
 
 /// Controls where a tool is exposed to the model.
@@ -13,7 +14,9 @@ pub enum ToolExposure {
     Direct,
 
     /// Register this tool for later discovery, but omit it from the initial
-    /// model-visible tool list.
+    /// model-visible tool list. Deferred tools must provide search metadata via
+    /// [`ToolExecutor::search_info`]. The default implementation derives
+    /// metadata from function and namespace specs.
     Deferred,
 
     /// Include this tool in the initial model-visible tool list only.
@@ -46,6 +49,11 @@ pub trait ToolExecutor<Invocation>: Send + Sync {
 
     fn exposure(&self) -> ToolExposure {
         ToolExposure::Direct
+    }
+
+    fn search_info(&self) -> Option<ToolSearchInfo> {
+        let spec = self.spec();
+        ToolSearchInfo::from_tool_spec(&self.tool_name(), spec, /*source_info*/ None)
     }
 
     fn supports_parallel_tool_calls(&self) -> bool {

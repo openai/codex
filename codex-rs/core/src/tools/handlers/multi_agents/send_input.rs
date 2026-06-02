@@ -16,6 +16,13 @@ impl ToolExecutor<ToolInvocation> for Handler {
         create_send_input_tool_v1()
     }
 
+    fn search_info(&self) -> Option<ToolSearchInfo> {
+        multi_agent_tool_search_info(
+            "send_input send message existing agent subagent follow up interrupt redirect queue target",
+            self.spec(),
+        )
+    }
+
     async fn handle(
         &self,
         invocation: ToolInvocation,
@@ -91,13 +98,6 @@ impl ToolExecutor<ToolInvocation> for Handler {
 }
 
 impl CoreToolRuntime for Handler {
-    fn search_info(&self) -> Option<ToolSearchInfo> {
-        multi_agent_tool_search_info(
-            "send_input send message existing agent subagent follow up interrupt redirect queue target",
-            self.spec(),
-        )
-    }
-
     fn matches_kind(&self, payload: &ToolPayload) -> bool {
         matches!(payload, ToolPayload::Function { .. })
     }
