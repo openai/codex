@@ -43,6 +43,7 @@ from .generated.v2_all import (
     TurnInterruptResponse,
     TurnStartParams as V2TurnStartParams,
     TurnStartResponse,
+    TurnSteerParams as V2TurnSteerParams,
     TurnSteerResponse,
 )
 from .models import (
@@ -66,6 +67,7 @@ def _params_dict(
         | V2ThreadListParams
         | V2ThreadForkParams
         | V2TurnStartParams
+        | V2TurnSteerParams
         | V2GetAccountParams
         | V2LoginAccountParams
         | JsonObject
@@ -480,14 +482,18 @@ class CodexClient:
         thread_id: str,
         expected_turn_id: str,
         input_items: list[JsonObject] | JsonObject | str,
+        *,
+        client_user_message_id: str | None = None,
     ) -> TurnSteerResponse:
+        params = V2TurnSteerParams(
+            thread_id=thread_id,
+            expected_turn_id=expected_turn_id,
+            input=self._normalize_input_items(input_items),
+            client_user_message_id=client_user_message_id,
+        )
         return self.request(
             "turn/steer",
-            {
-                "threadId": thread_id,
-                "expectedTurnId": expected_turn_id,
-                "input": self._normalize_input_items(input_items),
-            },
+            _params_dict(params),
             response_model=TurnSteerResponse,
         )
 

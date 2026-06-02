@@ -542,6 +542,7 @@ class Thread:
         input: RunInput,
         *,
         approval_mode: ApprovalMode | None = None,
+        client_user_message_id: str | None = None,
         cwd: str | None = None,
         effort: ReasoningEffort | None = None,
         model: str | None = None,
@@ -555,6 +556,7 @@ class Thread:
         turn = self.turn(
             input,
             approval_mode=approval_mode,
+            client_user_message_id=client_user_message_id,
             cwd=cwd,
             effort=effort,
             model=model,
@@ -632,6 +634,7 @@ class AsyncThread:
         input: RunInput,
         *,
         approval_mode: ApprovalMode | None = None,
+        client_user_message_id: str | None = None,
         cwd: str | None = None,
         effort: ReasoningEffort | None = None,
         model: str | None = None,
@@ -645,6 +648,7 @@ class AsyncThread:
         turn = await self.turn(
             input,
             approval_mode=approval_mode,
+            client_user_message_id=client_user_message_id,
             cwd=cwd,
             effort=effort,
             model=model,
@@ -726,12 +730,18 @@ class TurnHandle:
     thread_id: str
     id: str
 
-    def steer(self, input: RunInput) -> TurnSteerResponse:
+    def steer(
+        self,
+        input: RunInput,
+        *,
+        client_user_message_id: str | None = None,
+    ) -> TurnSteerResponse:
         """Send additional input to this active turn."""
         return self._client.turn_steer(
             self.thread_id,
             self.id,
             _to_wire_input(_normalize_run_input(input)),
+            client_user_message_id=client_user_message_id,
         )
 
     def interrupt(self) -> TurnInterruptResponse:
@@ -771,13 +781,19 @@ class AsyncTurnHandle:
     thread_id: str
     id: str
 
-    async def steer(self, input: RunInput) -> TurnSteerResponse:
+    async def steer(
+        self,
+        input: RunInput,
+        *,
+        client_user_message_id: str | None = None,
+    ) -> TurnSteerResponse:
         """Send additional input to this active turn."""
         await self._codex._ensure_initialized()
         return await self._codex._client.turn_steer(
             self.thread_id,
             self.id,
             _to_wire_input(_normalize_run_input(input)),
+            client_user_message_id=client_user_message_id,
         )
 
     async def interrupt(self) -> TurnInterruptResponse:
