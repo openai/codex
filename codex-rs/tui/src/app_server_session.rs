@@ -295,7 +295,7 @@ impl AppServerSession {
                 false,
             ),
             Some(Account::Chatgpt { email, plan_type }) => {
-                let email = normalize_account_email(email);
+                let email = (!email.is_empty()).then_some(email);
                 let feedback_audience = if email
                     .as_deref()
                     .is_some_and(|email| email.ends_with("@openai.com"))
@@ -1185,10 +1185,6 @@ fn thread_realtime_start_params(
 
     serde_json::from_value(serde_json::Value::Object(value))
         .wrap_err("mapping TUI realtime start params to app-server params")
-}
-
-fn normalize_account_email(email: String) -> Option<String> {
-    (!email.is_empty()).then_some(email)
 }
 
 pub(crate) fn status_account_display_from_auth_mode(
@@ -2514,10 +2510,5 @@ mod tests {
                 plan: Some(ref plan),
             }) if plan == "Business"
         ));
-    }
-
-    #[test]
-    fn normalize_account_email_treats_empty_email_as_missing() {
-        assert_eq!(normalize_account_email(String::new()), None);
     }
 }

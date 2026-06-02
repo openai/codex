@@ -19,6 +19,7 @@ pub use protocol::item_builders::*;
 pub use protocol::thread_history::*;
 pub use protocol::v1::ApplyPatchApprovalParams;
 pub use protocol::v1::ApplyPatchApprovalResponse;
+pub use protocol::v1::AuthMode as LegacyAuthMode;
 pub use protocol::v1::ClientInfo;
 pub use protocol::v1::ConversationGitInfo;
 pub use protocol::v1::ConversationSummary;

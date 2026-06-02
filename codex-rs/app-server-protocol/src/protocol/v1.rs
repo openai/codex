@@ -21,8 +21,35 @@ use serde::Deserialize;
 use serde::Serialize;
 use ts_rs::TS;
 
-use crate::protocol::common::AuthMode;
 use crate::protocol::v2::ForcedChatgptWorkspaceIds;
+
+/// Authentication modes reported by the deprecated v1 auth-status API.
+///
+/// Personal access tokens intentionally report `Chatgpt` to preserve the v1 wire contract.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "lowercase")]
+pub enum AuthMode {
+    ApiKey,
+    Chatgpt,
+    #[serde(rename = "chatgptAuthTokens")]
+    #[ts(rename = "chatgptAuthTokens")]
+    ChatgptAuthTokens,
+    #[serde(rename = "agentIdentity")]
+    #[ts(rename = "agentIdentity")]
+    AgentIdentity,
+}
+
+impl From<crate::protocol::common::AuthMode> for AuthMode {
+    fn from(value: crate::protocol::common::AuthMode) -> Self {
+        match value {
+            crate::protocol::common::AuthMode::ApiKey => Self::ApiKey,
+            crate::protocol::common::AuthMode::Chatgpt => Self::Chatgpt,
+            crate::protocol::common::AuthMode::ChatgptAuthTokens => Self::ChatgptAuthTokens,
+            crate::protocol::common::AuthMode::AgentIdentity => Self::AgentIdentity,
+            crate::protocol::common::AuthMode::PersonalAccessToken => Self::Chatgpt,
+        }
+    }
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
@@ -232,3 +259,7 @@ pub struct SandboxSettings {
 pub struct InterruptConversationResponse {
     pub abort_reason: TurnAbortReason,
 }
+
+#[cfg(test)]
+#[path = "v1_tests.rs"]
+mod tests;

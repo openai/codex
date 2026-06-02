@@ -35,6 +35,7 @@ export type { AppsListResponse } from "./AppsListResponse";
 export type { AskForApproval } from "./AskForApproval";
 export type { AttestationGenerateParams } from "./AttestationGenerateParams";
 export type { AttestationGenerateResponse } from "./AttestationGenerateResponse";
+export type { AuthMode } from "./AuthMode";
 export type { AutoReviewDecisionSource } from "./AutoReviewDecisionSource";
 export type { ByteRange } from "./ByteRange";
 export type { CancelLoginAccountParams } from "./CancelLoginAccountParams";
