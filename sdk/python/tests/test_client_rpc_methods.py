@@ -65,7 +65,7 @@ def test_turn_steer_sends_client_user_message_id() -> None:
             "params": {
                 "clientUserMessageId": "message-1",
                 "expectedTurnId": "turn-1",
-                "input": [{"text": "follow up", "textElements": [], "type": "text"}],
+                "input": [{"text": "follow up", "text_elements": [], "type": "text"}],
                 "threadId": "thread-1",
             },
             "response_model": TurnSteerResponse,

@@ -267,6 +267,7 @@ def test_schema_normalization_only_flattens_string_literal_oneofs(
         "ExperimentalFeatureStage",
         "AutoCompactTokenLimitScope",
         "CommandExecOutputStream",
+        "ProcessOutputStream",
     ]
 
 
