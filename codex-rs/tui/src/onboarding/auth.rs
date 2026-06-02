@@ -1012,7 +1012,7 @@ mod tests {
     use codex_app_server_client::InProcessAppServerClient;
     use codex_app_server_client::InProcessClientStartArgs;
     use codex_arg0::Arg0DispatchPaths;
-    use codex_cloud_requirements::cloud_requirements_loader_for_storage;
+    use codex_cloud_config::cloud_requirements_loader_for_storage;
     use codex_config::types::AuthCredentialsStoreMode;
 
     use pretty_assertions::assert_eq;

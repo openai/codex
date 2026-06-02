@@ -105,6 +105,7 @@ use codex_protocol::protocol::HasLegacyEvent;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::protocol::ItemStartedEvent;
+use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::RawResponseItemEvent;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::RolloutItem;
@@ -137,7 +138,6 @@ use codex_thread_store::LiveThreadInitGuard;
 use codex_thread_store::LocalThreadStore;
 use codex_thread_store::ReadThreadParams;
 use codex_thread_store::ResumeThreadParams;
-use codex_thread_store::ThreadEventPersistenceMode;
 use codex_thread_store::ThreadPersistenceMetadata;
 use codex_thread_store::ThreadStore;
 use codex_utils_output_truncation::TruncationPolicy;
@@ -362,7 +362,6 @@ use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
 use codex_tools::ToolEnvironmentMode;
 use codex_tools::UnifiedExecShellMode;
-use codex_tools::shell_command_backend_for_features;
 use codex_utils_absolute_path::AbsolutePathBuf;
 #[cfg(test)]
 use codex_utils_stream_parser::ProposedPlanSegment;
@@ -406,7 +405,6 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) thread_source: Option<ThreadSource>,
     pub(crate) agent_control: AgentControl,
     pub(crate) dynamic_tools: Vec<DynamicToolSpec>,
-    pub(crate) persist_extended_history: bool,
     pub(crate) metrics_service_name: Option<String>,
     pub(crate) inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
     pub(crate) inherited_exec_policy: Option<Arc<ExecPolicyManager>>,
@@ -421,6 +419,25 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) analytics_events_client: Option<AnalyticsEventsClient>,
     pub(crate) thread_store: Arc<dyn ThreadStore>,
     pub(crate) attestation_provider: Option<Arc<dyn AttestationProvider>>,
+    pub(crate) inherited_multi_agent_version: Option<MultiAgentVersion>,
+}
+
+pub(crate) fn resolve_multi_agent_version(
+    conversation_history: &InitialHistory,
+    inherited_multi_agent_version: Option<MultiAgentVersion>,
+) -> Option<MultiAgentVersion> {
+    if inherited_multi_agent_version == Some(MultiAgentVersion::Disabled) {
+        return Some(MultiAgentVersion::Disabled);
+    }
+
+    conversation_history
+        .get_multi_agent_version()
+        .or(inherited_multi_agent_version)
+        .or(match conversation_history {
+            InitialHistory::New | InitialHistory::Cleared => None,
+            // Threads created before runtime metadata existed keep the legacy V1 tool surface.
+            InitialHistory::Resumed(_) | InitialHistory::Forked(_) => Some(MultiAgentVersion::V1),
+        })
 }
 
 pub(crate) const INITIAL_SUBMIT_ID: &str = "";
@@ -472,7 +489,6 @@ impl Codex {
             thread_source,
             agent_control,
             dynamic_tools,
-            persist_extended_history,
             metrics_service_name,
             inherited_shell_snapshot,
             user_shell_override,
@@ -483,17 +499,10 @@ impl Codex {
             analytics_events_client,
             thread_store,
             attestation_provider,
+            inherited_multi_agent_version,
         } = args;
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
-
-        if let SessionSource::SubAgent(SubAgentSource::ThreadSpawn { depth, .. }) = session_source
-            && depth >= config.agent_max_depth
-            && !config.features.enabled(Feature::MultiAgentV2)
-        {
-            let _ = config.features.disable(Feature::SpawnCsv);
-            let _ = config.features.disable(Feature::Collab);
-        }
 
         let primary_environment = environment_selections.primary_environment();
         let mut user_instruction_warnings = Vec::new();
@@ -545,6 +554,14 @@ impl Codex {
         let model_info = models_manager
             .get_model_info(model.as_str(), &config.to_models_manager_config())
             .await;
+        let multi_agent_version =
+            resolve_multi_agent_version(&conversation_history, inherited_multi_agent_version);
+        let startup_multi_agent_version = multi_agent_version
+            .or(model_info.multi_agent_version)
+            .unwrap_or_else(|| config.multi_agent_version_from_features());
+        let _ = config
+            .effective_agent_max_threads(startup_multi_agent_version)
+            .map_err(|err| CodexErr::InvalidRequest(err.to_string()))?;
         let base_instructions = config
             .base_instructions
             .clone()
@@ -600,7 +617,6 @@ impl Codex {
             parent_thread_id,
             thread_source,
             dynamic_tools,
-            persist_extended_history,
             inherited_shell_snapshot,
             user_shell_override,
         };
@@ -609,7 +625,7 @@ impl Codex {
         let session_source_clone = session_configuration.session_source.clone();
         let (agent_status_tx, agent_status_rx) = watch::channel(AgentStatus::PendingInit);
 
-        let session = Session::new(
+        let session = Box::pin(Session::new(
             session_configuration,
             config.clone(),
             installation_id,
@@ -630,7 +646,8 @@ impl Codex {
             thread_store,
             parent_rollout_thread_trace,
             attestation_provider,
-        )
+            multi_agent_version,
+        ))
         .await
         .map_err(|e| {
             error!("Failed to create session: {e:#}");
@@ -1171,7 +1188,6 @@ impl Session {
     }
 
     async fn record_initial_history(&self, conversation_history: InitialHistory) {
-        let turn_context = self.new_default_turn().await;
         let is_subagent = {
             let state = self.state.lock().await;
             state
@@ -1192,6 +1208,7 @@ impl Session {
                     .await;
             }
             InitialHistory::Resumed(resumed_history) => {
+                let turn_context = self.new_default_turn().await;
                 let rollout_items = resumed_history.history;
                 let previous_turn_settings = self
                     .apply_rollout_reconstruction(&turn_context, &rollout_items)
@@ -1231,6 +1248,7 @@ impl Session {
                 }
             }
             InitialHistory::Forked(rollout_items) => {
+                let turn_context = self.new_default_turn().await;
                 self.apply_rollout_reconstruction(&turn_context, &rollout_items)
                     .await;
 
@@ -1653,7 +1671,7 @@ impl Session {
         turn_context: &TurnContext,
         msg: &EventMsg,
     ) {
-        if !self.enabled(Feature::MultiAgentV2) {
+        if turn_context.multi_agent_version != MultiAgentVersion::V2 {
             return;
         }
 
@@ -2622,6 +2640,33 @@ impl Session {
     pub(crate) async fn collaboration_mode(&self) -> CollaborationMode {
         let state = self.state.lock().await;
         state.session_configuration.collaboration_mode.clone()
+    }
+
+    pub(crate) fn multi_agent_version(&self) -> Option<MultiAgentVersion> {
+        self.multi_agent_version.get().copied()
+    }
+
+    pub(crate) fn set_multi_agent_version_if_unset(
+        &self,
+        multi_agent_version: MultiAgentVersion,
+    ) -> MultiAgentVersion {
+        *self.multi_agent_version.get_or_init(|| multi_agent_version)
+    }
+
+    pub(crate) fn resolve_multi_agent_version_for_model(
+        &self,
+        model_info: &ModelInfo,
+        config: &Config,
+    ) -> MultiAgentVersion {
+        if let Some(multi_agent_version) = self.multi_agent_version() {
+            return multi_agent_version;
+        }
+
+        let selected = model_info
+            .multi_agent_version
+            .unwrap_or_else(|| config.multi_agent_version_from_features());
+
+        self.set_multi_agent_version_if_unset(selected)
     }
 
     async fn send_raw_response_items(&self, turn_context: &TurnContext, items: &[ResponseItem]) {

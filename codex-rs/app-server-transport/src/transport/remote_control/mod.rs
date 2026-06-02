@@ -4,6 +4,8 @@ mod protocol;
 mod segment;
 mod websocket;
 
+use self::enroll::RemoteControlEnrollment;
+use self::enroll::refresh_remote_control_server;
 use crate::transport::remote_control::websocket::RemoteControlChannels;
 use crate::transport::remote_control::websocket::RemoteControlStatusPublisher;
 use crate::transport::remote_control::websocket::RemoteControlWebsocket;
@@ -16,6 +18,8 @@ use super::CHANNEL_CAPACITY;
 use super::TransportEvent;
 use super::next_connection_id;
 use codex_app_server_protocol::RemoteControlConnectionStatus;
+use codex_app_server_protocol::RemoteControlPairingStartParams;
+use codex_app_server_protocol::RemoteControlPairingStartResponse;
 use codex_app_server_protocol::RemoteControlStatusChangedNotification;
 use codex_login::AuthManager;
 use codex_state::StateRuntime;
@@ -26,6 +30,7 @@ use std::fmt;
 use std::io;
 use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
+use std::sync::Mutex as StdMutex;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::sync::watch;
@@ -52,7 +57,11 @@ pub struct RemoteControlHandle {
     enabled_tx: Arc<watch::Sender<bool>>,
     status_tx: Arc<watch::Sender<RemoteControlStatusChangedNotification>>,
     state_db_available: bool,
+    current_enrollment: CurrentRemoteControlEnrollment,
+    auth_manager: Arc<AuthManager>,
 }
+
+type CurrentRemoteControlEnrollment = Arc<StdMutex<Option<RemoteControlEnrollment>>>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RemoteControlUnavailable;
@@ -108,6 +117,7 @@ impl RemoteControlHandle {
             *state = false;
             changed
         });
+        clear_current_enrollment(&self.current_enrollment);
 
         let status = self.status();
         info!(
@@ -127,6 +137,88 @@ impl RemoteControlHandle {
 
     pub fn status_receiver(&self) -> watch::Receiver<RemoteControlStatusChangedNotification> {
         self.status_tx.subscribe()
+    }
+
+    pub async fn start_pairing(
+        &self,
+        params: RemoteControlPairingStartParams,
+    ) -> io::Result<RemoteControlPairingStartResponse> {
+        if !*self.enabled_tx.borrow() {
+            return Err(Self::pairing_disabled_error());
+        }
+        let mut auth = websocket::load_remote_control_auth(&self.auth_manager)
+            .await
+            .map_err(|_| pairing_unavailable_error())?;
+        let mut enrollment = {
+            let current_enrollment = self
+                .current_enrollment
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            current_enrollment
+                .as_ref()
+                .filter(|enrollment| enrollment.account_id == auth.account_id)
+                .cloned()
+        }
+        .ok_or_else(pairing_unavailable_error)?;
+        let installation_id = self.status().installation_id;
+        if enrollment.should_refresh_server_token() {
+            refresh_pairing_enrollment(
+                &self.current_enrollment,
+                &self.auth_manager,
+                &mut auth,
+                &installation_id,
+                &mut enrollment,
+            )
+            .await?;
+        }
+        let pairing_request = || protocol::StartRemoteControlPairingRequest {
+            manual_code: params.manual_code,
+        };
+        let pairing_response = match enrollment.start_pairing(pairing_request()).await {
+            Err(err) if err.kind() == io::ErrorKind::PermissionDenied => {
+                clear_pairing_server_token(&self.current_enrollment, &mut enrollment)?;
+                refresh_pairing_enrollment(
+                    &self.current_enrollment,
+                    &self.auth_manager,
+                    &mut auth,
+                    &installation_id,
+                    &mut enrollment,
+                )
+                .await?;
+                enrollment.start_pairing(pairing_request()).await
+            }
+            pairing_response => pairing_response,
+        };
+        if let Err(err) = &pairing_response {
+            match err.kind() {
+                io::ErrorKind::NotFound => {
+                    clear_current_enrollment_if_matches(&self.current_enrollment, &enrollment);
+                    return Err(pairing_unavailable_error());
+                }
+                io::ErrorKind::PermissionDenied => {
+                    clear_pairing_server_token(&self.current_enrollment, &mut enrollment)?;
+                    return Err(pairing_unavailable_error());
+                }
+                _ => {}
+            }
+        }
+        if !*self.enabled_tx.borrow() {
+            return Err(Self::pairing_disabled_error());
+        }
+        let current_auth = websocket::load_remote_control_auth(&self.auth_manager)
+            .await
+            .map_err(|_| pairing_unavailable_error())?;
+        if current_auth.account_id != auth.account_id {
+            return Err(pairing_unavailable_error());
+        }
+        pairing_response
+    }
+
+    fn pairing_disabled_error() -> io::Error {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "remote control pairing requires remote control to be enabled",
+        )
     }
 
     fn publish_status(
@@ -160,6 +252,71 @@ impl RemoteControlHandle {
     }
 }
 
+async fn refresh_pairing_enrollment(
+    current_enrollment: &CurrentRemoteControlEnrollment,
+    auth_manager: &Arc<AuthManager>,
+    auth: &mut enroll::RemoteControlConnectionAuth,
+    installation_id: &str,
+    enrollment: &mut RemoteControlEnrollment,
+) -> io::Result<()> {
+    if let Err(err) = refresh_remote_control_server(auth, installation_id, enrollment).await {
+        if err.kind() != io::ErrorKind::PermissionDenied {
+            return handle_pairing_refresh_error(current_enrollment, enrollment, err);
+        }
+        let mut auth_recovery = auth_manager.unauthorized_recovery();
+        let mut auth_change_rx = auth_manager.auth_change_receiver();
+        if !websocket::recover_remote_control_auth(&mut auth_recovery, &mut auth_change_rx).await {
+            return Err(err);
+        }
+        *auth = websocket::load_remote_control_auth(auth_manager)
+            .await
+            .map_err(|_| pairing_unavailable_error())?;
+        if auth.account_id != enrollment.account_id {
+            return Err(pairing_unavailable_error());
+        }
+        if let Err(err) = refresh_remote_control_server(auth, installation_id, enrollment).await {
+            return handle_pairing_refresh_error(current_enrollment, enrollment, err);
+        }
+    }
+    if replace_current_enrollment(current_enrollment, enrollment) {
+        Ok(())
+    } else {
+        Err(pairing_unavailable_error())
+    }
+}
+
+fn handle_pairing_refresh_error(
+    current_enrollment: &CurrentRemoteControlEnrollment,
+    enrollment: &RemoteControlEnrollment,
+    err: io::Error,
+) -> io::Result<()> {
+    if err.kind() == io::ErrorKind::NotFound {
+        clear_current_enrollment_if_matches(current_enrollment, enrollment);
+        Err(pairing_unavailable_error())
+    } else {
+        Err(err)
+    }
+}
+
+fn clear_pairing_server_token(
+    current_enrollment: &CurrentRemoteControlEnrollment,
+    enrollment: &mut RemoteControlEnrollment,
+) -> io::Result<()> {
+    enrollment.clear_server_token();
+    if replace_current_enrollment(current_enrollment, enrollment) {
+        Ok(())
+    } else {
+        Err(pairing_unavailable_error())
+    }
+}
+
+fn pairing_unavailable_error() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidInput,
+        "remote control pairing is unavailable until enrollment completes",
+    )
+}
+
 fn remote_control_status_with_connection_status(
     status: &RemoteControlStatusChangedNotification,
     connection_status: RemoteControlConnectionStatus,
@@ -174,6 +331,64 @@ fn remote_control_status_with_connection_status(
             status.environment_id.clone()
         },
     }
+}
+
+fn publish_current_enrollment(
+    current_enrollment: &CurrentRemoteControlEnrollment,
+    enrollment: &RemoteControlEnrollment,
+) {
+    *current_enrollment
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(enrollment.clone());
+}
+
+fn clear_current_enrollment(current_enrollment: &CurrentRemoteControlEnrollment) {
+    *current_enrollment
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+}
+
+fn replace_current_enrollment(
+    current_enrollment: &CurrentRemoteControlEnrollment,
+    enrollment: &RemoteControlEnrollment,
+) -> bool {
+    let mut current_enrollment = current_enrollment
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if !current_enrollment
+        .as_ref()
+        .is_some_and(|current| same_remote_control_enrollment(current, enrollment))
+    {
+        return false;
+    }
+    *current_enrollment = Some(enrollment.clone());
+    true
+}
+
+fn clear_current_enrollment_if_matches(
+    current_enrollment: &CurrentRemoteControlEnrollment,
+    enrollment: &RemoteControlEnrollment,
+) {
+    let mut current_enrollment = current_enrollment
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if current_enrollment
+        .as_ref()
+        .is_some_and(|current| same_remote_control_enrollment(current, enrollment))
+    {
+        *current_enrollment = None;
+    }
+}
+
+fn same_remote_control_enrollment(
+    left: &RemoteControlEnrollment,
+    right: &RemoteControlEnrollment,
+) -> bool {
+    // A refresh rotates only the bearer. Pairing remains current while the same persisted server
+    // record is still selected for the current account.
+    left.account_id == right.account_id
+        && left.server_id == right.server_id
+        && left.environment_id == right.environment_id
 }
 
 pub async fn start_remote_control(
@@ -198,6 +413,9 @@ pub async fn start_remote_control(
     };
 
     let (enabled_tx, enabled_rx) = watch::channel(initial_enabled);
+    let current_enrollment = Arc::new(StdMutex::new(None));
+    let websocket_current_enrollment = current_enrollment.clone();
+    let handle_auth_manager = auth_manager.clone();
     let server_name = gethostname().to_string_lossy().trim().to_string();
     let remote_control_url = config.remote_control_url;
     let installation_id = config.installation_id;
@@ -245,6 +463,7 @@ pub async fn start_remote_control(
             RemoteControlChannels {
                 transport_event_tx,
                 status_publisher,
+                current_enrollment: websocket_current_enrollment,
             },
             shutdown_token,
             enabled_rx,
@@ -289,6 +508,8 @@ pub async fn start_remote_control(
             enabled_tx: Arc::new(enabled_tx),
             status_tx: Arc::new(status_tx),
             state_db_available,
+            current_enrollment,
+            auth_manager: handle_auth_manager,
         },
     ))
 }

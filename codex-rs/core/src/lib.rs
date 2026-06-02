@@ -144,7 +144,6 @@ mod turn_metadata;
 mod turn_timing;
 pub use rollout::ARCHIVED_SESSIONS_SUBDIR;
 pub use rollout::Cursor;
-pub use rollout::EventPersistenceMode;
 pub use rollout::INTERACTIVE_SESSION_SOURCES;
 pub use rollout::RolloutRecorder;
 pub use rollout::RolloutRecorderParams;

@@ -76,6 +76,49 @@ Particularly when introducing a new concept/feature/API, before adding to `codex
 
 Likewise, when reviewing code, do not hesitate to push back on PRs that would unnecessarily add code to `codex-core`.
 
+## Code Review Rules
+
+### Model visible context
+
+Codex maintains a context (history of messages) that is sent to the model in inference requests.
+
+1. No history rewrite - the context must be built up incrementally.
+2. Avoid frequent changes to context that cause cache misses.
+3. No unbounded items - everything injected in the model context must have a bounded size and a hard cap.
+4. No items larger than 10K tokens.
+5. Highlight new individual items that can cross >1k tokens as P0. These need an additional manual review.
+6. All injected fragments must be defined as structs in `core/context` and implement ContextualUserFragment trait
+
+### Breaking changes
+
+Search for breaking changes in external integration surfaces:
+
+- app-server APIs
+- CLI parameters
+- configuration loading
+- resuming sessions from existing rollouts
+
+### Test authoring guidance
+
+For agent changes prefer integration tests over unit tests. Integration tests are under `core/suite` and use `test_codex` to set up a test instance of codex.
+
+Features that change the agent logic MUST add an integration test:
+
+- Provide a list of major logic changes and user-facing behaviors that need to be tested.
+
+If unit tests are needed, put them in a dedicated test file (\*\_tests.rs).
+Avoid test-only functions in the main implementation.
+
+Check whether there are existing helpers to make tests more streamlined and readable.
+
+### Change size guidance (800 lines)
+
+Unless the change is mechanical the total number of changed lines should not exceed 800 lines.
+For complex logic changes the size should be under 500 lines.
+
+If the change is larger, explore whether it can be split into reviewable stages and identify the smallest coherent stage to land first.
+Base the staging suggestion on the actual diff, dependencies, and affected call sites.
+
 ## TUI style conventions
 
 See `codex-rs/tui/styles.md`.
@@ -109,6 +152,19 @@ See `codex-rs/tui/styles.md`.
 - If you have a list of lines and you need to prefix them all with some prefix (optionally different on the first vs subsequent lines), use the `prefix_lines` helper from line_utils.
 
 ## Tests
+
+### Test module organization
+
+- When adding a new test module, define its contents in a separate sibling file rather than inline in the implementation file.
+- Use an explicit `#[path = "..._tests.rs"]` attribute so the test filename is descriptive and easy to locate:
+
+  ```rust
+  #[cfg(test)]
+  #[path = "parser_tests.rs"]
+  mod tests;
+  ```
+
+- This applies only when introducing a new test module. Do not move or rewrite existing inline `#[cfg(test)] mod tests { ... }` modules solely to follow this convention.
 
 ### Snapshot tests
 
@@ -219,3 +275,12 @@ These guidelines apply to app-server protocol work in `codex-rs`, especially:
 - Validate with `just test -p codex-app-server-protocol`.
 - Avoid boilerplate tests that only assert experimental field markers for individual
   request fields in `common.rs`; rely on schema generation/tests and behavioral coverage instead.
+
+## Python Development Best Practices
+
+### Ignore Python 2 compatibility
+
+This project uses Python 3+. You should not use the `__future__` module.
+
+If you need to worry about feature compatibility between different 3.xx point releases, check the
+closest `pyproject.toml`'s `requires-python` field to see what minimum runtime version is supported.

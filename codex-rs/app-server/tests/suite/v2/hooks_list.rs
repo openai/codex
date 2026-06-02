@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use anyhow::Result;
-use app_test_support::McpProcess;
+use app_test_support::TestAppServer;
 use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_responses_server_sequence_unchecked;
 use app_test_support::to_response;
@@ -135,7 +135,7 @@ async fn hooks_list_shows_discovered_hook() -> Result<()> {
     let cwd = TempDir::new()?;
     write_user_hook_config(codex_home.path())?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -211,7 +211,7 @@ async fn hooks_list_shows_discovered_plugin_hook() -> Result<()> {
 }"#,
     )?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -270,7 +270,7 @@ async fn hooks_list_shows_plugin_hook_load_warnings() -> Result<()> {
     let cwd = TempDir::new()?;
     write_plugin_hook_config(codex_home.path(), "{ not-json")?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -326,7 +326,7 @@ timeout = 5
     )?;
     set_project_trust_level(codex_home.path(), workspace.path(), TrustLevel::Trusted)?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -408,7 +408,7 @@ async fn hooks_list_uses_root_repo_hooks_for_linked_worktrees() -> Result<()> {
     write_project_hook_config(&worktree_root.join(".codex"), "echo worktree hook")?;
     set_project_trust_level(codex_home.path(), &repo_root, TrustLevel::Trusted)?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let list_id = mcp
@@ -478,7 +478,7 @@ async fn config_batch_write_toggles_user_hook() -> Result<()> {
     let cwd = TempDir::new()?;
     write_user_hook_config(codex_home.path())?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -629,7 +629,7 @@ command = "python3 {hook_script_path}"
         ),
     )?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let hook_list_id = mcp
@@ -879,7 +879,7 @@ command = "python3 {hook_script_path}"
         ),
     )?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let hook_list_id = mcp

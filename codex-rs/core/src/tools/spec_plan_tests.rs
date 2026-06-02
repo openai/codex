@@ -215,6 +215,7 @@ fn set_feature(turn: &mut TurnContext, feature: Feature, enabled: bool) {
             .disable(feature)
             .expect("test feature should be disableable in config");
     }
+    turn.multi_agent_version = config.multi_agent_version_from_features();
     turn.config = Arc::new(config);
     turn.tool_mode = turn.model_info.tool_mode.unwrap_or_else(|| {
         if turn.config.features.enabled(Feature::CodeModeOnly) {
@@ -230,6 +231,21 @@ fn set_feature(turn: &mut TurnContext, feature: Feature, enabled: bool) {
 fn set_features(turn: &mut TurnContext, features: &[Feature]) {
     for feature in features {
         set_feature(turn, *feature, /*enabled*/ true);
+    }
+}
+
+fn zsh_fork_config_for_spec_plan_tests() -> codex_tools::ZshForkConfig {
+    let placeholder_exe = codex_utils_absolute_path::AbsolutePathBuf::try_from(
+        std::env::current_exe().expect("current exe path"),
+    )
+    .expect("current exe should be absolute");
+
+    // Spec planning only checks whether the shell mode is ZshFork. These paths
+    // are never executed, so use a stable absolute placeholder instead of
+    // depending on packaged zsh-fork artifacts in schema tests.
+    codex_tools::ZshForkConfig {
+        shell_zsh_path: placeholder_exe.clone(),
+        main_execve_wrapper_exe: placeholder_exe,
     }
 }
 
@@ -295,6 +311,44 @@ impl ToolExecutor<ExtensionToolCall> for WebRunExtensionTool {
         _call: ExtensionToolCall,
     ) -> Result<Box<dyn ToolOutput>, codex_tools::FunctionCallError> {
         Ok(Box::new(codex_tools::JsonToolOutput::new(json!({}))))
+    }
+}
+
+struct DeferredExtensionTool;
+
+#[async_trait::async_trait]
+impl ToolExecutor<ExtensionToolCall> for DeferredExtensionTool {
+    fn tool_name(&self) -> ToolName {
+        ToolName::plain("extension_echo")
+    }
+
+    fn spec(&self) -> ToolSpec {
+        ToolSpec::Function(ResponsesApiTool {
+            name: "extension_echo".to_string(),
+            description: "Echoes arguments through an extension tool.".to_string(),
+            strict: true,
+            defer_loading: None,
+            parameters: codex_tools::JsonSchema::object(
+                BTreeMap::from([(
+                    "message".to_string(),
+                    codex_tools::JsonSchema::string(/*description*/ None),
+                )]),
+                Some(vec!["message".to_string()]),
+                Some(false.into()),
+            ),
+            output_schema: None,
+        })
+    }
+
+    fn exposure(&self) -> ToolExposure {
+        ToolExposure::Deferred
+    }
+
+    async fn handle(
+        &self,
+        _call: ExtensionToolCall,
+    ) -> Result<Box<dyn ToolOutput>, codex_tools::FunctionCallError> {
+        panic!("spec planning should not execute extension tools")
     }
 }
 
@@ -406,6 +460,120 @@ async fn shell_family_registers_visible_unified_exec_and_hidden_legacy_shell() {
     plan.assert_visible_lacks(&["shell_command"]);
     plan.assert_registered_contains(&["exec_command", "write_stdin", "shell_command"]);
     assert_eq!(plan.exposure("shell_command"), ToolExposure::Hidden);
+    assert!(has_parameter(plan.visible_spec("exec_command"), "shell"));
+}
+
+#[tokio::test]
+async fn shell_zsh_fork_stays_standalone_until_unified_exec_composition_is_enabled() {
+    let standalone = probe(|turn| {
+        set_features(turn, &[Feature::ShellTool, Feature::UnifiedExec]);
+        set_feature(turn, Feature::ShellZshFork, /*enabled*/ true);
+        set_feature(turn, Feature::UnifiedExecZshFork, /*enabled*/ false);
+        turn.model_info.shell_type = ConfigShellToolType::ShellCommand;
+    })
+    .await;
+
+    standalone.assert_visible_contains(&["shell_command"]);
+    standalone.assert_visible_lacks(&["exec_command", "write_stdin"]);
+    standalone.assert_registered_contains(&["shell_command"]);
+    standalone.assert_registered_lacks(&["exec_command", "write_stdin"]);
+
+    let composed = probe(|turn| {
+        set_features(
+            turn,
+            &[
+                Feature::ShellTool,
+                Feature::UnifiedExec,
+                Feature::ShellZshFork,
+                Feature::UnifiedExecZshFork,
+            ],
+        );
+        turn.model_info.shell_type = ConfigShellToolType::ShellCommand;
+    })
+    .await;
+
+    if codex_utils_pty::conpty_supported() {
+        composed.assert_visible_contains(&["exec_command", "write_stdin"]);
+        composed.assert_visible_lacks(&["shell_command"]);
+        composed.assert_registered_contains(&["exec_command", "write_stdin", "shell_command"]);
+        assert_eq!(composed.exposure("shell_command"), ToolExposure::Hidden);
+    } else {
+        composed.assert_visible_contains(&["shell_command"]);
+        composed.assert_visible_lacks(&["exec_command", "write_stdin"]);
+    }
+}
+
+#[tokio::test]
+async fn zsh_fork_unified_exec_hides_shell_parameter() {
+    if !codex_utils_pty::conpty_supported() {
+        return;
+    }
+
+    let plan = probe(|turn| {
+        set_features(
+            turn,
+            &[
+                Feature::ShellTool,
+                Feature::UnifiedExec,
+                Feature::ShellZshFork,
+                Feature::UnifiedExecZshFork,
+            ],
+        );
+        turn.unified_exec_shell_mode =
+            codex_tools::UnifiedExecShellMode::ZshFork(zsh_fork_config_for_spec_plan_tests());
+    })
+    .await;
+
+    plan.assert_visible_contains(&["exec_command", "write_stdin"]);
+    assert!(!has_parameter(plan.visible_spec("exec_command"), "shell"));
+}
+
+#[tokio::test]
+async fn zsh_fork_unified_exec_keeps_shell_parameter_when_remote_environment_available() {
+    if !codex_utils_pty::conpty_supported() {
+        return;
+    }
+
+    let plan = probe(|turn| {
+        set_features(
+            turn,
+            &[
+                Feature::ShellTool,
+                Feature::UnifiedExec,
+                Feature::ShellZshFork,
+                Feature::UnifiedExecZshFork,
+            ],
+        );
+        turn.unified_exec_shell_mode =
+            codex_tools::UnifiedExecShellMode::ZshFork(zsh_fork_config_for_spec_plan_tests());
+        let remote_cwd = turn
+            .environments
+            .primary()
+            .expect("primary environment")
+            .cwd
+            .clone();
+        turn.environments
+            .turn_environments
+            .push(crate::session::turn_context::TurnEnvironment {
+                environment_id: "remote".to_string(),
+                environment: Arc::new(
+                    codex_exec_server::Environment::create_for_tests(Some(
+                        "ws://127.0.0.1:1/remote-exec-server".to_string(),
+                    ))
+                    .expect("remote test environment"),
+                ),
+                cwd: remote_cwd,
+                shell: None,
+            });
+    })
+    .await;
+
+    plan.assert_visible_contains(&["exec_command", "write_stdin"]);
+    assert!(has_parameter(plan.visible_spec("exec_command"), "shell"));
+    assert!(has_parameter(
+        plan.visible_spec("exec_command"),
+        "environment_id"
+    ));
 }
 
 #[tokio::test]
@@ -571,6 +739,25 @@ async fn mcp_and_tool_search_follow_direct_and_deferred_tool_exposure() {
         "tool_search",
         &ToolName::namespaced("mcp__searchable", "lookup").to_string(),
     ]);
+}
+
+#[tokio::test]
+async fn deferred_extension_tools_are_discoverable_with_tool_search() {
+    let plan = probe_with(
+        |turn| {
+            turn.model_info.supports_search_tool = true;
+        },
+        ToolPlanInputs {
+            extension_tool_executors: vec![Arc::new(DeferredExtensionTool)],
+            ..ToolPlanInputs::default()
+        },
+    )
+    .await;
+
+    plan.assert_visible_contains(&["tool_search"]);
+    plan.assert_visible_lacks(&["extension_echo"]);
+    plan.assert_registered_contains(&["extension_echo"]);
+    assert_eq!(plan.exposure("extension_echo"), ToolExposure::Deferred);
 }
 
 #[tokio::test]

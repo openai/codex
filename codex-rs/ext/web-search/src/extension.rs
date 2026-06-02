@@ -169,12 +169,12 @@ mod tests {
             .tool_contributors()
             .iter()
             .flat_map(|contributor| contributor.tools(&session_store, &thread_store))
-            .map(|tool| tool.tool_name())
+            .map(|tool| (tool.tool_name(), tool.supports_parallel_tool_calls()))
             .collect::<Vec<_>>();
 
         assert_eq!(
             tool_names,
-            vec![ToolName::namespaced(WEB_NAMESPACE, RUN_TOOL_NAME)]
+            vec![(ToolName::namespaced(WEB_NAMESPACE, RUN_TOOL_NAME), true)]
         );
     }
 }

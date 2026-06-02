@@ -17,6 +17,13 @@ impl ToolExecutor<ToolInvocation> for Handler {
         create_resume_agent_tool()
     }
 
+    fn search_info(&self) -> Option<ToolSearchInfo> {
+        multi_agent_tool_search_info(
+            "resume_agent resume reopen closed agent subagent thread id target",
+            self.spec(),
+        )
+    }
+
     async fn handle(
         &self,
         invocation: ToolInvocation,
@@ -135,13 +142,6 @@ async fn handle_resume_agent(
 }
 
 impl CoreToolRuntime for Handler {
-    fn search_info(&self) -> Option<ToolSearchInfo> {
-        multi_agent_tool_search_info(
-            "resume_agent resume reopen closed agent subagent thread id target",
-            self.spec(),
-        )
-    }
-
     fn matches_kind(&self, payload: &ToolPayload) -> bool {
         matches!(payload, ToolPayload::Function { .. })
     }
@@ -181,7 +181,7 @@ async fn try_resume_closed_agent(
     receiver_thread_id: ThreadId,
     child_depth: i32,
 ) -> Result<(), FunctionCallError> {
-    let config = build_agent_resume_config(turn.as_ref(), child_depth)?;
+    let config = build_agent_resume_config(turn.as_ref())?;
     Box::pin(session.services.agent_control.resume_agent_from_rollout(
         config,
         receiver_thread_id,

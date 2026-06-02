@@ -67,6 +67,7 @@ use codex_app_server_protocol::ProcessKillParams;
 use codex_app_server_protocol::ProcessResizePtyParams;
 use codex_app_server_protocol::ProcessSpawnParams;
 use codex_app_server_protocol::ProcessWriteStdinParams;
+use codex_app_server_protocol::RemoteControlPairingStartParams;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ReviewStartParams;
 use codex_app_server_protocol::SendAddCreditsNudgeEmailParams;
@@ -106,7 +107,7 @@ use codex_app_server_protocol::WindowsSandboxSetupStartParams;
 use codex_login::default_client::CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR;
 use tokio::process::Command;
 
-pub struct McpProcess {
+pub struct TestAppServer {
     next_request_id: AtomicI64,
     /// Retain this child process until the client is dropped. The Tokio runtime
     /// will make a "best effort" to reap the process after it exits, but it is
@@ -122,7 +123,7 @@ pub const DEFAULT_CLIENT_NAME: &str = "codex-app-server-tests";
 pub const DISABLE_PLUGIN_STARTUP_TASKS_ARG: &str = "--disable-plugin-startup-tasks-for-tests";
 const DISABLE_MANAGED_CONFIG_ENV_VAR: &str = "CODEX_APP_SERVER_DISABLE_MANAGED_CONFIG";
 
-impl McpProcess {
+impl TestAppServer {
     pub async fn new(codex_home: &Path) -> anyhow::Result<Self> {
         Self::new_with_env_and_args(codex_home, &[], &[DISABLE_PLUGIN_STARTUP_TASKS_ARG]).await
     }
@@ -640,6 +641,16 @@ impl McpProcess {
     /// Send a `remoteControl/status/read` JSON-RPC request.
     pub async fn send_remote_control_status_read_request(&mut self) -> anyhow::Result<i64> {
         self.send_request("remoteControl/status/read", /*params*/ None)
+            .await
+    }
+
+    /// Send a `remoteControl/pairing/start` JSON-RPC request.
+    pub async fn send_remote_control_pairing_start_request(
+        &mut self,
+        params: RemoteControlPairingStartParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("remoteControl/pairing/start", params)
             .await
     }
 
@@ -1513,7 +1524,7 @@ impl McpProcess {
     }
 }
 
-impl Drop for McpProcess {
+impl Drop for TestAppServer {
     fn drop(&mut self) {
         // These tests spawn a `codex-app-server` child process.
         //

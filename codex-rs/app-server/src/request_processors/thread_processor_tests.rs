@@ -656,7 +656,6 @@ mod thread_processor_behavior_tests {
             personality: None,
             exclude_turns: false,
             initial_turns_page: None,
-            persist_extended_history: false,
         };
         let config_snapshot = ThreadConfigSnapshot {
             model: "gpt-5".to_string(),

@@ -1,5 +1,5 @@
 use anyhow::Result;
-use app_test_support::McpProcess;
+use app_test_support::TestAppServer;
 use app_test_support::create_mock_responses_server_repeating_assistant;
 use app_test_support::to_response;
 use codex_app_server::in_process;
@@ -35,7 +35,6 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::ThreadMemoryMode;
 use codex_thread_store::CreateThreadParams;
 use codex_thread_store::InMemoryThreadStore;
-use codex_thread_store::ThreadEventPersistenceMode;
 use codex_thread_store::ThreadMetadataPatch;
 use codex_thread_store::ThreadPersistenceMetadata;
 use codex_thread_store::ThreadStore;
@@ -60,7 +59,7 @@ async fn thread_unarchive_moves_rollout_back_into_sessions_directory() -> Result
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let start_id = mcp
@@ -216,12 +215,12 @@ async fn thread_unarchive_preserves_pathless_store_metadata() -> Result<()> {
             thread_source: None,
             base_instructions: BaseInstructions::default(),
             dynamic_tools: Vec::new(),
+            multi_agent_version: None,
             metadata: ThreadPersistenceMetadata {
                 cwd: None,
                 model_provider: "test-provider".to_string(),
                 memory_mode: ThreadMemoryMode::Disabled,
             },
-            event_persistence_mode: ThreadEventPersistenceMode::default(),
         })
         .await?;
     store

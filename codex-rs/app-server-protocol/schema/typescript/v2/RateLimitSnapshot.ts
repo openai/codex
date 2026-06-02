@@ -5,5 +5,6 @@ import type { PlanType } from "../PlanType";
 import type { CreditsSnapshot } from "./CreditsSnapshot";
 import type { RateLimitReachedType } from "./RateLimitReachedType";
 import type { RateLimitWindow } from "./RateLimitWindow";
+import type { SpendControlLimitSnapshot } from "./SpendControlLimitSnapshot";
 
-export type RateLimitSnapshot = { limitId: string | null, limitName: string | null, primary: RateLimitWindow | null, secondary: RateLimitWindow | null, credits: CreditsSnapshot | null, planType: PlanType | null, rateLimitReachedType: RateLimitReachedType | null, };
+export type RateLimitSnapshot = { limitId: string | null, limitName: string | null, primary: RateLimitWindow | null, secondary: RateLimitWindow | null, credits: CreditsSnapshot | null, individualLimit: SpendControlLimitSnapshot | null, planType: PlanType | null, rateLimitReachedType: RateLimitReachedType | null, };

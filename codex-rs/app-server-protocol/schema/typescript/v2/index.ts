@@ -350,6 +350,7 @@ export type { SkillsListEntry } from "./SkillsListEntry";
 export type { SkillsListParams } from "./SkillsListParams";
 export type { SkillsListResponse } from "./SkillsListResponse";
 export type { SortDirection } from "./SortDirection";
+export type { SpendControlLimitSnapshot } from "./SpendControlLimitSnapshot";
 export type { SubagentMigration } from "./SubagentMigration";
 export type { TerminalInteractionNotification } from "./TerminalInteractionNotification";
 export type { TextElement } from "./TextElement";

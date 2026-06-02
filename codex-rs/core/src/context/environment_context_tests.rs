@@ -180,6 +180,7 @@ fn turn_context_item_filesystem_uses_workspace_roots_instead_of_cwd() {
         model: "gpt-5".to_string(),
         personality: None,
         collaboration_mode: None,
+        multi_agent_version: None,
         realtime_active: None,
         effort: None,
         summary: codex_protocol::config_types::ReasoningSummary::Auto,

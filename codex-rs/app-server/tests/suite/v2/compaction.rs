@@ -9,7 +9,7 @@
 
 use anyhow::Result;
 use app_test_support::ChatGptAuthFixture;
-use app_test_support::McpProcess;
+use app_test_support::TestAppServer;
 use app_test_support::to_response;
 use app_test_support::write_chatgpt_auth;
 use app_test_support::write_mock_responses_config_toml;
@@ -82,7 +82,7 @@ async fn auto_compaction_local_emits_started_and_completed_items() -> Result<()>
         COMPACT_PROMPT,
     )?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let thread_id = start_thread(&mut mcp).await?;
@@ -162,7 +162,8 @@ async fn auto_compaction_remote_emits_started_and_completed_items() -> Result<()
         AuthCredentialsStoreMode::File,
     )?;
 
-    let mut mcp = McpProcess::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+    let mut mcp =
+        TestAppServer::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let thread_id = start_thread(&mut mcp).await?;
@@ -268,7 +269,7 @@ async fn thread_compact_start_triggers_compaction_and_returns_empty_response() -
         COMPACT_PROMPT,
     )?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let thread_id = start_thread(&mut mcp).await?;
@@ -318,7 +319,7 @@ async fn thread_compact_start_rejects_invalid_thread_id() -> Result<()> {
         COMPACT_PROMPT,
     )?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -354,7 +355,7 @@ async fn thread_compact_start_rejects_unknown_thread_id() -> Result<()> {
         COMPACT_PROMPT,
     )?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -374,7 +375,7 @@ async fn thread_compact_start_rejects_unknown_thread_id() -> Result<()> {
     Ok(())
 }
 
-async fn start_thread(mcp: &mut McpProcess) -> Result<String> {
+async fn start_thread(mcp: &mut TestAppServer) -> Result<String> {
     let thread_id = mcp
         .send_thread_start_request(ThreadStartParams {
             model: Some("mock-model".to_string()),
@@ -390,7 +391,11 @@ async fn start_thread(mcp: &mut McpProcess) -> Result<String> {
     Ok(thread.id)
 }
 
-async fn send_turn_and_wait(mcp: &mut McpProcess, thread_id: &str, text: &str) -> Result<String> {
+async fn send_turn_and_wait(
+    mcp: &mut TestAppServer,
+    thread_id: &str,
+    text: &str,
+) -> Result<String> {
     let turn_id = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread_id.to_string(),
@@ -412,7 +417,7 @@ async fn send_turn_and_wait(mcp: &mut McpProcess, thread_id: &str, text: &str) -
     Ok(turn.id)
 }
 
-async fn wait_for_turn_completed(mcp: &mut McpProcess, turn_id: &str) -> Result<()> {
+async fn wait_for_turn_completed(mcp: &mut TestAppServer, turn_id: &str) -> Result<()> {
     loop {
         let notification: JSONRPCNotification = timeout(
             DEFAULT_READ_TIMEOUT,
@@ -428,7 +433,7 @@ async fn wait_for_turn_completed(mcp: &mut McpProcess, turn_id: &str) -> Result<
 }
 
 async fn wait_for_context_compaction_started(
-    mcp: &mut McpProcess,
+    mcp: &mut TestAppServer,
 ) -> Result<ItemStartedNotification> {
     loop {
         let notification: JSONRPCNotification = timeout(
@@ -445,7 +450,7 @@ async fn wait_for_context_compaction_started(
 }
 
 async fn wait_for_context_compaction_completed(
-    mcp: &mut McpProcess,
+    mcp: &mut TestAppServer,
 ) -> Result<ItemCompletedNotification> {
     loop {
         let notification: JSONRPCNotification = timeout(
