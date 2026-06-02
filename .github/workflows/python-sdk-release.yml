@@ -4,6 +4,12 @@ on:
   push:
     tags:
       - "python-v*"
+  workflow_dispatch:
+    inputs:
+      runtime_version:
+        description: "Runtime version to publish before updating the SDK pin, for example 0.136.0 or 0.136.0a2."
+        required: true
+        type: string
 
 concurrency:
   group: ${{ github.workflow }}
@@ -11,8 +17,8 @@ concurrency:
 
 jobs:
   # Publish the platform-specific Python runtime wheels before building the SDK
-  # package that pins them. PyPI project configuration must trust this workflow
-  # and job for publishing.
+  # package that pins them, or explicitly before updating the SDK runtime pin.
+  # PyPI project configuration must trust this workflow and job for publishing.
   publish-python-runtime:
     if: github.repository == 'openai/codex'
     name: publish-python-runtime
@@ -28,9 +34,11 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Resolve pinned Python runtime release
+      - name: Validate SDK tag and resolve Python runtime release
         id: python_runtime
         shell: bash
+        env:
+          REQUESTED_RUNTIME_VERSION: ${{ inputs.runtime_version }}
         run: |
           set -euo pipefail
           python3 - <<'PY'
@@ -39,17 +47,30 @@ jobs:
           import tomllib
           from pathlib import Path
 
-          pyproject = tomllib.loads(Path("sdk/python/pyproject.toml").read_text())
-          prefix = "openai-codex-cli-bin=="
-          versions = [
-              dependency.removeprefix(prefix)
-              for dependency in pyproject["project"]["dependencies"]
-              if dependency.startswith(prefix)
-          ]
-          if len(versions) != 1:
-              raise SystemExit(f"Expected exactly one pinned {prefix} dependency, found {versions}")
+          event_name = os.environ["GITHUB_EVENT_NAME"]
+          if event_name == "workflow_dispatch":
+              python_version = os.environ["REQUESTED_RUNTIME_VERSION"]
+          elif event_name == "push":
+              sdk_version = os.environ["GITHUB_REF_NAME"].removeprefix("python-v")
+              if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+b[0-9]+", sdk_version):
+                  raise SystemExit(
+                      "Python SDK release tags must identify a beta release, "
+                      "for example python-v0.1.0b1."
+                  )
 
-          python_version = versions[0]
+              pyproject = tomllib.loads(Path("sdk/python/pyproject.toml").read_text())
+              prefix = "openai-codex-cli-bin=="
+              versions = [
+                  dependency.removeprefix(prefix)
+                  for dependency in pyproject["project"]["dependencies"]
+                  if dependency.startswith(prefix)
+              ]
+              if len(versions) != 1:
+                  raise SystemExit(f"Expected exactly one pinned {prefix} dependency, found {versions}")
+              python_version = versions[0]
+          else:
+              raise SystemExit(f"Unsupported workflow event: {event_name}")
+
           if match := re.fullmatch(r"([0-9]+\.[0-9]+\.[0-9]+)a([0-9]+)", python_version):
               release_version = f"{match.group(1)}-alpha.{match.group(2)}"
           elif re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", python_version):
@@ -135,7 +156,7 @@ jobs:
           skip-existing: true
 
   build-python-sdk:
-    if: github.repository == 'openai/codex'
+    if: github.event_name == 'push' && github.repository == 'openai/codex'
     name: build-python-sdk
     needs: publish-python-runtime
     runs-on: ubuntu-latest
@@ -154,11 +175,6 @@ jobs:
           set -euo pipefail
 
           sdk_version="${GITHUB_REF_NAME#python-v}"
-          if [[ ! "${sdk_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+b[0-9]+$ ]]; then
-            echo "Python SDK release tags must identify a beta release, for example python-v0.1.0b1."
-            exit 1
-          fi
-
           # Build in a glibc Linux image so release type generation installs
           # the pinned manylinux runtime wheel.
           docker run --rm \
