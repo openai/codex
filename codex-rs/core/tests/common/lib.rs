@@ -12,6 +12,7 @@ use codex_config::CloudConfigBundleLoader;
 use codex_config::LoaderOverrides;
 use codex_config::test_support::CloudConfigBundleFixture;
 use codex_core::CodexThread;
+use codex_core::LoadedAgentsMd;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
@@ -31,6 +32,14 @@ pub mod test_codex;
 pub mod test_codex_exec;
 pub mod tracing;
 pub mod zsh_fork;
+
+/// Creates loaded user instructions with a stable synthetic AGENTS.md source path.
+pub fn loaded_instructions(text: impl Into<String>) -> LoadedAgentsMd {
+    LoadedAgentsMd::new(
+        text.into(),
+        AbsolutePathBuf::from_absolute_path("/tmp/test-AGENTS.md").expect("absolute path"),
+    )
+}
 
 static TEST_ARG0_PATH_ENTRY: OnceLock<Option<Arg0PathEntryGuard>> = OnceLock::new();
 

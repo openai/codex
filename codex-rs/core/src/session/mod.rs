@@ -507,12 +507,13 @@ impl Codex {
 
         let primary_environment = environment_selections.primary_environment();
         let mut user_instruction_warnings = Vec::new();
-        let user_instructions = AgentsMdManager::new(&config)
-            .user_instructions(
-                primary_environment.as_deref(),
-                &mut user_instruction_warnings,
-            )
-            .await;
+        let user_instructions = if let Some(primary_environment) = primary_environment {
+            AgentsMdManager::new(&config)
+                .user_instructions(primary_environment.as_ref(), &mut user_instruction_warnings)
+                .await
+        } else {
+            None
+        };
         config.startup_warnings.extend(user_instruction_warnings);
 
         let exec_policy = if crate::guardian::is_guardian_reviewer_source(&session_source) {

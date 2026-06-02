@@ -16,6 +16,7 @@ async fn get_user_instructions(config: &Config) -> Option<String> {
     AgentsMdManager::new(config)
         .user_instructions_with_fs(LOCAL_FS.as_ref(), &mut warnings)
         .await
+        .map(|loaded| loaded.text())
 }
 
 async fn agents_md_paths(config: &Config) -> std::io::Result<Vec<AbsolutePathBuf>> {
@@ -53,7 +54,12 @@ async fn make_config(root: &TempDir, limit: usize, instructions: Option<&str>) -
     config.cwd = root.abs();
     config.project_doc_max_bytes = limit;
 
-    config.user_instructions = instructions.map(ToOwned::to_owned);
+    config.user_instructions = instructions.map(|text| {
+        LoadedAgentsMd::new(
+            text.to_owned(),
+            config.codex_home.join(DEFAULT_AGENTS_MD_FILENAME),
+        )
+    });
     config
 }
 
@@ -96,7 +102,12 @@ async fn make_config_with_project_root_markers(
 
     config.cwd = root.abs();
     config.project_doc_max_bytes = limit;
-    config.user_instructions = instructions.map(ToOwned::to_owned);
+    config.user_instructions = instructions.map(|text| {
+        LoadedAgentsMd::new(
+            text.to_owned(),
+            config.codex_home.join(DEFAULT_AGENTS_MD_FILENAME),
+        )
+    });
     config
 }
 
@@ -113,19 +124,6 @@ async fn no_doc_file_returns_none() {
         "Expected None when AGENTS.md is absent and no system instructions provided"
     );
     assert!(res.is_none(), "Expected None when AGENTS.md is absent");
-}
-
-#[tokio::test]
-async fn no_environment_returns_none() {
-    let tmp = tempfile::tempdir().expect("tempdir");
-    let config = make_config(&tmp, /*limit*/ 4096, Some("user instructions")).await;
-
-    let mut warnings = Vec::new();
-    let res = AgentsMdManager::new(&config)
-        .user_instructions(/*environment*/ None, &mut warnings)
-        .await;
-
-    assert_eq!(res, None);
 }
 
 /// Small file within the byte-limit is returned unmodified.
@@ -161,8 +159,10 @@ async fn global_doc_invalid_utf8_warns_and_uses_lossy_text() {
     .await
     .expect("global doc expected");
 
-    assert_eq!(loaded.contents, "global\u{FFFD} doc");
-    assert_eq!(loaded.path, path);
+    assert_eq!(
+        loaded,
+        LoadedAgentsMd::new("global\u{FFFD} doc".to_string(), path.clone())
+    );
     assert_invalid_utf8_warning(&warnings, "Global", path.as_path());
 }
 
@@ -177,7 +177,8 @@ async fn project_doc_invalid_utf8_warns_and_uses_lossy_text() {
     let res = AgentsMdManager::new(&config)
         .user_instructions_with_fs(LOCAL_FS.as_ref(), &mut warnings)
         .await
-        .expect("doc expected");
+        .expect("doc expected")
+        .text();
 
     assert_eq!(res, "project\u{FFFD} doc");
     let canonical_path = dunce::canonicalize(&path).expect("canonical doc path");
@@ -310,8 +311,38 @@ async fn concatenates_root_and_cwd_docs() {
     let mut cfg = make_config(&repo, /*limit*/ 4096, /*instructions*/ None).await;
     cfg.cwd = nested.abs();
 
-    let res = get_user_instructions(&cfg).await.expect("doc expected");
-    assert_eq!(res, "root doc\n\ncrate doc");
+    let mut warnings = Vec::new();
+    let loaded = AgentsMdManager::new(&cfg)
+        .user_instructions_with_fs(LOCAL_FS.as_ref(), &mut warnings)
+        .await
+        .expect("doc expected");
+    let root_agents = AbsolutePathBuf::try_from(
+        dunce::canonicalize(repo.path().join("AGENTS.md")).expect("canonical root doc path"),
+    )
+    .expect("absolute root doc path");
+    let crate_agents = AbsolutePathBuf::try_from(
+        dunce::canonicalize(cfg.cwd.join("AGENTS.md")).expect("canonical crate doc path"),
+    )
+    .expect("absolute crate doc path");
+    let expected = LoadedAgentsMd {
+        instructions: vec![
+            LoadedInstruction {
+                contents: "root doc".to_string(),
+                source: InstructionSource::Project(root_agents.clone()),
+            },
+            LoadedInstruction {
+                contents: "crate doc".to_string(),
+                source: InstructionSource::Project(crate_agents.clone()),
+            },
+        ],
+    };
+
+    assert_eq!(loaded, expected);
+    assert_eq!(loaded.text(), "root doc\n\ncrate doc");
+    assert_eq!(
+        loaded.sources().collect::<Vec<_>>(),
+        vec![&root_agents, &crate_agents]
+    );
 }
 
 #[tokio::test]
@@ -351,24 +382,83 @@ async fn project_root_markers_are_honored_for_agents_discovery() {
 }
 
 #[tokio::test]
+async fn child_agents_message_after_global_instructions_uses_plain_separator() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let mut cfg = make_config(&tmp, /*limit*/ 4096, Some("global doc")).await;
+    cfg.features.enable(Feature::ChildAgentsMd).unwrap();
+
+    let mut warnings = Vec::new();
+    let loaded = AgentsMdManager::new(&cfg)
+        .user_instructions_with_fs(LOCAL_FS.as_ref(), &mut warnings)
+        .await
+        .expect("instructions expected");
+    let global_agents = cfg.codex_home.join(DEFAULT_AGENTS_MD_FILENAME);
+    let expected = LoadedAgentsMd {
+        instructions: vec![
+            LoadedInstruction {
+                contents: "global doc".to_string(),
+                source: InstructionSource::User(global_agents),
+            },
+            LoadedInstruction {
+                contents: HIERARCHICAL_AGENTS_MESSAGE.to_string(),
+                source: InstructionSource::Internal,
+            },
+        ],
+    };
+
+    assert_eq!(loaded, expected);
+    assert_eq!(
+        loaded.text(),
+        format!("global doc\n\n{HIERARCHICAL_AGENTS_MESSAGE}")
+    );
+}
+
+#[tokio::test]
 async fn instruction_sources_include_global_before_agents_md_docs() {
     let tmp = tempfile::tempdir().expect("tempdir");
     fs::write(tmp.path().join("AGENTS.md"), "project doc").unwrap();
 
-    let cfg = make_config(&tmp, /*limit*/ 4096, Some("global doc")).await;
+    let mut cfg = make_config(&tmp, /*limit*/ 4096, Some("global doc")).await;
+    cfg.features.enable(Feature::ChildAgentsMd).unwrap();
     let global_agents = cfg.codex_home.join(DEFAULT_AGENTS_MD_FILENAME);
     fs::create_dir_all(&cfg.codex_home).unwrap();
     fs::write(&global_agents, "global doc").unwrap();
 
-    let sources = AgentsMdManager::new(&cfg)
-        .instruction_sources(LOCAL_FS.as_ref())
-        .await;
+    let mut warnings = Vec::new();
+    let loaded = AgentsMdManager::new(&cfg)
+        .user_instructions_with_fs(LOCAL_FS.as_ref(), &mut warnings)
+        .await
+        .expect("instructions expected");
     let project_agents = AbsolutePathBuf::try_from(
         dunce::canonicalize(cfg.cwd.join("AGENTS.md")).expect("canonical project doc path"),
     )
     .expect("absolute project doc path");
 
-    assert_eq!(sources, vec![global_agents, project_agents]);
+    let expected = LoadedAgentsMd {
+        instructions: vec![
+            LoadedInstruction {
+                contents: "global doc".to_string(),
+                source: InstructionSource::User(global_agents.clone()),
+            },
+            LoadedInstruction {
+                contents: "project doc".to_string(),
+                source: InstructionSource::Project(project_agents.clone()),
+            },
+            LoadedInstruction {
+                contents: HIERARCHICAL_AGENTS_MESSAGE.to_string(),
+                source: InstructionSource::Internal,
+            },
+        ],
+    };
+    assert_eq!(loaded, expected);
+    assert_eq!(
+        loaded.sources().collect::<Vec<_>>(),
+        vec![&global_agents, &project_agents]
+    );
+    assert_eq!(
+        loaded.text(),
+        format!("global doc{AGENTS_MD_SEPARATOR}project doc\n\n{HIERARCHICAL_AGENTS_MESSAGE}")
+    );
 }
 
 /// AGENTS.override.md is preferred over AGENTS.md when both are present.

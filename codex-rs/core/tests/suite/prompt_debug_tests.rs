@@ -5,6 +5,7 @@ use codex_core::config::ConfigOverrides;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::user_input::UserInput;
+use core_test_support::loaded_instructions;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 
@@ -21,7 +22,7 @@ async fn build_prompt_input_includes_context_and_user_message() -> Result<()> {
         })
         .build()
         .await?;
-    config.user_instructions = Some("Project-specific test instructions".to_string());
+    config.user_instructions = Some(loaded_instructions("Project-specific test instructions"));
 
     let input = build_prompt_input(
         config,

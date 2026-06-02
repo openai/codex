@@ -23,7 +23,6 @@ use codex_config::merge_toml_values;
 use codex_config::project_root_markers_from_config;
 use codex_exec_server::Environment;
 use codex_exec_server::ExecutorFileSystem;
-use codex_exec_server::LOCAL_FS;
 use codex_features::Feature;
 use codex_prompts::HIERARCHICAL_AGENTS_MESSAGE;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -37,19 +36,14 @@ pub const DEFAULT_AGENTS_MD_FILENAME: &str = "AGENTS.md";
 /// Preferred local override for AGENTS.md instructions.
 pub const LOCAL_AGENTS_MD_FILENAME: &str = "AGENTS.override.md";
 
-/// When both `Config::instructions` and AGENTS.md docs are present, they will
-/// be concatenated with the following separator.
+/// When both user and project AGENTS.md docs are present, they will be
+/// concatenated with the following separator.
 const AGENTS_MD_SEPARATOR: &str = "\n\n--- project-doc ---\n\n";
 
 /// Resolves AGENTS.md files into model-visible user instructions and source
 /// paths.
 pub struct AgentsMdManager<'a> {
     config: &'a Config,
-}
-
-pub(crate) struct LoadedAgentsMd {
-    pub(crate) contents: String,
-    pub(crate) path: AbsolutePathBuf,
 }
 
 impl<'a> AgentsMdManager<'a> {
@@ -81,10 +75,7 @@ impl<'a> AgentsMdManager<'a> {
             let contents = String::from_utf8_lossy(&data);
             let trimmed = contents.trim();
             if !trimmed.is_empty() {
-                return Some(LoadedAgentsMd {
-                    contents: trimmed.to_string(),
-                    path,
-                });
+                return Some(LoadedAgentsMd::new(trimmed.to_string(), path));
             }
         }
         None
@@ -94,10 +85,10 @@ impl<'a> AgentsMdManager<'a> {
     /// single model-visible instruction string.
     pub(crate) async fn user_instructions(
         &self,
-        environment: Option<&Environment>,
+        environment: &Environment,
         startup_warnings: &mut Vec<String>,
-    ) -> Option<String> {
-        let fs = environment?.get_filesystem();
+    ) -> Option<LoadedAgentsMd> {
+        let fs = environment.get_filesystem();
         self.user_instructions_with_fs(fs.as_ref(), startup_warnings)
             .await
     }
@@ -106,22 +97,13 @@ impl<'a> AgentsMdManager<'a> {
         &self,
         fs: &dyn ExecutorFileSystem,
         startup_warnings: &mut Vec<String>,
-    ) -> Option<String> {
+    ) -> Option<LoadedAgentsMd> {
         let agents_md_docs = self.read_agents_md(fs, startup_warnings).await;
 
-        let mut output = String::new();
-
-        if let Some(instructions) = self.config.user_instructions.clone() {
-            output.push_str(&instructions);
-        }
+        let mut loaded = self.config.user_instructions.clone().unwrap_or_default();
 
         match agents_md_docs {
-            Ok(Some(docs)) => {
-                if !output.is_empty() {
-                    output.push_str(AGENTS_MD_SEPARATOR);
-                }
-                output.push_str(&docs);
-            }
+            Ok(Some(docs)) => loaded.append_project_docs(docs),
             Ok(None) => {}
             Err(e) => {
                 error!("error trying to find AGENTS.md docs: {e:#}");
@@ -129,50 +111,26 @@ impl<'a> AgentsMdManager<'a> {
         };
 
         if self.config.features.enabled(Feature::ChildAgentsMd) {
-            if !output.is_empty() {
-                output.push_str("\n\n");
-            }
-            output.push_str(HIERARCHICAL_AGENTS_MESSAGE);
+            loaded.instructions.push(LoadedInstruction {
+                contents: HIERARCHICAL_AGENTS_MESSAGE.to_string(),
+                source: InstructionSource::Internal,
+            });
         }
 
-        if !output.is_empty() {
-            Some(output)
-        } else {
-            None
-        }
-    }
-
-    /// Returns all instruction source files included in the current config.
-    pub async fn instruction_sources(&self, fs: &dyn ExecutorFileSystem) -> Vec<AbsolutePathBuf> {
-        let mut global_instruction_warnings = Vec::new();
-        let mut paths = Self::load_global_instructions(
-            LOCAL_FS.as_ref(),
-            Some(&self.config.codex_home),
-            &mut global_instruction_warnings,
-        )
-        .await
-        .map(|loaded| vec![loaded.path])
-        .unwrap_or_default();
-        match self.agents_md_paths(fs).await {
-            Ok(agents_md_paths) => paths.extend(agents_md_paths),
-            Err(err) => {
-                tracing::warn!(error = %err, "failed to discover AGENTS.md docs for instruction sources");
-            }
-        }
-        paths
+        (!loaded.is_empty()).then_some(loaded)
     }
 
     /// Attempt to locate and load AGENTS.md documentation.
     ///
-    /// On success returns `Ok(Some(contents))` where `contents` is the
-    /// concatenation of all discovered docs. If no documentation file is found
-    /// the function returns `Ok(None)`. Unexpected I/O failures bubble up as
-    /// `Err` so callers can decide how to handle them.
+    /// On success returns `Ok(Some(loaded))` where `loaded` contains every
+    /// discovered doc. If no documentation file is found the function returns
+    /// `Ok(None)`. Unexpected I/O failures bubble up as `Err` so callers can
+    /// decide how to handle them.
     async fn read_agents_md(
         &self,
         fs: &dyn ExecutorFileSystem,
         startup_warnings: &mut Vec<String>,
-    ) -> io::Result<Option<String>> {
+    ) -> io::Result<Option<LoadedAgentsMd>> {
         let max_total = self.config.project_doc_max_bytes;
 
         if max_total == 0 {
@@ -185,7 +143,7 @@ impl<'a> AgentsMdManager<'a> {
         }
 
         let mut remaining: u64 = max_total as u64;
-        let mut parts: Vec<String> = Vec::new();
+        let mut loaded = LoadedAgentsMd::default();
 
         for p in paths {
             if remaining == 0 {
@@ -221,15 +179,18 @@ impl<'a> AgentsMdManager<'a> {
 
             let text = String::from_utf8_lossy(&data).to_string();
             if !text.trim().is_empty() {
-                parts.push(text);
+                loaded.instructions.push(LoadedInstruction {
+                    contents: text,
+                    source: InstructionSource::Project(p),
+                });
                 remaining = remaining.saturating_sub(data.len() as u64);
             }
         }
 
-        if parts.is_empty() {
+        if loaded.is_empty() {
             Ok(None)
         } else {
-            Ok(Some(parts.join("\n\n")))
+            Ok(Some(loaded))
         }
     }
 
@@ -345,6 +306,93 @@ impl<'a> AgentsMdManager<'a> {
             }
         }
         names
+    }
+}
+
+/// Model-visible instructions loaded from AGENTS.md files and internal
+/// guidance.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct LoadedAgentsMd {
+    /// Ordered instructions and their provenance.
+    instructions: Vec<LoadedInstruction>,
+}
+
+impl LoadedAgentsMd {
+    /// Creates loaded instructions containing one user-level AGENTS.md entry.
+    pub fn new(contents: String, path: AbsolutePathBuf) -> Self {
+        Self {
+            instructions: vec![LoadedInstruction {
+                contents,
+                source: InstructionSource::User(path),
+            }],
+        }
+    }
+
+    fn append_project_docs(&mut self, project_docs: Self) {
+        self.instructions.extend(project_docs.instructions);
+    }
+
+    fn is_empty(&self) -> bool {
+        self.instructions.is_empty()
+    }
+
+    /// Returns the concatenated model-visible instruction text.
+    pub fn text(&self) -> String {
+        let mut output = String::new();
+        let mut previous_source = None;
+        for instruction in &self.instructions {
+            if let Some(previous_source) = previous_source {
+                output.push_str(instruction.source.separator_after(previous_source));
+            }
+            output.push_str(&instruction.contents);
+            previous_source = Some(&instruction.source);
+        }
+        output
+    }
+
+    /// Returns the AGENTS.md files that supplied instruction entries.
+    pub fn sources(&self) -> impl Iterator<Item = &AbsolutePathBuf> {
+        self.instructions
+            .iter()
+            .filter_map(|instruction| instruction.source.path())
+    }
+}
+
+/// One model-visible instruction and its provenance.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct LoadedInstruction {
+    /// Model-visible instruction text.
+    contents: String,
+
+    /// Origin of the instruction.
+    source: InstructionSource,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum InstructionSource {
+    /// User-level instructions, normally loaded from CODEX_HOME.
+    User(AbsolutePathBuf),
+
+    /// Workspace instructions discovered from project AGENTS.md files.
+    Project(AbsolutePathBuf),
+
+    /// Instructions defined internally by Codex.
+    Internal,
+}
+
+impl InstructionSource {
+    fn separator_after(&self, previous: &Self) -> &'static str {
+        match (previous, self) {
+            (Self::User(_), Self::Project(_)) => AGENTS_MD_SEPARATOR,
+            _ => "\n\n",
+        }
+    }
+
+    fn path(&self) -> Option<&AbsolutePathBuf> {
+        match self {
+            Self::User(path) | Self::Project(path) => Some(path),
+            Self::Internal => None,
+        }
     }
 }
 
