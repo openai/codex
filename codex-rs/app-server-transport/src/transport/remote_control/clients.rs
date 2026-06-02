@@ -139,11 +139,15 @@ pub(super) async fn revoke_remote_control_client(
             "remote control client revoke requires clientId",
         ));
     }
-    let url = environment_client_url(
-        remote_control_url,
-        &params.environment_id,
-        &params.client_id,
-    )?;
+    let mut url = environment_clients_url(remote_control_url, &params.environment_id)?;
+    url.path_segments_mut()
+        .map_err(|()| {
+            io::Error::new(
+                ErrorKind::InvalidInput,
+                "remote control URL cannot be a base",
+            )
+        })?
+        .push(&params.client_id);
     let response = send_client_management_request(
         auth_manager,
         ClientManagementRequest::Revoke { url: &url },
@@ -268,23 +272,6 @@ fn environment_clients_url(remote_control_url: &str, environment_id: &str) -> io
         })?
         .push(environment_id)
         .push("clients");
-    Ok(url)
-}
-
-fn environment_client_url(
-    remote_control_url: &str,
-    environment_id: &str,
-    client_id: &str,
-) -> io::Result<Url> {
-    let mut url = environment_clients_url(remote_control_url, environment_id)?;
-    url.path_segments_mut()
-        .map_err(|()| {
-            io::Error::new(
-                ErrorKind::InvalidInput,
-                "remote control URL cannot be a base",
-            )
-        })?
-        .push(client_id);
     Ok(url)
 }
 
