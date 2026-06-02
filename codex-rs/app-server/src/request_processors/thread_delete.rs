@@ -25,11 +25,7 @@ impl ThreadRequestProcessor {
                     .await;
                 Ok(None)
             }
-            Err(error) => {
-                self.send_thread_deleted_notifications(deleted_thread_ids)
-                    .await;
-                Err(error)
-            }
+            Err(error) => Err(error),
         }
     }
 
@@ -59,27 +55,27 @@ impl ThreadRequestProcessor {
             Err(err) => return Err(core_thread_write_error("delete thread", err)),
         }
 
-        self.validate_root_thread_delete(thread_id).await?;
+        self.validate_root_thread_delete(thread_id, thread_ids.len() > 1)
+            .await?;
         for thread_id_to_delete in thread_ids.iter().copied() {
             self.prepare_thread_for_delete(thread_id_to_delete).await;
         }
 
-        for descendant_thread_id in thread_ids.iter().skip(1).rev().copied() {
+        let mut delete_order: Vec<_> = thread_ids.iter().skip(1).rev().copied().collect();
+        delete_order.push(thread_id);
+
+        for thread_id_to_delete in delete_order.iter().copied() {
             match self
                 .thread_store
                 .delete_thread(StoreDeleteThreadParams {
-                    thread_id: descendant_thread_id,
+                    thread_id: thread_id_to_delete,
                 })
                 .await
             {
-                Ok(()) => {
-                    self.cleanup_deleted_thread_state(descendant_thread_id)
-                        .await;
-                    deleted_thread_ids.push(descendant_thread_id.to_string());
-                }
+                Ok(()) => {}
                 Err(ThreadStoreError::ThreadNotFound { .. }) => {
                     warn!(
-                        "spawned descendant thread {descendant_thread_id} was already missing while deleting {thread_id}"
+                        "thread {thread_id_to_delete} was already missing while deleting {thread_id}"
                     );
                 }
                 Err(err) => {
@@ -88,13 +84,22 @@ impl ThreadRequestProcessor {
             }
         }
 
-        self.thread_store
-            .delete_thread(StoreDeleteThreadParams { thread_id })
-            .await
-            .map_err(thread_store_delete_error)?;
-        self.cleanup_deleted_thread_state(thread_id).await;
-        deleted_thread_ids.push(thread_id.to_string());
+        if let Some(state_db) = self.state_db.as_ref() {
+            state_db
+                .delete_threads_strict(thread_ids.as_slice())
+                .await
+                .map_err(|err| {
+                    internal_error(format!(
+                        "failed to delete app-server state for {thread_id}: {err}"
+                    ))
+                })?;
+        }
 
+        deleted_thread_ids.extend(
+            delete_order
+                .into_iter()
+                .map(|thread_id| thread_id.to_string()),
+        );
         Ok(ThreadDeleteResponse {})
     }
 
@@ -111,6 +116,7 @@ impl ThreadRequestProcessor {
     async fn validate_root_thread_delete(
         &self,
         thread_id: ThreadId,
+        has_descendants: bool,
     ) -> Result<(), JSONRPCErrorError> {
         if let Ok(thread) = self.thread_manager.get_thread(thread_id).await
             && thread.config_snapshot().await.ephemeral
@@ -119,29 +125,50 @@ impl ThreadRequestProcessor {
                 "thread is not persisted and cannot be deleted: {thread_id}"
             )));
         }
-        self.thread_store
+        match self
+            .thread_store
             .read_thread(StoreReadThreadParams {
                 thread_id,
                 include_archived: true,
                 include_history: false,
             })
             .await
-            .map(|_| ())
-            .map_err(thread_store_delete_error)
+        {
+            Ok(_) => Ok(()),
+            Err(ThreadStoreError::ThreadNotFound { .. }) => {
+                if has_descendants {
+                    return Ok(());
+                }
+                let Some(state_db) = self.state_db.as_ref() else {
+                    return Err(thread_store_delete_error(
+                        ThreadStoreError::ThreadNotFound { thread_id },
+                    ));
+                };
+                if state_db
+                    .get_thread(thread_id)
+                    .await
+                    .map_err(|err| {
+                        internal_error(format!(
+                            "failed to read app-server state for {thread_id}: {err}"
+                        ))
+                    })?
+                    .is_some()
+                {
+                    Ok(())
+                } else {
+                    Err(thread_store_delete_error(
+                        ThreadStoreError::ThreadNotFound { thread_id },
+                    ))
+                }
+            }
+            Err(err) => Err(thread_store_delete_error(err)),
+        }
     }
 
     async fn prepare_thread_for_delete(&self, thread_id: ThreadId) {
         self.prepare_thread_for_removal(thread_id, "delete").await;
         if let Some(log_db) = self.log_db.as_ref() {
             log_db.flush().await;
-        }
-    }
-
-    async fn cleanup_deleted_thread_state(&self, thread_id: ThreadId) {
-        if let Some(state_db) = self.state_db.as_ref()
-            && let Err(err) = state_db.delete_thread(thread_id).await
-        {
-            warn!("failed to delete app-server state for deleted thread {thread_id}: {err}");
         }
     }
 }

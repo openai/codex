@@ -1,8 +1,8 @@
 //! Local hard-delete support for persisted threads.
 //!
-//! Existing rollout files are deleted before this operation reports success. Missing rollout files
-//! count as already deleted; SQLite and compatibility metadata cleanup is best effort after rollout
-//! deletion succeeds.
+//! Existing rollout files are deleted before this operation reports success. A rollout file that
+//! vanishes after discovery counts as already deleted. SQLite cleanup happens at the app-server
+//! layer after every associated rollout has been removed so failed deletes can be retried.
 
 use std::io::ErrorKind;
 use std::path::Path;
@@ -11,7 +11,6 @@ use codex_rollout::ARCHIVED_SESSIONS_SUBDIR;
 use codex_rollout::SESSIONS_SUBDIR;
 use codex_rollout::find_archived_thread_path_by_id_str;
 use codex_rollout::find_thread_path_by_id_str;
-use tracing::warn;
 
 use super::LocalThreadStore;
 use super::helpers::matching_rollout_file_name;
@@ -28,18 +27,6 @@ pub(super) async fn delete_thread(
     let thread_id_str = thread_id.to_string();
     let state_db_ctx = store.state_db().await;
     let mut rollout_paths = Vec::new();
-    let state_thread_exists = if let Some(ctx) = state_db_ctx.as_ref() {
-        match ctx.get_thread(thread_id).await {
-            Ok(Some(_)) => true,
-            Ok(None) => false,
-            Err(err) => {
-                warn!("failed to check thread metadata for {thread_id}: {err}");
-                false
-            }
-        }
-    } else {
-        false
-    };
 
     match find_thread_path_by_id_str(
         store.config.codex_home.as_path(),
@@ -79,29 +66,12 @@ pub(super) async fn delete_thread(
 
     store.live_recorders.lock().await.remove(&thread_id);
 
-    let mut deleted_rollout_file = false;
+    let found_rollout_path = !rollout_paths.is_empty();
     for rollout_path in rollout_paths {
-        deleted_rollout_file |= delete_rollout_file(store, rollout_path.as_path(), thread_id)?;
+        delete_rollout_file(store, rollout_path.as_path(), thread_id)?;
     }
 
-    let deleted_state_rows = if let Some(ctx) = state_db_ctx.as_ref() {
-        match ctx.delete_thread(thread_id).await {
-            Ok(rows) => rows,
-            Err(err) if state_thread_exists && !deleted_rollout_file => {
-                return Err(ThreadStoreError::Internal {
-                    message: format!("failed to delete thread metadata for {thread_id}: {err}"),
-                });
-            }
-            Err(err) => {
-                warn!("failed to delete thread metadata for {thread_id}: {err}");
-                0
-            }
-        }
-    } else {
-        0
-    };
-
-    if !deleted_rollout_file && !state_thread_exists && deleted_state_rows == 0 {
+    if !found_rollout_path {
         return Err(ThreadStoreError::ThreadNotFound { thread_id });
     }
 
@@ -124,6 +94,10 @@ fn delete_rollout_file(
             rollout_path,
             "archived sessions",
         )
+    })
+    .or_else(|err| match rollout_path.try_exists() {
+        Ok(false) => Ok(rollout_path.to_path_buf()),
+        Ok(true) | Err(_) => Err(err),
     })?;
     matching_rollout_file_name(&canonical_rollout_path, thread_id, rollout_path)?;
     match std::fs::remove_file(&canonical_rollout_path) {
@@ -140,9 +114,7 @@ fn delete_rollout_file(
 
 #[cfg(test)]
 mod tests {
-    use chrono::Utc;
     use codex_protocol::ThreadId;
-    use codex_protocol::protocol::SessionSource;
     use pretty_assertions::assert_eq;
     use tempfile::TempDir;
     use uuid::Uuid;
@@ -187,43 +159,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn delete_thread_treats_missing_rollout_as_already_deleted_when_sqlite_row_exists() {
+    async fn delete_rollout_file_treats_vanished_path_as_already_deleted() {
         let home = TempDir::new().expect("temp dir");
-        let config = test_config(home.path());
-        let runtime = codex_state::StateRuntime::init(
-            config.sqlite_home.clone(),
-            config.default_model_provider_id.clone(),
-        )
-        .await
-        .expect("state db should initialize");
-        let store = LocalThreadStore::new(config.clone(), Some(runtime.clone()));
-        let thread_id =
-            ThreadId::from_string("00000000-0000-0000-0000-000000000303").expect("valid thread id");
-        let mut builder = codex_state::ThreadMetadataBuilder::new(
-            thread_id,
-            home.path().join("sessions/missing-rollout.jsonl"),
-            Utc::now(),
-            SessionSource::Cli,
-        );
-        builder.cwd = home.path().to_path_buf();
-        let metadata = builder.build(config.default_model_provider_id.as_str());
-        runtime
-            .upsert_thread(&metadata)
-            .await
-            .expect("state db upsert should succeed");
+        let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
+        let uuid = Uuid::from_u128(305);
+        let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
+        let path =
+            write_session_file(home.path(), "2025-01-03T12-00-00", uuid).expect("session file");
+        std::fs::remove_file(&path).expect("remove session file");
 
-        store
-            .delete_thread(DeleteThreadParams { thread_id })
-            .await
-            .expect("delete thread");
-
-        assert_eq!(
-            runtime
-                .get_thread(thread_id)
-                .await
-                .expect("sqlite metadata read"),
-            None
-        );
+        assert!(!delete_rollout_file(&store, path.as_path(), thread_id).expect("delete rollout"));
     }
 
     #[tokio::test]

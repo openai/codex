@@ -613,7 +613,7 @@ An archived thread will not appear in `thread/list` unless `archived` is set to 
 
 ### Example: Delete a thread
 
-Use `thread/delete` to hard-delete a thread and its spawned descendant threads. Existing rollout files must be removed before the request succeeds; missing rollout files are treated as already deleted, and metadata cleanup is best effort afterward.
+Use `thread/delete` to hard-delete a thread and its spawned descendant threads. Existing rollout files and associated metadata must be removed before the request succeeds; missing rollout files are treated as already deleted.
 
 ```json
 { "method": "thread/delete", "id": 23, "params": { "threadId": "thr_b" } }

@@ -98,6 +98,12 @@ async fn thread_delete_deletes_spawned_descendants() -> Result<()> {
             "expected active rollout for {thread_id} to be deleted"
         );
     }
+    assert_eq!(
+        state_db
+            .list_thread_spawn_descendants(parent_thread_id)
+            .await?,
+        Vec::<ThreadId>::new()
+    );
     Ok(())
 }
 

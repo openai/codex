@@ -884,37 +884,42 @@ ON CONFLICT(id) DO UPDATE SET
         self.upsert_thread(&metadata).await
     }
 
-    /// Delete a thread metadata row by id.
+    /// Delete a thread and all associated state by id.
     pub async fn delete_thread(&self, thread_id: ThreadId) -> anyhow::Result<u64> {
-        let thread_id_string = thread_id.to_string();
-        let result = sqlx::query("DELETE FROM threads WHERE id = ?")
-            .bind(thread_id_string.as_str())
-            .execute(self.pool.as_ref())
-            .await?;
-        let rows_affected = result.rows_affected();
+        self.delete_threads_strict(&[thread_id]).await
+    }
 
-        if let Err(err) = sqlx::query("DELETE FROM thread_dynamic_tools WHERE thread_id = ?")
-            .bind(thread_id_string.as_str())
-            .execute(self.pool.as_ref())
-            .await
-        {
-            warn!("failed to delete dynamic tools for thread {thread_id}: {err}");
+    /// Delete a set of threads and all associated state.
+    ///
+    /// Spawn edges and thread rows are deleted last so a failed delete can be retried with enough
+    /// state left to rediscover the same spawned subtree.
+    pub async fn delete_threads_strict(&self, thread_ids: &[ThreadId]) -> anyhow::Result<u64> {
+        if thread_ids.is_empty() {
+            return Ok(0);
         }
 
-        if let Err(err) = sqlx::query(
-            "DELETE FROM thread_spawn_edges WHERE parent_thread_id = ? OR child_thread_id = ?",
-        )
-        .bind(thread_id_string.as_str())
-        .bind(thread_id_string.as_str())
-        .execute(self.pool.as_ref())
-        .await
-        {
-            warn!("failed to delete spawn edges for thread {thread_id}: {err}");
+        let thread_id_strings = thread_ids
+            .iter()
+            .map(ThreadId::to_string)
+            .collect::<Vec<_>>();
+        for (thread_id, thread_id_string) in thread_ids.iter().zip(&thread_id_strings) {
+            sqlx::query("DELETE FROM logs WHERE thread_id = ?")
+                .bind(thread_id_string)
+                .execute(self.logs_pool.as_ref())
+                .await?;
+            self.memories.delete_thread_memory(*thread_id).await?;
+            self.thread_goals.delete_thread_goal(*thread_id).await?;
         }
 
         let now = Utc::now().timestamp();
-        if let Err(err) = sqlx::query(
-            r#"
+        let mut tx = self.pool.begin().await?;
+        for thread_id_string in &thread_id_strings {
+            sqlx::query("DELETE FROM thread_dynamic_tools WHERE thread_id = ?")
+                .bind(thread_id_string)
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query(
+                r#"
 UPDATE agent_job_items
 SET
     status = ?,
@@ -923,50 +928,44 @@ SET
     last_error = ?
 WHERE assigned_thread_id = ? AND status = ?
             "#,
-        )
-        .bind(AgentJobItemStatus::Pending.as_str())
-        .bind(now)
-        .bind("assigned thread was deleted")
-        .bind(thread_id_string.as_str())
-        .bind(AgentJobItemStatus::Running.as_str())
-        .execute(self.pool.as_ref())
-        .await
-        {
-            warn!("failed to requeue agent job items for deleted thread {thread_id}: {err}");
-        }
-
-        if let Err(err) = sqlx::query(
-            r#"
+            )
+            .bind(AgentJobItemStatus::Pending.as_str())
+            .bind(now)
+            .bind("assigned thread was deleted")
+            .bind(thread_id_string)
+            .bind(AgentJobItemStatus::Running.as_str())
+            .execute(&mut *tx)
+            .await?;
+            sqlx::query(
+                r#"
 UPDATE agent_job_items
 SET assigned_thread_id = NULL, updated_at = ?
 WHERE assigned_thread_id = ?
             "#,
-        )
-        .bind(now)
-        .bind(thread_id_string.as_str())
-        .execute(self.pool.as_ref())
-        .await
-        {
-            warn!(
-                "failed to clear agent job item assignments for deleted thread {thread_id}: {err}"
-            );
+            )
+            .bind(now)
+            .bind(thread_id_string)
+            .execute(&mut *tx)
+            .await?;
         }
-
-        if let Err(err) = sqlx::query("DELETE FROM logs WHERE thread_id = ?")
-            .bind(thread_id_string.as_str())
-            .execute(self.logs_pool.as_ref())
-            .await
-        {
-            warn!("failed to delete logs for thread {thread_id}: {err}");
+        for thread_id_string in &thread_id_strings {
+            sqlx::query(
+                "DELETE FROM thread_spawn_edges WHERE parent_thread_id = ? OR child_thread_id = ?",
+            )
+            .bind(thread_id_string)
+            .bind(thread_id_string)
+            .execute(&mut *tx)
+            .await?;
         }
-
-        if let Err(err) = self.memories.delete_thread_memory(thread_id).await {
-            warn!("failed to delete memory metadata for thread {thread_id}: {err}");
+        let mut rows_affected = 0;
+        for thread_id_string in &thread_id_strings {
+            rows_affected += sqlx::query("DELETE FROM threads WHERE id = ?")
+                .bind(thread_id_string)
+                .execute(&mut *tx)
+                .await?
+                .rows_affected();
         }
-
-        if let Err(err) = self.thread_goals.delete_thread_goal(thread_id).await {
-            warn!("failed to delete goal for thread {thread_id}: {err}");
-        }
+        tx.commit().await?;
 
         Ok(rows_affected)
     }
@@ -1334,6 +1333,35 @@ mod tests {
 
         assert_eq!(runtime.delete_thread(missing_thread_id).await?, 0);
         assert_thread_cleanup_state(&runtime, missing_thread_id).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn delete_thread_keeps_retry_graph_on_cleanup_failure() -> Result<()> {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string()).await?;
+        let thread_id = ThreadId::from_string("00000000-0000-0000-0000-000000000405")?;
+        let child_thread_id = ThreadId::from_string("00000000-0000-0000-0000-000000000406")?;
+        runtime
+            .upsert_thread(&test_thread_metadata(
+                &codex_home,
+                thread_id,
+                codex_home.clone(),
+            ))
+            .await?;
+        seed_thread_cleanup_state(&runtime, thread_id, child_thread_id).await?;
+
+        runtime.logs_pool.close().await;
+        runtime
+            .delete_thread(thread_id)
+            .await
+            .expect_err("closed log db should fail deletion");
+
+        assert!(runtime.get_thread(thread_id).await?.is_some());
+        assert_eq!(
+            runtime.list_thread_spawn_descendants(thread_id).await?,
+            vec![child_thread_id]
+        );
         Ok(())
     }
 
