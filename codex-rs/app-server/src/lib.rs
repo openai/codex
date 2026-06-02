@@ -478,6 +478,9 @@ pub async fn run_main_with_transport_options(
         }
         Err(err) => {
             warn!(error = %err, "Failed to preload config for cloud config bundle");
+            // TODO: Decide whether bootstrap config preload failures should block startup.
+            // If this fails, we cannot install cloud/thread config loaders, so non-strict
+            // startup may continue without managed cloud config.
         }
     };
     let mut config_warnings = Vec::new();

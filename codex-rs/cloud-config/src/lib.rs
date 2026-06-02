@@ -34,7 +34,6 @@ use hmac::Mac;
 use serde::Deserialize;
 use serde::Serialize;
 use sha2::Sha256;
-use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -310,10 +309,11 @@ fn requirements_fragment_from_delivered(
 struct CloudRequirementsService {
     auth_manager: Arc<AuthManager>,
     fetcher: Arc<dyn RequirementsFetcher>,
-    cache_path: PathBuf,
-    codex_home: PathBuf,
+    cache_path: AbsolutePathBuf,
+    codex_home: AbsolutePathBuf,
     timeout: Duration,
 }
+
 impl CloudRequirementsService {
     fn new(
         auth_manager: Arc<AuthManager>,
@@ -321,10 +321,12 @@ impl CloudRequirementsService {
         codex_home: PathBuf,
         timeout: Duration,
     ) -> Self {
+        let codex_home = AbsolutePathBuf::resolve_path_against_base(codex_home, "/");
+        let cache_path = codex_home.join(CLOUD_REQUIREMENTS_CACHE_FILENAME);
         Self {
             auth_manager,
             fetcher,
-            cache_path: codex_home.join(CLOUD_REQUIREMENTS_CACHE_FILENAME),
+            cache_path,
             codex_home,
             timeout,
         }
@@ -812,17 +814,10 @@ pub async fn cloud_config_bundle_loader_for_storage(
 
 fn validate_bundle(
     bundle: &CloudConfigBundle,
-    codex_home: &Path,
+    base_dir: &AbsolutePathBuf,
 ) -> Result<(), CloudConfigBundleLoadError> {
-    let base_dir = AbsolutePathBuf::from_absolute_path(codex_home).map_err(|err| {
-        CloudConfigBundleLoadError::new(
-            CloudConfigBundleLoadErrorCode::Internal,
-            /*status_code*/ None,
-            format!("failed to validate cloud config bundle base path: {err}"),
-        )
-    })?;
     let bundle_layers =
-        CloudConfigBundleLayers::from_bundle(bundle.clone(), &base_dir).map_err(|err| {
+        CloudConfigBundleLayers::from_bundle(bundle.clone(), base_dir).map_err(|err| {
             CloudConfigBundleLoadError::new(
                 CloudConfigBundleLoadErrorCode::InvalidBundle,
                 /*status_code*/ None,
@@ -1739,11 +1734,13 @@ mod tests {
             .await
             .expect_err("cloud config bundle should surface auth recovery errors");
         assert_eq!(
-            err.to_string(),
-            "Your access token could not be refreshed because you have since logged out or signed in to another account. Please sign in again."
+            err,
+            CloudConfigBundleLoadError::new(
+                CloudConfigBundleLoadErrorCode::Auth,
+                Some(401),
+                "Your access token could not be refreshed because you have since logged out or signed in to another account. Please sign in again.",
+            )
         );
-        assert_eq!(err.code(), CloudConfigBundleLoadErrorCode::Auth);
-        assert_eq!(err.status_code(), Some(401));
         assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 1);
     }
 
@@ -1792,11 +1789,13 @@ mod tests {
             .await
             .expect_err("cloud config bundle should fail closed");
         assert_eq!(
-            err.to_string(),
-            CLOUD_REQUIREMENTS_AUTH_RECOVERY_FAILED_MESSAGE
+            err,
+            CloudConfigBundleLoadError::new(
+                CloudConfigBundleLoadErrorCode::Auth,
+                Some(401),
+                CLOUD_REQUIREMENTS_AUTH_RECOVERY_FAILED_MESSAGE,
+            )
         );
-        assert_eq!(err.code(), CloudConfigBundleLoadErrorCode::Auth);
-        assert_eq!(err.status_code(), Some(401));
         assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 1);
     }
 
@@ -2009,7 +2008,7 @@ mod cache_tests {
         }
     }
 
-    async fn test_service(codex_home: &Path) -> CloudRequirementsService {
+    async fn create_test_service(codex_home: &Path) -> CloudRequirementsService {
         let auth_home = tempdir().expect("tempdir");
         let auth_manager = Arc::new(
             AuthManager::new(
@@ -2061,7 +2060,7 @@ mod cache_tests {
     #[tokio::test]
     async fn save_writes_signed_payload_and_loads_for_matching_identity() {
         let codex_home = tempdir().expect("tempdir");
-        let service = test_service(codex_home.path()).await;
+        let service = create_test_service(codex_home.path()).await;
         let bundle = test_bundle();
 
         service
@@ -2076,25 +2075,22 @@ mod cache_tests {
         let cache_file: CloudRequirementsCacheFile =
             serde_json::from_slice(&std::fs::read(&service.cache_path).expect("read cache"))
                 .expect("parse cache");
-        assert_eq!(cache_file.signed_payload.version, 1);
-        assert_eq!(
-            cache_file.signed_payload.chatgpt_user_id,
-            Some("user-12345".to_string())
-        );
-        assert_eq!(
-            cache_file.signed_payload.account_id,
-            Some("account-12345".to_string())
-        );
-        assert_eq!(cache_file.signed_payload.bundle, bundle);
         assert!(
             cache_file.signed_payload.expires_at
                 <= cache_file.signed_payload.cached_at + ChronoDuration::minutes(30)
         );
         assert!(cache_file.signed_payload.expires_at > cache_file.signed_payload.cached_at);
-        assert!(verify_cache_signature(
-            &cache_payload_bytes(&cache_file.signed_payload).expect("payload bytes"),
-            &cache_file.signature,
-        ));
+        assert_eq!(
+            cache_file,
+            signed_cache_file(CloudRequirementsCacheSignedPayload {
+                version: CLOUD_CONFIG_BUNDLE_CACHE_VERSION,
+                cached_at: cache_file.signed_payload.cached_at,
+                expires_at: cache_file.signed_payload.expires_at,
+                chatgpt_user_id: Some("user-12345".to_string()),
+                account_id: Some("account-12345".to_string()),
+                bundle,
+            })
+        );
 
         assert_eq!(
             service
@@ -2107,7 +2103,7 @@ mod cache_tests {
     #[tokio::test]
     async fn load_rejects_missing_request_identity_before_reading_cache_file() {
         let codex_home = tempdir().expect("tempdir");
-        let service = test_service(codex_home.path()).await;
+        let service = create_test_service(codex_home.path()).await;
 
         assert_eq!(
             service
@@ -2126,7 +2122,7 @@ mod cache_tests {
     #[tokio::test]
     async fn load_reports_missing_and_malformed_cache_files() {
         let codex_home = tempdir().expect("tempdir");
-        let service = test_service(codex_home.path()).await;
+        let service = create_test_service(codex_home.path()).await;
 
         assert_eq!(
             service
@@ -2147,7 +2143,7 @@ mod cache_tests {
     #[tokio::test]
     async fn load_rejects_tampered_payload() {
         let codex_home = tempdir().expect("tempdir");
-        let service = test_service(codex_home.path()).await;
+        let service = create_test_service(codex_home.path()).await;
         let mut cache_file = signed_cache_file(valid_signed_payload());
         cache_file
             .signed_payload
@@ -2168,7 +2164,7 @@ mod cache_tests {
     #[tokio::test]
     async fn load_rejects_cache_for_incomplete_or_different_identity() {
         let codex_home = tempdir().expect("tempdir");
-        let service = test_service(codex_home.path()).await;
+        let service = create_test_service(codex_home.path()).await;
         let cache_file = signed_cache_file(valid_signed_payload());
         write_cache_file(&service.cache_path, &cache_file);
 
@@ -2194,7 +2190,7 @@ mod cache_tests {
     #[tokio::test]
     async fn load_rejects_expired_cache() {
         let codex_home = tempdir().expect("tempdir");
-        let service = test_service(codex_home.path()).await;
+        let service = create_test_service(codex_home.path()).await;
         let mut signed_payload = valid_signed_payload();
         signed_payload.expires_at = Utc::now() - ChronoDuration::seconds(1);
         write_cache_file(&service.cache_path, &signed_cache_file(signed_payload));
@@ -2210,7 +2206,7 @@ mod cache_tests {
     #[tokio::test]
     async fn load_rejects_unsupported_cache_version() {
         let codex_home = tempdir().expect("tempdir");
-        let service = test_service(codex_home.path()).await;
+        let service = create_test_service(codex_home.path()).await;
         let mut signed_payload = valid_signed_payload();
         signed_payload.version = 2;
         write_cache_file(&service.cache_path, &signed_cache_file(signed_payload));

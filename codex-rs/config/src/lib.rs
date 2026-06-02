@@ -25,7 +25,6 @@ pub mod schema;
 mod skills_config;
 mod state;
 mod strict_config;
-#[doc(hidden)]
 pub mod test_support;
 mod thread_config;
 mod tui_keymap;
