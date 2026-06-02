@@ -8,14 +8,13 @@ pub fn create_list_mcp_resources_tool() -> ToolSpec {
         (
             "server".to_string(),
             JsonSchema::string(Some(
-                "Optional MCP server name. When omitted, lists resources from every configured server."
-                    .to_string(),
+                "MCP server name. Omit to list resources from every configured server.".to_string(),
             )),
         ),
         (
             "cursor".to_string(),
             JsonSchema::string(Some(
-                "Opaque cursor returned by a previous list_mcp_resources call for the same server."
+                "Opaque cursor from a previous list_mcp_resources call; omit for the first page."
                     .to_string(),
             )),
         ),
@@ -36,14 +35,14 @@ pub fn create_list_mcp_resource_templates_tool() -> ToolSpec {
         (
             "server".to_string(),
             JsonSchema::string(Some(
-                "Optional MCP server name. When omitted, lists resource templates from all configured servers."
+                "MCP server name. Omit to list resource templates from every configured server."
                     .to_string(),
             )),
         ),
         (
             "cursor".to_string(),
             JsonSchema::string(Some(
-                "Opaque cursor returned by a previous list_mcp_resource_templates call for the same server."
+                "Opaque cursor from a previous list_mcp_resource_templates call; omit for the first page."
                     .to_string(),
             )),
         ),

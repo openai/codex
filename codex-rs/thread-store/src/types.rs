@@ -5,11 +5,12 @@ use chrono::Utc;
 use codex_protocol::ThreadId;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::models::BaseInstructions;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::GitInfo;
+use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::RolloutItem;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::ThreadMemoryMode as MemoryMode;
 use codex_protocol::protocol::ThreadSource;
@@ -42,16 +43,6 @@ mod optional_option {
     }
 }
 
-/// Controls how many event variants should be persisted for future replay.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ThreadEventPersistenceMode {
-    /// Persist only the legacy minimal replay surface.
-    #[default]
-    Limited,
-    /// Persist the richer event surface used by app-server history reconstruction.
-    Extended,
-}
-
 /// Thread-scoped metadata used when opening live persistence.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ThreadPersistenceMetadata {
@@ -72,6 +63,8 @@ pub struct CreateThreadParams {
     pub thread_id: ThreadId,
     /// Source thread id when this thread is created as a fork.
     pub forked_from_id: Option<ThreadId>,
+    /// The ID of the parent thread. This will only be set if this thread is a subagent.
+    pub parent_thread_id: Option<ThreadId>,
     /// Runtime source for the thread.
     pub source: SessionSource,
     /// Optional analytics source classification for this thread.
@@ -80,10 +73,10 @@ pub struct CreateThreadParams {
     pub base_instructions: BaseInstructions,
     /// Dynamic tools available to the thread at startup.
     pub dynamic_tools: Vec<DynamicToolSpec>,
+    /// Multi-agent runtime selected when the thread was created.
+    pub multi_agent_version: Option<MultiAgentVersion>,
     /// Metadata captured for the newly created thread.
     pub metadata: ThreadPersistenceMetadata,
-    /// Whether persistence should include the extended event surface.
-    pub event_persistence_mode: ThreadEventPersistenceMode,
 }
 
 /// Parameters required to reopen persistence for an existing thread.
@@ -99,8 +92,6 @@ pub struct ResumeThreadParams {
     pub include_archived: bool,
     /// Metadata for future writes appended to the resumed live thread.
     pub metadata: ThreadPersistenceMetadata,
-    /// Whether persistence should include the extended event surface.
-    pub event_persistence_mode: ThreadEventPersistenceMode,
 }
 
 /// Parameters for appending rollout items to a live thread.
@@ -362,6 +353,8 @@ pub struct StoredThread {
     pub rollout_path: Option<PathBuf>,
     /// Source thread id when this thread was forked from another thread.
     pub forked_from_id: Option<ThreadId>,
+    /// The ID of the parent thread. This will only be set if this thread is a subagent.
+    pub parent_thread_id: Option<ThreadId>,
     /// Best available user-facing preview, usually the first user message.
     pub preview: String,
     /// Optional user-facing thread name/title.
@@ -396,8 +389,8 @@ pub struct StoredThread {
     pub git_info: Option<GitInfo>,
     /// Approval mode captured for the thread.
     pub approval_mode: AskForApproval,
-    /// Sandbox policy captured for the thread.
-    pub sandbox_policy: SandboxPolicy,
+    /// Canonical runtime permissions captured for the thread.
+    pub permission_profile: PermissionProfile,
     /// Last observed token usage.
     pub token_usage: Option<TokenUsage>,
     /// First user message observed for this thread, if any.
@@ -519,8 +512,8 @@ pub struct ThreadMetadataPatch {
     pub cli_version: Option<String>,
     /// Approval mode.
     pub approval_mode: Option<AskForApproval>,
-    /// Sandbox policy.
-    pub sandbox_policy: Option<SandboxPolicy>,
+    /// Canonical runtime permissions.
+    pub permission_profile: Option<PermissionProfile>,
     /// Last observed token usage.
     pub token_usage: Option<TokenUsage>,
     /// First user message observed for this thread.
@@ -591,8 +584,8 @@ impl ThreadMetadataPatch {
         if next.approval_mode.is_some() {
             self.approval_mode = next.approval_mode;
         }
-        if next.sandbox_policy.is_some() {
-            self.sandbox_policy = next.sandbox_policy;
+        if next.permission_profile.is_some() {
+            self.permission_profile = next.permission_profile;
         }
         if next.token_usage.is_some() {
             self.token_usage = next.token_usage;
@@ -639,7 +632,7 @@ impl ThreadMetadataPatch {
             && self.cwd.is_none()
             && self.cli_version.is_none()
             && self.approval_mode.is_none()
-            && self.sandbox_policy.is_none()
+            && self.permission_profile.is_none()
             && self.token_usage.is_none()
             && self.first_user_message.is_none()
             && self.git_info.is_none()

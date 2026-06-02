@@ -1,7 +1,6 @@
 use super::*;
 use codex_config::Constrained;
 use codex_config::types::AppToolApproval;
-use codex_config::types::ApprovalsReviewer;
 use codex_login::CodexAuth;
 use codex_plugin::AppConnectorId;
 use codex_plugin::PluginCapabilitySummary;
@@ -96,7 +95,6 @@ fn mcp_prompt_auto_approval_honors_approved_tools_in_all_permission_modes() {
             approval_policy,
             &PermissionProfile::read_only(),
             McpPermissionPromptAutoApproveContext {
-                approvals_reviewer: Some(ApprovalsReviewer::User),
                 tool_approval_mode: Some(AppToolApproval::Approve),
             },
         ));
@@ -106,7 +104,6 @@ fn mcp_prompt_auto_approval_honors_approved_tools_in_all_permission_modes() {
         AskForApproval::OnRequest,
         &PermissionProfile::read_only(),
         McpPermissionPromptAutoApproveContext {
-            approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
             tool_approval_mode: Some(AppToolApproval::Auto),
         },
     ));
@@ -118,7 +115,6 @@ fn mcp_prompt_auto_approval_rejects_auto_mode_in_default_permission_mode() {
         AskForApproval::OnRequest,
         &PermissionProfile::read_only(),
         McpPermissionPromptAutoApproveContext {
-            approvals_reviewer: Some(ApprovalsReviewer::User),
             tool_approval_mode: Some(AppToolApproval::Auto),
         },
     ));

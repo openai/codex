@@ -94,10 +94,10 @@ impl ChatWidget {
         approval_policy: AskForApproval,
         approvals_reviewer: ApprovalsReviewer,
     ) -> SelectionItem {
-        let label = if approvals_reviewer == ApprovalsReviewer::AutoReview {
-            "Auto-review"
-        } else {
-            preset.label
+        let label = match (preset.id, approvals_reviewer) {
+            ("auto", ApprovalsReviewer::AutoReview) => APPROVE_FOR_ME_LABEL,
+            ("auto", ApprovalsReviewer::User) => ASK_FOR_APPROVAL_LABEL,
+            _ => preset.label,
         };
         let active_profile_id = self
             .config

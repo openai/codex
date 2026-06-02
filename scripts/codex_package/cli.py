@@ -44,8 +44,7 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=argparse.SUPPRESS,
         help=(
-            "Output directory to create as the package root. Defaults to a new "
-            "temporary directory."
+            "Output directory to create as the package root. Defaults to a new temporary directory."
         ),
     )
     parser.add_argument(
@@ -72,8 +71,7 @@ def parse_args() -> argparse.Namespace:
         "--cargo-profile",
         default="dev-small",
         help=(
-            "Cargo profile for source-built package artifacts. Use release for "
-            "release packages."
+            "Cargo profile for source-built package artifacts. Use release for release packages."
         ),
     )
     parser.add_argument(
@@ -169,7 +167,9 @@ def main() -> int:
     )
     prepare_package_dir(package_dir, force=args.force)
     build_package_dir(package_dir, version, variant, spec, inputs)
-    validate_package_dir(package_dir, variant, spec, include_zsh=inputs.zsh_bin is not None)
+    validate_package_dir(
+        package_dir, variant, spec, include_zsh=inputs.zsh_bin is not None
+    )
 
     for archive_output in args.archive_output:
         archive_path = archive_output.resolve()

@@ -234,7 +234,7 @@ impl ThreadMetadataSync {
                     update.model = Some(turn_ctx.model.clone());
                     update.reasoning_effort = turn_ctx.effort;
                     update.approval_mode = Some(turn_ctx.approval_policy);
-                    update.sandbox_policy = Some(turn_ctx.sandbox_policy.clone());
+                    update.permission_profile = Some(turn_ctx.permission_profile());
                 }
                 RolloutItem::EventMsg(EventMsg::UserMessage(user)) => {
                     if let Some(preview) = user_message_preview(user) {
@@ -354,7 +354,7 @@ fn update_has_metadata_facts(update: &ThreadMetadataPatch) -> bool {
         || update.cwd.is_some()
         || update.cli_version.is_some()
         || update.approval_mode.is_some()
-        || update.sandbox_policy.is_some()
+        || update.permission_profile.is_some()
         || update.token_usage.is_some()
         || update.first_user_message.is_some()
         || update.git_info.is_some()
@@ -382,7 +382,6 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use super::*;
-    use crate::ThreadEventPersistenceMode;
     use crate::ThreadPersistenceMetadata;
 
     #[test]
@@ -529,7 +528,6 @@ mod tests {
                 model_provider: "test-provider".to_string(),
                 memory_mode: ThreadMemoryMode::Enabled,
             },
-            event_persistence_mode: ThreadEventPersistenceMode::Limited,
         }
     }
 

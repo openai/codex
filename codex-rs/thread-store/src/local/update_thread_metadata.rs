@@ -18,6 +18,7 @@ use tracing::warn;
 
 use super::LocalThreadStore;
 use super::helpers::git_info_from_parts;
+use super::helpers::permission_profile_to_metadata_value;
 use super::live_writer;
 use crate::GitInfoPatch;
 use crate::ReadThreadParams;
@@ -68,13 +69,14 @@ pub(super) async fn update_thread_metadata(
     if live_writer::rollout_path(store, thread_id).await.is_ok() {
         live_writer::persist_thread(store, thread_id).await?;
     }
-    let resolved_rollout_path =
+    let mut resolved_rollout_path =
         resolve_rollout_path(store, thread_id, params.include_archived).await?;
     let name = patch.name;
     let git_info = patch.git_info;
     if let Some(memory_mode) = patch.memory_mode {
         apply_thread_memory_mode(resolved_rollout_path.path.as_path(), thread_id, memory_mode)
             .await?;
+        refresh_resolved_rollout_path(&mut resolved_rollout_path).await;
     }
 
     let state_db_ctx = store.state_db().await;
@@ -142,6 +144,7 @@ pub(super) async fn update_thread_metadata(
             memory_mode.as_deref(),
         )
         .await?;
+        refresh_resolved_rollout_path(&mut resolved_rollout_path).await;
         apply_thread_git_info(store, thread_id, sha, branch, origin_url).await?;
     }
 
@@ -170,6 +173,12 @@ pub(super) async fn update_thread_metadata(
         thread.git_info = git_info_from_parts(sha, branch, origin_url);
     }
     Ok(thread)
+}
+
+async fn refresh_resolved_rollout_path(resolved: &mut ResolvedRolloutPath) {
+    if let Some(path) = codex_rollout::existing_rollout_path(resolved.path.as_path()).await {
+        resolved.path = path;
+    }
 }
 
 async fn apply_metadata_update(
@@ -276,8 +285,8 @@ async fn apply_metadata_update(
             if let Some(approval_mode) = patch.approval_mode {
                 metadata.approval_mode = enum_to_string(&approval_mode);
             }
-            if let Some(sandbox_policy) = patch.sandbox_policy {
-                metadata.sandbox_policy = enum_to_string(&sandbox_policy);
+            if let Some(permission_profile) = patch.permission_profile {
+                metadata.sandbox_policy = permission_profile_to_metadata_value(&permission_profile);
             }
             if let Some(token_usage) = patch.token_usage {
                 metadata.tokens_used = token_usage.total_tokens.max(0);
@@ -396,7 +405,7 @@ fn has_observed_metadata_facts(patch: &ThreadMetadataPatch) -> bool {
         || patch.cwd.is_some()
         || patch.cli_version.is_some()
         || patch.approval_mode.is_some()
-        || patch.sandbox_policy.is_some()
+        || patch.permission_profile.is_some()
         || patch.token_usage.is_some()
         || patch.first_user_message.is_some()
 }
@@ -618,6 +627,7 @@ fn rollout_path_is_archived(store: &LocalThreadStore, path: &Path) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use codex_protocol::models::PermissionProfile;
     use pretty_assertions::assert_eq;
     use serde_json::Value;
     use serde_json::json;
@@ -629,7 +639,6 @@ mod tests {
     use crate::ListThreadsParams;
     use crate::ResumeThreadParams;
     use crate::SortDirection;
-    use crate::ThreadEventPersistenceMode;
     use crate::ThreadMetadataPatch;
     use crate::ThreadPersistenceMetadata;
     use crate::ThreadSortKey;
@@ -792,7 +801,6 @@ mod tests {
                 history: None,
                 include_archived: true,
                 metadata: test_thread_metadata(),
-                event_persistence_mode: ThreadEventPersistenceMode::Limited,
             })
             .await
             .expect("resume external live thread");
@@ -856,6 +864,45 @@ mod tests {
         assert_eq!(
             git_info.repository_url.as_deref(),
             Some("https://github.com/openai/codex")
+        );
+    }
+
+    #[tokio::test]
+    async fn update_thread_metadata_sets_permission_profile() {
+        let home = TempDir::new().expect("temp dir");
+        let config = test_config(home.path());
+        let runtime = codex_state::StateRuntime::init(
+            config.sqlite_home.clone(),
+            config.default_model_provider_id.clone(),
+        )
+        .await
+        .expect("state db should initialize");
+        let store = LocalThreadStore::new(config, Some(runtime.clone()));
+        let uuid = Uuid::from_u128(317);
+        let thread_id = ThreadId::from_string(&uuid.to_string()).expect("valid thread id");
+        write_session_file(home.path(), "2025-01-03T20-30-00", uuid).expect("session file");
+
+        let thread = store
+            .update_thread_metadata(UpdateThreadMetadataParams {
+                thread_id,
+                patch: ThreadMetadataPatch {
+                    permission_profile: Some(PermissionProfile::Disabled),
+                    ..Default::default()
+                },
+                include_archived: false,
+            })
+            .await
+            .expect("set permission profile");
+
+        assert_eq!(thread.permission_profile, PermissionProfile::Disabled);
+        let metadata = runtime
+            .get_thread(thread_id)
+            .await
+            .expect("sqlite metadata read")
+            .expect("sqlite metadata");
+        assert_eq!(
+            metadata.sandbox_policy,
+            serde_json::to_string(&PermissionProfile::Disabled).expect("serialize profile")
         );
     }
 
@@ -1622,7 +1669,6 @@ mod tests {
                 history: None,
                 include_archived: true,
                 metadata: test_thread_metadata(),
-                event_persistence_mode: ThreadEventPersistenceMode::Limited,
             })
             .await
             .expect("resume archived live thread");

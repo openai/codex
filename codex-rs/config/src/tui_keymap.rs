@@ -23,6 +23,9 @@ use serde::Serialize;
 use serde::de::Error as SerdeError;
 use std::collections::BTreeMap;
 
+/// Highest function key supported by portable TUI keymap configuration.
+pub const MAX_FUNCTION_KEY: u8 = 24;
+
 /// Normalized string representation of a single key event (for example `ctrl-a`).
 ///
 /// The parser accepts a small alias set (for example `escape` -> `esc`,
@@ -223,6 +226,8 @@ pub struct TuiVimNormalKeymap {
     pub move_line_end: Option<KeybindingsSpec>,
     /// Delete character under cursor (`x`).
     pub delete_char: Option<KeybindingsSpec>,
+    /// Delete character under cursor and enter insert mode (`s`).
+    pub substitute_char: Option<KeybindingsSpec>,
     /// Delete from cursor to end of line (`D`).
     pub delete_to_line_end: Option<KeybindingsSpec>,
     /// Change from cursor to end of line and enter insert mode (`C`).
@@ -550,14 +555,14 @@ fn normalize_key_name(key: &str, original: &str) -> Result<String, String> {
 
     if let Some(number) = alias.strip_prefix('f')
         && let Ok(number) = number.parse::<u8>()
-        && (1..=12).contains(&number)
+        && (1..=MAX_FUNCTION_KEY).contains(&number)
     {
         return Ok(alias.to_string());
     }
 
     Err(format!(
         "unknown key `{key}` in keybinding `{original}`. \
-Use a printable character (for example `a`), function keys (`f1`-`f12`), \
+Use a printable character (for example `a`), function keys (`f1`-`f{MAX_FUNCTION_KEY}`), \
 or one of: enter, tab, backspace, esc, delete, arrows, home/end, page-up/page-down, space, minus.\n\
 See the Codex keymap documentation for supported actions and examples."
     ))
@@ -671,5 +676,12 @@ mod tests {
 
             assert_eq!(keymap, expected_keymap);
         }
+    }
+
+    #[test]
+    fn function_keys_through_f24_are_accepted() {
+        assert_eq!(normalize_keybinding_spec("F13"), Ok("f13".to_string()));
+        assert_eq!(normalize_keybinding_spec("f24"), Ok("f24".to_string()));
+        assert!(normalize_keybinding_spec("f25").is_err());
     }
 }

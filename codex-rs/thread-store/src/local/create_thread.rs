@@ -30,11 +30,13 @@ pub(super) async fn create_thread(
         RolloutRecorderParams::new(
             params.thread_id,
             params.forked_from_id,
+            params.parent_thread_id,
             params.source,
             params.thread_source,
             params.base_instructions,
             params.dynamic_tools,
-        ),
+        )
+        .with_multi_agent_version(params.multi_agent_version),
     )
     .await
     .map_err(|err| ThreadStoreError::Internal {

@@ -19,6 +19,7 @@ use crate::description::EnabledToolMetadata;
 use crate::description::ToolDefinition;
 use crate::description::enabled_tool_metadata;
 use crate::response::FunctionCallOutputContentItem;
+use crate::service::CellId;
 
 pub const DEFAULT_EXEC_YIELD_TIME_MS: u64 = 10_000;
 pub const DEFAULT_WAIT_YIELD_TIME_MS: u64 = 10_000;
@@ -27,11 +28,6 @@ const EXIT_SENTINEL: &str = "__codex_code_mode_exit__";
 
 #[derive(Clone, Debug)]
 pub struct ExecuteRequest {
-    /// Runtime cell id for this execution.
-    ///
-    /// Callers allocate this before execution so tracing, waits, and nested tool
-    /// calls can refer to the cell as soon as JavaScript starts.
-    pub cell_id: String,
     pub tool_call_id: String,
     pub enabled_tools: Vec<ToolDefinition>,
     pub source: String,
@@ -41,14 +37,13 @@ pub struct ExecuteRequest {
 
 #[derive(Clone, Debug)]
 pub struct WaitRequest {
-    pub cell_id: String,
+    pub cell_id: CellId,
     pub yield_time_ms: u64,
-    pub terminate: bool,
 }
 
 #[derive(Clone, Debug)]
 pub struct WaitToPendingRequest {
-    pub cell_id: String,
+    pub cell_id: CellId,
 }
 
 /// Result of waiting on a code-mode cell.
@@ -73,7 +68,7 @@ pub enum ExecuteToPendingOutcome {
     /// The cell is waiting for more runtime input after draining the runtime
     /// input queue that was ready at the pending boundary.
     Pending {
-        cell_id: String,
+        cell_id: CellId,
         content_items: Vec<FunctionCallOutputContentItem>,
         /// Runtime tool-call ids emitted before this paused execution frontier
         /// sealed. Hosts can use these ids to drain their tool-call transport
@@ -105,15 +100,15 @@ impl From<WaitOutcome> for RuntimeResponse {
 #[derive(Debug, PartialEq, Serialize)]
 pub enum RuntimeResponse {
     Yielded {
-        cell_id: String,
+        cell_id: CellId,
         content_items: Vec<FunctionCallOutputContentItem>,
     },
     Terminated {
-        cell_id: String,
+        cell_id: CellId,
         content_items: Vec<FunctionCallOutputContentItem>,
     },
     Result {
-        cell_id: String,
+        cell_id: CellId,
         content_items: Vec<FunctionCallOutputContentItem>,
         error_text: Option<String>,
     },
@@ -126,21 +121,11 @@ pub enum RuntimeResponse {
 /// if their tool-call graph requires globally unique ids.
 #[derive(Debug)]
 pub struct CodeModeNestedToolCall {
-    pub cell_id: String,
+    pub cell_id: CellId,
     pub runtime_tool_call_id: String,
     pub tool_name: ToolName,
     pub tool_kind: CodeModeToolKind,
     pub input: Option<JsonValue>,
-}
-
-#[derive(Debug)]
-pub(crate) enum TurnMessage {
-    ToolCall(CodeModeNestedToolCall),
-    Notify {
-        cell_id: String,
-        call_id: String,
-        text: String,
-    },
 }
 
 #[derive(Debug)]
@@ -460,7 +445,6 @@ mod tests {
 
     fn execute_request(source: &str) -> ExecuteRequest {
         ExecuteRequest {
-            cell_id: "1".to_string(),
             tool_call_id: "call_1".to_string(),
             enabled_tools: Vec::new(),
             source: source.to_string(),

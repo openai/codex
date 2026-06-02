@@ -248,6 +248,13 @@ pub(crate) fn sandbox_override_for_first_attempt(
     exec_approval_requirement: &ExecApprovalRequirement,
     file_system_sandbox_policy: &FileSystemSandboxPolicy,
 ) -> SandboxOverride {
+    // Deny-read restrictions are part of the active permission policy. Running
+    // without a filesystem sandbox would discard them, even if the command was
+    // otherwise approved by rules or explicit escalation.
+    if !unsandboxed_execution_allowed(file_system_sandbox_policy) {
+        return SandboxOverride::NoOverride;
+    }
+
     // ExecPolicy `Allow` can intentionally imply full trust (Skip + bypass_sandbox=true),
     // which supersedes `with_additional_permissions` sandboxed execution hints.
     if matches!(
@@ -260,16 +267,38 @@ pub(crate) fn sandbox_override_for_first_attempt(
         return SandboxOverride::BypassSandboxFirstAttempt;
     }
 
-    // Deny-read restrictions suppress explicit escalation because that path
-    // would otherwise discard the filesystem policy entirely.
-    if file_system_sandbox_policy.has_denied_read_restrictions() {
-        return SandboxOverride::NoOverride;
-    }
-
     if sandbox_permissions.requires_escalated_permissions() {
         SandboxOverride::BypassSandboxFirstAttempt
     } else {
         SandboxOverride::NoOverride
+    }
+}
+
+/// Returns true when the active filesystem policy can be represented by
+/// running without a filesystem sandbox.
+///
+/// Denied reads only exist inside the sandbox. If a policy contains any
+/// denied-read paths, bypassing the sandbox would silently grant those reads,
+/// so escalation must keep the command sandboxed with the denied reads intact.
+pub(crate) fn unsandboxed_execution_allowed(
+    file_system_sandbox_policy: &FileSystemSandboxPolicy,
+) -> bool {
+    !file_system_sandbox_policy.has_denied_read_restrictions()
+}
+
+pub(crate) fn sandbox_permissions_preserving_denied_reads(
+    sandbox_permissions: SandboxPermissions,
+    file_system_sandbox_policy: &FileSystemSandboxPolicy,
+) -> SandboxPermissions {
+    if sandbox_permissions.requires_escalated_permissions()
+        && !unsandboxed_execution_allowed(file_system_sandbox_policy)
+    {
+        // `RequireEscalated` normally asks the executor to bypass the sandbox.
+        // When denied reads are active, that would drop the only mechanism that
+        // enforces them, so fall back to the default sandboxed attempt instead.
+        SandboxPermissions::UseDefault
+    } else {
+        sandbox_permissions
     }
 }
 

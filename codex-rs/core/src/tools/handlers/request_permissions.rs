@@ -48,9 +48,13 @@ impl ToolExecutor<ToolInvocation> for RequestPermissionsHandler {
             }
         };
 
-        #[allow(deprecated)]
+        let Some(turn_environment) = turn.environments.primary() else {
+            return Err(FunctionCallError::RespondToModel(
+                "request_permissions requires a primary environment".to_string(),
+            ));
+        };
         let mut args: RequestPermissionsArgs =
-            parse_arguments_with_base_path(&arguments, &turn.cwd)?;
+            parse_arguments_with_base_path(&arguments, &turn_environment.cwd)?;
         args.permissions = normalize_additional_permissions(args.permissions.into())
             .map(codex_protocol::request_permissions::RequestPermissionProfile::from)
             .map_err(FunctionCallError::RespondToModel)?;

@@ -7,6 +7,7 @@ use crate::session::SessionSettingsUpdate;
 use crate::session::SteerInputError;
 use codex_features::Feature;
 use codex_otel::SessionTelemetry;
+use codex_protocol::ThreadId;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::Personality;
@@ -18,12 +19,12 @@ use codex_protocol::mcp::CallToolResult;
 use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::PermissionProfile;
-use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AdditionalContextEntry;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::Event;
+use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionConfiguredEvent;
@@ -69,6 +70,7 @@ pub struct ThreadConfigSnapshot {
     pub personality: Option<Personality>,
     pub collaboration_mode: CollaborationMode,
     pub session_source: SessionSource,
+    pub parent_thread_id: Option<ThreadId>,
     pub thread_source: Option<ThreadSource>,
 }
 
@@ -265,20 +267,24 @@ impl CodexThread {
             .await
     }
 
-    /// Injects hidden model-visible items into the currently active turn.
+    /// Injects model-visible items into the currently active turn.
     ///
-    /// This is the runtime-owned counterpart to user-facing `steer_input`.
+    /// This is the thread-level bridge to `Session::inject_if_running` for
+    /// callers that only hold a `CodexThread`.
     /// It returns the unchanged items when this thread has no active turn.
-    pub async fn inject_response_items_into_active_turn(
+    pub async fn inject_if_running(
         &self,
-        items: Vec<ResponseInputItem>,
-    ) -> Result<(), Vec<ResponseInputItem>> {
-        let response_items = items.iter().cloned().map(ResponseItem::from).collect();
-        self.codex
-            .session
-            .inject_if_running(response_items)
-            .await
-            .map_err(|_| items)
+        items: Vec<ResponseItem>,
+    ) -> Result<(), Vec<ResponseItem>> {
+        self.codex.session.inject_if_running(items).await
+    }
+
+    /// Starts a regular turn with model-visible items only if the thread is idle.
+    pub async fn try_start_turn_if_idle(
+        &self,
+        items: Vec<ResponseItem>,
+    ) -> Result<(), Vec<ResponseItem>> {
+        self.codex.session.try_start_turn_if_idle(items).await
     }
 
     pub async fn set_app_server_client_info(
@@ -396,7 +402,7 @@ impl CodexThread {
             .await;
     }
 
-    /// Append raw Responses API items to the thread's model-visible history.
+    /// Record raw Responses API items without starting a new turn.
     pub async fn inject_response_items(&self, items: Vec<ResponseItem>) -> CodexResult<()> {
         if items.is_empty() {
             return Err(CodexErr::InvalidRequest(
@@ -495,6 +501,10 @@ impl CodexThread {
 
     pub async fn config(&self) -> Arc<crate::config::Config> {
         self.codex.session.get_config().await
+    }
+
+    pub fn multi_agent_version(&self) -> Option<MultiAgentVersion> {
+        self.codex.session.multi_agent_version()
     }
 
     /// Refresh the thread's layer-backed user config state from a caller-supplied

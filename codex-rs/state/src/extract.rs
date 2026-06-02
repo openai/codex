@@ -76,7 +76,8 @@ fn apply_turn_context(metadata: &mut ThreadMetadata, turn_ctx: &TurnContextItem)
     }
     metadata.model = Some(turn_ctx.model.clone());
     metadata.reasoning_effort = turn_ctx.effort;
-    metadata.sandbox_policy = enum_to_string(&turn_ctx.sandbox_policy);
+    metadata.sandbox_policy =
+        serde_json::to_string(&turn_ctx.permission_profile()).unwrap_or_default();
     metadata.approval_mode = enum_to_string(&turn_ctx.approval_policy);
 }
 
@@ -157,6 +158,7 @@ mod tests {
     use chrono::Utc;
     use codex_protocol::ThreadId;
     use codex_protocol::models::ContentItem;
+    use codex_protocol::models::PermissionProfile;
     use codex_protocol::models::ResponseItem;
     use codex_protocol::openai_models::ReasoningEffort;
     use codex_protocol::protocol::AskForApproval;
@@ -320,6 +322,7 @@ mod tests {
                     forked_from_id: Some(
                         ThreadId::from_string(&Uuid::now_v7().to_string()).expect("thread id"),
                     ),
+                    parent_thread_id: None,
                     timestamp: "2026-02-26T00:00:00.000Z".to_string(),
                     cwd: PathBuf::from("/child/worktree"),
                     originator: "codex_cli_rs".to_string(),
@@ -333,6 +336,7 @@ mod tests {
                     base_instructions: None,
                     dynamic_tools: None,
                     memory_mode: None,
+                    multi_agent_version: None,
                 },
                 git: None,
             }),
@@ -354,6 +358,7 @@ mod tests {
                 model: "gpt-5".to_string(),
                 personality: None,
                 collaboration_mode: None,
+                multi_agent_version: None,
                 realtime_active: None,
                 effort: None,
                 summary: codex_protocol::config_types::ReasoningSummary::Auto,
@@ -364,9 +369,45 @@ mod tests {
         assert_eq!(metadata.cwd, PathBuf::from("/child/worktree"));
         assert_eq!(
             metadata.sandbox_policy,
-            super::enum_to_string(&SandboxPolicy::DangerFullAccess)
+            serde_json::to_string(&PermissionProfile::Disabled)
+                .expect("serialize permission profile")
         );
         assert_eq!(metadata.approval_mode, "never");
+    }
+
+    #[test]
+    fn turn_context_sets_permission_profile_metadata() {
+        let mut metadata = metadata_for_test();
+        let permission_profile = PermissionProfile::workspace_write();
+
+        apply_rollout_item(
+            &mut metadata,
+            &RolloutItem::TurnContext(TurnContextItem {
+                turn_id: Some("turn-1".to_string()),
+                cwd: PathBuf::from("/workspace"),
+                workspace_roots: None,
+                current_date: None,
+                timezone: None,
+                approval_policy: AskForApproval::OnRequest,
+                sandbox_policy: SandboxPolicy::DangerFullAccess,
+                permission_profile: Some(permission_profile.clone()),
+                network: None,
+                file_system_sandbox_policy: None,
+                model: "gpt-5".to_string(),
+                personality: None,
+                collaboration_mode: None,
+                multi_agent_version: None,
+                realtime_active: None,
+                effort: None,
+                summary: codex_protocol::config_types::ReasoningSummary::Auto,
+            }),
+            "test-provider",
+        );
+
+        assert_eq!(
+            metadata.sandbox_policy,
+            serde_json::to_string(&permission_profile).expect("serialize permission profile")
+        );
     }
 
     #[test]
@@ -390,6 +431,7 @@ mod tests {
                 model: "gpt-5".to_string(),
                 personality: None,
                 collaboration_mode: None,
+                multi_agent_version: None,
                 realtime_active: None,
                 effort: Some(ReasoningEffort::High),
                 summary: codex_protocol::config_types::ReasoningSummary::Auto,
@@ -420,6 +462,7 @@ mod tests {
                 model: "gpt-5".to_string(),
                 personality: None,
                 collaboration_mode: None,
+                multi_agent_version: None,
                 realtime_active: None,
                 effort: Some(ReasoningEffort::High),
                 summary: codex_protocol::config_types::ReasoningSummary::Auto,
@@ -442,6 +485,7 @@ mod tests {
                 meta: SessionMeta {
                     id: thread_id,
                     forked_from_id: None,
+                    parent_thread_id: None,
                     timestamp: "2026-02-26T00:00:00.000Z".to_string(),
                     cwd: PathBuf::from("/workspace"),
                     originator: "codex_cli_rs".to_string(),
@@ -455,6 +499,7 @@ mod tests {
                     base_instructions: None,
                     dynamic_tools: None,
                     memory_mode: None,
+                    multi_agent_version: None,
                 },
                 git: None,
             }),

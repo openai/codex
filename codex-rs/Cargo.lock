@@ -1913,7 +1913,7 @@ dependencies = [
  "codex-arg0",
  "codex-backend-client",
  "codex-chatgpt",
- "codex-cloud-requirements",
+ "codex-cloud-config",
  "codex-config",
  "codex-core",
  "codex-core-plugins",
@@ -2344,7 +2344,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "codex-cloud-requirements"
+name = "codex-cloud-config"
 version = "0.0.0"
 dependencies = [
  "async-trait",
@@ -2430,8 +2430,6 @@ dependencies = [
 name = "codex-code-mode"
 version = "0.0.0"
 dependencies = [
- "async-channel",
- "async-trait",
  "codex-protocol",
  "deno_core_icudata",
  "pretty_assertions",
@@ -2552,6 +2550,7 @@ dependencies = [
  "codex-network-proxy",
  "codex-otel",
  "codex-plugin",
+ "codex-prompts",
  "codex-protocol",
  "codex-response-debug-context",
  "codex-rmcp-client",
@@ -2576,7 +2575,6 @@ dependencies = [
  "codex-utils-pty",
  "codex-utils-stream-parser",
  "codex-utils-string",
- "codex-utils-template",
  "codex-windows-sandbox",
  "core_test_support",
  "csv",
@@ -2671,6 +2669,7 @@ dependencies = [
  "codex-utils-plugins",
  "dirs",
  "flate2",
+ "indexmap 2.13.0",
  "libc",
  "pretty_assertions",
  "reqwest 0.12.28",
@@ -2720,18 +2719,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "codex-debug-client"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "clap",
- "codex-app-server-protocol",
- "pretty_assertions",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "codex-exec"
 version = "0.0.0"
 dependencies = [
@@ -2742,7 +2729,7 @@ dependencies = [
  "codex-app-server-protocol",
  "codex-apply-patch",
  "codex-arg0",
- "codex-cloud-requirements",
+ "codex-cloud-config",
  "codex-config",
  "codex-core",
  "codex-feedback",
@@ -2999,6 +2986,7 @@ dependencies = [
  "codex-protocol",
  "codex-state",
  "codex-tools",
+ "codex-utils-template",
  "pretty_assertions",
  "serde",
  "serde_json",
@@ -3045,7 +3033,6 @@ name = "codex-image-generation-extension"
 version = "0.0.0"
 dependencies = [
  "async-trait",
- "base64 0.22.1",
  "codex-api",
  "codex-core",
  "codex-extension-api",
@@ -3060,9 +3047,6 @@ dependencies = [
  "schemars 0.8.22",
  "serde",
  "serde_json",
- "tempfile",
- "tokio",
- "tracing",
 ]
 
 [[package]]
@@ -3375,6 +3359,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "base64 0.22.1",
  "chrono",
  "clap",
  "codex-utils-absolute-path",
@@ -3390,8 +3375,10 @@ dependencies = [
  "rama-tcp",
  "rama-tls-rustls",
  "rama-unix",
+ "rustls-native-certs",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "tempfile",
  "thiserror 2.0.18",
  "time",
@@ -3466,6 +3453,19 @@ name = "codex-process-hardening"
 version = "0.0.0"
 dependencies = [
  "libc",
+ "pretty_assertions",
+]
+
+[[package]]
+name = "codex-prompts"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "codex-execpolicy",
+ "codex-git-utils",
+ "codex-protocol",
+ "codex-utils-absolute-path",
+ "codex-utils-template",
  "pretty_assertions",
 ]
 
@@ -3598,7 +3598,6 @@ dependencies = [
  "codex-protocol",
  "codex-state",
  "codex-utils-path",
- "codex-utils-string",
  "pretty_assertions",
  "regex",
  "serde",
@@ -3608,6 +3607,7 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+ "zstd 0.13.3",
 ]
 
 [[package]]
@@ -3841,7 +3841,7 @@ dependencies = [
  "codex-app-server-protocol",
  "codex-arg0",
  "codex-cli",
- "codex-cloud-requirements",
+ "codex-cloud-config",
  "codex-config",
  "codex-connectors",
  "codex-core-plugins",
@@ -4186,6 +4186,7 @@ dependencies = [
  "pretty_assertions",
  "schemars 0.8.22",
  "serde_json",
+ "url",
 ]
 
 [[package]]

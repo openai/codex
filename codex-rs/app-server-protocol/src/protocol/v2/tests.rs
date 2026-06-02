@@ -142,6 +142,7 @@ fn thread_resume_response_round_trips_initial_turns_page() {
             id: "thr_123".to_string(),
             session_id: "thr_123".to_string(),
             forked_from_id: None,
+            parent_thread_id: None,
             preview: String::new(),
             ephemeral: false,
             model_provider: "openai".to_string(),
@@ -1670,6 +1671,7 @@ fn config_requirements_granular_allowed_approval_policy_is_marked_experimental()
             }]),
             allowed_approvals_reviewers: None,
             allowed_sandbox_modes: None,
+            allowed_windows_sandbox_implementations: None,
             allowed_permissions: None,
             allowed_web_search_modes: None,
             allow_managed_hooks_only: None,
@@ -2627,6 +2629,27 @@ fn skills_list_params_serialization_uses_force_reload() {
 }
 
 #[test]
+fn skills_extra_roots_set_params_serialization_uses_extra_roots() {
+    assert_eq!(
+        serde_json::to_value(SkillsExtraRootsSetParams {
+            extra_roots: vec![absolute_path("tmp/skills")],
+        })
+        .unwrap(),
+        json!({
+            "extraRoots": [absolute_path_string("tmp/skills")],
+        }),
+    );
+}
+
+#[test]
+fn skills_extra_roots_set_params_rejects_relative_roots() {
+    let result = serde_json::from_value::<SkillsExtraRootsSetParams>(json!({
+        "extraRoots": ["relative/path"],
+    }));
+    assert!(result.is_err());
+}
+
+#[test]
 fn plugin_source_serializes_local_git_and_remote_variants() {
     let local_path = if cfg!(windows) {
         r"C:\plugins\linear"
@@ -3559,6 +3582,7 @@ fn thread_lifecycle_responses_default_missing_optional_fields() {
     let fork: ThreadForkResponse = serde_json::from_value(response).expect("thread/fork response");
 
     assert_eq!(start.instruction_sources, Vec::<AbsolutePathBuf>::new());
+    assert_eq!(start.thread.parent_thread_id, None);
     assert_eq!(resume.instruction_sources, Vec::<AbsolutePathBuf>::new());
     assert_eq!(fork.instruction_sources, Vec::<AbsolutePathBuf>::new());
     assert_eq!(start.active_permission_profile, None);

@@ -1,9 +1,13 @@
+use super::pairing_unavailable_error;
 use super::protocol::EnrollRemoteServerRequest;
 use super::protocol::EnrollRemoteServerResponse;
 use super::protocol::RefreshRemoteServerRequest;
 use super::protocol::RemoteControlTarget;
+use super::protocol::StartRemoteControlPairingRequest;
+use super::protocol::StartRemoteControlPairingResponse;
 use axum::http::HeaderMap;
 use codex_api::SharedAuthProvider;
+use codex_app_server_protocol::RemoteControlPairingStartResponse;
 use codex_login::default_client::build_reqwest_client;
 use codex_state::RemoteControlEnrollmentRecord;
 use codex_state::StateRuntime;
@@ -17,6 +21,7 @@ use tracing::info;
 use tracing::warn;
 
 const REMOTE_CONTROL_ENROLL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+const REMOTE_CONTROL_PAIRING_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 const REMOTE_CONTROL_RESPONSE_BODY_MAX_BYTES: usize = 4096;
 const REMOTE_CONTROL_SERVER_TOKEN_REFRESH_SKEW_SECS: i64 = 30;
 
@@ -28,6 +33,7 @@ pub(super) const REMOTE_CONTROL_INSTALLATION_ID_HEADER: &str = "x-codex-installa
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct RemoteControlEnrollment {
+    pub(super) remote_control_target: RemoteControlTarget,
     pub(super) account_id: String,
     pub(super) environment_id: String,
     pub(super) server_id: String,
@@ -37,6 +43,99 @@ pub(super) struct RemoteControlEnrollment {
 }
 
 impl RemoteControlEnrollment {
+    pub(super) async fn start_pairing(
+        &self,
+        request: StartRemoteControlPairingRequest,
+    ) -> io::Result<RemoteControlPairingStartResponse> {
+        if self.should_refresh_server_token() {
+            return Err(pairing_unavailable_error());
+        }
+        let remote_control_token = self
+            .remote_control_token
+            .as_deref()
+            .ok_or_else(pairing_unavailable_error)?;
+
+        let response = build_reqwest_client()
+            .post(&self.remote_control_target.pair_url)
+            .timeout(REMOTE_CONTROL_PAIRING_TIMEOUT)
+            .bearer_auth(remote_control_token)
+            .json(&request)
+            .send()
+            .await
+            .map_err(|err| {
+                io::Error::other(format!(
+                    "failed to start remote control pairing at `{}`: {err}",
+                    self.remote_control_target.pair_url
+                ))
+            })?;
+        let headers = response.headers().clone();
+        let status = response.status();
+        let body = response.bytes().await.map_err(|err| {
+            io::Error::other(format!(
+                "failed to read remote control pairing response from `{}`: {err}",
+                self.remote_control_target.pair_url
+            ))
+        })?;
+        let body_preview = preview_remote_control_response_body(&body);
+        if !status.is_success() {
+            let error_kind = match status.as_u16() {
+                401 | 403 => ErrorKind::PermissionDenied,
+                404 => ErrorKind::NotFound,
+                _ => ErrorKind::Other,
+            };
+            return Err(io::Error::new(
+                error_kind,
+                format!(
+                    "remote control pairing failed at `{}`: HTTP {status}, {}, body: {body_preview}",
+                    self.remote_control_target.pair_url,
+                    format_headers(&headers)
+                ),
+            ));
+        }
+
+        let pairing = serde_json::from_slice::<StartRemoteControlPairingResponse>(&body).map_err(
+            |err| {
+                io::Error::other(format!(
+                    "failed to parse remote control pairing response from `{}`: HTTP {status}, {}, body: {body_preview}, decode error: {err}",
+                    self.remote_control_target.pair_url,
+                    format_headers(&headers)
+                ))
+            },
+        )?;
+        let StartRemoteControlPairingResponse {
+            pairing_code,
+            manual_pairing_code,
+            server_id,
+            environment_id,
+            expires_at,
+        } = pairing;
+        if server_id != self.server_id || environment_id != self.environment_id {
+            return Err(io::Error::other(format!(
+                "remote control pairing returned mismatched enrollment: expected server_id={}, environment_id={}; got server_id={}, environment_id={}",
+                self.server_id, self.environment_id, server_id, environment_id
+            )));
+        }
+        let expires_at = OffsetDateTime::parse(&expires_at, &Rfc3339)
+            .map_err(|err| {
+                io::Error::new(
+                    ErrorKind::InvalidData,
+                    format!(
+                        "failed to parse remote control pairing response from `{}`: HTTP {status}, {}, body: {body_preview}, expires_at parse error: {err}",
+                        self.remote_control_target.pair_url,
+                        format_headers(&headers)
+                    ),
+                )
+            })?
+            .unix_timestamp();
+
+        Ok(RemoteControlPairingStartResponse {
+            pairing_code,
+            manual_pairing_code,
+            environment_id,
+            expires_at,
+        })
+    }
+
     pub(super) fn should_refresh_server_token(&self) -> bool {
         self.remote_control_token.is_none()
             || self.expires_at.is_none_or(|expires_at| {
@@ -101,6 +200,7 @@ pub(super) async fn load_persisted_remote_control_enrollment(
                 enrollment.environment_id
             );
             Ok(Some(RemoteControlEnrollment {
+                remote_control_target: remote_control_target.clone(),
                 account_id: enrollment.account_id,
                 environment_id: enrollment.environment_id,
                 server_id: enrollment.server_id,
@@ -211,8 +311,14 @@ fn redact_remote_control_response_body(body: &str) -> String {
     let Some(body_object) = body_json.as_object_mut() else {
         return body.to_string();
     };
-    if let Some(remote_control_token) = body_object.get_mut("remote_control_token") {
-        *remote_control_token = serde_json::Value::String("<redacted>".to_string());
+    for sensitive_field in [
+        "remote_control_token",
+        "pairing_code",
+        "manual_pairing_code",
+    ] {
+        if let Some(value) = body_object.get_mut(sensitive_field) {
+            *value = serde_json::Value::String("<redacted>".to_string());
+        }
     }
     body_json.to_string()
 }
@@ -254,6 +360,7 @@ pub(super) async fn enroll_remote_control_server(
     )
     .await?;
     let mut enrollment = RemoteControlEnrollment {
+        remote_control_target: remote_control_target.clone(),
         account_id: auth.account_id.clone(),
         environment_id: enrollment_response.environment_id,
         server_id: enrollment_response.server_id,
@@ -271,18 +378,17 @@ pub(super) async fn enroll_remote_control_server(
 }
 
 pub(super) async fn refresh_remote_control_server(
-    remote_control_target: &RemoteControlTarget,
     auth: &RemoteControlConnectionAuth,
     installation_id: &str,
     enrollment: &mut RemoteControlEnrollment,
 ) -> io::Result<()> {
-    let refresh_url = &remote_control_target.refresh_url;
+    let refresh_url = enrollment.remote_control_target.refresh_url.clone();
     let request = RefreshRemoteServerRequest {
         server_id: enrollment.server_id.clone(),
         installation_id: installation_id.to_string(),
     };
     let refreshed = send_remote_control_server_request::<_, EnrollRemoteServerResponse>(
-        refresh_url,
+        &refresh_url,
         auth,
         installation_id,
         &request,
@@ -304,7 +410,7 @@ pub(super) async fn refresh_remote_control_server(
 
     update_remote_control_server_token(
         enrollment,
-        refresh_url,
+        &refresh_url,
         refreshed.remote_control_token,
         refreshed.expires_at,
     )
@@ -412,6 +518,8 @@ mod tests {
     #[test]
     fn remote_control_enrollment_refreshes_server_token_before_expiry() {
         let expires_soon = RemoteControlEnrollment {
+            remote_control_target: normalize_remote_control_url("http://localhost/backend-api/")
+                .expect("target should normalize"),
             account_id: "account-a".to_string(),
             environment_id: "env_first".to_string(),
             server_id: "srv_e_first".to_string(),
@@ -433,12 +541,14 @@ mod tests {
     fn preview_remote_control_response_body_redacts_server_token() {
         assert_eq!(
             serde_json::from_str::<serde_json::Value>(&preview_remote_control_response_body(
-                br#"{"server_id":"srv_e_test","remote_control_token":"secret"}"#
+                br#"{"server_id":"srv_e_test","remote_control_token":"secret","pairing_code":"pairing-code","manual_pairing_code":"ABCD-EFGH"}"#
             ))
             .expect("redacted response preview should stay valid json"),
             json!({
                 "server_id": "srv_e_test",
                 "remote_control_token": "<redacted>",
+                "pairing_code": "<redacted>",
+                "manual_pairing_code": "<redacted>",
             })
         );
     }
@@ -453,6 +563,7 @@ mod tests {
             normalize_remote_control_url("https://api.chatgpt-staging.com/other/control")
                 .expect("second target should parse");
         let first_enrollment = RemoteControlEnrollment {
+            remote_control_target: first_target.clone(),
             account_id: "account-a".to_string(),
             environment_id: "env_first".to_string(),
             server_id: "srv_e_first".to_string(),
@@ -461,6 +572,7 @@ mod tests {
             expires_at: None,
         };
         let second_enrollment = RemoteControlEnrollment {
+            remote_control_target: second_target.clone(),
             account_id: "account-a".to_string(),
             environment_id: "env_second".to_string(),
             server_id: "srv_e_second".to_string(),
@@ -533,6 +645,7 @@ mod tests {
             normalize_remote_control_url("https://api.chatgpt-staging.com/other/control")
                 .expect("second target should parse");
         let first_enrollment = RemoteControlEnrollment {
+            remote_control_target: first_target.clone(),
             account_id: "account-a".to_string(),
             environment_id: "env_first".to_string(),
             server_id: "srv_e_first".to_string(),
@@ -541,6 +654,7 @@ mod tests {
             expires_at: None,
         };
         let second_enrollment = RemoteControlEnrollment {
+            remote_control_target: second_target.clone(),
             account_id: "account-a".to_string(),
             environment_id: "env_second".to_string(),
             server_id: "srv_e_second".to_string(),

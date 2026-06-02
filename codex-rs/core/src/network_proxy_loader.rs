@@ -210,7 +210,7 @@ fn selected_network_from_tables(parsed: NetworkTablesToml) -> Result<Option<Netw
         .context("default_permissions requires a `[permissions]` table for network settings")?;
     let profile = resolve_permission_profile(&permissions, &default_permissions)
         .map_err(anyhow::Error::from)?;
-    Ok(profile.profile.network)
+    Ok(profile.network)
 }
 
 #[cfg(test)]

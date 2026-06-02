@@ -30,6 +30,7 @@ use tracing::warn;
 
 use super::ARCHIVED_SESSIONS_SUBDIR;
 use super::SESSIONS_SUBDIR;
+use super::compression;
 use super::list::Cursor;
 use super::list::SortDirection;
 use super::list::ThreadItem;
@@ -51,6 +52,7 @@ use codex_git_utils::collect_git_info;
 use codex_git_utils::get_git_repo_root;
 use codex_protocol::protocol::GitInfo as ProtocolGitInfo;
 use codex_protocol::protocol::InitialHistory;
+use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::ResumedHistory;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
@@ -81,10 +83,12 @@ pub enum RolloutRecorderParams {
     Create {
         conversation_id: ThreadId,
         forked_from_id: Option<ThreadId>,
+        parent_thread_id: Option<ThreadId>,
         source: SessionSource,
         thread_source: Option<ThreadSource>,
         base_instructions: BaseInstructions,
         dynamic_tools: Vec<DynamicToolSpec>,
+        multi_agent_version: Option<MultiAgentVersion>,
     },
     Resume {
         path: PathBuf,
@@ -156,6 +160,7 @@ impl RolloutRecorderParams {
     pub fn new(
         conversation_id: ThreadId,
         forked_from_id: Option<ThreadId>,
+        parent_thread_id: Option<ThreadId>,
         source: SessionSource,
         thread_source: Option<ThreadSource>,
         base_instructions: BaseInstructions,
@@ -164,11 +169,27 @@ impl RolloutRecorderParams {
         Self::Create {
             conversation_id,
             forked_from_id,
+            parent_thread_id,
             source,
             thread_source,
             base_instructions,
             dynamic_tools,
+            multi_agent_version: None,
         }
+    }
+
+    pub fn with_multi_agent_version(
+        mut self,
+        multi_agent_version: Option<MultiAgentVersion>,
+    ) -> Self {
+        if let Self::Create {
+            multi_agent_version: version,
+            ..
+        } = &mut self
+        {
+            *version = multi_agent_version;
+        }
+        self
     }
 
     pub fn resume(path: PathBuf) -> Self {
@@ -652,10 +673,12 @@ impl RolloutRecorder {
             RolloutRecorderParams::Create {
                 conversation_id,
                 forked_from_id,
+                parent_thread_id,
                 source,
                 thread_source,
                 base_instructions,
                 dynamic_tools,
+                multi_agent_version,
             } => {
                 let log_file_info = precompute_log_file_info(config, conversation_id)?;
                 let path = log_file_info.path.clone();
@@ -673,6 +696,7 @@ impl RolloutRecorder {
                 let session_meta = SessionMeta {
                     id: session_id,
                     forked_from_id,
+                    parent_thread_id,
                     timestamp,
                     cwd: config.cwd().to_path_buf(),
                     originator: originator().value,
@@ -690,21 +714,25 @@ impl RolloutRecorder {
                         Some(dynamic_tools)
                     },
                     memory_mode: (!config.generate_memories()).then_some("disabled".to_string()),
+                    multi_agent_version,
                 };
 
                 (None, Some(log_file_info), path, Some(session_meta))
             }
-            RolloutRecorderParams::Resume { path } => (
-                Some(
-                    tokio::fs::OpenOptions::new()
-                        .append(true)
-                        .open(&path)
-                        .await?,
-                ),
-                None,
-                path,
-                None,
-            ),
+            RolloutRecorderParams::Resume { path } => {
+                let path = compression::materialize_rollout_for_append(path.as_path()).await?;
+                (
+                    Some(
+                        tokio::fs::OpenOptions::new()
+                            .append(true)
+                            .open(&path)
+                            .await?,
+                    ),
+                    None,
+                    path,
+                    None,
+                )
+            }
         };
 
         // Clone the cwd for the spawned task to collect git info asynchronously
@@ -815,19 +843,17 @@ impl RolloutRecorder {
         path: &Path,
     ) -> std::io::Result<(Vec<RolloutItem>, Option<ThreadId>, usize)> {
         trace!("Resuming rollout from {path:?}");
-        let text = tokio::fs::read_to_string(path).await?;
-        if text.trim().is_empty() {
-            return Err(IoError::other("empty session file"));
-        }
-
         let mut items: Vec<RolloutItem> = Vec::new();
         let mut thread_id: Option<ThreadId> = None;
         let mut parse_errors = 0usize;
-        for line in text.lines() {
+        let mut reader = compression::open_rollout_line_reader(path).await?;
+        let mut saw_non_empty_line = false;
+        while let Some(line) = reader.next_line().await? {
             if line.trim().is_empty() {
                 continue;
             }
-            let mut v: Value = match serde_json::from_str(line) {
+            saw_non_empty_line = true;
+            let mut v: Value = match serde_json::from_str(&line) {
                 Ok(v) => v,
                 Err(e) => {
                     warn!("failed to parse line as JSON: {line:?}, error: {e}");
@@ -870,6 +896,9 @@ impl RolloutRecorder {
                 }
             }
         }
+        if !saw_non_empty_line {
+            return Err(IoError::other("empty session file"));
+        }
 
         tracing::debug!(
             "Resumed rollout with {} items, thread ID: {:?}, parse errors: {}",
@@ -893,7 +922,7 @@ impl RolloutRecorder {
         Ok(InitialHistory::Resumed(ResumedHistory {
             conversation_id,
             history: items,
-            rollout_path: Some(path.to_path_buf()),
+            rollout_path: Some(compression::plain_rollout_path(path)),
         }))
     }
 
@@ -1020,6 +1049,7 @@ fn fill_missing_thread_item_metadata(item: &mut ThreadItem, state_item: ThreadIt
         git_sha,
         git_origin_url,
         source,
+        parent_thread_id,
         agent_nickname,
         agent_role,
         model_provider,
@@ -1048,6 +1078,9 @@ fn fill_missing_thread_item_metadata(item: &mut ThreadItem, state_item: ThreadIt
     }
     if item.source.is_none() {
         item.source = source;
+    }
+    if item.parent_thread_id.is_none() {
+        item.parent_thread_id = parent_thread_id;
     }
     if item.agent_nickname.is_none() {
         item.agent_nickname = agent_nickname;
@@ -1357,6 +1390,7 @@ fn precompute_log_file_info(
 }
 
 fn open_log_file(path: &Path) -> std::io::Result<File> {
+    let path = compression::materialize_rollout_for_append_blocking(path)?;
     let Some(parent) = path.parent() else {
         return Err(IoError::other(format!(
             "rollout path has no parent: {}",
@@ -1616,6 +1650,7 @@ pub async fn append_rollout_item_to_path(
     rollout_path: &Path,
     item: &RolloutItem,
 ) -> std::io::Result<()> {
+    let rollout_path = compression::materialize_rollout_for_append(rollout_path).await?;
     let file = tokio::fs::OpenOptions::new()
         .append(true)
         .open(rollout_path)
@@ -1690,6 +1725,7 @@ fn thread_item_from_state_metadata(item: codex_state::ThreadMetadata) -> ThreadI
                 .or_else(|_| serde_json::from_value(Value::String(item.source)))
                 .unwrap_or(SessionSource::Unknown),
         ),
+        parent_thread_id: None,
         agent_nickname: item.agent_nickname,
         agent_role: item.agent_role,
         model_provider: Some(item.model_provider),

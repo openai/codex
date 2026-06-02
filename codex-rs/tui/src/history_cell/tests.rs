@@ -1085,6 +1085,14 @@ fn standalone_windows_update_available_history_cell_snapshot() {
 }
 
 #[test]
+fn web_search_history_cell_without_detail_snapshot() {
+    let cell = new_web_search_call("call-1".to_string(), String::new(), WebSearchAction::Other);
+    let rendered = render_lines(&cell.display_lines(/*width*/ 64)).join("\n");
+
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
 fn web_search_history_cell_wraps_with_indented_continuation() {
     let query = "example search query with several generic words to exercise wrapping".to_string();
     let cell = new_web_search_call(
@@ -1100,8 +1108,8 @@ fn web_search_history_cell_wraps_with_indented_continuation() {
     assert_eq!(
         rendered,
         vec![
-            "• Searched example search query with several generic words to".to_string(),
-            "  exercise wrapping".to_string(),
+            "• Searched the web for example search query with several generic".to_string(),
+            "  words to exercise wrapping".to_string(),
         ]
     );
 }
@@ -1119,7 +1127,10 @@ fn web_search_history_cell_short_query_does_not_wrap() {
     );
     let rendered = render_lines(&cell.display_lines(/*width*/ 64));
 
-    assert_eq!(rendered, vec!["• Searched short query".to_string()]);
+    assert_eq!(
+        rendered,
+        vec!["• Searched the web for short query".to_string()]
+    );
 }
 
 #[test]

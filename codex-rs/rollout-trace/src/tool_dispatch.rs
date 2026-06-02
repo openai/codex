@@ -267,7 +267,7 @@ fn dispatched_tool_kind(tool_name: &str, _payload: &ToolDispatchPayload) -> Tool
         "image_generation" | "image_query" => ToolCallKind::ImageGeneration,
         "spawn_agent" => ToolCallKind::SpawnAgent,
         "send_message" => ToolCallKind::SendMessage,
-        "followup_task" => ToolCallKind::AssignAgentTask,
+        "followup_task" | "assign_task" => ToolCallKind::AssignAgentTask,
         "wait_agent" => ToolCallKind::WaitAgent,
         "close_agent" => ToolCallKind::CloseAgent,
         other => ToolCallKind::Other {

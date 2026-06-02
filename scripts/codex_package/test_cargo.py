@@ -27,7 +27,9 @@ class SourceBinariesForTargetTest(unittest.TestCase):
             [],
         )
 
-    def test_linux_package_with_prebuilt_entrypoint_and_bwrap_builds_nothing(self) -> None:
+    def test_linux_package_with_prebuilt_entrypoint_and_bwrap_builds_nothing(
+        self,
+    ) -> None:
         self.assertEqual(
             source_binaries_for_target(
                 TARGET_SPECS["x86_64-unknown-linux-musl"],
@@ -40,7 +42,9 @@ class SourceBinariesForTargetTest(unittest.TestCase):
             [],
         )
 
-    def test_windows_package_with_prebuilt_entrypoint_and_helpers_builds_nothing(self) -> None:
+    def test_windows_package_with_prebuilt_entrypoint_and_helpers_builds_nothing(
+        self,
+    ) -> None:
         self.assertEqual(
             source_binaries_for_target(
                 TARGET_SPECS["x86_64-pc-windows-msvc"],

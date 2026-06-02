@@ -12,7 +12,7 @@ expression: sanitized
 │                                                                       │
 │  Model:            gpt-5.1-codex-max (reasoning none, summaries auto) │
 │  Directory: [[workspace]]                                             │
-│  Permissions:      Profile locked (read-only, on-request)             │
+│  Permissions:      Profile locked (read-only, Ask for approval)       │
 │  Agents.md:        <none>                                             │
 │                                                                       │
 │  Token usage:      0 total  (0 input + 0 output)                      │

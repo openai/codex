@@ -32,5 +32,5 @@ fn register_session_root(session: &Arc<Session>, turn: &Arc<TurnContext>) {
     session
         .services
         .agent_control
-        .register_session_root(session.conversation_id, &turn.session_source);
+        .register_session_root(session.conversation_id, turn.parent_thread_id);
 }

@@ -412,10 +412,11 @@ pub async fn list_threads_db(
         Ok(mut page) => {
             let mut valid_items = Vec::with_capacity(page.items.len());
             for item in page.items {
-                if tokio::fs::try_exists(&item.rollout_path)
-                    .await
-                    .unwrap_or(false)
+                if let Some(existing_path) =
+                    crate::compression::existing_rollout_path(item.rollout_path.as_path()).await
                 {
+                    let mut item = item;
+                    item.rollout_path = existing_path;
                     valid_items.push(item);
                 } else {
                     warn!(
@@ -513,6 +514,7 @@ pub async fn reconcile_rollout(
     metadata.cwd = normalize_cwd_for_state_db(&metadata.cwd);
     if let Ok(Some(existing_metadata)) = ctx.get_thread(metadata.id).await {
         metadata.prefer_existing_git_info(&existing_metadata);
+        metadata.prefer_existing_explicit_title(&existing_metadata);
     }
     match archived_only {
         Some(true) if metadata.archived_at.is_none() => {

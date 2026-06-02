@@ -38,12 +38,14 @@ use super::ExecCommandArgs;
 use super::ExecCommandEnvironmentArgs;
 use super::get_command;
 use super::post_unified_exec_tool_use_payload;
+use super::shell_mode_for_environment;
 
 #[derive(Clone, Copy)]
 pub(crate) struct ExecCommandHandlerOptions {
     pub(crate) allow_login_shell: bool,
     pub(crate) exec_permission_approvals_enabled: bool,
     pub(crate) include_environment_id: bool,
+    pub(crate) include_shell_parameter: bool,
 }
 
 pub struct ExecCommandHandler {
@@ -57,6 +59,7 @@ impl Default for ExecCommandHandler {
                 allow_login_shell: false,
                 exec_permission_approvals_enabled: false,
                 include_environment_id: false,
+                include_shell_parameter: true,
             },
         }
     }
@@ -81,6 +84,7 @@ impl ToolExecutor<ToolInvocation> for ExecCommandHandler {
                 exec_permission_approvals_enabled: self.options.exec_permission_approvals_enabled,
             },
             self.options.include_environment_id,
+            self.options.include_shell_parameter,
         )
     }
 
@@ -140,10 +144,12 @@ impl ToolExecutor<ToolInvocation> for ExecCommandHandler {
         )
         .await;
         let process_id = manager.allocate_process_id().await;
+        let shell_mode =
+            shell_mode_for_environment(&turn.unified_exec_shell_mode, environment.as_ref());
         let resolved_command = get_command(
             &args,
             session.user_shell(),
-            &turn.unified_exec_shell_mode,
+            &shell_mode,
             turn.config.permissions.allow_login_shell,
         )
         .map_err(FunctionCallError::RespondToModel)?;
@@ -167,6 +173,7 @@ impl ToolExecutor<ToolInvocation> for ExecCommandHandler {
         let requested_additional_permissions = additional_permissions.clone();
         let effective_additional_permissions = apply_granted_turn_permissions(
             context.session.as_ref(),
+            &turn_environment.environment_id,
             cwd.as_path(),
             sandbox_permissions,
             additional_permissions,
@@ -260,6 +267,7 @@ impl ToolExecutor<ToolInvocation> for ExecCommandHandler {
                     cwd,
                     sandbox_cwd: turn_environment.cwd.clone(),
                     environment,
+                    shell_mode,
                     network: context.turn.network.clone(),
                     tty,
                     sandbox_permissions: effective_additional_permissions.sandbox_permissions,

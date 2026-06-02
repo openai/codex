@@ -12,6 +12,7 @@ use codex_config::config_toml::AgentRoleToml;
 use codex_config::config_toml::AgentsToml;
 use codex_config::config_toml::AutoReviewToml;
 use codex_config::config_toml::ConfigToml;
+use codex_config::config_toml::ExperimentalRequestUserInput;
 use codex_config::config_toml::ProjectConfig;
 use codex_config::config_toml::RealtimeConfig;
 use codex_config::config_toml::RealtimeToml;
@@ -85,6 +86,7 @@ use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
+use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::NetworkAccess;
 use codex_protocol::protocol::RealtimeVoice;
 use codex_protocol::protocol::SandboxPolicy;
@@ -389,7 +391,13 @@ web_search = true
     )
     .expect("TOML deserialization should succeed");
 
-    assert_eq!(cfg.tools, Some(ToolsToml { web_search: None }));
+    assert_eq!(
+        cfg.tools,
+        Some(ToolsToml {
+            web_search: None,
+            experimental_request_user_input: None,
+        })
+    );
 }
 
 #[test]
@@ -402,7 +410,72 @@ web_search = false
     )
     .expect("TOML deserialization should succeed");
 
-    assert_eq!(cfg.tools, Some(ToolsToml { web_search: None }));
+    assert_eq!(
+        cfg.tools,
+        Some(ToolsToml {
+            web_search: None,
+            experimental_request_user_input: None,
+        })
+    );
+}
+
+#[test]
+fn tools_experimental_request_user_input_defaults_to_enabled() {
+    let cfg: ConfigToml = toml::from_str(
+        r#"
+[tools.experimental_request_user_input]
+"#,
+    )
+    .expect("TOML deserialization should succeed");
+
+    assert_eq!(
+        cfg.tools,
+        Some(ToolsToml {
+            web_search: None,
+            experimental_request_user_input: Some(ExperimentalRequestUserInput { enabled: true }),
+        })
+    );
+}
+
+#[test]
+fn tools_experimental_request_user_input_can_be_disabled() {
+    let cfg: ConfigToml = toml::from_str(
+        r#"
+[tools.experimental_request_user_input]
+enabled = false
+"#,
+    )
+    .expect("TOML deserialization should succeed");
+
+    assert_eq!(
+        cfg.tools,
+        Some(ToolsToml {
+            web_search: None,
+            experimental_request_user_input: Some(ExperimentalRequestUserInput { enabled: false }),
+        })
+    );
+}
+
+#[tokio::test]
+async fn load_config_resolves_experimental_request_user_input_enabled() -> std::io::Result<()> {
+    let codex_home = tempdir()?;
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            tools: Some(ToolsToml {
+                web_search: None,
+                experimental_request_user_input: Some(ExperimentalRequestUserInput {
+                    enabled: false,
+                }),
+            }),
+            ..ConfigToml::default()
+        },
+        ConfigOverrides::default(),
+        codex_home.abs(),
+    )
+    .await?;
+
+    assert!(!config.experimental_request_user_input_enabled);
+    Ok(())
 }
 
 #[test]
@@ -2284,7 +2357,13 @@ async fn default_permissions_profile_can_extend_builtin_workspace() -> std::io::
                         description: None,
                         extends: Some(BUILT_IN_PERMISSION_PROFILE_WORKSPACE.to_string()),
                         workspace_roots: None,
-                        filesystem: None,
+                        filesystem: Some(FilesystemPermissionsToml {
+                            glob_scan_max_depth: None,
+                            entries: BTreeMap::from([(
+                                ":tmpdir".to_string(),
+                                FilesystemPermissionToml::Access(FileSystemAccessMode::Read),
+                            )]),
+                        }),
                         network: Some(NetworkToml {
                             enabled: Some(true),
                             ..Default::default()
@@ -2310,6 +2389,42 @@ async fn default_permissions_profile_can_extend_builtin_workspace() -> std::io::
     assert!(
         !policy.can_write_path_with_cwd(&cwd.path().join(".git"), cwd.path()),
         "expected profile extending :workspace to keep metadata carveouts, policy: {policy:?}"
+    );
+    assert!(
+        policy.entries.iter().any(|entry| matches!(
+            entry,
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::SlashTmp,
+                },
+                access: FileSystemAccessMode::Write,
+            }
+        )),
+        "expected profile extending :workspace to keep inherited :slash_tmp writes, policy: {policy:?}"
+    );
+    assert!(
+        policy.entries.iter().any(|entry| matches!(
+            entry,
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::Tmpdir,
+                },
+                access: FileSystemAccessMode::Read,
+            }
+        )),
+        "expected child :tmpdir read entry to replace the inherited write entry, policy: {policy:?}"
+    );
+    assert!(
+        !policy.entries.iter().any(|entry| matches!(
+            entry,
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::Tmpdir,
+                },
+                access: FileSystemAccessMode::Write,
+            }
+        )),
+        "expected inherited :tmpdir write entry to be removed, policy: {policy:?}"
     );
     assert_eq!(
         config.permissions.network_sandbox_policy(),
@@ -8195,6 +8310,7 @@ async fn test_requirements_web_search_mode_allowlist_does_not_warn_when_unset() 
         allow_managed_hooks_only: None,
         allow_appshots: None,
         computer_use: None,
+        windows: None,
         feature_requirements: None,
         hooks: None,
         mcp_servers: None,
@@ -8918,6 +9034,7 @@ async fn explicit_sandbox_mode_falls_back_when_disallowed_by_requirements() -> s
         allow_managed_hooks_only: None,
         allow_appshots: None,
         computer_use: None,
+        windows: None,
         feature_requirements: None,
         hooks: None,
         mcp_servers: None,
@@ -8941,6 +9058,47 @@ async fn explicit_sandbox_mode_falls_back_when_disallowed_by_requirements() -> s
     assert_eq!(
         config.legacy_sandbox_policy(),
         SandboxPolicy::new_read_only_policy()
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn windows_sandbox_mode_falls_back_when_disallowed_by_requirements() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"[windows]
+sandbox = "unelevated"
+"#,
+    )?;
+
+    let requirements = codex_config::ConfigRequirementsToml {
+        windows: Some(codex_config::WindowsRequirementsToml {
+            allowed_sandbox_implementations: Some(vec![
+                codex_config::types::WindowsSandboxModeToml::Elevated,
+            ]),
+        }),
+        ..Default::default()
+    };
+
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .cloud_requirements(CloudRequirementsLoader::new(async move {
+            Ok(Some(requirements))
+        }))
+        .build()
+        .await?;
+
+    assert_eq!(
+        config.permissions.windows_sandbox_mode,
+        Some(codex_config::types::WindowsSandboxModeToml::Elevated)
+    );
+    assert!(
+        config.startup_warnings.iter().any(|warning| warning
+            .contains("Configured value for `windows.sandbox` is disallowed by requirements")),
+        "{:?}",
+        config.startup_warnings
     );
     Ok(())
 }
@@ -9686,7 +9844,13 @@ non_code_mode_only = true
     assert_eq!(config.multi_agent_v2.min_wait_timeout_ms, 2500);
     assert_eq!(config.multi_agent_v2.max_wait_timeout_ms, 120000);
     assert_eq!(config.multi_agent_v2.default_wait_timeout_ms, 30000);
-    assert_eq!(config.agent_max_threads, Some(4));
+    assert_eq!(
+        (
+            config.agent_max_threads,
+            config.effective_agent_max_threads(MultiAgentVersion::V2)?
+        ),
+        (None, Some(4))
+    );
     assert!(!config.multi_agent_v2.usage_hint_enabled);
     assert_eq!(
         config.multi_agent_v2.usage_hint_text.as_deref(),
@@ -9730,8 +9894,62 @@ enabled = true
     assert_eq!(config.multi_agent_v2.min_wait_timeout_ms, 10_000);
     assert_eq!(config.multi_agent_v2.max_wait_timeout_ms, 3_600_000);
     assert_eq!(config.multi_agent_v2.default_wait_timeout_ms, 30_000);
-    assert_eq!(config.agent_max_threads, Some(3));
-    assert!(!config.multi_agent_v2.non_code_mode_only);
+    assert_eq!(
+        (
+            config.agent_max_threads,
+            config.effective_agent_max_threads(MultiAgentVersion::V2)?
+        ),
+        (None, Some(3))
+    );
+    assert_eq!(
+        config.multi_agent_v2.root_agent_usage_hint_text.as_deref(),
+        Some(DEFAULT_MULTI_AGENT_V2_ROOT_AGENT_USAGE_HINT_TEXT)
+    );
+    assert!(
+        !config
+            .multi_agent_v2
+            .root_agent_usage_hint_text
+            .as_deref()
+            .unwrap_or_default()
+            .contains("maximum concurrency"),
+    );
+    assert_eq!(
+        config.multi_agent_v2.subagent_usage_hint_text.as_deref(),
+        Some(DEFAULT_MULTI_AGENT_V2_SUBAGENT_USAGE_HINT_TEXT)
+    );
+    assert!(
+        !config
+            .multi_agent_v2
+            .subagent_usage_hint_text
+            .as_deref()
+            .unwrap_or_default()
+            .contains("maximum concurrency"),
+    );
+    assert!(config.multi_agent_v2.non_code_mode_only);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn multi_agent_v2_empty_usage_hint_overrides_clear_default_hints() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"[features.multi_agent_v2]
+enabled = true
+root_agent_usage_hint_text = ""
+subagent_usage_hint_text = ""
+"#,
+    )?;
+
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .build()
+        .await?;
+
+    assert_eq!(config.multi_agent_v2.root_agent_usage_hint_text, None);
+    assert_eq!(config.multi_agent_v2.subagent_usage_hint_text, None);
 
     Ok(())
 }
@@ -9749,17 +9967,19 @@ max_threads = 3
 "#,
     )?;
 
-    let err = ConfigBuilder::without_managed_config_for_tests()
+    let config = ConfigBuilder::without_managed_config_for_tests()
         .codex_home(codex_home.path().to_path_buf())
         .fallback_cwd(Some(codex_home.path().to_path_buf()))
         .build()
-        .await
+        .await?;
+    let err = config
+        .effective_agent_max_threads(MultiAgentVersion::V2)
         .expect_err("agents.max_threads should conflict with multi_agent_v2");
 
     assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
     assert_eq!(
         err.to_string(),
-        "agents.max_threads cannot be set when multi_agent_v2 is enabled"
+        "agents.max_threads cannot be set when the multi-agent runtime is v2"
     );
 
     Ok(())
@@ -10018,7 +10238,13 @@ max_concurrent_threads_per_session = 1
         .await?;
 
     assert_eq!(config.multi_agent_v2.max_concurrent_threads_per_session, 1);
-    assert_eq!(config.agent_max_threads, Some(0));
+    assert_eq!(
+        (
+            config.agent_max_threads,
+            config.effective_agent_max_threads(MultiAgentVersion::V2)?
+        ),
+        (None, Some(0))
+    );
 
     Ok(())
 }

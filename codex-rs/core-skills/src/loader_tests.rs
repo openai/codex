@@ -1302,6 +1302,84 @@ async fn namespaces_plugin_skills_using_plugin_name() {
 }
 
 #[tokio::test]
+async fn plugin_skill_name_length_limit_allows_max_qualified_name() {
+    let root = tempfile::tempdir().expect("tempdir");
+    let plugin_name = "p".repeat(MAX_NAME_LEN - 1);
+    let skill_name = "s".repeat(MAX_NAME_LEN);
+    let plugin_root = root.path().join("plugins").join(&plugin_name);
+    let frontmatter = format!("name: {skill_name}\ndescription: search sample data");
+    let skill_path = write_raw_skill_at(&plugin_root.join("skills"), "sample-search", &frontmatter);
+    fs::create_dir_all(plugin_root.join(".codex-plugin")).unwrap();
+    fs::write(
+        plugin_root.join(".codex-plugin/plugin.json"),
+        format!(r#"{{"name":"{plugin_name}"}}"#),
+    )
+    .unwrap();
+
+    let outcome = load_skills_from_roots([SkillRoot {
+        path: plugin_root.join("skills").abs(),
+        scope: SkillScope::User,
+        file_system: Arc::clone(&LOCAL_FS),
+        plugin_id: Some("sample@test".to_string()),
+        plugin_root: Some(plugin_root.abs()),
+    }])
+    .await;
+
+    assert!(
+        outcome.errors.is_empty(),
+        "unexpected errors: {:?}",
+        outcome.errors
+    );
+    assert_eq!(
+        outcome.skills,
+        vec![SkillMetadata {
+            name: format!("{plugin_name}:{skill_name}"),
+            description: "search sample data".to_string(),
+            short_description: None,
+            interface: None,
+            dependencies: None,
+            policy: None,
+            path_to_skills_md: normalized(&skill_path),
+            scope: SkillScope::User,
+            plugin_id: Some("sample@test".to_string()),
+        }]
+    );
+}
+
+#[tokio::test]
+async fn plugin_skill_name_length_limit_rejects_overlong_qualified_name() {
+    let root = tempfile::tempdir().expect("tempdir");
+    let plugin_name = "p".repeat(MAX_NAME_LEN);
+    let skill_name = "s".repeat(MAX_NAME_LEN);
+    let plugin_root = root.path().join("plugins").join(&plugin_name);
+    let frontmatter = format!("name: {skill_name}\ndescription: search sample data");
+    write_raw_skill_at(&plugin_root.join("skills"), "sample-search", &frontmatter);
+    fs::create_dir_all(plugin_root.join(".codex-plugin")).unwrap();
+    fs::write(
+        plugin_root.join(".codex-plugin/plugin.json"),
+        format!(r#"{{"name":"{plugin_name}"}}"#),
+    )
+    .unwrap();
+
+    let outcome = load_skills_from_roots([SkillRoot {
+        path: plugin_root.join("skills").abs(),
+        scope: SkillScope::User,
+        file_system: Arc::clone(&LOCAL_FS),
+        plugin_id: Some("sample@test".to_string()),
+        plugin_root: Some(plugin_root.abs()),
+    }])
+    .await;
+
+    assert_eq!(outcome.skills, Vec::new());
+    assert_eq!(outcome.errors.len(), 1);
+    assert!(
+        outcome.errors[0].message.contains("invalid qualified name"),
+        "expected qualified name length error, got: {:?}",
+        outcome.errors
+    );
+}
+
+#[tokio::test]
 async fn loads_short_description_from_metadata() {
     let codex_home = tempfile::tempdir().expect("tempdir");
     let skill_dir = codex_home.path().join("skills/demo");
@@ -1899,6 +1977,7 @@ async fn skill_roots_include_admin_with_lowest_priority() {
         Some(Arc::clone(&LOCAL_FS)),
         &cfg.config_layer_stack,
         &cfg.cwd,
+        Vec::new(),
         Vec::new(),
     )
     .await
