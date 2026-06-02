@@ -35,6 +35,81 @@ struct ActiveReplaySegment<'a> {
     base_replacement_history: Option<&'a [ResponseItem]>,
 }
 
+#[derive(Debug, Default)]
+struct WindowGenerationReplaySegment {
+    counts_as_user_turn: bool,
+    compaction_count: u64,
+}
+
+fn finalize_window_generation_segment(
+    active_segment: WindowGenerationReplaySegment,
+    window_generation: &mut u64,
+    pending_rollback_turns: &mut usize,
+) {
+    if *pending_rollback_turns > 0 {
+        if active_segment.counts_as_user_turn {
+            *pending_rollback_turns -= 1;
+        }
+        return;
+    }
+
+    *window_generation = window_generation.saturating_add(active_segment.compaction_count);
+}
+
+/// Replays rollout segments newest-to-oldest so compactions in rolled-back suffixes do not
+/// contribute to the public context-window lineage generation.
+pub(super) fn effective_window_generation_from_rollout(rollout_items: &[RolloutItem]) -> u64 {
+    let mut window_generation = 0u64;
+    let mut pending_rollback_turns = 0usize;
+    let mut active_segment: Option<WindowGenerationReplaySegment> = None;
+
+    for item in rollout_items.iter().rev() {
+        match item {
+            RolloutItem::Compacted(_) => {
+                let active_segment =
+                    active_segment.get_or_insert_with(WindowGenerationReplaySegment::default);
+                active_segment.compaction_count = active_segment.compaction_count.saturating_add(1);
+            }
+            RolloutItem::EventMsg(EventMsg::ThreadRolledBack(rollback)) => {
+                pending_rollback_turns = pending_rollback_turns
+                    .saturating_add(usize::try_from(rollback.num_turns).unwrap_or(usize::MAX));
+            }
+            RolloutItem::EventMsg(EventMsg::TurnStarted(_)) => {
+                if let Some(active_segment) = active_segment.take() {
+                    finalize_window_generation_segment(
+                        active_segment,
+                        &mut window_generation,
+                        &mut pending_rollback_turns,
+                    );
+                }
+            }
+            RolloutItem::EventMsg(EventMsg::UserMessage(_)) => {
+                active_segment
+                    .get_or_insert_with(WindowGenerationReplaySegment::default)
+                    .counts_as_user_turn = true;
+            }
+            RolloutItem::ResponseItem(response_item) => {
+                let active_segment =
+                    active_segment.get_or_insert_with(WindowGenerationReplaySegment::default);
+                active_segment.counts_as_user_turn |= is_user_turn_boundary(response_item);
+            }
+            RolloutItem::EventMsg(_)
+            | RolloutItem::TurnContext(_)
+            | RolloutItem::SessionMeta(_) => {}
+        }
+    }
+
+    if let Some(active_segment) = active_segment {
+        finalize_window_generation_segment(
+            active_segment,
+            &mut window_generation,
+            &mut pending_rollback_turns,
+        );
+    }
+
+    window_generation
+}
+
 fn turn_ids_are_compatible(active_turn_id: Option<&str>, item_turn_id: Option<&str>) -> bool {
     active_turn_id
         .is_none_or(|turn_id| item_turn_id.is_none_or(|item_turn_id| item_turn_id == turn_id))

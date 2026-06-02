@@ -518,15 +518,15 @@ impl Session {
             InitialHistory::Resumed(resumed_history) => resumed_history.conversation_id,
         };
         let window_generation = match &initial_history {
-            InitialHistory::Resumed(resumed_history) => u64::try_from(
-                resumed_history
-                    .history
-                    .iter()
-                    .filter(|item| matches!(item, RolloutItem::Compacted(_)))
-                    .count(),
-            )
-            .unwrap_or(u64::MAX),
-            InitialHistory::New | InitialHistory::Cleared | InitialHistory::Forked(_) => 0,
+            InitialHistory::Resumed(resumed_history) => {
+                super::rollout_reconstruction::effective_window_generation_from_rollout(
+                    &resumed_history.history,
+                )
+            }
+            InitialHistory::Forked(history) => {
+                super::rollout_reconstruction::effective_window_generation_from_rollout(history)
+            }
+            InitialHistory::New | InitialHistory::Cleared => 0,
         };
         // Kick off independent async setup tasks in parallel to reduce startup latency.
         //
