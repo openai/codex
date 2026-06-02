@@ -135,31 +135,48 @@ def test_root_format_driver_covers_all_formatter_groups() -> None:
         "Python scripts",
     ]
     assert [group.name for group in checks] == [group.name for group in formatters]
-    assert [len(group.commands) for group in formatters] == [1, 1, 3, 2]
+    assert [len(group.commands) for group in formatters] == [1, 1, 2, 1]
     assert [len(group.commands) for group in checks] == [
         len(group.commands) for group in formatters
     ]
-    assert formatters[2].commands[0] == checks[2].commands[0]
-    assert formatters[2].commands[0].args == (
+    sdk_uv_run_args = (
         "uv",
-        "sync",
+        "run",
         "--frozen",
         "--project",
         "sdk/python",
-        "--extra",
-        "dev",
-        "--inexact",
-        "--no-install-package",
-        "openai-codex-cli-bin",
+        "--no-sync",
+        "--with",
+        "ruff>=0.15.8",
     )
-    assert formatters[2].commands[1].args[-5:] == (
+    scripts_uv_run_args = (
+        "uv",
+        "run",
+        "--frozen",
+        "--project",
+        "scripts",
+        "--no-sync",
+        "--with",
+        "ruff>=0.15.8",
+    )
+    assert all(
+        command.args[: len(sdk_uv_run_args)] == sdk_uv_run_args
+        for group in (formatters[2], checks[2])
+        for command in group.commands
+    )
+    assert all(
+        command.args[: len(scripts_uv_run_args)] == scripts_uv_run_args
+        for group in (formatters[3], checks[3])
+        for command in group.commands
+    )
+    assert formatters[2].commands[0].args[-5:] == (
         "ruff",
         "check",
         "--fix",
         "--fix-only",
         "sdk/python",
     )
-    assert checks[2].commands[1].args[-4:] == (
+    assert checks[2].commands[0].args[-4:] == (
         "ruff",
         "check",
         "--diff",

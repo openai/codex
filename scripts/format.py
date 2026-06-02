@@ -14,7 +14,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CODEX_RS_ROOT = REPO_ROOT / "codex-rs"
-SDK_RUNTIME_PACKAGE = "openai-codex-cli-bin"
+RUFF_REQUIREMENT = "ruff>=0.15.8"
 
 
 @dataclass(frozen=True)
@@ -40,25 +40,33 @@ class FormatterResult:
 def formatter_groups(*, check: bool) -> tuple[FormatterGroup, ...]:
     just_args = ["just", "--unstable", "--fmt"]
     cargo_args = ["cargo", "fmt", "--", "--config", "imports_granularity=Item"]
-    sdk_format_args = [
+    sdk_uv_run_args = [
         "uv",
         "run",
         "--frozen",
         "--project",
         "sdk/python",
-        "--extra",
-        "dev",
         "--no-sync",
-        "ruff",
-        "format",
+        "--with",
+        RUFF_REQUIREMENT,
     ]
-    scripts_format_args = [
+    scripts_uv_run_args = [
         "uv",
         "run",
         "--frozen",
         "--project",
         "scripts",
         "--no-sync",
+        "--with",
+        RUFF_REQUIREMENT,
+    ]
+    sdk_format_args = [
+        *sdk_uv_run_args,
+        "ruff",
+        "format",
+    ]
+    scripts_format_args = [
+        *scripts_uv_run_args,
         "ruff",
         "format",
     ]
@@ -68,9 +76,9 @@ def formatter_groups(*, check: bool) -> tuple[FormatterGroup, ...]:
         cargo_args.append("--check")
         # `ruff check --diff` reports lint-driven rewrites without changing files.
         # It is the check-mode counterpart of `--fix --fix-only`, not a full lint gate.
-        sdk_lint_args = ["ruff", "check", "--diff"]
         sdk_format_args.append("--check")
         scripts_format_args.append("--check")
+        sdk_lint_args = ["ruff", "check", "--diff"]
     else:
         # Ruff's lint fixer and formatter are separate passes: the first applies
         # fixable lint rewrites, while the second formats source layout.
@@ -87,28 +95,7 @@ def formatter_groups(*, check: bool) -> tuple[FormatterGroup, ...]:
             (
                 Command(
                     (
-                        "uv",
-                        "sync",
-                        "--frozen",
-                        "--project",
-                        "sdk/python",
-                        "--extra",
-                        "dev",
-                        "--inexact",
-                        "--no-install-package",
-                        SDK_RUNTIME_PACKAGE,
-                    )
-                ),
-                Command(
-                    (
-                        "uv",
-                        "run",
-                        "--frozen",
-                        "--project",
-                        "sdk/python",
-                        "--extra",
-                        "dev",
-                        "--no-sync",
+                        *sdk_uv_run_args,
                         *sdk_lint_args,
                         "sdk/python",
                     )
@@ -120,8 +107,7 @@ def formatter_groups(*, check: bool) -> tuple[FormatterGroup, ...]:
             "Python scripts",
             (
                 # The SDK and internal scripts intentionally use separate project
-                # roots so each uses its own locked Ruff environment.
-                Command(("uv", "sync", "--frozen", "--project", "scripts")),
+                # roots so uv and Ruff retain each project's configuration context.
                 Command((*scripts_format_args, "scripts")),
             ),
         ),
@@ -129,6 +115,7 @@ def formatter_groups(*, check: bool) -> tuple[FormatterGroup, ...]:
 
 
 def run_formatter_group(group: FormatterGroup) -> FormatterResult:
+    """Run one formatter group sequentially and return its buffered output."""
     output: list[str] = []
     for command in group.commands:
         output.append(f"$ {shlex.join(command.args)}\n")
@@ -168,12 +155,13 @@ def main() -> int:
 
     failures: list[str] = []
     with ThreadPoolExecutor(max_workers=len(groups)) as executor:
-        futures = {
-            executor.submit(run_formatter_group, group): group.name for group in groups
-        }
+        futures = {}
+        for group in groups:
+            print(f"Starting {group.name} formatter...", flush=True)
+            futures[executor.submit(run_formatter_group, group)] = group.name
         for future in as_completed(futures):
             result = future.result()
-            print(f"==> {result.name}")
+            print(f"==> {result.name} formatter finished")
             print(result.output, end="")
             if result.returncode != 0:
                 failures.append(result.name)
