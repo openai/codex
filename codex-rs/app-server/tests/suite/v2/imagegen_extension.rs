@@ -136,6 +136,7 @@ async fn standalone_image_generation_persists_image_and_returns_it_to_model() ->
     Ok(())
 }
 
+#[cfg_attr(windows, ignore = "covered by Linux and macOS CI")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn standalone_image_generation_is_callable_from_code_mode_only() -> Result<()> {
     let call_id = "code-mode-image-run-1";
