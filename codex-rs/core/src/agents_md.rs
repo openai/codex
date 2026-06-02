@@ -93,6 +93,14 @@ impl<'a> AgentsMdManager<'a> {
             .await
     }
 
+    /// Returns the AGENTS.md files that contribute model-visible instructions.
+    pub async fn instruction_sources(&self, fs: &dyn ExecutorFileSystem) -> Vec<AbsolutePathBuf> {
+        let mut startup_warnings = Vec::new();
+        self.user_instructions_with_fs(fs, &mut startup_warnings)
+            .await
+            .map_or_else(Vec::new, |loaded| loaded.sources().cloned().collect())
+    }
+
     async fn user_instructions_with_fs(
         &self,
         fs: &dyn ExecutorFileSystem,

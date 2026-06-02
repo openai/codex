@@ -481,6 +481,12 @@ async fn instruction_sources_include_global_before_agents_md_docs() {
         vec![&global_agents, &project_agents]
     );
     assert_eq!(
+        AgentsMdManager::new(&cfg)
+            .instruction_sources(LOCAL_FS.as_ref())
+            .await,
+        vec![global_agents, project_agents]
+    );
+    assert_eq!(
         loaded.text(),
         format!("global doc{AGENTS_MD_SEPARATOR}project doc\n\n{HIERARCHICAL_AGENTS_MESSAGE}")
     );
