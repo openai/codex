@@ -41,6 +41,27 @@ pub trait AuthProvider: Send + Sync {
         headers
     }
 
+    /// Adds auth headers for a concrete HTTP request URL.
+    ///
+    /// URL-sensitive providers can override this to scope request-specific
+    /// headers without exposing them through generic/non-HTTP auth helpers.
+    fn add_auth_headers_for_url(&self, _request_url: &str, headers: &mut HeaderMap) {
+        self.add_auth_headers(headers);
+    }
+
+    /// Observes response headers for auth state that may need to rotate after a request.
+    ///
+    /// Most providers do not need this. Providers with server-minted,
+    /// request-scoped state may validate the URL and selectively persist
+    /// response headers here.
+    fn observe_response_headers(
+        &self,
+        _request_url: &str,
+        _request_headers: &HeaderMap,
+        _response_headers: &HeaderMap,
+    ) {
+    }
+
     /// Applies auth to a complete outbound request and returns the request to send.
     ///
     /// The input `request` is moved into this method. Implementations may mutate
@@ -54,7 +75,7 @@ pub trait AuthProvider: Send + Sync {
     /// If this returns [`AuthError`], the request should not be sent.
     async fn apply_auth(&self, request: Request) -> Result<Request, AuthError> {
         let mut request = request;
-        self.add_auth_headers(&mut request.headers);
+        self.add_auth_headers_for_url(&request.url, &mut request.headers);
         Ok(request)
     }
 }
