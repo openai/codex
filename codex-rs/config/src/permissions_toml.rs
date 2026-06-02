@@ -30,6 +30,13 @@ impl PermissionsToml {
         self.entries.is_empty()
     }
 
+    /// Resolve `profile_name` and all of its `extends` ancestors into one TOML
+    /// profile.
+    ///
+    /// Parent profiles are merged before their children, so child keys override
+    /// matching parent keys before callers compile the profile into runtime
+    /// permissions. The returned profile keeps the selected profile's
+    /// declaration metadata, such as `description` and `extends`.
     pub fn resolve_profile<F>(
         &self,
         profile_name: &str,
@@ -96,10 +103,7 @@ impl PermissionsToml {
                 .into_iter()
                 .rev()
                 .try_fold(profile, merge_permission_profiles)?;
-            return Ok(ResolvedPermissionProfileToml {
-                profile,
-                inherited_profile_names: profile_names.into_iter().skip(1).collect(),
-            });
+            return Ok(ResolvedPermissionProfileToml { profile });
         }
     }
 }
@@ -117,12 +121,6 @@ pub struct PermissionProfileToml {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedPermissionProfileToml {
     pub profile: PermissionProfileToml,
-    /// Names of profiles inherited while resolving `profile`, ordered from the
-    /// selected profile's direct parent to the farthest ancestor.
-    ///
-    /// Callers use this to preserve which built-in baseline contributed the
-    /// resolved permissions after the parent profiles have been merged away.
-    pub inherited_profile_names: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
