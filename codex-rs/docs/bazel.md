@@ -40,6 +40,8 @@ configuration.
 
 ### BuildBuddy API key
 
+If you're an OpenAI employee, log in to https://openai.buildbuddy.io and use Google sign-in.
+
 Create a BuildBuddy API key as described in BuildBuddy's [Authentication Guide][bb-auth-guide],
 then add it to `~/.bazelrc`:
 
