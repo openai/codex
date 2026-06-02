@@ -622,7 +622,6 @@ async fn build_extension_turn_input_items(
 
     let input = TurnInputContext {
         turn_id: turn_context.sub_id.to_string(),
-        cwd: turn_context.cwd.as_path().to_path_buf(),
         user_input: user_input.to_vec(),
         environments,
     };

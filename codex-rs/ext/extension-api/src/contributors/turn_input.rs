@@ -18,8 +18,6 @@ pub struct TurnInputEnvironment {
 pub struct TurnInputContext {
     /// Stable host-owned turn identifier.
     pub turn_id: String,
-    /// Effective primary cwd for this turn.
-    pub cwd: PathBuf,
     /// User input submitted for this turn.
     pub user_input: Vec<UserInput>,
     /// Resolved turn environments, in host priority order.
