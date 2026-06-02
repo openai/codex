@@ -87,6 +87,8 @@ def formatter_groups(*, check: bool) -> tuple[FormatterGroup, ...]:
         FormatterGroup("Just", (Command(tuple(just_args)),)),
         FormatterGroup(
             "Rust",
+            # Stable rustfmt repeats a nightly-only `imports_granularity` warning
+            # for each crate, so suppress that expected stderr noise.
             (Command(tuple(cargo_args), CODEX_RS_ROOT, discard_stderr=True),),
         ),
         FormatterGroup(
