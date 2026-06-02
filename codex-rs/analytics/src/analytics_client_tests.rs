@@ -62,6 +62,7 @@ use crate::facts::SkillInvokedInput;
 use crate::facts::SubAgentThreadStartedInput;
 use crate::facts::ThreadInitializationMode;
 use crate::facts::TrackEventsContext;
+use crate::facts::TurnCodexErrorFact;
 use crate::facts::TurnResolvedConfigFact;
 use crate::facts::TurnStatus;
 use crate::facts::TurnSteerRequestError;
@@ -132,6 +133,7 @@ use codex_plugin::PluginTelemetryMetadata;
 use codex_protocol::approvals::NetworkApprovalProtocol;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::ModeKind;
+use codex_protocol::error::CodexErr;
 use codex_protocol::models::NetworkPermissions as CoreNetworkPermissions;
 use codex_protocol::models::PermissionProfile as CorePermissionProfile;
 use codex_protocol::protocol::AskForApproval;
@@ -833,6 +835,7 @@ fn sample_permissions_approval_request(request_id: i64) -> ServerRequest {
             thread_id: "thread-1".to_string(),
             turn_id: "turn-1".to_string(),
             item_id: "permissions-1".to_string(),
+            environment_id: None,
             started_at_ms: 1_000,
             cwd: test_path_buf("/tmp").abs(),
             reason: Some("need network".to_string()),
@@ -3256,6 +3259,9 @@ fn turn_event_serializes_expected_shape() {
             is_first_turn: true,
             status: Some(TurnStatus::Completed),
             turn_error: None,
+            codex_error_kind: None,
+            codex_error_subreason: None,
+            codex_error_http_status_code: None,
             steer_count: Some(0),
             total_tool_call_count: None,
             shell_command_count: None,
@@ -3318,6 +3324,9 @@ fn turn_event_serializes_expected_shape() {
                 "is_first_turn": true,
                 "status": "completed",
                 "turn_error": null,
+                "codex_error_kind": null,
+                "codex_error_subreason": null,
+                "codex_error_http_status_code": null,
                 "steer_count": 0,
                 "total_tool_call_count": null,
                 "shell_command_count": null,
@@ -3985,6 +3994,18 @@ async fn turn_lifecycle_emits_failed_turn_event() {
     .await;
     reducer
         .ingest(
+            AnalyticsFact::Custom(CustomAnalyticsFact::TurnCodexError(Box::new(
+                TurnCodexErrorFact::from_codex_err(
+                    "thread-2".to_string(),
+                    "turn-2".to_string(),
+                    &CodexErr::InvalidRequest("unknown turn environment id `env-2`".to_string()),
+                ),
+            ))),
+            &mut out,
+        )
+        .await;
+    reducer
+        .ingest(
             AnalyticsFact::Notification(Box::new(sample_turn_completed_notification(
                 "thread-2",
                 "turn-2",
@@ -3999,6 +4020,18 @@ async fn turn_lifecycle_emits_failed_turn_event() {
     let payload = serde_json::to_value(&out[0]).expect("serialize turn event");
     assert_eq!(payload["event_params"]["status"], json!("failed"));
     assert_eq!(payload["event_params"]["turn_error"], json!("badRequest"));
+    assert_eq!(
+        payload["event_params"]["codex_error_kind"],
+        json!("invalid_request")
+    );
+    assert_eq!(
+        payload["event_params"]["codex_error_subreason"],
+        json!("unknown turn environment id `env-2`")
+    );
+    assert_eq!(
+        payload["event_params"]["codex_error_http_status_code"],
+        json!(null)
+    );
 }
 
 #[tokio::test]
@@ -4031,6 +4064,7 @@ async fn turn_lifecycle_emits_interrupted_turn_event_without_error() {
     let payload = serde_json::to_value(&out[0]).expect("serialize turn event");
     assert_eq!(payload["event_params"]["status"], json!("interrupted"));
     assert_eq!(payload["event_params"]["turn_error"], json!(null));
+    assert_eq!(payload["event_params"]["codex_error_kind"], json!(null));
 }
 
 #[tokio::test]

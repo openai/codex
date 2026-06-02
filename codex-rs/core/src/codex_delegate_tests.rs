@@ -183,9 +183,11 @@ async fn run_codex_thread_interactive_respects_pre_cancelled_spawn() {
 
 #[tokio::test]
 async fn handle_request_permissions_uses_tool_call_id_for_round_trip() {
-    let (parent_session, parent_ctx, rx_events) =
+    let (parent_session, mut parent_ctx, rx_events) =
         crate::session::tests::make_session_and_context_with_rx().await;
     *parent_session.active_turn.lock().await = Some(crate::state::ActiveTurn::default());
+    let parent_ctx_mut = Arc::get_mut(&mut parent_ctx).expect("single turn context ref");
+    parent_ctx_mut.environments.turn_environments[0].environment_id = "remote".to_string();
 
     let (tx_sub, rx_sub) = bounded(SUBMISSION_CHANNEL_CAPACITY);
     let (_tx_events, rx_events_child) = bounded(SUBMISSION_CHANNEL_CAPACITY);
@@ -228,6 +230,7 @@ async fn handle_request_permissions_uses_tool_call_id_for_round_trip() {
                 RequestPermissionsEvent {
                     call_id: request_call_id,
                     turn_id: "child-turn-1".to_string(),
+                    environment_id: Some("remote".to_string()),
                     started_at_ms: 0,
                     reason: Some("need access".to_string()),
                     permissions: RequestPermissionProfile {
@@ -252,6 +255,7 @@ async fn handle_request_permissions_uses_tool_call_id_for_round_trip() {
         panic!("expected RequestPermissions event");
     };
     assert_eq!(request.call_id, call_id.clone());
+    assert_eq!(request.environment_id.as_deref(), Some("remote"));
     assert_eq!(request.cwd, Some(delegated_cwd));
 
     parent_session

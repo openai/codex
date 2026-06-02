@@ -134,11 +134,22 @@ jobs:
       - name: Stage Windows binaries
         shell: bash
         run: |
-          output_dir="target/${{ matrix.target }}/release/staged-${{ matrix.bundle }}"
+          release_dir="target/${{ matrix.target }}/release"
+          output_dir="$release_dir/staged-${{ matrix.bundle }}"
           mkdir -p "$output_dir"
           for binary in ${{ matrix.binaries }}; do
-            cp "target/${{ matrix.target }}/release/${binary}.exe" "$output_dir/${binary}.exe"
-            cp "target/${{ matrix.target }}/release/${binary}.pdb" "$output_dir/${binary}.pdb"
+            pdb_name="${binary//-/_}"
+            pdb_path="$release_dir/${pdb_name}.pdb"
+            if [[ ! -f "$pdb_path" ]]; then
+              pdb_path="$release_dir/${binary}.pdb"
+            fi
+            if [[ ! -f "$pdb_path" ]]; then
+              echo "PDB for $binary not found at $release_dir/${pdb_name}.pdb or $release_dir/${binary}.pdb" >&2
+              exit 1
+            fi
+
+            cp "$release_dir/${binary}.exe" "$output_dir/${binary}.exe"
+            cp "$pdb_path" "$output_dir/${binary}.pdb"
           done
 
       - name: Upload Windows binaries

@@ -131,6 +131,7 @@ pub(crate) async fn persist_image_generation_item(
     turn_context: &TurnContext,
     image_item: &mut ImageGenerationItem,
 ) -> Option<AbsolutePathBuf> {
+    image_item.saved_path = None;
     let session_id = sess.conversation_id.to_string();
     match save_image_generation_result(
         &turn_context.config.codex_home,
@@ -163,15 +164,12 @@ pub(crate) async fn persist_image_generation_item(
     }
 }
 
-pub(crate) async fn finalize_image_generation_item(
+async fn record_image_generation_instructions(
     sess: &Session,
     turn_context: &TurnContext,
-    image_item: &mut ImageGenerationItem,
+    image_item: &ImageGenerationItem,
 ) {
-    if persist_image_generation_item(sess, turn_context, image_item)
-        .await
-        .is_none()
-    {
+    if image_item.saved_path.is_none() {
         return;
     }
     let session_id = sess.conversation_id.to_string();
@@ -530,27 +528,16 @@ pub(crate) async fn handle_non_tool_response_item(
         | ResponseItem::WebSearchCall { .. }
         | ResponseItem::ImageGenerationCall { .. } => {
             let mut turn_item = parse_turn_item(item)?;
-            if let TurnItemContributorPolicy::Run(turn_store) = contributor_policy {
-                apply_turn_item_contributors(sess, turn_store, &mut turn_item).await;
-            }
-            if let TurnItem::AgentMessage(agent_message) = &mut turn_item {
-                let combined = agent_message
-                    .content
-                    .iter()
-                    .map(|entry| match entry {
-                        codex_protocol::items::AgentMessageContent::Text { text } => text.as_str(),
-                    })
-                    .collect::<String>();
-                let (stripped, memory_citation) =
-                    strip_hidden_assistant_markup_and_parse_memory_citation(&combined, plan_mode);
-                agent_message.content =
-                    vec![codex_protocol::items::AgentMessageContent::Text { text: stripped }];
-                if agent_message.memory_citation.is_none() {
-                    agent_message.memory_citation = memory_citation;
-                }
-            }
-            if let TurnItem::ImageGeneration(image_item) = &mut turn_item {
-                finalize_image_generation_item(sess, turn_context, image_item).await;
+            finalize_turn_item(
+                sess,
+                turn_context,
+                contributor_policy,
+                &mut turn_item,
+                plan_mode,
+            )
+            .await;
+            if let TurnItem::ImageGeneration(image_item) = &turn_item {
+                record_image_generation_instructions(sess, turn_context, image_item).await;
             }
             Some(turn_item)
         }
@@ -561,6 +548,37 @@ pub(crate) async fn handle_non_tool_response_item(
             None
         }
         _ => None,
+    }
+}
+
+pub(crate) async fn finalize_turn_item(
+    sess: &Session,
+    turn_context: &TurnContext,
+    contributor_policy: TurnItemContributorPolicy<'_>,
+    turn_item: &mut TurnItem,
+    plan_mode: bool,
+) {
+    if let TurnItemContributorPolicy::Run(turn_store) = contributor_policy {
+        apply_turn_item_contributors(sess, turn_store, turn_item).await;
+    }
+    if let TurnItem::AgentMessage(agent_message) = &mut *turn_item {
+        let combined = agent_message
+            .content
+            .iter()
+            .map(|entry| match entry {
+                codex_protocol::items::AgentMessageContent::Text { text } => text.as_str(),
+            })
+            .collect::<String>();
+        let (stripped, memory_citation) =
+            strip_hidden_assistant_markup_and_parse_memory_citation(&combined, plan_mode);
+        agent_message.content =
+            vec![codex_protocol::items::AgentMessageContent::Text { text: stripped }];
+        if agent_message.memory_citation.is_none() {
+            agent_message.memory_citation = memory_citation;
+        }
+    }
+    if let TurnItem::ImageGeneration(image_item) = &mut *turn_item {
+        persist_image_generation_item(sess, turn_context, image_item).await;
     }
 }
 

@@ -15,6 +15,7 @@ use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::ServiceTier;
+use codex_protocol::error::CodexErr;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
@@ -28,6 +29,9 @@ use codex_protocol::protocol::TokenUsage;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
 use serde::Serialize;
 use std::path::PathBuf;
+
+const INVALID_REQUEST_SUBREASON_MAX_BYTES: usize = 512;
+const INVALID_REQUEST_SUBREASON_TRUNCATION_SUFFIX: &str = "...";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct AcceptedLineFingerprint {
@@ -97,6 +101,147 @@ pub struct TurnTokenUsageFact {
     pub turn_id: String,
     pub thread_id: String,
     pub token_usage: TokenUsage,
+}
+
+#[derive(Clone)]
+pub struct TurnCodexErrorFact {
+    pub(crate) turn_id: String,
+    pub(crate) thread_id: String,
+    pub(crate) error: TurnCodexError,
+}
+
+impl TurnCodexErrorFact {
+    pub fn from_codex_err(thread_id: String, turn_id: String, error: &CodexErr) -> Self {
+        Self {
+            turn_id,
+            thread_id,
+            error: TurnCodexError::from_codex_err(error),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum CodexErrKind {
+    TurnAborted,
+    Stream,
+    ContextWindowExceeded,
+    ThreadNotFound,
+    AgentLimitReached,
+    SessionConfiguredNotFirstEvent,
+    Timeout,
+    RequestTimeout,
+    Spawn,
+    Interrupted,
+    UnexpectedStatus,
+    InvalidRequest,
+    InvalidImageRequest,
+    UsageLimitReached,
+    ServerOverloaded,
+    CyberPolicy,
+    ResponseStreamFailed,
+    ConnectionFailed,
+    QuotaExceeded,
+    UsageNotIncluded,
+    InternalServerError,
+    RetryLimit,
+    InternalAgentDied,
+    Sandbox,
+    LandlockSandboxExecutableNotProvided,
+    UnsupportedOperation,
+    RefreshTokenFailed,
+    Fatal,
+    Io,
+    Json,
+    #[cfg(target_os = "linux")]
+    LandlockRuleset,
+    #[cfg(target_os = "linux")]
+    LandlockPathFd,
+    TokioJoin,
+    EnvVar,
+}
+
+#[derive(Clone)]
+pub(crate) struct TurnCodexError {
+    pub(crate) kind: CodexErrKind,
+    pub(crate) subreason: Option<String>,
+    pub(crate) http_status_code: Option<u16>,
+}
+
+impl TurnCodexError {
+    fn from_codex_err(error: &CodexErr) -> Self {
+        Self {
+            kind: error.into(),
+            subreason: match error {
+                CodexErr::InvalidRequest(message) => {
+                    // InvalidRequest can contain raw provider response bodies, so bound the
+                    // analytics copy without changing the source CodexErr.
+                    let subreason = if message.len() <= INVALID_REQUEST_SUBREASON_MAX_BYTES {
+                        message.clone()
+                    } else {
+                        let truncated_len = message.floor_char_boundary(
+                            INVALID_REQUEST_SUBREASON_MAX_BYTES
+                                .saturating_sub(INVALID_REQUEST_SUBREASON_TRUNCATION_SUFFIX.len()),
+                        );
+                        format!(
+                            "{}{INVALID_REQUEST_SUBREASON_TRUNCATION_SUFFIX}",
+                            &message[..truncated_len]
+                        )
+                    };
+                    Some(subreason)
+                }
+                _ => None,
+            },
+            http_status_code: error.http_status_code_value(),
+        }
+    }
+}
+
+impl From<&CodexErr> for CodexErrKind {
+    fn from(error: &CodexErr) -> Self {
+        match error {
+            CodexErr::TurnAborted => CodexErrKind::TurnAborted,
+            CodexErr::Stream(..) => CodexErrKind::Stream,
+            CodexErr::ContextWindowExceeded => CodexErrKind::ContextWindowExceeded,
+            CodexErr::ThreadNotFound(_) => CodexErrKind::ThreadNotFound,
+            CodexErr::AgentLimitReached { .. } => CodexErrKind::AgentLimitReached,
+            CodexErr::SessionConfiguredNotFirstEvent => {
+                CodexErrKind::SessionConfiguredNotFirstEvent
+            }
+            CodexErr::Timeout => CodexErrKind::Timeout,
+            CodexErr::RequestTimeout => CodexErrKind::RequestTimeout,
+            CodexErr::Spawn => CodexErrKind::Spawn,
+            CodexErr::Interrupted => CodexErrKind::Interrupted,
+            CodexErr::UnexpectedStatus(_) => CodexErrKind::UnexpectedStatus,
+            CodexErr::InvalidRequest(_) => CodexErrKind::InvalidRequest,
+            CodexErr::InvalidImageRequest() => CodexErrKind::InvalidImageRequest,
+            CodexErr::UsageLimitReached(_) => CodexErrKind::UsageLimitReached,
+            CodexErr::ServerOverloaded => CodexErrKind::ServerOverloaded,
+            CodexErr::CyberPolicy { .. } => CodexErrKind::CyberPolicy,
+            CodexErr::ResponseStreamFailed(_) => CodexErrKind::ResponseStreamFailed,
+            CodexErr::ConnectionFailed(_) => CodexErrKind::ConnectionFailed,
+            CodexErr::QuotaExceeded => CodexErrKind::QuotaExceeded,
+            CodexErr::UsageNotIncluded => CodexErrKind::UsageNotIncluded,
+            CodexErr::InternalServerError => CodexErrKind::InternalServerError,
+            CodexErr::RetryLimit(_) => CodexErrKind::RetryLimit,
+            CodexErr::InternalAgentDied => CodexErrKind::InternalAgentDied,
+            CodexErr::Sandbox(_) => CodexErrKind::Sandbox,
+            CodexErr::LandlockSandboxExecutableNotProvided => {
+                CodexErrKind::LandlockSandboxExecutableNotProvided
+            }
+            CodexErr::UnsupportedOperation(_) => CodexErrKind::UnsupportedOperation,
+            CodexErr::RefreshTokenFailed(_) => CodexErrKind::RefreshTokenFailed,
+            CodexErr::Fatal(_) => CodexErrKind::Fatal,
+            CodexErr::Io(_) => CodexErrKind::Io,
+            CodexErr::Json(_) => CodexErrKind::Json,
+            #[cfg(target_os = "linux")]
+            CodexErr::LandlockRuleset(_) => CodexErrKind::LandlockRuleset,
+            #[cfg(target_os = "linux")]
+            CodexErr::LandlockPathFd(_) => CodexErrKind::LandlockPathFd,
+            CodexErr::TokioJoin(_) => CodexErrKind::TokioJoin,
+            CodexErr::EnvVar(_) => CodexErrKind::EnvVar,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -329,6 +474,7 @@ pub(crate) enum CustomAnalyticsFact {
     GuardianReview(Box<GuardianReviewEventParams>),
     TurnResolvedConfig(Box<TurnResolvedConfigFact>),
     TurnTokenUsage(Box<TurnTokenUsageFact>),
+    TurnCodexError(Box<TurnCodexErrorFact>),
     SkillInvoked(SkillInvokedInput),
     AppMentioned(AppMentionedInput),
     AppUsed(AppUsedInput),

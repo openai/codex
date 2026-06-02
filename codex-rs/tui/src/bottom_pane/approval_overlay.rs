@@ -84,6 +84,7 @@ pub(crate) enum ApprovalRequest {
         thread_id: ThreadId,
         thread_label: Option<String>,
         call_id: String,
+        environment_id: Option<String>,
         reason: Option<String>,
         permissions: RequestPermissionProfile,
     },
@@ -713,6 +714,7 @@ fn build_header(request: &ApprovalRequest) -> Box<dyn Renderable> {
         }
         ApprovalRequest::Permissions {
             thread_label,
+            environment_id,
             reason,
             permissions,
             ..
@@ -722,6 +724,13 @@ fn build_header(request: &ApprovalRequest) -> Box<dyn Renderable> {
                 header.push(Line::from(vec![
                     "Thread: ".into(),
                     thread_label.clone().bold(),
+                ]));
+                header.push(Line::from(""));
+            }
+            if let Some(environment_id) = environment_id {
+                header.push(Line::from(vec![
+                    "Environment: ".into(),
+                    environment_id.clone().bold(),
                 ]));
                 header.push(Line::from(""));
             }
@@ -1227,6 +1236,7 @@ mod tests {
             thread_id: ThreadId::new(),
             thread_label: None,
             call_id: "test".to_string(),
+            environment_id: None,
             reason: Some("need workspace access".to_string()),
             permissions: RequestPermissionProfile {
                 network: Some(NetworkPermissions {
