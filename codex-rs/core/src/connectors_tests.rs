@@ -5,10 +5,10 @@ use codex_config::AppRequirementToml;
 use codex_config::AppToolRequirementToml;
 use codex_config::AppToolsRequirementsToml;
 use codex_config::AppsRequirementsToml;
-use codex_config::CloudRequirementsLoader;
 use codex_config::ConfigLayerStack;
 use codex_config::ConfigRequirements;
 use codex_config::ConfigRequirementsToml;
+use codex_config::test_support::CloudConfigBundleFixture;
 use codex_config::types::AppConfig;
 use codex_config::types::AppToolConfig;
 use codex_config::types::AppToolsConfig;
@@ -455,15 +455,13 @@ approvals_reviewer = "user"
 "#,
     )
     .expect("write config");
-    let requirements = ConfigRequirementsToml {
-        allowed_approvals_reviewers: Some(vec![ApprovalsReviewer::AutoReview]),
-        ..Default::default()
-    };
     let config = ConfigBuilder::default()
         .codex_home(codex_home.path().to_path_buf())
-        .cloud_requirements(CloudRequirementsLoader::new(async move {
-            Ok(Some(requirements))
-        }))
+        .cloud_config_bundle(
+            CloudConfigBundleFixture::loader_with_enterprise_requirement(
+                r#"allowed_approvals_reviewers = ["auto_review"]"#,
+            ),
+        )
         .build()
         .await
         .expect("config should build");
@@ -484,30 +482,19 @@ approvals_reviewer = "user"
 "#,
     )
     .expect("write config");
-    let requirements = ConfigRequirementsToml {
-        allowed_approvals_reviewers: Some(vec![
-            ApprovalsReviewer::User,
-            ApprovalsReviewer::AutoReview,
-        ]),
-        apps: Some(AppsRequirementsToml {
-            apps: BTreeMap::from([(
-                "calendar".to_string(),
-                AppRequirementToml {
-                    allowed_approvals_reviewers: Some(BTreeMap::from([
-                        (ApprovalsReviewer::User, false),
-                        (ApprovalsReviewer::AutoReview, true),
-                    ])),
-                    ..Default::default()
-                },
-            )]),
-        }),
-        ..Default::default()
-    };
     let config = ConfigBuilder::default()
         .codex_home(codex_home.path().to_path_buf())
-        .cloud_requirements(CloudRequirementsLoader::new(async move {
-            Ok(Some(requirements))
-        }))
+        .cloud_config_bundle(
+            CloudConfigBundleFixture::loader_with_enterprise_requirement(
+                r#"
+allowed_approvals_reviewers = ["user", "auto_review"]
+
+[apps.calendar.allowed_approvals_reviewers]
+user = false
+auto_review = true
+"#,
+            ),
+        )
         .build()
         .await
         .expect("config should build");
@@ -553,23 +540,27 @@ approvals_reviewer = "{global}"
             ),
         )
         .expect("write config");
-        let requirements = ConfigRequirementsToml {
-            apps: Some(AppsRequirementsToml {
-                apps: BTreeMap::from([(
-                    "calendar".to_string(),
-                    AppRequirementToml {
-                        allowed_approvals_reviewers: Some(overrides),
-                        ..Default::default()
-                    },
-                )]),
-            }),
-            ..Default::default()
-        };
+        let (user, auto_review) = (
+            overrides
+                .get(&ApprovalsReviewer::User)
+                .copied()
+                .unwrap_or(false),
+            overrides
+                .get(&ApprovalsReviewer::AutoReview)
+                .copied()
+                .unwrap_or(false),
+        );
         let config = ConfigBuilder::default()
             .codex_home(codex_home.path().to_path_buf())
-            .cloud_requirements(CloudRequirementsLoader::new(async move {
-                Ok(Some(requirements))
-            }))
+            .cloud_config_bundle(
+                CloudConfigBundleFixture::loader_with_enterprise_requirement(&format!(
+                    r#"
+[apps.calendar.allowed_approvals_reviewers]
+user = {user}
+auto_review = {auto_review}
+"#
+                )),
+            )
             .build()
             .await
             .expect("config should build");
@@ -652,7 +643,7 @@ fn requirements_enabled_does_not_override_disabled_connector() {
 }
 
 #[tokio::test]
-async fn cloud_requirements_disable_connector_overrides_user_apps_config() {
+async fn cloud_config_bundle_disable_connector_overrides_user_apps_config() {
     let codex_home = tempdir().expect("tempdir should succeed");
     std::fs::write(
         codex_home.path().join(CONFIG_TOML_FILE),
@@ -663,25 +654,17 @@ enabled = true
     )
     .expect("write config");
 
-    let requirements = ConfigRequirementsToml {
-        apps: Some(AppsRequirementsToml {
-            apps: BTreeMap::from([(
-                "connector_123123".to_string(),
-                AppRequirementToml {
-                    enabled: Some(false),
-                    ..Default::default()
-                },
-            )]),
-        }),
-        ..Default::default()
-    };
-
     let config = ConfigBuilder::default()
         .codex_home(codex_home.path().to_path_buf())
         .fallback_cwd(Some(codex_home.path().to_path_buf()))
-        .cloud_requirements(CloudRequirementsLoader::new(async move {
-            Ok(Some(requirements))
-        }))
+        .cloud_config_bundle(
+            CloudConfigBundleFixture::loader_with_enterprise_requirement(
+                r#"
+[apps.connector_123123]
+enabled = false
+"#,
+            ),
+        )
         .build()
         .await
         .expect("config should build");
@@ -703,29 +686,21 @@ enabled = true
 }
 
 #[tokio::test]
-async fn cloud_requirements_disable_connector_applies_without_user_apps_table() {
+async fn cloud_config_bundle_disable_connector_applies_without_user_apps_table() {
     let codex_home = tempdir().expect("tempdir should succeed");
     std::fs::write(codex_home.path().join(CONFIG_TOML_FILE), "").expect("write config");
-
-    let requirements = ConfigRequirementsToml {
-        apps: Some(AppsRequirementsToml {
-            apps: BTreeMap::from([(
-                "connector_123123".to_string(),
-                AppRequirementToml {
-                    enabled: Some(false),
-                    ..Default::default()
-                },
-            )]),
-        }),
-        ..Default::default()
-    };
 
     let config = ConfigBuilder::default()
         .codex_home(codex_home.path().to_path_buf())
         .fallback_cwd(Some(codex_home.path().to_path_buf()))
-        .cloud_requirements(CloudRequirementsLoader::new(async move {
-            Ok(Some(requirements))
-        }))
+        .cloud_config_bundle(
+            CloudConfigBundleFixture::loader_with_enterprise_requirement(
+                r#"
+[apps.connector_123123]
+enabled = false
+"#,
+            ),
+        )
         .build()
         .await
         .expect("config should build");
@@ -981,7 +956,7 @@ fn managed_app_tool_approval_uses_raw_tool_name() {
 }
 
 #[tokio::test]
-async fn cloud_requirements_tool_approval_overrides_user_apps_config() {
+async fn cloud_config_bundle_tool_approval_overrides_user_apps_config() {
     let codex_home = tempdir().expect("tempdir should succeed");
     std::fs::write(
         codex_home.path().join(CONFIG_TOML_FILE),
@@ -992,21 +967,17 @@ approval_mode = "prompt"
     )
     .expect("write config");
 
-    let requirements = ConfigRequirementsToml {
-        apps: Some(app_tool_requirements(
-            "connector_123123",
-            "calendar/list_events",
-            AppToolApproval::Approve,
-        )),
-        ..Default::default()
-    };
-
     let config = ConfigBuilder::default()
         .codex_home(codex_home.path().to_path_buf())
         .fallback_cwd(Some(codex_home.path().to_path_buf()))
-        .cloud_requirements(CloudRequirementsLoader::new(async move {
-            Ok(Some(requirements))
-        }))
+        .cloud_config_bundle(
+            CloudConfigBundleFixture::loader_with_enterprise_requirement(
+                r#"
+[apps.connector_123123.tools."calendar/list_events"]
+approval_mode = "approve"
+"#,
+            ),
+        )
         .build()
         .await
         .expect("config should build");

@@ -155,6 +155,7 @@ async fn run_remote_compact_task_inner(
     }
     attempt.track(sess.as_ref(), status, error.clone()).await;
     if let Err(err) = result {
+        sess.track_turn_codex_error(turn_context, &err);
         let event = EventMsg::Error(
             err.to_error_event(Some("Error running remote compact task".to_string())),
         );

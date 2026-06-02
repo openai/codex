@@ -755,6 +755,7 @@ async fn handle_request_permissions(
 ) {
     let call_id = event.call_id;
     let args = RequestPermissionsArgs {
+        environment_id: event.environment_id,
         reason: event.reason,
         permissions: event.permissions,
     };

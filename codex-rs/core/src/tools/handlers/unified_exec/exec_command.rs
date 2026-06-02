@@ -173,6 +173,7 @@ impl ToolExecutor<ToolInvocation> for ExecCommandHandler {
         let requested_additional_permissions = additional_permissions.clone();
         let effective_additional_permissions = apply_granted_turn_permissions(
             context.session.as_ref(),
+            &turn_environment.environment_id,
             cwd.as_path(),
             sandbox_permissions,
             additional_permissions,

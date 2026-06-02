@@ -473,11 +473,14 @@ pub async fn run_main_with_transport_options(
                 .replace_thread_config_loader(Arc::clone(&discovered_thread_config_loader));
             let auth_manager =
                 AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false).await;
-            config_manager.replace_cloud_requirements_loader(auth_manager, config.chatgpt_base_url);
+            config_manager
+                .replace_cloud_config_bundle_loader(auth_manager, config.chatgpt_base_url);
         }
         Err(err) => {
-            warn!(error = %err, "Failed to preload config for cloud requirements");
-            // TODO(gt): Make cloud requirements preload failures blocking once we can fail-closed.
+            warn!(error = %err, "Failed to preload config for cloud config bundle");
+            // TODO: Decide whether bootstrap config preload failures should block startup.
+            // If this fails, we cannot install cloud/thread config loaders, so non-strict
+            // startup may continue without managed cloud config.
         }
     };
     let mut config_warnings = Vec::new();

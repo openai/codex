@@ -1,6 +1,6 @@
 # `codex-config` loader
 
-This module is the canonical place to **load and describe Codex configuration layers** (user config, CLI/session overrides, managed config, and MDM-managed preferences) and to produce:
+This module is the canonical place to **load and describe Codex configuration layers** (user config, CLI/session overrides, cloud-managed config, managed config, and MDM-managed preferences) and to produce:
 
 - An **effective merged** TOML config.
 - **Per-key origins** metadata (which layer “wins” for a given key).
@@ -10,7 +10,7 @@ This module is the canonical place to **load and describe Codex configuration la
 
 Exported from `codex_config::loader`:
 
-- `load_config_layers_state(fs, codex_home, cwd_opt, cli_overrides, options, cloud_requirements, thread_config_loader) -> ConfigLayerStack`
+- `load_config_layers_state(fs, codex_home, cwd_opt, cli_overrides, options, thread_config_loader) -> ConfigLayerStack`
 - `ConfigLayerStack`
   - `effective_config() -> toml::Value`
   - `origins() -> HashMap<String, ConfigLayerMetadata>`
@@ -25,13 +25,19 @@ Exported from `codex_config::loader`:
 
 Precedence is **top overrides bottom**:
 
-1. **MDM** managed preferences (macOS only)
-2. **System** managed config (e.g. `managed_config.toml`)
-3. **Session flags** (CLI overrides, applied as dotted-path TOML writes)
-4. **User** config (`config.toml`)
+1. `LegacyManagedConfigTomlFromMdm` (MDM-delivered `managed_config.toml`, while it is being phased out)
+2. `LegacyManagedConfigTomlFromFile` (`managed_config.toml`, while it is being phased out)
+3. `SessionFlags` (CLI overrides, applied as dotted-path TOML writes)
+4. `Project` config (`.codex/config.toml`)
+5. `User` profile config, when present
+6. `User` config (`config.toml`)
+7. `EnterpriseManaged` cloud-managed config bundle layers
+8. `System` config (`/etc/codex/config.toml` or the Windows system config path)
 
-Thread config entries supplied by `thread_config_loader` are inserted according
-to their translated `ConfigLayerSource` precedence.
+`ConfigLayerStack` stores layers in the opposite order internally: lowest
+precedence first, highest precedence last, so later layers override earlier
+layers when folded. Thread config entries supplied by `thread_config_loader` are
+inserted according to their translated `ConfigLayerSource` precedence.
 
 Layers with a `disabled_reason` are still surfaced for UI, but are ignored when
 computing the effective config and origins metadata. This is what
@@ -42,9 +48,8 @@ computing the effective config and origins metadata. This is what
 Most callers want the effective config plus metadata:
 
 ```rust
-use codex_config::NoopThreadConfigLoader;
-use codex_config::CloudRequirementsLoader;
 use codex_config::LoaderOverrides;
+use codex_config::NoopThreadConfigLoader;
 use codex_config::loader::load_config_layers_state;
 use codex_exec_server::LOCAL_FS;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -58,7 +63,6 @@ let layers = load_config_layers_state(
     Some(cwd),
     &cli_overrides,
     LoaderOverrides::default(),
-    CloudRequirementsLoader::default(),
     &NoopThreadConfigLoader,
 ).await?;
 

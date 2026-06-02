@@ -6,19 +6,6 @@ on:
       release-lto:
         required: true
         type: string
-    secrets:
-      AZURE_TRUSTED_SIGNING_CLIENT_ID:
-        required: true
-      AZURE_TRUSTED_SIGNING_TENANT_ID:
-        required: true
-      AZURE_TRUSTED_SIGNING_SUBSCRIPTION_ID:
-        required: true
-      AZURE_TRUSTED_SIGNING_ENDPOINT:
-        required: true
-      AZURE_TRUSTED_SIGNING_ACCOUNT_NAME:
-        required: true
-      AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME:
-        required: true
 
 # Cargo's libgit2 transport has been flaky when fetching git dependencies with
 # nested submodules. Prefer the system git CLI across every Cargo invocation.
@@ -134,11 +121,22 @@ jobs:
       - name: Stage Windows binaries
         shell: bash
         run: |
-          output_dir="target/${{ matrix.target }}/release/staged-${{ matrix.bundle }}"
+          release_dir="target/${{ matrix.target }}/release"
+          output_dir="$release_dir/staged-${{ matrix.bundle }}"
           mkdir -p "$output_dir"
           for binary in ${{ matrix.binaries }}; do
-            cp "target/${{ matrix.target }}/release/${binary}.exe" "$output_dir/${binary}.exe"
-            cp "target/${{ matrix.target }}/release/${binary}.pdb" "$output_dir/${binary}.pdb"
+            pdb_name="${binary//-/_}"
+            pdb_path="$release_dir/${pdb_name}.pdb"
+            if [[ ! -f "$pdb_path" ]]; then
+              pdb_path="$release_dir/${binary}.pdb"
+            fi
+            if [[ ! -f "$pdb_path" ]]; then
+              echo "PDB for $binary not found at $release_dir/${pdb_name}.pdb or $release_dir/${binary}.pdb" >&2
+              exit 1
+            fi
+
+            cp "$release_dir/${binary}.exe" "$output_dir/${binary}.exe"
+            cp "$pdb_path" "$output_dir/${binary}.pdb"
           done
 
       - name: Upload Windows binaries
@@ -153,6 +151,9 @@ jobs:
       - build-windows-binaries
     name: Build - ${{ matrix.runner }} - ${{ matrix.target }}
     runs-on: ${{ matrix.runs_on }}
+    environment:
+      name: azure-artifact-signing
+      deployment: false
     timeout-minutes: 90
     permissions:
       contents: read

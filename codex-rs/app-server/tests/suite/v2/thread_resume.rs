@@ -2410,6 +2410,36 @@ async fn thread_resume_rejects_mismatched_path_for_running_thread_id() -> Result
     )
     .await??;
 
+    #[cfg(windows)]
+    {
+        let active_path = thread.path.as_ref().expect("thread should have path");
+        let active_path_display = active_path.as_os_str().to_string_lossy();
+        let equivalent_path = if let Some(path) = active_path_display.strip_prefix(r"\\?\UNC\") {
+            PathBuf::from(format!(r"\\{path}"))
+        } else if let Some(path) = active_path_display.strip_prefix(r"\\?\") {
+            PathBuf::from(path)
+        } else if let Some(path) = active_path_display.strip_prefix(r"\\") {
+            PathBuf::from(format!(r"\\?\UNC\{path}"))
+        } else {
+            PathBuf::from(format!(r"\\?\{active_path_display}"))
+        };
+        let normalized_resume_id = primary
+            .send_thread_resume_request(ThreadResumeParams {
+                thread_id: thread_id.clone(),
+                path: Some(equivalent_path),
+                ..Default::default()
+            })
+            .await?;
+        let normalized_resume_resp: JSONRPCResponse = timeout(
+            DEFAULT_READ_TIMEOUT,
+            primary.read_stream_until_response_message(RequestId::Integer(normalized_resume_id)),
+        )
+        .await??;
+        let ThreadResumeResponse { thread, .. } =
+            to_response::<ThreadResumeResponse>(normalized_resume_resp)?;
+        assert_eq!(thread.id, thread_id);
+    }
+
     let stale_thread_id = Uuid::new_v4().to_string();
     let stale_path = rollout_path(codex_home.path(), "2025-01-01T00-00-00", &stale_thread_id);
     std::fs::create_dir_all(stale_path.parent().expect("stale path parent"))?;
@@ -3091,10 +3121,10 @@ async fn thread_resume_fails_when_required_mcp_server_fails_to_initialize() -> R
 }
 
 #[tokio::test]
-async fn thread_resume_surfaces_cloud_requirements_load_errors() -> Result<()> {
+async fn thread_resume_surfaces_cloud_config_bundle_load_errors() -> Result<()> {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
-        .and(path("/backend-api/wham/config/requirements"))
+        .and(path("/backend-api/wham/config/bundle"))
         .respond_with(
             ResponseTemplate::new(401)
                 .insert_header("content-type", "text/html")
@@ -3171,7 +3201,7 @@ async fn thread_resume_surfaces_cloud_requirements_load_errors() -> Result<()> {
     assert_eq!(
         err.error.data,
         Some(json!({
-            "reason": "cloudRequirements",
+            "reason": "cloudConfigBundle",
             "errorCode": "Auth",
             "action": "relogin",
             "statusCode": 401,
