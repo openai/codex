@@ -1302,9 +1302,9 @@ async fn namespaces_plugin_skills_using_plugin_name() {
 }
 
 #[tokio::test]
-async fn plugin_skill_name_length_limit_ignores_plugin_namespace() {
+async fn plugin_skill_name_length_limit_allows_max_qualified_name() {
     let root = tempfile::tempdir().expect("tempdir");
-    let plugin_name = "p".repeat(MAX_NAME_LEN);
+    let plugin_name = "p".repeat(MAX_NAME_LEN - 1);
     let skill_name = "s".repeat(MAX_NAME_LEN);
     let plugin_root = root.path().join("plugins").join(&plugin_name);
     let frontmatter = format!("name: {skill_name}\ndescription: search sample data");
@@ -1343,6 +1343,39 @@ async fn plugin_skill_name_length_limit_ignores_plugin_namespace() {
             scope: SkillScope::User,
             plugin_id: Some("sample@test".to_string()),
         }]
+    );
+}
+
+#[tokio::test]
+async fn plugin_skill_name_length_limit_rejects_overlong_qualified_name() {
+    let root = tempfile::tempdir().expect("tempdir");
+    let plugin_name = "p".repeat(MAX_NAME_LEN);
+    let skill_name = "s".repeat(MAX_NAME_LEN);
+    let plugin_root = root.path().join("plugins").join(&plugin_name);
+    let frontmatter = format!("name: {skill_name}\ndescription: search sample data");
+    write_raw_skill_at(&plugin_root.join("skills"), "sample-search", &frontmatter);
+    fs::create_dir_all(plugin_root.join(".codex-plugin")).unwrap();
+    fs::write(
+        plugin_root.join(".codex-plugin/plugin.json"),
+        format!(r#"{{"name":"{plugin_name}"}}"#),
+    )
+    .unwrap();
+
+    let outcome = load_skills_from_roots([SkillRoot {
+        path: plugin_root.join("skills").abs(),
+        scope: SkillScope::User,
+        file_system: Arc::clone(&LOCAL_FS),
+        plugin_id: Some("sample@test".to_string()),
+        plugin_root: Some(plugin_root.abs()),
+    }])
+    .await;
+
+    assert_eq!(outcome.skills, Vec::new());
+    assert_eq!(outcome.errors.len(), 1);
+    assert!(
+        outcome.errors[0].message.contains("invalid qualified name"),
+        "expected qualified name length error, got: {:?}",
+        outcome.errors
     );
 }
 
