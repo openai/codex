@@ -1,5 +1,5 @@
 use anyhow::Result;
-use app_test_support::McpProcess;
+use app_test_support::TestAppServer;
 use app_test_support::create_fake_rollout;
 use app_test_support::to_response;
 use codex_app_server_protocol::JSONRPCError;
@@ -55,7 +55,7 @@ async fn thread_delete_deletes_spawned_descendants() -> Result<()> {
             .await?;
     }
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let delete_id = mcp
@@ -116,7 +116,7 @@ fn create_delete_test_rollout(codex_home: &Path, minute: u8, preview: &str) -> R
 async fn thread_delete_rejects_live_ephemeral_thread_without_unloading() -> Result<()> {
     let codex_home = TempDir::new()?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
     let start_id = mcp
         .send_thread_start_request(ThreadStartParams {
