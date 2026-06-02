@@ -196,7 +196,8 @@ jobs:
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
       - name: Run argument comment lint on codex-rs via Bazel
-        if: ${{ steps.argument_comment_lint_gate.outputs.run == 'true' }}
+        # Fork PRs cannot fetch the pinned Apple SDK without the BuildBuddy key.
+        if: ${{ steps.argument_comment_lint_gate.outputs.run == 'true' && (runner.os != 'macOS' || github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false) }}
         uses: ./.github/actions/run-argument-comment-lint
         with:
           target: ${{ runner.os }}

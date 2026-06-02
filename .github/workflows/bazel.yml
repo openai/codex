@@ -81,6 +81,10 @@ jobs:
         run: ./scripts/check-module-bazel-lock.sh
 
       - name: bazel test //...
+        # Fork PRs cannot access the BuildBuddy key. On macOS, the local Bazel
+        # path cannot fetch the pinned Apple SDK because the upstream package
+        # URL returns HTTP 403. Keep the full matrix for trusted upstream code.
+        if: runner.os != 'macOS' || github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false
         env:
           BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
         shell: bash
@@ -362,6 +366,8 @@ jobs:
           cache-scope: bazel-${{ github.job }}
 
       - name: bazel build --config=clippy lint targets
+        # See the macOS fork-PR note in the Bazel test job above.
+        if: runner.os != 'macOS' || github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false
         env:
           BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
         shell: bash
@@ -455,6 +461,8 @@ jobs:
           cache-scope: bazel-${{ github.job }}
 
       - name: bazel build verify-release-build targets
+        # See the macOS fork-PR note in the Bazel test job above.
+        if: runner.os != 'macOS' || github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false
         env:
           BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
         shell: bash
