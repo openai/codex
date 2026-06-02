@@ -236,6 +236,125 @@ async fn remote_control_handle_refreshes_after_pairing_auth_failure() {
 }
 
 #[tokio::test]
+async fn remote_control_handle_recovers_auth_before_refreshing_pairing() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("listener should bind");
+    let remote_control_url = remote_control_url_for_listener(&listener);
+    let server_task = tokio::spawn(async move {
+        let stale_refresh_request = accept_http_request(&listener).await;
+        assert_eq!(
+            stale_refresh_request.request_line,
+            "POST /backend-api/wham/remote/control/server/refresh HTTP/1.1"
+        );
+        assert_eq!(
+            stale_refresh_request.headers.get("authorization"),
+            Some(&"Bearer stale-token".to_string())
+        );
+        respond_with_status(stale_refresh_request.stream, "401 Unauthorized", "").await;
+
+        let recovered_refresh_request = accept_http_request(&listener).await;
+        assert_eq!(
+            recovered_refresh_request.request_line,
+            "POST /backend-api/wham/remote/control/server/refresh HTTP/1.1"
+        );
+        assert_eq!(
+            recovered_refresh_request.headers.get("authorization"),
+            Some(&"Bearer fresh-token".to_string())
+        );
+        respond_with_json(
+            recovered_refresh_request.stream,
+            remote_control_server_token_response(
+                "srv_e_test",
+                "env_test",
+                TEST_REFRESHED_REMOTE_CONTROL_SERVER_TOKEN,
+            ),
+        )
+        .await;
+
+        let pairing_request = accept_http_request(&listener).await;
+        assert_eq!(
+            pairing_request.request_line,
+            "POST /backend-api/wham/remote/control/server/pair HTTP/1.1"
+        );
+        assert_eq!(
+            pairing_request.headers.get("authorization"),
+            Some(&format!(
+                "Bearer {TEST_REFRESHED_REMOTE_CONTROL_SERVER_TOKEN}"
+            ))
+        );
+        respond_with_json(
+            pairing_request.stream,
+            json!({
+                "pairing_code": "pairing-code",
+                "manual_pairing_code": "ABCD-EFGH",
+                "server_id": "srv_e_test",
+                "environment_id": "env_test",
+                "expires_at": "3026-05-22T12:34:56Z",
+            }),
+        )
+        .await;
+    });
+    let codex_home = TempDir::new().expect("temp dir should create");
+    let mut stale_auth = remote_control_auth_dot_json(Some("account_id"));
+    stale_auth
+        .tokens
+        .as_mut()
+        .expect("stale auth should include tokens")
+        .access_token = "stale-token".to_string();
+    save_auth(
+        codex_home.path(),
+        &stale_auth,
+        AuthCredentialsStoreMode::File,
+    )
+    .expect("stale auth should save");
+    let auth_manager = AuthManager::shared(
+        codex_home.path().to_path_buf(),
+        /*enable_codex_api_key_env*/ false,
+        AuthCredentialsStoreMode::File,
+        /*chatgpt_base_url*/ None,
+    )
+    .await;
+    let mut fresh_auth = remote_control_auth_dot_json(Some("account_id"));
+    fresh_auth
+        .tokens
+        .as_mut()
+        .expect("fresh auth should include tokens")
+        .access_token = "fresh-token".to_string();
+    save_auth(
+        codex_home.path(),
+        &fresh_auth,
+        AuthCredentialsStoreMode::File,
+    )
+    .expect("fresh auth should save");
+    let remote_handle =
+        remote_control_handle_with_current_enrollment(&remote_control_url, auth_manager);
+    remote_handle
+        .current_enrollment
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .as_mut()
+        .expect("current enrollment should exist")
+        .expires_at = Some(OffsetDateTime::now_utc() + time::Duration::seconds(29));
+
+    let response = remote_handle
+        .start_pairing(RemoteControlPairingStartParams::default())
+        .await
+        .expect("pairing should refresh after auth recovery");
+    server_task.await.expect("server task should finish");
+
+    assert_eq!(
+        response,
+        RemoteControlPairingStartResponse {
+            pairing_code: "pairing-code".to_string(),
+            manual_pairing_code: Some("ABCD-EFGH".to_string()),
+            environment_id: "env_test".to_string(),
+            expires_at: 33_336_362_096,
+        }
+    );
+}
+
+#[tokio::test]
 async fn start_remote_control_pairing_preserves_backend_error_context() {
     let (err, expected_pair_url) =
         pairing_error("503 Service Unavailable", "pairing unavailable").await;

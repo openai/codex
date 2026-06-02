@@ -1548,7 +1548,7 @@ async fn enroll_remote_control_server_if_missing(
     Ok(())
 }
 
-async fn recover_remote_control_auth(
+pub(super) async fn recover_remote_control_auth(
     auth_recovery: &mut UnauthorizedRecovery,
     auth_change_rx: &mut watch::Receiver<u64>,
 ) -> bool {

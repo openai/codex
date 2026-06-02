@@ -146,7 +146,7 @@ impl RemoteControlHandle {
         if !*self.enabled_tx.borrow() {
             return Err(Self::pairing_disabled_error());
         }
-        let auth = websocket::load_remote_control_auth(&self.auth_manager)
+        let mut auth = websocket::load_remote_control_auth(&self.auth_manager)
             .await
             .map_err(|_| pairing_unavailable_error())?;
         let mut enrollment = {
@@ -164,7 +164,8 @@ impl RemoteControlHandle {
         if enrollment.should_refresh_server_token() {
             refresh_pairing_enrollment(
                 &self.current_enrollment,
-                &auth,
+                &self.auth_manager,
+                &mut auth,
                 &installation_id,
                 &mut enrollment,
             )
@@ -178,7 +179,8 @@ impl RemoteControlHandle {
                 clear_pairing_server_token(&self.current_enrollment, &mut enrollment)?;
                 refresh_pairing_enrollment(
                     &self.current_enrollment,
-                    &auth,
+                    &self.auth_manager,
+                    &mut auth,
                     &installation_id,
                     &mut enrollment,
                 )
@@ -252,22 +254,47 @@ impl RemoteControlHandle {
 
 async fn refresh_pairing_enrollment(
     current_enrollment: &CurrentRemoteControlEnrollment,
-    auth: &enroll::RemoteControlConnectionAuth,
+    auth_manager: &Arc<AuthManager>,
+    auth: &mut enroll::RemoteControlConnectionAuth,
     installation_id: &str,
     enrollment: &mut RemoteControlEnrollment,
 ) -> io::Result<()> {
-    match refresh_remote_control_server(auth, installation_id, enrollment).await {
-        Ok(()) => {
-            if !replace_current_enrollment(current_enrollment, enrollment) {
-                return Err(pairing_unavailable_error());
-            }
-            Ok(())
+    if let Err(err) = refresh_remote_control_server(auth, installation_id, enrollment).await {
+        if err.kind() != io::ErrorKind::PermissionDenied {
+            return handle_pairing_refresh_error(current_enrollment, enrollment, err);
         }
-        Err(err) if err.kind() == io::ErrorKind::NotFound => {
-            clear_current_enrollment_if_matches(current_enrollment, enrollment);
-            Err(pairing_unavailable_error())
+        let mut auth_recovery = auth_manager.unauthorized_recovery();
+        let mut auth_change_rx = auth_manager.auth_change_receiver();
+        if !websocket::recover_remote_control_auth(&mut auth_recovery, &mut auth_change_rx).await {
+            return Err(err);
         }
-        Err(err) => Err(err),
+        *auth = websocket::load_remote_control_auth(auth_manager)
+            .await
+            .map_err(|_| pairing_unavailable_error())?;
+        if auth.account_id != enrollment.account_id {
+            return Err(pairing_unavailable_error());
+        }
+        if let Err(err) = refresh_remote_control_server(auth, installation_id, enrollment).await {
+            return handle_pairing_refresh_error(current_enrollment, enrollment, err);
+        }
+    }
+    if replace_current_enrollment(current_enrollment, enrollment) {
+        Ok(())
+    } else {
+        Err(pairing_unavailable_error())
+    }
+}
+
+fn handle_pairing_refresh_error(
+    current_enrollment: &CurrentRemoteControlEnrollment,
+    enrollment: &RemoteControlEnrollment,
+    err: io::Error,
+) -> io::Result<()> {
+    if err.kind() == io::ErrorKind::NotFound {
+        clear_current_enrollment_if_matches(current_enrollment, enrollment);
+        Err(pairing_unavailable_error())
+    } else {
+        Err(err)
     }
 }
 
