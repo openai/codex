@@ -968,6 +968,18 @@ async fn status_snapshot_includes_enterprise_monthly_credit_limit() {
     }
     let sanitized = sanitize_directory(rendered_lines).join("\n");
     assert_snapshot!(sanitized);
+
+    let mut rendered_lines = render_lines(&composite.display_lines(/*width*/ 46));
+    if cfg!(windows) {
+        for line in &mut rendered_lines {
+            *line = line.replace('\\', "/");
+        }
+    }
+    let sanitized = sanitize_directory(rendered_lines).join("\n");
+    assert_snapshot!(
+        "status_snapshot_wraps_enterprise_monthly_credit_details_in_narrow_terminal",
+        sanitized
+    );
 }
 
 #[tokio::test]

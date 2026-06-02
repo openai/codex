@@ -524,7 +524,16 @@ impl StatusHistoryCell {
                         lines.push(base_line);
                     }
                     if let Some(details) = details {
-                        lines.push(formatter.continuation(vec![Span::from(details.clone()).dim()]));
+                        let detail_width = formatter.value_width(available_inner_width).max(1);
+                        let wrap_options = textwrap::Options::new(detail_width).break_words(false);
+                        lines.extend(
+                            textwrap::wrap(details.as_str(), wrap_options)
+                                .into_iter()
+                                .map(|wrapped| {
+                                    formatter
+                                        .continuation(vec![Span::from(wrapped.into_owned()).dim()])
+                                }),
+                        );
                     }
                 }
                 StatusRateLimitValue::Text(text) => {

@@ -121,6 +121,8 @@ pub(crate) struct CreditsSnapshotDisplay {
 /// Display-ready effective monthly limit extracted from spend controls.
 #[derive(Debug, Clone)]
 pub(crate) struct SpendControlLimitSnapshotDisplay {
+    /// Local timestamp representing when this monthly usage value was captured.
+    pub captured_at: DateTime<Local>,
     pub percent_remaining: f64,
     pub used: String,
     pub limit: String,
@@ -179,6 +181,7 @@ impl SpendControlLimitSnapshotDisplay {
         captured_at: DateTime<Local>,
     ) -> Option<Self> {
         Some(Self {
+            captured_at,
             percent_remaining: f64::from(value.remaining_percent.clamp(0, 100)),
             used: format_credit_amount(&value.used)?,
             limit: format_credit_amount(&value.limit)?,
@@ -216,6 +219,14 @@ pub(crate) fn compose_rate_limit_data_many(
     for snapshot in snapshots {
         stale |= now.signed_duration_since(snapshot.captured_at)
             > ChronoDuration::minutes(RATE_LIMIT_STALE_THRESHOLD_MINUTES);
+        stale |= snapshot
+            .individual_limit
+            .as_ref()
+            .map(|limit| {
+                now.signed_duration_since(limit.captured_at)
+                    > ChronoDuration::minutes(RATE_LIMIT_STALE_THRESHOLD_MINUTES)
+            })
+            .unwrap_or(false);
 
         let limit_bucket_label = snapshot.limit_name.clone();
         let show_limit_prefix = !limit_bucket_label.eq_ignore_ascii_case("codex");
@@ -403,8 +414,10 @@ mod tests {
     use super::CreditsSnapshotDisplay;
     use super::RateLimitSnapshotDisplay;
     use super::RateLimitWindowDisplay;
+    use super::SpendControlLimitSnapshotDisplay;
     use super::StatusRateLimitData;
     use super::compose_rate_limit_data_many;
+    use chrono::Duration as ChronoDuration;
     use chrono::Local;
     use pretty_assertions::assert_eq;
 
@@ -495,5 +508,29 @@ mod tests {
                 "Secondary usage limit".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn stale_monthly_limit_marks_fresh_rolling_snapshot_stale() {
+        let now = Local::now();
+        let snapshot = RateLimitSnapshotDisplay {
+            limit_name: "codex".to_string(),
+            captured_at: now,
+            primary: Some(window(/*used_percent*/ 20.0)),
+            secondary: None,
+            credits: None,
+            individual_limit: Some(SpendControlLimitSnapshotDisplay {
+                captured_at: now - ChronoDuration::minutes(20),
+                percent_remaining: 68.0,
+                used: "8,000".to_string(),
+                limit: "25,000".to_string(),
+                resets_at: Some("later".to_string()),
+            }),
+        };
+
+        assert!(matches!(
+            compose_rate_limit_data_many(&[snapshot], now),
+            StatusRateLimitData::Stale(_)
+        ));
     }
 }
