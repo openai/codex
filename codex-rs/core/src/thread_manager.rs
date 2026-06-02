@@ -1308,7 +1308,7 @@ impl ThreadManagerState {
             .await;
         let CodexSpawnOk {
             codex, thread_id, ..
-        } = Codex::spawn(CodexSpawnArgs {
+        } = Box::pin(Codex::spawn(CodexSpawnArgs {
             config,
             installation_id: self.installation_id.clone(),
             auth_manager,
@@ -1336,7 +1336,7 @@ impl ThreadManagerState {
             thread_store: Arc::clone(&self.thread_store),
             attestation_provider: self.attestation_provider.clone(),
             inherited_multi_agent_version: multi_agent_version,
-        })
+        }))
         .await?;
         let new_thread = self
             .finalize_thread_spawn(codex, thread_id, tracked_session_source)

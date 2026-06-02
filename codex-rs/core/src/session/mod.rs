@@ -625,7 +625,7 @@ impl Codex {
         let session_source_clone = session_configuration.session_source.clone();
         let (agent_status_tx, agent_status_rx) = watch::channel(AgentStatus::PendingInit);
 
-        let session = Session::new(
+        let session = Box::pin(Session::new(
             session_configuration,
             config.clone(),
             installation_id,
@@ -647,7 +647,7 @@ impl Codex {
             parent_rollout_thread_trace,
             attestation_provider,
             multi_agent_version,
-        )
+        ))
         .await
         .map_err(|e| {
             error!("Failed to create session: {e:#}");
