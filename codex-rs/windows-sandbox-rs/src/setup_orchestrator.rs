@@ -190,10 +190,13 @@ fn run_setup_refresh_inner(
     let json = serde_json::to_vec(&payload)?;
     let b64 = BASE64_STANDARD.encode(json);
     let exe = find_setup_exe();
+    let cwd = request.codex_home.to_path_buf();
     // Refresh should never request elevation; ensure verb isn't set and we don't trigger UAC.
     let mut cmd = Command::new(&exe);
-    cmd.arg(&b64).stdout(Stdio::null()).stderr(Stdio::null());
-    let cwd = std::env::current_dir().unwrap_or_else(|_| request.codex_home.to_path_buf());
+    cmd.arg(&b64)
+        .current_dir(&cwd)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
     log_note(
         &format!(
             "setup refresh: spawning {} (cwd={}, payload_len={})",
@@ -767,6 +770,7 @@ fn build_payload_roots(
     let write_roots = filter_user_profile_root_exclusions(write_roots);
     let write_roots = filter_ssh_config_dependency_roots(write_roots);
     let write_roots = filter_sensitive_write_roots(write_roots, request.codex_home);
+    let write_roots = filter_acl_unsupported_roots(write_roots);
     let mut read_roots = if let Some(roots) = overrides.read_roots.as_deref() {
         // An explicit override is the split policy's complete readable set. Keep only the
         // helper/platform roots the elevated setup needs; do not re-add legacy cwd/full-read roots.
@@ -814,6 +818,7 @@ fn build_payload_deny_write_paths(
         })
         .collect();
     deny_write_paths.extend(allow_deny_paths.deny);
+    deny_write_paths.retain(|path| !is_acl_unsupported_root(path));
     deny_write_paths
 }
 
@@ -940,12 +945,29 @@ fn filter_sensitive_write_roots(mut roots: Vec<PathBuf>, codex_home: &Path) -> V
     roots
 }
 
+fn filter_acl_unsupported_roots(roots: Vec<PathBuf>) -> Vec<PathBuf> {
+    roots
+        .into_iter()
+        .filter(|root| !is_acl_unsupported_root(root))
+        .collect()
+}
+
+fn is_acl_unsupported_root(path: &Path) -> bool {
+    let key = canonical_path_key(path);
+    key.starts_with("//wsl.localhost/")
+        || key.starts_with("//wsl$/")
+        || key.starts_with("//?/unc/wsl.localhost/")
+        || key.starts_with("//?/unc/wsl$/")
+}
+
 #[cfg(test)]
 mod tests {
     use super::WINDOWS_PLATFORM_DEFAULT_READ_ROOTS;
     use super::build_payload_roots;
+    use super::filter_acl_unsupported_roots;
     use super::gather_legacy_full_read_roots;
     use super::gather_read_roots;
+    use super::is_acl_unsupported_root;
     use super::loopback_proxy_port_from_url;
     use super::offline_proxy_settings_from_env;
     use super::profile_read_roots;
@@ -1434,6 +1456,72 @@ mod tests {
             ]
             .into_iter()
             .collect::<HashSet<PathBuf>>(),
+            deny_write_paths.into_iter().collect()
+        );
+    }
+
+    #[test]
+    fn acl_unsupported_root_detection_matches_wsl_unc_variants() {
+        assert!(is_acl_unsupported_root(std::path::Path::new(
+            r"\\wsl.localhost\Ubuntu\home\dev\repo"
+        )));
+        assert!(is_acl_unsupported_root(std::path::Path::new(
+            r"\\wsl$\Ubuntu\home\dev\repo"
+        )));
+        assert!(is_acl_unsupported_root(std::path::Path::new(
+            r"\\?\UNC\wsl.localhost\Ubuntu\home\dev\repo"
+        )));
+        assert!(!is_acl_unsupported_root(std::path::Path::new(
+            r"C:\Users\dev\repo"
+        )));
+    }
+
+    #[test]
+    fn filter_acl_unsupported_roots_drops_wsl_unc_entries() {
+        let local_root = PathBuf::from(r"C:\Users\dev\repo");
+        let roots = filter_acl_unsupported_roots(vec![
+            PathBuf::from(r"\\wsl.localhost\Ubuntu\home\dev\repo"),
+            PathBuf::from(r"\\?\UNC\wsl.localhost\Ubuntu\home\dev\repo"),
+            local_root.clone(),
+        ]);
+
+        assert_eq!(vec![local_root], roots);
+    }
+
+    #[test]
+    fn payload_deny_write_paths_skip_acl_unsupported_entries() {
+        let tmp = TempDir::new().expect("tempdir");
+        let codex_home = tmp.path().join("codex-home");
+        let command_cwd = tmp.path().join("workspace");
+        let command_git = command_cwd.join(".git");
+        fs::create_dir_all(&command_git).expect("create command .git");
+        let policy = SandboxPolicy::WorkspaceWrite {
+            writable_roots: Vec::new(),
+            network_access: false,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: true,
+        };
+        let request = super::SandboxSetupRequest {
+            policy: &policy,
+            policy_cwd: &command_cwd,
+            command_cwd: &command_cwd,
+            env_map: &HashMap::new(),
+            codex_home: &codex_home,
+            proxy_enforced: false,
+        };
+
+        let deny_write_paths = super::build_payload_deny_write_paths(
+            &request,
+            Some(vec![
+                PathBuf::from(r"\\wsl.localhost\Ubuntu\home\dev\repo\.git"),
+                command_git.clone(),
+            ]),
+        );
+
+        assert_eq!(
+            [dunce::canonicalize(&command_git).expect("canonical command .git")]
+                .into_iter()
+                .collect::<HashSet<PathBuf>>(),
             deny_write_paths.into_iter().collect()
         );
     }
