@@ -86,7 +86,12 @@ async fn execute_attaches_url_scoped_auth_and_observes_http_error_headers() {
     let (session, transport, auth, request_headers, response_headers) = test_session();
 
     session
-        .execute(Method::POST, "responses", HeaderMap::new(), None)
+        .execute(
+            Method::POST,
+            "responses",
+            HeaderMap::new(),
+            /*body*/ None,
+        )
         .await
         .expect_err("request should fail");
 
@@ -98,7 +103,13 @@ async fn stream_attaches_url_scoped_auth_and_observes_http_error_headers() {
     let (session, transport, auth, request_headers, response_headers) = test_session();
 
     let result = session
-        .stream_with(Method::POST, "responses", HeaderMap::new(), None, |_| {})
+        .stream_with(
+            Method::POST,
+            "responses",
+            HeaderMap::new(),
+            /*body*/ None,
+            |_| {},
+        )
         .await;
     assert!(result.is_err(), "request should fail");
 
