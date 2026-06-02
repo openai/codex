@@ -724,16 +724,13 @@ impl ConfigToml {
     pub async fn derive_permission_profile(
         &self,
         sandbox_mode_override: Option<SandboxMode>,
-        profile_sandbox_mode: Option<SandboxMode>,
         windows_sandbox_level: WindowsSandboxLevel,
         active_project: Option<&ProjectConfig>,
         permission_profile_constraint: Option<&crate::Constrained<PermissionProfile>>,
     ) -> PermissionProfile {
-        let sandbox_mode_was_explicit = sandbox_mode_override.is_some()
-            || profile_sandbox_mode.is_some()
-            || self.sandbox_mode.is_some();
+        let sandbox_mode_was_explicit =
+            sandbox_mode_override.is_some() || self.sandbox_mode.is_some();
         let resolved_sandbox_mode = sandbox_mode_override
-            .or(profile_sandbox_mode)
             .or(self.sandbox_mode)
             .or(if sandbox_mode_was_explicit {
                 None
