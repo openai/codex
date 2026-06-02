@@ -1423,11 +1423,7 @@ async fn system_allowed_permissions_keep_builtin_permission_fallbacks() -> anyho
         ),
         (
             Some(TrustLevel::Untrusted),
-            if cfg!(target_os = "windows") {
-                BUILT_IN_PERMISSION_PROFILE_READ_ONLY
-            } else {
-                BUILT_IN_PERMISSION_PROFILE_WORKSPACE
-            },
+            BUILT_IN_PERMISSION_PROFILE_READ_ONLY,
         ),
         (None, BUILT_IN_PERMISSION_PROFILE_READ_ONLY),
     ] {
