@@ -2070,6 +2070,13 @@
         }
       ]
     },
+    "RemoteControlClientsListOrder": {
+      "enum": [
+        "asc",
+        "desc"
+      ],
+      "type": "string"
+    },
     "RequestId": {
       "anyOf": [
         {

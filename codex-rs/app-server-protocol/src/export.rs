@@ -2926,16 +2926,22 @@ permissionProfile?: string | null};
     }
 
     #[test]
-    fn generate_json_includes_remote_control_pairing_start_with_experimental_api() -> Result<()> {
+    fn generate_json_includes_remote_control_methods_with_experimental_api() -> Result<()> {
         let output_dir = std::env::temp_dir().join(format!("codex_schema_{}", Uuid::now_v7()));
         fs::create_dir(&output_dir)?;
         generate_json_with_experimental(&output_dir, /*experimental_api*/ true)?;
 
         let client_request_json = fs::read_to_string(output_dir.join("ClientRequest.json"))?;
         assert!(client_request_json.contains("remoteControl/pairing/start"));
+        assert!(client_request_json.contains("remoteControl/clients/list"));
+        assert!(client_request_json.contains("remoteControl/clients/revoke"));
         for schema in [
             "RemoteControlPairingStartParams.json",
             "RemoteControlPairingStartResponse.json",
+            "RemoteControlClientsListParams.json",
+            "RemoteControlClientsListResponse.json",
+            "RemoteControlClientsRevokeParams.json",
+            "RemoteControlClientsRevokeResponse.json",
         ] {
             assert!(output_dir.join("v2").join(schema).exists());
         }

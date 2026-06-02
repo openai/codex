@@ -318,6 +318,8 @@ export type { ReasoningEffortOption } from "./ReasoningEffortOption";
 export type { ReasoningSummaryPartAddedNotification } from "./ReasoningSummaryPartAddedNotification";
 export type { ReasoningSummaryTextDeltaNotification } from "./ReasoningSummaryTextDeltaNotification";
 export type { ReasoningTextDeltaNotification } from "./ReasoningTextDeltaNotification";
+export type { RemoteControlClient } from "./RemoteControlClient";
+export type { RemoteControlClientsListOrder } from "./RemoteControlClientsListOrder";
 export type { RemoteControlConnectionStatus } from "./RemoteControlConnectionStatus";
 export type { RemoteControlStatusChangedNotification } from "./RemoteControlStatusChangedNotification";
 export type { RequestPermissionProfile } from "./RequestPermissionProfile";

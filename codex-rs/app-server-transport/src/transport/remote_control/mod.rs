@@ -1,9 +1,13 @@
+mod auth;
 mod client_tracker;
+mod clients;
 mod enroll;
 mod protocol;
 mod segment;
 mod websocket;
 
+use self::auth::load_remote_control_auth;
+use self::auth::recover_remote_control_auth;
 use self::enroll::RemoteControlEnrollment;
 use self::enroll::refresh_remote_control_server;
 use crate::transport::remote_control::websocket::RemoteControlChannels;
@@ -17,6 +21,10 @@ use self::protocol::normalize_remote_control_url;
 use super::CHANNEL_CAPACITY;
 use super::TransportEvent;
 use super::next_connection_id;
+use codex_app_server_protocol::RemoteControlClientsListParams;
+use codex_app_server_protocol::RemoteControlClientsListResponse;
+use codex_app_server_protocol::RemoteControlClientsRevokeParams;
+use codex_app_server_protocol::RemoteControlClientsRevokeResponse;
 use codex_app_server_protocol::RemoteControlConnectionStatus;
 use codex_app_server_protocol::RemoteControlPairingStartParams;
 use codex_app_server_protocol::RemoteControlPairingStartResponse;
@@ -57,6 +65,7 @@ pub struct RemoteControlHandle {
     enabled_tx: Arc<watch::Sender<bool>>,
     status_tx: Arc<watch::Sender<RemoteControlStatusChangedNotification>>,
     state_db_available: bool,
+    remote_control_url: String,
     current_enrollment: CurrentRemoteControlEnrollment,
     auth_manager: Arc<AuthManager>,
 }
@@ -146,7 +155,7 @@ impl RemoteControlHandle {
         if !*self.enabled_tx.borrow() {
             return Err(Self::pairing_disabled_error());
         }
-        let mut auth = websocket::load_remote_control_auth(&self.auth_manager)
+        let mut auth = load_remote_control_auth(&self.auth_manager)
             .await
             .map_err(|_| pairing_unavailable_error())?;
         let mut enrollment = {
@@ -205,13 +214,29 @@ impl RemoteControlHandle {
         if !*self.enabled_tx.borrow() {
             return Err(Self::pairing_disabled_error());
         }
-        let current_auth = websocket::load_remote_control_auth(&self.auth_manager)
+        let current_auth = load_remote_control_auth(&self.auth_manager)
             .await
             .map_err(|_| pairing_unavailable_error())?;
         if current_auth.account_id != auth.account_id {
             return Err(pairing_unavailable_error());
         }
         pairing_response
+    }
+
+    pub async fn list_clients(
+        &self,
+        params: RemoteControlClientsListParams,
+    ) -> io::Result<RemoteControlClientsListResponse> {
+        clients::list_remote_control_clients(&self.remote_control_url, &self.auth_manager, params)
+            .await
+    }
+
+    pub async fn revoke_client(
+        &self,
+        params: RemoteControlClientsRevokeParams,
+    ) -> io::Result<RemoteControlClientsRevokeResponse> {
+        clients::revoke_remote_control_client(&self.remote_control_url, &self.auth_manager, params)
+            .await
     }
 
     fn pairing_disabled_error() -> io::Error {
@@ -255,7 +280,7 @@ impl RemoteControlHandle {
 async fn refresh_pairing_enrollment(
     current_enrollment: &CurrentRemoteControlEnrollment,
     auth_manager: &Arc<AuthManager>,
-    auth: &mut enroll::RemoteControlConnectionAuth,
+    auth: &mut auth::RemoteControlConnectionAuth,
     installation_id: &str,
     enrollment: &mut RemoteControlEnrollment,
 ) -> io::Result<()> {
@@ -265,10 +290,10 @@ async fn refresh_pairing_enrollment(
         }
         let mut auth_recovery = auth_manager.unauthorized_recovery();
         let mut auth_change_rx = auth_manager.auth_change_receiver();
-        if !websocket::recover_remote_control_auth(&mut auth_recovery, &mut auth_change_rx).await {
+        if !recover_remote_control_auth(&mut auth_recovery, &mut auth_change_rx).await {
             return Err(err);
         }
-        *auth = websocket::load_remote_control_auth(auth_manager)
+        *auth = load_remote_control_auth(auth_manager)
             .await
             .map_err(|_| pairing_unavailable_error())?;
         if auth.account_id != enrollment.account_id {
@@ -440,6 +465,7 @@ pub async fn start_remote_control(
         "starting app-server remote control websocket task"
     );
     let remote_control_url_for_log = remote_control_url.clone();
+    let handle_remote_control_url = remote_control_url.clone();
     let installation_id_for_log = installation_id.clone();
     let server_name_for_log = server_name.clone();
     let shutdown_token_for_log = shutdown_token.clone();
@@ -508,6 +534,7 @@ pub async fn start_remote_control(
             enabled_tx: Arc::new(enabled_tx),
             status_tx: Arc::new(status_tx),
             state_db_available,
+            remote_control_url: handle_remote_control_url,
             current_enrollment,
             auth_manager: handle_auth_manager,
         },
