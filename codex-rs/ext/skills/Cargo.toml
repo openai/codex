@@ -7,6 +7,7 @@ version.workspace = true
 [lib]
 name = "codex_skills_extension"
 path = "src/lib.rs"
+test = false
 doctest = false
 
 [lints]
