@@ -481,6 +481,7 @@ unwrap_used = "deny"
 ignored = [
     "codex-agent-graph-store",
     "codex-goal-extension",
+    "codex-skills-extension",
     "icu_provider",
     "openssl-sys",
     "codex-v8-poc",
