@@ -33,6 +33,7 @@ const MODEL_KEY: &str = "model";
 const REASONING_EFFORT_KEY: &str = "reasoning_effort";
 const TURN_STARTED_AT_UNIX_MS_KEY: &str = "turn_started_at_unix_ms";
 const USER_INPUT_REQUESTED_DURING_TURN_KEY: &str = "user_input_requested_during_turn";
+const WORKSPACE_KIND_KEY: &str = "workspace_kind";
 const REQUEST_KIND_KEY: &str = "request_kind";
 const COMPACTION_KEY: &str = "compaction";
 const WINDOW_ID_KEY: &str = "window_id";
@@ -441,6 +442,14 @@ impl TurnMetadataState {
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner) =
             Some(responsesapi_client_metadata);
+    }
+
+    pub(crate) fn workspace_kind(&self) -> Option<String> {
+        self.responsesapi_client_metadata
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .and_then(|metadata| metadata.get(WORKSPACE_KIND_KEY).cloned())
     }
 
     pub(crate) fn set_turn_started_at_unix_ms(&self, turn_started_at_unix_ms: i64) {

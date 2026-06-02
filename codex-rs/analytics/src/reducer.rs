@@ -2483,6 +2483,7 @@ fn codex_turn_event_params(
         sandbox_network_access,
         collaboration_mode,
         personality,
+        workspace_kind,
         is_first_turn,
     } = resolved_config;
     let token_usage = turn_state.token_usage.clone();
@@ -2515,6 +2516,7 @@ fn codex_turn_event_params(
         sandbox_network_access,
         collaboration_mode: Some(collaboration_mode_mode(collaboration_mode)),
         personality: personality_mode(personality),
+        workspace_kind,
         num_input_images,
         is_first_turn,
         status: completed.status,

@@ -391,6 +391,7 @@ fn sample_turn_resolved_config(thread_id: &str, turn_id: &str) -> TurnResolvedCo
         sandbox_network_access: true,
         collaboration_mode: ModeKind::Plan,
         personality: None,
+        workspace_kind: None,
         is_first_turn: true,
     }
 }
@@ -3255,6 +3256,7 @@ fn turn_event_serializes_expected_shape() {
             sandbox_network_access: true,
             collaboration_mode: Some("plan"),
             personality: Some("pragmatic".to_string()),
+            workspace_kind: Some("projectless".to_string()),
             num_input_images: 2,
             is_first_turn: true,
             status: Some(TurnStatus::Completed),
@@ -3320,6 +3322,7 @@ fn turn_event_serializes_expected_shape() {
                 "sandbox_network_access": true,
                 "collaboration_mode": "plan",
                 "personality": "pragmatic",
+                "workspace_kind": "projectless",
                 "num_input_images": 2,
                 "is_first_turn": true,
                 "status": "completed",
@@ -3640,6 +3643,7 @@ async fn turn_lifecycle_emits_turn_event() {
     );
     assert!(payload["event_params"].get("product_client_id").is_none());
     assert_eq!(payload["event_params"]["ephemeral"], json!(false));
+    assert_eq!(payload["event_params"]["workspace_kind"], json!(null));
     assert_eq!(payload["event_params"]["num_input_images"], json!(1));
     assert_eq!(payload["event_params"]["status"], json!("completed"));
     assert_eq!(payload["event_params"]["steer_count"], json!(0));

@@ -51,7 +51,8 @@ use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStartedNotification;
 use codex_arg0::Arg0DispatchPaths;
-use codex_cloud_config::cloud_requirements_loader_for_storage;
+use codex_cloud_config::cloud_config_bundle_loader_for_storage;
+use codex_config::CloudConfigBundleLoader;
 use codex_config::ConfigLoadError;
 use codex_config::ConfigLoadOptions;
 use codex_config::LoaderOverrides;
@@ -330,53 +331,54 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         ..Default::default()
     };
 
-    let config_toml = match load_config_as_toml_with_cli_and_load_options(
+    let bootstrap_config_toml = load_config_toml_or_exit(
         &codex_home,
         Some(&config_cwd),
         cli_kv_overrides.clone(),
-        ConfigLoadOptions {
-            loader_overrides: loader_overrides.clone(),
-            strict_config,
-        },
+        loader_overrides.clone(),
+        strict_config,
+        CloudConfigBundleLoader::default(),
     )
-    .await
-    {
-        Ok(config_toml) => config_toml,
-        Err(err) => {
-            let config_error = err
-                .get_ref()
-                .and_then(|err| err.downcast_ref::<ConfigLoadError>())
-                .map(ConfigLoadError::config_error);
-            if let Some(config_error) = config_error {
-                eprintln!(
-                    "Error loading config.toml:\n{}",
-                    format_config_error_with_source(config_error)
-                );
-            } else {
-                eprintln!("Error loading config.toml: {err}");
-            }
-            std::process::exit(1);
-        }
-    };
+    .await;
 
-    let chatgpt_base_url = config_toml
+    let chatgpt_base_url = bootstrap_config_toml
         .chatgpt_base_url
         .clone()
         .unwrap_or_else(|| "https://chatgpt.com/backend-api/".to_string());
-    // TODO(gt): Make cloud requirements failures blocking once we can fail-closed.
-    let cloud_requirements = cloud_requirements_loader_for_storage(
+    let cloud_config_bundle = cloud_config_bundle_loader_for_storage(
         codex_home.to_path_buf(),
         /*enable_codex_api_key_env*/ false,
-        config_toml.cli_auth_credentials_store.unwrap_or_default(),
+        bootstrap_config_toml
+            .cli_auth_credentials_store
+            .unwrap_or_default(),
         chatgpt_base_url,
     )
     .await;
     let run_cli_overrides = cli_kv_overrides.clone();
     let run_loader_overrides = loader_overrides.clone();
-    let run_cloud_requirements = cloud_requirements.clone();
+    let run_cloud_config_bundle = cloud_config_bundle.clone();
 
     let model_provider = if oss {
-        let resolved = resolve_oss_provider(oss_provider.as_deref(), &config_toml);
+        let config_toml_with_cloud_config;
+        let config_toml_for_oss = if oss_provider.is_none() {
+            // The first load intentionally skips cloud config so we can read
+            // auth/base-url settings needed to fetch the bundle. If OSS mode
+            // needs a default provider from config, reload with the bundle.
+            config_toml_with_cloud_config = load_config_toml_or_exit(
+                &codex_home,
+                Some(&config_cwd),
+                cli_kv_overrides.clone(),
+                loader_overrides.clone(),
+                strict_config,
+                cloud_config_bundle.clone(),
+            )
+            .await;
+            &config_toml_with_cloud_config
+        } else {
+            &bootstrap_config_toml
+        };
+
+        let resolved = resolve_oss_provider(oss_provider.as_deref(), config_toml_for_oss);
 
         if let Some(provider) = resolved {
             Some(provider)
@@ -437,7 +439,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
             .harness_overrides(overrides)
             .loader_overrides(loader_overrides.clone())
             .strict_config(strict_config)
-            .cloud_requirements(cloud_requirements.clone())
+            .cloud_config_bundle(cloud_config_bundle.clone())
             .build()
     };
     let config = build_exec_config(
@@ -536,7 +538,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         cli_overrides: run_cli_overrides,
         loader_overrides: run_loader_overrides,
         strict_config,
-        cloud_requirements: run_cloud_requirements,
+        cloud_config_bundle: run_cloud_config_bundle,
         feedback: CodexFeedback::new(),
         log_db: None,
         state_db: state_db.clone(),
@@ -603,6 +605,46 @@ where
             }
         }
         Err(headless_error) => Err(headless_error),
+    }
+}
+
+#[allow(clippy::print_stderr)]
+async fn load_config_toml_or_exit(
+    codex_home: &Path,
+    cwd: Option<&AbsolutePathBuf>,
+    cli_kv_overrides: Vec<(String, codex_config::TomlValue)>,
+    loader_overrides: LoaderOverrides,
+    strict_config: bool,
+    cloud_config_bundle: CloudConfigBundleLoader,
+) -> codex_config::config_toml::ConfigToml {
+    match load_config_as_toml_with_cli_and_load_options(
+        codex_home,
+        cwd,
+        cli_kv_overrides,
+        ConfigLoadOptions {
+            loader_overrides,
+            strict_config,
+            cloud_config_bundle,
+        },
+    )
+    .await
+    {
+        Ok(config_toml) => config_toml,
+        Err(err) => {
+            let config_error = err
+                .get_ref()
+                .and_then(|err| err.downcast_ref::<ConfigLoadError>())
+                .map(ConfigLoadError::config_error);
+            if let Some(config_error) = config_error {
+                eprintln!(
+                    "Error loading config.toml:\n{}",
+                    format_config_error_with_source(config_error)
+                );
+            } else {
+                eprintln!("Error loading config.toml: {err}");
+            }
+            std::process::exit(1);
+        }
     }
 }
 

@@ -546,6 +546,7 @@ fn turn_metadata_state_merges_client_metadata_without_replacing_reserved_fields(
     state.set_responsesapi_client_metadata(HashMap::from([
         ("fiber_run_id".to_string(), "fiber-123".to_string()),
         ("origin".to_string(), "東京".to_string()),
+        ("workspace_kind".to_string(), "projectless".to_string()),
         ("model".to_string(), "client-supplied".to_string()),
         (
             "reasoning_effort".to_string(),
@@ -580,6 +581,7 @@ fn turn_metadata_state_merges_client_metadata_without_replacing_reserved_fields(
 
     assert_eq!(json["fiber_run_id"].as_str(), Some("fiber-123"));
     assert_eq!(json["origin"].as_str(), Some("東京"));
+    assert_eq!(json["workspace_kind"].as_str(), Some("projectless"));
     assert_eq!(json["model"].as_str(), Some("client-supplied"));
     assert_eq!(json["reasoning_effort"].as_str(), Some("client-supplied"));
     assert_eq!(json["session_id"].as_str(), Some("session-a"));
@@ -619,6 +621,7 @@ fn turn_metadata_state_merges_client_metadata_without_replacing_reserved_fields(
     assert_eq!(meta["model"].as_str(), Some("gpt-5.4"));
     assert_eq!(meta["reasoning_effort"].as_str(), Some("high"));
     assert!(meta.get(WINDOW_ID_KEY).is_none());
+    assert_eq!(state.workspace_kind().as_deref(), Some("projectless"));
 }
 
 #[test]

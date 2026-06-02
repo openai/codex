@@ -640,6 +640,7 @@ async fn track_turn_resolved_config_analytics(
             sandbox_network_access: turn_context.network_sandbox_policy().is_enabled(),
             collaboration_mode: turn_context.collaboration_mode.mode,
             personality: turn_context.personality,
+            workspace_kind: turn_context.turn_metadata_state.workspace_kind(),
             is_first_turn,
         });
 }
