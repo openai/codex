@@ -1,4 +1,5 @@
 use super::*;
+use pretty_assertions::assert_eq;
 use std::sync::Mutex as StdMutex;
 
 #[derive(Default)]
