@@ -18,6 +18,8 @@
 name: rust-release
 on:
   push:
+    branches:
+      - dev/shijie/drop-windows-signing-deployment
     tags:
       - "rust-v*.*.*"
   pull_request:
@@ -78,7 +80,7 @@ jobs:
           set -euo pipefail
           echo "::group::Tag validation"
 
-          if [[ "${GITHUB_EVENT_NAME}" == "pull_request" ]]; then
+          if [[ "${GITHUB_EVENT_NAME}" == "pull_request" || "${GITHUB_REF_TYPE}" == "branch" ]]; then
             echo "PR smoke run; skipping release tag validation."
             echo "::endgroup::"
             exit 0
@@ -1346,7 +1348,7 @@ jobs:
     needs: tag-check
     uses: ./.github/workflows/rust-release-windows.yml
     with:
-      release-lto: ${{ github.event_name == 'pull_request' && 'thin' || (contains(github.ref_name, '-alpha') && 'thin' || 'fat') }}
+      release-lto: ${{ (github.event_name == 'pull_request' || github.ref_type == 'branch') && 'thin' || (contains(github.ref_name, '-alpha') && 'thin' || 'fat') }}
     secrets: inherit
 
   argument-comment-lint-release-assets:
