@@ -161,7 +161,7 @@ async fn copy_paste_local_image_persists_rollout_request_shape() -> anyhow::Resu
         role: "user".to_string(),
         content: vec![
             ContentItem::InputText {
-                text: codex_protocol::models::local_image_open_tag_text(/*label_number*/ 1),
+                text: format!(r#"<image name=[Image #1] path="{}">"#, abs_path.display()),
             },
             ContentItem::InputImage {
                 image_url,

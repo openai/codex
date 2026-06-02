@@ -2181,8 +2181,9 @@ pub struct UserMessageEvent {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub image_details: Vec<Option<ImageDetail>>,
     /// Local file paths sourced from `UserInput::LocalImage`. These are kept so
-    /// the UI can reattach images when editing history, and should not be sent
-    /// to the model or treated as API-ready URLs.
+    /// the UI can reattach images when editing history. Local image prompts may
+    /// include a display form of the path, but these should not be treated as
+    /// API-ready URLs.
     #[serde(default)]
     pub local_images: Vec<std::path::PathBuf>,
     /// Detail hints for `local_images`, indexed in parallel. Missing entries
