@@ -1234,6 +1234,29 @@ async fn hosted_tools_follow_provider_auth_model_and_config_gates() {
         }
     );
 
+    let code_mode_only = probe(|turn| {
+        use_chatgpt_auth(turn);
+        set_features(
+            turn,
+            &[
+                Feature::CodeMode,
+                Feature::CodeModeOnly,
+                Feature::MultiAgentV2,
+                Feature::ImageGeneration,
+            ],
+        );
+        set_web_search_mode(turn, WebSearchMode::Live);
+        turn.model_info.input_modalities = vec![InputModality::Image];
+    })
+    .await;
+    code_mode_only.assert_visible_contains(&[
+        codex_code_mode::PUBLIC_TOOL_NAME,
+        codex_code_mode::WAIT_TOOL_NAME,
+        "spawn_agent",
+        "web_search",
+        "image_generation",
+    ]);
+
     let standalone_web_search_without_web_run = probe(|turn| {
         set_feature(turn, Feature::StandaloneWebSearch, /*enabled*/ true);
         set_web_search_mode(turn, WebSearchMode::Live);

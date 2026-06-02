@@ -207,15 +207,7 @@ fn build_model_visible_specs_and_registry(
             specs.push(spec_for_model_request(turn_context, exposure, spec));
         }
     }
-    for spec in hosted_specs {
-        if !is_hidden_by_code_mode_only(
-            turn_context,
-            &ToolName::plain(spec.name()),
-            ToolExposure::Direct,
-        ) {
-            specs.push(spec);
-        }
-    }
+    specs.extend(hosted_specs);
 
     let registry = ToolRegistry::from_tools(runtimes);
     let model_visible_specs = merge_into_namespaces(specs)
