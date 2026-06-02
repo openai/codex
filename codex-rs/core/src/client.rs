@@ -415,6 +415,10 @@ impl ModelClient {
             .map(NativeIntegrityStateContext::surface)
     }
 
+    pub(crate) fn native_integrity_state_context(&self) -> Option<NativeIntegrityStateContext> {
+        self.state.native_integrity_state.clone()
+    }
+
     pub(crate) fn set_native_integrity_surface(&self, surface: NativeIntegritySurface) {
         if self
             .state
