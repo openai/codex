@@ -22,18 +22,21 @@ pub(crate) const RESOURCES_DIRNAME: &str = "codex-resources";
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum HelperExecutable {
     CommandRunner,
+    Setup,
 }
 
 impl HelperExecutable {
     fn file_name(self) -> &'static str {
         match self {
             Self::CommandRunner => "codex-command-runner.exe",
+            Self::Setup => "codex-windows-sandbox-setup.exe",
         }
     }
 
     fn label(self) -> &'static str {
         match self {
             Self::CommandRunner => "command-runner",
+            Self::Setup => "setup",
         }
     }
 }
@@ -188,6 +191,16 @@ fn sibling_source_path(kind: HelperExecutable) -> Result<PathBuf> {
 }
 
 pub(crate) fn bundled_executable_path_for_exe(exe: &Path, file_name: &str) -> Option<PathBuf> {
+    bundled_executable_path_for_exe_direct(exe, file_name).or_else(|| {
+        let canonical = dunce::canonicalize(exe).ok()?;
+        if canonical == exe {
+            return None;
+        }
+        bundled_executable_path_for_exe_direct(&canonical, file_name)
+    })
+}
+
+fn bundled_executable_path_for_exe_direct(exe: &Path, file_name: &str) -> Option<PathBuf> {
     let dir = exe.parent()?;
     let direct_candidate = dir.join(file_name);
     if direct_candidate.is_file() {
@@ -459,6 +472,28 @@ mod tests {
     }
 
     #[test]
+    fn copy_setup_into_shared_bin_dir() {
+        let tmp = TempDir::new().expect("tempdir");
+        let codex_home = tmp.path().join("codex-home");
+        let source_dir = tmp.path().join("sibling-source");
+        fs::create_dir_all(&source_dir).expect("create source dir");
+        let setup_source = source_dir.join("codex-windows-sandbox-setup.exe");
+        fs::write(&setup_source, b"setup").expect("setup");
+        let setup_suffix = helper_version_suffix(&setup_source).expect("setup suffix");
+        let setup_destination = helper_bin_dir(&codex_home)
+            .join(materialized_file_name(HelperExecutable::Setup, &setup_suffix));
+
+        let setup_outcome =
+            copy_from_source_if_needed(&setup_source, &setup_destination).expect("setup copy");
+
+        assert_eq!(CopyOutcome::ReCopied, setup_outcome);
+        assert_eq!(
+            b"setup".as_slice(),
+            fs::read(&setup_destination).expect("read setup")
+        );
+    }
+
+    #[test]
     fn helper_source_lookup_checks_resource_dir() {
         let tmp = TempDir::new().expect("tempdir");
         let release_dir = tmp.path().join("release");
@@ -539,6 +574,32 @@ mod tests {
         assert_eq!(resolved, sibling_helper);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn helper_source_lookup_retries_canonicalized_exe_path() {
+        let tmp = TempDir::new().expect("tempdir");
+        let package_dir = tmp.path().join("package");
+        let bin_dir = package_dir.join(BIN_DIRNAME);
+        let resources_dir = package_dir.join(RESOURCES_DIRNAME);
+        let visible_dir = tmp.path().join("visible").join(BIN_DIRNAME);
+        fs::create_dir_all(&bin_dir).expect("create bin dir");
+        fs::create_dir_all(&resources_dir).expect("create resources dir");
+        fs::create_dir_all(&visible_dir).expect("create visible dir");
+
+        let real_exe = bin_dir.join("codex.exe");
+        let visible_exe = visible_dir.join("codex.exe");
+        let helper = resources_dir.join("codex-command-runner.exe");
+        fs::write(&real_exe, b"codex").expect("write exe");
+        fs::write(&helper, b"runner").expect("write helper");
+        std::os::unix::fs::symlink(&real_exe, &visible_exe).expect("symlink visible exe");
+
+        let resolved =
+            bundled_executable_path_for_exe(&visible_exe, /*file_name*/ "codex-command-runner.exe")
+                .expect("helper path");
+
+        assert_eq!(resolved, helper);
+    }
+
     #[test]
     fn helper_version_suffix_uses_cli_version_or_dev_build_metadata() {
         let tmp = TempDir::new().expect("tempdir");
@@ -558,5 +619,12 @@ mod tests {
         let file_name = materialized_file_name(HelperExecutable::CommandRunner, "test-suffix");
 
         assert_eq!(file_name, "codex-command-runner-test-suffix.exe");
+    }
+
+    #[test]
+    fn materialized_setup_file_name_adds_suffix_before_extension() {
+        let file_name = materialized_file_name(HelperExecutable::Setup, "test-suffix");
+
+        assert_eq!(file_name, "codex-windows-sandbox-setup-test-suffix.exe");
     }
 }
