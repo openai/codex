@@ -4,7 +4,7 @@ This repository uses Bazel to build the Rust workspace under `codex-rs`.
 Cargo remains the source of truth for crates and features, while Bazel
 provides hermetic builds, toolchains, and cross-platform artifacts.
 
-As of 1/9/2026, this setup is still experimental as we stabilize it.
+As of 6/1/2026, this setup is still experimental as we stabilize it.
 
 ## High-level layout
 
@@ -32,31 +32,48 @@ just bazel-clippy
 Ordinary local `bazel` and `just` invocations run locally. BuildBuddy cache,
 build event upload, downloads, and remote execution are opt-in configurations.
 
-## `user.bazelrc`
+## BuildBuddy
 
-The checked-in `.bazelrc` optionally imports `%workspace%/user.bazelrc`, and
-`.gitignore` excludes that file. Bazel also loads `~/.bazelrc` by default. You
-do not need either file for purely local builds or GitHub Actions.
+Codex uses BuildBuddy for a shared Bazel cache and remoted builds and tests. To use it
+to speed up your builds and tests you'll need to provide an API key and select a
+configuration.
 
-Add the following configuration to `%workspace%/user.bazelrc` if you want the
-credential scoped to this checkout, or to `~/.bazelrc` if you want the same
-defaults in every Bazel workspace. Choose the generic host, or
-`buildbuddy-openai-rbe` if you are authorized for the OpenAI host:
+### BuildBuddy API key
+
+Create a BuildBuddy API key as described in BuildBuddy's [Authentication Guide][bb-auth-guide],
+then add it to `~/.bazelrc`:
 
 ```bazelrc
 # Local machine only; this file contains a BuildBuddy credential.
-common --config=buildbuddy-generic-rbe
 common --remote_header=x-buildbuddy-api-key=<your-buildbuddy-api-key>
 ```
 
-Use `buildbuddy-generic` or `buildbuddy-openai` without the `-rbe` suffix if
-you want cache, build event upload, and downloads without remote execution.
-The `-rbe` configurations also enable the repository's shared remote-execution
-settings; no additional `--config=remote` is required.
+Keeping the credential outside the workspace reduces the risk of accidentally
+committing it.
 
-Both files contain a credential; do not commit or share them.
+If you need different API keys for different projects, put the API key in
+`%workspace%/user.bazelrc` instead. The checked-in `.bazelrc` optionally imports
+that file, and `.gitignore` excludes it. Do not commit or share a file containing
+the credential.
 
-## BuildBuddy remote configurations
+[bb-auth-guide]: https://www.buildbuddy.io/docs/guide-auth/#managing-keys
+
+### Selecting a remote build configuration
+
+OpenAI employees should default to the OpenAI host with remote execution unless
+they have a reason to choose another configuration. Add the following
+Codex-specific configuration to `%workspace%/user.bazelrc`:
+
+```bazelrc
+common --config=buildbuddy-openai-rbe
+```
+
+External users should use `buildbuddy-generic-rbe`, or `buildbuddy-generic`
+without the `-rbe` suffix if they want cache, build event upload, and downloads
+without remote execution. OpenAI employees can likewise use
+`buildbuddy-openai` without the `-rbe` suffix.
+
+### All remote configurations
 
 GitHub Actions routes Bazel build and output-resolution commands through
 `.github/scripts/run_bazel_with_buildbuddy.py`. Higher-level helpers such as
