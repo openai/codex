@@ -137,16 +137,37 @@ pub(crate) async fn list_tool_suggest_discoverable_plugins(
             .flat_map(|marketplace| marketplace.plugins.iter())
             .map(|plugin| plugin.remote_plugin_id.clone())
             .collect::<HashSet<_>>();
-        append_cached_remote_discoverable_plugins(
-            plugins_manager,
-            &plugins_input,
-            auth,
-            &configured_plugin_ids,
-            &disabled_plugin_ids,
-            &installed_app_connector_ids,
-            &installed_remote_plugin_ids,
-            &mut discoverable_plugins,
-        );
+        for plugin in plugins_manager
+            .cached_global_remote_discoverable_plugins_for_config(&plugins_input, auth)
+        {
+            let is_configured_plugin = configured_plugin_ids.contains(plugin.config_id.as_str())
+                || configured_plugin_ids.contains(plugin.remote_plugin_id.as_str());
+            let is_fallback_plugin =
+                TOOL_SUGGEST_DISCOVERABLE_PLUGIN_ALLOWLIST.contains(&plugin.config_id.as_str());
+            let matches_installed_app = plugin
+                .app_ids
+                .iter()
+                .any(|app_id| installed_app_connector_ids.contains(app_id.as_str()));
+            let is_disabled = disabled_plugin_ids.contains(plugin.config_id.as_str())
+                || disabled_plugin_ids.contains(plugin.remote_plugin_id.as_str());
+            if installed_remote_plugin_ids.contains(&plugin.remote_plugin_id)
+                || plugin.install_policy == PluginInstallPolicy::NotAvailable
+                || plugin.availability == PluginAvailability::DisabledByAdmin
+                || is_disabled
+                || (!is_configured_plugin && !is_fallback_plugin && !matches_installed_app)
+            {
+                continue;
+            }
+
+            discoverable_plugins.push(DiscoverablePluginInfo {
+                id: plugin.config_id,
+                name: plugin.name,
+                description: plugin.description,
+                has_skills: plugin.has_skills,
+                mcp_server_names: Vec::new(),
+                app_connector_ids: plugin.app_ids,
+            });
+        }
     }
     discoverable_plugins.sort_by(|left, right| {
         left.name
@@ -154,49 +175,6 @@ pub(crate) async fn list_tool_suggest_discoverable_plugins(
             .then_with(|| left.id.cmp(&right.id))
     });
     Ok(discoverable_plugins)
-}
-
-fn append_cached_remote_discoverable_plugins(
-    plugins_manager: &PluginsManager,
-    plugins_input: &codex_core_plugins::PluginsConfigInput,
-    auth: Option<&CodexAuth>,
-    configured_plugin_ids: &HashSet<&str>,
-    disabled_plugin_ids: &HashSet<&str>,
-    installed_app_connector_ids: &HashSet<String>,
-    installed_remote_plugin_ids: &HashSet<String>,
-    discoverable_plugins: &mut Vec<DiscoverablePluginInfo>,
-) {
-    for plugin in
-        plugins_manager.cached_global_remote_discoverable_plugins_for_config(plugins_input, auth)
-    {
-        let is_configured_plugin = configured_plugin_ids.contains(plugin.config_id.as_str())
-            || configured_plugin_ids.contains(plugin.remote_plugin_id.as_str());
-        let is_fallback_plugin =
-            TOOL_SUGGEST_DISCOVERABLE_PLUGIN_ALLOWLIST.contains(&plugin.config_id.as_str());
-        let matches_installed_app = plugin
-            .app_ids
-            .iter()
-            .any(|app_id| installed_app_connector_ids.contains(app_id.as_str()));
-        let is_disabled = disabled_plugin_ids.contains(plugin.config_id.as_str())
-            || disabled_plugin_ids.contains(plugin.remote_plugin_id.as_str());
-        if installed_remote_plugin_ids.contains(&plugin.remote_plugin_id)
-            || plugin.install_policy == PluginInstallPolicy::NotAvailable
-            || plugin.availability == PluginAvailability::DisabledByAdmin
-            || is_disabled
-            || (!is_configured_plugin && !is_fallback_plugin && !matches_installed_app)
-        {
-            continue;
-        }
-
-        discoverable_plugins.push(DiscoverablePluginInfo {
-            id: plugin.config_id,
-            name: plugin.name,
-            description: plugin.description,
-            has_skills: plugin.has_skills,
-            mcp_server_names: Vec::new(),
-            app_connector_ids: plugin.app_ids,
-        });
-    }
 }
 
 #[cfg(test)]
