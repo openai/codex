@@ -10,9 +10,92 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Publish the platform-specific Python runtime wheels before building the SDK
+  # package that pins them. PyPI project configuration must trust this workflow
+  # and job for publishing.
+  publish-python-runtime:
+    if: github.repository == 'openai/codex'
+    name: publish-python-runtime
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      contents: read
+      id-token: write # Required for PyPI trusted publishing.
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Resolve pinned Python runtime release
+        id: python_runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+          import re
+          import tomllib
+          from pathlib import Path
+
+          pyproject = tomllib.loads(Path("sdk/python/pyproject.toml").read_text())
+          prefix = "openai-codex-cli-bin=="
+          versions = [
+              dependency.removeprefix(prefix)
+              for dependency in pyproject["project"]["dependencies"]
+              if dependency.startswith(prefix)
+          ]
+          if len(versions) != 1:
+              raise SystemExit(f"Expected exactly one pinned {prefix} dependency, found {versions}")
+
+          python_version = versions[0]
+          if match := re.fullmatch(r"([0-9]+\.[0-9]+\.[0-9]+)a([0-9]+)", python_version):
+              release_version = f"{match.group(1)}-alpha.{match.group(2)}"
+          elif re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", python_version):
+              release_version = python_version
+          else:
+              raise SystemExit(
+                  "Python runtime version must be stable or a numbered alpha, "
+                  f"for example 0.136.0 or 0.136.0a2; found {python_version}"
+              )
+
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a") as output:
+              print(f"python_version={python_version}", file=output)
+              print(f"release_tag=rust-v{release_version}", file=output)
+          PY
+
+      - name: Download Python runtime wheels from release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PYTHON_RUNTIME_VERSION: ${{ steps.python_runtime.outputs.python_version }}
+          RELEASE_TAG: ${{ steps.python_runtime.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist/python-runtime
+          gh release download "$RELEASE_TAG" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --pattern "openai_codex_cli_bin-${PYTHON_RUNTIME_VERSION}-*.whl" \
+            --dir dist/python-runtime
+
+          shopt -s nullglob
+          wheels=(dist/python-runtime/*.whl)
+          if [[ "${#wheels[@]}" -ne 6 ]]; then
+            echo "Expected 6 Python runtime wheels for ${PYTHON_RUNTIME_VERSION}, found ${#wheels[@]}."
+            exit 1
+          fi
+          ls -lh dist/python-runtime
+
+      - name: Publish Python runtime wheels to PyPI
+        uses: pypa/gh-action-pypi-publish@ed0c53931b1dc9bd32cbe73a98c7f6766f8a527e # v1.13.0
+        with:
+          packages-dir: dist/python-runtime
+          skip-existing: true
+
   build-python-sdk:
     if: github.repository == 'openai/codex'
     name: build-python-sdk
+    needs: publish-python-runtime
     runs-on: ubuntu-latest
     permissions:
       contents: read
