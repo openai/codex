@@ -3559,6 +3559,7 @@ dependencies = [
  "codex-config",
  "codex-exec-server",
  "codex-keyring-store",
+ "codex-otel",
  "codex-protocol",
  "codex-utils-cargo-bin",
  "codex-utils-home-dir",

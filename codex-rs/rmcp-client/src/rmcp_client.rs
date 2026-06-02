@@ -784,6 +784,7 @@ impl RmcpClient {
                                     .auth_header(access_token);
                             let transport = StreamableHttpClientTransport::with_client(
                                 StreamableHttpClientAdapter::new(
+                                    server_name,
                                     Arc::clone(http_client),
                                     default_headers,
                                     /*auth_provider*/ None,
@@ -803,6 +804,7 @@ impl RmcpClient {
 
                     let transport = StreamableHttpClientTransport::with_client(
                         StreamableHttpClientAdapter::new(
+                            server_name,
                             Arc::clone(http_client),
                             default_headers,
                             auth_provider.clone(),
@@ -1040,7 +1042,12 @@ async fn create_oauth_transport_and_runtime(
     };
 
     let auth_client = AuthClient::new(
-        StreamableHttpClientAdapter::new(http_client, default_headers, /*auth_provider*/ None),
+        StreamableHttpClientAdapter::new(
+            server_name,
+            http_client,
+            default_headers,
+            /*auth_provider*/ None,
+        ),
         manager,
     );
     let auth_manager = auth_client.auth_manager.clone();
