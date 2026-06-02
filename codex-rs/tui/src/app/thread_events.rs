@@ -104,10 +104,10 @@ impl ThreadEventStore {
             ServerNotification::TurnStarted(turn) => {
                 self.active_turn_id = Some(turn.turn.id.clone());
             }
-            ServerNotification::TurnCompleted(turn) => {
-                if self.active_turn_id.as_deref() == Some(turn.turn.id.as_str()) {
-                    self.active_turn_id = None;
-                }
+            ServerNotification::TurnCompleted(turn)
+                if self.active_turn_id.as_deref() == Some(turn.turn.id.as_str()) =>
+            {
+                self.active_turn_id = None;
             }
             ServerNotification::ThreadClosed(_) => {
                 self.active_turn_id = None;

@@ -1,13 +1,14 @@
 use crate::windows_sandbox::run_setup_refresh_with_extra_read_roots;
 use anyhow::Result;
-use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::models::PermissionProfile;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
 
 pub fn grant_read_root_non_elevated(
-    policy: &SandboxPolicy,
-    policy_cwd: &Path,
+    permission_profile: &PermissionProfile,
+    workspace_roots: &[AbsolutePathBuf],
     command_cwd: &Path,
     env_map: &HashMap<String, String>,
     codex_home: &Path,
@@ -25,8 +26,8 @@ pub fn grant_read_root_non_elevated(
 
     let canonical_root = dunce::canonicalize(read_root)?;
     run_setup_refresh_with_extra_read_roots(
-        policy,
-        policy_cwd,
+        permission_profile,
+        workspace_roots,
         command_cwd,
         env_map,
         codex_home,

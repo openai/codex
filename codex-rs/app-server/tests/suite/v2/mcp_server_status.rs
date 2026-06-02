@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
-use app_test_support::McpProcess;
+use app_test_support::TestAppServer;
 use app_test_support::create_mock_responses_server_sequence_unchecked;
 use app_test_support::to_response;
 use app_test_support::write_mock_responses_config_toml;
@@ -20,6 +20,7 @@ use codex_core::config::set_project_trust_level;
 use codex_protocol::config_types::TrustLevel;
 use pretty_assertions::assert_eq;
 use rmcp::handler::server::ServerHandler;
+use rmcp::model::Implementation;
 use rmcp::model::JsonObject;
 use rmcp::model::ListResourceTemplatesResult;
 use rmcp::model::ListResourcesResult;
@@ -66,7 +67,7 @@ url = "{mcp_server_url}/mcp"
     ));
     std::fs::write(config_path, config_toml)?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -99,6 +100,13 @@ url = "{mcp_server_url}/mcp"
             .map(|tool| tool.name.as_str()),
         Some("look-up.raw")
     );
+    assert_eq!(
+        status
+            .server_info
+            .as_ref()
+            .and_then(|info| info.title.as_deref()),
+        Some("Lookup Server")
+    );
 
     mcp_server_handle.abort();
     let _ = mcp_server_handle.await;
@@ -124,7 +132,7 @@ async fn mcp_server_status_list_uses_thread_project_local_config() -> Result<()>
     std::fs::create_dir_all(workspace.path().join(".git"))?;
     set_project_trust_level(codex_home.path(), workspace.path(), TrustLevel::Trusted)?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let thread_start_id = mcp
@@ -205,10 +213,9 @@ struct McpStatusServer {
 
 impl ServerHandler for McpStatusServer {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            capabilities: ServerCapabilities::builder().enable_tools().build(),
-            ..ServerInfo::default()
-        }
+        ServerInfo::new(ServerCapabilities::builder().enable_tools().build()).with_server_info(
+            Implementation::new("lookup-server", "1.0.0").with_title("Lookup Server"),
+        )
     }
 
     async fn list_tools(
@@ -244,13 +251,12 @@ struct SlowInventoryServer {
 
 impl ServerHandler for SlowInventoryServer {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            capabilities: ServerCapabilities::builder()
+        ServerInfo::new(
+            ServerCapabilities::builder()
                 .enable_tools()
                 .enable_resources()
                 .build(),
-            ..ServerInfo::default()
-        }
+        )
     }
 
     async fn list_tools(
@@ -330,7 +336,7 @@ url = "{mcp_server_url}/mcp"
     ));
     std::fs::write(config_path, config_toml)?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -395,7 +401,7 @@ url = "{underscore_server_url}/mcp"
     ));
     std::fs::write(config_path, config_toml)?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp

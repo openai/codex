@@ -500,7 +500,7 @@ pub(crate) async fn inspect_pending_input(
     pending_input_item: &TurnInput,
 ) -> HookRuntimeOutcome {
     match pending_input_item {
-        TurnInput::UserInput(content) => {
+        TurnInput::UserInput { content, .. } => {
             let request = UserPromptSubmitRequest {
                 session_id: sess.session_id().into(),
                 turn_id: turn_context.sub_id.clone(),
@@ -522,7 +522,7 @@ pub(crate) async fn inspect_pending_input(
             )
             .await
         }
-        TurnInput::ResponseInputItem(_) => HookRuntimeOutcome {
+        TurnInput::ResponseItem(_) => HookRuntimeOutcome {
             should_stop: false,
             additional_contexts: Vec::new(),
         },
@@ -536,13 +536,16 @@ pub(crate) async fn record_pending_input(
     additional_contexts: Vec<String>,
 ) {
     match pending_input {
-        TurnInput::UserInput(content) => {
-            sess.record_user_prompt_and_emit_turn_item(turn_context.as_ref(), content.as_slice())
-                .await;
+        TurnInput::UserInput { content, client_id } => {
+            sess.record_user_prompt_and_emit_turn_item(
+                turn_context.as_ref(),
+                content.as_slice(),
+                client_id,
+            )
+            .await;
         }
-        TurnInput::ResponseInputItem(input) => {
-            let response_item = ResponseItem::from(input);
-            sess.record_conversation_items(turn_context, std::slice::from_ref(&response_item))
+        TurnInput::ResponseItem(item) => {
+            sess.record_conversation_items(turn_context, std::slice::from_ref(&item))
                 .await;
         }
     }
@@ -701,6 +704,7 @@ fn hook_run_metric_tags(run: &HookRunSummary) -> [(&'static str, &'static str); 
         HookSource::SessionFlags => "session_flags",
         HookSource::Plugin => "plugin",
         HookSource::CloudRequirements => "cloud_requirements",
+        HookSource::CloudManagedConfig => "cloud_managed_config",
         HookSource::LegacyManagedConfigFile => "legacy_managed_config_file",
         HookSource::LegacyManagedConfigMdm => "legacy_managed_config_mdm",
         HookSource::Unknown => "unknown",

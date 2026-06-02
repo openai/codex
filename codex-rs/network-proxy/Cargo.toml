@@ -37,6 +37,7 @@ rama-socks5 = { version = "=0.3.0-alpha.4" }
 rama-tcp = { version = "=0.3.0-alpha.4", features = ["http"] }
 rama-tls-rustls = { version = "=0.3.0-alpha.4", features = ["http"] }
 rustls-native-certs = { workspace = true }
+sha2 = { workspace = true }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }

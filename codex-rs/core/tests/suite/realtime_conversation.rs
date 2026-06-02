@@ -60,7 +60,7 @@ use wiremock::matchers::path_regex;
 const STARTUP_CONTEXT_HEADER: &str = "Startup context from Codex.";
 const STARTUP_CONTEXT_OPEN_TAG: &str = "<startup_context>";
 const STARTUP_CONTEXT_CLOSE_TAG: &str = "</startup_context>";
-const REALTIME_BACKEND_PROMPT: &str = include_str!("../../templates/realtime/backend_prompt.md");
+const REALTIME_BACKEND_PROMPT: &str = codex_prompts::BACKEND_PROMPT;
 const USER_FIRST_NAME_PLACEHOLDER: &str = "{{ user_first_name }}";
 const MEMORY_PROMPT_PHRASE: &str =
     "You have access to a memory folder with guidance from prior runs.";
@@ -1835,15 +1835,14 @@ async fn conversation_startup_context_current_thread_selects_many_turns_by_budge
         "head detail ".repeat(120),
         "tail detail ".repeat(170),
     );
-    let mut user_turns = (1..=7)
+    let user_turns = (1..=7)
         .map(|index| {
             format!(
                 "short-turn-{index}-start {} short-turn-{index}-end",
                 "detail ".repeat(86)
             )
         })
-        .collect::<Vec<_>>();
-    user_turns.push(latest_long_user_turn.clone());
+        .chain([latest_long_user_turn.clone()]);
 
     let mut builder = test_codex().with_config({
         let realtime_base_url = realtime_server.uri().to_string();
@@ -1858,7 +1857,6 @@ async fn conversation_startup_context_current_thread_selects_many_turns_by_budge
     // end-to-end startup-context test without paying for a model turn per
     // fixture entry in platform CI.
     let history = user_turns
-        .into_iter()
         .enumerate()
         .flat_map(|(index, user_turn)| {
             let turn_number = index + 1;
@@ -1888,7 +1886,6 @@ async fn conversation_startup_context_current_thread_selects_many_turns_by_budge
             test.config.clone(),
             InitialHistory::Forked(history),
             auth_manager_from_auth(CodexAuth::from_api_key("dummy")),
-            /*persist_extended_history*/ false,
             /*parent_trace*/ None,
         )
         .await?;
@@ -2168,6 +2165,7 @@ async fn conversation_user_text_turn_is_sent_to_realtime_when_active() -> Result
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         })
         .await?;
@@ -2303,6 +2301,7 @@ async fn conversation_user_text_turn_is_capped_when_mirrored_to_realtime() -> Re
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         })
         .await?;
@@ -3499,6 +3498,7 @@ async fn inbound_handoff_request_steers_active_turn() -> Result<()> {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         })
         .await?;

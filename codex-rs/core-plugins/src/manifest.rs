@@ -23,7 +23,7 @@ struct RawPluginManifest {
     // Keep manifest paths as raw strings so we can validate the required `./...` syntax before
     // resolving them under the plugin root.
     #[serde(default)]
-    skills: Option<String>,
+    skills: Option<RawPluginManifestPath>,
     #[serde(default)]
     mcp_servers: Option<String>,
     #[serde(default)]
@@ -124,6 +124,13 @@ enum RawPluginManifestDefaultPrompt {
 #[serde(untagged)]
 enum RawPluginManifestDefaultPromptEntry {
     String(String),
+    Invalid(JsonValue),
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum RawPluginManifestPath {
+    Path(String),
     Invalid(JsonValue),
 }
 
@@ -238,7 +245,7 @@ pub fn load_plugin_manifest(plugin_root: &Path) -> Option<PluginManifest> {
                 description,
                 keywords,
                 paths: PluginManifestPaths {
-                    skills: resolve_manifest_path(plugin_root, "skills", skills.as_deref()),
+                    skills: resolve_manifest_path_value(plugin_root, "skills", skills.as_ref()),
                     mcp_servers: resolve_manifest_path(
                         plugin_root,
                         "mcpServers",
@@ -391,6 +398,23 @@ fn json_value_type(value: &JsonValue) -> &'static str {
         JsonValue::String(_) => "string",
         JsonValue::Array(_) => "array",
         JsonValue::Object(_) => "object",
+    }
+}
+
+fn resolve_manifest_path_value(
+    plugin_root: &Path,
+    field: &'static str,
+    path: Option<&RawPluginManifestPath>,
+) -> Option<AbsolutePathBuf> {
+    match path? {
+        RawPluginManifestPath::Path(path) => resolve_manifest_path(plugin_root, field, Some(path)),
+        RawPluginManifestPath::Invalid(value) => {
+            tracing::warn!(
+                "ignoring {field}: expected a string; found {}",
+                json_value_type(value)
+            );
+            None
+        }
     }
 }
 

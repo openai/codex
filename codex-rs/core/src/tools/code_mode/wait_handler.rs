@@ -73,17 +73,24 @@ impl ToolExecutor<ToolInvocation> for CodeModeWaitHandler {
                 let args: ExecWaitArgs = parse_arguments(&arguments)?;
                 let exec = ExecContext { session, turn };
                 let started_at = std::time::Instant::now();
-                let wait_response = exec
-                    .session
-                    .services
-                    .code_mode_service
-                    .wait(codex_code_mode::WaitRequest {
-                        cell_id: args.cell_id,
-                        yield_time_ms: args.yield_time_ms,
-                        terminate: args.terminate,
-                    })
-                    .await
-                    .map_err(FunctionCallError::RespondToModel)?;
+                let cell_id = codex_code_mode::CellId::new(args.cell_id);
+                let wait_response = if args.terminate {
+                    exec.session
+                        .services
+                        .code_mode_service
+                        .terminate(cell_id)
+                        .await
+                } else {
+                    exec.session
+                        .services
+                        .code_mode_service
+                        .wait(codex_code_mode::WaitRequest {
+                            cell_id,
+                            yield_time_ms: args.yield_time_ms,
+                        })
+                        .await
+                }
+                .map_err(FunctionCallError::RespondToModel)?;
                 if let codex_code_mode::WaitOutcome::LiveCell(response) = &wait_response
                     && !matches!(response, codex_code_mode::RuntimeResponse::Yielded { .. })
                 {
@@ -98,8 +105,15 @@ impl ToolExecutor<ToolInvocation> for CodeModeWaitHandler {
                     exec.session
                         .services
                         .rollout_thread_trace
-                        .code_cell_trace_context(exec.turn.sub_id.as_str(), runtime_cell_id)
+                        .code_cell_trace_context(
+                            exec.turn.sub_id.as_str(),
+                            runtime_cell_id.as_str(),
+                        )
                         .record_ended(response);
+                    exec.session
+                        .services
+                        .code_mode_service
+                        .finish_cell_dispatch(runtime_cell_id);
                 }
                 handle_runtime_response(&exec, wait_response.into(), args.max_tokens, started_at)
                     .await

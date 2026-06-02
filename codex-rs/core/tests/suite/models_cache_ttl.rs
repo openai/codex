@@ -100,6 +100,7 @@ async fn renews_cache_ttl_on_matching_models_etag() -> Result<()> {
             environments: None,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                 cwd: Some(test.cwd_path().to_path_buf()),
                 approval_policy: Some(codex_protocol::protocol::AskForApproval::Never),
@@ -369,5 +370,7 @@ fn test_remote_model(slug: &str, priority: i32) -> ModelInfo {
         input_modalities: default_input_modalities(),
         used_fallback_model_metadata: false,
         supports_search_tool: false,
+        auto_review_model_override: None,
+        tool_mode: None,
     }
 }

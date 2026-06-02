@@ -4,6 +4,7 @@ use crate::command_safety::is_dangerous_command::executable_name_lookup_key;
 // may appear before it (e.g., `-C`, `-c`, `--git-dir`).
 // Implemented in `is_dangerous_command` and shared here.
 use crate::command_safety::is_dangerous_command::find_git_subcommand;
+#[cfg(windows)]
 use crate::command_safety::windows_safe_commands::is_safe_command_windows;
 #[cfg(windows)]
 use crate::command_safety::windows_safe_commands::is_safe_powershell_words as is_safe_powershell_words_windows;
@@ -20,8 +21,11 @@ pub fn is_known_safe_command(command: &[String]) -> bool {
         })
         .collect();
 
-    if is_safe_command_windows(&command) {
-        return true;
+    #[cfg(windows)]
+    {
+        if is_safe_command_windows(&command) {
+            return true;
+        }
     }
 
     if is_safe_to_call_with_exec(&command) {
@@ -747,5 +751,52 @@ mod tests {
         } else {
             assert!(!is_safe_powershell_words(&command));
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn non_windows_safe_classification_does_not_spawn_repo_powershell_path() {
+        use std::fs;
+        use std::io::Write;
+        use std::os::unix::fs::PermissionsExt;
+        use std::time::SystemTime;
+        use std::time::UNIX_EPOCH;
+
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be after unix epoch")
+            .as_nanos();
+        let temp_dir = std::env::temp_dir().join(format!(
+            "codex-safe-command-pwsh-test-{}-{unique}",
+            std::process::id()
+        ));
+        fs::create_dir(&temp_dir).expect("create temp dir for fake pwsh");
+        let fake_pwsh = temp_dir.join("pwsh");
+        let marker = temp_dir.join("marker");
+        let quoted_marker = marker.to_string_lossy().replace('\'', "'\\''");
+
+        let mut script = fs::File::create(&fake_pwsh).expect("create fake pwsh");
+        writeln!(
+            script,
+            "#!/bin/sh\nprintf spawned > '{quoted_marker}'\nexit 0"
+        )
+        .expect("write fake pwsh");
+        let mut permissions = fs::metadata(&fake_pwsh)
+            .expect("stat fake pwsh")
+            .permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&fake_pwsh, permissions).expect("make fake pwsh executable");
+
+        assert!(!is_known_safe_command(&[
+            fake_pwsh.to_string_lossy().into_owned(),
+            "-Command".to_string(),
+            "Get-ChildItem".to_string(),
+        ]));
+        assert!(
+            !marker.exists(),
+            "non-Windows safety classification must not spawn a PowerShell-looking path"
+        );
+
+        fs::remove_dir_all(temp_dir).expect("remove temp dir");
     }
 }

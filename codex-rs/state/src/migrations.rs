@@ -19,6 +19,8 @@ fn runtime_migrator(base: &'static Migrator) -> Migrator {
         ignore_missing: true,
         locking: base.locking,
         no_tx: base.no_tx,
+        table_name: base.table_name.clone(),
+        create_schemas: base.create_schemas.clone(),
     }
 }
 

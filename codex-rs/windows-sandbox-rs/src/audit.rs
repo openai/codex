@@ -7,7 +7,6 @@ use crate::cap::workspace_write_root_contains_path;
 use crate::logging::debug_log;
 use crate::logging::log_note;
 use crate::path_normalization::canonical_path_key;
-use crate::policy::SandboxPolicy;
 use crate::resolved_permissions::ResolvedWindowsSandboxPermissions;
 use crate::setup::effective_write_roots_for_permissions;
 use crate::token::LocalSid;
@@ -216,24 +215,6 @@ pub fn audit_everyone_writable(
         logs_base_dir,
     );
     Ok(Vec::new())
-}
-
-pub fn apply_world_writable_scan_and_denies(
-    codex_home: &Path,
-    cwd: &Path,
-    env_map: &std::collections::HashMap<String, String>,
-    sandbox_policy: &SandboxPolicy,
-    logs_base_dir: Option<&Path>,
-) -> Result<()> {
-    let permissions =
-        ResolvedWindowsSandboxPermissions::from_legacy_policy_for_cwd(sandbox_policy, cwd);
-    apply_world_writable_scan_and_denies_for_permissions(
-        codex_home,
-        cwd,
-        env_map,
-        &permissions,
-        logs_base_dir,
-    )
 }
 
 pub fn apply_world_writable_scan_and_denies_for_permissions(

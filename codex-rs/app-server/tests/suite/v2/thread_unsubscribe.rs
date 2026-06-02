@@ -1,5 +1,5 @@
 use anyhow::Result;
-use app_test_support::McpProcess;
+use app_test_support::TestAppServer;
 use app_test_support::create_mock_responses_server_repeating_assistant;
 use app_test_support::to_response;
 use codex_app_server_protocol::DynamicToolCallOutputContentItem;
@@ -41,7 +41,7 @@ async fn thread_unsubscribe_keeps_thread_loaded_until_idle_timeout() -> Result<(
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let thread_id = start_thread(&mut mcp).await?;
@@ -120,7 +120,7 @@ async fn thread_unsubscribe_during_turn_keeps_turn_running() -> Result<()> {
     let final_response_completed = completions.remove(0);
     create_config_toml(&codex_home, server.uri())?;
 
-    let mut mcp = McpProcess::new(&codex_home).await?;
+    let mut mcp = TestAppServer::new(&codex_home).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let thread_req = mcp
@@ -151,6 +151,7 @@ async fn thread_unsubscribe_during_turn_keeps_turn_running() -> Result<()> {
     let turn_req = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread_id.clone(),
+            client_user_message_id: None,
             input: vec![V2UserInput::Text {
                 text: "run deterministic tool".to_string(),
                 text_elements: Vec::new(),
@@ -252,7 +253,7 @@ async fn thread_unsubscribe_preserves_cached_status_before_idle_unload() -> Resu
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let thread_id = start_thread(&mut mcp).await?;
@@ -260,6 +261,7 @@ async fn thread_unsubscribe_preserves_cached_status_before_idle_unload() -> Resu
     let turn_req = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread_id.clone(),
+            client_user_message_id: None,
             input: vec![V2UserInput::Text {
                 text: "fail this turn".to_string(),
                 text_elements: Vec::new(),
@@ -317,6 +319,7 @@ async fn thread_unsubscribe_preserves_cached_status_before_idle_unload() -> Resu
     let resume_id = mcp
         .send_thread_resume_request(ThreadResumeParams {
             thread_id,
+            cwd: Some(codex_home.path().to_string_lossy().to_string()),
             ..Default::default()
         })
         .await?;
@@ -337,7 +340,7 @@ async fn thread_unsubscribe_reports_not_subscribed_before_idle_unload() -> Resul
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let thread_id = start_thread(&mut mcp).await?;
@@ -376,7 +379,7 @@ async fn thread_unsubscribe_reports_not_subscribed_before_idle_unload() -> Resul
 }
 
 async fn wait_for_dynamic_tool_started(
-    mcp: &mut McpProcess,
+    mcp: &mut TestAppServer,
     call_id: &str,
 ) -> Result<ItemStartedNotification> {
     loop {
@@ -416,7 +419,7 @@ stream_max_retries = 0
     )
 }
 
-async fn start_thread(mcp: &mut McpProcess) -> Result<String> {
+async fn start_thread(mcp: &mut TestAppServer) -> Result<String> {
     let req_id = mcp
         .send_thread_start_request(ThreadStartParams {
             model: Some("mock-model".to_string()),

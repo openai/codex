@@ -143,6 +143,7 @@ fn terminal_title_item_id(item: &str) -> Option<&'static str> {
         "fast-mode" => Some("fast-mode"),
         "model" | "model-name" => Some("model"),
         "model-with-reasoning" => Some("model-with-reasoning"),
+        "reasoning" => Some("reasoning"),
         "task-progress" => Some("task-progress"),
         _ => None,
     }

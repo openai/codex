@@ -61,8 +61,6 @@ impl ThreadMetadataSync {
         } else {
             None
         };
-        let dynamic_tools =
-            (!params.dynamic_tools.is_empty()).then(|| params.dynamic_tools.clone());
         let update = ThreadMetadataPatch {
             model_provider: Some(params.metadata.model_provider.clone()),
             created_at: Some(created_at),
@@ -76,7 +74,6 @@ impl ThreadMetadataSync {
             cli_version: Some(env!("CARGO_PKG_VERSION").to_string()),
             git_info: git_info.map(git_info_patch_from_observation),
             memory_mode: Some(params.metadata.memory_mode),
-            dynamic_tools,
             ..Default::default()
         };
         Self {
@@ -228,9 +225,6 @@ impl ThreadMetadataSync {
                     {
                         update.memory_mode = Some(memory_mode);
                     }
-                    if let Some(dynamic_tools) = meta_line.meta.dynamic_tools.clone() {
-                        update.dynamic_tools = Some(dynamic_tools);
-                    }
                 }
                 RolloutItem::TurnContext(turn_ctx) => {
                     if !self.cwd_seen && !turn_ctx.cwd.as_os_str().is_empty() {
@@ -240,7 +234,7 @@ impl ThreadMetadataSync {
                     update.model = Some(turn_ctx.model.clone());
                     update.reasoning_effort = turn_ctx.effort;
                     update.approval_mode = Some(turn_ctx.approval_policy);
-                    update.sandbox_policy = Some(turn_ctx.sandbox_policy.clone());
+                    update.permission_profile = Some(turn_ctx.permission_profile());
                 }
                 RolloutItem::EventMsg(EventMsg::UserMessage(user)) => {
                     if let Some(preview) = user_message_preview(user) {
@@ -360,12 +354,11 @@ fn update_has_metadata_facts(update: &ThreadMetadataPatch) -> bool {
         || update.cwd.is_some()
         || update.cli_version.is_some()
         || update.approval_mode.is_some()
-        || update.sandbox_policy.is_some()
+        || update.permission_profile.is_some()
         || update.token_usage.is_some()
         || update.first_user_message.is_some()
         || update.git_info.is_some()
         || update.memory_mode.is_some()
-        || update.dynamic_tools.is_some()
 }
 
 fn git_info_patch_from_observation(git_info: GitInfo) -> GitInfoPatch {
@@ -389,7 +382,6 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use super::*;
-    use crate::ThreadEventPersistenceMode;
     use crate::ThreadPersistenceMetadata;
 
     #[test]
@@ -536,12 +528,12 @@ mod tests {
                 model_provider: "test-provider".to_string(),
                 memory_mode: ThreadMemoryMode::Enabled,
             },
-            event_persistence_mode: ThreadEventPersistenceMode::Limited,
         }
     }
 
     fn user_message(message: &str) -> UserMessageEvent {
         UserMessageEvent {
+            client_id: None,
             message: message.to_string(),
             images: None,
             local_images: Vec::new(),

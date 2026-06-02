@@ -148,6 +148,7 @@ impl ToolExecutor<ToolInvocation> for ShellCommandHandler {
         let ToolInvocation {
             session,
             turn,
+            cancellation_token,
             tracker,
             call_id,
             payload,
@@ -185,6 +186,7 @@ impl ToolExecutor<ToolInvocation> for ShellCommandHandler {
         run_exec_like(RunExecLikeArgs {
             tool_name,
             exec_params,
+            cancellation_token,
             hook_command: params.command,
             shell_type,
             additional_permissions: params.additional_permissions.clone(),
@@ -203,6 +205,10 @@ impl ToolExecutor<ToolInvocation> for ShellCommandHandler {
 impl CoreToolRuntime for ShellCommandHandler {
     fn matches_kind(&self, payload: &ToolPayload) -> bool {
         matches!(payload, ToolPayload::Function { .. })
+    }
+
+    fn waits_for_runtime_cancellation(&self) -> bool {
+        true
     }
 
     fn pre_tool_use_payload(&self, invocation: &ToolInvocation) -> Option<PreToolUsePayload> {

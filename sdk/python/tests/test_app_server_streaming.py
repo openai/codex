@@ -114,7 +114,7 @@ def test_async_stream_routes_text_deltas_and_completion(tmp_path) -> None:
 
 
 def test_low_level_sync_stream_text_uses_real_turn_routing(tmp_path) -> None:
-    """AppServerClient.stream_text should stream through a real app-server turn."""
+    """CodexClient.stream_text should stream through a real app-server turn."""
     with AppServerHarness(tmp_path) as harness:
         harness.responses.enqueue_sse(
             streaming_response("low-sync-stream", "msg-low-sync-stream", ["fir", "st"])

@@ -511,7 +511,7 @@ WHERE so.thread_id = ? AND so.source_updated_at = ?
             }
         }
 
-        selected.sort_by(|a, b| a.thread_id.to_string().cmp(&b.thread_id.to_string()));
+        selected.sort_by_key(|entry| entry.thread_id.to_string());
 
         Ok(selected)
     }

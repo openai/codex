@@ -1,6 +1,6 @@
 use anyhow::Result;
 use app_test_support::ChatGptAuthFixture;
-use app_test_support::McpProcess;
+use app_test_support::TestAppServer;
 use app_test_support::to_response;
 use app_test_support::write_chatgpt_auth;
 use chrono::Duration;
@@ -92,7 +92,7 @@ shell_snapshot = false
     std::fs::write(config_toml, contents)
 }
 
-async fn login_with_api_key_via_request(mcp: &mut McpProcess, api_key: &str) -> Result<()> {
+async fn login_with_api_key_via_request(mcp: &mut TestAppServer, api_key: &str) -> Result<()> {
     let request_id = mcp.send_login_account_api_key_request(api_key).await?;
 
     let resp: JSONRPCResponse = timeout(
@@ -110,7 +110,8 @@ async fn get_auth_status_no_auth() -> Result<()> {
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path())?;
 
-    let mut mcp = McpProcess::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+    let mut mcp =
+        TestAppServer::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -136,7 +137,7 @@ async fn get_auth_status_with_api_key() -> Result<()> {
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path())?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     login_with_api_key_via_request(&mut mcp, "sk-test-key").await?;
@@ -164,7 +165,7 @@ async fn get_auth_status_with_api_key_when_auth_not_required() -> Result<()> {
     let codex_home = TempDir::new()?;
     create_config_toml_custom_provider(codex_home.path(), /*requires_openai_auth*/ false)?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     login_with_api_key_via_request(&mut mcp, "sk-test-key").await?;
@@ -197,7 +198,7 @@ async fn get_auth_status_with_api_key_no_include_token() -> Result<()> {
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path())?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     login_with_api_key_via_request(&mut mcp, "sk-test-key").await?;
@@ -225,7 +226,7 @@ async fn get_auth_status_with_api_key_refresh_requested() -> Result<()> {
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path())?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     login_with_api_key_via_request(&mut mcp, "sk-test-key").await?;
@@ -281,7 +282,7 @@ async fn get_auth_status_omits_token_after_permanent_refresh_failure() -> Result
         .await;
 
     let refresh_url = format!("{}/oauth/token", server.uri());
-    let mut mcp = McpProcess::new_with_env(
+    let mut mcp = TestAppServer::new_with_env(
         codex_home.path(),
         &[
             ("OPENAI_API_KEY", None),
@@ -363,7 +364,7 @@ async fn get_auth_status_omits_token_after_proactive_refresh_failure() -> Result
         .await;
 
     let refresh_url = format!("{}/oauth/token", server.uri());
-    let mut mcp = McpProcess::new_with_env(
+    let mut mcp = TestAppServer::new_with_env(
         codex_home.path(),
         &[
             ("OPENAI_API_KEY", None),
@@ -430,7 +431,7 @@ async fn get_auth_status_returns_token_after_proactive_refresh_recovery() -> Res
         .await;
 
     let refresh_url = format!("{}/oauth/token", server.uri());
-    let mut mcp = McpProcess::new_with_env(
+    let mut mcp = TestAppServer::new_with_env(
         codex_home.path(),
         &[
             ("OPENAI_API_KEY", None),
@@ -507,7 +508,7 @@ async fn login_api_key_rejected_when_forced_chatgpt() -> Result<()> {
     let codex_home = TempDir::new()?;
     create_config_toml_forced_login(codex_home.path(), "chatgpt")?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp

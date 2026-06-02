@@ -7,27 +7,37 @@ from .models import JsonObject
 
 @dataclass(slots=True)
 class TextInput:
+    """Text supplied to a turn or steering request."""
+
     text: str
 
 
 @dataclass(slots=True)
 class ImageInput:
+    """Remote image URL supplied as turn input."""
+
     url: str
 
 
 @dataclass(slots=True)
 class LocalImageInput:
+    """Local image path supplied as turn input."""
+
     path: str
 
 
 @dataclass(slots=True)
 class SkillInput:
+    """Named skill reference supplied as turn input."""
+
     name: str
     path: str
 
 
 @dataclass(slots=True)
 class MentionInput:
+    """Named resource mention supplied as turn input."""
+
     name: str
     path: str
 
