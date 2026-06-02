@@ -427,13 +427,16 @@ approvals_reviewer = "{app}"
             .await
             .expect("config should build");
 
-        let policy = mcp_approvals_reviewer_policy(&config);
         assert_eq!(
-            policy.resolve(CODEX_APPS_MCP_SERVER_NAME, Some("calendar")),
+            mcp_approvals_reviewer(&config, CODEX_APPS_MCP_SERVER_NAME, Some("calendar")),
             expected_app
         );
         assert_eq!(
-            policy.resolve(CODEX_APPS_MCP_SERVER_NAME, Some("drive")),
+            mcp_approvals_reviewer(&config, CODEX_APPS_MCP_SERVER_NAME, Some("drive")),
+            expected_global
+        );
+        assert_eq!(
+            mcp_approvals_reviewer(&config, "custom_server", Some("calendar")),
             expected_global
         );
     }
@@ -465,9 +468,8 @@ approvals_reviewer = "user"
         .await
         .expect("config should build");
 
-    let policy = mcp_approvals_reviewer_policy(&config);
     assert_eq!(
-        policy.resolve(CODEX_APPS_MCP_SERVER_NAME, Some("calendar")),
+        mcp_approvals_reviewer(&config, CODEX_APPS_MCP_SERVER_NAME, Some("calendar")),
         ApprovalsReviewer::AutoReview
     );
 }

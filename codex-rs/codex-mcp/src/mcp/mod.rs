@@ -293,7 +293,6 @@ pub async fn read_mcp_resource(
         config.prefix_mcp_tool_names,
         config.client_elicitation_capability.clone(),
         tool_plugin_provenance(config),
-        crate::McpApprovalsReviewerPolicy::default(),
         auth,
         /*elicitation_reviewer*/ None,
     )
@@ -364,7 +363,6 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
         config.prefix_mcp_tool_names,
         config.client_elicitation_capability.clone(),
         tool_plugin_provenance,
-        crate::McpApprovalsReviewerPolicy::default(),
         auth,
         /*elicitation_reviewer*/ None,
     )

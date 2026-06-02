@@ -1431,7 +1431,11 @@ pub(crate) async fn lookup_mcp_tool_metadata(
     let tool_info = tools
         .into_iter()
         .find(|tool_info| tool_info.server_name == server && tool_info.tool.name == tool_name)?;
-    let approvals_reviewer = manager.approvals_reviewer(server, tool_info.connector_id.as_deref());
+    let approvals_reviewer = connectors::mcp_approvals_reviewer(
+        turn_context.config.as_ref(),
+        server,
+        tool_info.connector_id.as_deref(),
+    );
     let connector_description = if server == CODEX_APPS_MCP_SERVER_NAME {
         let connectors = match connectors::list_cached_accessible_connectors_from_mcp_tools(
             turn_context.config.as_ref(),

@@ -26,6 +26,7 @@ use crate::plugins::list_tool_suggest_discoverable_plugins;
 use crate::session::INITIAL_SUBMIT_ID;
 use codex_config::AppsRequirementsToml;
 use codex_config::types::AppToolApproval;
+use codex_config::types::ApprovalsReviewer;
 use codex_config::types::AppsConfigToml;
 use codex_config::types::ToolSuggestDiscoverableType;
 use codex_core_plugins::PluginsManager;
@@ -34,7 +35,6 @@ use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_login::default_client::originator;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
-use codex_mcp::McpApprovalsReviewerPolicy;
 use codex_mcp::McpConnectionManager;
 use codex_mcp::McpRuntimeContext;
 use codex_mcp::ToolInfo;
@@ -282,7 +282,6 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_environment_manager(
         mcp_config.prefix_mcp_tool_names,
         mcp_config.client_elicitation_capability,
         ToolPluginProvenance::default(),
-        mcp_approvals_reviewer_policy(config),
         auth.as_ref(),
         /*elicitation_reviewer*/ None,
     )
@@ -568,29 +567,33 @@ pub(crate) fn codex_app_tool_is_enabled(config: &Config, tool_info: &ToolInfo) -
     .enabled
 }
 
-pub(crate) fn mcp_approvals_reviewer_policy(config: &Config) -> McpApprovalsReviewerPolicy {
-    let codex_apps_by_connector_id = read_user_apps_config(config)
-        .map(|apps_config| {
-            apps_config
-                .apps
-                .into_iter()
-                .filter_map(|(connector_id, app)| {
-                    app.approvals_reviewer
-                        .filter(|reviewer| {
-                            config
-                                .config_layer_stack
-                                .requirements()
-                                .approvals_reviewer
-                                .can_set(reviewer)
-                                .is_ok()
-                        })
-                        .map(|reviewer| (connector_id, reviewer))
-                })
-                .collect()
+pub(crate) fn mcp_approvals_reviewer(
+    config: &Config,
+    server_name: &str,
+    connector_id: Option<&str>,
+) -> ApprovalsReviewer {
+    let app_reviewer = if server_name == CODEX_APPS_MCP_SERVER_NAME {
+        read_user_apps_config(config).and_then(|apps_config| {
+            connector_id
+                .and_then(|connector_id| apps_config.apps.get(connector_id))
+                .and_then(|app| app.approvals_reviewer)
         })
-        .unwrap_or_default();
+    } else {
+        None
+    };
 
-    McpApprovalsReviewerPolicy::new(config.approvals_reviewer, codex_apps_by_connector_id)
+    if let Some(reviewer) = app_reviewer
+        && config
+            .config_layer_stack
+            .requirements()
+            .approvals_reviewer
+            .can_set(&reviewer)
+            .is_ok()
+    {
+        return reviewer;
+    }
+
+    config.approvals_reviewer
 }
 
 fn read_apps_config(config: &Config) -> Option<AppsConfigToml> {

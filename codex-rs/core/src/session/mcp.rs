@@ -356,7 +356,6 @@ impl Session {
             mcp_config.prefix_mcp_tool_names,
             mcp_config.client_elicitation_capability,
             tool_plugin_provenance,
-            crate::connectors::mcp_approvals_reviewer_policy(turn_context.config.as_ref()),
             auth.as_ref(),
             elicitation_reviewer,
         )
@@ -456,9 +455,14 @@ async fn review_guardian_mcp_elicitation(
         return Ok(None);
     };
 
+    let approvals_reviewer = crate::connectors::mcp_approvals_reviewer(
+        turn_context.config.as_ref(),
+        request.server_name.as_str(),
+        elicitation_connector_id(&request.elicitation),
+    );
     if !crate::guardian::routes_approval_to_guardian_with_reviewer(
         turn_context.as_ref(),
-        request.approvals_reviewer,
+        approvals_reviewer,
     ) {
         return Ok(None);
     }
@@ -569,6 +573,15 @@ fn guardian_elicitation_review_request(
             annotations: None,
         },
     ))
+}
+
+fn elicitation_connector_id(elicitation: &CreateElicitationRequestParams) -> Option<&str> {
+    match elicitation {
+        CreateElicitationRequestParams::FormElicitationParams { meta, .. }
+        | CreateElicitationRequestParams::UrlElicitationParams { meta, .. } => meta
+            .as_ref()
+            .and_then(|meta| metadata_str(&meta.0, MCP_ELICITATION_CONNECTOR_ID_KEY)),
+    }
 }
 
 fn meta_requests_approval_request(meta: &Option<Meta>) -> bool {

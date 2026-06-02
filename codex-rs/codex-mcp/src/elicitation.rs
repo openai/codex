@@ -9,7 +9,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 
-use crate::McpApprovalsReviewerPolicy;
 use crate::mcp::McpPermissionPromptAutoApproveContext;
 use crate::mcp::mcp_permission_prompt_is_auto_approved;
 use anyhow::Context;
@@ -19,7 +18,6 @@ use async_channel::Sender;
 use codex_protocol::approvals::ElicitationRequest;
 use codex_protocol::approvals::ElicitationRequestEvent;
 use codex_protocol::mcp::RequestId as ProtocolRequestId;
-use codex_protocol::mcp_approval_meta::CONNECTOR_ID_KEY;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::Event;
@@ -39,7 +37,6 @@ pub struct ElicitationReviewRequest {
     pub server_name: String,
     pub request_id: RequestId,
     pub elicitation: CreateElicitationRequestParams,
-    pub approvals_reviewer: codex_config::types::ApprovalsReviewer,
 }
 
 pub trait ElicitationReviewer: Send + Sync {
@@ -57,7 +54,6 @@ pub(crate) struct ElicitationRequestManager {
     pub(crate) approval_policy: Arc<StdMutex<AskForApproval>>,
     pub(crate) permission_profile: Arc<StdMutex<PermissionProfile>>,
     auto_deny: Arc<StdMutex<bool>>,
-    approvals_reviewer_policy: Arc<StdMutex<McpApprovalsReviewerPolicy>>,
     reviewer: Option<ElicitationReviewerHandle>,
 }
 
@@ -65,7 +61,6 @@ impl ElicitationRequestManager {
     pub(crate) fn new(
         approval_policy: AskForApproval,
         permission_profile: PermissionProfile,
-        approvals_reviewer_policy: McpApprovalsReviewerPolicy,
         reviewer: Option<ElicitationReviewerHandle>,
     ) -> Self {
         Self {
@@ -73,7 +68,6 @@ impl ElicitationRequestManager {
             approval_policy: Arc::new(StdMutex::new(approval_policy)),
             permission_profile: Arc::new(StdMutex::new(permission_profile)),
             auto_deny: Arc::new(StdMutex::new(false)),
-            approvals_reviewer_policy: Arc::new(StdMutex::new(approvals_reviewer_policy)),
             reviewer,
         }
     }
@@ -89,26 +83,6 @@ impl ElicitationRequestManager {
         if let Ok(mut current) = self.auto_deny.lock() {
             *current = auto_deny;
         }
-    }
-
-    pub(crate) fn set_approvals_reviewer_policy(
-        &self,
-        approvals_reviewer_policy: McpApprovalsReviewerPolicy,
-    ) {
-        if let Ok(mut current) = self.approvals_reviewer_policy.lock() {
-            *current = approvals_reviewer_policy;
-        }
-    }
-
-    pub(crate) fn approvals_reviewer(
-        &self,
-        server_name: &str,
-        connector_id: Option<&str>,
-    ) -> codex_config::types::ApprovalsReviewer {
-        self.approvals_reviewer_policy
-            .lock()
-            .map(|reviewers| reviewers.resolve(server_name, connector_id))
-            .unwrap_or_default()
     }
 
     pub(crate) async fn resolve(
@@ -135,7 +109,6 @@ impl ElicitationRequestManager {
         let approval_policy = self.approval_policy.clone();
         let permission_profile = self.permission_profile.clone();
         let auto_deny = self.auto_deny.clone();
-        let approvals_reviewer_policy = self.approvals_reviewer_policy.clone();
         let reviewer = self.reviewer.clone();
         Box::new(move |id, elicitation| {
             let elicitation_requests = elicitation_requests.clone();
@@ -144,7 +117,6 @@ impl ElicitationRequestManager {
             let approval_policy = approval_policy.clone();
             let permission_profile = permission_profile.clone();
             let auto_deny = auto_deny.clone();
-            let approvals_reviewer_policy = approvals_reviewer_policy.clone();
             let reviewer = reviewer.clone();
             async move {
                 let auto_deny = auto_deny
@@ -189,20 +161,10 @@ impl ElicitationRequestManager {
                 }
 
                 if let Some(reviewer) = reviewer.as_ref() {
-                    let approvals_reviewer = approvals_reviewer_policy
-                        .lock()
-                        .map(|reviewers| {
-                            reviewers.resolve(
-                                server_name.as_str(),
-                                elicitation_connector_id(&elicitation),
-                            )
-                        })
-                        .unwrap_or_default();
                     let request = ElicitationReviewRequest {
                         server_name: server_name.clone(),
                         request_id: id.clone(),
                         elicitation: elicitation.clone(),
-                        approvals_reviewer,
                     };
                     if let Some(response) = reviewer.review(request).await? {
                         return Ok(response);
@@ -266,16 +228,6 @@ impl ElicitationRequestManager {
             }
             .boxed()
         })
-    }
-}
-
-fn elicitation_connector_id(elicitation: &CreateElicitationRequestParams) -> Option<&str> {
-    match elicitation {
-        CreateElicitationRequestParams::FormElicitationParams { meta, .. }
-        | CreateElicitationRequestParams::UrlElicitationParams { meta, .. } => meta
-            .as_ref()
-            .and_then(|meta| meta.0.get(CONNECTOR_ID_KEY))
-            .and_then(serde_json::Value::as_str),
     }
 }
 

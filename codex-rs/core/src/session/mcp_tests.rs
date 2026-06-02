@@ -30,7 +30,6 @@ fn form_request(meta: Option<Meta>) -> ElicitationReviewRequest {
     ElicitationReviewRequest {
         server_name: "browser-use".to_string(),
         request_id: rmcp::model::NumberOrString::Number(7),
-        approvals_reviewer: ApprovalsReviewer::AutoReview,
         elicitation: CreateElicitationRequestParams::FormElicitationParams {
             meta,
             message: "Allow origin?".to_string(),
@@ -172,7 +171,6 @@ fn guardian_elicitation_review_request_declines_unsupported_opt_in_shapes() {
     let url_request = ElicitationReviewRequest {
         server_name: "browser-use".to_string(),
         request_id: rmcp::model::NumberOrString::Number(8),
-        approvals_reviewer: ApprovalsReviewer::AutoReview,
         elicitation: CreateElicitationRequestParams::UrlElicitationParams {
             meta: guardian_meta(Some(json!({}))),
             message: "Open URL".to_string(),
@@ -188,7 +186,6 @@ fn guardian_elicitation_review_request_declines_unsupported_opt_in_shapes() {
     let non_empty_schema_request = ElicitationReviewRequest {
         server_name: "browser-use".to_string(),
         request_id: rmcp::model::NumberOrString::Number(9),
-        approvals_reviewer: ApprovalsReviewer::AutoReview,
         elicitation: CreateElicitationRequestParams::FormElicitationParams {
             meta: guardian_meta(Some(json!({}))),
             message: "Allow origin?".to_string(),

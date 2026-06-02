@@ -5,7 +5,6 @@
 //! connector allow-list filtering, and the normalization that turns app
 //! connector/tool metadata into model-visible MCP callable names.
 
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Instant;
 
@@ -14,7 +13,6 @@ use crate::runtime::emit_duration;
 use crate::tools::MCP_TOOLS_CACHE_WRITE_DURATION_METRIC;
 use crate::tools::ToolInfo;
 use anyhow::Context;
-use codex_config::types::ApprovalsReviewer;
 use codex_login::CodexAuth;
 use codex_protocol::mcp::McpServerInfo;
 use codex_utils_plugins::mcp_connector::is_connector_id_allowed;
@@ -23,41 +21,6 @@ use serde::Deserialize;
 use serde::Serialize;
 use sha1::Digest;
 use sha1::Sha1;
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct McpApprovalsReviewerPolicy {
-    default: ApprovalsReviewer,
-    codex_apps_by_connector_id: HashMap<String, ApprovalsReviewer>,
-}
-
-impl McpApprovalsReviewerPolicy {
-    pub fn new(
-        default: ApprovalsReviewer,
-        codex_apps_by_connector_id: HashMap<String, ApprovalsReviewer>,
-    ) -> Self {
-        Self {
-            default,
-            codex_apps_by_connector_id,
-        }
-    }
-
-    pub fn resolve(&self, server_name: &str, connector_id: Option<&str>) -> ApprovalsReviewer {
-        if server_name == CODEX_APPS_MCP_SERVER_NAME
-            && let Some(reviewer) = connector_id
-                .and_then(|connector_id| self.codex_apps_by_connector_id.get(connector_id))
-        {
-            return *reviewer;
-        }
-
-        self.default
-    }
-}
-
-impl Default for McpApprovalsReviewerPolicy {
-    fn default() -> Self {
-        Self::new(ApprovalsReviewer::User, HashMap::new())
-    }
-}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CodexAppsToolsCacheKey {
@@ -350,30 +313,4 @@ fn sha1_hex(s: &str) -> String {
     hasher.update(s.as_bytes());
     let sha1 = hasher.finalize();
     format!("{sha1:x}")
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn mcp_approvals_reviewer_policy_only_applies_connector_overrides_to_codex_apps() {
-        let policy = McpApprovalsReviewerPolicy::new(
-            ApprovalsReviewer::User,
-            HashMap::from([("calendar".to_string(), ApprovalsReviewer::AutoReview)]),
-        );
-
-        assert_eq!(
-            policy.resolve(CODEX_APPS_MCP_SERVER_NAME, Some("calendar")),
-            ApprovalsReviewer::AutoReview
-        );
-        assert_eq!(
-            policy.resolve("custom_server", Some("calendar")),
-            ApprovalsReviewer::User
-        );
-        assert_eq!(
-            policy.resolve(CODEX_APPS_MCP_SERVER_NAME, Some("drive")),
-            ApprovalsReviewer::User
-        );
-    }
 }
