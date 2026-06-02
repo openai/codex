@@ -77,9 +77,9 @@ impl ToolExecutor<ToolCall> for ImageGenerationTool {
         imagegen_tool_spec()
     }
 
-    /// Exposes image generation directly and through the nested code-mode tool surface.
+    /// Keeps this model-facing tool out of the nested code-mode tool surface.
     fn exposure(&self) -> ToolExposure {
-        ToolExposure::Direct
+        ToolExposure::DirectModelOnly
     }
 
     /// Executes the selected image operation and returns the completed image result.

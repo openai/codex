@@ -17,7 +17,7 @@ mod experimental_feature_list;
 mod external_agent_config;
 mod fs;
 mod hooks_list;
-mod imagegen_extension;
+mod image_generation;
 mod initialize;
 mod marketplace_add;
 mod marketplace_remove;
