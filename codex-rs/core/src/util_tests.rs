@@ -23,6 +23,11 @@ fn feedback_tags_macro_compiles() {
     feedback_tags!(model = "gpt-5.2", cached = true, debug_only = OnlyDebug);
 }
 
+#[test]
+fn ci_test_intentionally_fails_to_verify_bazel_runs_codex_core_tests() {
+    panic!("intentional codex-core CI test failure");
+}
+
 #[derive(Default)]
 struct TagCollectorVisitor {
     tags: BTreeMap<String, String>,
