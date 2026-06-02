@@ -1,4 +1,10 @@
 use codex_api::AuthProvider;
+use codex_api::SharedAuthProvider;
+use codex_client::INTEGRITY_STATE_HEADER_NAME;
+use codex_client::INTEGRITY_STATE_UPDATE_HEADER_NAME;
+use codex_client::NativeIntegrityStateContext;
+use codex_client::NativeIntegritySurface;
+use codex_client::is_allowed_chatgpt_request_url;
 use http::HeaderMap;
 use http::HeaderValue;
 
@@ -46,10 +52,91 @@ impl AuthProvider for BearerAuthProvider {
     }
 }
 
+#[derive(Clone)]
+pub(crate) struct NativeIntegrityAuthProvider {
+    auth: SharedAuthProvider,
+    state: NativeIntegrityStateContext,
+    surface: NativeIntegritySurface,
+}
+
+impl NativeIntegrityAuthProvider {
+    pub(crate) fn new(auth: SharedAuthProvider, state: NativeIntegrityStateContext) -> Self {
+        let surface = state.surface();
+        Self {
+            auth,
+            state,
+            surface,
+        }
+    }
+}
+
+impl AuthProvider for NativeIntegrityAuthProvider {
+    fn add_auth_headers(&self, headers: &mut HeaderMap) {
+        self.auth.add_auth_headers(headers);
+    }
+
+    fn add_auth_headers_for_url(&self, request_url: &str, headers: &mut HeaderMap) {
+        self.auth.add_auth_headers_for_url(request_url, headers);
+        if !is_allowed_chatgpt_request_url(request_url) {
+            return;
+        }
+
+        match self.state.load_for_surface(self.surface) {
+            Ok(Some(state_file)) => {
+                if let Ok(header) = HeaderValue::from_str(&state_file.state) {
+                    let _ = headers.insert(INTEGRITY_STATE_HEADER_NAME, header);
+                }
+            }
+            Ok(None) => {}
+            Err(error) => {
+                tracing::warn!("failed to load native integrity state: {error}");
+            }
+        }
+    }
+
+    fn observe_response_headers(
+        &self,
+        request_url: &str,
+        request_headers: &HeaderMap,
+        response_headers: &HeaderMap,
+    ) {
+        self.auth
+            .observe_response_headers(request_url, request_headers, response_headers);
+        if !is_allowed_chatgpt_request_url(request_url) {
+            return;
+        }
+
+        let Some(expected_state) = request_headers
+            .get(INTEGRITY_STATE_HEADER_NAME)
+            .and_then(|value| value.to_str().ok())
+        else {
+            return;
+        };
+        let Some(next_state) = response_headers
+            .get(INTEGRITY_STATE_UPDATE_HEADER_NAME)
+            .and_then(|value| value.to_str().ok())
+        else {
+            return;
+        };
+
+        if let Err(error) = self.state.compare_and_store_for_surface(
+            self.surface,
+            expected_state,
+            next_state.to_string(),
+        ) {
+            tracing::warn!("failed to rotate native integrity state: {error}");
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_client::NativeIntegrityStateFile;
+    use codex_client::NativeIntegrityStateStore;
     use pretty_assertions::assert_eq;
+    use std::sync::Arc;
+    use tempfile::TempDir;
 
     #[test]
     fn bearer_auth_provider_reports_when_auth_header_will_attach() {
@@ -106,5 +193,80 @@ mod tests {
                 .and_then(|value| value.to_str().ok()),
             Some("true")
         );
+    }
+
+    #[test]
+    fn native_integrity_provider_scopes_and_rotates_surface_state() {
+        let codex_home = TempDir::new().expect("tempdir");
+        let context = NativeIntegrityStateContext::new(
+            codex_home.path().to_path_buf(),
+            NativeIntegritySurface::CodexDesktop,
+        );
+        let store = NativeIntegrityStateStore::new(codex_home.path().to_path_buf());
+        store
+            .replace(
+                NativeIntegritySurface::CodexDesktop,
+                "ois1.initial.nonce.ciphertext".to_string(),
+            )
+            .expect("state should store");
+        let provider = NativeIntegrityAuthProvider::new(
+            Arc::new(BearerAuthProvider::new("access-token".to_string())),
+            context.clone(),
+        );
+        context.set_surface(NativeIntegritySurface::CodexCli);
+        store
+            .replace(
+                NativeIntegritySurface::CodexCli,
+                "ois1.cli.nonce.ciphertext".to_string(),
+            )
+            .expect("CLI state should store");
+
+        let mut request_headers = HeaderMap::new();
+        provider.add_auth_headers_for_url(
+            "https://chatgpt.com/backend-api/codex/responses",
+            &mut request_headers,
+        );
+        assert_eq!(
+            request_headers
+                .get(INTEGRITY_STATE_HEADER_NAME)
+                .and_then(|value| value.to_str().ok()),
+            Some("ois1.initial.nonce.ciphertext")
+        );
+
+        let mut response_headers = HeaderMap::new();
+        response_headers.insert(
+            INTEGRITY_STATE_UPDATE_HEADER_NAME,
+            HeaderValue::from_static("ois1.rotated.nonce.ciphertext"),
+        );
+        provider.observe_response_headers(
+            "https://chatgpt.com/backend-api/codex/responses",
+            &request_headers,
+            &response_headers,
+        );
+        assert_eq!(
+            store
+                .load(NativeIntegritySurface::CodexDesktop)
+                .expect("state should load")
+                .expect("state should exist"),
+            NativeIntegrityStateFile {
+                state: "ois1.rotated.nonce.ciphertext".to_string(),
+            }
+        );
+        assert_eq!(
+            store
+                .load(NativeIntegritySurface::CodexCli)
+                .expect("CLI state should load")
+                .expect("CLI state should exist"),
+            NativeIntegrityStateFile {
+                state: "ois1.cli.nonce.ciphertext".to_string(),
+            }
+        );
+
+        let mut external_headers = HeaderMap::new();
+        provider.add_auth_headers_for_url(
+            "https://example.com/backend-api/codex/responses",
+            &mut external_headers,
+        );
+        assert!(!external_headers.contains_key(INTEGRITY_STATE_HEADER_NAME));
     }
 }

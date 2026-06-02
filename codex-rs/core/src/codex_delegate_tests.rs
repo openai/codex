@@ -2,6 +2,7 @@ use super::*;
 use crate::mcp_tool_call::MCP_TOOL_APPROVAL_DECLINE_SYNTHETIC;
 use crate::mcp_tool_call::MCP_TOOL_APPROVAL_QUESTION_ID_PREFIX;
 use async_channel::bounded;
+use codex_client::NativeIntegritySurface;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::models::NetworkPermissions;
@@ -179,6 +180,40 @@ async fn run_codex_thread_interactive_respects_pre_cancelled_spawn() {
     .expect("cancelled delegate spawn should not hang");
 
     assert!(matches!(result, Err(CodexErr::TurnAborted)));
+}
+
+#[tokio::test]
+async fn run_codex_thread_interactive_inherits_parent_native_integrity_surface() {
+    let (parent_session, parent_ctx, _rx_events) =
+        crate::session::tests::make_session_and_context_with_rx().await;
+    parent_session
+        .services
+        .model_client
+        .set_native_integrity_surface(NativeIntegritySurface::CodexDesktop);
+    let cancel_token = CancellationToken::new();
+
+    let delegated = run_codex_thread_interactive(
+        parent_ctx.config.as_ref().clone(),
+        Arc::clone(&parent_session.services.auth_manager),
+        Arc::clone(&parent_session.services.models_manager),
+        parent_session,
+        parent_ctx,
+        cancel_token.clone(),
+        SubAgentSource::Review,
+        /*initial_history*/ None,
+    )
+    .await
+    .expect("delegate should spawn");
+
+    assert_eq!(
+        delegated
+            .session
+            .services
+            .model_client
+            .native_integrity_surface(),
+        Some(NativeIntegritySurface::CodexDesktop)
+    );
+    cancel_token.cancel();
 }
 
 #[tokio::test]

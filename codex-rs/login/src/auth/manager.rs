@@ -1401,6 +1401,10 @@ impl AuthManager {
         })
     }
 
+    pub fn codex_home(&self) -> &Path {
+        &self.codex_home
+    }
+
     /// Current cached auth (clone) without attempting a refresh.
     pub fn auth_cached(&self) -> Option<CodexAuth> {
         self.inner.read().ok().and_then(|c| c.auth.clone())
