@@ -331,31 +331,6 @@ impl AccountRequestProcessor {
         save_amazon_bedrock_auth(&self.config.codex_home, key, region)
             .map_err(|err| internal_error(format!("failed to save Amazon Bedrock auth: {err}")))?;
 
-        self.config_manager
-            .batch_write(ConfigBatchWriteParams {
-                edits: vec![
-                    ConfigWriteEdit {
-                        key_path: "model_provider".to_string(),
-                        value: serde_json::json!(AMAZON_BEDROCK_PROVIDER_ID),
-                        merge_strategy: MergeStrategy::Upsert,
-                    },
-                    ConfigWriteEdit {
-                        key_path: format!(
-                            "model_providers.{AMAZON_BEDROCK_PROVIDER_ID}.aws.region"
-                        ),
-                        value: serde_json::json!(region),
-                        merge_strategy: MergeStrategy::Upsert,
-                    },
-                ],
-                file_path: None,
-                expected_version: None,
-                reload_user_config: false,
-            })
-            .await
-            .map_err(|err| {
-                internal_error(format!("failed to update Amazon Bedrock config: {err}"))
-            })?;
-
         let next_config = self
             .config_manager
             .load_latest_config(/*fallback_cwd*/ None)
@@ -796,54 +771,63 @@ impl AccountRequestProcessor {
             }
         }
 
-        match self.auth_manager.logout_with_revoke().await {
-            Ok(_) => {}
-            Err(err) => {
-                return Err(internal_error(format!("logout failed: {err}")));
+        let current_config = self
+            .config_manager
+            .load_latest_config(/*fallback_cwd*/ None)
+            .await
+            .map_err(|err| internal_error(format!("failed to reload config: {err}")))?;
+        if current_config.model_provider_id == AMAZON_BEDROCK_PROVIDER_ID {
+            let provider = create_model_provider(
+                current_config.model_provider.clone(),
+                Some(self.auth_manager.clone()),
+                Some(current_config.codex_home.to_path_buf()),
+            );
+            let account_state = provider.account_state().map_err(|err| match err {
+                ProviderAccountError::MissingChatgptAccountDetails => {
+                    invalid_request("email and plan type are required for chatgpt authentication")
+                }
+            })?;
+            let codex_managed_auth = account_state.codex_managed_auth;
+            let Some(ProviderAccount::AmazonBedrock) = account_state.account else {
+                return Err(invalid_request(
+                    "active Amazon Bedrock provider did not report an Amazon Bedrock account",
+                ));
+            };
+            if !codex_managed_auth {
+                return Ok(None);
             }
-        }
-        let removed_bedrock_auth =
+
             delete_amazon_bedrock_auth(&self.config.codex_home).map_err(|err| {
                 internal_error(format!("failed to remove Amazon Bedrock auth: {err}"))
             })?;
-        if removed_bedrock_auth {
-            let current_config = self
+            let next_config = self
                 .config_manager
                 .load_latest_config(/*fallback_cwd*/ None)
                 .await
                 .map_err(|err| internal_error(format!("failed to reload config: {err}")))?;
-            if current_config.model_provider_id == AMAZON_BEDROCK_PROVIDER_ID {
-                self.config_manager
-                    .batch_write(ConfigBatchWriteParams {
-                        edits: vec![ConfigWriteEdit {
-                            key_path: "model_provider".to_string(),
-                            value: serde_json::Value::Null,
-                            merge_strategy: MergeStrategy::Replace,
-                        }],
-                        file_path: None,
-                        expected_version: None,
-                        reload_user_config: false,
-                    })
-                    .await
-                    .map_err(|err| {
-                        internal_error(format!("failed to update Amazon Bedrock config: {err}"))
-                    })?;
+            for thread_id in self.thread_manager.list_thread_ids().await {
+                let Ok(thread) = self.thread_manager.get_thread(thread_id).await else {
+                    continue;
+                };
+                thread.refresh_runtime_config(next_config.clone()).await;
+            }
+            Self::spawn_effective_plugins_changed_task(
+                Arc::clone(&self.thread_manager),
+                self.config_manager.clone(),
+            );
+            Self::maybe_refresh_remote_installed_plugins_cache_for_current_config(
+                &self.config_manager,
+                &self.thread_manager,
+                self.auth_manager.auth_cached(),
+            )
+            .await;
+            return Ok(None);
+        }
 
-                let next_config = self
-                    .config_manager
-                    .load_latest_config(/*fallback_cwd*/ None)
-                    .await
-                    .map_err(|err| internal_error(format!("failed to reload config: {err}")))?;
-                for thread_id in self.thread_manager.list_thread_ids().await {
-                    let Ok(thread) = self.thread_manager.get_thread(thread_id).await else {
-                        continue;
-                    };
-                    thread.refresh_runtime_config(next_config.clone()).await;
-                }
-                Self::spawn_effective_plugins_changed_task(
-                    Arc::clone(&self.thread_manager),
-                    self.config_manager.clone(),
-                );
+        match self.auth_manager.logout_with_revoke().await {
+            Ok(_) => {}
+            Err(err) => {
+                return Err(internal_error(format!("logout failed: {err}")));
             }
         }
 
@@ -997,6 +981,7 @@ impl AccountRequestProcessor {
         Ok(GetAccountResponse {
             account,
             requires_openai_auth: account_state.requires_openai_auth,
+            codex_managed_auth: account_state.codex_managed_auth,
         })
     }
 

@@ -45,6 +45,9 @@
         },
         {
           "properties": {
+            "authSource": {
+              "$ref": "#/definitions/AmazonBedrockAuthSource"
+            },
             "type": {
               "enum": [
                 "amazonBedrock"
@@ -54,12 +57,20 @@
             }
           },
           "required": [
+            "authSource",
             "type"
           ],
           "title": "AmazonBedrockAccount",
           "type": "object"
         }
       ]
+    },
+    "AmazonBedrockAuthSource": {
+      "enum": [
+        "codexManaged",
+        "awsManaged"
+      ],
+      "type": "string"
     },
     "PlanType": {
       "enum": [

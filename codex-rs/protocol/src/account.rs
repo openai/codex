@@ -34,7 +34,10 @@ pub enum PlanType {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProviderAccount {
     ApiKey,
-    Chatgpt { email: String, plan_type: PlanType },
+    Chatgpt {
+        email: String,
+        plan_type: PlanType,
+    },
     AmazonBedrock,
 }
 

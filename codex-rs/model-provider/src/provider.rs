@@ -45,6 +45,7 @@ impl Default for ProviderCapabilities {
 pub struct ProviderAccountState {
     pub account: Option<ProviderAccount>,
     pub requires_openai_auth: bool,
+    pub codex_managed_auth: bool,
 }
 
 /// Error returned when a provider cannot construct its app-visible account state.
@@ -231,6 +232,7 @@ impl ModelProvider for ConfiguredModelProvider {
         };
 
         Ok(ProviderAccountState {
+            codex_managed_auth: account.is_some(),
             account,
             requires_openai_auth: self.info.requires_openai_auth,
         })
@@ -438,6 +440,7 @@ mod tests {
             Ok(ProviderAccountState {
                 account: None,
                 requires_openai_auth: true,
+                codex_managed_auth: false,
             })
         );
     }
@@ -457,6 +460,7 @@ mod tests {
             Ok(ProviderAccountState {
                 account: Some(ProviderAccount::ApiKey),
                 requires_openai_auth: true,
+                codex_managed_auth: true,
             })
         );
     }
@@ -480,6 +484,7 @@ mod tests {
             Ok(ProviderAccountState {
                 account: None,
                 requires_openai_auth: false,
+                codex_managed_auth: false,
             })
         );
     }
@@ -497,6 +502,7 @@ mod tests {
             Ok(ProviderAccountState {
                 account: Some(ProviderAccount::AmazonBedrock),
                 requires_openai_auth: false,
+                codex_managed_auth: false,
             })
         );
     }

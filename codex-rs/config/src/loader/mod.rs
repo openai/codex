@@ -22,6 +22,7 @@ use crate::merge::merge_toml_values;
 use crate::overrides::build_cli_overrides_layer;
 use crate::project_root_markers::default_project_root_markers;
 use crate::project_root_markers::project_root_markers_from_config;
+use crate::provider_state::load_provider_state_layer;
 use crate::state::ConfigLayerEntry;
 use crate::state::ConfigLayerStack;
 use crate::state::ConfigLoadOptions;
@@ -346,6 +347,10 @@ pub async fn load_config_layers_state(
         .await?;
         layers.extend(project_layers.layers);
         startup_warnings = Some(project_layers.startup_warnings);
+    }
+
+    if let Some(provider_state_layer) = load_provider_state_layer(fs, codex_home).await? {
+        layers.push(provider_state_layer);
     }
 
     // Add a layer for runtime overrides from the CLI or UI, if any exist.

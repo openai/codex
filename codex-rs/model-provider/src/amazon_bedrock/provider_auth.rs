@@ -11,6 +11,8 @@ use serde::Serialize;
 pub struct AmazonBedrockAuth {
     pub bearer_token: String,
     pub region: String,
+    #[serde(default = "default_activates_provider")]
+    pub activates_provider: bool,
 }
 
 pub(super) type StoredAmazonBedrockAuth = std::result::Result<Option<AmazonBedrockAuth>, String>;
@@ -23,6 +25,7 @@ pub fn save_amazon_bedrock_auth(
     let auth = AmazonBedrockAuth {
         bearer_token: bearer_token.to_string(),
         region: region.to_string(),
+        activates_provider: true,
     };
     let auth_path = amazon_bedrock_auth_file(codex_home);
     if let Some(parent) = auth_path.parent() {
@@ -97,6 +100,7 @@ mod tests {
             Some(AmazonBedrockAuth {
                 bearer_token: "bedrock-key".to_string(),
                 region: "us-east-1".to_string(),
+                activates_provider: true,
             })
         );
         assert!(delete_amazon_bedrock_auth(&codex_home).expect("delete auth"));
@@ -107,4 +111,8 @@ mod tests {
         assert!(!delete_amazon_bedrock_auth(&codex_home).expect("delete missing auth"));
         let _ = fs::remove_dir_all(&codex_home);
     }
+}
+
+fn default_activates_provider() -> bool {
+    true
 }

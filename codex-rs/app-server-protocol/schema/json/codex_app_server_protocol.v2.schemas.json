@@ -49,6 +49,9 @@
         },
         {
           "properties": {
+            "authSource": {
+              "$ref": "#/definitions/AmazonBedrockAuthSource"
+            },
             "type": {
               "enum": [
                 "amazonBedrock"
@@ -58,6 +61,7 @@
             }
           },
           "required": [
+            "authSource",
             "type"
           ],
           "title": "AmazonBedrockAccount",
@@ -266,6 +270,13 @@
       "type": "object"
     },
     "AgentPath": {
+      "type": "string"
+    },
+    "AmazonBedrockAuthSource": {
+      "enum": [
+        "codexManaged",
+        "awsManaged"
+      ],
       "type": "string"
     },
     "AnalyticsConfig": {
@@ -4062,6 +4073,31 @@
             "type"
           ],
           "title": "ProjectConfigLayerSource",
+          "type": "object"
+        },
+        {
+          "description": "Local Codex-owned provider state, such as a provider activated by managed auth.",
+          "properties": {
+            "file": {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            },
+            "provider": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "providerState"
+              ],
+              "title": "ProviderStateConfigLayerSourceType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "file",
+            "provider",
+            "type"
+          ],
+          "title": "ProviderStateConfigLayerSource",
           "type": "object"
         },
         {

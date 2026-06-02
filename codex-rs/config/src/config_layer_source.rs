@@ -20,6 +20,9 @@ pub fn format_config_layer_source(source: &ConfigLayerSource, config_toml_file: 
                 dot_codex_folder.as_path().display()
             )
         }
+        ConfigLayerSource::ProviderState { provider, file } => {
+            format!("provider state ({provider}, {})", file.as_path().display())
+        }
         ConfigLayerSource::SessionFlags => "session-flags".to_string(),
         ConfigLayerSource::LegacyManagedConfigTomlFromFile { file } => {
             format!("legacy managed_config.toml ({})", file.as_path().display())

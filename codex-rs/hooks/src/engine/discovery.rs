@@ -371,6 +371,9 @@ fn config_toml_source_path(layer: &ConfigLayerEntry) -> AbsolutePathBuf {
         ConfigLayerSource::EnterpriseManaged { id, name } => synthetic_layer_path(&format!(
             "<enterprise-managed:{name}:{id}>/{CONFIG_TOML_FILE}"
         )),
+        ConfigLayerSource::ProviderState { provider, .. } => {
+            synthetic_layer_path(&format!("<provider-state:{provider}>/{CONFIG_TOML_FILE}"))
+        }
         ConfigLayerSource::LegacyManagedConfigTomlFromMdm => {
             synthetic_layer_path("<legacy-managed-config.toml-mdm>/managed_config.toml")
         }
@@ -612,6 +615,7 @@ fn hook_metadata_for_config_layer_source(source: &ConfigLayerSource) -> (HookSou
         ConfigLayerSource::Project { .. } => (HookSource::Project, false),
         ConfigLayerSource::Mdm { .. } => (HookSource::Mdm, true),
         ConfigLayerSource::EnterpriseManaged { .. } => (HookSource::CloudManagedConfig, true),
+        ConfigLayerSource::ProviderState { .. } => (HookSource::Unknown, false),
         ConfigLayerSource::SessionFlags => (HookSource::SessionFlags, false),
         ConfigLayerSource::LegacyManagedConfigTomlFromFile { .. } => {
             (HookSource::LegacyManagedConfigFile, true)

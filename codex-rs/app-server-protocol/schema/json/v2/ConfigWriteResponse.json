@@ -155,6 +155,31 @@
           "type": "object"
         },
         {
+          "description": "Local Codex-owned provider state, such as a provider activated by managed auth.",
+          "properties": {
+            "file": {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            },
+            "provider": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "providerState"
+              ],
+              "title": "ProviderStateConfigLayerSourceType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "file",
+            "provider",
+            "type"
+          ],
+          "title": "ProviderStateConfigLayerSource",
+          "type": "object"
+        },
+        {
           "description": "Session-layer overrides supplied via `-c`/`--config`.",
           "properties": {
             "type": {

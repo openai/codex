@@ -217,6 +217,7 @@ mod tests {
         let auth = AmazonBedrockAuth {
             bearer_token: "stored-bedrock-key".to_string(),
             region: "eu-west-1".to_string(),
+            activates_provider: true,
         };
         let stored_auth: StoredAmazonBedrockAuth = Ok(Some(auth));
 

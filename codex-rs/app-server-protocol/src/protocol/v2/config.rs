@@ -80,6 +80,15 @@ pub enum ConfigLayerSource {
         dot_codex_folder: AbsolutePathBuf,
     },
 
+    /// Local Codex-owned provider state, such as a provider activated by
+    /// managed auth.
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    ProviderState {
+        provider: String,
+        file: AbsolutePathBuf,
+    },
+
     /// Session-layer overrides supplied via `-c`/`--config`.
     SessionFlags,
 
@@ -112,6 +121,7 @@ impl ConfigLayerSource {
                 }
             }
             ConfigLayerSource::Project { .. } => 25,
+            ConfigLayerSource::ProviderState { .. } => 28,
             ConfigLayerSource::SessionFlags => 30,
             ConfigLayerSource::LegacyManagedConfigTomlFromFile { .. } => 40,
             ConfigLayerSource::LegacyManagedConfigTomlFromMdm => 50,

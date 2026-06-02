@@ -19,6 +19,7 @@ pub mod permissions_toml;
 mod plugin_edit;
 pub mod profile_toml;
 mod project_root_markers;
+mod provider_state;
 mod requirements_exec_policy;
 mod requirements_layers;
 pub mod schema;

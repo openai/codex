@@ -250,25 +250,33 @@ async fn logout_account_removes_auth_and_notifies() -> Result<()> {
 }
 
 #[tokio::test]
-async fn logout_account_removes_bedrock_model_provider_after_managed_auth_removed() -> Result<()> {
+async fn logout_account_removes_managed_bedrock_provider_state() -> Result<()> {
     let codex_home = TempDir::new()?;
     create_config_toml(
         codex_home.path(),
         CreateConfigTomlParams {
-            model_provider_id: Some("amazon-bedrock".to_string()),
-            extra_provider_config: Some(
-                r#"[model_providers.amazon-bedrock.aws]
-region = "us-west-2"
-"#
-                .to_string(),
-            ),
             ..Default::default()
         },
     )?;
     save_amazon_bedrock_auth(codex_home.path(), "bedrock-key", "us-west-2")?;
 
-    let mut mcp = McpProcess::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+    let mut mcp =
+        TestAppServer::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let account_id = mcp
+        .send_get_account_request(GetAccountParams {
+            refresh_token: false,
+        })
+        .await?;
+    let account_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(account_id)),
+    )
+    .await??;
+    let account: GetAccountResponse = to_response(account_resp)?;
+    assert_eq!(account.account, Some(Account::AmazonBedrock {}));
+    assert!(account.codex_managed_auth);
 
     let id = mcp.send_logout_account_request().await?;
     let resp: JSONRPCResponse = timeout(
@@ -289,22 +297,14 @@ region = "us-west-2"
     );
     let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
     assert!(
-        !config.contains("model_provider = \"amazon-bedrock\""),
-        "active Bedrock model provider should be removed after managed Bedrock logout"
-    );
-    assert!(
-        config.contains("[model_providers.amazon-bedrock.aws]"),
-        "Bedrock provider config should be preserved"
-    );
-    assert!(
-        config.contains("region = \"us-west-2\""),
-        "Bedrock region should be preserved"
+        config.contains("model_provider = \"mock_provider\""),
+        "managed Bedrock login should not mutate user model provider config"
     );
     Ok(())
 }
 
 #[tokio::test]
-async fn logout_account_keeps_bedrock_model_provider_without_managed_auth() -> Result<()> {
+async fn logout_account_noops_for_aws_managed_bedrock_auth() -> Result<()> {
     let codex_home = TempDir::new()?;
     create_config_toml(
         codex_home.path(),
@@ -320,7 +320,8 @@ region = "us-west-2"
         },
     )?;
 
-    let mut mcp = McpProcess::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+    let mut mcp =
+        TestAppServer::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let id = mcp.send_logout_account_request().await?;
@@ -335,6 +336,47 @@ region = "us-west-2"
     assert!(
         config.contains("model_provider = \"amazon-bedrock\""),
         "unmanaged Bedrock logout should not change the active provider"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn login_account_amazon_bedrock_activates_provider_without_user_config_write() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), CreateConfigTomlParams::default())?;
+
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let login_id = mcp
+        .send_login_account_amazon_bedrock_request("bedrock-key", "us-west-2")
+        .await?;
+    let login_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(login_id)),
+    )
+    .await??;
+    let login: LoginAccountResponse = to_response(login_resp)?;
+    assert_eq!(login, LoginAccountResponse::AmazonBedrock {});
+
+    let get_id = mcp
+        .send_get_account_request(GetAccountParams {
+            refresh_token: false,
+        })
+        .await?;
+    let get_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(get_id)),
+    )
+    .await??;
+    let account: GetAccountResponse = to_response(get_resp)?;
+    assert_eq!(account.account, Some(Account::AmazonBedrock {}));
+    assert!(account.codex_managed_auth);
+
+    let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
+    assert!(
+        config.contains("model_provider = \"mock_provider\""),
+        "Amazon Bedrock login should not mutate user model provider config"
     );
     Ok(())
 }
@@ -410,6 +452,7 @@ async fn set_auth_token_updates_account_and_notifies() -> Result<()> {
                 plan_type: AccountPlanType::Pro,
             }),
             requires_openai_auth: true,
+            codex_managed_auth: true,
         }
     );
 
@@ -478,6 +521,7 @@ async fn account_read_refresh_token_is_noop_in_external_mode() -> Result<()> {
                 plan_type: AccountPlanType::Pro,
             }),
             requires_openai_auth: true,
+            codex_managed_auth: true,
         }
     );
 
@@ -1688,6 +1732,7 @@ async fn get_account_with_api_key() -> Result<()> {
     let expected = GetAccountResponse {
         account: Some(Account::ApiKey {}),
         requires_openai_auth: true,
+        codex_managed_auth: true,
     };
     assert_eq!(received, expected);
     Ok(())
@@ -1722,6 +1767,7 @@ async fn get_account_when_auth_not_required() -> Result<()> {
     let expected = GetAccountResponse {
         account: None,
         requires_openai_auth: false,
+        codex_managed_auth: false,
     };
     assert_eq!(received, expected);
     Ok(())
@@ -1763,6 +1809,7 @@ region = "us-west-2"
     let expected = GetAccountResponse {
         account: Some(Account::AmazonBedrock {}),
         requires_openai_auth: false,
+        codex_managed_auth: false,
     };
     assert_eq!(received, expected);
     Ok(())
@@ -1808,6 +1855,7 @@ async fn get_account_with_chatgpt() -> Result<()> {
             plan_type: AccountPlanType::Pro,
         }),
         requires_openai_auth: true,
+        codex_managed_auth: true,
     };
     assert_eq!(received, expected);
     Ok(())
@@ -1891,6 +1939,7 @@ async fn get_account_omits_chatgpt_after_permanent_refresh_failure() -> Result<(
         GetAccountResponse {
             account: None,
             requires_openai_auth: true,
+            codex_managed_auth: false,
         }
     );
     server.verify().await;
@@ -1935,6 +1984,7 @@ async fn get_account_with_chatgpt_missing_plan_claim_returns_unknown() -> Result
             plan_type: AccountPlanType::Unknown,
         }),
         requires_openai_auth: true,
+        codex_managed_auth: true,
     };
     assert_eq!(received, expected);
     Ok(())

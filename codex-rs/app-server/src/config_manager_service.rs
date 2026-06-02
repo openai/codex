@@ -631,6 +631,12 @@ fn override_message(layer: &ConfigLayerSource) -> String {
             "Overridden by project config: {}/{CONFIG_TOML_FILE}",
             dot_codex_folder.display(),
         ),
+        ConfigLayerSource::ProviderState { provider, file } => {
+            format!(
+                "Overridden by provider state ({provider}): {}",
+                file.display()
+            )
+        }
         ConfigLayerSource::SessionFlags => "Overridden by session flags".to_string(),
         ConfigLayerSource::User { file, .. } => {
             format!("Overridden by user config: {}", file.display())

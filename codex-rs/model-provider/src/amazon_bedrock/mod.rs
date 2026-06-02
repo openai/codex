@@ -90,9 +90,11 @@ impl ModelProvider for AmazonBedrockModelProvider {
     }
 
     fn account_state(&self) -> ProviderAccountResult {
+        let codex_managed_auth = matches!(&self.stored_auth, Ok(Some(_)));
         Ok(ProviderAccountState {
             account: Some(ProviderAccount::AmazonBedrock),
             requires_openai_auth: false,
+            codex_managed_auth,
         })
     }
 

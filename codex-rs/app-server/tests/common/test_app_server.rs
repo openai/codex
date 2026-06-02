@@ -1180,6 +1180,20 @@ impl TestAppServer {
         self.send_request("account/login/start", Some(params)).await
     }
 
+    /// Send an `account/login/start` JSON-RPC request for Amazon Bedrock login.
+    pub async fn send_login_account_amazon_bedrock_request(
+        &mut self,
+        key: &str,
+        region: &str,
+    ) -> anyhow::Result<i64> {
+        let params = serde_json::json!({
+            "type": "amazonBedrock",
+            "key": key,
+            "region": region,
+        });
+        self.send_request("account/login/start", Some(params)).await
+    }
+
     /// Send an `account/login/cancel` JSON-RPC request.
     pub async fn send_cancel_login_account_request(
         &mut self,
