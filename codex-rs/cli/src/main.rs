@@ -54,6 +54,9 @@ mod remote_control_cmd;
 #[cfg(target_os = "windows")]
 mod sandbox_setup;
 mod state_db_recovery;
+#[cfg(any(target_os = "linux", test))]
+#[cfg_attr(all(test, not(target_os = "linux")), allow(dead_code))]
+mod wsl_home_setup;
 #[cfg(not(windows))]
 mod wsl_paths;
 
@@ -917,6 +920,10 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
     reject_root_strict_config_for_subcommand(root_strict_config, &subcommand)?;
     if let Some(subcommand) = subcommand.as_ref() {
         profile_v2_for_subcommand(&interactive, subcommand)?;
+    }
+    #[cfg(target_os = "linux")]
+    if should_offer_wsl_home_setup(subcommand.as_ref()) {
+        wsl_home_setup::maybe_offer_wsl_home_setup()?;
     }
 
     match subcommand {
@@ -1956,6 +1963,15 @@ fn reject_remote_mode_for_subcommand(
         );
     }
     Ok(())
+}
+
+#[cfg(any(target_os = "linux", test))]
+#[cfg_attr(all(test, not(target_os = "linux")), allow(dead_code))]
+fn should_offer_wsl_home_setup(subcommand: Option<&Subcommand>) -> bool {
+    matches!(
+        subcommand,
+        None | Some(Subcommand::Login(LoginCommand { action: None, .. }))
+    )
 }
 
 fn reject_root_strict_config_for_subcommand(
