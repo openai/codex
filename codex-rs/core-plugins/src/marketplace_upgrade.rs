@@ -45,6 +45,20 @@ struct ConfiguredGitMarketplace {
     ref_name: Option<String>,
     sparse_paths: Vec<String>,
     last_revision: Option<String>,
+    persist_to_user_config: bool,
+}
+
+impl ConfiguredGitMarketplace {
+    fn has_same_source(&self, other: &Self) -> bool {
+        self.name == other.name
+            && self.source == other.source
+            && self.ref_name == other.ref_name
+            && self.sparse_paths == other.sparse_paths
+    }
+
+    fn has_same_config(&self, other: &Self) -> bool {
+        self.has_same_source(other) && self.last_revision == other.last_revision
+    }
 }
 
 impl ConfiguredMarketplaceUpgradeOutcome {
@@ -109,29 +123,45 @@ fn marketplace_install_root(codex_home: &Path) -> PathBuf {
 fn configured_git_marketplaces(
     config_layer_stack: &ConfigLayerStack,
 ) -> Vec<ConfiguredGitMarketplace> {
-    let Some(user_config) = config_layer_stack.effective_user_config() else {
-        return Vec::new();
-    };
-    let Some(marketplaces_value) = user_config.get("marketplaces") else {
-        return Vec::new();
-    };
-    let marketplaces = match marketplaces_value
-        .clone()
-        .try_into::<HashMap<String, MarketplaceConfig>>()
-    {
-        Ok(marketplaces) => marketplaces,
+    let user_marketplaces = config_layer_stack
+        .effective_user_config()
+        .and_then(|config| configured_git_marketplaces_from_config(&config).ok())
+        .unwrap_or_default()
+        .into_iter()
+        .map(|marketplace| (marketplace.name.clone(), marketplace))
+        .collect::<HashMap<_, _>>();
+
+    let effective_config = config_layer_stack.effective_config();
+    let mut configured = match configured_git_marketplaces_from_config(&effective_config) {
+        Ok(configured) => configured,
         Err(err) => {
             warn!("invalid marketplaces config while preparing auto-upgrade: {err}");
             return Vec::new();
         }
     };
 
-    let mut configured = marketplaces
-        .into_iter()
-        .filter_map(|(name, marketplace)| configured_git_marketplace_from_config(name, marketplace))
-        .collect::<Vec<_>>();
+    for marketplace in &mut configured {
+        marketplace.persist_to_user_config = user_marketplaces
+            .get(&marketplace.name)
+            .is_some_and(|user_marketplace| user_marketplace.has_same_source(marketplace));
+    }
     configured.sort_unstable_by(|left, right| left.name.cmp(&right.name));
     configured
+}
+
+fn configured_git_marketplaces_from_config(
+    config: &toml::Value,
+) -> Result<Vec<ConfiguredGitMarketplace>, toml::de::Error> {
+    let Some(marketplaces_value) = config.get("marketplaces") else {
+        return Ok(Vec::new());
+    };
+    let marketplaces = marketplaces_value
+        .clone()
+        .try_into::<HashMap<String, MarketplaceConfig>>()?;
+    Ok(marketplaces
+        .into_iter()
+        .filter_map(|(name, marketplace)| configured_git_marketplace_from_config(name, marketplace))
+        .collect())
 }
 
 fn configured_git_marketplace_from_config(
@@ -162,6 +192,7 @@ fn configured_git_marketplace_from_config(
         ref_name,
         sparse_paths: sparse_paths.unwrap_or_default(),
         last_revision,
+        persist_to_user_config: false,
     })
 }
 
@@ -178,7 +209,8 @@ fn upgrade_configured_git_marketplace(
     )?;
     let destination = install_root.join(&marketplace.name);
     if find_marketplace_manifest_path(&destination).is_some()
-        && marketplace.last_revision.as_deref() == Some(remote_revision.as_str())
+        && (!marketplace.persist_to_user_config
+            || marketplace.last_revision.as_deref() == Some(remote_revision.as_str()))
         && installed_marketplace_metadata_matches(&destination, marketplace, &remote_revision)
     {
         return Ok(None);
@@ -228,6 +260,11 @@ fn upgrade_configured_git_marketplace(
         sparse_paths: &marketplace.sparse_paths,
     };
     activate_marketplace_root(&destination, staged_dir, || {
+        // Keep marketplace definitions owned by their original config layer so
+        // future updates are not shadowed by user config.
+        if !marketplace.persist_to_user_config {
+            return Ok(());
+        }
         ensure_configured_git_marketplace_unchanged(codex_home, marketplace)?;
         record_user_marketplace(codex_home, &marketplace.name, &update).map_err(|err| {
             format!(
@@ -247,7 +284,7 @@ fn ensure_configured_git_marketplace_unchanged(
 ) -> Result<(), String> {
     let current = read_configured_git_marketplace(codex_home, &expected.name)?;
     match current {
-        Some(current) if current == *expected => Ok(()),
+        Some(current) if current.has_same_config(expected) => Ok(()),
         Some(_) => Err(format!(
             "configured marketplace `{}` changed while auto-upgrade was in flight",
             expected.name
@@ -295,3 +332,7 @@ fn read_configured_git_marketplace(
         marketplace,
     ))
 }
+
+#[cfg(test)]
+#[path = "marketplace_upgrade_tests.rs"]
+mod tests;

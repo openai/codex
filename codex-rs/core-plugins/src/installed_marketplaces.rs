@@ -18,10 +18,8 @@ pub fn installed_marketplace_roots_from_layer_stack(
     config_layer_stack: &ConfigLayerStack,
     codex_home: &Path,
 ) -> Vec<AbsolutePathBuf> {
-    let Some(user_config) = config_layer_stack.effective_user_config() else {
-        return Vec::new();
-    };
-    let Some(marketplaces_value) = user_config.get("marketplaces") else {
+    let effective_config = config_layer_stack.effective_config();
+    let Some(marketplaces_value) = effective_config.get("marketplaces") else {
         return Vec::new();
     };
     let Some(marketplaces) = marketplaces_value.as_table() else {
@@ -74,3 +72,7 @@ pub fn resolve_configured_marketplace_root(
         _ => Some(default_install_root.join(marketplace_name)),
     }
 }
+
+#[cfg(test)]
+#[path = "installed_marketplaces_tests.rs"]
+mod tests;

@@ -430,7 +430,8 @@ pub struct ConfigToml {
     #[serde(default)]
     pub plugins: HashMap<String, PluginConfig>,
 
-    /// User-level marketplace entries keyed by marketplace name.
+    /// Plugin marketplace entries keyed by marketplace name. Entries follow
+    /// normal config layer precedence.
     #[serde(default)]
     pub marketplaces: HashMap<String, MarketplaceConfig>,
 

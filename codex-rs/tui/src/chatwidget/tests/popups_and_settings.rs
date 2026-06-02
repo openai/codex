@@ -2,10 +2,14 @@ use super::*;
 use crate::app_event::ConnectorsSnapshot;
 use crate::chatwidget::connectors::ConnectorsCacheState;
 use codex_app_server_protocol::AppInfo;
+use codex_app_server_protocol::ConfigLayerSource;
 use codex_app_server_protocol::HookErrorInfo;
 use codex_app_server_protocol::HooksListEntry;
 use codex_app_server_protocol::HooksListResponse;
 use codex_app_server_protocol::MarketplaceRemoveResponse;
+use codex_config::ConfigLayerEntry;
+use codex_config::ConfigRequirements;
+use codex_config::ConfigRequirementsToml;
 use codex_features::Stage;
 use pretty_assertions::assert_eq;
 
@@ -433,6 +437,79 @@ async fn plugins_popup_upgrades_user_configured_git_marketplace_from_marketplace
         no_more_events.is_err(),
         "expected no duplicate marketplace upgrade events, got {no_more_events:?}"
     );
+}
+
+#[tokio::test]
+async fn plugins_popup_upgrades_managed_git_marketplace_without_remove_action() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Plugins, /*enabled*/ true);
+
+    let cwd = chat.config.cwd.to_path_buf();
+    chat.config.config_layer_stack = ConfigLayerStack::new(
+        vec![ConfigLayerEntry::new(
+            ConfigLayerSource::EnterpriseManaged {
+                id: "cfg_marketplaces".to_string(),
+                name: "Managed marketplaces".to_string(),
+            },
+            toml::from_str::<TomlValue>(
+                "[marketplaces.repo]\nsource_type = \"git\"\nsource = \"https://github.com/owner/repo.git\"\n",
+            )
+            .expect("marketplace config"),
+        )],
+        ConfigRequirements::default(),
+        ConfigRequirementsToml::default(),
+    )
+    .expect("config layer stack");
+
+    render_loaded_plugins_popup(
+        &mut chat,
+        plugins_test_response(vec![
+            plugins_test_curated_marketplace(Vec::new()),
+            plugins_test_repo_marketplace(vec![plugins_test_summary(
+                "plugin-debug",
+                "debug",
+                Some("Debug Plugin"),
+                Some("Debug marketplace plugin."),
+                /*installed*/ false,
+                /*enabled*/ true,
+                PluginInstallPolicy::Available,
+            )]),
+        ]),
+    );
+
+    while rx.try_recv().is_ok() {}
+    for _ in 0..3 {
+        chat.handle_key_event(KeyEvent::from(KeyCode::Right));
+    }
+
+    let popup = render_bottom_popup(&chat, /*width*/ 100);
+    assert!(
+        popup.contains("Repo Marketplace.")
+            && popup.contains("ctrl + u upgrade")
+            && !popup.contains("ctrl + r remove")
+            && popup.contains("Debug Plugin"),
+        "expected upgradeable managed marketplace tab without remove action, got:\n{popup}"
+    );
+    assert_chatwidget_snapshot!("plugins_popup_managed_git_marketplace", popup);
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
+
+    match rx.try_recv() {
+        Ok(AppEvent::OpenMarketplaceUpgradeLoading { marketplace_name }) => {
+            assert_eq!(marketplace_name, Some("repo".to_string()));
+        }
+        other => panic!("expected OpenMarketplaceUpgradeLoading event, got {other:?}"),
+    }
+    match rx.try_recv() {
+        Ok(AppEvent::FetchMarketplaceUpgrade {
+            cwd: event_cwd,
+            marketplace_name,
+        }) => {
+            assert_eq!(event_cwd, cwd);
+            assert_eq!(marketplace_name, Some("repo".to_string()));
+        }
+        other => panic!("expected FetchMarketplaceUpgrade event, got {other:?}"),
+    }
 }
 
 #[tokio::test]

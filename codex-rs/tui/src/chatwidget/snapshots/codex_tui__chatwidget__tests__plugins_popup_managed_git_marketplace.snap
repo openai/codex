@@ -1,0 +1,14 @@
+---
+source: tui/src/chatwidget/tests/popups_and_settings.rs
+expression: popup
+---
+  Plugins
+  Repo Marketplace.
+  Installed 0 of 1 Repo Marketplace plugins.
+
+  All Plugins  Installed (0)  OpenAI Curated  [Repo Marketplace]  Add Marketplace
+
+  Type to search plugins
+› [-] Debug Plugin  Available   Press Enter to install or view plugin details.
+
+  ctrl + u upgrade · space toggle · ←/→ tabs · enter details · esc close

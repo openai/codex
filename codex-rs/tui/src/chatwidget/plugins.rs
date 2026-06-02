@@ -711,14 +711,18 @@ impl ChatWidget {
         else {
             return false;
         };
-        let Some(marketplace) = plugins_response.marketplaces.iter().find(|marketplace| {
-            marketplace_tab_id(marketplace) == active_tab_id
-                && marketplace_is_user_configured(&self.config, &marketplace.name)
-        }) else {
+        let Some(marketplace) = plugins_response
+            .marketplaces
+            .iter()
+            .find(|marketplace| marketplace_tab_id(marketplace) == active_tab_id)
+        else {
             return false;
         };
 
         if remove_marketplace {
+            if !marketplace_is_user_configured(&self.config, &marketplace.name) {
+                return false;
+            }
             self.open_marketplace_remove_confirmation(
                 marketplace.name.clone(),
                 marketplace_display_name(marketplace),
@@ -726,7 +730,7 @@ impl ChatWidget {
             return true;
         }
         if marketplace.path.is_none()
-            || !marketplace_is_user_configured_git(&self.config, &marketplace.name)
+            || !marketplace_is_configured_git(&self.config, &marketplace.name)
         {
             return false;
         }
@@ -1536,7 +1540,7 @@ impl ChatWidget {
             let can_remove_marketplace =
                 marketplace_is_user_configured(&self.config, &marketplace.name);
             let can_upgrade_marketplace = marketplace.path.is_some()
-                && marketplace_is_user_configured_git(&self.config, &marketplace.name);
+                && marketplace_is_configured_git(&self.config, &marketplace.name);
             if can_remove_marketplace || can_upgrade_marketplace {
                 tab_footer_hints.push((
                     tab_id.clone(),
@@ -2032,11 +2036,11 @@ fn marketplace_is_user_configured(config: &Config, marketplace_name: &str) -> bo
         .is_some_and(|marketplaces| marketplaces.contains_key(marketplace_name))
 }
 
-fn marketplace_is_user_configured_git(config: &Config, marketplace_name: &str) -> bool {
+fn marketplace_is_configured_git(config: &Config, marketplace_name: &str) -> bool {
     config
         .config_layer_stack
-        .get_active_user_layer()
-        .and_then(|user_layer| user_layer.config.get("marketplaces"))
+        .effective_config()
+        .get("marketplaces")
         .and_then(toml::Value::as_table)
         .and_then(|marketplaces| marketplaces.get(marketplace_name))
         .and_then(toml::Value::as_table)
