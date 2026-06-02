@@ -556,10 +556,11 @@ impl Codex {
             .await;
         let multi_agent_version =
             resolve_multi_agent_version(&conversation_history, inherited_multi_agent_version);
+        let startup_multi_agent_version = multi_agent_version
+            .or(model_info.multi_agent_version)
+            .unwrap_or_else(|| config.multi_agent_version_from_features());
         let _ = config
-            .effective_agent_max_threads(
-                multi_agent_version.unwrap_or_else(|| config.multi_agent_version_from_features()),
-            )
+            .effective_agent_max_threads(startup_multi_agent_version)
             .map_err(|err| CodexErr::InvalidRequest(err.to_string()))?;
         let base_instructions = config
             .base_instructions
