@@ -265,6 +265,7 @@ fn apply_patch_payload_command(payload: &ToolPayload) -> Option<String> {
 async fn effective_patch_permissions(
     session: &Session,
     turn: &TurnContext,
+    environment_id: &str,
     action: &ApplyPatchAction,
     cwd: &AbsolutePathBuf,
 ) -> (
@@ -274,8 +275,8 @@ async fn effective_patch_permissions(
 ) {
     let file_paths = file_paths_for_action(action);
     let granted_permissions = merge_permission_profiles(
-        session.granted_session_permissions().await.as_ref(),
-        session.granted_turn_permissions().await.as_ref(),
+        session.granted_session_permissions(environment_id).await.as_ref(),
+        session.granted_turn_permissions(environment_id).await.as_ref(),
     );
     let base_file_system_sandbox_policy = turn.file_system_sandbox_policy();
     let file_system_sandbox_policy = effective_file_system_sandbox_policy(
@@ -284,6 +285,7 @@ async fn effective_patch_permissions(
     );
     let effective_additional_permissions = apply_granted_turn_permissions(
         session,
+        environment_id,
         cwd.as_path(),
         crate::sandboxing::SandboxPermissions::UseDefault,
         write_permissions_for_paths(&file_paths, &file_system_sandbox_policy, cwd),
@@ -353,8 +355,14 @@ impl ToolExecutor<ToolInvocation> for ApplyPatchHandler {
         {
             codex_apply_patch::MaybeApplyPatchVerified::Body(changes) => {
                 let (file_paths, effective_additional_permissions, file_system_sandbox_policy) =
-                    effective_patch_permissions(session.as_ref(), turn.as_ref(), &changes, &cwd)
-                        .await;
+                    effective_patch_permissions(
+                        session.as_ref(),
+                        turn.as_ref(),
+                        &turn_environment.environment_id,
+                        &changes,
+                        &cwd,
+                    )
+                    .await;
                 match apply_patch::apply_patch(turn.as_ref(), &file_system_sandbox_policy, changes)
                     .await
                 {
@@ -506,7 +514,14 @@ pub(crate) async fn intercept_apply_patch(
     {
         codex_apply_patch::MaybeApplyPatchVerified::Body(changes) => {
             let (approval_keys, effective_additional_permissions, file_system_sandbox_policy) =
-                effective_patch_permissions(session.as_ref(), turn.as_ref(), &changes, cwd).await;
+                effective_patch_permissions(
+                    session.as_ref(),
+                    turn.as_ref(),
+                    &turn_environment.environment_id,
+                    &changes,
+                    cwd,
+                )
+                .await;
             match apply_patch::apply_patch(turn.as_ref(), &file_system_sandbox_policy, changes)
                 .await
             {
