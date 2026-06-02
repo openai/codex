@@ -39,6 +39,8 @@ use ts_rs::TS;
 pub(crate) const GENERATED_TS_HEADER: &str = "// GENERATED CODE! DO NOT MODIFY BY HAND!\n\n";
 const IGNORED_DEFINITIONS: &[&str] = &["Option<()>"];
 const JSON_V1_ALLOWLIST: &[&str] = &["InitializeParams", "InitializeResponse"];
+const EXPERIMENTAL_CLIENT_METHOD_DEPENDENCY_TYPES: &[&str] =
+    &["RemoteControlClient", "RemoteControlClientsListOrder"];
 const SPECIAL_DEFINITIONS: &[&str] = &[
     "ClientNotification",
     "ClientRequest",
@@ -554,6 +556,7 @@ fn experimental_method_types() -> HashSet<String> {
     let mut type_names = HashSet::new();
     collect_experimental_type_names(EXPERIMENTAL_CLIENT_METHOD_PARAM_TYPES, &mut type_names);
     collect_experimental_type_names(EXPERIMENTAL_CLIENT_METHOD_RESPONSE_TYPES, &mut type_names);
+    collect_experimental_type_names(EXPERIMENTAL_CLIENT_METHOD_DEPENDENCY_TYPES, &mut type_names);
     type_names
 }
 
@@ -2132,6 +2135,14 @@ mod tests {
             fixture_tree.contains_key(Path::new("v2/MockExperimentalMethodResponse.ts")),
             false
         );
+        assert_eq!(
+            fixture_tree.contains_key(Path::new("v2/RemoteControlClient.ts")),
+            false
+        );
+        assert_eq!(
+            fixture_tree.contains_key(Path::new("v2/RemoteControlClientsListOrder.ts")),
+            false
+        );
 
         let mut undefined_offenders = Vec::new();
         let mut optional_nullable_offenders = BTreeSet::new();
@@ -2847,6 +2858,11 @@ permissionProfile?: string | null};
             flat_v2_bundle_json.contains("MockExperimentalMethodResponse"),
             false
         );
+        assert_eq!(flat_v2_bundle_json.contains("RemoteControlClient"), false);
+        assert_eq!(
+            flat_v2_bundle_json.contains("RemoteControlClientsListOrder"),
+            false
+        );
         assert_eq!(flat_v2_bundle_json.contains("#/definitions/v2/"), false);
         assert_eq!(
             flat_v2_bundle_json.contains("\"title\": \"CodexAppServerProtocolV2\""),
@@ -2917,6 +2933,20 @@ permissionProfile?: string | null};
             output_dir
                 .join("v2")
                 .join("MockExperimentalMethodResponse.json")
+                .exists(),
+            false
+        );
+        assert_eq!(
+            output_dir
+                .join("v2")
+                .join("RemoteControlClient.json")
+                .exists(),
+            false
+        );
+        assert_eq!(
+            output_dir
+                .join("v2")
+                .join("RemoteControlClientsListOrder.json")
                 .exists(),
             false
         );

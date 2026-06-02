@@ -196,7 +196,14 @@ async fn send_client_management_request_once(
                 query.push(("limit", limit.to_string()));
             }
             if let Some(order) = params.order {
-                query.push(("order", clients_list_order_as_str(order).to_string()));
+                query.push((
+                    "order",
+                    match order {
+                        RemoteControlClientsListOrder::Asc => "asc",
+                        RemoteControlClientsListOrder::Desc => "desc",
+                    }
+                    .to_string(),
+                ));
             }
             client.get((*url).clone()).query(&query)
         }
@@ -279,13 +286,6 @@ fn environment_client_url(
         })?
         .push(client_id);
     Ok(url)
-}
-
-fn clients_list_order_as_str(order: RemoteControlClientsListOrder) -> &'static str {
-    match order {
-        RemoteControlClientsListOrder::Asc => "asc",
-        RemoteControlClientsListOrder::Desc => "desc",
-    }
 }
 
 impl TryFrom<RemoteControlClientResponse> for RemoteControlClient {
