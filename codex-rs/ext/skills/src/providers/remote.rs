@@ -19,8 +19,14 @@ impl SkillProvider for RemoteSkillProvider {
     ) -> impl Future<Output = SkillProviderResult<SkillCatalog>> + Send {
         future::ready(Ok(SkillCatalog::default()))
         // TODO(skills-extension): list org/account/backend skills from a
-        // remote catalog. These skills should use opaque ids and backend
-        // authority, not paths.
+        // remote catalog only when they are not installed/materialized into the
+        // host. These skills should use opaque ids and backend authority, not
+        // paths.
+        //
+        // TODO(skills-extension): if a remote skill is downloaded or installed
+        // as part of a plugin-like bundle, hand it to HostSkillProvider for
+        // runtime listing/read instead of keeping a separate remote runtime
+        // path.
         //
         // TODO(skills-extension): decide how org policy and local enable/disable
         // rules combine when the backend supplies a managed skill catalog.

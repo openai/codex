@@ -40,6 +40,11 @@ impl SkillProviders {
         // TODO(skills-extension): apply final merged-catalog policy here:
         // source precedence, duplicate name handling, disabled-skill rules,
         // product/session-source filtering, and telemetry for omitted entries.
+        //
+        // TODO(skills-extension): treat plugin-installed skills as ordinary
+        // host catalog entries by this point. Plugin identity may remain useful
+        // for display, auth, and uninstall flows, but mention resolution and
+        // entrypoint injection should not special-case plugin packaging.
         Ok(catalog)
     }
 }

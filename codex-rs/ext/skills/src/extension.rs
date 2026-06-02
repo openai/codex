@@ -99,8 +99,9 @@ impl TurnLifecycleContributor for SkillsExtension {
         // turn-input contributor in codex-extension-api. This placeholder only
         // demonstrates where provider aggregation belongs; it cannot resolve
         // real skills because this hook does not receive cwd, executor
-        // selections, effective plugins, connector slug counts, user input,
-        // cancellation, analytics, or a response-item output channel.
+        // selections, effective plugins/materialized plugin skill roots,
+        // connector slug counts, user input, cancellation, analytics, or a
+        // response-item output channel.
         let query = SkillListQuery::placeholder_for_turn(input.turn_id);
         let catalog = self
             .providers
@@ -133,6 +134,11 @@ impl TurnLifecycleContributor for SkillsExtension {
 /// loading skill roots, emitting warnings, tracking analytics, prompting for MCP
 /// dependency install, refreshing MCP servers, and serving app-server catalog
 /// requests.
+///
+/// TODO(skills-extension): plugin handling should stay outside the runtime
+/// skills model. Plugins are bundle/install units; once installed or refreshed,
+/// their skill descriptors/roots should be handed to this extension just like
+/// any other host-owned skill source.
 pub fn install(registry: &mut ExtensionRegistryBuilder<Config>) {
     let extension = Arc::new(SkillsExtension::default());
     registry.thread_lifecycle_contributor(extension.clone());
