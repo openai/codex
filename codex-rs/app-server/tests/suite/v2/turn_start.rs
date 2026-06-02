@@ -855,6 +855,10 @@ async fn turn_start_tracks_turn_event_analytics() -> Result<()> {
                 url: "https://example.com/a.png".to_string(),
                 detail: None,
             }],
+            responsesapi_client_metadata: Some(HashMap::from([(
+                "workspace_kind".to_string(),
+                "projectless".to_string(),
+            )])),
             ..Default::default()
         })
         .await?;
@@ -882,6 +886,7 @@ async fn turn_start_tracks_turn_event_analytics() -> Result<()> {
     assert_eq!(event["event_params"]["model"], "mock-model");
     assert_eq!(event["event_params"]["model_provider"], "mock_provider");
     assert_eq!(event["event_params"]["sandbox_policy"], "read_only");
+    assert_eq!(event["event_params"]["workspace_kind"], "projectless");
     assert_eq!(event["event_params"]["ephemeral"], false);
     assert_eq!(event["event_params"]["thread_source"], "user");
     assert_eq!(event["event_params"]["initialization_mode"], "new");

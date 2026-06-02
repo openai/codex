@@ -215,6 +215,7 @@ fn set_feature(turn: &mut TurnContext, feature: Feature, enabled: bool) {
             .disable(feature)
             .expect("test feature should be disableable in config");
     }
+    turn.multi_agent_version = config.multi_agent_version_from_features();
     turn.config = Arc::new(config);
     turn.tool_mode = turn.model_info.tool_mode.unwrap_or_else(|| {
         if turn.config.features.enabled(Feature::CodeModeOnly) {
@@ -1166,7 +1167,16 @@ async fn code_mode_only_can_expose_namespaced_multi_agent_v2_as_normal_tools() {
     })
     .await;
 
-    assert_eq!(plan.visible_names, vec!["exec", "wait", "agents"]);
+    assert_eq!(
+        plan.visible_names,
+        vec![
+            "exec",
+            "wait",
+            "agents",
+            // Hosted Responses tools.
+            "web_search",
+        ]
+    );
     assert!(
         !plan
             .namespace_function_names("agents")
@@ -1232,6 +1242,32 @@ async fn hosted_tools_follow_provider_auth_model_and_config_gates() {
             search_context_size: None,
             search_content_types: Some(vec!["text".to_string(), "image".to_string()]),
         }
+    );
+
+    let code_mode_only = probe(|turn| {
+        use_chatgpt_auth(turn);
+        set_features(turn, &[Feature::CodeModeOnly, Feature::MultiAgentV2]);
+        set_web_search_mode(turn, WebSearchMode::Live);
+        turn.model_info.input_modalities = vec![InputModality::Image];
+    })
+    .await;
+    assert_eq!(
+        code_mode_only.visible_names,
+        vec![
+            // Code-mode entrypoints.
+            codex_code_mode::PUBLIC_TOOL_NAME,
+            codex_code_mode::WAIT_TOOL_NAME,
+            // Multi-agent v2 tools.
+            "spawn_agent",
+            "send_message",
+            "followup_task",
+            "wait_agent",
+            "close_agent",
+            "list_agents",
+            // Hosted Responses tools.
+            "web_search",
+            "image_generation",
+        ]
     );
 
     let standalone_web_search_without_web_run = probe(|turn| {

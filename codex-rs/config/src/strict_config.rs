@@ -37,7 +37,6 @@ pub(crate) fn config_error_from_ignored_toml_value_fields<T: DeserializeOwned>(
     )
 }
 
-#[cfg(any(target_os = "macos", test))]
 pub(crate) fn config_error_from_ignored_toml_value_fields_for_source_name<T: DeserializeOwned>(
     source_name: &str,
     contents: &str,

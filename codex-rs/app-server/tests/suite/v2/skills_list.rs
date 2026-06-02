@@ -795,7 +795,6 @@ async fn skills_changed_notification_is_emitted_after_skill_change() -> Result<(
             environments: None,
             mock_experimental_field: None,
             experimental_raw_events: false,
-            persist_extended_history: false,
         })
         .await?;
     let _: JSONRPCResponse = timeout(

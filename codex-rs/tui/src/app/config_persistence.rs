@@ -14,19 +14,32 @@ pub(super) struct WindowsSetupPermissions {
     pub(super) workspace_roots: Vec<AbsolutePathBuf>,
 }
 
+async fn build_config_on_runtime_worker(
+    builder: ConfigBuilder,
+    error_context: String,
+) -> Result<Config> {
+    match tokio::spawn(async move { builder.build().await }).await {
+        Ok(build_result) => build_result.wrap_err(error_context),
+        Err(err) if err.is_panic() => std::panic::resume_unwind(err.into_panic()),
+        Err(err) => Err(err).wrap_err_with(|| format!("{error_context} task failed")),
+    }
+}
+
 impl App {
     pub(super) async fn rebuild_config_for_cwd(&self, cwd: PathBuf) -> Result<Config> {
         let mut overrides = self.harness_overrides.clone();
         overrides.cwd = Some(cwd.clone());
         let cwd_display = cwd.display().to_string();
-        ConfigBuilder::default()
+        let builder = ConfigBuilder::default()
             .codex_home(self.config.codex_home.to_path_buf())
             .cli_overrides(self.cli_kv_overrides.clone())
             .harness_overrides(overrides)
-            .loader_overrides(self.loader_overrides.clone())
-            .build()
-            .await
-            .wrap_err_with(|| format!("Failed to rebuild config for cwd {cwd_display}"))
+            .loader_overrides(self.loader_overrides.clone());
+        build_config_on_runtime_worker(
+            builder,
+            format!("Failed to rebuild config for cwd {cwd_display}"),
+        )
+        .await
     }
 
     pub(super) async fn rebuild_config_for_permission_profile(
@@ -38,16 +51,16 @@ impl App {
         overrides.sandbox_mode = None;
         overrides.permission_profile = None;
         overrides.default_permissions = Some(profile_id.to_string());
-        ConfigBuilder::default()
+        let builder = ConfigBuilder::default()
             .codex_home(self.config.codex_home.to_path_buf())
             .cli_overrides(self.cli_kv_overrides.clone())
             .harness_overrides(overrides)
-            .loader_overrides(self.loader_overrides.clone())
-            .build()
-            .await
-            .wrap_err_with(|| {
-                format!("Failed to rebuild config for permission profile {profile_id}")
-            })
+            .loader_overrides(self.loader_overrides.clone());
+        build_config_on_runtime_worker(
+            builder,
+            format!("Failed to rebuild config for permission profile {profile_id}"),
+        )
+        .await
     }
 
     #[cfg(target_os = "windows")]

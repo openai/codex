@@ -23,6 +23,7 @@ use crate::RolloutConfig;
 use crate::RolloutRecorder;
 use crate::RolloutRecorderParams;
 use crate::append_rollout_item_to_path;
+use crate::search_rollout_matches;
 
 #[tokio::test]
 async fn load_rollout_items_reads_compressed_rollout() -> anyhow::Result<()> {
@@ -101,6 +102,31 @@ async fn append_rollout_item_materializes_compressed_rollout() -> anyhow::Result
     assert_eq!(loaded_thread_id, Some(thread_id));
     assert_eq!(parse_errors, 0);
     assert_eq!(items.len(), 3);
+    Ok(())
+}
+
+#[tokio::test]
+async fn search_rollout_matches_returns_compressed_snippet() -> anyhow::Result<()> {
+    let home = TempDir::new()?;
+    let uuid = Uuid::from_u128(15);
+    let thread_id = ThreadId::from_string(&uuid.to_string())?;
+    let rollout_path = rollout_path(home.path(), "2025-01-03T12-00-00", uuid);
+    write_rollout(&rollout_path, thread_id, "targeted search term")?;
+    compress_now(&rollout_path)?;
+    let compressed_path = compressed_rollout_path(&rollout_path);
+
+    let matches = search_rollout_matches(
+        std::path::Path::new("missing-rg-for-test"),
+        home.path(),
+        /*archived*/ false,
+        "search term",
+    )
+    .await?;
+
+    assert_eq!(
+        matches.get(compressed_path.as_path()),
+        Some(&Some("targeted search term".to_string()))
+    );
     Ok(())
 }
 
@@ -447,6 +473,7 @@ fn write_rollout(path: &std::path::Path, thread_id: ThreadId, message: &str) -> 
             base_instructions: None,
             dynamic_tools: None,
             memory_mode: None,
+            multi_agent_version: None,
         },
         git: None,
     };

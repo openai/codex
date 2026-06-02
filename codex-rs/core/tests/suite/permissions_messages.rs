@@ -490,7 +490,6 @@ async fn resume_and_fork_append_permissions_messages() -> Result<()> {
             fork_config.clone(),
             rollout_path,
             /*thread_source*/ None,
-            /*persist_extended_history*/ false,
             /*parent_trace*/ None,
         )
         .await?;

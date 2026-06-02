@@ -21,7 +21,6 @@ use codex_config::Constrained;
 use codex_config::McpServerConfig;
 use codex_config::McpServerTransportConfig;
 use codex_config::types::AppToolApproval;
-use codex_config::types::ApprovalsReviewer;
 use codex_config::types::OAuthCredentialsStoreMode;
 use codex_login::CodexAuth;
 use codex_plugin::PluginCapabilitySummary;
@@ -91,7 +90,6 @@ pub fn mcp_permission_prompt_is_auto_approved(
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct McpPermissionPromptAutoApproveContext {
-    pub approvals_reviewer: Option<ApprovalsReviewer>,
     pub tool_approval_mode: Option<AppToolApproval>,
 }
 

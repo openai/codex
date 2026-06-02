@@ -358,22 +358,26 @@ pub fn project_roots_glob_pattern(subpath: &Path) -> String {
     format!("{PROJECT_ROOTS_GLOB_PATTERN_PREFIX}{}", subpath.display())
 }
 
+fn read_only_file_system_entries() -> Vec<FileSystemSandboxEntry> {
+    vec![FileSystemSandboxEntry {
+        path: FileSystemPath::Special {
+            value: FileSystemSpecialPath::Root,
+        },
+        access: FileSystemAccessMode::Read,
+    }]
+}
+
 impl Default for FileSystemSandboxPolicy {
     fn default() -> Self {
-        Self {
-            kind: FileSystemSandboxKind::Restricted,
-            glob_scan_max_depth: None,
-            entries: vec![FileSystemSandboxEntry {
-                path: FileSystemPath::Special {
-                    value: FileSystemSpecialPath::Root,
-                },
-                access: FileSystemAccessMode::Read,
-            }],
-        }
+        Self::read_only()
     }
 }
 
 impl FileSystemSandboxPolicy {
+    pub fn read_only() -> Self {
+        Self::restricted(read_only_file_system_entries())
+    }
+
     pub fn unrestricted() -> Self {
         Self {
             kind: FileSystemSandboxKind::Unrestricted,

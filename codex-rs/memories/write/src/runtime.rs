@@ -248,7 +248,6 @@ impl MemoryStartupContext {
                 )),
                 thread_source: Some(ThreadSource::MemoryConsolidation),
                 dynamic_tools: Vec::new(),
-                persist_extended_history: false,
                 metrics_service_name: None,
                 parent_trace: None,
                 environments,

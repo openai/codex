@@ -164,12 +164,6 @@ pub struct ThreadStartParams {
     #[experimental("thread/start.experimentalRawEvents")]
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub experimental_raw_events: bool,
-    /// Deprecated and ignored by app-server. Kept only so older clients can
-    /// continue sending the field while rollout persistence always uses the
-    /// limited history policy.
-    #[experimental("thread/start.persistFullHistory")]
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub persist_extended_history: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS)]
@@ -402,12 +396,6 @@ pub struct ThreadResumeParams {
     #[experimental("thread/resume.initialTurnsPage")]
     #[ts(optional = nullable)]
     pub initial_turns_page: Option<ThreadResumeInitialTurnsPageParams>,
-    /// Deprecated and ignored by app-server. Kept only so older clients can
-    /// continue sending the field while rollout persistence always uses the
-    /// limited history policy.
-    #[experimental("thread/resume.persistFullHistory")]
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub persist_extended_history: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, ExperimentalApi)]
@@ -557,12 +545,6 @@ pub struct ThreadForkParams {
     #[experimental("thread/fork.excludeTurns")]
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub exclude_turns: bool,
-    /// Deprecated and ignored by app-server. Kept only so older clients can
-    /// continue sending the field while rollout persistence always uses the
-    /// limited history policy.
-    #[experimental("thread/fork.persistFullHistory")]
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub persist_extended_history: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, ExperimentalApi)]

@@ -58,6 +58,17 @@ async fn verified_plugin_install_completed_requires_installed_plugin() {
 }
 
 #[test]
+fn remote_plugin_install_suggestions_skip_core_installed_verification() {
+    assert!(is_remote_plugin_install_suggestion(
+        "snowflake@openai-curated-remote"
+    ));
+    assert!(!is_remote_plugin_install_suggestion(
+        "snowflake@openai-curated"
+    ));
+    assert!(!is_remote_plugin_install_suggestion("Plugin_123"));
+}
+
+#[test]
 fn request_plugin_install_response_persists_only_decline_always_mode() {
     assert!(request_plugin_install_response_requests_persistent_disable(
         &ElicitationResponse {
