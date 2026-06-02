@@ -2549,6 +2549,65 @@ async fn empty_config_defaults_to_builtin_profile_for_trusted_project() -> std::
 }
 
 #[tokio::test]
+async fn empty_config_defaults_to_builtin_profile_for_untrusted_project() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+    let project_key = cwd.path().to_string_lossy().to_string();
+
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            projects: Some(HashMap::from([(
+                project_key,
+                ProjectConfig {
+                    trust_level: Some(TrustLevel::Untrusted),
+                },
+            )])),
+            ..Default::default()
+        },
+        ConfigOverrides {
+            cwd: Some(cwd.path().to_path_buf()),
+            ..Default::default()
+        },
+        codex_home.abs(),
+    )
+    .await?;
+
+    let policy = config.permissions.file_system_sandbox_policy();
+    assert_eq!(
+        config
+            .permissions
+            .active_permission_profile()
+            .as_ref()
+            .map(|active| active.id.as_str()),
+        Some(if cfg!(target_os = "windows") {
+            BUILT_IN_PERMISSION_PROFILE_READ_ONLY
+        } else {
+            BUILT_IN_PERMISSION_PROFILE_WORKSPACE
+        })
+    );
+    assert!(
+        policy.can_read_path_with_cwd(cwd.path(), cwd.path()),
+        "expected untrusted project fallback to allow reads, policy: {policy:?}"
+    );
+    if cfg!(target_os = "windows") {
+        assert!(
+            !policy.can_write_path_with_cwd(cwd.path(), cwd.path()),
+            "expected untrusted project fallback to stay read-only without Windows sandbox support, policy: {policy:?}"
+        );
+    } else {
+        assert!(
+            policy.can_write_path_with_cwd(cwd.path(), cwd.path()),
+            "expected untrusted project fallback to use :workspace, policy: {policy:?}"
+        );
+        assert!(
+            !policy.can_write_path_with_cwd(&cwd.path().join(".codex"), cwd.path()),
+            "expected :workspace metadata carveouts, policy: {policy:?}"
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn implicit_builtin_workspace_profile_preserves_sandbox_workspace_write_settings()
 -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
