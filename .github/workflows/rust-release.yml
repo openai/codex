@@ -19,6 +19,10 @@ on:
       - "rust-v*.*.*"
   workflow_dispatch:
     inputs:
+      python_runtime_version:
+        description: "Publish Python runtime wheels for an existing Rust release, for example 0.136.0 or 0.136.0a2. Leave empty for a normal Rust release run."
+        required: false
+        type: string
       release_mode:
         description: "build_unsigned creates unsigned macOS handoff artifacts; promote_signed finishes a release from signed macOS handoff artifacts."
         required: false
@@ -46,11 +50,12 @@ on:
         type: string
 
 concurrency:
-  group: ${{ github.workflow }}
+  group: ${{ github.workflow }}-${{ inputs.python_runtime_version != '' && 'publish-python-runtime' || 'release' }}
   cancel-in-progress: true
 
 jobs:
   tag-check:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.python_runtime_version == '' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -929,7 +934,6 @@ jobs:
       sign_macos: ${{ steps.release_mode.outputs.sign_macos }}
       should_publish_npm: ${{ steps.npm_publish_settings.outputs.should_publish }}
       npm_tag: ${{ steps.npm_publish_settings.outputs.npm_tag }}
-      should_publish_python_runtime: ${{ steps.python_runtime_publish_settings.outputs.should_publish }}
 
     steps:
       - name: Checkout repository
@@ -1152,27 +1156,6 @@ jobs:
           else
             echo "should_publish=false" >> "$GITHUB_OUTPUT"
             echo "npm_tag=" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Determine Python runtime publish settings
-        id: python_runtime_publish_settings
-        env:
-          VERSION: ${{ steps.release_name.outputs.name }}
-        run: |
-          set -euo pipefail
-          version="${VERSION}"
-
-          if [[ "${SIGN_MACOS}" != "true" ]]; then
-            echo "should_publish=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          if [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "should_publish=true" >> "$GITHUB_OUTPUT"
-          elif [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+-alpha\.[0-9]+$ ]]; then
-            echo "should_publish=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "should_publish=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Setup pnpm
@@ -1439,22 +1422,13 @@ jobs:
             exit "${publish_status}"
           done
 
-  # Publish the platform-specific Python runtime wheels using PyPI trusted publishing.
-  # PyPI project configuration must trust this workflow and job. Keep this
-  # non-blocking while the Python runtime publishing path is new; failures still
-  # need release follow-up, but should not invalidate the Rust release itself.
+  # Publish the platform-specific Python runtime wheels explicitly when
+  # preparing to update the Python SDK pin. PyPI project configuration trusts
+  # this workflow and job for publishing.
   publish-python-runtime:
-    # Publish to PyPI for stable releases and alpha pre-releases with numeric suffixes.
-    if: >-
-      ${{
-        !cancelled() &&
-        needs.release.result == 'success' &&
-        needs.release.outputs.should_publish_python_runtime == 'true'
-      }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.python_runtime_version != '' }}
     name: publish-python-runtime
-    needs: release
     runs-on: ubuntu-latest
-    continue-on-error: true
     environment: pypi
     permissions:
       id-token: write # Required for PyPI trusted publishing.
@@ -1464,20 +1438,31 @@ jobs:
       - name: Download Python runtime wheels from release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RELEASE_TAG: ${{ needs.release.outputs.tag }}
-          RELEASE_VERSION: ${{ needs.release.outputs.version }}
+          PYTHON_RUNTIME_VERSION: ${{ inputs.python_runtime_version }}
         run: |
           set -euo pipefail
-          python_version="$RELEASE_VERSION"
-          python_version="${python_version/-alpha./a}"
-          python_version="${python_version/-beta./b}"
-          python_version="${python_version/-rc./rc}"
+          python_version="$PYTHON_RUNTIME_VERSION"
+          release_version="$python_version"
+          if [[ "${python_version}" =~ ^([0-9]+\.[0-9]+\.[0-9]+)a([0-9]+)$ ]]; then
+            release_version="${BASH_REMATCH[1]}-alpha.${BASH_REMATCH[2]}"
+          elif [[ ! "${python_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Python runtime version must be stable or a numbered alpha, for example 0.136.0 or 0.136.0a2."
+            exit 1
+          fi
+          release_tag="rust-v${release_version}"
 
           mkdir -p dist/python-runtime
-          gh release download "$RELEASE_TAG" \
+          gh release download "$release_tag" \
             --repo "${GITHUB_REPOSITORY}" \
             --pattern "openai_codex_cli_bin-${python_version}-*.whl" \
             --dir dist/python-runtime
+
+          shopt -s nullglob
+          wheels=(dist/python-runtime/*.whl)
+          if [[ "${#wheels[@]}" -ne 6 ]]; then
+            echo "Expected 6 Python runtime wheels for ${python_version}, found ${#wheels[@]}."
+            exit 1
+          fi
           ls -lh dist/python-runtime
 
       - name: Publish Python runtime wheels to PyPI
