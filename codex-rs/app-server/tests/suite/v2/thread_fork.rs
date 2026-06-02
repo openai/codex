@@ -510,10 +510,10 @@ async fn thread_fork_with_empty_path_uses_thread_id() -> Result<()> {
 }
 
 #[tokio::test]
-async fn thread_fork_surfaces_cloud_requirements_load_errors() -> Result<()> {
+async fn thread_fork_surfaces_cloud_config_bundle_load_errors() -> Result<()> {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
-        .and(path("/backend-api/wham/config/requirements"))
+        .and(path("/backend-api/wham/config/bundle"))
         .respond_with(
             ResponseTemplate::new(401)
                 .insert_header("content-type", "text/html")
@@ -594,7 +594,7 @@ async fn thread_fork_surfaces_cloud_requirements_load_errors() -> Result<()> {
     assert_eq!(
         fork_err.error.data,
         Some(json!({
-            "reason": "cloudRequirements",
+            "reason": "cloudConfigBundle",
             "errorCode": "Auth",
             "action": "relogin",
             "statusCode": 401,

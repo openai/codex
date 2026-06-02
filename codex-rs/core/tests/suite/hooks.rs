@@ -2229,7 +2229,7 @@ allow_local_binding = true
                 panic!("failed to write permission request hook test fixture: {error}");
             }
         })
-        .with_cloud_requirements(managed_network_requirements_loader())
+        .with_cloud_config_bundle(managed_network_requirements_loader())
         .with_config(move |config| {
             trust_discovered_hooks(config);
             config.permissions.approval_policy = Constrained::allow_any(approval_policy);
