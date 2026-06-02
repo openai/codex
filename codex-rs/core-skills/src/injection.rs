@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 
-use crate::SkillLoadOutcome;
 use crate::SkillMetadata;
 use crate::mention_counts::build_skill_name_counts_for_raw_paths;
 use codex_analytics::AnalyticsEventsClient;
@@ -28,7 +27,6 @@ pub struct SkillInjection {
 
 pub async fn build_skill_injections(
     mentioned_skills: &[SkillMetadata],
-    _loaded_skills: Option<&SkillLoadOutcome>,
     otel: Option<&SessionTelemetry>,
     analytics_client: &AnalyticsEventsClient,
     tracking: TrackEventsContext,
@@ -44,12 +42,7 @@ pub async fn build_skill_injections(
     let mut invocations = Vec::new();
 
     for skill in mentioned_skills {
-        match skill
-            .source_path
-            .file_system()
-            .read_file_text(&skill.path_to_skills_md, /*sandbox*/ None)
-            .await
-        {
+        match skill.source_path.read_to_string(/*sandbox*/ None).await {
             Ok(contents) => {
                 emit_skill_injected_metric(otel, skill, "ok");
                 invocations.push(SkillInvocation {

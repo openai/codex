@@ -25,6 +25,7 @@ use crate::unified_exec::UnifiedExecContext;
 use crate::unified_exec::UnifiedExecError;
 use crate::unified_exec::UnifiedExecProcessManager;
 use crate::unified_exec::generate_chunk_id;
+use codex_exec_server::EnvironmentPathRef;
 use codex_features::Feature;
 use codex_otel::SessionTelemetry;
 use codex_otel::TOOL_CALL_UNIFIED_EXEC_METRIC;
@@ -136,7 +137,7 @@ impl ToolExecutor<ToolInvocation> for ExecCommandHandler {
             session.as_ref(),
             context.turn.as_ref(),
             &hook_command,
-            &cwd,
+            &EnvironmentPathRef::new(Arc::clone(&fs), cwd.clone()),
         )
         .await;
         let process_id = manager.allocate_process_id().await;

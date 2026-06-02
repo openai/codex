@@ -190,7 +190,7 @@ impl SkillsManager {
             self.restriction_product,
         );
         let disabled_paths = resolve_disabled_skill_paths(&outcome.skills, skill_config_rules);
-        finalize_skill_outcome(outcome, disabled_paths)
+        finalize_skill_outcome(outcome, disabled_paths).await
     }
 
     pub fn clear_cache(&self) {
@@ -294,13 +294,13 @@ fn config_skills_cache_key(
     }
 }
 
-fn finalize_skill_outcome(
+async fn finalize_skill_outcome(
     mut outcome: SkillLoadOutcome,
     disabled_paths: HashSet<EnvironmentPathRef>,
 ) -> SkillLoadOutcome {
     outcome.disabled_paths = disabled_paths;
     let (by_scripts_dir, by_doc_path) =
-        build_implicit_skill_path_indexes(outcome.allowed_skills_for_implicit_invocation());
+        build_implicit_skill_path_indexes(outcome.allowed_skills_for_implicit_invocation()).await;
     outcome.implicit_skills_by_scripts_dir = Arc::new(by_scripts_dir);
     outcome.implicit_skills_by_doc_path = Arc::new(by_doc_path);
     outcome

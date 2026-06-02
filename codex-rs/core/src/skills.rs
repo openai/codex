@@ -4,8 +4,7 @@ use crate::session::turn_context::TurnContext;
 use codex_analytics::InvocationType;
 use codex_analytics::SkillInvocation;
 use codex_analytics::build_track_events_context;
-use codex_protocol::protocol::SkillScope;
-use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_exec_server::EnvironmentPathRef;
 use codex_utils_plugins::PluginSkillRoot;
 
 pub use codex_core_skills::SkillError;
@@ -49,15 +48,18 @@ pub(crate) async fn maybe_emit_implicit_skill_invocation(
     sess: &Session,
     turn_context: &TurnContext,
     command: &str,
-    workdir: &AbsolutePathBuf,
+    workdir: &EnvironmentPathRef,
 ) {
     let Some(candidate) = detect_implicit_skill_invocation_for_command(
         turn_context.turn_skills.outcome.as_ref(),
         command,
         workdir,
-    ) else {
+    )
+    .await
+    else {
         return;
     };
+    let source_path = candidate.source_path.clone();
     let invocation = SkillInvocation {
         skill_name: candidate.name,
         skill_scope: candidate.scope,
@@ -65,22 +67,14 @@ pub(crate) async fn maybe_emit_implicit_skill_invocation(
         plugin_id: candidate.plugin_id,
         invocation_type: InvocationType::Implicit,
     };
-    let skill_scope = match invocation.skill_scope {
-        SkillScope::User => "user",
-        SkillScope::Repo => "repo",
-        SkillScope::System => "system",
-        SkillScope::Admin => "admin",
-    };
-    let skill_path = invocation.skill_path.to_string_lossy();
     let skill_name = invocation.skill_name.clone();
-    let seen_key = format!("{skill_scope}:{skill_path}:{skill_name}");
     let inserted = {
         let mut seen_skills = turn_context
             .turn_skills
             .implicit_invocation_seen_skills
             .lock()
             .await;
-        seen_skills.insert(seen_key)
+        seen_skills.insert(source_path)
     };
     if !inserted {
         return;
