@@ -1,11 +1,11 @@
 use anyhow::Result;
+use codex_core::LoadedAgentsMd;
 use codex_core::build_prompt_input;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::user_input::UserInput;
-use core_test_support::loaded_instructions;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 
@@ -22,7 +22,9 @@ async fn build_prompt_input_includes_context_and_user_message() -> Result<()> {
         })
         .build()
         .await?;
-    config.user_instructions = Some(loaded_instructions("Project-specific test instructions"));
+    config.user_instructions = Some(LoadedAgentsMd::from_text(
+        "Project-specific test instructions",
+    ));
 
     let input = build_prompt_input(
         config,

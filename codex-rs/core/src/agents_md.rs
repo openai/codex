@@ -340,7 +340,8 @@ impl LoadedAgentsMd {
     }
 
     /// Creates source-less user instructions.
-    pub fn from_text(contents: String) -> Self {
+    pub fn from_text(contents: impl Into<String>) -> Self {
+        let contents = contents.into();
         if contents.is_empty() {
             return Self::default();
         }

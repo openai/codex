@@ -12,7 +12,6 @@ use codex_config::CloudConfigBundleLoader;
 use codex_config::LoaderOverrides;
 use codex_config::test_support::CloudConfigBundleFixture;
 use codex_core::CodexThread;
-use codex_core::LoadedAgentsMd;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
@@ -32,11 +31,6 @@ pub mod test_codex;
 pub mod test_codex_exec;
 pub mod tracing;
 pub mod zsh_fork;
-
-/// Creates source-less loaded user instructions for integration tests.
-pub fn loaded_instructions(text: impl Into<String>) -> LoadedAgentsMd {
-    LoadedAgentsMd::from_text(text.into())
-}
 
 static TEST_ARG0_PATH_ENTRY: OnceLock<Option<Arg0PathEntryGuard>> = OnceLock::new();
 

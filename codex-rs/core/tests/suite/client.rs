@@ -1,5 +1,6 @@
 use codex_config::ConfigLayerStack;
 use codex_config::types::AuthCredentialsStoreMode;
+use codex_core::LoadedAgentsMd;
 use codex_core::ModelClient;
 use codex_core::NewThread;
 use codex_core::Prompt;
@@ -51,7 +52,6 @@ use codex_protocol::user_input::UserInput;
 use core_test_support::PathBufExt;
 use core_test_support::apps_test_server::AppsTestServer;
 use core_test_support::load_default_config_for_test;
-use core_test_support::loaded_instructions;
 use core_test_support::responses::ResponsesRequest;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -365,7 +365,7 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
         .with_home(codex_home.clone())
         .with_config(|config| {
             // Ensure user instructions are NOT delivered on resume.
-            config.user_instructions = Some(loaded_instructions("be nice"));
+            config.user_instructions = Some(LoadedAgentsMd::from_text("be nice"));
         });
     let test = builder
         .resume(&server, codex_home, session_path.clone())
@@ -1181,7 +1181,7 @@ async fn includes_user_instructions_message_in_request() {
     let mut builder = test_codex()
         .with_auth(CodexAuth::from_api_key("Test API Key"))
         .with_config(|config| {
-            config.user_instructions = Some(loaded_instructions("be nice"));
+            config.user_instructions = Some(LoadedAgentsMd::from_text("be nice"));
         });
     let codex = builder
         .build(&server)
@@ -2213,7 +2213,7 @@ async fn includes_developer_instructions_message_in_request() {
     let mut builder = test_codex()
         .with_auth(CodexAuth::from_api_key("Test API Key"))
         .with_config(|config| {
-            config.user_instructions = Some(loaded_instructions("be nice"));
+            config.user_instructions = Some(LoadedAgentsMd::from_text("be nice"));
             config.developer_instructions = Some("be useful".to_string());
         });
     let codex = builder
