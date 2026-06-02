@@ -1244,14 +1244,17 @@ async fn hosted_tools_follow_provider_auth_model_and_config_gates() {
     assert_eq!(
         code_mode_only.visible_names,
         vec![
+            // Code-mode entrypoints.
             codex_code_mode::PUBLIC_TOOL_NAME,
             codex_code_mode::WAIT_TOOL_NAME,
+            // Multi-agent v2 tools.
             "spawn_agent",
             "send_message",
             "followup_task",
             "wait_agent",
             "close_agent",
             "list_agents",
+            // Hosted Responses tools.
             "web_search",
             "image_generation",
         ]
