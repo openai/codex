@@ -2356,7 +2356,13 @@ async fn default_permissions_profile_can_extend_builtin_workspace() -> std::io::
                         description: None,
                         extends: Some(BUILT_IN_PERMISSION_PROFILE_WORKSPACE.to_string()),
                         workspace_roots: None,
-                        filesystem: None,
+                        filesystem: Some(FilesystemPermissionsToml {
+                            glob_scan_max_depth: None,
+                            entries: BTreeMap::from([(
+                                ":tmpdir".to_string(),
+                                FilesystemPermissionToml::Access(FileSystemAccessMode::Read),
+                            )]),
+                        }),
                         network: Some(NetworkToml {
                             enabled: Some(true),
                             ..Default::default()
@@ -2382,6 +2388,30 @@ async fn default_permissions_profile_can_extend_builtin_workspace() -> std::io::
     assert!(
         !policy.can_write_path_with_cwd(&cwd.path().join(".git"), cwd.path()),
         "expected profile extending :workspace to keep metadata carveouts, policy: {policy:?}"
+    );
+    assert!(
+        policy.entries.iter().any(|entry| matches!(
+            entry,
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::Tmpdir,
+                },
+                access: FileSystemAccessMode::Read,
+            }
+        )),
+        "expected child :tmpdir read entry to replace the inherited write entry, policy: {policy:?}"
+    );
+    assert!(
+        !policy.entries.iter().any(|entry| matches!(
+            entry,
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::Tmpdir,
+                },
+                access: FileSystemAccessMode::Write,
+            }
+        )),
+        "expected inherited :tmpdir write entry to be removed, policy: {policy:?}"
     );
     assert_eq!(
         config.permissions.network_sandbox_policy(),
