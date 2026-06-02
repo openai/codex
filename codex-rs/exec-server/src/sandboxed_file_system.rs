@@ -3,6 +3,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use std::path::Path;
 use tokio::io;
 
 use crate::CopyOptions;
@@ -17,6 +18,7 @@ use crate::RemoveOptions;
 use crate::fs_helper::FsHelperPayload;
 use crate::fs_helper::FsHelperRequest;
 use crate::fs_sandbox::FileSystemSandboxRunner;
+use crate::protocol::FsCanonicalizeParams;
 use crate::protocol::FsCopyParams;
 use crate::protocol::FsCreateDirectoryParams;
 use crate::protocol::FsGetMetadataParams;
@@ -51,6 +53,38 @@ impl SandboxedFileSystem {
 
 #[async_trait]
 impl ExecutorFileSystem for SandboxedFileSystem {
+    async fn canonicalize(
+        &self,
+        path: &AbsolutePathBuf,
+        sandbox: Option<&FileSystemSandboxContext>,
+    ) -> FileSystemResult<AbsolutePathBuf> {
+        let sandbox = require_platform_sandbox(sandbox)?;
+        let response = self
+            .run_sandboxed(
+                sandbox,
+                FsHelperRequest::Canonicalize(FsCanonicalizeParams {
+                    path: path.clone(),
+                    sandbox: None,
+                }),
+            )
+            .await?
+            .expect_canonicalize()
+            .map_err(map_sandbox_error)?;
+        Ok(response.path)
+    }
+
+    async fn join(
+        &self,
+        base_path: &AbsolutePathBuf,
+        path: &Path,
+    ) -> FileSystemResult<AbsolutePathBuf> {
+        Ok(base_path.join(path))
+    }
+
+    async fn parent(&self, path: &AbsolutePathBuf) -> FileSystemResult<Option<AbsolutePathBuf>> {
+        Ok(path.parent())
+    }
+
     async fn read_file(
         &self,
         path: &AbsolutePathBuf,

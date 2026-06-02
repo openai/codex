@@ -343,11 +343,23 @@ WHERE id IN (
         let max_bytes = usize::try_from(LOG_PARTITION_SIZE_LIMIT_BYTES).unwrap_or(usize::MAX);
         // Bound the fetched rows in SQL first so over-retained partitions do not have to load
         // every row into memory, then apply the exact whole-line byte cap after formatting.
-        let requested_threads = vec!["(?)"; thread_ids.len()].join(", ");
-        let query = format!(
+        let mut builder = QueryBuilder::<Sqlite>::new(
             r#"
 WITH requested_threads(thread_id) AS (
-    VALUES {requested_threads}
+    VALUES
+            "#,
+        );
+        {
+            let mut separated = builder.separated(", ");
+            for thread_id in thread_ids {
+                separated
+                    .push("(")
+                    .push_bind_unseparated(*thread_id)
+                    .push_unseparated(")");
+            }
+        }
+        builder.push(
+            r#"
 ),
 latest_processes AS (
     SELECT (
@@ -388,16 +400,13 @@ bounded_feedback_logs AS (
 )
 SELECT ts, ts_nanos, level, feedback_log_body
 FROM bounded_feedback_logs
-WHERE cumulative_estimated_bytes <= ?
-ORDER BY ts DESC, ts_nanos DESC, id DESC
-"#
+WHERE cumulative_estimated_bytes <=
+"#,
         );
-        let mut sql = sqlx::query_as::<_, FeedbackLogRow>(query.as_str());
-        for thread_id in thread_ids {
-            sql = sql.bind(thread_id);
-        }
-        let rows = sql
-            .bind(LOG_PARTITION_SIZE_LIMIT_BYTES)
+        builder.push_bind(LOG_PARTITION_SIZE_LIMIT_BYTES);
+        builder.push(" ORDER BY ts DESC, ts_nanos DESC, id DESC");
+        let rows = builder
+            .build_query_as::<FeedbackLogRow>()
             .fetch_all(self.logs_pool.as_ref())
             .await?;
 
@@ -463,7 +472,7 @@ fn format_feedback_log_line(
     line
 }
 
-fn push_log_filters<'a>(builder: &mut QueryBuilder<'a, Sqlite>, query: &'a LogQuery) {
+fn push_log_filters(builder: &mut QueryBuilder<Sqlite>, query: &LogQuery) {
     if !query.levels_upper.is_empty() {
         builder.push(" AND UPPER(level) IN (");
         {
@@ -511,11 +520,7 @@ fn push_log_filters<'a>(builder: &mut QueryBuilder<'a, Sqlite>, query: &'a LogQu
     }
 }
 
-fn push_like_filters<'a>(
-    builder: &mut QueryBuilder<'a, Sqlite>,
-    column: &str,
-    filters: &'a [String],
-) {
+fn push_like_filters(builder: &mut QueryBuilder<Sqlite>, column: &str, filters: &[String]) {
     if filters.is_empty() {
         return;
     }
@@ -613,6 +618,8 @@ mod tests {
             ignore_missing: false,
             locking: true,
             no_tx: false,
+            table_name: LOGS_MIGRATOR.table_name.clone(),
+            create_schemas: LOGS_MIGRATOR.create_schemas.clone(),
         };
         let pool = SqlitePool::connect_with(
             SqliteConnectOptions::new()

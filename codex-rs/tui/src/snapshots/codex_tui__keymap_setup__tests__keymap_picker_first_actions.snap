@@ -2,14 +2,14 @@
 source: tui/src/keymap_setup.rs
 expression: snapshot
 ---
-tab: All (93 selectable)
-tab: Common (19 selectable)
+tab: All (108 selectable)
+tab: Common (20 selectable)
 tab: Customized (0) (0 selectable)
 tab: Unbound (2) (2 selectable)
-tab: App (9 selectable)
+tab: App (10 selectable)
 tab: Composer (5 selectable)
 tab: Editor (17 selectable)
-tab: Vim (34 selectable)
+tab: Vim (48 selectable)
 tab: Navigation (20 selectable)
 tab: Approval (8 selectable)
 tab: Debug (1 selectable)
@@ -19,9 +19,9 @@ Copy | ctrl-o | Global copy Copy Copy the last agent response to the clipboard. 
 Clear Terminal | ctrl-l | Global clear_terminal Clear Terminal Clear the terminal UI. ctrl-l Default
 Toggle Vim Mode | unbound | Global toggle_vim_mode Toggle Vim Mode Turn Vim composer mode on or off. unbound Default
 Toggle Raw Output | alt-r | Global toggle_raw_output Toggle Raw Output Toggle raw scrollback mode. alt-r Default
+Interrupt Turn | esc | Chat interrupt_turn Interrupt Turn Interrupt the active turn. esc Default
 Decrease Reasoning Effort | alt-, | Chat decrease_reasoning_effort Decrease Reasoning Effort Decrease reasoning effort. alt-, Default
 Increase Reasoning Effort | alt-. | Chat increase_reasoning_effort Increase Reasoning Effort Increase reasoning effort. alt-. Default
 Edit Queued Message | alt-up, shift-left | Chat edit_queued_message Edit Queued Message Edit the most recently queued message. alt-up, shift-left Default
 Submit | enter | Composer submit Submit Submit the current composer draft. enter Default
 Queue | tab | Composer queue Queue Queue the draft while a task is running. tab Default
-Toggle Shortcuts | ?, shift-? | Composer toggle_shortcuts Toggle Shortcuts Show or hide the composer shortcut overlay. ?, shift-? Default

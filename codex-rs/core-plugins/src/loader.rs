@@ -5,6 +5,7 @@ use crate::manifest::load_plugin_manifest;
 use crate::marketplace::MarketplacePluginSource;
 use crate::marketplace::list_marketplaces;
 use crate::marketplace::load_marketplace;
+use crate::remote::REMOTE_GLOBAL_MARKETPLACE_NAME;
 use crate::remote::RemoteInstalledPlugin;
 use crate::store::PluginStore;
 use crate::store::plugin_version_for_source;
@@ -32,6 +33,7 @@ use codex_protocol::protocol::Product;
 use codex_protocol::protocol::SkillScope;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_plugins::find_plugin_manifest_path;
+use indexmap::IndexMap;
 use serde::Deserialize;
 use serde_json::Map as JsonMap;
 use serde_json::Value as JsonValue;
@@ -99,7 +101,7 @@ impl PluginMcpFile {
 #[serde(rename_all = "camelCase")]
 struct PluginAppFile {
     #[serde(default)]
-    apps: HashMap<String, PluginAppConfig>,
+    apps: IndexMap<String, PluginAppConfig>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -112,10 +114,15 @@ pub async fn load_plugins_from_layer_stack(
     extra_plugins: HashMap<String, PluginConfig>,
     store: &PluginStore,
     restriction_product: Option<Product>,
+    prefer_remote_curated_conflicts: bool,
 ) -> PluginLoadOutcome<McpServerConfig> {
     let skill_config_rules = skill_config_rules_from_stack(config_layer_stack);
-    let mut configured_plugins = configured_plugins_from_stack(config_layer_stack);
-    configured_plugins.extend(extra_plugins);
+    let configured_plugins = merge_configured_plugins_with_remote_installed(
+        configured_plugins_from_stack(config_layer_stack),
+        extra_plugins,
+        store,
+        prefer_remote_curated_conflicts,
+    );
     let mut configured_plugins: Vec<_> = configured_plugins.into_iter().collect();
     configured_plugins.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));
 
@@ -146,6 +153,61 @@ pub async fn load_plugins_from_layer_stack(
     }
 
     PluginLoadOutcome::from_plugins(plugins)
+}
+
+fn merge_configured_plugins_with_remote_installed(
+    mut configured_plugins: HashMap<String, PluginConfig>,
+    extra_plugins: HashMap<String, PluginConfig>,
+    store: &PluginStore,
+    prefer_remote_curated_conflicts: bool,
+) -> HashMap<String, PluginConfig> {
+    let local_curated_installed_plugin_keys = configured_plugins
+        .keys()
+        .filter_map(|plugin_key| {
+            installed_plugin_name_for_marketplace(
+                plugin_key,
+                OPENAI_CURATED_MARKETPLACE_NAME,
+                store,
+            )
+            .map(|plugin_name| (plugin_name, plugin_key.clone()))
+        })
+        .collect::<HashMap<_, _>>();
+
+    for (plugin_key, plugin_config) in extra_plugins {
+        let remote_curated_plugin_name = installed_plugin_name_for_marketplace(
+            &plugin_key,
+            REMOTE_GLOBAL_MARKETPLACE_NAME,
+            store,
+        );
+        let local_curated_plugin_key = remote_curated_plugin_name
+            .as_ref()
+            .and_then(|plugin_name| local_curated_installed_plugin_keys.get(plugin_name));
+
+        if let Some(local_curated_plugin_key) = local_curated_plugin_key {
+            if prefer_remote_curated_conflicts {
+                configured_plugins.remove(local_curated_plugin_key);
+            } else {
+                continue;
+            }
+        }
+
+        configured_plugins.insert(plugin_key, plugin_config);
+    }
+
+    configured_plugins
+}
+
+fn installed_plugin_name_for_marketplace(
+    plugin_key: &str,
+    marketplace_name: &str,
+    store: &PluginStore,
+) -> Option<String> {
+    let plugin_id = PluginId::parse(plugin_key).ok()?;
+    if plugin_id.marketplace_name != marketplace_name {
+        return None;
+    }
+    store.active_plugin_root(&plugin_id)?;
+    Some(plugin_id.plugin_name)
 }
 
 pub fn remote_installed_plugins_to_config(
@@ -883,10 +945,7 @@ async fn load_apps_from_paths(
             }
         };
 
-        let mut apps: Vec<PluginAppConfig> = parsed.apps.into_values().collect();
-        apps.sort_unstable_by(|left, right| left.id.cmp(&right.id));
-
-        connector_ids.extend(apps.into_iter().filter_map(|app| {
+        connector_ids.extend(parsed.apps.into_values().filter_map(|app| {
             if app.id.trim().is_empty() {
                 warn!(
                     plugin = %plugin_root.display(),
@@ -898,7 +957,8 @@ async fn load_apps_from_paths(
             }
         }));
     }
-    connector_ids.dedup();
+    let mut seen_connector_ids = HashSet::new();
+    connector_ids.retain(|connector_id| seen_connector_ids.insert(connector_id.0.clone()));
     connector_ids
 }
 

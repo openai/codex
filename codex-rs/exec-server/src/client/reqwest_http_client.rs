@@ -5,6 +5,7 @@
 //! - in a remote environment, that means the remote runtime after the
 //!   orchestrator has forwarded `http/request` over JSON-RPC
 
+use std::error::Error as StdError;
 use std::time::Duration;
 
 use codex_app_server_protocol::JSONRPCErrorError;
@@ -135,15 +136,21 @@ impl ReqwestHttpRequestRunner {
         }
 
         let headers = Self::build_headers(params.headers)?;
-        let mut request = self.client.request(method, url).headers(headers);
+        let mut request = self.client.request(method.clone(), url).headers(headers);
         if let Some(body) = params.body {
             request = request.body(body.into_inner());
         }
 
-        let response = request
-            .send()
-            .await
-            .map_err(|error| internal_error(format!("http/request failed: {error}")))?;
+        let response = match request.send().await {
+            Ok(response) => response,
+            Err(error) => {
+                let error_message = error.to_string();
+                log_send_error(&method, error);
+                return Err(internal_error(format!(
+                    "http/request failed: {error_message}"
+                )));
+            }
+        };
         let status = response.status().as_u16();
         let headers = Self::response_headers(response.headers());
 
@@ -264,4 +271,27 @@ impl ReqwestHttpRequestRunner {
             })
             .collect()
     }
+}
+
+fn log_send_error(method: &Method, error: reqwest::Error) {
+    let error = error.without_url();
+    let source_chain = error_source_chain(&error);
+    tracing::warn!(
+        http_method = method.as_str(),
+        error_is_timeout = error.is_timeout(),
+        error_is_connect = error.is_connect(),
+        error = %error,
+        error_sources = ?source_chain,
+        "http/request send failed"
+    );
+}
+
+fn error_source_chain(error: &reqwest::Error) -> Option<String> {
+    let mut sources = Vec::new();
+    let mut source = error.source();
+    while let Some(error) = source {
+        sources.push(error.to_string());
+        source = error.source();
+    }
+    (!sources.is_empty()).then(|| sources.join(": "))
 }

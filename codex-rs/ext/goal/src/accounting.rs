@@ -83,6 +83,17 @@ impl GoalAccountingState {
         self.inner().current_turn_id.clone()
     }
 
+    pub(crate) fn turn_is_current_active_goal(&self, turn_id: &str) -> bool {
+        let inner = self.inner();
+        if inner.current_turn_id.as_deref() != Some(turn_id) {
+            return false;
+        }
+        let Some(turn) = inner.turns.get(turn_id) else {
+            return false;
+        };
+        turn.account_tokens && turn.active_goal_id.is_some()
+    }
+
     pub(crate) fn record_token_usage(
         &self,
         turn_id: impl Into<String>,

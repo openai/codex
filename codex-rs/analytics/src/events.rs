@@ -147,6 +147,7 @@ pub(crate) struct CodexRuntimeMetadata {
 #[derive(Serialize)]
 pub(crate) struct ThreadInitializedEventParams {
     pub(crate) thread_id: String,
+    pub(crate) session_id: String,
     pub(crate) app_server_client: CodexAppServerClientMetadata,
     pub(crate) runtime: CodexRuntimeMetadata,
     pub(crate) model: String,
@@ -420,6 +421,7 @@ impl GuardianReviewAnalyticsResult {
 
 #[derive(Serialize)]
 pub(crate) struct GuardianReviewEventPayload {
+    pub(crate) session_id: String,
     pub(crate) app_server_client: CodexAppServerClientMetadata,
     pub(crate) runtime: CodexRuntimeMetadata,
     #[serde(flatten)]
@@ -738,6 +740,7 @@ pub(crate) struct CodexHookRunEventRequest {
 #[derive(Serialize)]
 pub(crate) struct CodexCompactionEventParams {
     pub(crate) thread_id: String,
+    pub(crate) session_id: String,
     pub(crate) turn_id: String,
     pub(crate) app_server_client: CodexAppServerClientMetadata,
     pub(crate) runtime: CodexRuntimeMetadata,
@@ -767,6 +770,7 @@ pub(crate) struct CodexCompactionEventRequest {
 #[derive(Serialize)]
 pub(crate) struct CodexTurnEventParams {
     pub(crate) thread_id: String,
+    pub(crate) session_id: String,
     pub(crate) turn_id: String,
     // TODO(rhan-oai): Populate once queued/default submission type is plumbed from
     // the turn/start callsites instead of always being reported as None.
@@ -821,6 +825,7 @@ pub(crate) struct CodexTurnEventRequest {
 #[derive(Serialize)]
 pub(crate) struct CodexTurnSteerEventParams {
     pub(crate) thread_id: String,
+    pub(crate) session_id: String,
     pub(crate) expected_turn_id: Option<String>,
     pub(crate) accepted_turn_id: Option<String>,
     pub(crate) app_server_client: CodexAppServerClientMetadata,
@@ -926,6 +931,7 @@ pub(crate) fn codex_plugin_metadata(plugin: PluginTelemetryMetadata) -> CodexPlu
 
 pub(crate) fn codex_compaction_event_params(
     input: CodexCompactionEvent,
+    session_id: String,
     app_server_client: CodexAppServerClientMetadata,
     runtime: CodexRuntimeMetadata,
     thread_source: Option<ThreadSource>,
@@ -934,6 +940,7 @@ pub(crate) fn codex_compaction_event_params(
 ) -> CodexCompactionEventParams {
     CodexCompactionEventParams {
         thread_id: input.thread_id,
+        session_id,
         turn_id: input.turn_id,
         app_server_client,
         runtime,
@@ -1005,6 +1012,7 @@ fn analytics_hook_source(source: HookSource) -> &'static str {
         HookSource::SessionFlags => "session_flags",
         HookSource::Plugin => "plugin",
         HookSource::CloudRequirements => "cloud_requirements",
+        HookSource::CloudManagedConfig => "cloud_managed_config",
         HookSource::LegacyManagedConfigFile => "legacy_managed_config_file",
         HookSource::LegacyManagedConfigMdm => "legacy_managed_config_mdm",
         HookSource::Unknown => "unknown",
@@ -1026,6 +1034,7 @@ pub(crate) fn subagent_thread_started_event_request(
 ) -> ThreadInitializedEvent {
     let event_params = ThreadInitializedEventParams {
         thread_id: input.thread_id,
+        session_id: input.session_id,
         app_server_client: CodexAppServerClientMetadata {
             product_client_id: input.product_client_id,
             client_name: Some(input.client_name),
@@ -1039,9 +1048,7 @@ pub(crate) fn subagent_thread_started_event_request(
         thread_source: Some(ThreadSource::Subagent),
         initialization_mode: ThreadInitializationMode::New,
         subagent_source: Some(subagent_source_name(&input.subagent_source)),
-        parent_thread_id: input
-            .parent_thread_id
-            .or_else(|| subagent_parent_thread_id(&input.subagent_source)),
+        parent_thread_id: input.parent_thread_id,
         created_at: input.created_at,
     };
     ThreadInitializedEvent {
@@ -1051,22 +1058,7 @@ pub(crate) fn subagent_thread_started_event_request(
 }
 
 pub(crate) fn subagent_source_name(subagent_source: &SubAgentSource) -> String {
-    match subagent_source {
-        SubAgentSource::Review => "review".to_string(),
-        SubAgentSource::Compact => "compact".to_string(),
-        SubAgentSource::ThreadSpawn { .. } => "thread_spawn".to_string(),
-        SubAgentSource::MemoryConsolidation => "memory_consolidation".to_string(),
-        SubAgentSource::Other(other) => other.clone(),
-    }
-}
-
-pub(crate) fn subagent_parent_thread_id(subagent_source: &SubAgentSource) -> Option<String> {
-    match subagent_source {
-        SubAgentSource::ThreadSpawn {
-            parent_thread_id, ..
-        } => Some(parent_thread_id.to_string()),
-        _ => None,
-    }
+    subagent_source.kind().to_string()
 }
 
 fn analytics_hook_status(status: HookRunStatus) -> HookRunStatus {

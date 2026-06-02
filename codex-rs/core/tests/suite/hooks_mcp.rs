@@ -22,6 +22,7 @@ use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::stdio_server_bin;
 use core_test_support::test_codex::test_codex;
+use core_test_support::wait_for_mcp_server;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
@@ -284,6 +285,7 @@ async fn pre_tool_use_blocks_mcp_tool_before_execution(
         })
         .build(&server)
         .await?;
+    wait_for_mcp_server(&test.codex, RMCP_SERVER).await?;
 
     test.submit_turn("call the rmcp echo tool with the MCP pre hook")
         .await?;
@@ -375,6 +377,7 @@ async fn pre_tool_use_rewrites_mcp_tool_before_execution() -> Result<()> {
         })
         .build(&server)
         .await?;
+    wait_for_mcp_server(&test.codex, RMCP_SERVER).await?;
 
     test.submit_turn("call the rmcp echo tool with the MCP pre hook rewrite")
         .await?;
@@ -471,6 +474,7 @@ async fn post_tool_use_records_mcp_tool_payload_and_context(
         })
         .build(&server)
         .await?;
+    wait_for_mcp_server(&test.codex, RMCP_SERVER).await?;
 
     test.submit_turn("call the rmcp echo tool with the MCP post hook")
         .await?;

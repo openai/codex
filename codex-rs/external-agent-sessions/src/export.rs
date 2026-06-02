@@ -78,6 +78,7 @@ fn rollout_items_from_messages(messages: &[ConversationMessage]) -> Vec<RolloutI
                 items.push(RolloutItem::ResponseItem(response_item));
                 items.push(RolloutItem::EventMsg(EventMsg::UserMessage(
                     UserMessageEvent {
+                        client_id: None,
                         message: message.text.clone(),
                         images: None,
                         local_images: Vec::new(),

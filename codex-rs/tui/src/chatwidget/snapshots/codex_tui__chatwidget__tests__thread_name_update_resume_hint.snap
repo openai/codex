@@ -2,4 +2,4 @@
 source: tui/src/chatwidget/tests/app_server.rs
 expression: rendered
 ---
-• Thread renamed to review-fix. To resume this thread run codex resume, then select review-fix (123e4567-e89b-12d3-a456-426614174000)
+• Session renamed to review-fix. To resume this session run codex resume, then select review-fix (123e4567-e89b-12d3-a456-426614174000)

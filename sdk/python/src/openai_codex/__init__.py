@@ -1,3 +1,17 @@
+"""Python SDK for running Codex workflows.
+
+Start with :class:`Codex` for synchronous applications or
+:class:`AsyncCodex` for async applications. Most programs create a thread and
+run a turn::
+
+    from openai_codex import Codex, Sandbox
+
+    with Codex() as codex:
+        thread = codex.thread_start(sandbox=Sandbox.workspace_write)
+        result = thread.run("Describe this project.")
+        print(result.final_response)
+"""
+
 from ._version import __version__
 from .api import (
     ApprovalMode,
@@ -15,16 +29,17 @@ from .api import (
     LocalImageInput,
     MentionInput,
     RunInput,
+    Sandbox,
     SkillInput,
     TextInput,
     Thread,
     TurnHandle,
     TurnResult,
 )
-from .client import AppServerConfig
+from .client import CodexConfig
 from .errors import (
-    AppServerError,
-    AppServerRpcError,
+    CodexError,
+    CodexRpcError,
     InternalRpcError,
     InvalidParamsError,
     InvalidRequestError,
@@ -40,10 +55,11 @@ from .retry import retry_on_overload
 
 __all__ = [
     "__version__",
-    "AppServerConfig",
+    "CodexConfig",
     "Codex",
     "AsyncCodex",
     "ApprovalMode",
+    "Sandbox",
     "ChatgptLoginHandle",
     "DeviceCodeLoginHandle",
     "AsyncChatgptLoginHandle",
@@ -62,10 +78,10 @@ __all__ = [
     "SkillInput",
     "MentionInput",
     "retry_on_overload",
-    "AppServerError",
+    "CodexError",
     "TransportClosedError",
     "JsonRpcError",
-    "AppServerRpcError",
+    "CodexRpcError",
     "ParseError",
     "InvalidRequestError",
     "MethodNotFoundError",

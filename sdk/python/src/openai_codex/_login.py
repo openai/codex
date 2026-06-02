@@ -3,8 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol
 
-from .async_client import AsyncAppServerClient
-from .client import AppServerClient
+from .async_client import AsyncCodexClient
+from .client import CodexClient
 from .generated.v2_all import (
     AccountLoginCompletedNotification,
     CancelLoginAccountResponse,
@@ -19,14 +19,14 @@ from .generated.v2_all import (
 class _AsyncLoginOwner(Protocol):
     """Subset of AsyncCodex needed by async login handles."""
 
-    _client: AsyncAppServerClient
+    _client: AsyncCodexClient
 
     async def _ensure_initialized(self) -> None:
-        """Ensure the owning SDK client has a live app-server connection."""
+        """Ensure the owning SDK client has a live Codex connection."""
         ...
 
 
-def start_chatgpt_login(client: AppServerClient) -> ChatgptLoginHandle:
+def start_chatgpt_login(client: CodexClient) -> ChatgptLoginHandle:
     """Start browser ChatGPT login and return the handle for that attempt."""
     response = client.account_login_start(
         LoginAccountParams(
@@ -60,7 +60,7 @@ async def async_start_chatgpt_login(owner: _AsyncLoginOwner) -> AsyncChatgptLogi
     )
 
 
-def start_device_code_login(client: AppServerClient) -> DeviceCodeLoginHandle:
+def start_device_code_login(client: CodexClient) -> DeviceCodeLoginHandle:
     """Start device-code ChatGPT login and return the handle for that attempt."""
     response = client.account_login_start(
         LoginAccountParams(
@@ -102,7 +102,7 @@ async def async_start_device_code_login(
 class ChatgptLoginHandle:
     """Live browser-login attempt returned by `Codex.login_chatgpt()`."""
 
-    _client: AppServerClient
+    _client: CodexClient
     login_id: str
     auth_url: str
 
@@ -119,7 +119,7 @@ class ChatgptLoginHandle:
 class DeviceCodeLoginHandle:
     """Live device-code login attempt returned by `Codex.login_chatgpt_device_code()`."""
 
-    _client: AppServerClient
+    _client: CodexClient
     login_id: str
     verification_url: str
     user_code: str

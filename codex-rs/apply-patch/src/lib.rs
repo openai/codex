@@ -31,9 +31,6 @@ pub use standalone_executable::main;
 
 use crate::invocation::ExtractHeredocError;
 
-/// Detailed instructions for gpt-4.1 on how to use the `apply_patch` tool.
-pub const APPLY_PATCH_TOOL_INSTRUCTIONS: &str = include_str!("../apply_patch_tool_instructions.md");
-
 /// Special argv[1] flag used when the Codex executable self-invokes to run the
 /// internal `apply_patch` path.
 ///
@@ -776,7 +773,7 @@ fn compute_replacements(
         }
     }
 
-    replacements.sort_by(|(lhs_idx, _, _), (rhs_idx, _, _)| lhs_idx.cmp(rhs_idx));
+    replacements.sort_by_key(|(index, _, _)| *index);
 
     Ok(replacements)
 }

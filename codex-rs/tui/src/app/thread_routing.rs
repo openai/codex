@@ -497,7 +497,7 @@ impl App {
         op: &AppCommand,
     ) -> Result<bool> {
         match op {
-            AppCommand::Interrupt => {
+            AppCommand::Interrupt { .. } => {
                 if let Some(turn_id) = self.active_turn_id_for_thread(thread_id).await {
                     app_server.turn_interrupt(thread_id, turn_id).await?;
                 } else {
@@ -684,7 +684,6 @@ impl App {
             }
             AppCommand::ReloadUserConfig => {
                 app_server.reload_user_config().await?;
-                self.refresh_in_memory_config_from_disk().await?;
                 Ok(true)
             }
             AppCommand::OverrideTurnContext { .. } => {

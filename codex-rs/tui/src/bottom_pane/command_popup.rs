@@ -98,6 +98,7 @@ impl CommandPopup {
     /// to narrow down the list of available commands.
     pub(crate) fn on_composer_text_change(&mut self, text: String) {
         let first_line = text.lines().next().unwrap_or("");
+        let previous_filter = self.command_filter.clone();
 
         if let Some(stripped) = first_line.strip_prefix('/') {
             // Extract the *first* token (sequence of non-whitespace
@@ -114,6 +115,10 @@ impl CommandPopup {
             // popup shows the *full* command list if it is still displayed
             // for some reason.
             self.command_filter.clear();
+        }
+
+        if self.command_filter != previous_filter {
+            self.state.reset();
         }
 
         // Reset or clamp selected index based on new filtered list.
@@ -404,6 +409,38 @@ mod tests {
         assert!(
             !cmds.iter().any(|cmd| cmd == "compact"),
             "expected prefix search for '/ac' to exclude 'compact', got {cmds:?}"
+        );
+    }
+
+    #[test]
+    fn changing_filter_resets_selection_after_scrolling() {
+        let mut popup = CommandPopup::new(CommandPopupFlags::default(), Vec::new());
+        popup.on_composer_text_change("/".to_string());
+
+        for _ in 0..MAX_POPUP_ROWS {
+            popup.move_down();
+        }
+        assert!(popup.state.scroll_top > 0);
+
+        popup.on_composer_text_change("/st".to_string());
+
+        assert_eq!(
+            popup.selected_item(),
+            Some(CommandItem::Builtin(SlashCommand::Status))
+        );
+        assert_eq!(popup.state.scroll_top, 0);
+        let width = 72;
+        let area = Rect::new(
+            /*x*/ 0,
+            /*y*/ 0,
+            width,
+            popup.calculate_required_height(width),
+        );
+        let mut buf = Buffer::empty(area);
+        popup.render_ref(area, &mut buf);
+        insta::assert_snapshot!(
+            "command_popup_filter_reset_after_scroll",
+            format!("{buf:?}")
         );
     }
 

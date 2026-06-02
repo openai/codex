@@ -30,7 +30,7 @@ impl ToolExecutor<ToolInvocation> for Handler {
         session
             .services
             .agent_control
-            .register_session_root(session.conversation_id, &turn.session_source);
+            .register_session_root(session.conversation_id, turn.parent_thread_id);
         let agents = session
             .services
             .agent_control
