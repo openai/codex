@@ -5459,7 +5459,7 @@ async fn request_permissions_tool_resolves_relative_paths_against_selected_envir
                     source: ToolCallSource::Direct,
                     payload: ToolPayload::Function {
                         arguments: json!({
-                            "environmentId": "remote",
+                            "environment_id": "remote",
                             "reason": "need write",
                             "permissions": {
                                 "file_system": {
@@ -5532,7 +5532,7 @@ async fn request_permissions_tool_rejects_unknown_environment_id() {
             source: ToolCallSource::Direct,
             payload: ToolPayload::Function {
                 arguments: json!({
-                    "environmentId": "missing",
+                    "environment_id": "missing",
                     "permissions": {
                         "network": {
                             "enabled": true,

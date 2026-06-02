@@ -21,7 +21,7 @@ pub struct RequestPermissionsHandler;
 
 #[derive(Deserialize)]
 struct RequestPermissionsEnvironmentArgs {
-    #[serde(default, rename = "environmentId", alias = "environment_id")]
+    #[serde(default, rename = "environment_id", alias = "environmentId")]
     environment_id: Option<String>,
 }
 
