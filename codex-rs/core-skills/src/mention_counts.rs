@@ -3,7 +3,6 @@ use std::collections::HashSet;
 
 use super::SkillMetadata;
 use codex_exec_server::EnvironmentPathRef;
-use codex_utils_absolute_path::AbsolutePathBuf;
 
 /// Counts how often each skill name appears (exact and ASCII-lowercase), excluding disabled paths.
 pub fn build_skill_name_counts(
@@ -12,15 +11,6 @@ pub fn build_skill_name_counts(
 ) -> (HashMap<String, usize>, HashMap<String, usize>) {
     build_skill_name_counts_with_disabled(skills, |skill| {
         disabled_paths.contains(&skill.source_path)
-    })
-}
-
-pub(crate) fn build_skill_name_counts_for_raw_paths(
-    skills: &[SkillMetadata],
-    disabled_paths: &HashSet<AbsolutePathBuf>,
-) -> (HashMap<String, usize>, HashMap<String, usize>) {
-    build_skill_name_counts_with_disabled(skills, |skill| {
-        disabled_paths.contains(&skill.path_to_skills_md)
     })
 }
 
