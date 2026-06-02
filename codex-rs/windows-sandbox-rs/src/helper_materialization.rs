@@ -22,18 +22,21 @@ pub(crate) const RESOURCES_DIRNAME: &str = "codex-resources";
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum HelperExecutable {
     CommandRunner,
+    SetupHelper,
 }
 
 impl HelperExecutable {
     fn file_name(self) -> &'static str {
         match self {
             Self::CommandRunner => "codex-command-runner.exe",
+            Self::SetupHelper => "codex-windows-sandbox-setup.exe",
         }
     }
 
     fn label(self) -> &'static str {
         match self {
             Self::CommandRunner => "command-runner",
+            Self::SetupHelper => "setup-helper",
         }
     }
 }
@@ -558,5 +561,12 @@ mod tests {
         let file_name = materialized_file_name(HelperExecutable::CommandRunner, "test-suffix");
 
         assert_eq!(file_name, "codex-command-runner-test-suffix.exe");
+    }
+
+    #[test]
+    fn materialized_setup_helper_name_adds_suffix_before_extension() {
+        let file_name = materialized_file_name(HelperExecutable::SetupHelper, "test-suffix");
+
+        assert_eq!(file_name, "codex-windows-sandbox-setup-test-suffix.exe");
     }
 }

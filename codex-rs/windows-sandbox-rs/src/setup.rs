@@ -12,8 +12,10 @@ use std::process::Stdio;
 
 use crate::allow::AllowDenyPaths;
 use crate::allow::compute_allow_paths_for_permissions;
+use crate::helper_materialization::HelperExecutable;
 use crate::helper_materialization::bundled_executable_path_for_exe;
 use crate::helper_materialization::helper_bin_dir;
+use crate::helper_materialization::resolve_helper_for_launch;
 use crate::logging::log_note;
 use crate::path_normalization::canonical_path_key;
 use crate::path_normalization::canonicalize_path;
@@ -208,7 +210,7 @@ fn run_setup_refresh_inner(
     };
     let json = serde_json::to_vec(&payload)?;
     let b64 = BASE64_STANDARD.encode(json);
-    let exe = find_setup_exe();
+    let exe = find_setup_exe(request.codex_home);
     // Refresh should never request elevation; ensure verb isn't set and we don't trigger UAC.
     let mut cmd = Command::new(&exe);
     cmd.arg(&b64).stdout(Stdio::null()).stderr(Stdio::null());
@@ -639,7 +641,17 @@ fn quote_arg(arg: &str) -> String {
     out
 }
 
-fn find_setup_exe() -> PathBuf {
+fn find_setup_exe(codex_home: &Path) -> PathBuf {
+    let sandbox_log_dir = sandbox_dir(codex_home);
+    let copied = resolve_helper_for_launch(
+        HelperExecutable::SetupHelper,
+        codex_home,
+        Some(&sandbox_log_dir),
+    );
+    if copied.exists() {
+        return copied;
+    }
+
     if let Ok(exe) = std::env::current_exe()
         && let Some(setup_exe) = find_setup_exe_for_current_exe(&exe)
     {
@@ -682,7 +694,7 @@ fn run_setup_exe(
     use windows_sys::Win32::UI::Shell::SEE_MASK_NOCLOSEPROCESS;
     use windows_sys::Win32::UI::Shell::SHELLEXECUTEINFOW;
     use windows_sys::Win32::UI::Shell::ShellExecuteExW;
-    let exe = find_setup_exe();
+    let exe = find_setup_exe(codex_home);
     let payload_json = serde_json::to_string(payload).map_err(|err| {
         failure(
             SetupErrorCode::OrchestratorPayloadSerializeFailed,
