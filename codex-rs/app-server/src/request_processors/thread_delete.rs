@@ -118,9 +118,10 @@ impl ThreadRequestProcessor {
         thread_id: ThreadId,
         has_descendants: bool,
     ) -> Result<(), JSONRPCErrorError> {
-        if let Ok(thread) = self.thread_manager.get_thread(thread_id).await
-            && thread.config_snapshot().await.ephemeral
-        {
+        if let Ok(thread) = self.thread_manager.get_thread(thread_id).await {
+            if !thread.config_snapshot().await.ephemeral {
+                return Ok(());
+            }
             return Err(invalid_request(format!(
                 "thread is not persisted and cannot be deleted: {thread_id}"
             )));

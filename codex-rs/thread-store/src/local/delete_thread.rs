@@ -83,6 +83,18 @@ fn delete_rollout_file(
     rollout_path: &Path,
     thread_id: codex_protocol::ThreadId,
 ) -> ThreadStoreResult<bool> {
+    let plain_path = codex_rollout::plain_rollout_path(rollout_path);
+    let compressed_path = plain_path.with_extension("jsonl.zst");
+    let deleted_plain = delete_rollout_path(store, plain_path.as_path(), thread_id)?;
+    let deleted_compressed = delete_rollout_path(store, compressed_path.as_path(), thread_id)?;
+    Ok(deleted_plain || deleted_compressed)
+}
+
+fn delete_rollout_path(
+    store: &LocalThreadStore,
+    rollout_path: &Path,
+    thread_id: codex_protocol::ThreadId,
+) -> ThreadStoreResult<bool> {
     let canonical_rollout_path = scoped_rollout_path(
         store.config.codex_home.join(SESSIONS_SUBDIR),
         rollout_path,
@@ -130,12 +142,13 @@ mod tests {
     async fn delete_thread_removes_active_and_archived_rollouts() {
         let home = TempDir::new().expect("temp dir");
         let store = LocalThreadStore::new(test_config(home.path()), /*state_db*/ None);
+        let active_path =
+            write_session_file(home.path(), "2025-01-03T12-00-00", Uuid::from_u128(301))
+                .expect("session file");
+        let compressed_path = active_path.with_extension("jsonl.zst");
+        std::fs::write(&compressed_path, b"compressed sibling").expect("compressed sibling");
         let cases = [
-            (
-                Uuid::from_u128(301),
-                write_session_file(home.path(), "2025-01-03T12-00-00", Uuid::from_u128(301))
-                    .expect("session file"),
-            ),
+            (Uuid::from_u128(301), active_path),
             (
                 Uuid::from_u128(302),
                 write_archived_session_file(
@@ -156,6 +169,7 @@ mod tests {
 
             assert!(!path.exists());
         }
+        assert!(!compressed_path.exists());
     }
 
     #[tokio::test]

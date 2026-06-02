@@ -119,11 +119,41 @@ fn create_delete_test_rollout(codex_home: &Path, minute: u8, preview: &str) -> R
 }
 
 #[tokio::test]
-async fn thread_delete_rejects_live_ephemeral_thread_without_unloading() -> Result<()> {
+async fn thread_delete_handles_live_threads_before_rollout_exists() -> Result<()> {
     let codex_home = TempDir::new()?;
 
     let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let start_id = mcp
+        .send_thread_start_request(ThreadStartParams::default())
+        .await?;
+    let start_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(start_id)),
+    )
+    .await??;
+    let persisted_thread = to_response::<ThreadStartResponse>(start_resp)?.thread;
+    let rollout_path = find_thread_path_by_id_str(
+        codex_home.path(),
+        &persisted_thread.id,
+        /*state_db_ctx*/ None,
+    )
+    .await?;
+    assert_eq!(rollout_path, None);
+
+    let delete_id = mcp
+        .send_thread_delete_request(ThreadDeleteParams {
+            thread_id: persisted_thread.id,
+        })
+        .await?;
+    let delete_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(delete_id)),
+    )
+    .await??;
+    let _: ThreadDeleteResponse = to_response::<ThreadDeleteResponse>(delete_resp)?;
+
     let start_id = mcp
         .send_thread_start_request(ThreadStartParams {
             ephemeral: Some(true),
