@@ -969,7 +969,6 @@ enum McpToolApprovalDecision {
 
 pub(crate) struct McpToolApprovalMetadata {
     annotations: Option<ToolAnnotations>,
-    approvals_reviewer: Option<ApprovalsReviewer>,
     connector_id: Option<String>,
     connector_name: Option<String>,
     connector_description: Option<String>,
@@ -1164,7 +1163,7 @@ async fn maybe_request_mcp_tool_approval(
     metadata: Option<&McpToolApprovalMetadata>,
     approval_mode: AppToolApproval,
 ) -> Option<McpToolApprovalDecision> {
-    let approvals_reviewer = mcp_approvals_reviewer(turn_context, metadata);
+    let approvals_reviewer = mcp_approvals_reviewer(turn_context, &invocation.server, metadata);
     if mcp_permission_prompt_is_auto_approved(
         turn_context.approval_policy.value(),
         &turn_context.permission_profile(),
@@ -1332,11 +1331,14 @@ async fn maybe_request_mcp_tool_approval(
 
 pub(crate) fn mcp_approvals_reviewer(
     turn_context: &TurnContext,
+    server_name: &str,
     metadata: Option<&McpToolApprovalMetadata>,
 ) -> ApprovalsReviewer {
-    metadata
-        .and_then(|metadata| metadata.approvals_reviewer)
-        .unwrap_or(turn_context.config.approvals_reviewer)
+    connectors::mcp_approvals_reviewer(
+        turn_context.config.as_ref(),
+        server_name,
+        metadata.and_then(|metadata| metadata.connector_id.as_deref()),
+    )
 }
 
 fn session_mcp_tool_approval_key(
@@ -1431,11 +1433,6 @@ pub(crate) async fn lookup_mcp_tool_metadata(
     let tool_info = tools
         .into_iter()
         .find(|tool_info| tool_info.server_name == server && tool_info.tool.name == tool_name)?;
-    let approvals_reviewer = connectors::mcp_approvals_reviewer(
-        turn_context.config.as_ref(),
-        server,
-        tool_info.connector_id.as_deref(),
-    );
     let connector_description = if server == CODEX_APPS_MCP_SERVER_NAME {
         let connectors = match connectors::list_cached_accessible_connectors_from_mcp_tools(
             turn_context.config.as_ref(),
@@ -1462,7 +1459,6 @@ pub(crate) async fn lookup_mcp_tool_metadata(
 
     Some(McpToolApprovalMetadata {
         annotations: tool_info.tool.annotations,
-        approvals_reviewer: Some(approvals_reviewer),
         connector_id: tool_info.connector_id,
         connector_name: tool_info.connector_name,
         connector_description,
