@@ -186,6 +186,7 @@ async fn auth_refreshes_when_access_token_is_near_expiry() -> Result<()> {
         tokens: Some(initial_tokens.clone()),
         last_refresh: Some(initial_last_refresh),
         agent_identity: None,
+        personal_access_token: None,
     };
     ctx.write_auth(&initial_auth).await?;
 
@@ -236,6 +237,7 @@ async fn auth_skips_access_token_outside_refresh_window() -> Result<()> {
         tokens: Some(initial_tokens.clone()),
         last_refresh: Some(initial_last_refresh),
         agent_identity: None,
+        personal_access_token: None,
     };
     ctx.write_auth(&initial_auth).await?;
 
