@@ -8,8 +8,6 @@ use codex_protocol::protocol::RateLimitSnapshot as CoreRateLimitSnapshot;
 use codex_protocol::protocol::RateLimitWindow as CoreRateLimitWindow;
 use codex_protocol::protocol::SpendControlLimitSnapshot as CoreSpendControlLimitSnapshot;
 use schemars::JsonSchema;
-use schemars::SchemaGenerator;
-use schemars::schema::Schema;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -26,26 +24,21 @@ pub enum Account {
 
     #[serde(rename = "chatgpt", rename_all = "camelCase")]
     #[ts(rename = "chatgpt", rename_all = "camelCase")]
-    Chatgpt {
-        #[schemars(schema_with = "nullable_string_schema")]
-        email: Option<String>,
-        plan_type: PlanType,
-    },
+    Chatgpt { email: String, plan_type: PlanType },
 
     #[serde(rename = "amazonBedrock", rename_all = "camelCase")]
     #[ts(rename = "amazonBedrock", rename_all = "camelCase")]
     AmazonBedrock {},
 }
 
-fn nullable_string_schema(generator: &mut SchemaGenerator) -> Schema {
-    generator.subschema_for::<Option<String>>()
-}
-
 impl From<ProviderAccount> for Account {
     fn from(account: ProviderAccount) -> Self {
         match account {
             ProviderAccount::ApiKey => Self::ApiKey {},
-            ProviderAccount::Chatgpt { email, plan_type } => Self::Chatgpt { email, plan_type },
+            ProviderAccount::Chatgpt { email, plan_type } => Self::Chatgpt {
+                email: email.unwrap_or_default(),
+                plan_type,
+            },
             ProviderAccount::AmazonBedrock => Self::AmazonBedrock {},
         }
     }

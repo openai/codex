@@ -1607,6 +1607,7 @@ mod tests {
     use anyhow::Result;
     use codex_protocol::ThreadId;
     use codex_protocol::account::PlanType;
+    use codex_protocol::account::ProviderAccount;
     use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_READ_ONLY;
     use codex_protocol::parse_command::ParsedCommand;
     use codex_protocol::protocol::RealtimeConversationVersion;
@@ -2696,7 +2697,7 @@ mod tests {
         );
 
         let chatgpt = v2::Account::Chatgpt {
-            email: Some("user@example.com".to_string()),
+            email: "user@example.com".to_string(),
             plan_type: PlanType::Plus,
         };
         assert_eq!(
@@ -2708,14 +2709,14 @@ mod tests {
             serde_json::to_value(&chatgpt)?,
         );
 
-        let phone_only_chatgpt = v2::Account::Chatgpt {
+        let phone_only_chatgpt = v2::Account::from(ProviderAccount::Chatgpt {
             email: None,
             plan_type: PlanType::Plus,
-        };
+        });
         assert_eq!(
             json!({
                 "type": "chatgpt",
-                "email": null,
+                "email": "",
                 "planType": "plus",
             }),
             serde_json::to_value(&phone_only_chatgpt)?,
