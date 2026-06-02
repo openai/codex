@@ -425,6 +425,55 @@ default_tools_approval_mode = "prompt"
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_read_includes_prompt_writes_app_approval_mode() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    write_config(
+        &codex_home,
+        r#"
+[apps.app1]
+default_tools_approval_mode = "prompt_writes"
+"#,
+    )?;
+
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_config_read_request(ConfigReadParams {
+            include_layers: false,
+            cwd: None,
+        })
+        .await?;
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let ConfigReadResponse { config, .. } = to_response(resp)?;
+
+    assert_eq!(
+        config.apps,
+        Some(AppsConfig {
+            default: None,
+            apps: std::collections::HashMap::from([(
+                "app1".to_string(),
+                AppConfig {
+                    enabled: true,
+                    approvals_reviewer: None,
+                    destructive_enabled: None,
+                    open_world_enabled: None,
+                    default_tools_approval_mode: Some(AppToolApproval::PromptWrites),
+                    default_tools_enabled: None,
+                    tools: None,
+                },
+            )]),
+        })
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn config_read_includes_desktop_settings() -> Result<()> {
     let codex_home = TempDir::new()?;
     write_config(

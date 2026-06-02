@@ -1175,8 +1175,13 @@ async fn maybe_request_mcp_tool_approval(
     }
 
     let annotations = metadata.and_then(|metadata| metadata.annotations.as_ref());
-    let approval_required = requires_mcp_tool_approval(annotations);
-    if !approval_required && approval_mode != AppToolApproval::Prompt {
+    let approval_required = match approval_mode {
+        AppToolApproval::Auto => requires_mcp_tool_approval(annotations),
+        AppToolApproval::Prompt => true,
+        AppToolApproval::PromptWrites => !mcp_tool_is_safely_read_only(annotations),
+        AppToolApproval::Approve => false,
+    };
+    if !approval_required {
         return None;
     }
 
@@ -1861,12 +1866,13 @@ fn normalize_approval_decision_for_mode(
     decision: McpToolApprovalDecision,
     approval_mode: AppToolApproval,
 ) -> McpToolApprovalDecision {
-    if approval_mode == AppToolApproval::Prompt
-        && matches!(
-            decision,
-            McpToolApprovalDecision::AcceptForSession | McpToolApprovalDecision::AcceptAndRemember
-        )
-    {
+    if matches!(
+        approval_mode,
+        AppToolApproval::Prompt | AppToolApproval::PromptWrites
+    ) && matches!(
+        decision,
+        McpToolApprovalDecision::AcceptForSession | McpToolApprovalDecision::AcceptAndRemember
+    ) {
         McpToolApprovalDecision::Accept
     } else {
         decision
@@ -2094,16 +2100,17 @@ fn project_mcp_tool_approval_config_folder(
         })
 }
 
+fn mcp_tool_is_safely_read_only(annotations: Option<&ToolAnnotations>) -> bool {
+    annotations.is_some_and(|annotations| annotations.read_only_hint == Some(true))
+}
+
 fn requires_mcp_tool_approval(annotations: Option<&ToolAnnotations>) -> bool {
     let destructive_hint = annotations.and_then(|annotations| annotations.destructive_hint);
     if destructive_hint == Some(true) {
         return true;
     }
 
-    let read_only_hint = annotations
-        .and_then(|annotations| annotations.read_only_hint)
-        .unwrap_or(false);
-    if read_only_hint {
+    if mcp_tool_is_safely_read_only(annotations) {
         return false;
     }
 

@@ -43,6 +43,7 @@ fn set_calendar_approval_mode(config: &mut Config, approval_mode: AppToolApprova
     let approval_mode = match approval_mode {
         AppToolApproval::Auto => "auto",
         AppToolApproval::Prompt => "prompt",
+        AppToolApproval::PromptWrites => "prompt_writes",
         AppToolApproval::Approve => "approve",
     };
     let user_config_path = config.codex_home.join("config.toml").abs();

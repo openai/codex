@@ -2096,6 +2096,36 @@ allowed_approvals_reviewers = ["user"]
         Ok(())
     }
 
+    #[test]
+    fn deserialize_apps_tool_requirements_with_prompt_writes() -> Result<()> {
+        let toml_str = r#"
+            [apps.connector_123123.tools."calendar/list_events"]
+            approval_mode = "prompt_writes"
+        "#;
+        let requirements: ConfigRequirementsToml = from_str(toml_str)?;
+
+        assert_eq!(
+            requirements.apps,
+            Some(AppsRequirementsToml {
+                apps: BTreeMap::from([(
+                    "connector_123123".to_string(),
+                    AppRequirementToml {
+                        enabled: None,
+                        tools: Some(AppToolsRequirementsToml {
+                            tools: BTreeMap::from([(
+                                "calendar/list_events".to_string(),
+                                AppToolRequirementToml {
+                                    approval_mode: Some(AppToolApproval::PromptWrites),
+                                },
+                            )]),
+                        }),
+                    },
+                )]),
+            })
+        );
+        Ok(())
+    }
+
     fn apps_requirements(entries: &[(&str, Option<bool>)]) -> AppsRequirementsToml {
         AppsRequirementsToml {
             apps: entries

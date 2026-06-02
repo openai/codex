@@ -121,6 +121,17 @@ fn mcp_prompt_auto_approval_rejects_auto_mode_in_default_permission_mode() {
 }
 
 #[test]
+fn mcp_prompt_auto_approval_rejects_prompt_writes_mode_in_default_permission_mode() {
+    assert!(!mcp_permission_prompt_is_auto_approved(
+        AskForApproval::OnRequest,
+        &PermissionProfile::read_only(),
+        McpPermissionPromptAutoApproveContext {
+            tool_approval_mode: Some(AppToolApproval::PromptWrites),
+        },
+    ));
+}
+
+#[test]
 fn tool_plugin_provenance_collects_app_and_mcp_sources() {
     let mut config = test_mcp_config(PathBuf::new());
     config.plugin_ids_by_mcp_server_name =

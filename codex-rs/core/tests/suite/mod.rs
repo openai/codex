@@ -33,6 +33,8 @@ mod additional_context;
 mod agent_jobs;
 mod agent_websocket;
 mod agents_md;
+#[cfg(not(target_os = "windows"))]
+mod app_tool_approvals;
 mod apply_patch_cli;
 #[cfg(not(target_os = "windows"))]
 mod approvals;

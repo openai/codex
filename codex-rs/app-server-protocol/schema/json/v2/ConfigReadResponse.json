@@ -78,6 +78,7 @@
       "enum": [
         "auto",
         "prompt",
+        "prompt_writes",
         "approve"
       ],
       "type": "string"

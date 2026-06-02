@@ -869,6 +869,24 @@ fn managed_app_tool_approval_uses_raw_tool_name() {
     );
 }
 
+#[test]
+fn managed_app_tool_approval_supports_prompt_writes() {
+    let requirements_apps = app_tool_requirements(
+        "connector_123123",
+        "calendar/list_events",
+        AppToolApproval::PromptWrites,
+    );
+
+    assert_eq!(
+        managed_app_tool_approval(
+            Some(&requirements_apps),
+            Some("connector_123123"),
+            "calendar/list_events",
+        ),
+        Some(AppToolApproval::PromptWrites)
+    );
+}
+
 #[tokio::test]
 async fn cloud_requirements_tool_approval_overrides_user_apps_config() {
     let codex_home = tempdir().expect("tempdir should succeed");
@@ -1200,6 +1218,46 @@ fn app_tool_policy_uses_default_tools_approval_mode() {
         AppToolPolicy {
             enabled: true,
             approval: AppToolApproval::Prompt,
+        }
+    );
+}
+
+#[test]
+fn app_tool_policy_uses_prompt_writes_default_tools_approval_mode() {
+    let apps_config = AppsConfigToml {
+        default: None,
+        apps: HashMap::from([(
+            "calendar".to_string(),
+            AppConfig {
+                enabled: true,
+                approvals_reviewer: None,
+                destructive_enabled: None,
+                open_world_enabled: None,
+                default_tools_approval_mode: Some(AppToolApproval::PromptWrites),
+                default_tools_enabled: None,
+                tools: Some(AppToolsConfig {
+                    tools: HashMap::new(),
+                }),
+            },
+        )]),
+    };
+
+    let policy = app_tool_policy_from_apps_config(
+        Some(&apps_config),
+        Some("calendar"),
+        "events/list",
+        /*tool_title*/ None,
+        Some(&annotations(
+            /*destructive_hint*/ None, /*open_world_hint*/ None,
+        )),
+        /*managed_approval*/ None,
+    );
+
+    assert_eq!(
+        policy,
+        AppToolPolicy {
+            enabled: true,
+            approval: AppToolApproval::PromptWrites,
         }
     );
 }
