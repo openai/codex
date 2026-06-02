@@ -31,13 +31,6 @@
             "agentIdentity"
           ],
           "type": "string"
-        },
-        {
-          "description": "Programmatic Codex auth backed by an opaque personal access token.",
-          "enum": [
-            "personalAccessToken"
-          ],
-          "type": "string"
         }
       ]
     },

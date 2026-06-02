@@ -36,11 +36,6 @@ pub enum AuthMode {
     #[ts(rename = "agentIdentity")]
     #[strum(serialize = "agentIdentity")]
     AgentIdentity,
-    /// Programmatic Codex auth backed by an opaque personal access token.
-    #[serde(rename = "personalAccessToken")]
-    #[ts(rename = "personalAccessToken")]
-    #[strum(serialize = "personalAccessToken")]
-    PersonalAccessToken,
 }
 
 macro_rules! experimental_reason_expr {

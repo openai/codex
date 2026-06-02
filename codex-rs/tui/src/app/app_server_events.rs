@@ -89,9 +89,7 @@ impl App {
                     notification.plan_type,
                     matches!(
                         notification.auth_mode,
-                        Some(AuthMode::Chatgpt)
-                            | Some(AuthMode::ChatgptAuthTokens)
-                            | Some(AuthMode::PersonalAccessToken)
+                        Some(AuthMode::Chatgpt) | Some(AuthMode::ChatgptAuthTokens)
                     ),
                 );
                 return;

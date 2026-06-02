@@ -39,6 +39,7 @@
             }
           },
           "required": [
+            "email",
             "planType",
             "type"
           ],

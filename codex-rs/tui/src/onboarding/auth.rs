@@ -847,7 +847,6 @@ impl AuthModeWidget {
             self.login_status,
             LoginStatus::AuthMode(AppServerAuthMode::Chatgpt)
                 | LoginStatus::AuthMode(AppServerAuthMode::ChatgptAuthTokens)
-                | LoginStatus::AuthMode(AppServerAuthMode::PersonalAccessToken)
         ) {
             *self.sign_in_state.write().unwrap() = SignInState::ChatGptSuccess;
             self.request_frame.schedule_frame();
