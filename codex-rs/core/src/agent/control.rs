@@ -192,14 +192,13 @@ impl AgentControl {
         initial_operation: Op,
         session_source: Option<SessionSource>,
     ) -> CodexResult<ThreadId> {
-        let spawned_agent =
-            Box::pin(self.spawn_agent_internal(
-                config,
-                initial_operation,
-                session_source,
-                SpawnAgentOptions::default(),
-            ))
-            .await?;
+        let spawned_agent = Box::pin(self.spawn_agent_internal(
+            config,
+            initial_operation,
+            session_source,
+            SpawnAgentOptions::default(),
+        ))
+        .await?;
         Ok(spawned_agent.thread_id)
     }
 
@@ -358,7 +357,7 @@ impl AgentControl {
 
         self.send_input(new_thread.thread_id, initial_operation)
             .await?;
-        if new_thread.thread.multi_agent_version() != Some(MultiAgentVersion::V2) {
+        if multi_agent_version != MultiAgentVersion::V2 {
             let child_reference = agent_metadata
                 .agent_path
                 .as_ref()
@@ -691,7 +690,7 @@ impl AgentControl {
         // Resumed threads are re-registered in-memory and need the same listener
         // attachment path as freshly spawned threads.
         state.notify_thread_created(resumed_thread.thread_id);
-        if resumed_thread.thread.multi_agent_version() != Some(MultiAgentVersion::V2) {
+        if multi_agent_version != MultiAgentVersion::V2 {
             let child_reference = agent_metadata
                 .agent_path
                 .as_ref()

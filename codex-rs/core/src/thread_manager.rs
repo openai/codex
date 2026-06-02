@@ -1064,8 +1064,7 @@ impl ThreadManagerState {
     ) -> Option<MultiAgentVersion> {
         let inherited_thread_id = match session_source {
             Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-                parent_thread_id,
-                ..
+                parent_thread_id, ..
             })) => Some(*parent_thread_id),
             _ => match initial_history {
                 InitialHistory::Resumed(resumed) => Some(resumed.conversation_id),
