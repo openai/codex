@@ -921,9 +921,18 @@ pub(crate) fn build_guardian_review_session_config(
     guardian_config.notify = None;
     guardian_config.developer_instructions = None;
     guardian_config.permissions.approval_policy = Constrained::allow_only(AskForApproval::Never);
+    let guardian_permission_profile = PermissionProfile::read_only();
+    let (mut guardian_file_system_policy, guardian_network_policy) =
+        guardian_permission_profile.to_runtime_permissions();
+    guardian_file_system_policy.preserve_deny_read_restrictions_from(
+        &parent_config.permissions.file_system_sandbox_policy(),
+    );
     guardian_config
         .permissions
-        .set_permission_profile(PermissionProfile::read_only())
+        .set_permission_profile(PermissionProfile::from_runtime_permissions(
+            &guardian_file_system_policy,
+            guardian_network_policy,
+        ))
         .map_err(|err| {
             anyhow::anyhow!("guardian review session could not set permission profile: {err}")
         })?;
