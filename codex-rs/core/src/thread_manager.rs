@@ -192,7 +192,6 @@ pub(crate) struct ResumeThreadWithHistoryOptions {
     pub(crate) parent_thread_id: Option<ThreadId>,
     pub(crate) inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
     pub(crate) inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
-    pub(crate) inherited_multi_agent_version: Option<MultiAgentVersion>,
 }
 
 /// Shared, `Arc`-owned state for [`ThreadManager`]. This `Arc` is required to have a single
@@ -585,18 +584,14 @@ impl ThreadManager {
         &self,
         options: StartThreadOptions,
     ) -> CodexResult<NewThread> {
-        self.start_thread_with_options_and_fork_source(
-            options, /*forked_from_thread_id*/ None,
-            /*inherited_multi_agent_version*/ None,
-        )
-        .await
+        self.start_thread_with_options_and_fork_source(options, /*forked_from_thread_id*/ None)
+            .await
     }
 
     async fn start_thread_with_options_and_fork_source(
         &self,
         options: StartThreadOptions,
         forked_from_thread_id: Option<ThreadId>,
-        inherited_multi_agent_version: Option<MultiAgentVersion>,
     ) -> CodexResult<NewThread> {
         let (resumed_session_source, resumed_thread_source) = options
             .initial_history
@@ -620,7 +615,6 @@ impl ThreadManager {
             options.parent_trace,
             options.environments,
             /*user_shell_override*/ None,
-            inherited_multi_agent_version,
         ))
         .await
     }
@@ -658,12 +652,8 @@ impl ThreadManager {
                 inherited_multi_agent_version,
             ),
         );
-        self.start_thread_with_options_and_fork_source(
-            options,
-            Some(forked_from_thread_id),
-            Some(inherited_multi_agent_version),
-        )
-        .await
+        self.start_thread_with_options_and_fork_source(options, Some(forked_from_thread_id))
+            .await
     }
 
     pub async fn resume_thread_from_rollout(
@@ -713,7 +703,6 @@ impl ThreadManager {
             parent_trace,
             environments,
             /*user_shell_override*/ None,
-            /*inherited_multi_agent_version*/ None,
         ))
         .await
     }
@@ -740,7 +729,6 @@ impl ThreadManager {
             /*parent_trace*/ None,
             environments,
             /*user_shell_override*/ Some(user_shell_override),
-            /*inherited_multi_agent_version*/ None,
         ))
         .await
     }
@@ -776,7 +764,6 @@ impl ThreadManager {
             /*parent_trace*/ None,
             environments,
             /*user_shell_override*/ Some(user_shell_override),
-            /*inherited_multi_agent_version*/ None,
         ))
         .await
     }
@@ -915,11 +902,18 @@ impl ThreadManager {
             InitialHistory::Forked(_) => history.forked_from_id(),
             InitialHistory::New | InitialHistory::Cleared => None,
         };
-        let interrupted_marker = InterruptedTurnHistoryMarker::from_config_and_version(
-            &config,
-            resolve_multi_agent_version(&history, /*inherited_multi_agent_version*/ None)
-                .unwrap_or(MultiAgentVersion::V1),
-        );
+        let multi_agent_version = self
+            .state
+            .effective_multi_agent_version_for_spawn(
+                &history,
+                /*session_source*/ None,
+                /*parent_thread_id*/ None,
+                forked_from_thread_id,
+                &config,
+            )
+            .await;
+        let interrupted_marker =
+            InterruptedTurnHistoryMarker::from_config_and_version(&config, multi_agent_version);
         let history = fork_history_from_snapshot(snapshot, history, interrupted_marker);
         let environments = default_thread_environment_selections(
             self.state.environment_manager.as_ref(),
@@ -938,7 +932,6 @@ impl ThreadManager {
             parent_trace,
             environments,
             /*user_shell_override*/ None,
-            /*inherited_multi_agent_version*/ None,
         ))
         .await
     }
@@ -1044,6 +1037,53 @@ impl ThreadManagerState {
         self.threads.write().await.remove(thread_id)
     }
 
+    pub(crate) async fn effective_multi_agent_version_for_spawn(
+        &self,
+        initial_history: &InitialHistory,
+        session_source: Option<&SessionSource>,
+        parent_thread_id: Option<ThreadId>,
+        forked_from_thread_id: Option<ThreadId>,
+        config: &Config,
+    ) -> MultiAgentVersion {
+        self.initial_multi_agent_version_for_spawn(
+            initial_history,
+            session_source,
+            parent_thread_id,
+            forked_from_thread_id,
+        )
+        .await
+        .unwrap_or_else(|| config.multi_agent_version_from_features())
+    }
+
+    async fn initial_multi_agent_version_for_spawn(
+        &self,
+        initial_history: &InitialHistory,
+        session_source: Option<&SessionSource>,
+        parent_thread_id: Option<ThreadId>,
+        forked_from_thread_id: Option<ThreadId>,
+    ) -> Option<MultiAgentVersion> {
+        let inherited_thread_id = match session_source {
+            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id,
+                ..
+            })) => Some(*parent_thread_id),
+            _ => match initial_history {
+                InitialHistory::Resumed(resumed) => Some(resumed.conversation_id),
+                InitialHistory::Forked(_) => forked_from_thread_id.or(parent_thread_id),
+                InitialHistory::New | InitialHistory::Cleared => parent_thread_id,
+            },
+        };
+        let inherited_multi_agent_version = match inherited_thread_id {
+            Some(thread_id) => self
+                .get_thread(thread_id)
+                .await
+                .ok()
+                .and_then(|thread| thread.multi_agent_version()),
+            None => None,
+        };
+        resolve_multi_agent_version(initial_history, inherited_multi_agent_version)
+    }
+
     /// Spawn a new thread with no history using a provided config.
     pub(crate) async fn spawn_new_thread(
         &self,
@@ -1061,7 +1101,6 @@ impl ThreadManagerState {
             /*inherited_shell_snapshot*/ None,
             /*inherited_exec_policy*/ None,
             /*environments*/ None,
-            /*inherited_multi_agent_version*/ None,
         ))
         .await
     }
@@ -1079,7 +1118,6 @@ impl ThreadManagerState {
         inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
         inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
         environments: Option<Vec<TurnEnvironmentSelection>>,
-        inherited_multi_agent_version: Option<MultiAgentVersion>,
     ) -> CodexResult<NewThread> {
         let environments = environments.unwrap_or_else(|| {
             default_thread_environment_selections(self.environment_manager.as_ref(), &config.cwd)
@@ -1100,7 +1138,6 @@ impl ThreadManagerState {
             /*parent_trace*/ None,
             environments,
             /*user_shell_override*/ None,
-            inherited_multi_agent_version,
         ))
         .await
     }
@@ -1117,7 +1154,6 @@ impl ThreadManagerState {
             parent_thread_id,
             inherited_shell_snapshot,
             inherited_exec_policy,
-            inherited_multi_agent_version,
         } = options;
         let environments =
             default_thread_environment_selections(self.environment_manager.as_ref(), &config.cwd);
@@ -1138,7 +1174,6 @@ impl ThreadManagerState {
             /*parent_trace*/ None,
             environments,
             /*user_shell_override*/ None,
-            inherited_multi_agent_version,
         ))
         .await
     }
@@ -1156,7 +1191,6 @@ impl ThreadManagerState {
         inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
         inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
         environments: Option<Vec<TurnEnvironmentSelection>>,
-        inherited_multi_agent_version: Option<MultiAgentVersion>,
     ) -> CodexResult<NewThread> {
         let environments = environments.unwrap_or_else(|| {
             default_thread_environment_selections(self.environment_manager.as_ref(), &config.cwd)
@@ -1177,7 +1211,6 @@ impl ThreadManagerState {
             /*parent_trace*/ None,
             environments,
             /*user_shell_override*/ None,
-            inherited_multi_agent_version,
         ))
         .await
     }
@@ -1198,7 +1231,6 @@ impl ThreadManagerState {
         parent_trace: Option<W3cTraceContext>,
         environments: Vec<TurnEnvironmentSelection>,
         user_shell_override: Option<crate::shell::Shell>,
-        inherited_multi_agent_version: Option<MultiAgentVersion>,
     ) -> CodexResult<NewThread> {
         Box::pin(self.spawn_thread_with_source(
             config,
@@ -1216,7 +1248,6 @@ impl ThreadManagerState {
             parent_trace,
             environments,
             user_shell_override,
-            inherited_multi_agent_version,
         ))
         .await
     }
@@ -1239,7 +1270,6 @@ impl ThreadManagerState {
         parent_trace: Option<W3cTraceContext>,
         environments: Vec<TurnEnvironmentSelection>,
         user_shell_override: Option<crate::shell::Shell>,
-        inherited_multi_agent_version: Option<MultiAgentVersion>,
     ) -> CodexResult<NewThread> {
         let is_resumed_thread = matches!(&initial_history, InitialHistory::Resumed(_));
         if let InitialHistory::Resumed(resumed) = &initial_history {
@@ -1269,22 +1299,14 @@ impl ThreadManagerState {
             .parent_rollout_thread_trace_for_source(&session_source, &initial_history)
             .await;
         let tracked_session_source = session_source.clone();
-        let source_thread_id = match &initial_history {
-            InitialHistory::Resumed(resumed) => Some(resumed.conversation_id),
-            InitialHistory::Forked(_) => forked_from_thread_id,
-            InitialHistory::New | InitialHistory::Cleared => None,
-        };
-        let inherited_multi_agent_version = match inherited_multi_agent_version {
-            Some(multi_agent_version) => Some(multi_agent_version),
-            None => match source_thread_id {
-                Some(source_thread_id) => self
-                    .get_thread(source_thread_id)
-                    .await
-                    .ok()
-                    .and_then(|source_thread| source_thread.multi_agent_version()),
-                None => None,
-            },
-        };
+        let multi_agent_version = self
+            .initial_multi_agent_version_for_spawn(
+                &initial_history,
+                Some(&session_source),
+                parent_thread_id,
+                forked_from_thread_id,
+            )
+            .await;
         let CodexSpawnOk {
             codex, thread_id, ..
         } = Codex::spawn(CodexSpawnArgs {
@@ -1314,7 +1336,7 @@ impl ThreadManagerState {
             analytics_events_client: self.analytics_events_client.clone(),
             thread_store: Arc::clone(&self.thread_store),
             attestation_provider: self.attestation_provider.clone(),
-            inherited_multi_agent_version,
+            inherited_multi_agent_version: multi_agent_version,
         })
         .await?;
         let new_thread = self

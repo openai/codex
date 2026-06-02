@@ -426,6 +426,10 @@ pub(crate) fn resolve_multi_agent_version(
     conversation_history: &InitialHistory,
     inherited_multi_agent_version: Option<MultiAgentVersion>,
 ) -> Option<MultiAgentVersion> {
+    if inherited_multi_agent_version == Some(MultiAgentVersion::Disabled) {
+        return Some(MultiAgentVersion::Disabled);
+    }
+
     conversation_history
         .get_multi_agent_version()
         .or(inherited_multi_agent_version)

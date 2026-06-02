@@ -1359,10 +1359,6 @@ async fn multi_agent_v2_send_message_accepts_root_target_from_child() {
         .expect("root thread should start");
     session.services.agent_control = manager.agent_control();
     session.conversation_id = root.thread_id;
-    let multi_agent_version = root
-        .thread
-        .multi_agent_version()
-        .expect("root thread should have a multi-agent version");
 
     let child_path = AgentPath::try_from("/root/worker").expect("agent path");
     let child_thread_id = session
@@ -1382,7 +1378,6 @@ async fn multi_agent_v2_send_message_accepts_root_target_from_child() {
                 agent_nickname: None,
                 agent_role: None,
             })),
-            multi_agent_version,
             crate::agent::control::SpawnAgentOptions::default(),
         )
         .await
@@ -1440,10 +1435,6 @@ async fn multi_agent_v2_followup_task_rejects_root_target_from_child() {
         .expect("root thread should start");
     session.services.agent_control = manager.agent_control();
     session.conversation_id = root.thread_id;
-    let multi_agent_version = root
-        .thread
-        .multi_agent_version()
-        .expect("root thread should have a multi-agent version");
 
     let child_path = AgentPath::try_from("/root/worker").expect("agent path");
     let child_thread_id = session
@@ -1463,7 +1454,6 @@ async fn multi_agent_v2_followup_task_rejects_root_target_from_child() {
                 agent_nickname: None,
                 agent_role: None,
             })),
-            multi_agent_version,
             crate::agent::control::SpawnAgentOptions::default(),
         )
         .await
@@ -1619,10 +1609,6 @@ async fn multi_agent_v2_list_agents_filters_by_relative_path_prefix() {
         .expect("root thread should start");
     session.services.agent_control = manager.agent_control();
     session.conversation_id = root.thread_id;
-    let multi_agent_version = root
-        .thread
-        .multi_agent_version()
-        .expect("root thread should have a multi-agent version");
 
     let researcher_path = AgentPath::from_string("/root/researcher".to_string()).expect("path");
     let worker_path = AgentPath::from_string("/root/researcher/worker".to_string()).expect("path");
@@ -1643,7 +1629,6 @@ async fn multi_agent_v2_list_agents_filters_by_relative_path_prefix() {
                 agent_nickname: None,
                 agent_role: None,
             })),
-            multi_agent_version,
             crate::agent::control::SpawnAgentOptions::default(),
         )
         .await
@@ -1665,7 +1650,6 @@ async fn multi_agent_v2_list_agents_filters_by_relative_path_prefix() {
                 agent_nickname: None,
                 agent_role: None,
             })),
-            multi_agent_version,
             crate::agent::control::SpawnAgentOptions::default(),
         )
         .await

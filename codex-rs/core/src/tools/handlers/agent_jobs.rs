@@ -88,7 +88,6 @@ struct ReportAgentJobResultToolResult {
 struct JobRunnerOptions {
     max_concurrency: usize,
     spawn_config: Config,
-    multi_agent_version: MultiAgentVersion,
 }
 
 #[derive(Debug, Clone)]
@@ -132,7 +131,6 @@ async fn build_runner_options(
     Ok(JobRunnerOptions {
         max_concurrency,
         spawn_config,
-        multi_agent_version,
     })
 }
 
@@ -212,7 +210,6 @@ async fn run_agent_job_loop(
                         Some(SessionSource::SubAgent(SubAgentSource::Other(format!(
                             "agent_job:{job_id}"
                         )))),
-                        options.multi_agent_version,
                         SpawnAgentOptions {
                             parent_thread_id: Some(session.conversation_id),
                             environments: Some(turn.environments.to_selections()),
