@@ -102,7 +102,16 @@ impl<T: HttpTransport> EndpointSession<T> {
                 let transport = &self.transport;
                 async move {
                     let req = auth.apply_auth(req).await.map_err(TransportError::from)?;
-                    transport.execute(req).await
+                    let request_url = req.url.clone();
+                    let request_headers = req.headers.clone();
+                    let response = transport.execute(req).await;
+                    observe_auth_response_headers(
+                        auth.as_ref(),
+                        &request_url,
+                        &request_headers,
+                        &response,
+                    );
+                    response
                 }
             },
         )
@@ -143,7 +152,16 @@ impl<T: HttpTransport> EndpointSession<T> {
                 let transport = &self.transport;
                 async move {
                     let req = auth.apply_auth(req).await.map_err(TransportError::from)?;
-                    transport.stream(req).await
+                    let request_url = req.url.clone();
+                    let request_headers = req.headers.clone();
+                    let response = transport.stream(req).await;
+                    observe_auth_response_headers(
+                        auth.as_ref(),
+                        &request_url,
+                        &request_headers,
+                        &response,
+                    );
+                    response
                 }
             },
         )
@@ -152,3 +170,43 @@ impl<T: HttpTransport> EndpointSession<T> {
         Ok(stream)
     }
 }
+
+fn observe_auth_response_headers<T>(
+    auth: &dyn crate::auth::AuthProvider,
+    request_url: &str,
+    request_headers: &HeaderMap,
+    response: &Result<T, TransportError>,
+) where
+    T: ResponseHeaders,
+{
+    match response {
+        Ok(response) => {
+            auth.observe_response_headers(request_url, request_headers, response.headers())
+        }
+        Err(TransportError::Http {
+            headers: Some(headers),
+            ..
+        }) => auth.observe_response_headers(request_url, request_headers, headers),
+        Err(_) => {}
+    }
+}
+
+trait ResponseHeaders {
+    fn headers(&self) -> &HeaderMap;
+}
+
+impl ResponseHeaders for Response {
+    fn headers(&self) -> &HeaderMap {
+        &self.headers
+    }
+}
+
+impl ResponseHeaders for StreamResponse {
+    fn headers(&self) -> &HeaderMap {
+        &self.headers
+    }
+}
+
+#[cfg(test)]
+#[path = "session_tests.rs"]
+mod tests;
