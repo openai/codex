@@ -22,6 +22,7 @@ use serde::Deserialize;
 use serde_json::Value;
 use serde_json::map::Map as JsonMap;
 use std::sync::Arc;
+use std::sync::Mutex as SyncMutex;
 use std::sync::OnceLock;
 use std::time::Duration;
 use tokio::net::TcpStream;
@@ -164,7 +165,7 @@ const WEBSOCKET_CONNECTION_LIMIT_REACHED_MESSAGE: &str = "Responses websocket co
 struct WebsocketAuthContext {
     auth: SharedAuthProvider,
     request_url: String,
-    request_headers: HeaderMap,
+    request_headers: Arc<SyncMutex<HeaderMap>>,
 }
 
 impl WebsocketAuthContext {
@@ -172,16 +173,19 @@ impl WebsocketAuthContext {
         Self {
             auth,
             request_url,
-            request_headers,
+            request_headers: Arc::new(SyncMutex::new(request_headers)),
         }
     }
 
     fn observe_response_headers(&self, response_headers: &HeaderMap) {
-        self.auth.observe_response_headers(
-            &self.request_url,
-            &self.request_headers,
-            response_headers,
-        );
+        let mut request_headers = self
+            .request_headers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.auth
+            .observe_response_headers(&self.request_url, &request_headers, response_headers);
+        self.auth
+            .add_auth_headers_for_url(&self.request_url, &mut request_headers);
     }
 
     fn observe_error_headers(&self, error: &ApiError) {
@@ -783,8 +787,13 @@ async fn run_websocket_response_stream(
 
         match message {
             Message::Text(text) => {
-                trace!("websocket event: {text}");
-                if let Some(wrapped_error) = parse_wrapped_websocket_error_event(&text) {
+                let wrapped_error = parse_wrapped_websocket_error_event(&text);
+                if wrapped_error.is_some() {
+                    trace!("websocket error event");
+                } else {
+                    trace!("websocket event: {text}");
+                }
+                if let Some(wrapped_error) = wrapped_error {
                     auth_context.observe_wrapped_error_headers(&wrapped_error);
                     if let Some(error) =
                         map_wrapped_websocket_error_event(wrapped_error, text.to_string())
@@ -911,16 +920,32 @@ mod tests {
     const HANDSHAKE_STATE: &str = "ois1.handshake.nonce.ciphertext";
     const WRAPPED_ERROR_STATE: &str = "ois1.error.nonce.ciphertext";
 
-    #[derive(Default)]
     struct RecordingAuthProvider {
+        state: StdMutex<String>,
         observed_updates: StdMutex<Vec<(String, String, String)>>,
+    }
+
+    impl Default for RecordingAuthProvider {
+        fn default() -> Self {
+            Self {
+                state: StdMutex::new(SENT_STATE.to_string()),
+                observed_updates: StdMutex::new(Vec::new()),
+            }
+        }
     }
 
     impl AuthProvider for RecordingAuthProvider {
         fn add_auth_headers(&self, _headers: &mut HeaderMap) {}
 
         fn add_auth_headers_for_url(&self, _request_url: &str, headers: &mut HeaderMap) {
-            headers.insert("x-oai-is", HeaderValue::from_static(SENT_STATE));
+            let state = self
+                .state
+                .lock()
+                .expect("state lock should not be poisoned");
+            headers.insert(
+                "x-oai-is",
+                HeaderValue::from_str(&state).expect("state should be a valid header value"),
+            );
         }
 
         fn observe_response_headers(
@@ -949,6 +974,10 @@ mod tests {
                     sent_state.to_string(),
                     update_state.to_string(),
                 ));
+            *self
+                .state
+                .lock()
+                .expect("state lock should not be poisoned") = update_state.to_string();
         }
     }
 
@@ -1061,7 +1090,7 @@ mod tests {
                 ),
                 (
                     request_url,
-                    SENT_STATE.to_string(),
+                    HANDSHAKE_STATE.to_string(),
                     WRAPPED_ERROR_STATE.to_string(),
                 ),
             ]
