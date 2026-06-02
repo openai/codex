@@ -505,6 +505,55 @@ source = "/tmp/{sales_marketplace_name}"
 }
 
 #[tokio::test]
+async fn list_tool_suggest_discoverable_plugins_omits_openai_curated_when_remote_enabled() {
+    let codex_home = tempdir().expect("tempdir should succeed");
+    let curated_root = curated_plugins_repo_path(codex_home.path());
+    write_openai_curated_marketplace(&curated_root, &["slack"]);
+
+    let bundled_marketplace_name = OPENAI_BUNDLED_MARKETPLACE_NAME;
+    let bundled_marketplace_root = codex_home
+        .path()
+        .join(format!(".tmp/marketplaces/{bundled_marketplace_name}"));
+    write_file(
+        &bundled_marketplace_root.join(".agents/plugins/marketplace.json"),
+        &format!(
+            r#"{{
+  "name": "{bundled_marketplace_name}",
+  "plugins": [
+    {{"name": "chrome", "source": {{"source": "local", "path": "./plugins/chrome"}}}}
+  ]
+}}
+"#
+        ),
+    );
+    write_curated_plugin(&bundled_marketplace_root, "chrome");
+    write_file(
+        &codex_home.path().join(crate::config::CONFIG_TOML_FILE),
+        &format!(
+            r#"[features]
+plugins = true
+remote_plugin = true
+
+[marketplaces.{bundled_marketplace_name}]
+source_type = "git"
+source = "/tmp/{bundled_marketplace_name}"
+"#
+        ),
+    );
+
+    let config = load_plugins_config(codex_home.path()).await;
+    let discoverable_plugins = list_discoverable_plugins(&config, &[]).await.unwrap();
+
+    assert_eq!(
+        discoverable_plugins
+            .into_iter()
+            .map(|plugin| plugin.id)
+            .collect::<Vec<_>>(),
+        vec!["chrome@openai-bundled".to_string()]
+    );
+}
+
+#[tokio::test]
 async fn list_tool_suggest_discoverable_plugins_deduplicates_configured_marketplace_plugin() {
     let codex_home = tempdir().expect("tempdir should succeed");
     let plugin_name = "sample";

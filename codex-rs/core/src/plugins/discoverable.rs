@@ -13,6 +13,7 @@ use codex_core_plugins::PluginsManager;
 use codex_core_plugins::TOOL_SUGGEST_DISCOVERABLE_PLUGIN_ALLOWLIST;
 use codex_core_plugins::marketplace::MarketplacePluginInstallPolicy;
 use codex_core_plugins::remote::REMOTE_GLOBAL_MARKETPLACE_NAME;
+use codex_core_plugins::remote::RemotePluginScope;
 use codex_features::Feature;
 use codex_login::CodexAuth;
 use codex_tools::DiscoverablePluginInfo;
@@ -61,10 +62,21 @@ pub(crate) async fn list_tool_suggest_discoverable_plugins(
         .map(|connector_id| connector_id.0.clone())
         .collect::<HashSet<_>>();
     installed_app_connector_ids.extend(loaded_plugin_app_connector_ids.iter().cloned());
+    let remote_installed_marketplaces = if plugins_input.remote_plugin_enabled {
+        plugins_manager
+            .build_remote_installed_plugin_marketplaces_from_cache(&[RemotePluginScope::Global])
+    } else {
+        None
+    };
 
     let mut discoverable_plugins = Vec::<DiscoverablePluginInfo>::new();
     for marketplace in marketplaces {
         let marketplace_name = marketplace.name;
+        if plugins_input.remote_plugin_enabled
+            && marketplace_name == OPENAI_CURATED_MARKETPLACE_NAME
+        {
+            continue;
+        }
         let is_allowlisted_marketplace =
             TOOL_SUGGEST_DISCOVERABLE_MARKETPLACE_ALLOWLIST.contains(&marketplace_name.as_str());
 
@@ -119,15 +131,23 @@ pub(crate) async fn list_tool_suggest_discoverable_plugins(
             }
         }
     }
-    append_cached_remote_discoverable_plugins(
-        plugins_manager,
-        &plugins_input,
-        auth,
-        &configured_plugin_ids,
-        &disabled_plugin_ids,
-        &installed_app_connector_ids,
-        &mut discoverable_plugins,
-    );
+    if let Some(remote_installed_marketplaces) = remote_installed_marketplaces.as_ref() {
+        let installed_remote_plugin_ids = remote_installed_marketplaces
+            .iter()
+            .flat_map(|marketplace| marketplace.plugins.iter())
+            .map(|plugin| plugin.remote_plugin_id.clone())
+            .collect::<HashSet<_>>();
+        append_cached_remote_discoverable_plugins(
+            plugins_manager,
+            &plugins_input,
+            auth,
+            &configured_plugin_ids,
+            &disabled_plugin_ids,
+            &installed_app_connector_ids,
+            &installed_remote_plugin_ids,
+            &mut discoverable_plugins,
+        );
+    }
     discoverable_plugins.sort_by(|left, right| {
         left.name
             .cmp(&right.name)
@@ -143,13 +163,9 @@ fn append_cached_remote_discoverable_plugins(
     configured_plugin_ids: &HashSet<&str>,
     disabled_plugin_ids: &HashSet<&str>,
     installed_app_connector_ids: &HashSet<String>,
+    installed_remote_plugin_ids: &HashSet<String>,
     discoverable_plugins: &mut Vec<DiscoverablePluginInfo>,
 ) {
-    let Some(installed_remote_plugin_ids) =
-        plugins_manager.remote_installed_plugin_ids_from_cache()
-    else {
-        return;
-    };
     for plugin in
         plugins_manager.cached_global_remote_discoverable_plugins_for_config(plugins_input, auth)
     {

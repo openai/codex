@@ -617,20 +617,6 @@ impl PluginsManager {
         )
     }
 
-    pub fn remote_installed_plugin_ids_from_cache(&self) -> Option<HashSet<String>> {
-        let cache = match self.remote_installed_plugins_cache.read() {
-            Ok(cache) => cache,
-            Err(err) => err.into_inner(),
-        };
-        Some(
-            cache
-                .as_ref()?
-                .iter()
-                .map(|plugin| plugin.id.clone())
-                .collect(),
-        )
-    }
-
     pub async fn build_and_cache_remote_installed_plugin_marketplaces(
         &self,
         config: &PluginsConfigInput,
