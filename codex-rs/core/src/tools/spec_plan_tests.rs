@@ -1241,13 +1241,21 @@ async fn hosted_tools_follow_provider_auth_model_and_config_gates() {
         turn.model_info.input_modalities = vec![InputModality::Image];
     })
     .await;
-    code_mode_only.assert_visible_contains(&[
-        codex_code_mode::PUBLIC_TOOL_NAME,
-        codex_code_mode::WAIT_TOOL_NAME,
-        "spawn_agent",
-        "web_search",
-        "image_generation",
-    ]);
+    assert_eq!(
+        code_mode_only.visible_names,
+        vec![
+            codex_code_mode::PUBLIC_TOOL_NAME,
+            codex_code_mode::WAIT_TOOL_NAME,
+            "spawn_agent",
+            "send_message",
+            "followup_task",
+            "wait_agent",
+            "close_agent",
+            "list_agents",
+            "web_search",
+            "image_generation",
+        ]
+    );
 
     let standalone_web_search_without_web_run = probe(|turn| {
         set_feature(turn, Feature::StandaloneWebSearch, /*enabled*/ true);
