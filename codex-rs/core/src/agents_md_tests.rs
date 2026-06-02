@@ -458,6 +458,55 @@ async fn instruction_sources_include_global_before_agents_md_docs() {
     let tmp = tempfile::tempdir().expect("tempdir");
     fs::write(tmp.path().join("AGENTS.md"), "project doc").unwrap();
 
+    let cfg = make_config(&tmp, /*limit*/ 4096, Some("global doc")).await;
+    let global_agents = cfg.codex_home.join(DEFAULT_AGENTS_MD_FILENAME);
+    fs::create_dir_all(&cfg.codex_home).unwrap();
+    fs::write(&global_agents, "global doc").unwrap();
+
+    let mut warnings = Vec::new();
+    let loaded = AgentsMdManager::new(&cfg)
+        .user_instructions_with_fs(LOCAL_FS.as_ref(), &mut warnings)
+        .await
+        .expect("instructions expected");
+    let project_agents = AbsolutePathBuf::try_from(
+        dunce::canonicalize(cfg.cwd.join("AGENTS.md")).expect("canonical project doc path"),
+    )
+    .expect("absolute project doc path");
+
+    let expected = LoadedAgentsMd {
+        instructions: vec![
+            LoadedInstruction {
+                contents: "global doc".to_string(),
+                source: InstructionSource::User(global_agents.clone()),
+            },
+            LoadedInstruction {
+                contents: "project doc".to_string(),
+                source: InstructionSource::Project(project_agents.clone()),
+            },
+        ],
+    };
+    assert_eq!(loaded, expected);
+    assert_eq!(
+        loaded.sources().collect::<Vec<_>>(),
+        vec![&global_agents, &project_agents]
+    );
+    assert_eq!(
+        AgentsMdManager::new(&cfg)
+            .instruction_sources(LOCAL_FS.as_ref())
+            .await,
+        vec![global_agents, project_agents]
+    );
+    assert_eq!(
+        loaded.text(),
+        format!("global doc{AGENTS_MD_SEPARATOR}project doc")
+    );
+}
+
+#[tokio::test]
+async fn child_agents_message_after_project_docs_is_not_an_instruction_source() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    fs::write(tmp.path().join("AGENTS.md"), "project doc").unwrap();
+
     let mut cfg = make_config(&tmp, /*limit*/ 4096, Some("global doc")).await;
     cfg.features.enable(Feature::ChildAgentsMd).unwrap();
     let global_agents = cfg.codex_home.join(DEFAULT_AGENTS_MD_FILENAME);
@@ -494,12 +543,6 @@ async fn instruction_sources_include_global_before_agents_md_docs() {
     assert_eq!(
         loaded.sources().collect::<Vec<_>>(),
         vec![&global_agents, &project_agents]
-    );
-    assert_eq!(
-        AgentsMdManager::new(&cfg)
-            .instruction_sources(LOCAL_FS.as_ref())
-            .await,
-        vec![global_agents, project_agents]
     );
     assert_eq!(
         loaded.text(),
