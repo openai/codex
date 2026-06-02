@@ -150,17 +150,11 @@ impl SessionConfiguration {
     }
 
     pub(super) fn sandbox_policy(&self) -> SandboxPolicy {
-        self.permission_profile()
-            .to_legacy_sandbox_policy(&self.cwd)
-            .unwrap_or_else(|_| {
-                let file_system_sandbox_policy = self.file_system_sandbox_policy();
-                codex_sandboxing::compatibility_sandbox_policy_for_permission_profile(
-                    self.permission_profile_state.permission_profile(),
-                    &file_system_sandbox_policy,
-                    self.network_sandbox_policy(),
-                    &self.cwd,
-                )
-            })
+        let permission_profile = self.permission_profile();
+        codex_sandboxing::compatibility_sandbox_policy_for_permission_profile(
+            &permission_profile,
+            &self.cwd,
+        )
     }
 
     pub(super) fn file_system_sandbox_policy(&self) -> FileSystemSandboxPolicy {
