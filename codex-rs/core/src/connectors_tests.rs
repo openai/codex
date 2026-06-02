@@ -516,6 +516,51 @@ approvals_reviewer = "user"
 }
 
 #[tokio::test]
+async fn app_approvals_reviewer_does_not_widen_global_reviewer_requirement() {
+    let codex_home = tempdir().expect("tempdir should succeed");
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"
+approvals_reviewer = "auto_review"
+"#,
+    )
+    .expect("write config");
+    let requirements = ConfigRequirementsToml {
+        allowed_approvals_reviewers: Some(vec![ApprovalsReviewer::AutoReview]),
+        ..Default::default()
+    };
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .cloud_requirements(CloudRequirementsLoader::new(async move {
+            Ok(Some(requirements))
+        }))
+        .build()
+        .await
+        .expect("config should build");
+    let invalid_app_requirement = AppRequirementToml {
+        allowed_approvals_reviewers: Some(vec![ApprovalsReviewer::User]),
+        ..Default::default()
+    };
+    let empty_app_requirement = AppRequirementToml {
+        allowed_approvals_reviewers: Some(Vec::new()),
+        ..Default::default()
+    };
+
+    assert_eq!(
+        app_approvals_reviewer(
+            &config,
+            Some(ApprovalsReviewer::User),
+            Some(&invalid_app_requirement),
+        ),
+        ApprovalsReviewer::AutoReview
+    );
+    assert_eq!(
+        app_approvals_reviewer(&config, None, Some(&empty_app_requirement)),
+        ApprovalsReviewer::AutoReview
+    );
+}
+
+#[tokio::test]
 async fn app_approvals_reviewer_respects_app_reviewer_requirements() {
     for (global, allowed, expected_global, expected_app) in [
         (

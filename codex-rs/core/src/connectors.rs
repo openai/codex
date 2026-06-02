@@ -602,6 +602,7 @@ fn app_approvals_reviewer(
     configured: Option<ApprovalsReviewer>,
     requirement: Option<&AppRequirementToml>,
 ) -> ApprovalsReviewer {
+    let global_requirement = &config.config_layer_stack.requirements().approvals_reviewer;
     let resolved_app_allowed =
         requirement.and_then(|requirement| requirement.allowed_approvals_reviewers.as_deref());
 
@@ -609,21 +610,28 @@ fn app_approvals_reviewer(
         return configured
             .into_iter()
             .chain([config.approvals_reviewer])
-            .find(|reviewer| resolved_app_allowed.contains(reviewer))
-            .or_else(|| resolved_app_allowed.first().copied())
-            // An empty managed allow-list must not route through Guardian.
-            .unwrap_or(ApprovalsReviewer::User);
+            .find(|reviewer| {
+                resolved_app_allowed.contains(reviewer)
+                    && global_requirement.can_set(reviewer).is_ok()
+            })
+            .or_else(|| {
+                resolved_app_allowed
+                    .iter()
+                    .copied()
+                    .find(|reviewer| global_requirement.can_set(reviewer).is_ok())
+            })
+            // Invalid or stale requirements must not widen the global managed constraint.
+            .unwrap_or_else(|| {
+                if global_requirement.can_set(&ApprovalsReviewer::User).is_ok() {
+                    ApprovalsReviewer::User
+                } else {
+                    config.approvals_reviewer
+                }
+            });
     }
 
     configured
-        .filter(|reviewer| {
-            config
-                .config_layer_stack
-                .requirements()
-                .approvals_reviewer
-                .can_set(reviewer)
-                .is_ok()
-        })
+        .filter(|reviewer| global_requirement.can_set(reviewer).is_ok())
         .unwrap_or(config.approvals_reviewer)
 }
 
