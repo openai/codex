@@ -65,23 +65,65 @@ jobs:
               print(f"release_tag=rust-v{release_version}", file=output)
           PY
 
-      - name: Download Python runtime wheels from release
+      - name: Download Python runtime release artifacts
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PYTHON_RUNTIME_VERSION: ${{ steps.python_runtime.outputs.python_version }}
           RELEASE_TAG: ${{ steps.python_runtime.outputs.release_tag }}
         run: |
           set -euo pipefail
-          mkdir -p dist/python-runtime
+          mkdir -p dist/python-runtime dist/python-runtime-packages
           gh release download "$RELEASE_TAG" \
             --repo "${GITHUB_REPOSITORY}" \
             --pattern "openai_codex_cli_bin-${PYTHON_RUNTIME_VERSION}-*.whl" \
             --dir dist/python-runtime
+          gh release download "$RELEASE_TAG" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --pattern "codex-package-*-unknown-linux-musl.tar.gz" \
+            --dir dist/python-runtime-packages
 
           shopt -s nullglob
           wheels=(dist/python-runtime/*.whl)
           if [[ "${#wheels[@]}" -ne 6 ]]; then
             echo "Expected 6 Python runtime wheels for ${PYTHON_RUNTIME_VERSION}, found ${#wheels[@]}."
+            exit 1
+          fi
+          packages=(dist/python-runtime-packages/*.tar.gz)
+          if [[ "${#packages[@]}" -ne 2 ]]; then
+            echo "Expected 2 Linux package archives for ${PYTHON_RUNTIME_VERSION}, found ${#packages[@]}."
+            exit 1
+          fi
+
+      - name: Build musllinux Python runtime wheels
+        env:
+          RELEASE_TAG: ${{ steps.python_runtime.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+
+          python3 -m venv "${RUNNER_TEMP}/python-runtime-build-venv"
+          "${RUNNER_TEMP}/python-runtime-build-venv/bin/python" -m pip install build
+
+          while read -r target platform_tag; do
+            stage_dir="${RUNNER_TEMP}/openai-codex-cli-bin-${target}-${platform_tag}"
+            python3 sdk/python/scripts/update_sdk_artifacts.py \
+              stage-runtime \
+              "$stage_dir" \
+              "dist/python-runtime-packages/codex-package-${target}.tar.gz" \
+              --codex-version "$RELEASE_TAG" \
+              --platform-tag "$platform_tag"
+            "${RUNNER_TEMP}/python-runtime-build-venv/bin/python" -m build \
+              --wheel \
+              --outdir dist/python-runtime \
+              "$stage_dir"
+          done <<'EOF'
+          aarch64-unknown-linux-musl musllinux_1_1_aarch64
+          x86_64-unknown-linux-musl musllinux_1_1_x86_64
+          EOF
+
+          shopt -s nullglob
+          wheels=(dist/python-runtime/*.whl)
+          if [[ "${#wheels[@]}" -ne 8 ]]; then
+            echo "Expected 8 Python runtime wheels, found ${#wheels[@]}."
             exit 1
           fi
           ls -lh dist/python-runtime
