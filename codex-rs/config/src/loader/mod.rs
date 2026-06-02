@@ -1206,20 +1206,15 @@ async fn load_project_layers(
                 }
             }
             Err(err) => {
-                if err.kind() == io::ErrorKind::NotFound {
-                    layers.push(project_layer_entry(
-                        &dot_codex_abs,
-                        TomlValue::Table(toml::map::Map::new()),
-                        disabled_reason,
-                        hooks_config_folder_override,
+                if err.kind() != io::ErrorKind::NotFound {
+                    let config_file_display = config_file.as_path().display();
+                    return Err(io::Error::new(
+                        err.kind(),
+                        format!(
+                            "Failed to inspect project config file {config_file_display}: {err}"
+                        ),
                     ));
-                    continue;
                 }
-                let config_file_display = config_file.as_path().display();
-                return Err(io::Error::new(
-                    err.kind(),
-                    format!("Failed to inspect project config file {config_file_display}: {err}"),
-                ));
             }
         }
         match fs
