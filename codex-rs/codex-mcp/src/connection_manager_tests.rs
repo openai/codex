@@ -239,7 +239,6 @@ async fn disabled_permissions_auto_accept_elicitation_with_empty_form_schema() {
     let manager = ElicitationRequestManager::new(
         AskForApproval::Never,
         PermissionProfile::Disabled,
-        McpApprovalsReviewerPolicy::default(),
         /*reviewer*/ None,
     );
     let (tx_event, _rx_event) = async_channel::bounded(1);
@@ -273,7 +272,6 @@ async fn disabled_permissions_do_not_auto_accept_elicitation_with_requested_fiel
     let manager = ElicitationRequestManager::new(
         AskForApproval::Never,
         PermissionProfile::Disabled,
-        McpApprovalsReviewerPolicy::default(),
         /*reviewer*/ None,
     );
     let (tx_event, _rx_event) = async_channel::bounded(1);
@@ -1191,7 +1189,6 @@ async fn no_local_runtime_fails_local_stdio_but_keeps_local_http_server() {
         /*prefix_mcp_tool_names*/ true,
         ElicitationCapability::default(),
         ToolPluginProvenance::default(),
-        McpApprovalsReviewerPolicy::default(),
         /*auth*/ None,
         /*elicitation_reviewer*/ None,
     )
