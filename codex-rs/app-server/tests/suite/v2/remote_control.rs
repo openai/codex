@@ -132,7 +132,7 @@ async fn remote_control_status_read_returns_connecting_status_after_enable() -> 
 async fn remote_control_pairing_start_returns_pairing_artifacts() -> Result<()> {
     let codex_home = TempDir::new()?;
     let mut backend = PairingRemoteControlBackend::start(codex_home.path()).await?;
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp.send_remote_control_enable_request().await?;
