@@ -2679,24 +2679,10 @@ async fn guardian_mode_mcp_denial_returns_rationale_message() {
 }
 
 #[tokio::test]
-async fn codex_apps_mcp_uses_connector_approvals_reviewer_override() {
-    let codex_home = tempdir().expect("tempdir should succeed");
-    std::fs::write(
-        codex_home.path().join(CONFIG_TOML_FILE),
-        r#"
-approvals_reviewer = "user"
-
-[apps.calendar]
-approvals_reviewer = "auto_review"
-"#,
-    )
-    .expect("write config");
-    let config = ConfigBuilder::default()
-        .codex_home(codex_home.path().to_path_buf())
-        .build()
-        .await
-        .expect("config should build");
+async fn mcp_approvals_reviewer_prefers_metadata_over_turn_default() {
     let (_session, mut turn_context) = make_session_and_context().await;
+    let mut config = (*turn_context.config).clone();
+    config.approvals_reviewer = ApprovalsReviewer::User;
     turn_context.config = Arc::new(config);
     let mut metadata = approval_metadata(
         Some("calendar"),
