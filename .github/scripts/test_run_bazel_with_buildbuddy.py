@@ -70,13 +70,30 @@ class RunBazelWithBuildBuddyTest(unittest.TestCase):
                 ),
                 [
                     "build",
-                    "--config=ci-linux",
                     "--config=buildbuddy-openai-rbe",
                     "--remote_header=x-buildbuddy-api-key=token",
+                    "--config=ci-linux",
                     "--",
                     "//codex-rs/cli:codex",
                 ],
             )
+
+    def test_windows_cross_ci_configuration_follows_remote_configuration(self) -> None:
+        env = {"BUILDBUDDY_API_KEY": "fork-token"}
+
+        self.assertEqual(
+            run_bazel_with_buildbuddy.bazel_args_with_remote_config(
+                ["build", "--config=ci-windows-cross", "//codex-rs/cli:codex"],
+                env,
+            ),
+            [
+                "build",
+                "--config=buildbuddy-generic-rbe",
+                "--remote_header=x-buildbuddy-api-key=fork-token",
+                "--config=ci-windows-cross",
+                "//codex-rs/cli:codex",
+            ],
+        )
 
     def test_query_remote_configuration_is_inserted_before_expression(self) -> None:
         expression = 'kind("rust_library rule", //codex-rs/...)'
@@ -96,10 +113,10 @@ class RunBazelWithBuildBuddyTest(unittest.TestCase):
                     ),
                     [
                         command,
-                        "--config=ci-windows-cross",
-                        "--output=label",
                         "--config=buildbuddy-generic-rbe",
                         "--remote_header=x-buildbuddy-api-key=fork-token",
+                        "--config=ci-windows-cross",
+                        "--output=label",
                         expression,
                     ],
                 )

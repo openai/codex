@@ -107,10 +107,10 @@ class RustyV8BazelTest(unittest.TestCase):
                 [
                     "bazel",
                     "build",
-                    "--config=ci-v8",
-                    "//third_party/v8:release",
                     "--config=buildbuddy-generic-rbe",
                     "--remote_header=x-buildbuddy-api-key=token",
+                    "--config=ci-v8",
+                    "//third_party/v8:release",
                 ],
                 rusty_v8_bazel.bazel_command(
                     "build",

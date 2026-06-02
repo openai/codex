@@ -21,9 +21,6 @@ REMOTE_EXECUTION_CONFIGS = {
     "--config=ci-v8",
     "--config=ci-windows-cross",
 }
-QUERY_COMMANDS = {"query", "cquery", "aquery"}
-
-
 # Only authenticated workflow runs executing trusted upstream code may use the
 # OpenAI BuildBuddy host. A pull request event without proof that its head is
 # in the upstream repository fails closed to the generic host.
@@ -103,20 +100,13 @@ def bazel_args_with_remote_config(
         f"--remote_header=x-buildbuddy-api-key={api_key}",
     ]
 
-    try:
-        insertion_idx = args.index("--")
-    except ValueError:
-        if any(command in args for command in QUERY_COMMANDS):
-            # Query commands accept one trailing expression; keep
-            # wrapper-added options in front of it without adding a separator.
-            insertion_idx = len(args) - 1
-        else:
-            # No target separator or query expression is present, so command
-            # options can be appended.
-            insertion_idx = len(args)
-
-    # In both forms, keep the wrapper-added options out of positional payloads:
-    # arguments to `bazel run`, or the final query expression.
+    # Insert immediately after the Bazel command. This keeps wrapper-added
+    # options out of positional payloads and lets later CI configs override
+    # shared RBE defaults such as the Windows cross-compilation exec platforms.
+    insertion_idx = next(
+        (idx + 1 for idx, arg in enumerate(args) if not arg.startswith("-")),
+        len(args),
+    )
     return [*args[:insertion_idx], *remote_args, *args[insertion_idx:]]
 
 

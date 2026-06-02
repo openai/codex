@@ -136,7 +136,7 @@ bazel-argument-comment-lint:
     bazel build --config=argument-comment-lint -- $({{ justfile_directory() }}/tools/argument-comment-lint/list-bazel-targets.sh)
 
 build-for-release:
-    bazel build //codex-rs/cli:release_binaries --config=remote
+    bazel build //codex-rs/cli:release_binaries
 
 # Run the MCP server
 mcp-server-run *args:
