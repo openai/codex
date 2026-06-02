@@ -53,6 +53,7 @@ async fn interrupt_long_running_tool_emits_turn_aborted() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         })
         .await
@@ -110,6 +111,7 @@ async fn interrupt_tool_records_history_entries() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         })
         .await
@@ -131,6 +133,7 @@ async fn interrupt_tool_records_history_entries() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         })
         .await
@@ -214,6 +217,7 @@ async fn interrupt_persists_turn_aborted_marker_in_next_request() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         })
         .await
@@ -235,6 +239,7 @@ async fn interrupt_persists_turn_aborted_marker_in_next_request() {
             }],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         })
         .await

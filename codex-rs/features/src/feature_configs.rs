@@ -124,5 +124,5 @@ pub enum NetworkProxyDomainPermissionToml {
 #[serde(rename_all = "lowercase")]
 pub enum NetworkProxyUnixSocketPermissionToml {
     Allow,
-    None,
+    Deny,
 }

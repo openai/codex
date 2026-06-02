@@ -12,16 +12,20 @@ use crate::shell::ShellType;
 use crate::tools::sandboxing::ToolError;
 #[cfg(target_os = "macos")]
 use codex_network_proxy::CODEX_PROXY_GIT_SSH_COMMAND_MARKER;
+use codex_network_proxy::CUSTOM_CA_ENV_KEYS;
 use codex_network_proxy::PROXY_ACTIVE_ENV_KEY;
 use codex_network_proxy::PROXY_ENV_KEYS;
 #[cfg(target_os = "macos")]
 use codex_network_proxy::PROXY_GIT_SSH_COMMAND_ENV_KEY;
+use codex_network_proxy::is_managed_mitm_ca_trust_bundle_path;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_sandboxing::SandboxCommand;
 use codex_sandboxing::SandboxType;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::HashMap;
+#[cfg(unix)]
+use std::path::Path;
 
 pub(crate) mod apply_patch;
 pub(crate) mod shell;
@@ -55,19 +59,69 @@ pub(crate) fn exec_env_for_sandbox_permissions(
     if sandbox_permissions.requires_escalated_permissions()
         && env.contains_key(PROXY_ACTIVE_ENV_KEY)
     {
-        for key in PROXY_ENV_KEYS {
-            env.remove(*key);
-        }
-        // Only macOS injects a Codex-owned SSH wrapper for the managed SOCKS proxy.
-        #[cfg(target_os = "macos")]
-        if env
-            .get(PROXY_GIT_SSH_COMMAND_ENV_KEY)
-            .is_some_and(|command| command.starts_with(CODEX_PROXY_GIT_SSH_COMMAND_MARKER))
-        {
-            env.remove(PROXY_GIT_SSH_COMMAND_ENV_KEY);
-        }
+        strip_managed_proxy_env(&mut env);
     }
     env
+}
+
+pub(crate) fn strip_managed_proxy_env(env: &mut HashMap<String, String>) {
+    for key in PROXY_ENV_KEYS {
+        env.remove(*key);
+    }
+    for key in CUSTOM_CA_ENV_KEYS {
+        if env
+            .get(key)
+            .is_some_and(|value| is_managed_mitm_ca_trust_bundle_path(value))
+        {
+            env.remove(key);
+        }
+    }
+    // Only macOS injects a Codex-owned SSH wrapper for the managed SOCKS proxy.
+    #[cfg(target_os = "macos")]
+    if env
+        .get(PROXY_GIT_SSH_COMMAND_ENV_KEY)
+        .is_some_and(|command| command.starts_with(CODEX_PROXY_GIT_SSH_COMMAND_MARKER))
+    {
+        env.remove(PROXY_GIT_SSH_COMMAND_ENV_KEY);
+    }
+}
+
+#[cfg(unix)]
+fn prepend_path_entry(env: &mut HashMap<String, String>, path_entry: &str) -> String {
+    let updated_path = match env.get("PATH") {
+        Some(path) if !path.is_empty() => std::iter::once(path_entry)
+            .chain(path.split(':').filter(|entry| *entry != path_entry))
+            .collect::<Vec<_>>()
+            .join(":"),
+        _ => path_entry.to_string(),
+    };
+    env.insert("PATH".to_string(), updated_path.clone());
+    updated_path
+}
+
+#[cfg(unix)]
+pub(crate) fn prepend_zsh_fork_bin_to_path(
+    env: &mut HashMap<String, String>,
+    shell_zsh_path: &Path,
+) -> Option<String> {
+    let zsh_bin_dir = shell_zsh_path
+        .parent()
+        .map(|path| path.to_string_lossy().to_string())?;
+    Some(prepend_path_entry(env, &zsh_bin_dir))
+}
+
+#[cfg(unix)]
+pub(crate) fn apply_zsh_fork_path_prepend(
+    env: &mut HashMap<String, String>,
+    explicit_env_overrides: &mut HashMap<String, String>,
+    shell_zsh_path: &Path,
+) {
+    let Some(updated_path) = prepend_zsh_fork_bin_to_path(env, shell_zsh_path) else {
+        return;
+    };
+    // Snapshot wrapping restores explicit overrides after sourcing the shell
+    // snapshot, so capture this PATH override there as well.
+    explicit_env_overrides.insert("PATH".to_string(), updated_path);
 }
 
 pub(crate) fn disable_powershell_profile_for_elevated_windows_sandbox(
@@ -195,6 +249,7 @@ fn build_proxy_env_exports() -> (String, String) {
     let mut keys = PROXY_ENV_KEYS
         .iter()
         .copied()
+        .chain(CUSTOM_CA_ENV_KEYS)
         .filter(|key| is_valid_shell_variable_name(key))
         .collect::<Vec<_>>();
     keys.sort_unstable();

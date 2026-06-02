@@ -77,6 +77,7 @@ fn disabled_user_turn(test: &TestCodex, items: Vec<UserInput>, model: String) ->
         environments: None,
         final_output_json_schema: None,
         responsesapi_client_metadata: None,
+        additional_context: Default::default(),
         thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
             cwd: Some(test.config.cwd.to_path_buf()),
             approval_policy: Some(AskForApproval::Never),
@@ -1354,6 +1355,8 @@ async fn view_image_tool_returns_unsupported_message_for_text_only_model() -> an
         input_modalities: vec![InputModality::Text],
         used_fallback_model_metadata: false,
         supports_search_tool: false,
+        auto_review_model_override: None,
+        tool_mode: None,
         priority: 1,
         additional_speed_tiers: Vec::new(),
         service_tiers: Vec::new(),

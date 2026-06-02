@@ -160,6 +160,7 @@ async fn remote_models_config_context_window_override_clamps_to_max_context_wind
             environments: None,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         })
         .await?;
@@ -227,6 +228,7 @@ async fn remote_models_config_override_above_max_uses_max_context_window() -> Re
             environments: None,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         })
         .await?;
@@ -293,6 +295,7 @@ async fn remote_models_use_context_window_when_config_override_is_absent() -> Re
             environments: None,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         })
         .await?;
@@ -372,6 +375,7 @@ async fn remote_models_long_model_slug_is_sent_with_high_reasoning() -> Result<(
             environments: None,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         })
         .await?;
@@ -422,6 +426,7 @@ async fn namespaced_model_slug_uses_catalog_metadata_without_fallback_warning() 
             environments: None,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: Default::default(),
         })
         .await?;
@@ -472,6 +477,8 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
         input_modalities: default_input_modalities(),
         used_fallback_model_metadata: false,
         supports_search_tool: false,
+        auto_review_model_override: None,
+        tool_mode: None,
         priority: 1,
         additional_speed_tiers: Vec::new(),
         service_tiers: Vec::new(),
@@ -575,6 +582,7 @@ async fn remote_models_remote_model_uses_unified_exec() -> Result<()> {
             environments: None,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                 cwd: Some(cwd_path),
                 approval_policy: Some(AskForApproval::Never),
@@ -720,6 +728,8 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
         input_modalities: default_input_modalities(),
         used_fallback_model_metadata: false,
         supports_search_tool: false,
+        auto_review_model_override: None,
+        tool_mode: None,
         priority: 1,
         additional_speed_tiers: Vec::new(),
         service_tiers: Vec::new(),
@@ -798,6 +808,7 @@ async fn remote_models_apply_remote_base_instructions() -> Result<()> {
             environments: None,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
+            additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                 cwd: Some(cwd_path),
                 approval_policy: Some(AskForApproval::Never),
@@ -1202,6 +1213,8 @@ fn test_remote_model_with_policy(
         input_modalities: default_input_modalities(),
         used_fallback_model_metadata: false,
         supports_search_tool: false,
+        auto_review_model_override: None,
+        tool_mode: None,
         priority,
         additional_speed_tiers: Vec::new(),
         service_tiers: Vec::new(),

@@ -30,6 +30,7 @@ pub(super) async fn create_thread(
         RolloutRecorderParams::new(
             params.thread_id,
             params.forked_from_id,
+            params.parent_thread_id,
             params.source,
             params.thread_source,
             params.base_instructions,

@@ -61,6 +61,7 @@ async fn write_rollout_with_user_event(dir: &Path, thread_id: ThreadId) -> io::R
         meta: SessionMeta {
             id: thread_id,
             forked_from_id: None,
+            parent_thread_id: None,
             timestamp: TEST_TIMESTAMP.to_string(),
             cwd: std::path::PathBuf::from("."),
             originator: "test_originator".to_string(),
@@ -84,6 +85,7 @@ async fn write_rollout_with_user_event(dir: &Path, thread_id: ThreadId) -> io::R
     let user_event = RolloutLine {
         timestamp: TEST_TIMESTAMP.to_string(),
         item: RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+            client_id: None,
             message: "hello".to_string(),
             images: None,
             local_images: Vec::new(),
@@ -108,6 +110,7 @@ async fn write_rollout_with_meta_only(dir: &Path, thread_id: ThreadId) -> io::Re
         meta: SessionMeta {
             id: thread_id,
             forked_from_id: None,
+            parent_thread_id: None,
             timestamp: TEST_TIMESTAMP.to_string(),
             cwd: std::path::PathBuf::from("."),
             originator: "test_originator".to_string(),

@@ -276,6 +276,7 @@ impl McpRequestProcessor {
         .await;
 
         let McpServerStatusSnapshot {
+            server_infos,
             tools_by_server,
             resources,
             resource_templates,
@@ -315,6 +316,7 @@ impl McpRequestProcessor {
             .iter()
             .map(|name| McpServerStatus {
                 name: name.clone(),
+                server_info: server_infos.get(name).cloned(),
                 tools: tools_by_server.get(name).cloned().unwrap_or_default(),
                 resources: resources.get(name).cloned().unwrap_or_default(),
                 resource_templates: resource_templates.get(name).cloned().unwrap_or_default(),

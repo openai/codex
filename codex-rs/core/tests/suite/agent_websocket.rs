@@ -95,6 +95,16 @@ async fn websocket_first_turn_uses_startup_prewarm_and_create() -> Result<()> {
     let turn = connection.get(1).expect("missing turn request").body_json();
     assert_eq!(warmup["type"].as_str(), Some("response.create"));
     assert_eq!(warmup["generate"].as_bool(), Some(false));
+    let warmup_metadata: Value = serde_json::from_str(
+        warmup["client_metadata"]["x-codex-turn-metadata"]
+            .as_str()
+            .expect("warmup turn metadata"),
+    )?;
+    assert_eq!(warmup_metadata["request_kind"].as_str(), Some("prewarm"));
+    assert_eq!(
+        warmup_metadata["window_id"].as_str(),
+        warmup["client_metadata"]["x-codex-window-id"].as_str()
+    );
     assert!(
         turn["tools"]
             .as_array()
@@ -102,6 +112,12 @@ async fn websocket_first_turn_uses_startup_prewarm_and_create() -> Result<()> {
         "expected request tools to be populated"
     );
     assert_eq!(turn["type"].as_str(), Some("response.create"));
+    let turn_metadata: Value = serde_json::from_str(
+        turn["client_metadata"]["x-codex-turn-metadata"]
+            .as_str()
+            .expect("turn metadata"),
+    )?;
+    assert_eq!(turn_metadata["request_kind"].as_str(), Some("turn"));
 
     server.shutdown().await;
     Ok(())

@@ -537,7 +537,7 @@ async fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) ->
     let effective_mcp_servers = mcp_manager.effective_servers(&config, /*auth*/ None).await;
 
     let mut entries: Vec<_> = mcp_servers.iter().collect();
-    entries.sort_by(|(a, _), (b, _)| a.cmp(b));
+    entries.sort_by_key(|(name, _)| *name);
     let auth_statuses = compute_auth_statuses(
         effective_mcp_servers.iter(),
         config.mcp_oauth_credentials_store_mode,
@@ -906,7 +906,7 @@ async fn run_get(config_overrides: &CliConfigOverrides, get_args: GetArgs) -> Re
             let headers_display = match http_headers {
                 Some(map) if !map.is_empty() => {
                     let mut pairs: Vec<_> = map.iter().collect();
-                    pairs.sort_by(|(a, _), (b, _)| a.cmp(b));
+                    pairs.sort_by_key(|(name, _)| *name);
                     pairs
                         .into_iter()
                         .map(|(k, _)| format!("{k}=*****"))
@@ -919,7 +919,7 @@ async fn run_get(config_overrides: &CliConfigOverrides, get_args: GetArgs) -> Re
             let env_headers_display = match env_http_headers {
                 Some(map) if !map.is_empty() => {
                     let mut pairs: Vec<_> = map.iter().collect();
-                    pairs.sort_by(|(a, _), (b, _)| a.cmp(b));
+                    pairs.sort_by_key(|(name, _)| *name);
                     pairs
                         .into_iter()
                         .map(|(k, var)| format!("{k}={var}"))

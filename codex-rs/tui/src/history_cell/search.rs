@@ -4,7 +4,7 @@ use super::*;
 
 fn web_search_header(completed: bool) -> &'static str {
     if completed {
-        "Searched"
+        "Searched the web"
     } else {
         "Searching the web"
     }
@@ -104,7 +104,8 @@ impl HistoryCell for WebSearchCell {
         let text: Text<'static> = if detail.is_empty() {
             Line::from(vec![header.bold()]).into()
         } else {
-            Line::from(vec![header.bold(), " ".into(), detail.into()]).into()
+            let separator = if self.completed { " for " } else { " " };
+            Line::from(vec![header.bold(), separator.into(), detail.into()]).into()
         };
         PrefixedWrappedHistoryCell::new(text, vec![bullet, " ".into()], "  ").display_lines(width)
     }
@@ -115,7 +116,8 @@ impl HistoryCell for WebSearchCell {
         if detail.is_empty() {
             vec![Line::from(header)]
         } else {
-            vec![Line::from(format!("{header} {detail}"))]
+            let separator = if self.completed { " for " } else { " " };
+            vec![Line::from(format!("{header}{separator}{detail}"))]
         }
     }
 }

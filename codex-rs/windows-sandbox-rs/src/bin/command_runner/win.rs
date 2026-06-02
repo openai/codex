@@ -238,7 +238,8 @@ fn spawn_ipc_process(req: &SpawnRequest) -> Result<IpcSpawnedProcess> {
     hide_current_user_profile_dir(req.codex_home.as_path());
     let token_mode = token_mode_for_permission_profile(
         &req.permission_profile,
-        &req.permission_profile_cwd,
+        &req.workspace_roots,
+        &req.cwd,
         &req.env,
     )
     .context("resolve permission profile token mode")?;

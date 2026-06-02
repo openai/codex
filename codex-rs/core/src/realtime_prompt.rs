@@ -1,4 +1,4 @@
-const BACKEND_PROMPT: &str = include_str!("../templates/realtime/backend_prompt.md");
+use codex_prompts::BACKEND_PROMPT;
 const DEFAULT_USER_FIRST_NAME: &str = "there";
 const USER_FIRST_NAME_PLACEHOLDER: &str = "{{ user_first_name }}";
 

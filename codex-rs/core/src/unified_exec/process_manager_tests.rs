@@ -100,7 +100,8 @@ fn exec_server_params_use_env_policy_overlay_contract() {
         expiration: crate::exec::ExecExpiration::DefaultTimeout,
         capture_policy: crate::exec::ExecCapturePolicy::ShellTool,
         sandbox: codex_sandboxing::SandboxType::None,
-        windows_sandbox_policy_cwd: cwd,
+        windows_sandbox_policy_cwd: cwd.clone(),
+        windows_sandbox_workspace_roots: vec![cwd],
         windows_sandbox_level: codex_protocol::config_types::WindowsSandboxLevel::Disabled,
         windows_sandbox_private_desktop: false,
         permission_profile,
@@ -178,6 +179,7 @@ async fn failed_initial_end_for_unstored_process_uses_fallback_output() {
             .environments
             .primary_environment()
             .expect("primary environment"),
+        shell_mode: codex_tools::UnifiedExecShellMode::Direct,
         network: None,
         tty: true,
         sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,

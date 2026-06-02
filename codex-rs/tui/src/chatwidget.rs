@@ -10,7 +10,8 @@
 //! visible immediately.
 //!
 //! The transcript overlay is kept in sync by `App::overlay_forward_event`, which syncs a live tail
-//! during draws using `active_cell_transcript_key()` and `active_cell_transcript_lines()`. The
+//! during draws using `active_cell_transcript_key()` and
+//! `active_cell_transcript_hyperlink_lines()`. The
 //! cache key is designed to change when the active cell mutates in place or when its transcript
 //! output is time-dependent so the overlay can refresh its cached tail without rebuilding it on
 //! every draw.
@@ -62,7 +63,7 @@ use crate::legacy_core::config::Config;
 use crate::legacy_core::config::Constrained;
 use crate::legacy_core::config::ConstraintResult;
 use crate::legacy_core::config::PermissionProfileSnapshot;
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", test))]
 use crate::legacy_core::windows_sandbox::WindowsSandboxLevelExt;
 use crate::mention_codec::LinkedMention;
 use crate::mention_codec::encode_history_mentions;
@@ -77,6 +78,7 @@ use crate::status::StatusHistoryHandle;
 use crate::status::format_directory_display;
 use crate::status::format_tokens_compact;
 use crate::status::rate_limit_snapshot_display_for_limit;
+use crate::terminal_hyperlinks::HyperlinkLine;
 use crate::terminal_title::SetTerminalTitleResult;
 use crate::terminal_title::clear_terminal_title;
 use crate::terminal_title::set_terminal_title;
@@ -124,7 +126,6 @@ use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnPlanStepStatus;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput;
-use codex_chatgpt::connectors as chatgpt_connectors;
 use codex_config::ConfigLayerStackOrdering;
 use codex_config::types::ApprovalsReviewer;
 use codex_config::types::Notifications;
@@ -152,7 +153,7 @@ use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::Settings;
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", test))]
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::items::AgentMessageContent;
 use codex_protocol::items::AgentMessageItem;
@@ -168,6 +169,8 @@ use codex_terminal_detection::TerminalName;
 use codex_terminal_detection::terminal_info;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_cli::resume_hint;
+use codex_utils_plugins::mention_syntax::PLUGIN_TEXT_MENTION_SIGIL;
+use codex_utils_plugins::mention_syntax::TOOL_MENTION_SIGIL;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
@@ -258,7 +261,7 @@ use crate::app_event::AppEvent;
 use crate::app_event::ExitMode;
 use crate::app_event::PermissionProfileSelection;
 use crate::app_event::RateLimitRefreshOrigin;
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", test))]
 use crate::app_event::WindowsSandboxEnableMode;
 use crate::app_event_sender::AppEventSender;
 use crate::auto_review_denials;
@@ -273,6 +276,7 @@ use crate::bottom_pane::DOUBLE_PRESS_QUIT_SHORTCUT_ENABLED;
 use crate::bottom_pane::ExperimentalFeatureItem;
 use crate::bottom_pane::ExperimentalFeaturesView;
 use crate::bottom_pane::GoalStatusIndicator;
+use crate::bottom_pane::HistoryEntry;
 use crate::bottom_pane::InputResult;
 use crate::bottom_pane::LocalImageAttachment;
 use crate::bottom_pane::McpServerElicitationFormRequest;
@@ -362,6 +366,7 @@ mod slash_dispatch;
 use self::skills::collect_tool_mentions;
 use self::skills::find_app_mentions;
 use self::skills::find_skill_mentions_with_tool_mentions;
+use self::skills::is_app_mentionable;
 mod plugins;
 use self::plugins::PluginInstallAuthFlowState;
 use self::plugins::PluginListFetchState;
@@ -462,7 +467,9 @@ use unicode_segmentation::UnicodeSegmentation;
 
 const USER_SHELL_COMMAND_HELP_TITLE: &str = "Prefix a command with ! to run it locally";
 const USER_SHELL_COMMAND_HELP_HINT: &str = "Example: !ls";
-const AUTO_REVIEW_DESCRIPTION: &str = "Same workspace-write permissions as Default, but eligible `on-request` approvals are routed through the auto-reviewer subagent.";
+const ASK_FOR_APPROVAL_LABEL: &str = "Ask for approval";
+const APPROVE_FOR_ME_LABEL: &str = "Approve for me";
+const AUTO_REVIEW_DESCRIPTION: &str = "Only ask for actions detected as potentially unsafe.";
 const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
 const DEFAULT_STATUS_LINE_ITEMS: [&str; 2] = ["model-with-reasoning", "current-dir"];
 const MAX_AGENT_COPY_HISTORY: usize = 32;
@@ -637,6 +644,7 @@ pub(crate) struct ChatWidget {
     // order.
     suppress_initial_user_message_submit: bool,
     input_queue: InputQueueState,
+    cancel_edit: CancelEditState,
     /// Main chat-surface bindings resolved from `tui.keymap.chat`.
     chat_keymap: ChatKeymap,
     /// Keybinding to show for popping the most-recently queued message back
@@ -748,6 +756,13 @@ pub(crate) enum InterruptedTurnNoticeMode {
     #[default]
     Default,
     Suppress,
+}
+
+#[derive(Debug, Default)]
+struct CancelEditState {
+    prompt: Option<UserMessage>,
+    eligible: bool,
+    armed: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -977,12 +992,19 @@ impl ChatWidget {
 
     pub(crate) fn open_feedback_consent(&mut self, category: crate::app_event::FeedbackCategory) {
         let snapshot = self.feedback.snapshot(self.thread_id);
+        #[cfg(target_os = "windows")]
+        let include_windows_sandbox_log =
+            codex_windows_sandbox::current_log_file_path_for_codex_home(&self.config.codex_home)
+                .is_file();
+        #[cfg(not(target_os = "windows"))]
+        let include_windows_sandbox_log = false;
         let params = crate::bottom_pane::feedback_upload_consent_params(
             self.app_event_tx.clone(),
             category,
             self.current_rollout_path.clone(),
             self.thread_id
                 .map(|thread_id| format!("auto-review-rollout-{thread_id}.jsonl")),
+            include_windows_sandbox_log,
             snapshot.feedback_diagnostics(),
         );
         self.bottom_pane.show_selection_view(params);
@@ -1167,6 +1189,9 @@ impl ChatWidget {
     }
 
     fn add_boxed_history(&mut self, cell: Box<dyn HistoryCell>) {
+        if self.turn_lifecycle.agent_turn_running && !cell.display_lines(u16::MAX).is_empty() {
+            self.record_visible_turn_activity();
+        }
         // Keep the placeholder session header as the active cell until real session info arrives,
         // so we can merge headers instead of committing a duplicate box to history.
         let keep_placeholder_header_active = !self.is_session_configured()
@@ -1214,9 +1239,75 @@ impl ChatWidget {
     fn on_committed_user_message(&mut self, items: &[UserInput], from_replay: bool) {
         let display = Self::user_message_display_from_inputs(items);
         if from_replay {
-            if !self.review.is_review_mode {
-                self.on_user_message_display(display);
+            if self.review.is_review_mode {
+                return;
             }
+            let message = display.message.as_str();
+            let mention_start = |sigil: char, mention: &str| {
+                let token = format!("{sigil}{mention}");
+                message.match_indices(&token).find_map(|(start, _)| {
+                    let end = start + token.len();
+                    message
+                        .as_bytes()
+                        .get(end)
+                        .is_none_or(|byte| {
+                            !byte.is_ascii_alphanumeric() && !matches!(byte, b'_' | b'-')
+                        })
+                        .then_some(start)
+                })
+            };
+            let mut mention_bindings: Vec<MentionBinding> = items
+                .iter()
+                .filter_map(|item| match item {
+                    UserInput::Skill { name, path } => Some(MentionBinding {
+                        sigil: TOOL_MENTION_SIGIL,
+                        mention: name.clone(),
+                        path: path.to_string_lossy().into_owned(),
+                    }),
+                    UserInput::Mention { name, path } => {
+                        let plugin_id = path.strip_prefix("plugin://");
+                        let mention = if let Some(plugin_id) = plugin_id {
+                            plugin_id
+                                .split_once('@')
+                                .map(|(plugin_name, _)| plugin_name)
+                                .unwrap_or(plugin_id)
+                                .to_string()
+                        } else if path.starts_with("app://") {
+                            codex_connectors::metadata::connector_mention_slug_from_name(name)
+                        } else {
+                            name.clone()
+                        };
+                        let sigil = if plugin_id.is_some()
+                            && mention_start(PLUGIN_TEXT_MENTION_SIGIL, &mention).is_some()
+                        {
+                            PLUGIN_TEXT_MENTION_SIGIL
+                        } else {
+                            TOOL_MENTION_SIGIL
+                        };
+                        Some(MentionBinding {
+                            sigil,
+                            mention,
+                            path: path.clone(),
+                        })
+                    }
+                    UserInput::Text { .. }
+                    | UserInput::Image { .. }
+                    | UserInput::LocalImage { .. } => None,
+                })
+                .collect();
+            mention_bindings.sort_by_key(|binding| {
+                mention_start(binding.sigil, &binding.mention).unwrap_or(usize::MAX)
+            });
+            self.bottom_pane
+                .record_replayed_user_message_history(HistoryEntry {
+                    text: display.message.clone(),
+                    text_elements: display.text_elements.clone(),
+                    local_image_paths: display.local_images.clone(),
+                    remote_image_urls: display.remote_image_urls.clone(),
+                    mention_bindings,
+                    pending_pastes: Vec::new(),
+                });
+            self.on_user_message_display(display);
             return;
         }
 
@@ -1447,11 +1538,11 @@ impl ChatWidget {
     fn rename_confirmation_cell(name: &str, thread_id: Option<ThreadId>) -> PlainHistoryCell {
         let mut line = vec![
             "• ".into(),
-            "Thread renamed to ".into(),
+            "Session renamed to ".into(),
             name.to_string().cyan(),
         ];
         if let Some(hint) = resume_hint(Some(name), thread_id) {
-            line.extend([". To resume this thread run ".into(), hint.cyan()]);
+            line.extend([". To resume this session run ".into(), hint.cyan()]);
         }
         PlainHistoryCell::new(vec![line.into()])
     }
@@ -1719,7 +1810,12 @@ impl ChatWidget {
     }
 
     pub(crate) fn prepare_local_op_submission(&mut self, op: &AppCommand) {
-        if matches!(op, AppCommand::Interrupt) && self.turn_lifecycle.agent_turn_running {
+        if let AppCommand::Interrupt { behavior } = op
+            && self.turn_lifecycle.agent_turn_running
+        {
+            if *behavior == crate::app_command::InterruptBehavior::RestorePromptIfNoOutput {
+                self.arm_cancel_edit();
+            }
             if let Some(controller) = self.stream_controller.as_mut() {
                 controller.clear_queue();
             }
@@ -1817,26 +1913,35 @@ impl ChatWidget {
         })
     }
 
-    /// Returns the active cell's transcript lines for a given terminal width.
+    /// Returns the active cell's annotated transcript lines for a given terminal width.
     ///
     /// This is a convenience for the transcript overlay live-tail path, and it intentionally
     /// filters out empty results so the overlay can treat "nothing to render" as "no tail". Callers
     /// should pass the same width the overlay uses; using a different width will cause wrapping
     /// mismatches between the main viewport and the transcript overlay.
-    pub(crate) fn active_cell_transcript_lines(&self, width: u16) -> Option<Vec<Line<'static>>> {
+    pub(crate) fn active_cell_transcript_hyperlink_lines(
+        &self,
+        width: u16,
+    ) -> Option<Vec<HyperlinkLine>> {
         let mut lines = Vec::new();
         if let Some(cell) = self.transcript.active_cell.as_ref() {
-            lines.extend(cell.transcript_lines(width));
+            lines.extend(cell.transcript_hyperlink_lines(width));
         }
         if let Some(hook_cell) = self.active_hook_cell.as_ref() {
             // Compute hook lines first so hidden hooks do not add a separator.
-            let hook_lines = hook_cell.transcript_lines(width);
+            let hook_lines = hook_cell.transcript_hyperlink_lines(width);
             if !hook_lines.is_empty() && !lines.is_empty() {
-                lines.push("".into());
+                lines.push(HyperlinkLine::from(""));
             }
             lines.extend(hook_lines);
         }
         (!lines.is_empty()).then_some(lines)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn active_cell_transcript_lines(&self, width: u16) -> Option<Vec<Line<'static>>> {
+        self.active_cell_transcript_hyperlink_lines(width)
+            .map(crate::terminal_hyperlinks::visible_lines)
     }
 
     /// Return a reference to the widget's current config (includes any

@@ -8,6 +8,7 @@ use crate::tools::sandboxing::SandboxAttempt;
 use crate::tools::sandboxing::managed_network_for_sandbox_permissions;
 #[cfg(target_os = "macos")]
 use codex_network_proxy::CODEX_PROXY_GIT_SSH_COMMAND_MARKER;
+use codex_network_proxy::CUSTOM_CA_ENV_KEYS;
 use codex_network_proxy::ConfigReloader;
 use codex_network_proxy::ConfigState;
 use codex_network_proxy::NetworkProxy;
@@ -111,6 +112,7 @@ async fn explicit_escalation_prepares_exec_without_managed_network() -> anyhow::
         enforce_managed_network: false,
         manager: &manager,
         sandbox_cwd: &cwd,
+        workspace_roots: std::slice::from_ref(&cwd),
         codex_linux_sandbox_exe: None,
         use_legacy_landlock: false,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
@@ -133,6 +135,9 @@ async fn explicit_escalation_prepares_exec_without_managed_network() -> anyhow::
     for key in PROXY_ENV_KEYS {
         assert_eq!(exec_request.env.get(*key), None, "{key} should be unset");
     }
+    for key in CUSTOM_CA_ENV_KEYS {
+        assert_eq!(exec_request.env.get(key), None, "{key} should be unset");
+    }
     #[cfg(target_os = "macos")]
     assert_eq!(exec_request.env.get(PROXY_GIT_SSH_COMMAND_ENV_KEY), None);
     assert_eq!(
@@ -141,6 +146,66 @@ async fn explicit_escalation_prepares_exec_without_managed_network() -> anyhow::
     );
 
     Ok(())
+}
+
+#[test]
+fn explicit_escalation_preserves_user_ca_env() {
+    let env = HashMap::from([
+        (PROXY_ACTIVE_ENV_KEY.to_string(), "1".to_string()),
+        (
+            "SSL_CERT_FILE".to_string(),
+            "/tmp/custom-ca.pem".to_string(),
+        ),
+    ]);
+
+    let env = exec_env_for_sandbox_permissions(&env, SandboxPermissions::RequireEscalated);
+
+    assert_eq!(
+        env.get("SSL_CERT_FILE"),
+        Some(&"/tmp/custom-ca.pem".to_string())
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn apply_zsh_fork_path_prepend_uses_shell_parent() {
+    let mut env = HashMap::from([("PATH".to_string(), "/usr/bin:/bin".to_string())]);
+    let mut explicit_env_overrides = HashMap::new();
+
+    apply_zsh_fork_path_prepend(
+        &mut env,
+        &mut explicit_env_overrides,
+        PathBuf::from("/package/codex-resources/zsh/bin/zsh").as_path(),
+    );
+
+    let expected = "/package/codex-resources/zsh/bin:/usr/bin:/bin";
+    assert_eq!(env.get("PATH").map(String::as_str), Some(expected));
+    assert_eq!(
+        explicit_env_overrides.get("PATH").map(String::as_str),
+        Some(expected)
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn apply_zsh_fork_path_prepend_moves_existing_shell_parent_to_front() {
+    let mut env = HashMap::from([(
+        "PATH".to_string(),
+        "/usr/bin:/package/codex-resources/zsh/bin:/bin:/package/codex-resources/zsh/bin"
+            .to_string(),
+    )]);
+    let mut explicit_env_overrides = HashMap::new();
+
+    apply_zsh_fork_path_prepend(
+        &mut env,
+        &mut explicit_env_overrides,
+        PathBuf::from("/package/codex-resources/zsh/bin/zsh").as_path(),
+    );
+
+    assert_eq!(
+        env.get("PATH").map(String::as_str),
+        Some("/package/codex-resources/zsh/bin:/usr/bin:/bin")
+    );
 }
 
 #[test]
@@ -816,6 +881,57 @@ fn maybe_wrap_shell_lc_with_snapshot_applies_explicit_path_override() {
 
     assert!(output.status.success(), "command failed: {output:?}");
     assert_eq!(String::from_utf8_lossy(&output.stdout), "/worktree/bin");
+}
+
+#[cfg(unix)]
+#[test]
+fn maybe_wrap_shell_lc_with_snapshot_preserves_zsh_fork_path_prepend() {
+    let dir = tempdir().expect("create temp dir");
+    let snapshot_path = dir.path().join("snapshot.sh");
+    std::fs::write(
+        &snapshot_path,
+        "# Snapshot file\nexport PATH='/snapshot/bin'\n",
+    )
+    .expect("write snapshot");
+    let session_shell = shell_with_snapshot(
+        ShellType::Bash,
+        "/bin/bash",
+        snapshot_path.abs(),
+        dir.path().abs(),
+    );
+    let command = vec![
+        "/bin/bash".to_string(),
+        "-lc".to_string(),
+        "printf '%s' \"$PATH\"".to_string(),
+    ];
+    let zsh_path = dir
+        .path()
+        .join("codex-resources")
+        .join("zsh")
+        .join("bin")
+        .join("zsh");
+    let zsh_bin_dir = zsh_path.parent().expect("zsh path should have parent");
+    let mut env = HashMap::from([("PATH".to_string(), "/worktree/bin".to_string())]);
+    let mut explicit_env_overrides = HashMap::new();
+    apply_zsh_fork_path_prepend(&mut env, &mut explicit_env_overrides, zsh_path.as_path());
+    let rewritten = maybe_wrap_shell_lc_with_snapshot(
+        &command,
+        &session_shell,
+        &dir.path().abs(),
+        &explicit_env_overrides,
+        &env,
+    );
+    let output = Command::new(&rewritten[0])
+        .args(&rewritten[1..])
+        .env("PATH", env.get("PATH").expect("PATH should be set"))
+        .output()
+        .expect("run rewritten command");
+
+    assert!(output.status.success(), "command failed: {output:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        format!("{}:/worktree/bin", zsh_bin_dir.display())
+    );
 }
 
 #[test]
