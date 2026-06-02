@@ -801,6 +801,7 @@ fn config_source_label(source: HookSource) -> &'static str {
         HookSource::CloudManagedConfig => "Cloud-managed config",
         HookSource::LegacyManagedConfigFile => "Admin config",
         HookSource::LegacyManagedConfigMdm => "Admin config",
+        HookSource::AppBundledInternal => "App-bundled internal",
         HookSource::Unknown => "Unknown source",
     }
 }

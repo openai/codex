@@ -1,3 +1,4 @@
+mod app_bundled_internal;
 mod discoverable;
 pub mod installed_marketplaces;
 pub mod loader;
@@ -24,6 +25,7 @@ pub const OPENAI_BUNDLED_MARKETPLACE_NAME: &str = "openai-bundled";
 pub type LoadedPlugin = codex_plugin::LoadedPlugin<codex_config::McpServerConfig>;
 pub type PluginLoadOutcome = codex_plugin::PluginLoadOutcome<codex_config::McpServerConfig>;
 
+pub use app_bundled_internal::AppBundledInternalPlugin;
 pub use discoverable::ToolSuggestDiscoverablePlugin;
 pub use discoverable::ToolSuggestPluginDiscoveryInput;
 pub use loader::PluginHookLoadOutcome;

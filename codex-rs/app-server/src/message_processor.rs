@@ -68,6 +68,7 @@ use codex_arg0::Arg0DispatchPaths;
 use codex_chatgpt::workspace_settings;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
+use codex_core_plugins::AppBundledInternalPlugin;
 use codex_exec_server::EnvironmentManager;
 use codex_feedback::CodexFeedback;
 use codex_login::AuthManager;
@@ -272,6 +273,7 @@ pub(crate) struct MessageProcessorArgs {
     pub(crate) rpc_transport: AppServerRpcTransport,
     pub(crate) remote_control_handle: Option<RemoteControlHandle>,
     pub(crate) plugin_startup_tasks: crate::PluginStartupTasks,
+    pub(crate) app_bundled_internal_plugins: Vec<AppBundledInternalPlugin>,
 }
 
 impl MessageProcessor {
@@ -295,6 +297,7 @@ impl MessageProcessor {
             rpc_transport,
             remote_control_handle,
             plugin_startup_tasks,
+            app_bundled_internal_plugins,
         } = args;
         auth_manager.set_external_auth(Arc::new(ExternalAuthRefreshBridge {
             outgoing: outgoing.clone(),
@@ -306,7 +309,7 @@ impl MessageProcessor {
         let thread_store = codex_core::thread_store_from_config(config.as_ref(), state_db.clone());
         let environment_manager_for_requests = Arc::clone(&environment_manager);
         let thread_manager = Arc::new_cyclic(|thread_manager| {
-            ThreadManager::new(
+            ThreadManager::new_with_app_bundled_internal_plugins(
                 config.as_ref(),
                 auth_manager.clone(),
                 session_source,
@@ -324,6 +327,7 @@ impl MessageProcessor {
                     outgoing.clone(),
                     thread_state_manager.clone(),
                 )),
+                app_bundled_internal_plugins,
             )
         });
         thread_manager

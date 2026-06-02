@@ -19,6 +19,7 @@ use crate::tasks::interrupted_turn_history_marker;
 use codex_analytics::AnalyticsEventsClient;
 use codex_app_server_protocol::ThreadHistoryBuilder;
 use codex_app_server_protocol::TurnStatus;
+use codex_core_plugins::AppBundledInternalPlugin;
 use codex_core_plugins::PluginsManager;
 use codex_exec_server::EnvironmentManager;
 use codex_extension_api::ExtensionRegistry;
@@ -263,13 +264,45 @@ impl ThreadManager {
         installation_id: String,
         attestation_provider: Option<Arc<dyn AttestationProvider>>,
     ) -> Self {
+        Self::new_with_app_bundled_internal_plugins(
+            config,
+            auth_manager,
+            session_source,
+            environment_manager,
+            extensions,
+            analytics_events_client,
+            thread_store,
+            state_db,
+            installation_id,
+            attestation_provider,
+            Vec::new(),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_app_bundled_internal_plugins(
+        config: &Config,
+        auth_manager: Arc<AuthManager>,
+        session_source: SessionSource,
+        environment_manager: Arc<EnvironmentManager>,
+        extensions: Arc<ExtensionRegistry<Config>>,
+        analytics_events_client: Option<AnalyticsEventsClient>,
+        thread_store: Arc<dyn ThreadStore>,
+        state_db: Option<StateDbHandle>,
+        installation_id: String,
+        attestation_provider: Option<Arc<dyn AttestationProvider>>,
+        app_bundled_internal_plugins: Vec<AppBundledInternalPlugin>,
+    ) -> Self {
         let codex_home = config.codex_home.clone();
         let restriction_product = session_source.restriction_product();
         let (thread_created_tx, _) = broadcast::channel(THREAD_CREATED_CHANNEL_CAPACITY);
-        let plugins_manager = Arc::new(PluginsManager::new_with_restriction_product(
-            codex_home.to_path_buf(),
-            restriction_product,
-        ));
+        let plugins_manager = Arc::new(
+            PluginsManager::new_with_restriction_product_and_app_bundled_internal_plugins(
+                codex_home.to_path_buf(),
+                restriction_product,
+                app_bundled_internal_plugins,
+            ),
+        );
         let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));
         let skills_manager = Arc::new(SkillsManager::new_with_restriction_product(
             codex_home,

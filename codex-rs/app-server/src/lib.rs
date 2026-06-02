@@ -52,6 +52,7 @@ use codex_config::TextRange as CoreTextRange;
 use codex_core::ExecPolicyError;
 use codex_core::check_execpolicy_for_warnings;
 use codex_core::config::find_codex_home;
+pub use codex_core_plugins::AppBundledInternalPlugin;
 use codex_exec_server::EnvironmentManager;
 use codex_exec_server::ExecServerRuntimePaths;
 use codex_feedback::CodexFeedback;
@@ -399,11 +400,12 @@ pub enum PluginStartupTasks {
     Skip,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppServerRuntimeOptions {
     pub plugin_startup_tasks: PluginStartupTasks,
     pub remote_control_enabled: bool,
     pub install_shutdown_signal_handler: bool,
+    pub app_bundled_internal_plugins: Vec<AppBundledInternalPlugin>,
 }
 
 impl Default for AppServerRuntimeOptions {
@@ -412,6 +414,7 @@ impl Default for AppServerRuntimeOptions {
             plugin_startup_tasks: PluginStartupTasks::Start,
             remote_control_enabled: false,
             install_shutdown_signal_handler: true,
+            app_bundled_internal_plugins: Vec::new(),
         }
     }
 }
@@ -815,6 +818,7 @@ pub async fn run_main_with_transport_options(
             rpc_transport: analytics_rpc_transport(&transport),
             remote_control_handle: Some(remote_control_handle.clone()),
             plugin_startup_tasks: runtime_options.plugin_startup_tasks,
+            app_bundled_internal_plugins: runtime_options.app_bundled_internal_plugins,
         }));
         let mut thread_created_rx = processor.thread_created_receiver();
         let mut running_turn_count_rx = processor.subscribe_running_assistant_turn_count();

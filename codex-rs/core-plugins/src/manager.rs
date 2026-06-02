@@ -1,6 +1,9 @@
 use super::PluginLoadOutcome;
 use super::startup_remote_sync::start_startup_remote_plugin_sync_once;
 use crate::OPENAI_CURATED_MARKETPLACE_NAME;
+use crate::app_bundled_internal::AppBundledInternalPlugin;
+use crate::app_bundled_internal::refresh_app_bundled_internal_hook_receipt;
+use crate::app_bundled_internal::should_hide_app_bundled_internal_hook_declarations;
 use crate::installed_marketplaces::installed_marketplace_roots_from_layer_stack;
 use crate::loader::PluginHookLoadOutcome;
 use crate::loader::configured_curated_plugin_ids_from_codex_home;
@@ -409,6 +412,7 @@ pub struct PluginsManager {
     remote_sync_lock: Semaphore,
     restriction_product: Option<Product>,
     analytics_events_client: RwLock<Option<AnalyticsEventsClient>>,
+    app_bundled_internal_plugins: Vec<AppBundledInternalPlugin>,
 }
 
 #[derive(Clone)]
@@ -425,6 +429,18 @@ impl PluginsManager {
     pub fn new_with_restriction_product(
         codex_home: PathBuf,
         restriction_product: Option<Product>,
+    ) -> Self {
+        Self::new_with_restriction_product_and_app_bundled_internal_plugins(
+            codex_home,
+            restriction_product,
+            Vec::new(),
+        )
+    }
+
+    pub fn new_with_restriction_product_and_app_bundled_internal_plugins(
+        codex_home: PathBuf,
+        restriction_product: Option<Product>,
+        app_bundled_internal_plugins: Vec<AppBundledInternalPlugin>,
     ) -> Self {
         // Product restrictions are enforced at marketplace admission time for a given CODEX_HOME:
         // listing, install, and curated refresh all consult this restriction context before new
@@ -449,6 +465,7 @@ impl PluginsManager {
             remote_sync_lock: Semaphore::new(/*permits*/ 1),
             restriction_product,
             analytics_events_client: RwLock::new(None),
+            app_bundled_internal_plugins,
         }
     }
 
@@ -495,6 +512,7 @@ impl PluginsManager {
             &self.store,
             self.restriction_product,
             config.remote_plugin_enabled,
+            &self.app_bundled_internal_plugins,
         )
         .await;
         log_plugin_load_errors(&outcome);
@@ -541,6 +559,7 @@ impl PluginsManager {
             &self.store,
             self.restriction_product,
             config.remote_plugin_enabled,
+            &self.app_bundled_internal_plugins,
         )
         .await
     }
@@ -559,6 +578,7 @@ impl PluginsManager {
             self.remote_installed_plugin_configs(),
             &self.store,
             config.remote_plugin_enabled,
+            &self.app_bundled_internal_plugins,
         )
         .await
     }
@@ -922,6 +942,23 @@ impl PluginsManager {
         })
         .await
         .map_err(PluginInstallError::join)??;
+
+        if let Err(err) = refresh_app_bundled_internal_hook_receipt(
+            &result.plugin_id,
+            &result.installed_path,
+            &self.store.plugin_data_root(&result.plugin_id),
+            &self.app_bundled_internal_plugins,
+        ) {
+            let store = self.store.clone();
+            let plugin_id = result.plugin_id.clone();
+            tokio::task::spawn_blocking(move || store.uninstall(&plugin_id))
+                .await
+                .map_err(PluginInstallError::join)??;
+            return Err(PluginStoreError::Invalid(format!(
+                "app-bundled internal hook verification failed: {err}"
+            ))
+            .into());
+        }
 
         set_user_plugin_enabled(
             &self.codex_home,
@@ -1477,15 +1514,25 @@ impl PluginsManager {
         )
         .await;
         let plugin_data_root = self.store.plugin_data_root(&plugin_id);
-        let (hook_sources, _hook_load_warnings) =
-            load_plugin_hooks(&source_path, &plugin_id, &plugin_data_root, &manifest.paths);
-        let hooks = plugin_hook_declarations(&hook_sources)
-            .into_iter()
-            .map(|hook| PluginHookSummary {
-                key: hook.key,
-                event_name: hook.event_name,
-            })
-            .collect();
+        let hooks = if should_hide_app_bundled_internal_hook_declarations(
+            &plugin_id,
+            &source_path,
+            &plugin_data_root,
+            &manifest.paths,
+            &self.app_bundled_internal_plugins,
+        ) {
+            Vec::new()
+        } else {
+            let (hook_sources, _hook_load_warnings) =
+                load_plugin_hooks(&source_path, &plugin_id, &plugin_data_root, &manifest.paths);
+            plugin_hook_declarations(&hook_sources)
+                .into_iter()
+                .map(|hook| PluginHookSummary {
+                    key: hook.key,
+                    event_name: hook.event_name,
+                })
+                .collect()
+        };
         let apps = load_plugin_apps(source_path.as_path()).await;
         let mut mcp_server_names = load_plugin_mcp_servers(source_path.as_path())
             .await

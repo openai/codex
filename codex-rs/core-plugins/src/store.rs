@@ -1,3 +1,4 @@
+use crate::app_bundled_internal::remove_app_bundled_internal_hook_receipt;
 use crate::manifest::PluginManifest;
 use crate::manifest::load_plugin_manifest;
 use codex_plugin::PluginId;
@@ -135,6 +136,12 @@ impl PluginStore {
             self.plugin_base_root(&plugin_id).as_path(),
             &plugin_version,
         )?;
+        remove_app_bundled_internal_hook_receipt(&installed_path).map_err(|err| {
+            PluginStoreError::io(
+                "failed to remove source-supplied app-bundled internal hook receipt",
+                err,
+            )
+        })?;
 
         Ok(PluginInstallResult {
             plugin_id,

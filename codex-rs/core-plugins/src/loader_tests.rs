@@ -162,6 +162,7 @@ enabled = true
         &store,
         Some(Product::Codex),
         /*prefer_remote_curated_conflicts*/ false,
+        &[],
     )
     .await;
     let hooks_only = load_plugins_from_layer_stack_with_scope(
@@ -169,6 +170,7 @@ enabled = true
         HashMap::new(),
         &store,
         /*prefer_remote_curated_conflicts*/ false,
+        &[],
         PluginLoadScope::HooksOnly,
     )
     .await;

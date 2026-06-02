@@ -2006,6 +2006,7 @@
         "cloudManagedConfig",
         "legacyManagedConfigFile",
         "legacyManagedConfigMdm",
+        "appBundledInternal",
         "unknown"
       ],
       "type": "string"

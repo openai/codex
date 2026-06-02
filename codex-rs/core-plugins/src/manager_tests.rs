@@ -1395,6 +1395,69 @@ async fn install_plugin_updates_config_with_relative_path_and_plugin_key() {
 }
 
 #[tokio::test]
+async fn install_plugin_rejects_mismatched_app_bundled_internal_hooks() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo_root = tmp.path().join("repo");
+    let packaged_root = tmp.path().join("packaged-computer-use");
+    fs::create_dir_all(repo_root.join(".git")).unwrap();
+    fs::create_dir_all(repo_root.join(".agents/plugins")).unwrap();
+    write_plugin(&repo_root, "computer-use", "computer-use");
+    write_plugin(tmp.path(), "packaged-computer-use", "computer-use");
+    write_file(
+        &repo_root.join("computer-use/hooks/hooks.json"),
+        r#"{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"echo installed"}]}]}}"#,
+    );
+    write_file(
+        &packaged_root.join("hooks/hooks.json"),
+        r#"{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"echo packaged"}]}]}}"#,
+    );
+    fs::write(
+        repo_root.join(".agents/plugins/marketplace.json"),
+        r#"{
+  "name": "openai-bundled",
+  "plugins": [
+    {
+      "name": "computer-use",
+      "source": {
+        "source": "local",
+        "path": "./computer-use"
+      }
+    }
+  ]
+}"#,
+    )
+    .unwrap();
+    let plugin_id = PluginId::parse("computer-use@openai-bundled").unwrap();
+    let manager = PluginsManager::new_with_restriction_product_and_app_bundled_internal_plugins(
+        tmp.path().to_path_buf(),
+        Some(Product::Codex),
+        vec![AppBundledInternalPlugin {
+            plugin_id,
+            plugin_root: AbsolutePathBuf::try_from(packaged_root).unwrap(),
+        }],
+    );
+
+    let err = manager
+        .install_plugin(PluginInstallRequest {
+            plugin_name: "computer-use".to_string(),
+            marketplace_path: AbsolutePathBuf::try_from(
+                repo_root.join(".agents/plugins/marketplace.json"),
+            )
+            .unwrap(),
+        })
+        .await
+        .unwrap_err();
+
+    assert!(err.is_invalid_request());
+    assert!(
+        !tmp.path()
+            .join("plugins/cache/openai-bundled/computer-use")
+            .exists()
+    );
+    assert!(!tmp.path().join(CONFIG_TOML_FILE).exists());
+}
+
+#[tokio::test]
 async fn install_openai_curated_plugin_uses_short_sha_cache_version() {
     let tmp = tempfile::tempdir().unwrap();
     let curated_root = curated_plugins_repo_path(tmp.path());
@@ -2211,6 +2274,76 @@ enabled = false
             .join("plugins/.marketplace-plugin-source-staging")
             .exists()
     );
+}
+
+#[tokio::test]
+async fn app_bundled_internal_hooks_are_hidden_from_plugin_detail() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo_root = tmp.path().join("repo");
+    let plugin_root = repo_root.join("computer-use");
+    write_file(
+        &plugin_root.join(".codex-plugin/plugin.json"),
+        r#"{"name":"computer-use"}"#,
+    );
+    write_file(
+        &plugin_root.join("hooks/hooks.json"),
+        r#"{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo internal"
+          }
+        ]
+      }
+    ]
+  }
+}"#,
+    );
+    write_file(
+        &tmp.path().join(CONFIG_TOML_FILE),
+        r#"[features]
+plugins = true
+"#,
+    );
+    let config = load_config(tmp.path(), &repo_root).await;
+    let plugin_root = AbsolutePathBuf::try_from(plugin_root).unwrap();
+    let manager = PluginsManager::new_with_restriction_product_and_app_bundled_internal_plugins(
+        tmp.path().to_path_buf(),
+        Some(Product::Codex),
+        vec![AppBundledInternalPlugin {
+            plugin_id: PluginId::parse("computer-use@openai-bundled").unwrap(),
+            plugin_root: plugin_root.clone(),
+        }],
+    );
+
+    let detail = manager
+        .read_plugin_detail_for_marketplace_plugin(
+            &config,
+            "openai-bundled",
+            ConfiguredMarketplacePlugin {
+                id: "computer-use@openai-bundled".to_string(),
+                name: "computer-use".to_string(),
+                local_version: None,
+                installed_version: None,
+                source: MarketplacePluginSource::Local { path: plugin_root },
+                policy: MarketplacePluginPolicy {
+                    installation: MarketplacePluginInstallPolicy::Available,
+                    authentication: MarketplacePluginAuthPolicy::OnInstall,
+                    products: None,
+                },
+                interface: None,
+                keywords: Vec::new(),
+                installed: false,
+                enabled: false,
+            },
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(detail.hooks, Vec::<PluginHookSummary>::new());
 }
 
 #[tokio::test]
@@ -3853,6 +3986,7 @@ async fn load_plugins_ignores_project_config_files() {
         &PluginStore::new(codex_home.path().to_path_buf()),
         Some(Product::Codex),
         /*prefer_remote_curated_conflicts*/ false,
+        &[],
     )
     .await;
 

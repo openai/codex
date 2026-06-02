@@ -1,4 +1,5 @@
 use super::*;
+use crate::app_bundled_internal::APP_BUNDLED_INTERNAL_HOOK_RECEIPT_PATH;
 use codex_plugin::PluginId;
 use pretty_assertions::assert_eq;
 use tempfile::tempdir;
@@ -69,6 +70,34 @@ fn install_copies_plugin_into_default_marketplace() {
     );
     assert!(installed_path.join(".codex-plugin/plugin.json").is_file());
     assert!(installed_path.join("skills/SKILL.md").is_file());
+}
+
+#[test]
+fn install_removes_source_supplied_internal_hook_receipt() {
+    let tmp = tempdir().unwrap();
+    write_plugin(tmp.path(), "sample-plugin", "sample-plugin");
+    fs::write(
+        tmp.path()
+            .join("sample-plugin")
+            .join(APP_BUNDLED_INTERNAL_HOOK_RECEIPT_PATH),
+        r#"{"schema_version":1}"#,
+    )
+    .unwrap();
+    let plugin_id = PluginId::new("sample-plugin".to_string(), "debug".to_string()).unwrap();
+
+    let result = PluginStore::new(tmp.path().to_path_buf())
+        .install(
+            AbsolutePathBuf::try_from(tmp.path().join("sample-plugin")).unwrap(),
+            plugin_id,
+        )
+        .unwrap();
+
+    assert!(
+        !result
+            .installed_path
+            .join(APP_BUNDLED_INTERNAL_HOOK_RECEIPT_PATH)
+            .exists()
+    );
 }
 
 #[test]

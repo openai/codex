@@ -36,6 +36,7 @@ reqwest = { workspace = true }
 semver = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+sha2 = { workspace = true }
 tar = { workspace = true }
 tempfile = { workspace = true }
 thiserror = { workspace = true }
@@ -43,6 +44,7 @@ tokio = { workspace = true, features = ["fs", "macros", "rt", "time"] }
 toml = { workspace = true }
 tracing = { workspace = true }
 url = { workspace = true }
+walkdir = { workspace = true }
 zip = { workspace = true }
 
 [dev-dependencies]
