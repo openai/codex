@@ -5454,7 +5454,8 @@ async fn to_mcp_config_flows_mcp_tool_prefix_from_feature() -> std::io::Result<(
 }
 
 #[tokio::test]
-async fn to_mcp_config_preserves_auth_elicitation_feature_from_config() -> std::io::Result<()> {
+async fn to_mcp_config_keeps_auth_elicitation_separate_from_mcp_url_capability()
+-> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let mut config = Config::load_from_base_config_with_overrides(
         ConfigToml::default(),
@@ -5471,6 +5472,13 @@ async fn to_mcp_config_preserves_auth_elicitation_feature_from_config() -> std::
     );
 
     let _ = config.features.enable(Feature::AuthElicitation);
+    let mcp_config = config.to_mcp_config(&plugins_manager).await;
+    assert_eq!(
+        mcp_config.client_elicitation_capability,
+        ElicitationCapability::default()
+    );
+
+    let _ = config.features.enable(Feature::McpUrlElicitationCapability);
     let mcp_config = config.to_mcp_config(&plugins_manager).await;
     assert_eq!(
         mcp_config.client_elicitation_capability,

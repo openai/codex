@@ -481,13 +481,7 @@ async fn start_server_task(
         codex_apps_tools_cache_context,
         client_elicitation_capability,
     } = params;
-    let mut capabilities = ClientCapabilities::default();
-    capabilities.elicitation = Some(client_elicitation_capability);
-    let params = InitializeRequestParams::new(
-        capabilities,
-        Implementation::new("codex-mcp-client", env!("CARGO_PKG_VERSION")).with_title("Codex"),
-    )
-    .with_protocol_version(ProtocolVersion::V_2025_06_18);
+    let params = initialize_request_params(client_elicitation_capability);
 
     let send_elicitation = elicitation_requests.make_sender(server_name.clone(), tx_event);
 
@@ -571,6 +565,18 @@ struct StartServerTaskParams {
     elicitation_requests: ElicitationRequestManager,
     codex_apps_tools_cache_context: Option<CodexAppsToolsCacheContext>,
     client_elicitation_capability: ElicitationCapability,
+}
+
+fn initialize_request_params(
+    client_elicitation_capability: ElicitationCapability,
+) -> InitializeRequestParams {
+    let mut capabilities = ClientCapabilities::default();
+    capabilities.elicitation = Some(client_elicitation_capability);
+    InitializeRequestParams::new(
+        capabilities,
+        Implementation::new("codex-mcp-client", env!("CARGO_PKG_VERSION")).with_title("Codex"),
+    )
+    .with_protocol_version(ProtocolVersion::V_2025_06_18)
 }
 
 async fn make_rmcp_client(
@@ -660,8 +666,11 @@ async fn make_rmcp_client(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pretty_assertions::assert_eq;
+    use rmcp::model::ElicitationCapability;
     use rmcp::model::JsonObject;
     use rmcp::model::Meta;
+    use serde_json::json;
 
     fn tool_with_connector_meta() -> RmcpTool {
         RmcpTool::new(
@@ -685,6 +694,26 @@ mod tests {
             .expect("object")
             .clone(),
         ))
+    }
+
+    #[test]
+    fn initialize_request_uses_2025_06_18_elicitation_capability_by_default() {
+        let params = initialize_request_params(ElicitationCapability::default());
+
+        assert_eq!(
+            serde_json::to_value(params).expect("serialize initialize params"),
+            json!({
+                "protocolVersion": "2025-06-18",
+                "capabilities": {
+                    "elicitation": {},
+                },
+                "clientInfo": {
+                    "name": "codex-mcp-client",
+                    "title": "Codex",
+                    "version": env!("CARGO_PKG_VERSION"),
+                },
+            })
+        );
     }
 
     #[test]

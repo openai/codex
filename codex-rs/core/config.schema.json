@@ -488,6 +488,9 @@
             "local_thread_store_compression": {
               "type": "boolean"
             },
+            "mcp_url_elicitation_capability": {
+              "type": "boolean"
+            },
             "memories": {
               "type": "boolean"
             },
@@ -4609,6 +4612,9 @@
           "type": "boolean"
         },
         "local_thread_store_compression": {
+          "type": "boolean"
+        },
+        "mcp_url_elicitation_capability": {
           "type": "boolean"
         },
         "memories": {

@@ -1133,7 +1133,10 @@ impl Session {
             let host_owned_codex_apps_enabled = config
                 .features
                 .apps_enabled_for_auth(auth.as_ref().is_some_and(|auth| auth.uses_codex_backend()));
-            let client_elicitation_capability = if config.features.enabled(Feature::AuthElicitation) {
+            let client_elicitation_capability = if config
+                .features
+                .enabled(Feature::McpUrlElicitationCapability)
+            {
                 ElicitationCapability {
                     form: Some(FormElicitationCapability::default()),
                     url: Some(UrlElicitationCapability::default()),

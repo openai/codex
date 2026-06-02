@@ -1283,8 +1283,13 @@ async fn install_host_owned_codex_apps_manager(session: &Session, turn_context: 
 
 #[tokio::test]
 async fn codex_apps_auth_elicitation_feature_disabled_returns_original_result() {
-    let (session, turn_context, rx_event) = make_session_and_context_with_rx().await;
+    let (session, mut turn_context, rx_event) = make_session_and_context_with_rx().await;
     install_host_owned_codex_apps_manager(&session, &turn_context).await;
+    let mut features = Features::with_defaults();
+    features.disable(Feature::AuthElicitation);
+    Arc::get_mut(&mut turn_context)
+        .expect("single turn context ref")
+        .features = ManagedFeatures::from(features);
     let result = codex_apps_auth_failure_result();
     let metadata = codex_apps_auth_failure_metadata();
 
@@ -1392,15 +1397,10 @@ async fn codex_apps_auth_elicitation_granular_mcp_disabled_returns_original_resu
 }
 
 #[tokio::test]
-async fn codex_apps_auth_elicitation_feature_enabled_requests_elicitation() {
-    let (session, mut turn_context, rx_event) = make_session_and_context_with_rx().await;
+async fn codex_apps_auth_elicitation_default_enabled_requests_elicitation() {
+    let (session, turn_context, rx_event) = make_session_and_context_with_rx().await;
     install_host_owned_codex_apps_manager(&session, &turn_context).await;
     *session.active_turn.lock().await = Some(ActiveTurn::default());
-    let mut features = Features::with_defaults();
-    features.enable(Feature::AuthElicitation);
-    Arc::get_mut(&mut turn_context)
-        .expect("single turn context ref")
-        .features = ManagedFeatures::from(features);
     let result = codex_apps_auth_failure_result();
     let metadata = codex_apps_auth_failure_metadata();
 

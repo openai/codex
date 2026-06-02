@@ -302,12 +302,28 @@ fn tool_call_mcp_elicitation_is_stable_and_enabled_by_default() {
 }
 
 #[test]
-fn auth_elicitation_is_under_development() {
-    assert_eq!(Feature::AuthElicitation.stage(), Stage::UnderDevelopment);
-    assert_eq!(Feature::AuthElicitation.default_enabled(), false);
+fn auth_elicitation_is_stable_and_enabled_by_default() {
+    assert_eq!(Feature::AuthElicitation.stage(), Stage::Stable);
+    assert_eq!(Feature::AuthElicitation.default_enabled(), true);
     assert_eq!(
         feature_for_key("auth_elicitation"),
         Some(Feature::AuthElicitation)
+    );
+}
+
+#[test]
+fn mcp_url_elicitation_capability_is_under_development() {
+    assert_eq!(
+        Feature::McpUrlElicitationCapability.stage(),
+        Stage::UnderDevelopment
+    );
+    assert_eq!(
+        Feature::McpUrlElicitationCapability.default_enabled(),
+        false
+    );
+    assert_eq!(
+        feature_for_key("mcp_url_elicitation_capability"),
+        Some(Feature::McpUrlElicitationCapability)
     );
 }
 

@@ -1415,7 +1415,10 @@ impl Config {
             use_legacy_landlock: self.features.use_legacy_landlock(),
             apps_enabled: self.features.enabled(Feature::Apps),
             prefix_mcp_tool_names: self.prefix_mcp_tool_names(),
-            client_elicitation_capability: if self.features.enabled(Feature::AuthElicitation) {
+            client_elicitation_capability: if self
+                .features
+                .enabled(Feature::McpUrlElicitationCapability)
+            {
                 ElicitationCapability {
                     form: Some(FormElicitationCapability::default()),
                     url: Some(UrlElicitationCapability::default()),

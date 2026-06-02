@@ -194,8 +194,10 @@ pub enum Feature {
     Goals,
     /// Route MCP tool approval prompts through the MCP elicitation request path.
     ToolCallMcpElicitation,
-    /// Prompt Codex Apps connector auth failures through MCP URL elicitations.
+    /// Prompt host-owned Codex Apps connector auth failures through URL elicitations.
     AuthElicitation,
+    /// Advertise URL elicitation support to configured MCP servers.
+    McpUrlElicitationCapability,
     /// Enable personality selection in the TUI.
     Personality,
     /// Enable native artifact tools.
@@ -1138,6 +1140,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::AuthElicitation,
         key: "auth_elicitation",
+        stage: Stage::Stable,
+        default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::McpUrlElicitationCapability,
+        key: "mcp_url_elicitation_capability",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
