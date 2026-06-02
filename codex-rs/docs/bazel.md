@@ -27,25 +27,24 @@ The repository root `justfile` exposes the common Bazel entry points:
 ```bash
 just bazel-test
 just bazel-clippy
-just bazel-remote-test
 ```
 
 Ordinary local `bazel` and `just` invocations run locally. BuildBuddy cache,
 build event upload, downloads, and remote execution are opt-in configurations.
-`just bazel-remote-test` requires the remote configuration described below.
 
 ## `user.bazelrc`
 
 The checked-in `.bazelrc` optionally imports `%workspace%/user.bazelrc`, and
-`.gitignore` excludes that file. You do not need a `user.bazelrc` for purely
-local builds or GitHub Actions.
+`.gitignore` excludes that file. Bazel also loads `~/.bazelrc` by default. You
+do not need either file for purely local builds or GitHub Actions.
 
-Create `user.bazelrc` only if you have a BuildBuddy API key and want
-`bazel` and `just` commands to use remote services. Choose the generic
-host, or `buildbuddy-openai-rbe` if you are authorized for the OpenAI host:
+Add the following configuration to `%workspace%/user.bazelrc` if you want the
+credential scoped to this checkout, or to `~/.bazelrc` if you want the same
+defaults in every Bazel workspace. Choose the generic host, or
+`buildbuddy-openai-rbe` if you are authorized for the OpenAI host:
 
 ```bazelrc
-# Local only; this file contains a BuildBuddy credential.
+# Local machine only; this file contains a BuildBuddy credential.
 common --config=buildbuddy-generic-rbe
 common --remote_header=x-buildbuddy-api-key=<your-buildbuddy-api-key>
 ```
@@ -55,8 +54,7 @@ you want cache, build event upload, and downloads without remote execution.
 The `-rbe` configurations also enable the repository's shared remote-execution
 settings; no additional `--config=remote` is required.
 
-`user.bazelrc` is ignored by Git but still contains a credential; do not commit
-or share it.
+Both files contain a credential; do not commit or share them.
 
 ## BuildBuddy remote configurations
 

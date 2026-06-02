@@ -6,26 +6,13 @@ set -euo pipefail
 # build/test invocation so they can reuse the same Bazel server. Queries only
 # enumerate labels, so they intentionally do not select CI or remote configs.
 
-query_args=()
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --)
-      shift
-      break
-      ;;
-    *)
-      query_args+=("$1")
-      shift
-      ;;
-  esac
-done
-
-if [[ $# -ne 1 ]]; then
+if [[ $# -lt 2 || "${@: -2:1}" != "--" ]]; then
   echo "Usage: $0 [<bazel query args>...] -- <query expression>" >&2
   exit 1
 fi
 
-query_expression="$1"
+query_args=("${@:1:$#-2}")
+query_expression="${@: -1}"
 
 bazel_startup_args=()
 if [[ -n "${BAZEL_OUTPUT_USER_ROOT:-}" ]]; then

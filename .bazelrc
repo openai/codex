@@ -50,20 +50,24 @@ common --grpc_keepalive_time=30s
 # Opt-in remote configurations selected by
 # `.github/scripts/run_bazel_with_buildbuddy.py`. Plain Bazel commands do not
 # contact BuildBuddy unless a user selects one of these configurations.
+# Use the generic host for cache, BES, and downloads without remote execution.
 common:buildbuddy-generic --bes_backend=grpcs://remote.buildbuddy.io
 common:buildbuddy-generic --bes_results_url=https://app.buildbuddy.io/invocation/
 common:buildbuddy-generic --remote_cache=grpcs://remote.buildbuddy.io
 common:buildbuddy-generic --experimental_remote_downloader=grpcs://remote.buildbuddy.io
 
+# Add remote execution on the generic host.
 common:buildbuddy-generic-rbe --config=buildbuddy-generic
 common:buildbuddy-generic-rbe --config=remote
 common:buildbuddy-generic-rbe --remote_executor=grpcs://remote.buildbuddy.io
 
+# Use the OpenAI tenant for cache, BES, and downloads without remote execution.
 common:buildbuddy-openai --bes_backend=grpcs://openai.buildbuddy.io
 common:buildbuddy-openai --bes_results_url=https://openai.buildbuddy.io/invocation/
 common:buildbuddy-openai --remote_cache=grpcs://openai.buildbuddy.io
 common:buildbuddy-openai --experimental_remote_downloader=grpcs://openai.buildbuddy.io
 
+# Add remote execution on the OpenAI tenant.
 common:buildbuddy-openai-rbe --config=buildbuddy-openai
 common:buildbuddy-openai-rbe --config=remote
 common:buildbuddy-openai-rbe --remote_executor=grpcs://openai.buildbuddy.io

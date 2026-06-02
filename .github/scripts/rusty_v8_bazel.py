@@ -30,25 +30,21 @@ ARTIFACT_BAZEL_CONFIGS = ["rusty-v8-upstream-libcxx"]
 
 
 def bazel_execroot() -> Path:
-    result = subprocess.run(
+    output = subprocess.check_output(
         bazel_command("info", "execution_root"),
         cwd=ROOT,
-        check=True,
-        capture_output=True,
         text=True,
     )
-    return Path(result.stdout.strip())
+    return Path(output.strip())
 
 
 def bazel_output_base() -> Path:
-    result = subprocess.run(
+    output = subprocess.check_output(
         bazel_command("info", "output_base"),
         cwd=ROOT,
-        check=True,
-        capture_output=True,
         text=True,
     )
-    return Path(result.stdout.strip())
+    return Path(output.strip())
 
 
 def bazel_output_path(path: str) -> Path:
@@ -65,7 +61,7 @@ def bazel_output_files(
 ) -> list[Path]:
     expression = "set(" + " ".join(labels) + ")"
     bazel_configs = bazel_configs or []
-    result = subprocess.run(
+    output = subprocess.check_output(
         bazel_command(
             "cquery",
             "-c",
@@ -76,14 +72,10 @@ def bazel_output_files(
             expression,
         ),
         cwd=ROOT,
-        check=True,
-        capture_output=True,
         text=True,
     )
     return [
-        bazel_output_path(line.strip())
-        for line in result.stdout.splitlines()
-        if line.strip()
+        bazel_output_path(line.strip()) for line in output.splitlines() if line.strip()
     ]
 
 

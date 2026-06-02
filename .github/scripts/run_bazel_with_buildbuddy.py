@@ -1,7 +1,5 @@
 #!/usr/bin/env python3
 
-from __future__ import annotations
-
 import json
 import os
 import sys
@@ -37,8 +35,8 @@ def is_trusted_upstream_run(env: Mapping[str, str]) -> bool:
         or env.get("GITHUB_REPOSITORY") != OPENAI_REPOSITORY
     ):
         return False
-    # The workflows using this helper run non-PR events from upstream refs;
-    # untrusted fork code reaches them only through `pull_request` events.
+    # Non-PR workflow runs in `openai/codex` execute upstream refs, so they are
+    # trusted. Fork code reaches these workflows only through pull requests.
     if env.get("GITHUB_EVENT_NAME") != "pull_request":
         return True
 
@@ -98,6 +96,7 @@ def bazel_args_with_remote_config(
     if config is None:
         return bazel_args_without_remote_execution(args)
 
+    # `remote_config()` returns a configuration only when this key is present.
     api_key = env["BUILDBUDDY_API_KEY"]
     remote_args = [
         f"--config={config}",
