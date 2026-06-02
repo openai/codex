@@ -48,6 +48,15 @@ impl From<AdditionalPermissionProfile> for RequestPermissionProfile {
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
 pub struct RequestPermissionsArgs {
+    #[serde(
+        default,
+        rename = "environmentId",
+        alias = "environment_id",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[ts(optional)]
+    #[ts(rename = "environmentId")]
+    pub environment_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
     pub permissions: RequestPermissionProfile,

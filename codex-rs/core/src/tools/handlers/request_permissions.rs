@@ -6,15 +6,24 @@ use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::context::boxed_tool_output;
+use crate::tools::handlers::parse_arguments;
 use crate::tools::handlers::parse_arguments_with_base_path;
+use crate::tools::handlers::resolve_tool_environment;
 use crate::tools::handlers::shell_spec::create_request_permissions_tool;
 use crate::tools::handlers::shell_spec::request_permissions_tool_description;
 use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::ToolExecutor;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
+use serde::Deserialize;
 
 pub struct RequestPermissionsHandler;
+
+#[derive(Deserialize)]
+struct RequestPermissionsEnvironmentArgs {
+    #[serde(default, rename = "environmentId", alias = "environment_id")]
+    environment_id: Option<String>,
+}
 
 #[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for RequestPermissionsHandler {
@@ -48,7 +57,10 @@ impl ToolExecutor<ToolInvocation> for RequestPermissionsHandler {
             }
         };
 
-        let Some(turn_environment) = turn.environments.primary() else {
+        let environment_args: RequestPermissionsEnvironmentArgs = parse_arguments(&arguments)?;
+        let Some(turn_environment) =
+            resolve_tool_environment(turn.as_ref(), environment_args.environment_id.as_deref())?
+        else {
             return Err(FunctionCallError::RespondToModel(
                 "request_permissions requires a primary environment".to_string(),
             ));
@@ -65,7 +77,13 @@ impl ToolExecutor<ToolInvocation> for RequestPermissionsHandler {
         }
 
         let response = session
-            .request_permissions(&turn, call_id, args, cancellation_token)
+            .request_permissions_for_environment(
+                &turn,
+                call_id,
+                args,
+                turn_environment.selection(),
+                cancellation_token,
+            )
             .await
             .ok_or_else(|| {
                 FunctionCallError::RespondToModel(

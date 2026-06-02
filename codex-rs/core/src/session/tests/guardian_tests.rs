@@ -124,15 +124,22 @@ async fn request_permissions_routes_to_guardian_when_reviewer_is_enabled() {
         }),
         ..RequestPermissionProfile::default()
     };
+    let environment = turn_context
+        .environments
+        .primary()
+        .expect("primary environment")
+        .selection();
     let response = tokio::time::timeout(
         Duration::from_secs(45),
-        session.request_permissions(
+        session.request_permissions_for_environment(
             &turn_context,
             "perm-call-1".to_string(),
             RequestPermissionsArgs {
+                environment_id: None,
                 reason: Some("need network".to_string()),
                 permissions: requested_permissions.clone(),
             },
+            environment,
             CancellationToken::new(),
         ),
     )
@@ -213,14 +220,21 @@ async fn request_permissions_guardian_review_stops_when_cancelled() {
         let requested_permissions = requested_permissions.clone();
         let cancellation_token = cancellation_token.clone();
         async move {
+            let environment = turn_context
+                .environments
+                .primary()
+                .expect("primary environment")
+                .selection();
             session
-                .request_permissions(
+                .request_permissions_for_environment(
                     &turn_context,
                     "perm-call-cancelled".to_string(),
                     RequestPermissionsArgs {
+                        environment_id: None,
                         reason: Some("need network".to_string()),
                         permissions: requested_permissions,
                     },
+                    environment,
                     cancellation_token,
                 )
                 .await

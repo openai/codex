@@ -172,6 +172,13 @@ fn request_permissions_tool_includes_full_permission_schema() {
                 "Optional short explanation for why additional permissions are needed.".to_string(),
             )),
         ),
+        (
+            "environmentId".to_string(),
+            JsonSchema::string(Some(
+                "Environment id from <environment_context>. Omit to use the primary environment."
+                    .to_string(),
+            )),
+        ),
         ("permissions".to_string(), permission_profile_schema()),
     ]);
 
