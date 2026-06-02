@@ -97,6 +97,7 @@ pub(crate) use skills::manager;
 pub(crate) use skills::maybe_emit_implicit_skill_invocation;
 pub(crate) use skills::skills_load_input_from_config;
 mod stream_events_utils;
+pub use stream_events_utils::image_generation_artifact_path;
 pub mod test_support;
 mod unified_exec;
 pub mod windows_sandbox;

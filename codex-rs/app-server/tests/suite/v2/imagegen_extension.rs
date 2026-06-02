@@ -44,7 +44,7 @@ const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(60);
 const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[tokio::test]
-async fn standalone_image_generation_persists_image_and_returns_it_to_model() -> Result<()> {
+async fn standalone_image_generation_returns_saved_path_hint_to_model() -> Result<()> {
     let call_id = "image-run-1";
     let server = responses::start_mock_server().await;
     mount_image_response(&server).await;
@@ -124,7 +124,13 @@ async fn standalone_image_generation_persists_image_and_returns_it_to_model() ->
             "detail": "high",
         })
     );
-    assert_eq!(output["output"].as_array().map(Vec::len), Some(1));
+    let output_hint = output["output"][1]["text"]
+        .as_str()
+        .context("image output should include model-visible path hint")?;
+    assert!(
+        output_hint.contains(&saved_path.display().to_string()),
+        "output hint should identify the path core saved"
+    );
     assert!(
         !requests[1]
             .message_input_texts("developer")
