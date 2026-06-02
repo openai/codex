@@ -25,6 +25,7 @@ use codex_config::types::MAX_FUNCTION_KEY;
 use codex_config::types::TuiKeymap;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyModifiers;
+use serde::Serialize;
 use std::collections::HashMap;
 
 /// Runtime keymap used by TUI input handlers.
@@ -479,144 +480,6 @@ impl RuntimeKeymap {
             yank: resolve_local!(keymap, defaults, editor, yank),
         };
 
-        let mut configured_main_bindings_to_preserve = configured_bindings_to_preserve([
-            (
-                keymap.global.open_transcript.as_ref(),
-                app.open_transcript.as_slice(),
-            ),
-            (
-                keymap.global.open_external_editor.as_ref(),
-                app.open_external_editor.as_slice(),
-            ),
-            (keymap.global.copy.as_ref(), app.copy.as_slice()),
-            (
-                keymap.global.clear_terminal.as_ref(),
-                app.clear_terminal.as_slice(),
-            ),
-            (
-                keymap.global.toggle_vim_mode.as_ref(),
-                app.toggle_vim_mode.as_slice(),
-            ),
-            (
-                keymap.global.toggle_fast_mode.as_ref(),
-                app.toggle_fast_mode.as_slice(),
-            ),
-            (
-                keymap.global.toggle_raw_output.as_ref(),
-                app.toggle_raw_output.as_slice(),
-            ),
-            (
-                keymap.chat.interrupt_turn.as_ref(),
-                chat.interrupt_turn.as_slice(),
-            ),
-            (
-                keymap.chat.decrease_reasoning_effort.as_ref(),
-                chat.decrease_reasoning_effort.as_slice(),
-            ),
-            (
-                keymap.chat.increase_reasoning_effort.as_ref(),
-                chat.increase_reasoning_effort.as_slice(),
-            ),
-            (
-                keymap.chat.edit_queued_message.as_ref(),
-                chat.edit_queued_message.as_slice(),
-            ),
-            (
-                keymap
-                    .composer
-                    .submit
-                    .as_ref()
-                    .or(keymap.global.submit.as_ref()),
-                composer.submit.as_slice(),
-            ),
-            (
-                keymap
-                    .composer
-                    .queue
-                    .as_ref()
-                    .or(keymap.global.queue.as_ref()),
-                composer.queue.as_slice(),
-            ),
-            (
-                keymap
-                    .composer
-                    .toggle_shortcuts
-                    .as_ref()
-                    .or(keymap.global.toggle_shortcuts.as_ref()),
-                composer.toggle_shortcuts.as_slice(),
-            ),
-            (
-                keymap.composer.history_search_previous.as_ref(),
-                composer.history_search_previous.as_slice(),
-            ),
-            (
-                keymap.composer.history_search_next.as_ref(),
-                composer.history_search_next.as_slice(),
-            ),
-            (
-                keymap.editor.insert_newline.as_ref(),
-                editor.insert_newline.as_slice(),
-            ),
-            (
-                keymap.editor.move_left.as_ref(),
-                editor.move_left.as_slice(),
-            ),
-            (
-                keymap.editor.move_right.as_ref(),
-                editor.move_right.as_slice(),
-            ),
-            (keymap.editor.move_up.as_ref(), editor.move_up.as_slice()),
-            (
-                keymap.editor.move_down.as_ref(),
-                editor.move_down.as_slice(),
-            ),
-            (
-                keymap.editor.move_word_left.as_ref(),
-                editor.move_word_left.as_slice(),
-            ),
-            (
-                keymap.editor.move_word_right.as_ref(),
-                editor.move_word_right.as_slice(),
-            ),
-            (
-                keymap.editor.move_line_start.as_ref(),
-                editor.move_line_start.as_slice(),
-            ),
-            (
-                keymap.editor.move_line_end.as_ref(),
-                editor.move_line_end.as_slice(),
-            ),
-            (
-                keymap.editor.delete_backward.as_ref(),
-                editor.delete_backward.as_slice(),
-            ),
-            (
-                keymap.editor.delete_forward.as_ref(),
-                editor.delete_forward.as_slice(),
-            ),
-            (
-                keymap.editor.delete_backward_word.as_ref(),
-                editor.delete_backward_word.as_slice(),
-            ),
-            (
-                keymap.editor.delete_forward_word.as_ref(),
-                editor.delete_forward_word.as_slice(),
-            ),
-            (
-                keymap.editor.kill_line_start.as_ref(),
-                editor.kill_line_start.as_slice(),
-            ),
-            (
-                keymap.editor.kill_whole_line.as_ref(),
-                editor.kill_whole_line.as_slice(),
-            ),
-            (
-                keymap.editor.kill_line_end.as_ref(),
-                editor.kill_line_end.as_slice(),
-            ),
-            (keymap.editor.yank.as_ref(), editor.yank.as_slice()),
-        ]);
-
         let mut vim_normal = VimNormalKeymap {
             enter_insert: resolve_local!(keymap, defaults, vim_normal, enter_insert),
             append_after_cursor: resolve_local!(keymap, defaults, vim_normal, append_after_cursor),
@@ -876,73 +739,20 @@ impl RuntimeKeymap {
             cancel: resolve_local!(keymap, defaults, vim_text_object, cancel),
         };
 
-        configured_main_bindings_to_preserve.extend(configured_vim_normal_bindings_to_preserve);
-        configured_main_bindings_to_preserve.extend(configured_vim_operator_bindings_to_preserve);
-        configured_main_bindings_to_preserve.extend(configured_bindings_to_preserve([
-            (
-                keymap.vim_normal.substitute_char.as_ref(),
-                vim_normal.substitute_char.as_slice(),
-            ),
-            (
-                keymap.vim_operator.select_inner_text_object.as_ref(),
-                vim_operator.select_inner_text_object.as_slice(),
-            ),
-            (
-                keymap.vim_operator.select_around_text_object.as_ref(),
-                vim_operator.select_around_text_object.as_slice(),
-            ),
-            (
-                keymap.vim_text_object.word.as_ref(),
-                vim_text_object.word.as_slice(),
-            ),
-            (
-                keymap.vim_text_object.big_word.as_ref(),
-                vim_text_object.big_word.as_slice(),
-            ),
-            (
-                keymap.vim_text_object.parentheses.as_ref(),
-                vim_text_object.parentheses.as_slice(),
-            ),
-            (
-                keymap.vim_text_object.brackets.as_ref(),
-                vim_text_object.brackets.as_slice(),
-            ),
-            (
-                keymap.vim_text_object.braces.as_ref(),
-                vim_text_object.braces.as_slice(),
-            ),
-            (
-                keymap.vim_text_object.double_quote.as_ref(),
-                vim_text_object.double_quote.as_slice(),
-            ),
-            (
-                keymap.vim_text_object.single_quote.as_ref(),
-                vim_text_object.single_quote.as_slice(),
-            ),
-            (
-                keymap.vim_text_object.backtick.as_ref(),
-                vim_text_object.backtick.as_slice(),
-            ),
-            (
-                keymap.vim_text_object.cancel.as_ref(),
-                vim_text_object.cancel.as_slice(),
-            ),
-        ]));
-
-        // Keep newly introduced compatibility aliases from invalidating or
-        // shadowing existing explicit keymaps. Explicit reasoning bindings
-        // remain authoritative.
-        if keymap.chat.decrease_reasoning_effort.is_none() {
-            chat.decrease_reasoning_effort.retain(|binding| {
-                *binding != key_hint::shift(KeyCode::Down)
-                    || !configured_main_bindings_to_preserve.contains(binding)
-            });
+        // Reasoning arrow aliases are fallback defaults: existing explicit
+        // bindings on the same input path keep the keys, while explicit
+        // reasoning bindings remain authoritative.
+        if keymap.chat.decrease_reasoning_effort.is_none()
+            && configured_main_surface_alias_is_used(keymap, "shift-down")
+        {
+            chat.decrease_reasoning_effort
+                .retain(|binding| *binding != key_hint::shift(KeyCode::Down));
         }
-        if keymap.chat.increase_reasoning_effort.is_none() {
-            chat.increase_reasoning_effort.retain(|binding| {
-                *binding != key_hint::shift(KeyCode::Up)
-                    || !configured_main_bindings_to_preserve.contains(binding)
-            });
+        if keymap.chat.increase_reasoning_effort.is_none()
+            && configured_main_surface_alias_is_used(keymap, "shift-up")
+        {
+            chat.increase_reasoning_effort
+                .retain(|binding| *binding != key_hint::shift(KeyCode::Up));
         }
 
         let pager = PagerKeymap {
@@ -2069,6 +1879,52 @@ fn configured_bindings_to_preserve<const N: usize>(
     configured_bindings
 }
 
+fn configured_main_surface_alias_is_used(keymap: &TuiKeymap, alias: &str) -> bool {
+    let mut global = keymap.global.clone();
+    if keymap.composer.submit.is_some() {
+        global.submit = None;
+    }
+    if keymap.composer.queue.is_some() {
+        global.queue = None;
+    }
+    if keymap.composer.toggle_shortcuts.is_some() {
+        global.toggle_shortcuts = None;
+    }
+
+    // Reasoning shortcuts run before composer/editor key handling, so fallback
+    // aliases must yield to any explicit binding on the same main-surface input
+    // path.
+    configured_context_alias_is_used(&global, alias)
+        || configured_context_alias_is_used(&keymap.chat, alias)
+        || configured_context_alias_is_used(&keymap.composer, alias)
+        || configured_context_alias_is_used(&keymap.editor, alias)
+        || configured_context_alias_is_used(&keymap.vim_normal, alias)
+        || configured_context_alias_is_used(&keymap.vim_operator, alias)
+        || configured_context_alias_is_used(&keymap.vim_text_object, alias)
+}
+
+fn configured_context_alias_is_used(context: &impl Serialize, alias: &str) -> bool {
+    let Ok(value) = serde_json::to_value(context) else {
+        return false;
+    };
+    keymap_value_contains_alias(&value, alias)
+}
+
+fn keymap_value_contains_alias(value: &serde_json::Value, alias: &str) -> bool {
+    match value {
+        serde_json::Value::String(value) => value == alias,
+        serde_json::Value::Array(values) => values
+            .iter()
+            .any(|value| keymap_value_contains_alias(value, alias)),
+        serde_json::Value::Object(values) => values
+            .values()
+            .any(|value| keymap_value_contains_alias(value, alias)),
+        serde_json::Value::Bool(_) | serde_json::Value::Number(_) | serde_json::Value::Null => {
+            false
+        }
+    }
+}
+
 fn resolve_new_default_bindings(
     configured: Option<&KeybindingsSpec>,
     fallback: &[KeyBinding],
@@ -2440,87 +2296,14 @@ mod tests {
     }
 
     #[test]
-    fn configured_editor_bindings_prune_new_reasoning_default_overlaps() {
+    fn configured_main_surface_bindings_prune_reasoning_fallback_aliases() {
         let mut keymap = TuiKeymap::default();
         keymap.editor.move_up = Some(one("shift-up"));
-        keymap.editor.move_down = Some(one("shift-down"));
-
-        let runtime = RuntimeKeymap::from_config(&keymap).expect("config should parse");
-
-        assert_eq!(runtime.editor.move_up, vec![key_hint::shift(KeyCode::Up)]);
-        assert_eq!(
-            runtime.editor.move_down,
-            vec![key_hint::shift(KeyCode::Down)]
-        );
-        assert_eq!(
-            runtime.chat.decrease_reasoning_effort,
-            vec![key_hint::alt(KeyCode::Char(','))]
-        );
-        assert_eq!(
-            runtime.chat.increase_reasoning_effort,
-            vec![key_hint::alt(KeyCode::Char('.'))]
-        );
-    }
-
-    #[test]
-    fn explicit_new_reasoning_binding_still_conflicts_with_editor_binding() {
-        let mut keymap = TuiKeymap::default();
-        keymap.editor.move_up = Some(one("shift-up"));
-        keymap.chat.increase_reasoning_effort = Some(one("shift-up"));
-
-        expect_conflict(&keymap, "chat.increase_reasoning_effort", "editor.move_up");
-    }
-
-    #[test]
-    fn configured_vim_normal_bindings_prune_new_reasoning_default_overlaps() {
-        let mut keymap = TuiKeymap::default();
-        keymap.vim_normal.move_up = Some(one("shift-up"));
-        keymap.vim_normal.move_down = Some(one("shift-down"));
-
-        let runtime = RuntimeKeymap::from_config(&keymap).expect("config should parse");
-
-        assert_eq!(
-            runtime.vim_normal.move_up,
-            vec![key_hint::shift(KeyCode::Up)]
-        );
-        assert_eq!(
-            runtime.vim_normal.move_down,
-            vec![key_hint::shift(KeyCode::Down)]
-        );
-        assert_eq!(
-            runtime.chat.decrease_reasoning_effort,
-            vec![key_hint::alt(KeyCode::Char(','))]
-        );
-        assert_eq!(
-            runtime.chat.increase_reasoning_effort,
-            vec![key_hint::alt(KeyCode::Char('.'))]
-        );
-    }
-
-    #[test]
-    fn configured_vim_operator_binding_prunes_new_reasoning_default_overlap() {
-        let mut keymap = TuiKeymap::default();
-        keymap.vim_operator.select_inner_text_object = Some(one("shift-up"));
-
-        let runtime = RuntimeKeymap::from_config(&keymap).expect("config should parse");
-
-        assert_eq!(
-            runtime.vim_operator.select_inner_text_object,
-            vec![key_hint::shift(KeyCode::Up)]
-        );
-        assert_eq!(
-            runtime.chat.increase_reasoning_effort,
-            vec![key_hint::alt(KeyCode::Char('.'))]
-        );
-    }
-
-    #[test]
-    fn configured_vim_text_object_binding_prunes_new_reasoning_default_overlap() {
-        let mut keymap = TuiKeymap::default();
         keymap.vim_text_object.word = Some(one("shift-down"));
 
         let runtime = RuntimeKeymap::from_config(&keymap).expect("config should parse");
 
+        assert_eq!(runtime.editor.move_up, vec![key_hint::shift(KeyCode::Up)]);
         assert_eq!(
             runtime.vim_text_object.word,
             vec![key_hint::shift(KeyCode::Down)]
@@ -2529,6 +2312,19 @@ mod tests {
             runtime.chat.decrease_reasoning_effort,
             vec![key_hint::alt(KeyCode::Char(','))]
         );
+        assert_eq!(
+            runtime.chat.increase_reasoning_effort,
+            vec![key_hint::alt(KeyCode::Char('.'))]
+        );
+    }
+
+    #[test]
+    fn explicit_reasoning_binding_still_conflicts_with_editor_binding() {
+        let mut keymap = TuiKeymap::default();
+        keymap.editor.move_up = Some(one("shift-up"));
+        keymap.chat.increase_reasoning_effort = Some(one("shift-up"));
+
+        expect_conflict(&keymap, "chat.increase_reasoning_effort", "editor.move_up");
     }
 
     #[test]
