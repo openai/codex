@@ -761,6 +761,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 thread_id: conversation_id.to_string(),
                 turn_id: request.turn_id.clone(),
                 item_id: request.call_id.clone(),
+                environment_id: request.environment_id.clone(),
                 started_at_ms: request.started_at_ms,
                 cwd: request_cwd.clone(),
                 reason: request.reason,

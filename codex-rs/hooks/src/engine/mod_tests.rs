@@ -120,12 +120,12 @@ fn requirements_with_managed_hooks_only(
         ConfigRequirements {
             allow_managed_hooks_only: Some(Sourced::new(
                 allow_managed_hooks_only,
-                RequirementSource::CloudRequirements,
+                RequirementSource::LegacyManagedConfigTomlFromMdm,
             )),
             managed_hooks: managed_hooks.clone().map(|hooks| {
                 ConstrainedWithSource::new(
                     Constrained::allow_any(hooks),
-                    Some(RequirementSource::CloudRequirements),
+                    Some(RequirementSource::LegacyManagedConfigTomlFromMdm),
                 )
             }),
             ..ConfigRequirements::default()
@@ -183,7 +183,7 @@ with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
         ConfigRequirements {
             managed_hooks: Some(ConstrainedWithSource::new(
                 Constrained::allow_any(managed_hooks.clone()),
-                Some(RequirementSource::CloudRequirements),
+                Some(RequirementSource::LegacyManagedConfigTomlFromMdm),
             )),
             ..ConfigRequirements::default()
         },
@@ -208,7 +208,10 @@ with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
 
     assert!(engine.warnings().is_empty());
     assert_eq!(engine.handlers.len(), 1);
-    assert_eq!(engine.handlers[0].source, HookSource::CloudRequirements);
+    assert_eq!(
+        engine.handlers[0].source,
+        HookSource::LegacyManagedConfigMdm
+    );
     let listed = crate::list_hooks(crate::HooksConfig {
         legacy_notify_argv: None,
         feature_enabled: true,
@@ -286,7 +289,7 @@ async fn requirements_managed_hooks_execute_windows_command_override() {
         ConfigRequirements {
             managed_hooks: Some(ConstrainedWithSource::new(
                 Constrained::allow_any(managed_hooks.clone()),
-                Some(RequirementSource::CloudRequirements),
+                Some(RequirementSource::LegacyManagedConfigTomlFromMdm),
             )),
             ..ConfigRequirements::default()
         },
@@ -447,7 +450,7 @@ fn user_disablement_filters_non_managed_hooks_but_not_managed_hooks() {
         ConfigRequirements {
             managed_hooks: Some(ConstrainedWithSource::new(
                 Constrained::allow_any(managed_hooks.clone()),
-                Some(RequirementSource::CloudRequirements),
+                Some(RequirementSource::LegacyManagedConfigTomlFromMdm),
             )),
             ..ConfigRequirements::default()
         },
@@ -471,7 +474,10 @@ fn user_disablement_filters_non_managed_hooks_but_not_managed_hooks() {
     );
 
     assert_eq!(engine.handlers.len(), 1);
-    assert_eq!(engine.handlers[0].source, HookSource::CloudRequirements);
+    assert_eq!(
+        engine.handlers[0].source,
+        HookSource::LegacyManagedConfigMdm
+    );
     let discovered = super::discovery::discover_handlers(
         Some(&config_layer_stack),
         Vec::new(),
@@ -671,7 +677,7 @@ fn requirements_managed_hooks_load_when_managed_dir_is_missing() {
         ConfigRequirements {
             managed_hooks: Some(ConstrainedWithSource::new(
                 Constrained::allow_any(managed_hooks.clone()),
-                Some(RequirementSource::CloudRequirements),
+                Some(RequirementSource::LegacyManagedConfigTomlFromMdm),
             )),
             ..ConfigRequirements::default()
         },
@@ -1237,7 +1243,12 @@ print(json.dumps({
 
     assert_eq!(outcome.hook_events.len(), 1);
     assert_eq!(outcome.hook_events[0].run.source, HookSource::Plugin);
-    assert_eq!(outcome.hook_events[0].run.status, HookRunStatus::Completed);
+    assert_eq!(
+        outcome.hook_events[0].run.status,
+        HookRunStatus::Completed,
+        "hook entries: {:#?}",
+        outcome.hook_events[0].run.entries
+    );
     assert_eq!(outcome.hook_events[0].run.entries.len(), 1);
     assert_eq!(
         outcome.hook_events[0].run.entries[0].kind,
