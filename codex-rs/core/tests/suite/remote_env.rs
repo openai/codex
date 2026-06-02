@@ -421,7 +421,7 @@ async fn remote_request_permissions_grant_unblocks_later_remote_exec() -> Result
                     "permissions-call",
                     "request_permissions",
                     &json!({
-                        "environmentId": REMOTE_ENVIRONMENT_ID,
+                        "environment_id": REMOTE_ENVIRONMENT_ID,
                         "reason": "Allow writing inside the selected remote environment",
                         "permissions": {
                             "file_system": {
