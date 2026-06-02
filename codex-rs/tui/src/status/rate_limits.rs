@@ -414,10 +414,8 @@ mod tests {
     use super::CreditsSnapshotDisplay;
     use super::RateLimitSnapshotDisplay;
     use super::RateLimitWindowDisplay;
-    use super::SpendControlLimitSnapshotDisplay;
     use super::StatusRateLimitData;
     use super::compose_rate_limit_data_many;
-    use chrono::Duration as ChronoDuration;
     use chrono::Local;
     use pretty_assertions::assert_eq;
 
@@ -508,29 +506,5 @@ mod tests {
                 "Secondary usage limit".to_string(),
             ]
         );
-    }
-
-    #[test]
-    fn stale_monthly_limit_marks_fresh_rolling_snapshot_stale() {
-        let now = Local::now();
-        let snapshot = RateLimitSnapshotDisplay {
-            limit_name: "codex".to_string(),
-            captured_at: now,
-            primary: Some(window(/*used_percent*/ 20.0)),
-            secondary: None,
-            credits: None,
-            individual_limit: Some(SpendControlLimitSnapshotDisplay {
-                captured_at: now - ChronoDuration::minutes(20),
-                percent_remaining: 68.0,
-                used: "8,000".to_string(),
-                limit: "25,000".to_string(),
-                resets_at: Some("later".to_string()),
-            }),
-        };
-
-        assert!(matches!(
-            compose_rate_limit_data_many(&[snapshot], now),
-            StatusRateLimitData::Stale(_)
-        ));
     }
 }

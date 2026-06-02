@@ -2,6 +2,11 @@ use super::new_status_output;
 use super::new_status_output_with_rate_limits;
 use super::new_status_output_with_rate_limits_handle;
 use super::rate_limit_snapshot_display;
+use super::rate_limits::RateLimitSnapshotDisplay;
+use super::rate_limits::RateLimitWindowDisplay;
+use super::rate_limits::SpendControlLimitSnapshotDisplay;
+use super::rate_limits::StatusRateLimitData;
+use super::rate_limits::compose_rate_limit_data_many;
 use crate::history_cell::HistoryCell;
 use crate::legacy_core::config::Config;
 use crate::legacy_core::config::ConfigBuilder;
@@ -13,6 +18,7 @@ use crate::test_support::test_path_buf;
 use crate::token_usage::TokenUsage;
 use crate::token_usage::TokenUsageInfo;
 use chrono::Duration as ChronoDuration;
+use chrono::Local;
 use chrono::TimeZone;
 use chrono::Utc;
 use codex_app_server_protocol::AskForApproval;
@@ -41,6 +47,34 @@ use insta::assert_snapshot;
 use pretty_assertions::assert_eq;
 use ratatui::prelude::*;
 use tempfile::TempDir;
+
+#[test]
+fn stale_monthly_limit_marks_fresh_rolling_snapshot_stale() {
+    let now = Local::now();
+    let snapshot = RateLimitSnapshotDisplay {
+        limit_name: "codex".to_string(),
+        captured_at: now,
+        primary: Some(RateLimitWindowDisplay {
+            used_percent: 20.0,
+            resets_at: Some("soon".to_string()),
+            window_minutes: Some(300),
+        }),
+        secondary: None,
+        credits: None,
+        individual_limit: Some(SpendControlLimitSnapshotDisplay {
+            captured_at: now - ChronoDuration::minutes(20),
+            percent_remaining: 68.0,
+            used: "8,000".to_string(),
+            limit: "25,000".to_string(),
+            resets_at: Some("later".to_string()),
+        }),
+    };
+
+    assert!(matches!(
+        compose_rate_limit_data_many(&[snapshot], now),
+        StatusRateLimitData::Stale(_)
+    ));
+}
 
 fn app_server_workspace_write_profile(network_enabled: bool) -> PermissionProfile {
     PermissionProfile::Managed {
