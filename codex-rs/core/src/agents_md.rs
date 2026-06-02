@@ -75,7 +75,7 @@ impl<'a> AgentsMdManager<'a> {
             let contents = String::from_utf8_lossy(&data);
             let trimmed = contents.trim();
             if !trimmed.is_empty() {
-                return Some(LoadedAgentsMd::new(trimmed.to_string(), path));
+                return Some(LoadedAgentsMd::new_user(trimmed.to_string(), path));
             }
         }
         None
@@ -327,7 +327,7 @@ pub struct LoadedAgentsMd {
 
 impl LoadedAgentsMd {
     /// Creates loaded instructions containing one user-level AGENTS.md entry.
-    pub fn new(contents: String, path: AbsolutePathBuf) -> Self {
+    pub fn new_user(contents: String, path: AbsolutePathBuf) -> Self {
         if contents.is_empty() {
             return Self::default();
         }

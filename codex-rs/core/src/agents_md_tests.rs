@@ -55,7 +55,7 @@ async fn make_config(root: &TempDir, limit: usize, instructions: Option<&str>) -
     config.project_doc_max_bytes = limit;
 
     config.user_instructions = instructions.map(|text| {
-        LoadedAgentsMd::new(
+        LoadedAgentsMd::new_user(
             text.to_owned(),
             config.codex_home.join(DEFAULT_AGENTS_MD_FILENAME),
         )
@@ -103,7 +103,7 @@ async fn make_config_with_project_root_markers(
     config.cwd = root.abs();
     config.project_doc_max_bytes = limit;
     config.user_instructions = instructions.map(|text| {
-        LoadedAgentsMd::new(
+        LoadedAgentsMd::new_user(
             text.to_owned(),
             config.codex_home.join(DEFAULT_AGENTS_MD_FILENAME),
         )
@@ -132,7 +132,7 @@ fn empty_loaded_instructions_are_empty() {
         AbsolutePathBuf::from_absolute_path("/tmp/AGENTS.md").expect("absolute source path");
 
     assert_eq!(
-        LoadedAgentsMd::new(String::new(), source),
+        LoadedAgentsMd::new_user(String::new(), source),
         LoadedAgentsMd::default()
     );
     assert_eq!(
@@ -176,7 +176,7 @@ async fn global_doc_invalid_utf8_warns_and_uses_lossy_text() {
 
     assert_eq!(
         loaded,
-        LoadedAgentsMd::new("global\u{FFFD} doc".to_string(), path.clone())
+        LoadedAgentsMd::new_user("global\u{FFFD} doc".to_string(), path.clone())
     );
     assert_invalid_utf8_warning(&warnings, "Global", path.as_path());
 }
