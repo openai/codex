@@ -34,8 +34,8 @@ jobs:
             exit 1
           fi
 
-          # The pinned runtime currently publishes a musllinux Linux wheel.
-          # Build in Alpine so release type generation installs that wheel.
+          # Build in a glibc Linux image so release type generation installs
+          # the pinned manylinux runtime wheel.
           docker run --rm \
             --user "$(id -u):$(id -g)" \
             -e HOME=/tmp/codex-python-sdk-home \
@@ -46,7 +46,7 @@ jobs:
             -v "${GITHUB_WORKSPACE}:${GITHUB_WORKSPACE}" \
             -v "${RUNNER_TEMP}:${RUNNER_TEMP}" \
             -w "${GITHUB_WORKSPACE}/sdk/python" \
-            python:3.12-alpine \
+            python:3.12-slim \
             sh -euxc '
               python -m venv /tmp/release-tools
               /tmp/release-tools/bin/python -m pip install build twine uv==0.11.3
