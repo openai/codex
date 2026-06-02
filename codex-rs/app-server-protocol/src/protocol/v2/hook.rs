@@ -51,6 +51,7 @@ v2_enum_from_core!(
         CloudManagedConfig,
         LegacyManagedConfigFile,
         LegacyManagedConfigMdm,
+        AppBundledInternal,
         Unknown,
     }
 );

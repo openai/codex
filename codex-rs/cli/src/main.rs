@@ -495,6 +495,14 @@ struct AppServerCommand {
     #[arg(long = "remote-control", hide = true)]
     remote_control: bool,
 
+    /// Host-owned packaged plugin root for first-class app-bundled internal hooks.
+    #[arg(
+        long = "app-bundled-internal-plugin-root",
+        value_name = "PLUGIN_ID=PATH",
+        hide = true
+    )]
+    app_bundled_internal_plugin_roots: Vec<codex_app_server::AppBundledInternalPlugin>,
+
     /// Controls whether analytics are enabled by default.
     ///
     /// Analytics are disabled by default for app-server. Users have to explicitly opt in
@@ -1039,6 +1047,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 listen,
                 stdio,
                 remote_control,
+                app_bundled_internal_plugin_roots,
                 analytics_default_enabled,
                 auth,
             } = app_server_cli;
@@ -1059,6 +1068,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                     let auth = auth.try_into_settings()?;
                     let runtime_options = codex_app_server::AppServerRuntimeOptions {
                         remote_control_enabled: remote_control,
+                        app_bundled_internal_plugins: app_bundled_internal_plugin_roots,
                         ..Default::default()
                     };
                     codex_app_server::run_main_with_transport_options(

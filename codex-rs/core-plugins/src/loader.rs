@@ -1,4 +1,6 @@
 use crate::OPENAI_CURATED_MARKETPLACE_NAME;
+use crate::app_bundled_internal::AppBundledInternalPlugin;
+use crate::app_bundled_internal::apply_app_bundled_internal_hook_authority;
 use crate::manifest::PluginManifestHooks;
 use crate::manifest::PluginManifestPaths;
 use crate::manifest::load_plugin_manifest;
@@ -25,6 +27,7 @@ use codex_plugin::AppConnectorId;
 use codex_plugin::LoadedPlugin;
 use codex_plugin::PluginCapabilitySummary;
 use codex_plugin::PluginHookSource;
+use codex_plugin::PluginHookSourceKind;
 use codex_plugin::PluginId;
 use codex_plugin::PluginIdError;
 use codex_plugin::PluginLoadOutcome;
@@ -115,6 +118,7 @@ pub async fn load_plugins_from_layer_stack(
     store: &PluginStore,
     restriction_product: Option<Product>,
     prefer_remote_curated_conflicts: bool,
+    app_bundled_internal_plugins: &[AppBundledInternalPlugin],
 ) -> PluginLoadOutcome<McpServerConfig> {
     let skill_config_rules = skill_config_rules_from_stack(config_layer_stack);
     let configured_plugins = merge_configured_plugins_with_remote_installed(
@@ -135,6 +139,7 @@ pub async fn load_plugins_from_layer_stack(
             store,
             restriction_product,
             &skill_config_rules,
+            app_bundled_internal_plugins,
         )
         .await;
         for name in loaded_plugin.mcp_servers.keys() {
@@ -559,6 +564,7 @@ async fn load_plugin(
     store: &PluginStore,
     restriction_product: Option<Product>,
     skill_config_rules: &SkillConfigRules,
+    app_bundled_internal_plugins: &[AppBundledInternalPlugin],
 ) -> LoadedPlugin<McpServerConfig> {
     let plugin_id = PluginId::parse(&config_name);
     let active_plugin_root = plugin_id
@@ -661,6 +667,14 @@ async fn load_plugin(
         &loaded_plugin_id,
         &store.plugin_data_root(&loaded_plugin_id),
         manifest_paths,
+    );
+    let (hook_sources, hook_load_warnings) = apply_app_bundled_internal_hook_authority(
+        &loaded_plugin_id,
+        &plugin_root,
+        &store.plugin_data_root(&loaded_plugin_id),
+        hook_sources,
+        hook_load_warnings,
+        app_bundled_internal_plugins,
     );
     loaded_plugin.hook_sources = hook_sources;
     loaded_plugin.hook_load_warnings = hook_load_warnings;
@@ -854,6 +868,7 @@ pub fn load_plugin_hooks(
                     source_path: manifest_path.clone(),
                     source_relative_path: format!("plugin.json#hooks[{index}]"),
                     hooks: hooks_file.hooks.clone(),
+                    kind: PluginHookSourceKind::UserReviewed,
                 });
             }
         }
@@ -922,6 +937,7 @@ fn append_plugin_hook_file(
         source_path: path.clone(),
         source_relative_path,
         hooks: parsed.hooks,
+        kind: PluginHookSourceKind::UserReviewed,
     });
 }
 

@@ -1400,6 +1400,7 @@ pub enum HookSource {
     CloudManagedConfig,
     LegacyManagedConfigFile,
     LegacyManagedConfigMdm,
+    AppBundledInternal,
     #[default]
     Unknown,
 }

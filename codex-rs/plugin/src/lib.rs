@@ -37,6 +37,14 @@ pub struct PluginHookSource {
     pub source_path: AbsolutePathBuf,
     pub source_relative_path: String,
     pub hooks: HookEventsToml,
+    pub kind: PluginHookSourceKind,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub enum PluginHookSourceKind {
+    #[default]
+    UserReviewed,
+    AppBundledInternal,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -82,6 +82,7 @@ use codex_config::LoaderOverrides;
 use codex_config::ThreadConfigLoader;
 use codex_core::config::Config;
 use codex_core::resolve_installation_id;
+use codex_core_plugins::AppBundledInternalPlugin;
 use codex_exec_server::EnvironmentManager;
 use codex_feedback::CodexFeedback;
 use codex_login::AuthManager;
@@ -146,6 +147,8 @@ pub struct InProcessStartArgs {
     pub initialize: InitializeParams,
     /// Capacity used for all runtime queues (clamped to at least 1).
     pub channel_capacity: usize,
+    /// Host-owned app-packaged plugin roots allowed to authorize internal hooks.
+    pub app_bundled_internal_plugins: Vec<AppBundledInternalPlugin>,
 }
 
 /// Event emitted from the app-server to the in-process client.
@@ -438,6 +441,7 @@ async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClie
                 rpc_transport: AppServerRpcTransport::InProcess,
                 remote_control_handle: None,
                 plugin_startup_tasks: crate::PluginStartupTasks::Start,
+                app_bundled_internal_plugins: args.app_bundled_internal_plugins,
             }));
             let mut thread_created_rx = processor.thread_created_receiver();
             let session = Arc::new(ConnectionSessionState::new());
@@ -790,6 +794,7 @@ mod tests {
                 capabilities: None,
             },
             channel_capacity,
+            app_bundled_internal_plugins: Vec::new(),
         };
         let mut client = start(args).await.expect("in-process runtime should start");
         client._test_codex_home = Some(codex_home);

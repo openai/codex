@@ -18,6 +18,7 @@ use codex_config::RequirementSource;
 use codex_config::Sourced;
 use codex_config::TomlValue;
 use codex_plugin::PluginHookSource;
+use codex_plugin::PluginHookSourceKind;
 use codex_plugin::PluginId;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::HookOutputEntry;
@@ -894,6 +895,7 @@ fn allow_managed_hooks_only_skips_unmanaged_plugin_hooks() {
         source_path,
         source_relative_path: "hooks/hooks.json".to_string(),
         hooks: pre_tool_use_hook_events("python3 /tmp/plugin-hook.py"),
+        kind: PluginHookSourceKind::UserReviewed,
     }];
     let (requirements, requirements_toml) = requirements_with_managed_hooks_only(
         /*allow_managed_hooks_only*/ true, /*managed_hooks*/ None,
@@ -915,6 +917,87 @@ fn allow_managed_hooks_only_skips_unmanaged_plugin_hooks() {
 
     assert!(engine.handlers.is_empty());
     assert!(engine.warnings().is_empty());
+}
+
+#[test]
+fn app_bundled_internal_plugin_hooks_are_managed_and_hidden_from_listing() {
+    let temp = tempdir().expect("create temp dir");
+    let plugin_root =
+        AbsolutePathBuf::try_from(temp.path().join("computer-use")).expect("plugin root");
+    let plugin_data_root =
+        AbsolutePathBuf::try_from(temp.path().join("plugin-data")).expect("plugin data root");
+    let source_path = plugin_root.join("hooks/hooks.json");
+    let plugin_id = PluginId::parse("computer-use@openai-bundled").expect("plugin id");
+    let disabled_key = "computer-use@openai-bundled:hooks/hooks.json:pre_tool_use:0:0";
+    let plugin_hook_sources = vec![PluginHookSource {
+        plugin_id,
+        plugin_root,
+        plugin_data_root,
+        source_path,
+        source_relative_path: "hooks/hooks.json".to_string(),
+        hooks: pre_tool_use_hook_events("python3 /tmp/internal-plugin-hook.py"),
+        kind: PluginHookSourceKind::AppBundledInternal,
+    }];
+    let (requirements, requirements_toml) = requirements_with_managed_hooks_only(
+        /*allow_managed_hooks_only*/ true, /*managed_hooks*/ None,
+    );
+    let config_layer_stack = ConfigLayerStack::new(
+        vec![ConfigLayerEntry::new(
+            ConfigLayerSource::User {
+                file: AbsolutePathBuf::try_from(temp.path().join("config.toml"))
+                    .expect("absolute config path"),
+                profile: None,
+            },
+            config_with_hook_state(disabled_key, /*enabled*/ false),
+        )],
+        requirements,
+        requirements_toml,
+    )
+    .expect("config layer stack");
+
+    let engine = ClaudeHooksEngine::new(
+        /*enabled*/ true,
+        /*bypass_hook_trust*/ false,
+        Some(&config_layer_stack),
+        plugin_hook_sources.clone(),
+        Vec::new(),
+        CommandShell {
+            program: String::new(),
+            args: Vec::new(),
+        },
+    );
+
+    assert!(engine.warnings().is_empty());
+    assert_eq!(engine.handlers.len(), 1);
+    assert_eq!(engine.handlers[0].source, HookSource::AppBundledInternal);
+    let preview = engine.preview_pre_tool_use(&PreToolUseRequest {
+        session_id: ThreadId::new(),
+        turn_id: "turn-1".to_string(),
+        subagent: None,
+        cwd: cwd(),
+        transcript_path: None,
+        model: "gpt-test".to_string(),
+        permission_mode: "default".to_string(),
+        tool_name: "Bash".to_string(),
+        matcher_aliases: Vec::new(),
+        tool_use_id: "tool-1".to_string(),
+        tool_input: serde_json::json!({ "command": "echo hello" }),
+    });
+    assert_eq!(preview.len(), 1);
+    assert_eq!(preview[0].source, HookSource::AppBundledInternal);
+
+    let listed = crate::list_hooks(crate::HooksConfig {
+        legacy_notify_argv: None,
+        feature_enabled: true,
+        bypass_hook_trust: false,
+        config_layer_stack: Some(config_layer_stack),
+        plugin_hook_sources,
+        plugin_hook_load_warnings: Vec::new(),
+        shell_program: None,
+        shell_args: Vec::new(),
+    });
+    assert_eq!(listed.hooks, Vec::new());
+    assert_eq!(listed.warnings, Vec::<String>::new());
 }
 
 #[test]
@@ -1171,6 +1254,7 @@ print(json.dumps({
             }],
             ..Default::default()
         },
+        kind: PluginHookSourceKind::UserReviewed,
     }];
     let config_layer_stack = trusted_plugin_hook_stack(
         AbsolutePathBuf::try_from(temp.path().join("config.toml")).expect("absolute config path"),
@@ -1285,6 +1369,7 @@ fn plugin_hook_sources_expand_plugin_placeholders() {
             }],
             ..Default::default()
         },
+        kind: PluginHookSourceKind::UserReviewed,
     }];
     let config_layer_stack = trusted_plugin_hook_stack(
         AbsolutePathBuf::try_from(temp.path().join("config.toml")).expect("absolute config path"),

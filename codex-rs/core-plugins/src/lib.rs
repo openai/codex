@@ -1,3 +1,4 @@
+mod app_bundled_internal;
 pub mod installed_marketplaces;
 pub mod loader;
 mod manager;
@@ -42,6 +43,7 @@ pub const TOOL_SUGGEST_DISCOVERABLE_PLUGIN_ALLOWLIST: &[&str] = &[
 pub type LoadedPlugin = codex_plugin::LoadedPlugin<codex_config::McpServerConfig>;
 pub type PluginLoadOutcome = codex_plugin::PluginLoadOutcome<codex_config::McpServerConfig>;
 
+pub use app_bundled_internal::AppBundledInternalPlugin;
 pub use manager::ConfiguredMarketplace;
 pub use manager::ConfiguredMarketplaceListOutcome;
 pub use manager::ConfiguredMarketplacePlugin;

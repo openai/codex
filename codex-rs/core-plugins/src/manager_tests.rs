@@ -3816,6 +3816,7 @@ async fn load_plugins_ignores_project_config_files() {
         &PluginStore::new(codex_home.path().to_path_buf()),
         Some(Product::Codex),
         /*prefer_remote_curated_conflicts*/ false,
+        &[],
     )
     .await;
 

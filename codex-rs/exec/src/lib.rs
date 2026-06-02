@@ -549,6 +549,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         experimental_api: true,
         opt_out_notification_methods: Vec::new(),
         channel_capacity: DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
+        app_bundled_internal_plugins: Vec::new(),
     };
     run_exec_session(ExecRunArgs {
         in_process_start_args,

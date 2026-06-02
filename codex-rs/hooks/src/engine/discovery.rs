@@ -17,6 +17,7 @@ use codex_config::RequirementSource;
 use codex_config::TomlValue;
 use codex_config::version_for_toml;
 use codex_plugin::PluginHookSource;
+use codex_plugin::PluginHookSourceKind;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Deserialize;
 use serde::Serialize;
@@ -41,6 +42,7 @@ struct HookHandlerSource<'a> {
     key_source: String,
     source: HookSource,
     is_managed: bool,
+    include_in_hook_list: bool,
     bypass_hook_trust: bool,
     hook_states: &'a HashMap<String, HookStateToml>,
     env: HashMap<String, String>,
@@ -103,6 +105,7 @@ pub(crate) fn discover_handlers(
                 key_source: policy_path.display().to_string(),
                 source: hook_source,
                 is_managed,
+                include_in_hook_list: true,
                 bypass_hook_trust: false,
                 hook_states: &hook_states,
                 env: HashMap::new(),
@@ -137,6 +140,7 @@ pub(crate) fn discover_handlers(
                         key_source: source_path.display().to_string(),
                         source: hook_source,
                         is_managed,
+                        include_in_hook_list: true,
                         bypass_hook_trust: policy.bypass_hook_trust,
                         hook_states: &hook_states,
                         env: HashMap::new(),
@@ -189,6 +193,7 @@ fn append_managed_requirement_handlers(
             key_source: source_path.display().to_string(),
             source: hook_source_for_requirement_source(managed_hooks.source.as_ref()),
             is_managed: true,
+            include_in_hook_list: true,
             bypass_hook_trust: false,
             hook_states,
             env: HashMap::new(),
@@ -216,7 +221,14 @@ fn append_plugin_hook_sources(
             source_path,
             source_relative_path,
             hooks,
+            kind,
         } = source;
+        let (hook_source, is_managed, include_in_hook_list) = match kind {
+            PluginHookSourceKind::UserReviewed => (HookSource::Plugin, false, true),
+            PluginHookSourceKind::AppBundledInternal => {
+                (HookSource::AppBundledInternal, true, false)
+            }
+        };
         let mut env = HashMap::new();
         let plugin_root_value = plugin_root.display().to_string();
         let plugin_data_root_value = plugin_data_root.display().to_string();
@@ -238,8 +250,9 @@ fn append_plugin_hook_sources(
                     plugin_id.as_str(),
                     source_relative_path.as_str(),
                 ),
-                source: HookSource::Plugin,
-                is_managed: false,
+                source: hook_source,
+                is_managed,
+                include_in_hook_list,
                 bypass_hook_trust: policy.bypass_hook_trust,
                 hook_states,
                 env,
@@ -503,23 +516,25 @@ fn append_matcher_groups(
                     let trusted_hash = hook_trusted_hash(source.is_managed, state);
                     let trust_status =
                         hook_trust_status(source.is_managed, &current_hash, trusted_hash);
-                    hook_entries.push(HookListEntry {
-                        key,
-                        event_name,
-                        handler_type: HookHandlerType::Command,
-                        matcher: matcher.map(ToOwned::to_owned),
-                        command: Some(command.clone()),
-                        timeout_sec,
-                        status_message: status_message.clone(),
-                        source_path: source.path.clone(),
-                        source: source.source,
-                        plugin_id: source.plugin_id.clone(),
-                        display_order: *display_order,
-                        enabled,
-                        is_managed: source.is_managed,
-                        current_hash,
-                        trust_status,
-                    });
+                    if source.include_in_hook_list {
+                        hook_entries.push(HookListEntry {
+                            key,
+                            event_name,
+                            handler_type: HookHandlerType::Command,
+                            matcher: matcher.map(ToOwned::to_owned),
+                            command: Some(command.clone()),
+                            timeout_sec,
+                            status_message: status_message.clone(),
+                            source_path: source.path.clone(),
+                            source: source.source,
+                            plugin_id: source.plugin_id.clone(),
+                            display_order: *display_order,
+                            enabled,
+                            is_managed: source.is_managed,
+                            current_hash,
+                            trust_status,
+                        });
+                    }
                     if enabled
                         && (source.bypass_hook_trust
                             || matches!(
@@ -686,6 +701,7 @@ mod tests {
             key_source: path.display().to_string(),
             source: hook_source(),
             is_managed: true,
+            include_in_hook_list: true,
             bypass_hook_trust: false,
             hook_states,
             env: std::collections::HashMap::new(),
@@ -703,6 +719,7 @@ mod tests {
             key_source: path.display().to_string(),
             source: HookSource::User,
             is_managed: false,
+            include_in_hook_list: true,
             bypass_hook_trust,
             hook_states,
             env: std::collections::HashMap::new(),
