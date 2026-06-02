@@ -328,6 +328,9 @@ pub struct LoadedAgentsMd {
 impl LoadedAgentsMd {
     /// Creates loaded instructions containing one user-level AGENTS.md entry.
     pub fn new(contents: String, path: AbsolutePathBuf) -> Self {
+        if contents.is_empty() {
+            return Self::default();
+        }
         Self {
             instructions: vec![LoadedInstruction {
                 contents,
@@ -338,6 +341,9 @@ impl LoadedAgentsMd {
 
     /// Creates source-less user instructions.
     pub fn from_text(contents: String) -> Self {
+        if contents.is_empty() {
+            return Self::default();
+        }
         Self {
             instructions: vec![LoadedInstruction {
                 contents,

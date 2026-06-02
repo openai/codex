@@ -126,6 +126,21 @@ async fn no_doc_file_returns_none() {
     assert!(res.is_none(), "Expected None when AGENTS.md is absent");
 }
 
+#[test]
+fn empty_loaded_instructions_are_empty() {
+    let source =
+        AbsolutePathBuf::from_absolute_path("/tmp/AGENTS.md").expect("absolute source path");
+
+    assert_eq!(
+        LoadedAgentsMd::new(String::new(), source),
+        LoadedAgentsMd::default()
+    );
+    assert_eq!(
+        LoadedAgentsMd::from_text(String::new()),
+        LoadedAgentsMd::default()
+    );
+}
+
 /// Small file within the byte-limit is returned unmodified.
 #[tokio::test]
 async fn doc_smaller_than_limit_is_returned() {
