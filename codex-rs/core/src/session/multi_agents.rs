@@ -12,6 +12,10 @@ pub(super) fn usage_hint_text<'a>(
     }
 
     let multi_agent_v2 = &turn_context.config.multi_agent_v2;
+    if !multi_agent_v2.usage_hint_enabled {
+        return None;
+    }
+
     match session_source {
         SessionSource::SubAgent(SubAgentSource::ThreadSpawn { .. }) => {
             multi_agent_v2.subagent_usage_hint_text.as_deref()

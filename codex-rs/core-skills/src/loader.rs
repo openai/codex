@@ -235,6 +235,7 @@ pub(crate) async fn skill_roots(
     config_layer_stack: &ConfigLayerStack,
     cwd: &AbsolutePathBuf,
     plugin_skill_roots: Vec<PluginSkillRoot>,
+    extra_skill_roots: Vec<AbsolutePathBuf>,
 ) -> Vec<SkillRoot> {
     let home_dir =
         home_dir().and_then(|path| AbsolutePathBuf::from_absolute_path_checked(path).ok());
@@ -244,6 +245,7 @@ pub(crate) async fn skill_roots(
         cwd,
         home_dir.as_ref(),
         plugin_skill_roots,
+        extra_skill_roots,
     )
     .await
 }
@@ -254,6 +256,7 @@ async fn skill_roots_with_home_dir(
     cwd: &AbsolutePathBuf,
     home_dir: Option<&AbsolutePathBuf>,
     plugin_skill_roots: Vec<PluginSkillRoot>,
+    extra_skill_roots: Vec<AbsolutePathBuf>,
 ) -> Vec<SkillRoot> {
     let mut roots = skill_roots_from_layer_stack_inner(config_layer_stack, home_dir, fs.clone());
     roots.extend(plugin_skill_roots.into_iter().map(|root| SkillRoot {
@@ -262,6 +265,13 @@ async fn skill_roots_with_home_dir(
         file_system: Arc::clone(&LOCAL_FS),
         plugin_id: Some(root.plugin_id),
         plugin_root: Some(root.plugin_root),
+    }));
+    roots.extend(extra_skill_roots.into_iter().map(|path| SkillRoot {
+        path,
+        scope: SkillScope::User,
+        file_system: Arc::clone(&LOCAL_FS),
+        plugin_id: None,
+        plugin_root: None,
     }));
     roots.extend(repo_agents_skill_roots(fs, config_layer_stack, cwd).await);
     dedupe_skill_roots_by_path(&mut roots);
@@ -339,6 +349,7 @@ fn skill_roots_from_layer_stack_inner(
                 });
             }
             ConfigLayerSource::Mdm { .. }
+            | ConfigLayerSource::EnterpriseManaged { .. }
             | ConfigLayerSource::SessionFlags
             | ConfigLayerSource::LegacyManagedConfigTomlFromFile { .. }
             | ConfigLayerSource::LegacyManagedConfigTomlFromMdm => {}
@@ -1051,7 +1062,15 @@ pub(crate) async fn skill_roots_from_layer_stack(
     cwd: &AbsolutePathBuf,
     home_dir: Option<&AbsolutePathBuf>,
 ) -> Vec<SkillRoot> {
-    skill_roots_with_home_dir(Some(fs), config_layer_stack, cwd, home_dir, Vec::new()).await
+    skill_roots_with_home_dir(
+        Some(fs),
+        config_layer_stack,
+        cwd,
+        home_dir,
+        Vec::new(),
+        Vec::new(),
+    )
+    .await
 }
 
 #[cfg(test)]

@@ -51,6 +51,7 @@ impl SkillsLoadInput {
 pub struct SkillsManager {
     codex_home: AbsolutePathBuf,
     restriction_product: Option<Product>,
+    extra_roots: RwLock<Vec<AbsolutePathBuf>>,
     cache_by_cwd: RwLock<HashMap<AbsolutePathBuf, SkillLoadOutcome>>,
     cache_by_config: RwLock<HashMap<ConfigSkillsCacheKey, SkillLoadOutcome>>,
 }
@@ -68,6 +69,7 @@ impl SkillsManager {
         let manager = Self {
             codex_home,
             restriction_product,
+            extra_roots: RwLock::new(Vec::new()),
             cache_by_cwd: RwLock::new(HashMap::new()),
             cache_by_config: RwLock::new(HashMap::new()),
         };
@@ -79,6 +81,17 @@ impl SkillsManager {
             tracing::error!("failed to install system skills: {err}");
         }
         manager
+    }
+
+    pub fn set_extra_roots(&self, extra_roots: Vec<AbsolutePathBuf>) {
+        {
+            let mut roots = self
+                .extra_roots
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            *roots = extra_roots;
+        }
+        self.clear_cache();
     }
 
     /// Load skills for an already-constructed [`Config`], avoiding any additional config-layer
@@ -118,6 +131,7 @@ impl SkillsManager {
             &input.config_layer_stack,
             &input.cwd,
             input.effective_skill_roots.clone(),
+            self.extra_roots(),
         )
         .await;
         if !input.bundled_skills_enabled {
@@ -145,6 +159,7 @@ impl SkillsManager {
             &input.config_layer_stack,
             &input.cwd,
             input.effective_skill_roots.clone(),
+            self.extra_roots(),
         )
         .await;
         if !bundled_skills_enabled_from_stack(&input.config_layer_stack) {
@@ -212,6 +227,13 @@ impl SkillsManager {
         match self.cache_by_config.read() {
             Ok(cache) => cache.get(cache_key).cloned(),
             Err(err) => err.into_inner().get(cache_key).cloned(),
+        }
+    }
+
+    fn extra_roots(&self) -> Vec<AbsolutePathBuf> {
+        match self.extra_roots.read() {
+            Ok(roots) => roots.clone(),
+            Err(err) => err.into_inner().clone(),
         }
     }
 }

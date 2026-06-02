@@ -211,6 +211,7 @@ async fn config_summary_entries_include_runtime_workspace_roots() {
         session_id: SessionId::new(),
         thread_id: ThreadId::new(),
         forked_from_id: None,
+        parent_thread_id: None,
         thread_source: None,
         thread_name: None,
         model: "gpt-5.4".to_string(),

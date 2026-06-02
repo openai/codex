@@ -366,13 +366,18 @@ pub async fn load_config_layers_state(
         // paths, starting with `./`, but a path starting with `~/` _is_ a
         // supported use case. Because resolve_relative_paths_in_config_toml()
         // relies on AbsolutePathBufGuard to resolve `~/`, we must supply a
-        // value for base_dir, so codex_home is as good a value as any.
-        let managed_config =
-            resolve_relative_paths_in_config_toml(config.managed_config, codex_home)?;
+        // value for base_dir. Preserve that same base on the layer so later
+        // raw-TOML diagnostics parse with the same path semantics.
+        let raw_toml_base_dir = AbsolutePathBuf::from_absolute_path(codex_home)?;
+        let managed_config = resolve_relative_paths_in_config_toml(
+            config.managed_config,
+            raw_toml_base_dir.as_path(),
+        )?;
         layers.push(ConfigLayerEntry::new_with_raw_toml(
             ConfigLayerSource::LegacyManagedConfigTomlFromMdm,
             managed_config,
             config.raw_toml,
+            raw_toml_base_dir,
         ));
     }
 
@@ -1006,7 +1011,7 @@ fn project_trust_for_lookup_key(
         .iter()
         .filter(|(key, _)| normalize_project_trust_lookup_key((*key).clone()) == lookup_key)
         .collect();
-    normalized_matches.sort_by(|(left, _), (right, _)| left.cmp(right));
+    normalized_matches.sort_by_key(|(key, _)| *key);
     normalized_matches
         .first()
         .map(|(key, trust_level)| ((**key).clone(), **trust_level))

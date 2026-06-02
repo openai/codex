@@ -54,6 +54,7 @@ pub(crate) enum SpawnAgentForkMode {
 pub(crate) struct SpawnAgentOptions {
     pub(crate) fork_parent_spawn_call_id: Option<String>,
     pub(crate) fork_mode: Option<SpawnAgentForkMode>,
+    pub(crate) parent_thread_id: Option<ThreadId>,
     pub(crate) environments: Option<Vec<TurnEnvironmentSelection>>,
 }
 
@@ -266,8 +267,9 @@ impl AgentControl {
                     config.clone(),
                     self.clone(),
                     session_source,
+                    options.parent_thread_id,
+                    /*forked_from_thread_id*/ None,
                     /*thread_source*/ Some(ThreadSource::Subagent),
-                    /*persist_extended_history*/ false,
                     /*metrics_service_name*/ None,
                     inherited_shell_snapshot,
                     inherited_exec_policy,
@@ -307,6 +309,7 @@ impl AgentControl {
                 }
             };
             let thread_config = new_thread.thread.codex.thread_config_snapshot().await;
+            let parent_thread_id = thread_config.parent_thread_id;
             emit_subagent_session_started(
                 &new_thread
                     .thread
@@ -315,8 +318,9 @@ impl AgentControl {
                     .services
                     .analytics_events_client,
                 client_metadata,
+                new_thread.thread.codex.session.session_id(),
                 new_thread.thread_id,
-                /*parent_thread_id*/ None,
+                parent_thread_id,
                 thread_config,
                 subagent_source.clone(),
             );
@@ -470,6 +474,7 @@ impl AgentControl {
         }
         if preserve_reference_context_item
             && config.features.enabled(Feature::MultiAgentV2)
+            && config.multi_agent_v2.usage_hint_enabled
             && let Some(subagent_usage_hint_text) =
                 config.multi_agent_v2.subagent_usage_hint_text.clone()
             && let Some(subagent_usage_hint_message) =
@@ -487,7 +492,8 @@ impl AgentControl {
                 self.clone(),
                 session_source,
                 /*thread_source*/ Some(ThreadSource::Subagent),
-                /*persist_extended_history*/ false,
+                /*parent_thread_id*/ Some(parent_thread_id),
+                /*forked_from_thread_id*/ Some(parent_thread_id),
                 inherited_shell_snapshot,
                 inherited_exec_policy,
                 options.environments.clone(),
@@ -634,6 +640,7 @@ impl AgentControl {
             .history
             .ok_or_else(|| CodexErr::ThreadNotFound(thread_id))?
             .items;
+        let parent_thread_id = stored_thread.parent_thread_id;
 
         let resumed_thread = state
             .resume_thread_with_history_with_source(ResumeThreadWithHistoryOptions {
@@ -645,6 +652,7 @@ impl AgentControl {
                 }),
                 agent_control: self.clone(),
                 session_source,
+                parent_thread_id,
                 inherited_shell_snapshot,
                 inherited_exec_policy,
             })
@@ -698,22 +706,6 @@ impl AgentControl {
                 .update_last_task_message(agent_id, last_task_message);
         }
         result
-    }
-
-    /// Append a prebuilt message to an existing agent thread outside the normal user-input path.
-    #[cfg(test)]
-    pub(crate) async fn append_message(
-        &self,
-        agent_id: ThreadId,
-        message: ResponseItem,
-    ) -> CodexResult<String> {
-        let state = self.upgrade()?;
-        self.handle_thread_request_result(
-            agent_id,
-            &state,
-            state.append_message(agent_id, message).await,
-        )
-        .await
     }
 
     pub(crate) async fn send_inter_agent_communication(
@@ -784,15 +776,45 @@ impl AgentControl {
     /// agent and any live descendants reached from the in-memory tree.
     pub(crate) async fn close_agent(&self, agent_id: ThreadId) -> CodexResult<String> {
         let state = self.upgrade()?;
-        if let Ok(thread) = state.get_thread(agent_id).await
-            && let Some(state_db_ctx) = thread.state_db()
-            && let Err(err) = state_db_ctx
-                .set_thread_spawn_edge_status(agent_id, DirectionalThreadSpawnEdgeStatus::Closed)
-                .await
-        {
-            warn!("failed to persist thread-spawn edge status for {agent_id}: {err}");
+        let known_agent = self.state.agent_metadata_for_thread(agent_id).is_some();
+        match state.get_thread(agent_id).await {
+            Ok(thread) => {
+                if let Some(state_db_ctx) = thread.state_db()
+                    && let Err(err) = state_db_ctx
+                        .set_thread_spawn_edge_status(
+                            agent_id,
+                            DirectionalThreadSpawnEdgeStatus::Closed,
+                        )
+                        .await
+                {
+                    warn!("failed to persist thread-spawn edge status for {agent_id}: {err}");
+                }
+            }
+            Err(CodexErr::ThreadNotFound(_)) if known_agent => {
+                if let Some(state_db_ctx) = state.state_db()
+                    && let Err(err) = state_db_ctx
+                        .set_thread_spawn_edge_status(
+                            agent_id,
+                            DirectionalThreadSpawnEdgeStatus::Closed,
+                        )
+                        .await
+                {
+                    return Err(CodexErr::Fatal(format!(
+                        "failed to persist stale thread-spawn edge status for {agent_id}: {err}"
+                    )));
+                }
+            }
+            Err(CodexErr::ThreadNotFound(_)) => {}
+            Err(err) => {
+                warn!("failed to inspect agent before close {agent_id}: {err}");
+            }
         }
-        Box::pin(self.shutdown_agent_tree(agent_id)).await
+        match Box::pin(self.shutdown_agent_tree(agent_id)).await {
+            Err(CodexErr::ThreadNotFound(_)) | Err(CodexErr::InternalAgentDied) if known_agent => {
+                Ok(String::new())
+            }
+            result => result,
+        }
     }
 
     /// Shut down `agent_id` and any live descendants reachable from the in-memory spawn tree.
@@ -823,9 +845,9 @@ impl AgentControl {
     pub(crate) fn register_session_root(
         &self,
         current_thread_id: ThreadId,
-        current_session_source: &SessionSource,
+        current_parent_thread_id: Option<ThreadId>,
     ) {
-        if thread_spawn_parent_thread_id(current_session_source).is_none() {
+        if current_parent_thread_id.is_none() {
             self.state.register_root_thread(current_thread_id);
         }
     }
@@ -1200,7 +1222,8 @@ impl AgentControl {
         child_thread_id: ThreadId,
         session_source: Option<&SessionSource>,
     ) {
-        let Some(parent_thread_id) = session_source.and_then(thread_spawn_parent_thread_id) else {
+        let Some(parent_thread_id) = session_source.and_then(SessionSource::parent_thread_id)
+        else {
             return;
         };
         let Some(state_db_ctx) = thread.state_db() else {
@@ -1245,15 +1268,6 @@ impl AgentControl {
     }
 }
 
-fn thread_spawn_parent_thread_id(session_source: &SessionSource) -> Option<ThreadId> {
-    match session_source {
-        SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
-            parent_thread_id, ..
-        }) => Some(*parent_thread_id),
-        _ => None,
-    }
-}
-
 fn agent_matches_prefix(agent_path: Option<&AgentPath>, prefix: &AgentPath) -> bool {
     if prefix.is_root() {
         return true;
@@ -1278,8 +1292,10 @@ pub(crate) fn render_input_preview(initial_operation: &Op) -> String {
                 UserInput::LocalImage { path, .. } => {
                     format!("[local_image:{}]", path.display())
                 }
-                UserInput::Skill { name, path } => format!("[skill:${name}]({})", path.display()),
-                UserInput::Mention { name, path } => format!("[mention:${name}]({path})"),
+                UserInput::Skill { name, path, .. } => {
+                    format!("[skill:${name}]({})", path.display())
+                }
+                UserInput::Mention { name, path, .. } => format!("[mention:${name}]({path})"),
                 _ => "[input]".to_string(),
             })
             .collect::<Vec<_>>()

@@ -5,7 +5,6 @@ use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxKind;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::HashMap;
 use std::path::Path;
@@ -38,13 +37,15 @@ pub enum WindowsSandboxTokenMode {
 /// Chooses the restricted-token family needed for a managed permission profile.
 pub fn token_mode_for_permission_profile(
     permission_profile: &PermissionProfile,
+    workspace_roots: &[AbsolutePathBuf],
     cwd: &Path,
     env_map: &HashMap<String, String>,
 ) -> Result<WindowsSandboxTokenMode> {
-    let permissions = ResolvedWindowsSandboxPermissions::try_from_permission_profile_for_cwd(
-        permission_profile,
-        cwd,
-    )?;
+    let permissions =
+        ResolvedWindowsSandboxPermissions::try_from_permission_profile_for_workspace_roots(
+            permission_profile,
+            workspace_roots,
+        )?;
     if permissions.file_system.has_full_disk_write_access() {
         anyhow::bail!(
             "permission profile requests full-disk filesystem writes, which cannot be enforced by the Windows sandbox"
@@ -58,14 +59,6 @@ pub fn token_mode_for_permission_profile(
 }
 
 impl ResolvedWindowsSandboxPermissions {
-    pub fn from_legacy_policy_for_cwd(policy: &SandboxPolicy, cwd: &Path) -> Self {
-        Self {
-            file_system: FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(policy, cwd)
-                .materialize_project_roots_with_cwd(cwd),
-            network: NetworkSandboxPolicy::from(policy),
-        }
-    }
-
     pub fn try_from_permission_profile(permission_profile: &PermissionProfile) -> Result<Self> {
         if !matches!(permission_profile, PermissionProfile::Managed { .. }) {
             anyhow::bail!(
@@ -85,15 +78,15 @@ impl ResolvedWindowsSandboxPermissions {
     }
 
     /// Resolves a managed permission profile and binds symbolic `:workspace_roots`
-    /// entries to the permission root supplied by the caller.
-    pub fn try_from_permission_profile_for_cwd(
+    /// entries to the workspace roots supplied by the caller.
+    pub fn try_from_permission_profile_for_workspace_roots(
         permission_profile: &PermissionProfile,
-        cwd: &Path,
+        workspace_roots: &[AbsolutePathBuf],
     ) -> Result<Self> {
         let mut permissions = Self::try_from_permission_profile(permission_profile)?;
         permissions.file_system = permissions
             .file_system
-            .materialize_project_roots_with_cwd(cwd);
+            .materialize_project_roots_with_workspace_roots(workspace_roots);
         Ok(permissions)
     }
 
@@ -211,8 +204,13 @@ mod tests {
     use codex_protocol::permissions::FileSystemAccessMode;
     use codex_protocol::permissions::FileSystemSandboxEntry;
     use codex_protocol::permissions::FileSystemSpecialPath;
+    use codex_protocol::permissions::project_roots_glob_pattern;
     use pretty_assertions::assert_eq;
     use tempfile::TempDir;
+
+    fn workspace_roots_for(root: &Path) -> Vec<AbsolutePathBuf> {
+        vec![AbsolutePathBuf::from_absolute_path(root).expect("absolute workspace root")]
+    }
 
     #[test]
     fn permission_profile_workspace_write_uses_windows_temp_env_vars() {
@@ -247,38 +245,10 @@ mod tests {
     }
 
     #[test]
-    fn legacy_workspace_root_stays_bound_to_policy_cwd() {
+    fn permission_profile_workspace_root_uses_runtime_workspace_roots() {
         let tmp = TempDir::new().expect("tempdir");
-        let policy_cwd = tmp.path().join("workspace");
-        let command_cwd = policy_cwd.join("subdir");
-        std::fs::create_dir_all(&command_cwd).expect("create command cwd");
-
-        let policy = SandboxPolicy::WorkspaceWrite {
-            writable_roots: Vec::new(),
-            network_access: false,
-            exclude_tmpdir_env_var: true,
-            exclude_slash_tmp: true,
-        };
-        let permissions =
-            ResolvedWindowsSandboxPermissions::from_legacy_policy_for_cwd(&policy, &policy_cwd);
-
-        let roots = permissions
-            .writable_roots_for_cwd(&command_cwd, &HashMap::new())
-            .into_iter()
-            .map(|root| root.root)
-            .collect::<Vec<_>>();
-
-        assert_eq!(
-            roots,
-            vec![dunce::canonicalize(&policy_cwd).expect("canonical policy cwd")]
-        );
-    }
-
-    #[test]
-    fn permission_profile_workspace_root_stays_bound_to_profile_cwd() {
-        let tmp = TempDir::new().expect("tempdir");
-        let profile_cwd = tmp.path().join("workspace");
-        let command_cwd = profile_cwd.join("subdir");
+        let workspace_root = tmp.path().join("workspace");
+        let command_cwd = workspace_root.join("subdir");
         std::fs::create_dir_all(&command_cwd).expect("create command cwd");
 
         let permission_profile = PermissionProfile::Managed {
@@ -293,11 +263,13 @@ mod tests {
             },
             network: NetworkSandboxPolicy::Restricted,
         };
-        let permissions = ResolvedWindowsSandboxPermissions::try_from_permission_profile_for_cwd(
-            &permission_profile,
-            &profile_cwd,
-        )
-        .expect("managed permission profile");
+        let workspace_roots = workspace_roots_for(workspace_root.as_path());
+        let permissions =
+            ResolvedWindowsSandboxPermissions::try_from_permission_profile_for_workspace_roots(
+                &permission_profile,
+                workspace_roots.as_slice(),
+            )
+            .expect("managed permission profile");
 
         let roots = permissions
             .writable_roots_for_cwd(&command_cwd, &HashMap::new())
@@ -307,7 +279,101 @@ mod tests {
 
         assert_eq!(
             roots,
-            vec![dunce::canonicalize(&profile_cwd).expect("canonical profile cwd")]
+            vec![dunce::canonicalize(&workspace_root).expect("canonical workspace root")]
+        );
+    }
+
+    #[test]
+    fn permission_profile_workspace_roots_expand_all_runtime_workspace_roots() {
+        let tmp = TempDir::new().expect("tempdir");
+        let first = AbsolutePathBuf::from_absolute_path(tmp.path().join("first"))
+            .expect("absolute first root");
+        let second = AbsolutePathBuf::from_absolute_path(tmp.path().join("second"))
+            .expect("absolute second root");
+        let permission_profile = PermissionProfile::Managed {
+            file_system: ManagedFileSystemPermissions::Restricted {
+                entries: vec![
+                    FileSystemSandboxEntry {
+                        path: FileSystemPath::Special {
+                            value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
+                        },
+                        access: FileSystemAccessMode::Write,
+                    },
+                    FileSystemSandboxEntry {
+                        path: FileSystemPath::Special {
+                            value: FileSystemSpecialPath::project_roots(Some(".git".into())),
+                        },
+                        access: FileSystemAccessMode::Deny,
+                    },
+                    FileSystemSandboxEntry {
+                        path: FileSystemPath::GlobPattern {
+                            pattern: project_roots_glob_pattern(Path::new("**/*.env")),
+                        },
+                        access: FileSystemAccessMode::Deny,
+                    },
+                ],
+                glob_scan_max_depth: None,
+            },
+            network: NetworkSandboxPolicy::Restricted,
+        };
+
+        let permissions =
+            ResolvedWindowsSandboxPermissions::try_from_permission_profile_for_workspace_roots(
+                &permission_profile,
+                &[first.clone(), second.clone()],
+            )
+            .expect("managed permission profile");
+
+        assert_eq!(
+            permissions.file_system,
+            FileSystemSandboxPolicy::restricted(vec![
+                FileSystemSandboxEntry {
+                    path: FileSystemPath::Path {
+                        path: first.clone(),
+                    },
+                    access: FileSystemAccessMode::Write,
+                },
+                FileSystemSandboxEntry {
+                    path: FileSystemPath::Path {
+                        path: second.clone(),
+                    },
+                    access: FileSystemAccessMode::Write,
+                },
+                FileSystemSandboxEntry {
+                    path: FileSystemPath::Path {
+                        path: first.join(".git"),
+                    },
+                    access: FileSystemAccessMode::Deny,
+                },
+                FileSystemSandboxEntry {
+                    path: FileSystemPath::Path {
+                        path: second.join(".git"),
+                    },
+                    access: FileSystemAccessMode::Deny,
+                },
+                FileSystemSandboxEntry {
+                    path: FileSystemPath::GlobPattern {
+                        pattern: AbsolutePathBuf::resolve_path_against_base(
+                            "**/*.env",
+                            first.as_path(),
+                        )
+                        .to_string_lossy()
+                        .into_owned(),
+                    },
+                    access: FileSystemAccessMode::Deny,
+                },
+                FileSystemSandboxEntry {
+                    path: FileSystemPath::GlobPattern {
+                        pattern: AbsolutePathBuf::resolve_path_against_base(
+                            "**/*.env",
+                            second.as_path(),
+                        )
+                        .to_string_lossy()
+                        .into_owned(),
+                    },
+                    access: FileSystemAccessMode::Deny,
+                },
+            ])
         );
     }
 
@@ -316,9 +382,11 @@ mod tests {
         let tmp = TempDir::new().expect("tempdir");
         let cwd = tmp.path().join("workspace");
         std::fs::create_dir_all(&cwd).expect("create cwd");
+        let workspace_roots = workspace_roots_for(cwd.as_path());
 
         let token_mode = token_mode_for_permission_profile(
             &PermissionProfile::read_only(),
+            workspace_roots.as_slice(),
             &cwd,
             &HashMap::new(),
         )
@@ -332,9 +400,11 @@ mod tests {
         let tmp = TempDir::new().expect("tempdir");
         let cwd = tmp.path().join("workspace");
         std::fs::create_dir_all(&cwd).expect("create cwd");
+        let workspace_roots = workspace_roots_for(cwd.as_path());
 
         let token_mode = token_mode_for_permission_profile(
             &PermissionProfile::workspace_write(),
+            workspace_roots.as_slice(),
             &cwd,
             &HashMap::new(),
         )
@@ -390,9 +460,15 @@ mod tests {
             },
             network: NetworkSandboxPolicy::Restricted,
         };
+        let workspace_roots = workspace_roots_for(cwd.as_path());
 
-        let err = token_mode_for_permission_profile(&permission_profile, &cwd, &HashMap::new())
-            .expect_err("full disk writes should not resolve to a token mode");
+        let err = token_mode_for_permission_profile(
+            &permission_profile,
+            workspace_roots.as_slice(),
+            &cwd,
+            &HashMap::new(),
+        )
+        .expect_err("full disk writes should not resolve to a token mode");
 
         assert!(
             err.to_string()

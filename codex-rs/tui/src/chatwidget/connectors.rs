@@ -303,13 +303,6 @@ impl ChatWidget {
 
         match result {
             Ok(mut snapshot) => {
-                if !is_final {
-                    snapshot.connectors = chatgpt_connectors::merge_connectors_with_accessible(
-                        Vec::new(),
-                        snapshot.connectors,
-                        /*all_connectors_loaded*/ false,
-                    );
-                }
                 if let ConnectorsCacheState::Ready(existing_snapshot) = &self.connectors.cache {
                     let enabled_by_id: HashMap<&str, bool> = existing_snapshot
                         .connectors

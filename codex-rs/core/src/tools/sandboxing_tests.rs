@@ -138,7 +138,7 @@ fn guardian_bypasses_sandbox_for_explicit_escalation_on_first_attempt() {
 }
 
 #[test]
-fn deny_read_blocks_explicit_escalation_but_preserves_policy_bypass() {
+fn deny_read_blocks_explicit_escalation_and_policy_bypass() {
     let file_system_policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
         path: FileSystemPath::GlobPattern {
             pattern: "**/*.env".to_string(),
@@ -158,6 +158,28 @@ fn deny_read_blocks_explicit_escalation_but_preserves_policy_bypass() {
         SandboxOverride::NoOverride,
         "explicit escalation would drop deny-read filesystem policy, so keep the first attempt sandboxed",
     );
+    assert!(!unsandboxed_execution_allowed(&file_system_policy));
+    assert_eq!(
+        sandbox_permissions_preserving_denied_reads(
+            SandboxPermissions::RequireEscalated,
+            &file_system_policy,
+        ),
+        SandboxPermissions::UseDefault,
+    );
+    assert_eq!(
+        sandbox_permissions_preserving_denied_reads(
+            SandboxPermissions::WithAdditionalPermissions,
+            &file_system_policy,
+        ),
+        SandboxPermissions::WithAdditionalPermissions,
+    );
+    assert_eq!(
+        sandbox_permissions_preserving_denied_reads(
+            SandboxPermissions::RequireEscalated,
+            &FileSystemSandboxPolicy::default(),
+        ),
+        SandboxPermissions::RequireEscalated,
+    );
     assert_eq!(
         sandbox_override_for_first_attempt(
             SandboxPermissions::WithAdditionalPermissions,
@@ -167,7 +189,7 @@ fn deny_read_blocks_explicit_escalation_but_preserves_policy_bypass() {
             },
             &file_system_policy,
         ),
-        SandboxOverride::BypassSandboxFirstAttempt,
-        "exec-policy allow rules intentionally bypass sandbox even when deny-read entries exist",
+        SandboxOverride::NoOverride,
+        "exec-policy allow rules would drop deny-read filesystem policy, so keep the first attempt sandboxed",
     );
 }

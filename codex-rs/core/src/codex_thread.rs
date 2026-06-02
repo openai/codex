@@ -7,6 +7,7 @@ use crate::session::SessionSettingsUpdate;
 use crate::session::SteerInputError;
 use codex_features::Feature;
 use codex_otel::SessionTelemetry;
+use codex_protocol::ThreadId;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::Personality;
@@ -18,9 +19,9 @@ use codex_protocol::mcp::CallToolResult;
 use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::PermissionProfile;
-use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::protocol::AdditionalContextEntry;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::Op;
@@ -41,6 +42,7 @@ use codex_thread_store::ThreadStoreError;
 use codex_thread_store::ThreadStoreResult;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use rmcp::model::ReadResourceRequestParams;
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -67,6 +69,7 @@ pub struct ThreadConfigSnapshot {
     pub personality: Option<Personality>,
     pub collaboration_mode: CollaborationMode,
     pub session_source: SessionSource,
+    pub parent_thread_id: Option<ThreadId>,
     pub thread_source: Option<ThreadSource>,
 }
 
@@ -228,6 +231,17 @@ impl CodexThread {
         self.codex.submit_with_trace(op, trace).await
     }
 
+    pub async fn submit_user_input_with_client_user_message_id(
+        &self,
+        op: Op,
+        trace: Option<W3cTraceContext>,
+        client_user_message_id: Option<String>,
+    ) -> CodexResult<String> {
+        self.codex
+            .submit_user_input_with_client_user_message_id(op, trace, client_user_message_id)
+            .await
+    }
+
     /// Persist whether this thread is eligible for future memory generation.
     pub async fn set_thread_memory_mode(&self, mode: ThreadMemoryMode) -> anyhow::Result<()> {
         self.codex.set_thread_memory_mode(mode).await
@@ -236,23 +250,40 @@ impl CodexThread {
     pub async fn steer_input(
         &self,
         input: Vec<UserInput>,
+        additional_context: BTreeMap<String, AdditionalContextEntry>,
         expected_turn_id: Option<&str>,
+        client_user_message_id: Option<String>,
         responsesapi_client_metadata: Option<HashMap<String, String>>,
     ) -> Result<String, SteerInputError> {
         self.codex
-            .steer_input(input, expected_turn_id, responsesapi_client_metadata)
+            .steer_input(
+                input,
+                additional_context,
+                expected_turn_id,
+                client_user_message_id,
+                responsesapi_client_metadata,
+            )
             .await
     }
 
-    /// Injects hidden model-visible items into the currently active turn.
+    /// Injects model-visible items into the currently active turn.
     ///
-    /// This is the runtime-owned counterpart to user-facing `steer_input`.
+    /// This is the thread-level bridge to `Session::inject_if_running` for
+    /// callers that only hold a `CodexThread`.
     /// It returns the unchanged items when this thread has no active turn.
-    pub async fn inject_response_items_into_active_turn(
+    pub async fn inject_if_running(
         &self,
-        items: Vec<ResponseInputItem>,
-    ) -> Result<(), Vec<ResponseInputItem>> {
-        self.codex.session.inject_response_items(items).await
+        items: Vec<ResponseItem>,
+    ) -> Result<(), Vec<ResponseItem>> {
+        self.codex.session.inject_if_running(items).await
+    }
+
+    /// Starts a regular turn with model-visible items only if the thread is idle.
+    pub async fn try_start_turn_if_idle(
+        &self,
+        items: Vec<ResponseItem>,
+    ) -> Result<(), Vec<ResponseItem>> {
+        self.codex.session.try_start_turn_if_idle(items).await
     }
 
     pub async fn set_app_server_client_info(
@@ -358,61 +389,19 @@ impl CodexThread {
 
     /// Records a user-role session-prefix message without creating a new user turn boundary.
     pub(crate) async fn inject_user_message_without_turn(&self, message: String) {
-        let message = ResponseItem::Message {
+        let item = ResponseItem::Message {
             id: None,
             role: "user".to_string(),
             content: vec![ContentItem::InputText { text: message }],
             phase: None,
         };
-        let pending_item = match pending_message_input_item(&message) {
-            Ok(pending_item) => pending_item,
-            Err(err) => {
-                debug_assert!(false, "session-prefix message append should succeed: {err}");
-                return;
-            }
-        };
-        if self
-            .codex
+        self.codex
             .session
-            .inject_response_items(vec![pending_item])
-            .await
-            .is_err()
-        {
-            let turn_context = self.codex.session.new_default_turn().await;
-            self.codex
-                .session
-                .record_conversation_items(turn_context.as_ref(), &[message])
-                .await;
-        }
+            .inject_no_new_turn(vec![item], /*current_turn_context*/ None)
+            .await;
     }
 
-    /// Append a prebuilt message to the thread history without treating it as a user turn.
-    ///
-    /// If the thread already has an active turn, the message is queued as pending input for that
-    /// turn. Otherwise it is queued at session scope and a regular turn is started so the agent
-    /// can consume that pending input through the normal turn pipeline.
-    #[cfg(test)]
-    pub(crate) async fn append_message(&self, message: ResponseItem) -> CodexResult<String> {
-        let submission_id = uuid::Uuid::new_v4().to_string();
-        let pending_item = pending_message_input_item(&message)?;
-        if let Err(items) = self
-            .codex
-            .session
-            .inject_response_items(vec![pending_item])
-            .await
-        {
-            self.codex
-                .session
-                .input_queue
-                .queue_response_items_for_next_turn(items)
-                .await;
-            self.codex.session.maybe_start_turn_for_pending_work().await;
-        }
-
-        Ok(submission_id)
-    }
-
-    /// Append raw Responses API items to the thread's model-visible history.
+    /// Record raw Responses API items without starting a new turn.
     pub async fn inject_response_items(&self, items: Vec<ResponseItem>) -> CodexResult<()> {
         if items.is_empty() {
             return Err(CodexErr::InvalidRequest(
@@ -429,7 +418,7 @@ impl CodexThread {
         }
         self.codex
             .session
-            .record_conversation_items(turn_context.as_ref(), &items)
+            .inject_no_new_turn(items, Some(turn_context.as_ref()))
             .await;
         self.codex.session.flush_rollout().await?;
         Ok(())
@@ -532,13 +521,7 @@ impl CodexThread {
         let result = self
             .codex
             .session
-            .read_resource(
-                server,
-                ReadResourceRequestParams {
-                    meta: None,
-                    uri: uri.to_string(),
-                },
-            )
+            .read_resource(server, ReadResourceRequestParams::new(uri))
             .await?;
 
         Ok(serde_json::to_value(result)?)
@@ -594,23 +577,5 @@ impl CodexThread {
         }
 
         Ok(*guard)
-    }
-}
-
-fn pending_message_input_item(message: &ResponseItem) -> CodexResult<ResponseInputItem> {
-    match message {
-        ResponseItem::Message {
-            role,
-            content,
-            phase,
-            ..
-        } => Ok(ResponseInputItem::Message {
-            role: role.clone(),
-            content: content.clone(),
-            phase: phase.clone(),
-        }),
-        _ => Err(CodexErr::InvalidRequest(
-            "append_message only supports ResponseItem::Message".to_string(),
-        )),
     }
 }

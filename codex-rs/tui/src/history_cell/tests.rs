@@ -278,10 +278,8 @@ fn proposed_plan_cell_renders_markdown_table() {
     let rendered = render_lines(&plan.display_lines(/*width*/ 80));
 
     assert!(
-        rendered
-            .iter()
-            .any(|line| line.contains('│') || line.contains('┌')),
-        "expected boxed table in proposed plan output: {rendered:?}"
+        rendered.iter().any(|line| line.contains('━')),
+        "expected separated table in proposed plan output: {rendered:?}"
     );
     assert!(
         !rendered
@@ -298,6 +296,47 @@ fn proposed_plan_cell_renders_markdown_table() {
 }
 
 #[test]
+fn proposed_plan_cell_preserves_wrapped_table_web_links() {
+    let destination = "https://example.com/a/very/long/path/to/a/table/artifact";
+    let plan = new_proposed_plan(
+        format!("| Step | URL |\n| --- | --- |\n| Verify | {destination} |\n"),
+        &test_cwd(),
+    );
+
+    let lines = plan.display_hyperlink_lines(/*width*/ 32);
+    let linked_rows = lines
+        .iter()
+        .filter(|line| !line.hyperlinks.is_empty())
+        .collect::<Vec<_>>();
+
+    assert!(linked_rows.len() > 1);
+    assert!(linked_rows.iter().all(|line| {
+        line.hyperlinks
+            .iter()
+            .all(|link| link.destination == destination)
+    }));
+}
+
+#[test]
+fn composite_cell_preserves_child_web_links() {
+    let destination = "https://chatgpt.com/codex/settings/usage";
+    let cell = CompositeHistoryCell::new(vec![
+        Box::new(PlainHistoryCell::new(vec![Line::from("/status")])),
+        Box::new(WebHyperlinkHistoryCell::new(vec![Line::from(destination)])),
+    ]);
+
+    let lines = cell.display_hyperlink_lines(/*width*/ 80);
+
+    assert_eq!(
+        lines[2].hyperlinks,
+        vec![crate::terminal_hyperlinks::TerminalHyperlink {
+            columns: 0..destination.len(),
+            destination: destination.to_string(),
+        }]
+    );
+}
+
+#[test]
 fn proposed_plan_cell_unwraps_markdown_fenced_table() {
     let plan = new_proposed_plan(
         "## Plan\n\n```markdown\n| Step | Owner |\n| --- | --- |\n| Verify | Codex |\n```\n"
@@ -308,10 +347,8 @@ fn proposed_plan_cell_unwraps_markdown_fenced_table() {
     let rendered = render_lines(&plan.display_lines(/*width*/ 80));
 
     assert!(
-        rendered
-            .iter()
-            .any(|line| line.contains('│') || line.contains('┌')),
-        "expected boxed table for markdown-fenced proposed plan output: {rendered:?}"
+        rendered.iter().any(|line| line.contains('━')),
+        "expected separated table for markdown-fenced proposed plan output: {rendered:?}"
     );
     assert!(
         !rendered.iter().any(|line| line.trim() == "```markdown"),
@@ -806,6 +843,7 @@ async fn mcp_tools_output_lists_tools_for_hyphenated_server_names() {
 fn mcp_tools_output_from_statuses_renders_status_only_servers() {
     let statuses = vec![McpServerStatus {
         name: "plugin_docs".to_string(),
+        server_info: None,
         tools: HashMap::from([(
             "lookup".to_string(),
             Tool {
@@ -835,6 +873,7 @@ fn mcp_tools_output_from_statuses_renders_status_only_servers() {
 fn mcp_tools_output_from_statuses_renders_verbose_inventory() {
     let statuses = vec![McpServerStatus {
         name: "plugin_docs".to_string(),
+        server_info: None,
         tools: HashMap::from([(
             "lookup".to_string(),
             Tool {
@@ -1028,6 +1067,32 @@ fn web_search_history_cell_snapshot() {
 }
 
 #[test]
+fn standalone_unix_update_available_history_cell_snapshot() {
+    let cell =
+        UpdateAvailableHistoryCell::new("9.9.9".to_string(), Some(UpdateAction::StandaloneUnix));
+    let rendered = render_lines(&cell.display_lines(/*width*/ 110)).join("\n");
+
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn standalone_windows_update_available_history_cell_snapshot() {
+    let cell =
+        UpdateAvailableHistoryCell::new("9.9.9".to_string(), Some(UpdateAction::StandaloneWindows));
+    let rendered = render_lines(&cell.display_lines(/*width*/ 110)).join("\n");
+
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn web_search_history_cell_without_detail_snapshot() {
+    let cell = new_web_search_call("call-1".to_string(), String::new(), WebSearchAction::Other);
+    let rendered = render_lines(&cell.display_lines(/*width*/ 64)).join("\n");
+
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
 fn web_search_history_cell_wraps_with_indented_continuation() {
     let query = "example search query with several generic words to exercise wrapping".to_string();
     let cell = new_web_search_call(
@@ -1043,8 +1108,8 @@ fn web_search_history_cell_wraps_with_indented_continuation() {
     assert_eq!(
         rendered,
         vec![
-            "• Searched example search query with several generic words to".to_string(),
-            "  exercise wrapping".to_string(),
+            "• Searched the web for example search query with several generic".to_string(),
+            "  words to exercise wrapping".to_string(),
         ]
     );
 }
@@ -1062,7 +1127,10 @@ fn web_search_history_cell_short_query_does_not_wrap() {
     );
     let rendered = render_lines(&cell.display_lines(/*width*/ 64));
 
-    assert_eq!(rendered, vec!["• Searched short query".to_string()]);
+    assert_eq!(
+        rendered,
+        vec!["• Searched the web for short query".to_string()]
+    );
 }
 
 #[test]

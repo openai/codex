@@ -67,6 +67,7 @@ fn test_exec_request(
         ExecExpiration::DefaultTimeout,
         ExecCapturePolicy::ShellTool,
         SandboxType::None,
+        turn.config.effective_workspace_roots(),
         turn.windows_sandbox_level,
         windows_sandbox_private_desktop,
         permission_profile,

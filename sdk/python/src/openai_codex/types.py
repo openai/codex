@@ -1,4 +1,4 @@
-"""Public app-server model exports for type annotations and matching."""
+"""Public Codex protocol model exports for type annotations and matching."""
 
 from __future__ import annotations
 

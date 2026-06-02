@@ -4,9 +4,6 @@ use std::time::Duration;
 use codex_async_utils::CancelErr;
 use codex_async_utils::OrCancelExt;
 use codex_network_proxy::PROXY_ACTIVE_ENV_KEY;
-use codex_network_proxy::PROXY_ENV_KEYS;
-#[cfg(target_os = "macos")]
-use codex_network_proxy::PROXY_GIT_SSH_COMMAND_ENV_KEY;
 use tokio_util::sync::CancellationToken;
 use tracing::error;
 use uuid::Uuid;
@@ -21,6 +18,7 @@ use crate::session::turn_context::TurnContext;
 use crate::state::TaskKind;
 use crate::tools::format_exec_output_str;
 use crate::tools::runtimes::maybe_wrap_shell_lc_with_snapshot;
+use crate::tools::runtimes::strip_managed_proxy_env;
 use crate::turn_timing::now_unix_timestamp_ms;
 use crate::user_shell_command::user_shell_command_record_item;
 use codex_protocol::exec_output::ExecToolCallOutput;
@@ -38,8 +36,6 @@ use super::SessionTask;
 use super::SessionTaskContext;
 use crate::session::session::Session;
 use codex_protocol::models::PermissionProfile;
-use codex_protocol::models::ResponseInputItem;
-use codex_protocol::models::ResponseItem;
 
 const USER_SHELL_TIMEOUT_MS: u64 = 60 * 60 * 1000; // 1 hour
 
@@ -133,18 +129,7 @@ pub(crate) async fn execute_user_shell_command(
         Some(session.conversation_id),
     );
     if exec_env_map.contains_key(PROXY_ACTIVE_ENV_KEY) {
-        for key in PROXY_ENV_KEYS {
-            exec_env_map.remove(*key);
-        }
-        #[cfg(target_os = "macos")]
-        if exec_env_map
-            .get(PROXY_GIT_SSH_COMMAND_ENV_KEY)
-            .is_some_and(|value| {
-                value.starts_with(codex_network_proxy::CODEX_PROXY_GIT_SSH_COMMAND_MARKER)
-            })
-        {
-            exec_env_map.remove(PROXY_GIT_SSH_COMMAND_ENV_KEY);
-        }
+        strip_managed_proxy_env(&mut exec_env_map);
     }
     let exec_command = maybe_wrap_shell_lc_with_snapshot(
         &display_command,
@@ -193,6 +178,7 @@ pub(crate) async fn execute_user_shell_command(
         capture_policy: ExecCapturePolicy::ShellTool,
         sandbox: SandboxType::None,
         windows_sandbox_policy_cwd: cwd.clone(),
+        windows_sandbox_workspace_roots: turn_context.config.effective_workspace_roots(),
         windows_sandbox_level: turn_context.windows_sandbox_level,
         windows_sandbox_private_desktop: turn_context
             .config
@@ -361,30 +347,7 @@ async fn persist_user_shell_output(
         return;
     }
 
-    let response_input_item = match output_item {
-        ResponseItem::Message {
-            role,
-            content,
-            phase,
-            ..
-        } => ResponseInputItem::Message {
-            role,
-            content,
-            phase,
-        },
-        _ => unreachable!("user shell command output record should always be a message"),
-    };
-
-    if let Err(items) = session
-        .inject_response_items(vec![response_input_item])
-        .await
-    {
-        let response_items = items
-            .into_iter()
-            .map(ResponseItem::from)
-            .collect::<Vec<_>>();
-        session
-            .record_conversation_items(turn_context, &response_items)
-            .await;
-    }
+    session
+        .inject_no_new_turn(vec![output_item], Some(turn_context))
+        .await;
 }

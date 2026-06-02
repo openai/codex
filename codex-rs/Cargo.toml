@@ -14,7 +14,6 @@ members = [
     "app-server-client",
     "app-server-protocol",
     "app-server-test-client",
-    "debug-client",
     "apply-patch",
     "arg0",
     "feedback",
@@ -22,7 +21,7 @@ members = [
     "install-context",
     "codex-backend-openapi-models",
     "code-mode",
-    "cloud-requirements",
+    "cloud-config",
     "cloud-tasks",
     "cloud-tasks-client",
     "cloud-tasks-mock-client",
@@ -47,7 +46,9 @@ members = [
     "ext/extension-api",
     "ext/goal",
     "ext/guardian",
+    "ext/image-generation",
     "ext/memories",
+    "ext/web-search",
     "external-agent-migration",
     "external-agent-sessions",
     "keyring-store",
@@ -67,6 +68,7 @@ members = [
     "process-hardening",
     "protocol",
     "realtime-webrtc",
+    "prompts",
     "rollout",
     "rollout-trace",
     "rmcp-client",
@@ -147,7 +149,7 @@ codex-chatgpt = { path = "chatgpt" }
 codex-cli = { path = "cli" }
 codex-client = { path = "codex-client" }
 codex-collaboration-mode-templates = { path = "collaboration-mode-templates" }
-codex-cloud-requirements = { path = "cloud-requirements" }
+codex-cloud-config = { path = "cloud-config" }
 codex-cloud-tasks-client = { path = "cloud-tasks-client" }
 codex-cloud-tasks-mock-client = { path = "cloud-tasks-mock-client" }
 codex-code-mode = { path = "code-mode" }
@@ -164,6 +166,7 @@ codex-execpolicy = { path = "execpolicy" }
 codex-extension-api = { path = "ext/extension-api" }
 codex-goal-extension = { path = "ext/goal" }
 codex-guardian = { path = "ext/guardian" }
+codex-image-generation-extension = { path = "ext/image-generation" }
 codex-external-agent-migration = { path = "external-agent-migration" }
 codex-external-agent-sessions = { path = "external-agent-sessions" }
 codex-experimental-api-macros = { path = "codex-experimental-api-macros" }
@@ -180,6 +183,7 @@ codex-lmstudio = { path = "lmstudio" }
 codex-login = { path = "login" }
 codex-message-history = { path = "message-history" }
 codex-memories-extension = { path = "ext/memories" }
+codex-web-search-extension = { path = "ext/web-search" }
 codex-memories-read = { path = "memories/read" }
 codex-memories-write = { path = "memories/write" }
 codex-mcp = { path = "codex-mcp" }
@@ -194,6 +198,7 @@ codex-model-provider = { path = "model-provider" }
 codex-process-hardening = { path = "process-hardening" }
 codex-protocol = { path = "protocol" }
 codex-realtime-webrtc = { path = "realtime-webrtc" }
+codex-prompts = { path = "prompts" }
 codex-responses-api-proxy = { path = "responses-api-proxy" }
 codex-response-debug-context = { path = "response-debug-context" }
 codex-rmcp-client = { path = "rmcp-client" }
@@ -340,7 +345,7 @@ rcgen = { version = "0.14.7", default-features = false, features = [
 regex = "1.12.3"
 regex-lite = "0.1.8"
 reqwest = { version = "0.12", features = ["cookies"] }
-rmcp = { version = "0.15.0", default-features = false }
+rmcp = { version = "1.7.0", default-features = false }
 runfiles = { git = "https://github.com/dzbarsky/rules_rust", rev = "b56cbaa8465e74127f1ea216f813cd377295ad81" }
 rustls = { version = "0.23", default-features = false, features = [
     "ring",
@@ -364,13 +369,14 @@ sha2 = "0.10"
 shlex = "1.3.0"
 similar = "2.7.0"
 socket2 = "0.6.1"
-sqlx = { version = "0.8.6", default-features = false, features = [
+sqlx = { version = "0.9.0", default-features = false, features = [
     "chrono",
     "json",
     "macros",
     "migrate",
-    "runtime-tokio-rustls",
-    "sqlite",
+    "runtime-tokio",
+    "tls-rustls",
+    "sqlite-bundled",
     "time",
     "uuid",
 ] }

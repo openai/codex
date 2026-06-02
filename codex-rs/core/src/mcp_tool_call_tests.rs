@@ -56,13 +56,13 @@ fn annotations(
     destructive: Option<bool>,
     open_world: Option<bool>,
 ) -> ToolAnnotations {
-    ToolAnnotations {
-        destructive_hint: destructive,
-        idempotent_hint: None,
-        open_world_hint: open_world,
-        read_only_hint: read_only,
-        title: None,
-    }
+    ToolAnnotations::from_raw(
+        /*title*/ None,
+        read_only,
+        destructive,
+        /*idempotent_hint*/ None,
+        open_world,
+    )
 }
 
 fn approval_metadata(

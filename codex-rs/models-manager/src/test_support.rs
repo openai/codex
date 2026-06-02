@@ -14,7 +14,7 @@ pub fn get_model_offline_for_tests(model: Option<&str>) -> String {
         return model.to_string();
     }
     let mut response = bundled_models_response().unwrap_or_default();
-    response.models.sort_by(|a, b| a.priority.cmp(&b.priority));
+    response.models.sort_by_key(|model| model.priority);
     let presets: Vec<ModelPreset> = response.models.into_iter().map(Into::into).collect();
     presets
         .iter()
