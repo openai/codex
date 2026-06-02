@@ -1,5 +1,3 @@
-#[cfg(unix)]
-use std::io::Write;
 use std::path::Path;
 
 use codex_app_server_protocol::ServerNotification;
@@ -43,84 +41,8 @@ pub(crate) fn handle_last_message(last_agent_message: Option<&str>, output_file:
 
 fn write_last_message_file(contents: &str, last_message_path: Option<&Path>) {
     if let Some(path) = last_message_path
-        && let Err(e) = write_last_message_to_path(path, contents)
+        && let Err(e) = std::fs::write(path, contents)
     {
         eprintln!("Failed to write last message file {path:?}: {e}");
-    }
-}
-
-#[cfg(unix)]
-fn write_last_message_to_path(path: &Path, contents: &str) -> std::io::Result<()> {
-    let mut file = codex_utils_path::open_file_for_write_no_follow(path)?;
-    file.write_all(contents.as_bytes())
-}
-
-#[cfg(not(unix))]
-fn write_last_message_to_path(path: &Path, contents: &str) -> std::io::Result<()> {
-    std::fs::write(path, contents)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::write_last_message_to_path;
-    use pretty_assertions::assert_eq;
-    use tempfile::tempdir;
-
-    #[test]
-    fn writes_last_message_to_regular_file() {
-        let temp_dir = tempdir().expect("tempdir");
-        let output_path = temp_dir
-            .path()
-            .canonicalize()
-            .expect("canonical tempdir")
-            .join("output.md");
-
-        write_last_message_to_path(&output_path, "hello").expect("write output");
-
-        assert_eq!(
-            std::fs::read_to_string(&output_path).expect("read output"),
-            "hello"
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn rejects_symlinked_last_message_path() {
-        let temp_dir = tempdir().expect("tempdir");
-        let temp_dir = temp_dir.path().canonicalize().expect("canonical tempdir");
-        let target_path = temp_dir.join("target.md");
-        let output_path = temp_dir.join("output.md");
-        std::fs::write(&target_path, "original").expect("write target");
-        std::os::unix::fs::symlink(&target_path, &output_path).expect("create symlink");
-
-        let err =
-            write_last_message_to_path(&output_path, "hello").expect_err("symlink should fail");
-
-        assert_eq!(err.raw_os_error(), Some(libc::ELOOP));
-        assert_eq!(
-            std::fs::read_to_string(&target_path).expect("read target"),
-            "original"
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn rejects_symlinked_last_message_parent_directory() {
-        let temp_dir = tempdir().expect("tempdir");
-        let temp_dir = temp_dir.path().canonicalize().expect("canonical tempdir");
-        let target_dir = temp_dir.join("target");
-        let symlinked_dir = temp_dir.join("link");
-        std::fs::create_dir(&target_dir).expect("create target directory");
-        let target_path = target_dir.join("output.md");
-        std::fs::write(&target_path, "original").expect("write target");
-        std::os::unix::fs::symlink(&target_dir, &symlinked_dir).expect("create symlink");
-
-        write_last_message_to_path(&symlinked_dir.join("output.md"), "hello")
-            .expect_err("symlinked parent should fail");
-
-        assert_eq!(
-            std::fs::read_to_string(&target_path).expect("read target"),
-            "original"
-        );
     }
 }

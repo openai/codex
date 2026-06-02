@@ -150,16 +150,6 @@ pub fn open_file_for_read_no_follow(path: &Path) -> io::Result<File> {
     open_file_no_follow(path, libc::O_RDONLY, /*mode*/ 0)
 }
 
-/// Opens a file for writing without following symlinks in any path component.
-#[cfg(unix)]
-pub fn open_file_for_write_no_follow(path: &Path) -> io::Result<File> {
-    open_file_no_follow(
-        path,
-        libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC,
-        /*mode*/ 0o666,
-    )
-}
-
 #[cfg(unix)]
 fn open_file_no_follow(path: &Path, flags: libc::c_int, mode: libc::mode_t) -> io::Result<File> {
     let components = path
