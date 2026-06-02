@@ -479,7 +479,6 @@ mod tests {
     use std::fs::File;
     use std::path::Path;
     use std::path::PathBuf;
-    use std::rc::Rc;
     use tempfile::TempDir;
 
     fn create_lock(dir: &Path) -> std::io::Result<File> {
@@ -594,16 +593,5 @@ mod tests {
 
         assert!(!dir.exists());
         Ok(())
-    }
-
-    #[allow(dead_code)]
-    fn arg0_dispatch_or_else_accepts_non_send_main_future() {
-        let _ = super::arg0_dispatch_or_else(|_paths| {
-            let state = Rc::new(());
-            async move {
-                let _state = state;
-                Ok(())
-            }
-        });
     }
 }
