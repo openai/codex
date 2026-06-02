@@ -256,6 +256,7 @@ fn hosted_model_tool_specs(context: &CoreToolPlanContext<'_>) -> Vec<ToolSpec> {
     }) {
         specs.push(web_search_tool);
     }
+    // TODO: Remove hosted image generation once the standalone extension is ready.
     if image_generation_tool_enabled(turn_context)
         && !standalone_image_generation_available(turn_context, context.extension_tool_executors)
     {
