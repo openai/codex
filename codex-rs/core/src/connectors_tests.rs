@@ -475,7 +475,7 @@ approvals_reviewer = "user"
 }
 
 #[tokio::test]
-async fn app_approvals_reviewer_uses_first_resolved_app_requirement_when_constraints_conflict() {
+async fn app_approvals_reviewer_uses_first_resolved_app_requirement_within_global_constraint() {
     let codex_home = tempdir().expect("tempdir should succeed");
     std::fs::write(
         codex_home.path().join(CONFIG_TOML_FILE),
@@ -485,7 +485,10 @@ approvals_reviewer = "user"
     )
     .expect("write config");
     let requirements = ConfigRequirementsToml {
-        allowed_approvals_reviewers: Some(vec![ApprovalsReviewer::User]),
+        allowed_approvals_reviewers: Some(vec![
+            ApprovalsReviewer::User,
+            ApprovalsReviewer::AutoReview,
+        ]),
         apps: Some(AppsRequirementsToml {
             apps: BTreeMap::from([(
                 "calendar".to_string(),

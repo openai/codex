@@ -1144,10 +1144,50 @@ impl ConfigRequirementsToml {
     }
 }
 
+fn validate_app_approvals_reviewers_are_subsets(
+    allowed_approvals_reviewers: Option<&Sourced<Vec<ApprovalsReviewer>>>,
+    apps: Option<&Sourced<AppsRequirementsToml>>,
+) -> Result<(), ConstraintError> {
+    let (Some(allowed_approvals_reviewers), Some(apps)) = (allowed_approvals_reviewers, apps)
+    else {
+        return Ok(());
+    };
+    if allowed_approvals_reviewers.value.is_empty() {
+        return Ok(());
+    }
+
+    for (app_id, app_requirement) in &apps.value.apps {
+        let Some(app_allowed_approvals_reviewers) =
+            app_requirement.allowed_approvals_reviewers.as_deref()
+        else {
+            continue;
+        };
+
+        if let Some(reviewer) = app_allowed_approvals_reviewers
+            .iter()
+            .find(|reviewer| !allowed_approvals_reviewers.value.contains(reviewer))
+        {
+            return Err(ConstraintError::InvalidValue {
+                field_name: "apps.*.allowed_approvals_reviewers",
+                candidate: format!("{reviewer:?} for app {app_id:?}"),
+                allowed: format!("{:?}", allowed_approvals_reviewers.value),
+                requirement_source: allowed_approvals_reviewers.source.clone(),
+            });
+        }
+    }
+
+    Ok(())
+}
+
 impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
     type Error = ConstraintError;
 
     fn try_from(toml: ConfigRequirementsWithSources) -> Result<Self, Self::Error> {
+        validate_app_approvals_reviewers_are_subsets(
+            toml.allowed_approvals_reviewers.as_ref(),
+            toml.apps.as_ref(),
+        )?;
+
         // Profile catalog selection remains on ConfigRequirementsToml for
         // config loading and requirements API projection. The normalized
         // constraints below only need the compiled PermissionProfile envelope.
@@ -2573,6 +2613,31 @@ allowed_approvals_reviewers = ["user"]
                 .approvals_reviewer
                 .can_set(&ApprovalsReviewer::User)
                 .is_ok()
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn app_allowed_approvals_reviewers_must_be_subset_of_global_allow_list() -> Result<()> {
+        let toml_str = r#"
+            allowed_approvals_reviewers = ["auto_review"]
+
+            [apps.calendar]
+            allowed_approvals_reviewers = ["user"]
+        "#;
+        let config: ConfigRequirementsToml = from_str(toml_str)?;
+        let err = ConfigRequirements::try_from(with_unknown_source(config))
+            .expect_err("app reviewer allow-list should not widen the global allow-list");
+
+        assert_eq!(
+            err,
+            ConstraintError::InvalidValue {
+                field_name: "apps.*.allowed_approvals_reviewers",
+                candidate: "User for app \"calendar\"".to_string(),
+                allowed: "[AutoReview]".to_string(),
+                requirement_source: RequirementSource::Unknown,
+            }
         );
 
         Ok(())
