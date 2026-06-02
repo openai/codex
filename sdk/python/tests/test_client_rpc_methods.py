@@ -11,7 +11,6 @@ from openai_codex.generated.v2_all import (
     ThreadResumeResponse,
     ThreadTokenUsageUpdatedNotification,
     TurnCompletedNotification,
-    TurnSteerResponse,
     WarningNotification,
 )
 from openai_codex.models import Notification, UnknownNotification
@@ -25,53 +24,6 @@ def test_generated_params_models_are_snake_case_and_dump_by_alias() -> None:
     assert "search_term" in ThreadListParams.model_fields
     dumped = _params_dict(params)
     assert dumped == {"searchTerm": "needle", "limit": 5}
-
-
-def test_turn_steer_sends_client_user_message_id() -> None:
-    """Steering should preserve the caller's message id on the wire."""
-    client = CodexClient()
-    captured: dict[str, object] = {}
-
-    def fake_request(
-        method: str,
-        params: dict[str, object] | None,
-        *,
-        response_model: type[TurnSteerResponse],
-    ) -> TurnSteerResponse:
-        captured.update(
-            {
-                "method": method,
-                "params": params,
-                "response_model": response_model,
-            }
-        )
-        return TurnSteerResponse(turn_id="turn-1")
-
-    client.request = fake_request  # type: ignore[method-assign]
-
-    response = client.turn_steer(
-        "thread-1",
-        "turn-1",
-        "follow up",
-        client_user_message_id="message-1",
-    )
-
-    assert {
-        "captured": captured,
-        "response": response,
-    } == {
-        "captured": {
-            "method": "turn/steer",
-            "params": {
-                "clientUserMessageId": "message-1",
-                "expectedTurnId": "turn-1",
-                "input": [{"text": "follow up", "text_elements": [], "type": "text"}],
-                "threadId": "thread-1",
-            },
-            "response_model": TurnSteerResponse,
-        },
-        "response": TurnSteerResponse(turn_id="turn-1"),
-    }
 
 
 def test_generated_v2_bundle_has_single_shared_plan_type_definition() -> None:

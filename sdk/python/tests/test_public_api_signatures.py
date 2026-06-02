@@ -371,7 +371,6 @@ def test_generated_public_signatures_are_snake_case_and_typed() -> None:
         ],
         Thread.turn: [
             "approval_mode",
-            "client_user_message_id",
             "cwd",
             "effort",
             "model",
@@ -383,7 +382,6 @@ def test_generated_public_signatures_are_snake_case_and_typed() -> None:
         ],
         Thread.run: [
             "approval_mode",
-            "client_user_message_id",
             "cwd",
             "effort",
             "model",
@@ -448,7 +446,6 @@ def test_generated_public_signatures_are_snake_case_and_typed() -> None:
         ],
         AsyncThread.turn: [
             "approval_mode",
-            "client_user_message_id",
             "cwd",
             "effort",
             "model",
@@ -460,7 +457,6 @@ def test_generated_public_signatures_are_snake_case_and_typed() -> None:
         ],
         AsyncThread.run: [
             "approval_mode",
-            "client_user_message_id",
             "cwd",
             "effort",
             "model",
@@ -469,12 +465,6 @@ def test_generated_public_signatures_are_snake_case_and_typed() -> None:
             "sandbox",
             "service_tier",
             "summary",
-        ],
-        TurnHandle.steer: [
-            "client_user_message_id",
-        ],
-        AsyncTurnHandle.steer: [
-            "client_user_message_id",
         ],
     }
 

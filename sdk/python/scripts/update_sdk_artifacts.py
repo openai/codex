@@ -1163,7 +1163,9 @@ def generate_public_api_flat_methods() -> None:
     turn_start_fields = _load_public_fields(
         "openai_codex.generated.v2_all",
         "TurnStartParams",
-        exclude={"thread_id", "input", *approval_fields},
+        # Keep the wire model current without exposing this app-server field
+        # through the ergonomic Python API yet.
+        exclude={"thread_id", "input", "client_user_message_id", *approval_fields},
     )
     turn_start_fields = _replace_public_sandbox_field(turn_start_fields, wire_name="sandbox_policy")
 

@@ -210,8 +210,6 @@ class AsyncCodexClient:
         thread_id: str,
         expected_turn_id: str,
         input_items: list[JsonObject] | JsonObject | str,
-        *,
-        client_user_message_id: str | None = None,
     ) -> TurnSteerResponse:
         """Send steering input to a turn using the wrapped sync client."""
         return await self._call_sync(
@@ -219,7 +217,6 @@ class AsyncCodexClient:
             thread_id,
             expected_turn_id,
             input_items,
-            client_user_message_id=client_user_message_id,
         )
 
     async def model_list(self, include_hidden: bool = False) -> ModelListResponse:
