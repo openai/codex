@@ -136,13 +136,8 @@ fn open_desktop_thread_url(url: &str) -> Result<(), String> {
     }
 }
 
-#[cfg(any(target_os = "windows", target_os = "linux"))]
+#[cfg(target_os = "windows")]
 fn open_desktop_thread_url(url: &str) -> Result<(), String> {
-    #[cfg(target_os = "linux")]
-    if !crate::clipboard_paste::is_probably_wsl() {
-        return Err("Codex Desktop is only available on macOS and Windows".to_string());
-    }
-
     let script = windows_desktop_app_launch_script(url);
     let output = std::process::Command::new("powershell.exe")
         .arg("-NoProfile")
@@ -166,7 +161,7 @@ fn open_desktop_thread_url(url: &str) -> Result<(), String> {
     }
 }
 
-#[cfg(any(target_os = "windows", target_os = "linux"))]
+#[cfg(target_os = "windows")]
 fn windows_desktop_app_launch_script(url: &str) -> String {
     let url = powershell_single_quoted_string(url);
     format!(
@@ -197,12 +192,12 @@ Start-Process -FilePath $exe -WorkingDirectory $appDir -ArgumentList @('resource
     )
 }
 
-#[cfg(any(target_os = "windows", target_os = "linux"))]
+#[cfg(target_os = "windows")]
 fn powershell_single_quoted_string(value: &str) -> String {
     format!("'{}'", value.replace('\'', "''"))
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 fn open_desktop_thread_url(_url: &str) -> Result<(), String> {
     Err("Codex Desktop is only available on macOS and Windows".to_string())
 }
