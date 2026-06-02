@@ -794,6 +794,7 @@ pub(crate) struct CodexTurnEventParams {
     pub(crate) sandbox_network_access: bool,
     pub(crate) collaboration_mode: Option<&'static str>,
     pub(crate) personality: Option<String>,
+    pub(crate) workspace_kind: Option<String>,
     pub(crate) num_input_images: usize,
     pub(crate) is_first_turn: bool,
     pub(crate) status: Option<TurnStatus>,

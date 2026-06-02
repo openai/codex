@@ -85,6 +85,7 @@ pub struct TurnResolvedConfigFact {
     pub sandbox_network_access: bool,
     pub collaboration_mode: ModeKind,
     pub personality: Option<Personality>,
+    pub workspace_kind: Option<String>,
     pub is_first_turn: bool,
 }
 
