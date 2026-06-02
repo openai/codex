@@ -1887,6 +1887,9 @@ async fn multi_agent_v2_followup_task_completion_notifies_parent_on_every_turn()
         .start_thread((*turn.config).clone())
         .await
         .expect("root thread should start");
+    // Production spawn_agent calls happen after the parent turn has resolved
+    // and stored its runtime; mirror that before using the synthetic handler.
+    root.thread.codex.session.new_default_turn().await;
     session.services.agent_control = manager.agent_control();
     session.conversation_id = root.thread_id;
     let session = Arc::new(session);
