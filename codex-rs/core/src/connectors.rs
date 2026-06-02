@@ -26,6 +26,7 @@ use crate::plugins::list_tool_suggest_discoverable_plugins;
 use crate::session::INITIAL_SUBMIT_ID;
 use codex_config::AppsRequirementsToml;
 use codex_config::types::AppToolApproval;
+use codex_config::types::ApprovalsReviewer;
 use codex_config::types::AppsConfigToml;
 use codex_config::types::ToolSuggestDiscoverableType;
 use codex_core_plugins::PluginsManager;
@@ -569,6 +570,35 @@ pub(crate) fn codex_app_tool_is_enabled(config: &Config, tool_info: &ToolInfo) -
         tool_info.tool.annotations.as_ref(),
     )
     .enabled
+}
+
+pub(crate) fn mcp_approvals_reviewer(
+    config: &Config,
+    server_name: &str,
+    connector_id: Option<&str>,
+) -> ApprovalsReviewer {
+    let app_reviewer = if server_name == CODEX_APPS_MCP_SERVER_NAME {
+        read_user_apps_config(config).and_then(|apps_config| {
+            connector_id
+                .and_then(|connector_id| apps_config.apps.get(connector_id))
+                .and_then(|app| app.approvals_reviewer)
+        })
+    } else {
+        None
+    };
+
+    if let Some(reviewer) = app_reviewer
+        && config
+            .config_layer_stack
+            .requirements()
+            .approvals_reviewer
+            .can_set(&reviewer)
+            .is_ok()
+    {
+        return reviewer;
+    }
+
+    config.approvals_reviewer
 }
 
 fn read_apps_config(config: &Config) -> Option<AppsConfigToml> {
