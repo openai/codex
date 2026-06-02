@@ -259,33 +259,27 @@ async fn websocket_v2_test_codex_shell_chain() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn websocket_v2_rollback_opens_new_connection_for_rewritten_history() -> Result<()> {
+async fn websocket_v2_rollback_reuses_connection_without_previous_response_id() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let server = start_websocket_server(vec![
+    let server = start_websocket_server(vec![vec![
+        vec![ev_response_created("warm-1"), ev_completed("warm-1")],
         vec![
-            vec![ev_response_created("warm-1"), ev_completed("warm-1")],
-            vec![
-                ev_response_created("resp-1"),
-                ev_assistant_message("msg-1", "kept"),
-                ev_completed("resp-1"),
-            ],
-            vec![
-                ev_response_created("resp-2"),
-                ev_assistant_message("msg-2", "discarded"),
-                ev_completed("resp-2"),
-            ],
-            vec![
-                ev_response_created("should-not-be-used"),
-                ev_completed("should-not-be-used"),
-            ],
+            ev_response_created("resp-1"),
+            ev_assistant_message("msg-1", "kept"),
+            ev_completed("resp-1"),
         ],
-        vec![vec![
+        vec![
+            ev_response_created("resp-2"),
+            ev_assistant_message("msg-2", "discarded"),
+            ev_completed("resp-2"),
+        ],
+        vec![
             ev_response_created("resp-3"),
             ev_assistant_message("msg-3", "after rollback"),
             ev_completed("resp-3"),
-        ]],
-    ])
+        ],
+    ]])
     .await;
 
     let mut builder = test_codex().with_config(|config| {
@@ -307,13 +301,12 @@ async fn websocket_v2_rollback_opens_new_connection_for_rewritten_history() -> R
     .await;
     test.submit_turn("after rollback").await?;
 
-    assert_eq!(server.handshakes().len(), 2);
+    assert_eq!(server.handshakes().len(), 1);
     let connections = server.connections();
-    assert_eq!(connections.len(), 2);
-    assert_eq!(connections[0].len(), 3);
-    assert_eq!(connections[1].len(), 1);
+    assert_eq!(connections.len(), 1);
+    assert_eq!(connections[0].len(), 4);
 
-    let after_rollback = connections[1][0].body_json();
+    let after_rollback = connections[0][3].body_json();
     assert_eq!(after_rollback["type"].as_str(), Some("response.create"));
     assert_eq!(after_rollback.get("previous_response_id"), None);
 
