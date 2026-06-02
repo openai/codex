@@ -82,7 +82,7 @@ class RunBazelWithBuildBuddyTest(unittest.TestCase):
         expression = 'kind("rust_library rule", //codex-rs/...)'
         env = {"BUILDBUDDY_API_KEY": "fork-token"}
 
-        for command in ("query", "cquery"):
+        for command in ("query", "cquery", "aquery"):
             with self.subTest(command=command):
                 self.assertEqual(
                     run_bazel_with_buildbuddy.bazel_args_with_remote_config(

@@ -21,7 +21,7 @@ REMOTE_EXECUTION_CONFIGS = {
     "--config=ci-v8",
     "--config=ci-windows-cross",
 }
-QUERY_COMMANDS = {"query", "cquery"}
+QUERY_COMMANDS = {"query", "cquery", "aquery"}
 
 
 # Only authenticated workflow runs executing trusted upstream code may use the
@@ -107,7 +107,7 @@ def bazel_args_with_remote_config(
         insertion_idx = args.index("--")
     except ValueError:
         if any(command in args for command in QUERY_COMMANDS):
-            # `query` and `cquery` accept one trailing expression; keep
+            # Query commands accept one trailing expression; keep
             # wrapper-added options in front of it without adding a separator.
             insertion_idx = len(args) - 1
         else:
