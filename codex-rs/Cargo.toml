@@ -67,6 +67,7 @@ members = [
     "models-manager",
     "network-proxy",
     "ollama",
+    "process",
     "process-hardening",
     "protocol",
     "realtime-webrtc",
@@ -198,6 +199,7 @@ codex-ollama = { path = "ollama" }
 codex-otel = { path = "otel" }
 codex-plugin = { path = "plugin" }
 codex-model-provider = { path = "model-provider" }
+codex-process = { path = "process" }
 codex-process-hardening = { path = "process-hardening" }
 codex-protocol = { path = "protocol" }
 codex-realtime-webrtc = { path = "realtime-webrtc" }

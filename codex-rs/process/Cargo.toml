@@ -1,0 +1,21 @@
+[package]
+name = "codex-process"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "codex_process"
+path = "src/lib.rs"
+doctest = false
+
+[lints]
+workspace = true
+
+[dependencies]
+tokio = { workspace = true, features = ["process"] }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["io-util", "macros", "rt", "time"] }
+tracing-test = { workspace = true }

@@ -3457,6 +3457,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-process"
+version = "0.0.0"
+dependencies = [
+ "tokio",
+ "tracing",
+ "tracing-test",
+]
+
+[[package]]
 name = "codex-process-hardening"
 version = "0.0.0"
 dependencies = [
