@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::collections::BTreeMap;
 use std::io;
 use std::path::Component;
 use std::path::Path;
@@ -196,25 +197,130 @@ pub(crate) fn resolve_permission_profile(
     profile_name: &str,
 ) -> io::Result<ResolvedPermissionProfileToml> {
     permissions
-        .resolve_profile(profile_name, extensible_builtin_parent_profile_marker)
+        .resolve_profile(profile_name, extensible_builtin_parent_profile)
         .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err.to_string()))
 }
 
-/// Built-in parents provide their runtime permissions below. Resolution only
-/// needs an empty profile marker so inheritance can terminate while preserving
-/// the built-in parent id in `inherited_profile_names`.
-fn extensible_builtin_parent_profile_marker(profile_name: &str) -> Option<PermissionProfileToml> {
-    matches!(
-        profile_name,
-        BUILT_IN_READ_ONLY_PROFILE | BUILT_IN_WORKSPACE_PROFILE
-    )
-    .then_some(PermissionProfileToml {
+fn extensible_builtin_parent_profile(profile_name: &str) -> Option<PermissionProfileToml> {
+    let file_system = match profile_name {
+        BUILT_IN_READ_ONLY_PROFILE => FileSystemSandboxPolicy::read_only(),
+        BUILT_IN_WORKSPACE_PROFILE => FileSystemSandboxPolicy::workspace_write(
+            &[],
+            /*exclude_tmpdir_env_var*/ false,
+            /*exclude_slash_tmp*/ false,
+        ),
+        _ => return None,
+    };
+    Some(permission_profile_toml_from_file_system_policy(file_system))
+}
+
+fn permission_profile_toml_from_file_system_policy(
+    file_system: FileSystemSandboxPolicy,
+) -> PermissionProfileToml {
+    let mut filesystem = FilesystemPermissionsToml {
+        glob_scan_max_depth: file_system.glob_scan_max_depth,
+        entries: BTreeMap::new(),
+    };
+    for entry in file_system.entries {
+        insert_filesystem_permission_toml(&mut filesystem.entries, entry);
+    }
+    PermissionProfileToml {
         description: None,
         extends: None,
         workspace_roots: None,
-        filesystem: None,
+        filesystem: Some(filesystem),
         network: None,
-    })
+    }
+}
+
+fn insert_filesystem_permission_toml(
+    entries: &mut BTreeMap<String, FilesystemPermissionToml>,
+    entry: FileSystemSandboxEntry,
+) {
+    match entry.path {
+        FileSystemPath::Path { path } => {
+            entries.insert(
+                path.into_path_buf().to_string_lossy().into_owned(),
+                FilesystemPermissionToml::Access(entry.access),
+            );
+        }
+        FileSystemPath::GlobPattern { pattern } => {
+            entries.insert(pattern, FilesystemPermissionToml::Access(entry.access));
+        }
+        FileSystemPath::Special { value } => {
+            insert_special_filesystem_permission_toml(entries, value, entry.access);
+        }
+    }
+}
+
+fn insert_special_filesystem_permission_toml(
+    entries: &mut BTreeMap<String, FilesystemPermissionToml>,
+    value: FileSystemSpecialPath,
+    access: FileSystemAccessMode,
+) {
+    match value {
+        FileSystemSpecialPath::Root => {
+            entries.insert(
+                ":root".to_string(),
+                FilesystemPermissionToml::Access(access),
+            );
+        }
+        FileSystemSpecialPath::Minimal => {
+            entries.insert(
+                ":minimal".to_string(),
+                FilesystemPermissionToml::Access(access),
+            );
+        }
+        FileSystemSpecialPath::ProjectRoots { subpath } => {
+            insert_scoped_filesystem_permission_toml(
+                entries,
+                ":workspace_roots".to_string(),
+                subpath.unwrap_or_else(|| PathBuf::from(".")),
+                access,
+            );
+        }
+        FileSystemSpecialPath::Tmpdir => {
+            entries.insert(
+                ":tmpdir".to_string(),
+                FilesystemPermissionToml::Access(access),
+            );
+        }
+        FileSystemSpecialPath::SlashTmp => {
+            entries.insert(
+                ":slash_tmp".to_string(),
+                FilesystemPermissionToml::Access(access),
+            );
+        }
+        FileSystemSpecialPath::Unknown { path, subpath } => {
+            if let Some(subpath) = subpath {
+                insert_scoped_filesystem_permission_toml(entries, path, subpath, access);
+            } else {
+                entries.insert(path, FilesystemPermissionToml::Access(access));
+            }
+        }
+    };
+}
+
+fn insert_scoped_filesystem_permission_toml(
+    entries: &mut BTreeMap<String, FilesystemPermissionToml>,
+    path: String,
+    subpath: PathBuf,
+    access: FileSystemAccessMode,
+) {
+    let permission = entries
+        .entry(path)
+        .or_insert_with(|| FilesystemPermissionToml::Scoped(BTreeMap::new()));
+    match permission {
+        FilesystemPermissionToml::Scoped(scoped_entries) => {
+            scoped_entries.insert(subpath.to_string_lossy().into_owned(), access);
+        }
+        FilesystemPermissionToml::Access(_) => {
+            *permission = FilesystemPermissionToml::Scoped(BTreeMap::from([(
+                subpath.to_string_lossy().into_owned(),
+                access,
+            )]));
+        }
+    }
 }
 
 pub(crate) fn network_proxy_config_for_profile_selection(
@@ -244,25 +350,10 @@ pub(crate) fn compile_permission_profile(
     policy_cwd: &Path,
     startup_warnings: &mut Vec<String>,
 ) -> io::Result<(FileSystemSandboxPolicy, NetworkSandboxPolicy)> {
-    let ResolvedPermissionProfileToml {
-        profile,
-        inherited_profile_names,
-    } = resolve_permission_profile(permissions, profile_name)?;
-    let base_permissions = inherited_profile_names.iter().find_map(|name| {
-        match name.as_str() {
-            BUILT_IN_READ_ONLY_PROFILE => Some(PermissionProfile::read_only()),
-            BUILT_IN_WORKSPACE_PROFILE => Some(PermissionProfile::workspace_write()),
-            _ => None,
-        }
-        .map(|profile| profile.to_runtime_permissions())
-    });
-    let (mut file_system_sandbox_policy, base_network_sandbox_policy) = base_permissions
-        .unwrap_or_else(|| {
-            (
-                FileSystemSandboxPolicy::restricted(Vec::new()),
-                NetworkSandboxPolicy::Restricted,
-            )
-        });
+    let ResolvedPermissionProfileToml { profile, .. } =
+        resolve_permission_profile(permissions, profile_name)?;
+    let mut file_system_sandbox_policy = FileSystemSandboxPolicy::restricted(Vec::new());
+    let base_network_sandbox_policy = NetworkSandboxPolicy::Restricted;
     if let Some(filesystem) = profile.filesystem.as_ref() {
         if filesystem.is_empty() && file_system_sandbox_policy.entries.is_empty() {
             push_warning(
@@ -693,6 +784,7 @@ fn parse_special_path(path: &str) -> Option<FileSystemSpecialPath> {
         ":minimal" => Some(FileSystemSpecialPath::Minimal),
         ":workspace_roots" => Some(FileSystemSpecialPath::project_roots(/*subpath*/ None)),
         ":tmpdir" => Some(FileSystemSpecialPath::Tmpdir),
+        ":slash_tmp" => Some(FileSystemSpecialPath::SlashTmp),
         _ if path.starts_with(':') => {
             Some(FileSystemSpecialPath::unknown(path, /*subpath*/ None))
         }
