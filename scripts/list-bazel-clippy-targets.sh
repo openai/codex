@@ -20,23 +20,13 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Resolve the dynamic targets before printing anything so callers do not
-# continue with a partial list if `bazel query` fails. Reuse the same CI Bazel
-# server settings as the subsequent build so Windows jobs do not cold-start a
-# second Bazel server just for target discovery.
-if [[ $windows_cross_compile -eq 1 ]]; then
-  manual_rust_test_targets="$(
-    ./.github/scripts/run-bazel-query-ci.sh \
-      --windows-cross-compile \
-      --output=label \
-      -- 'kind("rust_test rule", attr(tags, "manual", //codex-rs/... except //codex-rs/v8-poc/...))'
-  )"
-else
-  manual_rust_test_targets="$(
-    ./.github/scripts/run-bazel-query-ci.sh \
-      --output=label \
-      -- 'kind("rust_test rule", attr(tags, "manual", //codex-rs/... except //codex-rs/v8-poc/...))'
-  )"
-fi
+# continue with a partial list if `bazel query` fails. Target discovery is
+# local on all platforms.
+manual_rust_test_targets="$(
+  ./.github/scripts/run-bazel-query-ci.sh \
+    --output=label \
+    -- 'kind("rust_test rule", attr(tags, "manual", //codex-rs/... except //codex-rs/v8-poc/...))'
+)"
 if [[ "${RUNNER_OS:-}" != "Windows" ]]; then
   # Non-Windows clippy jobs lint the native test binaries; the
   # Windows-cross binaries exist only for the fast Windows test leg.

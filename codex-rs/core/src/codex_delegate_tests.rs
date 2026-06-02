@@ -2,6 +2,7 @@ use super::*;
 use crate::mcp_tool_call::MCP_TOOL_APPROVAL_DECLINE_SYNTHETIC;
 use crate::mcp_tool_call::MCP_TOOL_APPROVAL_QUESTION_ID_PREFIX;
 use async_channel::bounded;
+use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::models::NetworkPermissions;
 use codex_protocol::models::ResponseItem;
@@ -443,5 +444,74 @@ async fn delegated_mcp_guardian_abort_returns_synthetic_decline_answer() {
                 },
             )]),
         })
+    );
+}
+
+#[tokio::test]
+async fn delegated_mcp_user_reviewer_waits_for_metadata_lookup() {
+    let (parent_session, parent_ctx, _rx_events) =
+        crate::session::tests::make_session_and_context_with_rx().await;
+    let pending_mcp_invocations = Arc::new(Mutex::new(HashMap::from([(
+        "call-1".to_string(),
+        McpInvocation {
+            server: CODEX_APPS_MCP_SERVER_NAME.to_string(),
+            tool: "dangerous_tool".to_string(),
+            arguments: None,
+        },
+    )])));
+    let cancel_token = CancellationToken::new();
+    let manager = Arc::clone(&parent_session.services.mcp_connection_manager);
+    let (manager_locked_tx, manager_locked_rx) = std::sync::mpsc::sync_channel(0);
+    let (release_manager_tx, release_manager_rx) = std::sync::mpsc::sync_channel(0);
+    let manager_lock = tokio::task::spawn_blocking(move || {
+        let _manager_guard = manager.blocking_write();
+        manager_locked_tx
+            .send(())
+            .expect("manager lock receiver should remain open");
+        release_manager_rx
+            .recv()
+            .expect("manager lock release sender should remain open");
+    });
+    manager_locked_rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("manager write lock should be acquired");
+
+    let event = RequestUserInputEvent {
+        call_id: "call-1".to_string(),
+        turn_id: "child-turn-1".to_string(),
+        questions: vec![RequestUserInputQuestion {
+            id: format!("{MCP_TOOL_APPROVAL_QUESTION_ID_PREFIX}_call-1"),
+            header: "Approve app tool call?".to_string(),
+            question: "Allow this app tool?".to_string(),
+            is_other: false,
+            is_secret: false,
+            options: None,
+        }],
+    };
+    let response = maybe_auto_review_mcp_request_user_input(
+        &parent_session,
+        &parent_ctx,
+        &pending_mcp_invocations,
+        &event,
+        &cancel_token,
+    );
+    tokio::pin!(response);
+    assert!(
+        timeout(Duration::from_millis(100), &mut response)
+            .await
+            .is_err(),
+        "manual reviewer should wait for MCP metadata"
+    );
+    release_manager_tx
+        .send(())
+        .expect("manager lock holder should remain open");
+    manager_lock
+        .await
+        .expect("manager lock task should not panic");
+    assert_eq!(
+        timeout(Duration::from_secs(1), response)
+            .await
+            .expect("manual reviewer should finish after MCP metadata lookup"),
+        None
     );
 }

@@ -1080,6 +1080,7 @@ pub(crate) async fn built_tools(
         if let Some(accessible_connectors) = accessible_connectors_with_enabled_state.as_ref() {
             match connectors::list_tool_suggest_discoverable_tools_with_auth(
                 &turn_context.config,
+                sess.services.plugins_manager.as_ref(),
                 auth.as_ref(),
                 accessible_connectors.as_slice(),
                 &loaded_plugin_app_connector_ids,

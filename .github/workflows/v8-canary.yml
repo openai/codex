@@ -5,6 +5,7 @@ on:
     paths:
       - ".bazelrc"
       - ".github/actions/setup-bazel-ci/**"
+      - ".github/scripts/run_bazel_with_buildbuddy.py"
       - ".github/scripts/rusty_v8_bazel.py"
       - ".github/scripts/rusty_v8_module_bazel.py"
       - ".github/workflows/rusty-v8-release.yml"
@@ -23,6 +24,7 @@ on:
     paths:
       - ".bazelrc"
       - ".github/actions/setup-bazel-ci/**"
+      - ".github/scripts/run_bazel_with_buildbuddy.py"
       - ".github/scripts/rusty_v8_bazel.py"
       - ".github/scripts/rusty_v8_module_bazel.py"
       - ".github/workflows/rusty-v8-release.yml"
@@ -36,6 +38,11 @@ on:
       - "patches/v8_*.patch"
       - "third_party/v8/**"
   workflow_dispatch:
+
+# Cargo's libgit2 transport has been flaky when fetching git dependencies with
+# nested submodules. Prefer the system git CLI for Cargo builds and smoke tests.
+env:
+  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
 
 concurrency:
   group: ${{ github.workflow }}::${{ github.event.pull_request.number > 0 && format('pr-{0}', github.event.pull_request.number) || github.ref_name }}
@@ -198,11 +205,10 @@ jobs:
             bazel_args+=(--config=v8-release-compat)
           fi
 
-          bazel \
+          ./.github/scripts/run_bazel_with_buildbuddy.py \
             --noexperimental_remote_repo_contents_cache \
             "${bazel_args[@]}" \
-            "--config=${{ matrix.bazel_config }}" \
-            "--remote_header=x-buildbuddy-api-key=${BUILDBUDDY_API_KEY}"
+            "--config=${{ matrix.bazel_config }}"
 
       - name: Stage release pair
         env:

@@ -9,6 +9,7 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::GitInfo;
+use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::ThreadMemoryMode as MemoryMode;
@@ -72,6 +73,8 @@ pub struct CreateThreadParams {
     pub base_instructions: BaseInstructions,
     /// Dynamic tools available to the thread at startup.
     pub dynamic_tools: Vec<DynamicToolSpec>,
+    /// Multi-agent runtime selected when the thread was created.
+    pub multi_agent_version: Option<MultiAgentVersion>,
     /// Metadata captured for the newly created thread.
     pub metadata: ThreadPersistenceMetadata,
 }

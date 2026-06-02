@@ -592,6 +592,31 @@ impl PluginsManager {
         Some(crate::remote::group_remote_installed_plugins_by_marketplaces(plugins, visible_scopes))
     }
 
+    pub fn cached_global_remote_discoverable_plugins_for_config(
+        &self,
+        config: &PluginsConfigInput,
+        auth: Option<&CodexAuth>,
+    ) -> Vec<crate::remote::RemoteDiscoverablePlugin> {
+        if !config.plugins_enabled || !config.remote_plugin_enabled {
+            return Vec::new();
+        }
+        let Some(auth) = auth.filter(|auth| auth.uses_codex_backend()) else {
+            return Vec::new();
+        };
+        let Some(account_id) = auth.get_account_id() else {
+            return Vec::new();
+        };
+        if account_id.is_empty() {
+            return Vec::new();
+        }
+
+        crate::remote::cached_global_remote_discoverable_plugins(
+            self.codex_home.as_path(),
+            &remote_plugin_service_config(config),
+            auth,
+        )
+    }
+
     pub async fn build_and_cache_remote_installed_plugin_marketplaces(
         &self,
         config: &PluginsConfigInput,
@@ -1548,9 +1573,30 @@ impl PluginsManager {
                 );
                 manager.maybe_start_remote_installed_plugin_bundle_sync(
                     &config_for_remote_sync,
-                    auth,
+                    auth.clone(),
                     on_effective_plugins_changed,
                 );
+                if config_for_remote_sync.remote_plugin_enabled {
+                    match crate::remote::fetch_and_cache_global_remote_plugin_catalog(
+                        manager.codex_home.as_path(),
+                        &remote_plugin_service_config(&config_for_remote_sync),
+                        auth.as_ref(),
+                    )
+                    .await
+                    {
+                        Ok(()) => {}
+                        Err(
+                            RemotePluginCatalogError::AuthRequired
+                            | RemotePluginCatalogError::UnsupportedAuthMode,
+                        ) => {}
+                        Err(err) => {
+                            warn!(
+                                error = %err,
+                                "failed to warm remote plugin catalog cache"
+                            );
+                        }
+                    }
+                }
             });
 
             let config = config.clone();

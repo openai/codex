@@ -215,6 +215,7 @@ async fn thread_unarchive_preserves_pathless_store_metadata() -> Result<()> {
             thread_source: None,
             base_instructions: BaseInstructions::default(),
             dynamic_tools: Vec::new(),
+            multi_agent_version: None,
             metadata: ThreadPersistenceMetadata {
                 cwd: None,
                 model_provider: "test-provider".to_string(),

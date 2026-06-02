@@ -22,6 +22,7 @@ use crate::config_types::ReasoningSummary;
 use crate::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
 use crate::config_types::ServiceTier;
 use crate::config_types::Verbosity;
+use crate::protocol::MultiAgentVersion;
 
 const PERSONALITY_PLACEHOLDER: &str = "{{ personality }}";
 pub const SPEED_TIER_FAST: &str = "fast";
@@ -347,6 +348,12 @@ pub struct ModelInfo {
         deserialize_with = "deserialize_optional_model_selector"
     )]
     pub tool_mode: Option<ToolMode>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_optional_model_selector"
+    )]
+    pub multi_agent_version: Option<MultiAgentVersion>,
 }
 
 impl ModelInfo {
@@ -643,6 +650,7 @@ mod tests {
             supports_search_tool: false,
             auto_review_model_override: None,
             tool_mode: None,
+            multi_agent_version: None,
         }
     }
 
@@ -899,6 +907,22 @@ mod tests {
             .as_object()
             .expect("model info should be an object");
         assert!(!object.contains_key("tool_mode"));
+    }
+
+    #[test]
+    fn model_info_treats_unknown_multi_agent_version_as_omitted() {
+        let mut value =
+            serde_json::to_value(test_model(/*spec*/ None)).expect("serialize test model");
+        let object = value
+            .as_object_mut()
+            .expect("model info should be an object");
+        object.insert(
+            "multi_agent_version".to_string(),
+            serde_json::Value::String("future_multi_agent_version".to_string()),
+        );
+        let model = serde_json::from_value::<ModelInfo>(value).expect("deserialize model info");
+
+        assert_eq!(model.multi_agent_version, None);
     }
 
     #[test]

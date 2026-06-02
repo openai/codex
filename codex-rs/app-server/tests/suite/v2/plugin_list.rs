@@ -1900,6 +1900,23 @@ async fn plugin_list_includes_remote_marketplaces_when_remote_plugin_enabled() -
             "project management".to_string()
         ]
     );
+    let cache_files = std::fs::read_dir(codex_home.path().join("cache/remote_plugin_catalog"))?
+        .map(|entry| entry.map(|entry| entry.path()))
+        .collect::<Result<Vec<_>, _>>()?;
+    assert_eq!(cache_files.len(), 1);
+    let cached_catalog: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&cache_files[0])?)?;
+    assert_eq!(cached_catalog["schema_version"], serde_json::json!(1));
+    let cached_plugin_ids = cached_catalog["plugins"]
+        .as_array()
+        .expect("cached plugins should be an array")
+        .iter()
+        .map(|plugin| plugin["id"].as_str().expect("cached plugin id").to_string())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        cached_plugin_ids,
+        vec!["plugins~Plugin_00000000000000000000000000000000".to_string()]
+    );
     assert_eq!(response.featured_plugin_ids, Vec::<String>::new());
     assert!(
         !server

@@ -6,6 +6,11 @@ on:
     branches:
       - main
 
+# Cargo's libgit2 transport has been flaky when fetching git dependencies with
+# nested submodules. Prefer the system git CLI across every Cargo invocation.
+env:
+  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+
 jobs:
   cargo-deny:
     runs-on: ubuntu-latest

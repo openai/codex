@@ -3,6 +3,11 @@ on:
   pull_request: {}
   workflow_dispatch:
 
+# Cargo's libgit2 transport has been flaky when fetching git dependencies with
+# nested submodules. Prefer the system git CLI across every Cargo invocation.
+env:
+  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+
 jobs:
   # --- Detect what changed so the fast PR workflow only runs relevant jobs ----
   changed:
