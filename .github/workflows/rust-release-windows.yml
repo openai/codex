@@ -150,6 +150,8 @@ jobs:
       - build-windows-binaries
     name: Build - ${{ matrix.runner }} - ${{ matrix.target }}
     runs-on: ${{ matrix.runs_on }}
+    environment:
+      name: azure-artifact-signing
     timeout-minutes: 90
     permissions:
       contents: read
