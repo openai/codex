@@ -275,8 +275,14 @@ async fn effective_patch_permissions(
 ) {
     let file_paths = file_paths_for_action(action);
     let granted_permissions = merge_permission_profiles(
-        session.granted_session_permissions(environment_id).await.as_ref(),
-        session.granted_turn_permissions(environment_id).await.as_ref(),
+        session
+            .granted_session_permissions(environment_id)
+            .await
+            .as_ref(),
+        session
+            .granted_turn_permissions(environment_id)
+            .await
+            .as_ref(),
     );
     let base_file_system_sandbox_policy = turn.file_system_sandbox_policy();
     let file_system_sandbox_policy = effective_file_system_sandbox_policy(

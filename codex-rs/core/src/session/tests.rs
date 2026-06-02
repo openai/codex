@@ -5240,13 +5240,14 @@ async fn request_permission_grants_are_environment_keyed() {
         )
         .await;
 
-    let turn_state = originating_turn_state.lock().await;
-    assert_eq!(
-        turn_state.granted_permissions("remote"),
-        Some(requested_permissions.clone().into())
-    );
-    assert_eq!(turn_state.granted_permissions("local"), None);
-    drop(turn_state);
+    {
+        let turn_state = originating_turn_state.lock().await;
+        assert_eq!(
+            turn_state.granted_permissions("remote"),
+            Some(requested_permissions.clone().into())
+        );
+        assert_eq!(turn_state.granted_permissions("local"), None);
+    }
 
     session
         .record_granted_request_permissions_for_turn(

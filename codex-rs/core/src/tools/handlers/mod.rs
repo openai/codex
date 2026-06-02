@@ -274,11 +274,9 @@ pub(super) async fn apply_granted_turn_permissions(
         granted_permissions.as_ref(),
     );
     let permissions_preapproved = match (effective_permissions.as_ref(), granted_permissions) {
-        (Some(effective_permissions), Some(granted_permissions)) => permissions_are_preapproved(
-            effective_permissions,
-            granted_permissions,
-            cwd,
-        ),
+        (Some(effective_permissions), Some(granted_permissions)) => {
+            permissions_are_preapproved(effective_permissions, granted_permissions, cwd)
+        }
         _ => false,
     };
 

@@ -242,7 +242,8 @@ impl SessionState {
         permissions: AdditionalPermissionProfile,
     ) {
         let granted_permissions = merge_permission_profiles(
-            self.granted_permissions_by_environment_id.get(environment_id),
+            self.granted_permissions_by_environment_id
+                .get(environment_id),
             Some(&permissions),
         );
         if let Some(granted_permissions) = granted_permissions {
