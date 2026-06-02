@@ -29,7 +29,6 @@ pub enum RequirementSource {
         domain: String,
         key: String,
     },
-    CloudRequirements,
     /// Multiple requirements layers contributed to the final value. Sources are
     /// stored highest-priority first, matching the order surfaced in errors.
     Composite {
@@ -86,9 +85,6 @@ impl fmt::Display for RequirementSource {
             RequirementSource::Unknown => write!(f, "<unspecified>"),
             RequirementSource::MdmManagedPreferences { domain, key } => {
                 write!(f, "MDM {domain}:{key}")
-            }
-            RequirementSource::CloudRequirements => {
-                write!(f, "cloud requirements")
             }
             RequirementSource::Composite { sources } => {
                 write!(f, "requirements layers: ")?;
@@ -1510,22 +1506,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn composite_requirement_source_display_lists_sources_in_priority_order() {
-        let source = RequirementSource::composite([
-            RequirementSource::MdmManagedPreferences {
-                domain: "com.openai.codex".to_string(),
-                key: "requirements_toml_base64".to_string(),
-            },
-            RequirementSource::LegacyManagedConfigTomlFromMdm,
-        ]);
-
-        assert_eq!(
-            source.to_string(),
-            "requirements layers: MDM com.openai.codex:requirements_toml_base64, MDM managed_config.toml (legacy)"
-        );
-    }
-
     fn with_unknown_source(toml: ConfigRequirementsToml) -> ConfigRequirementsWithSources {
         let ConfigRequirementsToml {
             allowed_approval_policies,
@@ -1906,7 +1886,7 @@ mod tests {
     fn merge_unset_fields_ignores_blank_guardian_override() {
         let mut target = ConfigRequirementsWithSources::default();
         target.merge_unset_fields(
-            RequirementSource::CloudRequirements,
+            RequirementSource::LegacyManagedConfigTomlFromMdm,
             ConfigRequirementsToml {
                 guardian_policy_config: Some("   \n\t".to_string()),
                 ..Default::default()
@@ -2252,8 +2232,11 @@ allowed_approvals_reviewers = ["user"]
 
     #[test]
     fn merge_unset_fields_merges_apps_across_sources_with_enabled_evaluation() {
-        let higher_source = RequirementSource::CloudRequirements;
-        let lower_source = RequirementSource::LegacyManagedConfigTomlFromMdm;
+        let higher_source = RequirementSource::LegacyManagedConfigTomlFromMdm;
+        let lower_source = RequirementSource::MdmManagedPreferences {
+            domain: "com.openai.codex".to_string(),
+            key: "requirements_toml_base64".to_string(),
+        };
         let mut target = ConfigRequirementsWithSources::default();
 
         target.merge_unset_fields(
@@ -2294,7 +2277,7 @@ allowed_approvals_reviewers = ["user"]
         let mut target = ConfigRequirementsWithSources::default();
 
         target.merge_unset_fields(
-            RequirementSource::CloudRequirements,
+            RequirementSource::LegacyManagedConfigTomlFromMdm,
             ConfigRequirementsToml {
                 apps: Some(apps_requirements(&[])),
                 ..Default::default()
@@ -2415,7 +2398,7 @@ allowed_approvals_reviewers = ["user"]
             "#,
         )?;
 
-        let source_location = RequirementSource::CloudRequirements;
+        let source_location = RequirementSource::LegacyManagedConfigTomlFromMdm;
         let mut target = ConfigRequirementsWithSources::default();
         target.merge_unset_fields(source_location.clone(), source);
         let requirements = ConfigRequirements::try_from(target)?;
@@ -2725,7 +2708,7 @@ allowed_approvals_reviewers = ["user"]
 
     #[test]
     fn remote_sandbox_config_first_match_overrides_top_level() -> Result<()> {
-        let source = RequirementSource::CloudRequirements;
+        let source = RequirementSource::LegacyManagedConfigTomlFromMdm;
         let mut requirements_toml: ConfigRequirementsToml = from_str(
             r#"
                 allowed_sandbox_modes = ["read-only"]
@@ -2816,7 +2799,7 @@ allowed_approvals_reviewers = ["user"]
 
     #[test]
     fn remote_sandbox_config_does_not_override_higher_precedence_sandbox_modes() -> Result<()> {
-        let high_source = RequirementSource::CloudRequirements;
+        let high_source = RequirementSource::LegacyManagedConfigTomlFromMdm;
         let mut high_precedence: ConfigRequirementsToml = from_str(
             r#"
                 allowed_sandbox_modes = ["read-only"]
@@ -3003,7 +2986,7 @@ statusMessage = "checking"
     fn merge_unset_fields_does_not_overwrite_existing_hooks() -> Result<()> {
         let mut target = ConfigRequirementsWithSources::default();
         target.merge_unset_fields(
-            RequirementSource::CloudRequirements,
+            RequirementSource::LegacyManagedConfigTomlFromMdm,
             from_str::<ConfigRequirementsToml>(
                 r#"
 [hooks]
@@ -3047,7 +3030,7 @@ command = "python3 /system/hooks/pre.py"
         );
         assert_eq!(
             target.hooks.as_ref().map(|hooks| hooks.source.clone()),
-            Some(RequirementSource::CloudRequirements)
+            Some(RequirementSource::LegacyManagedConfigTomlFromMdm)
         );
         Ok(())
     }
@@ -3111,7 +3094,7 @@ command = "python3 /enterprise/hooks/pre.py"
             "/tmp/blocked.sock" = "deny"
         "#;
 
-        let source = RequirementSource::CloudRequirements;
+        let source = RequirementSource::LegacyManagedConfigTomlFromMdm;
         let mut requirements_with_sources = ConfigRequirementsWithSources::default();
         requirements_with_sources.merge_unset_fields(source.clone(), from_str(toml_str)?);
 
@@ -3184,7 +3167,7 @@ command = "python3 /enterprise/hooks/pre.py"
             allow_local_binding = false
         "#;
 
-        let source = RequirementSource::CloudRequirements;
+        let source = RequirementSource::LegacyManagedConfigTomlFromMdm;
         let mut requirements_with_sources = ConfigRequirementsWithSources::default();
         requirements_with_sources.merge_unset_fields(source.clone(), from_str(toml_str)?);
 
