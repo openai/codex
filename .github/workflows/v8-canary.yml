@@ -37,6 +37,11 @@ on:
       - "third_party/v8/**"
   workflow_dispatch:
 
+# Cargo's libgit2 transport has been flaky when fetching git dependencies with
+# nested submodules. Prefer the system git CLI for Cargo builds and smoke tests.
+env:
+  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+
 concurrency:
   group: ${{ github.workflow }}::${{ github.event.pull_request.number > 0 && format('pr-{0}', github.event.pull_request.number) || github.ref_name }}
   cancel-in-progress: ${{ github.ref_name != 'main' }}
