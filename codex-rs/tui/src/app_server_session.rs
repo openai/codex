@@ -295,6 +295,7 @@ impl AppServerSession {
                 false,
             ),
             Some(Account::Chatgpt { email, plan_type }) => {
+                let email = (!email.is_empty()).then_some(email);
                 let feedback_audience = if email
                     .as_deref()
                     .is_some_and(|email| email.ends_with("@openai.com"))
