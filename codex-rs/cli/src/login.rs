@@ -372,10 +372,6 @@ pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
     )
     .await
     {
-        Ok(Some(CodexAuth::PersonalAccessToken(_))) => {
-            eprintln!("Logged in using personal access token");
-            std::process::exit(0);
-        }
         Ok(Some(auth)) => match auth.auth_mode() {
             AuthMode::ApiKey => match auth.get_token() {
                 Ok(api_key) => {
@@ -393,6 +389,10 @@ pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
             }
             AuthMode::AgentIdentity => {
                 eprintln!("Logged in using access token");
+                std::process::exit(0);
+            }
+            AuthMode::PersonalAccessToken => {
+                eprintln!("Logged in using personal access token");
                 std::process::exit(0);
             }
         },

@@ -163,7 +163,7 @@ async fn login_with_access_token_writes_only_personal_access_token() {
     assert_eq!(
         auth,
         AuthDotJson {
-            auth_mode: Some(AuthMode::Chatgpt),
+            auth_mode: Some(AuthMode::PersonalAccessToken),
             openai_api_key: None,
             tokens: None,
             last_refresh: None,
@@ -876,7 +876,7 @@ async fn load_auth_reads_personal_access_token_from_env() {
         .expect("env auth should load")
         .expect("env auth should be present");
 
-        assert_eq!(auth.api_auth_mode(), AuthMode::Chatgpt);
+        assert_eq!(auth.api_auth_mode(), AuthMode::PersonalAccessToken);
         assert_eq!(
             auth.get_token()
                 .expect("personal access token should be exposed"),
