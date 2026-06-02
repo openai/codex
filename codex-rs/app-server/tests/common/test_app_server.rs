@@ -656,23 +656,22 @@ impl TestAppServer {
             .await
     }
 
-    /// Send a `remoteControl/clients/list` JSON-RPC request.
+    /// Send a `remoteControl/client/list` JSON-RPC request.
     pub async fn send_remote_control_clients_list_request(
         &mut self,
         params: RemoteControlClientsListParams,
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
-        self.send_request("remoteControl/clients/list", params)
-            .await
+        self.send_request("remoteControl/client/list", params).await
     }
 
-    /// Send a `remoteControl/clients/revoke` JSON-RPC request.
+    /// Send a `remoteControl/client/revoke` JSON-RPC request.
     pub async fn send_remote_control_clients_revoke_request(
         &mut self,
         params: RemoteControlClientsRevokeParams,
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
-        self.send_request("remoteControl/clients/revoke", params)
+        self.send_request("remoteControl/client/revoke", params)
             .await
     }
 

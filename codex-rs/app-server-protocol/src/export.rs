@@ -2963,8 +2963,8 @@ permissionProfile?: string | null};
 
         let client_request_json = fs::read_to_string(output_dir.join("ClientRequest.json"))?;
         assert!(client_request_json.contains("remoteControl/pairing/start"));
-        assert!(client_request_json.contains("remoteControl/clients/list"));
-        assert!(client_request_json.contains("remoteControl/clients/revoke"));
+        assert!(client_request_json.contains("remoteControl/client/list"));
+        assert!(client_request_json.contains("remoteControl/client/revoke"));
         for schema in [
             "RemoteControlPairingStartParams.json",
             "RemoteControlPairingStartResponse.json",

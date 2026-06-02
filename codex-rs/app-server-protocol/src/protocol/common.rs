@@ -849,14 +849,14 @@ client_request_definitions! {
         serialization: global("remote-control-pairing"),
         response: v2::RemoteControlPairingStartResponse,
     },
-    #[experimental("remoteControl/clients/list")]
-    RemoteControlClientsList => "remoteControl/clients/list" {
+    #[experimental("remoteControl/client/list")]
+    RemoteControlClientsList => "remoteControl/client/list" {
         params: v2::RemoteControlClientsListParams,
         serialization: global_shared_read("remote-control-clients"),
         response: v2::RemoteControlClientsListResponse,
     },
-    #[experimental("remoteControl/clients/revoke")]
-    RemoteControlClientsRevoke => "remoteControl/clients/revoke" {
+    #[experimental("remoteControl/client/revoke")]
+    RemoteControlClientsRevoke => "remoteControl/client/revoke" {
         params: v2::RemoteControlClientsRevokeParams,
         serialization: global("remote-control-clients"),
         response: v2::RemoteControlClientsRevokeResponse,
