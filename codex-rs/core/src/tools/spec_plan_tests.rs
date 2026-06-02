@@ -1236,15 +1236,7 @@ async fn hosted_tools_follow_provider_auth_model_and_config_gates() {
 
     let code_mode_only = probe(|turn| {
         use_chatgpt_auth(turn);
-        set_features(
-            turn,
-            &[
-                Feature::CodeMode,
-                Feature::CodeModeOnly,
-                Feature::MultiAgentV2,
-                Feature::ImageGeneration,
-            ],
-        );
+        set_features(turn, &[Feature::CodeModeOnly, Feature::MultiAgentV2]);
         set_web_search_mode(turn, WebSearchMode::Live);
         turn.model_info.input_modalities = vec![InputModality::Image];
     })
