@@ -191,6 +191,7 @@ fn observe_auth_response_headers<T>(
     }
 }
 
+/// Exposes transport response headers so auth providers can observe request-scoped updates.
 trait ResponseHeaders {
     fn headers(&self) -> &HeaderMap;
 }
