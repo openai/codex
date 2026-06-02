@@ -776,24 +776,27 @@ impl AccountRequestProcessor {
                     let permanent_refresh_failure =
                         self.auth_manager.refresh_failure_for_auth(&auth).is_some();
                     let auth_mode = LegacyAuthMode::from(auth.api_auth_mode());
-                    let (reported_auth_method, token_opt) =
-                        if matches!(auth, CodexAuth::AgentIdentity(_))
-                            || include_token && permanent_refresh_failure
-                        {
-                            (Some(auth_mode), None)
-                        } else {
-                            match auth.get_token() {
-                                Ok(token) if !token.is_empty() => {
-                                    let tok = if include_token { Some(token) } else { None };
-                                    (Some(auth_mode), tok)
-                                }
-                                Ok(_) => (None, None),
-                                Err(err) => {
-                                    tracing::warn!("failed to get token for auth status: {err}");
-                                    (None, None)
-                                }
+                    let (reported_auth_method, token_opt) = if matches!(
+                        auth,
+                        CodexAuth::AgentIdentity(_) | CodexAuth::PersonalAccessToken(_)
+                    ) || include_token
+                        && permanent_refresh_failure
+                    {
+                        // V1 cannot represent the metadata needed to reuse these credentials.
+                        (Some(auth_mode), None)
+                    } else {
+                        match auth.get_token() {
+                            Ok(token) if !token.is_empty() => {
+                                let tok = if include_token { Some(token) } else { None };
+                                (Some(auth_mode), tok)
                             }
-                        };
+                            Ok(_) => (None, None),
+                            Err(err) => {
+                                tracing::warn!("failed to get token for auth status: {err}");
+                                (None, None)
+                            }
+                        }
+                    };
                     GetAuthStatusResponse {
                         auth_method: reported_auth_method,
                         auth_token: token_opt,
@@ -825,11 +828,7 @@ impl AccountRequestProcessor {
         );
         let account_state = match provider.account_state() {
             Ok(account_state) => account_state,
-            Err(ProviderAccountError::MissingChatgptPlanType) => {
-                return Err(invalid_request(
-                    "plan type is required for chatgpt authentication",
-                ));
-            }
+            Err(err) => return Err(invalid_request(err.to_string())),
         };
         let account = account_state.account.map(Account::from);
 

@@ -50,12 +50,19 @@ pub struct ProviderAccountState {
 /// Error returned when a provider cannot construct its app-visible account state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderAccountError {
+    MissingChatgptAccountDetails,
     MissingChatgptPlanType,
 }
 
 impl fmt::Display for ProviderAccountError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::MissingChatgptAccountDetails => {
+                write!(
+                    f,
+                    "email and plan type are required for chatgpt authentication"
+                )
+            }
             Self::MissingChatgptPlanType => {
                 write!(f, "plan type is required for chatgpt authentication")
             }
@@ -209,13 +216,26 @@ impl ModelProvider for ConfiguredModelProvider {
                     CodexAuth::ApiKey(_) => Ok(ProviderAccount::ApiKey),
                     CodexAuth::Chatgpt(_)
                     | CodexAuth::ChatgptAuthTokens(_)
-                    | CodexAuth::AgentIdentity(_)
-                    | CodexAuth::PersonalAccessToken(_) => {
+                    | CodexAuth::AgentIdentity(_) => {
                         let email = auth.get_account_email();
+                        let plan_type = auth.account_plan_type();
+
+                        match (email, plan_type) {
+                            (Some(email), Some(plan_type)) => Ok(ProviderAccount::Chatgpt {
+                                email: Some(email),
+                                plan_type,
+                            }),
+                            _ => Err(ProviderAccountError::MissingChatgptAccountDetails),
+                        }
+                    }
+                    CodexAuth::PersonalAccessToken(_) => {
                         let plan_type = auth
                             .account_plan_type()
                             .ok_or(ProviderAccountError::MissingChatgptPlanType)?;
-                        Ok(ProviderAccount::Chatgpt { email, plan_type })
+                        Ok(ProviderAccount::Chatgpt {
+                            email: auth.get_account_email(),
+                            plan_type,
+                        })
                     }
                 })
                 .transpose()?
@@ -444,6 +464,21 @@ mod tests {
                 account: Some(ProviderAccount::ApiKey),
                 requires_openai_auth: true,
             })
+        );
+    }
+
+    #[test]
+    fn openai_provider_rejects_chatgpt_account_state_without_email() {
+        let provider = create_model_provider(
+            ModelProviderInfo::create_openai_provider(/*base_url*/ None),
+            Some(AuthManager::from_auth_for_testing(
+                CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+            )),
+        );
+
+        assert_eq!(
+            provider.account_state(),
+            Err(ProviderAccountError::MissingChatgptAccountDetails)
         );
     }
 
