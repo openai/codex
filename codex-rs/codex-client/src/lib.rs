@@ -3,6 +3,7 @@ mod chatgpt_hosts;
 mod custom_ca;
 mod default_client;
 mod error;
+mod native_integrity;
 mod request;
 mod retry;
 mod sse;
@@ -11,6 +12,7 @@ mod transport;
 
 pub use crate::chatgpt_cloudflare_cookies::with_chatgpt_cloudflare_cookie_store;
 pub use crate::chatgpt_hosts::is_allowed_chatgpt_host;
+pub use crate::chatgpt_hosts::is_allowed_chatgpt_request_url;
 pub use crate::custom_ca::BuildCustomCaTransportError;
 /// Test-only subprocess hook for custom CA coverage.
 ///
@@ -25,6 +27,12 @@ pub use crate::default_client::CodexHttpClient;
 pub use crate::default_client::CodexRequestBuilder;
 pub use crate::error::StreamError;
 pub use crate::error::TransportError;
+pub use crate::native_integrity::INTEGRITY_STATE_HEADER_NAME;
+pub use crate::native_integrity::INTEGRITY_STATE_UPDATE_HEADER_NAME;
+pub use crate::native_integrity::NativeIntegrityStateContext;
+pub use crate::native_integrity::NativeIntegrityStateFile;
+pub use crate::native_integrity::NativeIntegrityStateStore;
+pub use crate::native_integrity::NativeIntegritySurface;
 pub use crate::request::PreparedRequestBody;
 pub use crate::request::Request;
 pub use crate::request::RequestBody;
