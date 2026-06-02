@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 """Format repository sources or check that they are already formatted."""
 
-from __future__ import annotations
-
 import argparse
 import shlex
 import subprocess
@@ -14,7 +12,6 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CODEX_RS_ROOT = REPO_ROOT / "codex-rs"
-RUFF_REQUIREMENT = "ruff>=0.15.8"
 
 
 @dataclass(frozen=True)
@@ -40,6 +37,8 @@ class FormatterResult:
 def formatter_groups(*, check: bool) -> tuple[FormatterGroup, ...]:
     just_args = ["just", "--unstable", "--fmt"]
     cargo_args = ["cargo", "fmt", "--", "--config", "imports_granularity=Item"]
+    # Use an unpinned overlay so Ruff is available without syncing project
+    # dependencies. Each `--project` still retains its local configuration context.
     sdk_uv_run_args = [
         "uv",
         "run",
@@ -48,7 +47,7 @@ def formatter_groups(*, check: bool) -> tuple[FormatterGroup, ...]:
         "sdk/python",
         "--no-sync",
         "--with",
-        RUFF_REQUIREMENT,
+        "ruff",
     ]
     scripts_uv_run_args = [
         "uv",
@@ -58,7 +57,7 @@ def formatter_groups(*, check: bool) -> tuple[FormatterGroup, ...]:
         "scripts",
         "--no-sync",
         "--with",
-        RUFF_REQUIREMENT,
+        "ruff",
     ]
     sdk_format_args = [
         *sdk_uv_run_args,
@@ -74,10 +73,10 @@ def formatter_groups(*, check: bool) -> tuple[FormatterGroup, ...]:
     if check:
         just_args.append("--check")
         cargo_args.append("--check")
-        # `ruff check --diff` reports lint-driven rewrites without changing files.
-        # It is the check-mode counterpart of `--fix --fix-only`, not a full lint gate.
         sdk_format_args.append("--check")
         scripts_format_args.append("--check")
+        # `ruff check --diff` reports lint-driven rewrites without changing files.
+        # It is the check-mode counterpart of `--fix --fix-only`, not a full lint gate.
         sdk_lint_args = ["ruff", "check", "--diff"]
     else:
         # Ruff's lint fixer and formatter are separate passes: the first applies

@@ -147,7 +147,7 @@ def test_root_format_driver_covers_all_formatter_groups() -> None:
         "sdk/python",
         "--no-sync",
         "--with",
-        "ruff>=0.15.8",
+        "ruff",
     )
     scripts_uv_run_args = (
         "uv",
@@ -157,7 +157,7 @@ def test_root_format_driver_covers_all_formatter_groups() -> None:
         "scripts",
         "--no-sync",
         "--with",
-        "ruff>=0.15.8",
+        "ruff",
     )
     assert all(
         command.args[: len(sdk_uv_run_args)] == sdk_uv_run_args
