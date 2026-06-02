@@ -38,20 +38,11 @@ app-server-test-client *args:
 
 # Format the justfile, Rust, Python SDK code, and Python scripts.
 fmt:
-    just --unstable --fmt
-    cargo fmt -- --config imports_granularity=Item {stderr-null}
-    uv run --frozen --project ../sdk/python --extra dev ruff check --fix --fix-only ../sdk/python
-    uv run --frozen --project ../sdk/python --extra dev ruff format ../sdk/python
-    # Root scripts have their own locked Ruff environment.
-    uv run --frozen --project ../scripts ruff format ../scripts
+    {{ python }} ../scripts/format.py
 
+# Check formatting without modifying files.
 fmt-check:
-    # Keep this recipe in sync with `fmt` above.
-    just --unstable --fmt --check
-    cargo fmt -- --config imports_granularity=Item --check {stderr-null}
-    uv run --frozen --project ../sdk/python --extra dev ruff check --diff ../sdk/python
-    uv run --frozen --project ../sdk/python --extra dev ruff format --check ../sdk/python
-    uv run --frozen --project ../scripts ruff format --check ../scripts
+    {{ python }} ../scripts/format.py --check
 
 fix *args:
     cargo clippy --fix --tests --allow-dirty {args}

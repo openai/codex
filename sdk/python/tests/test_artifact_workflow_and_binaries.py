@@ -14,6 +14,18 @@ import tomllib
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def _load_root_format_script_module():
+    """Load the root formatter driver so tests exercise its real command graph."""
+    script_path = ROOT.parents[1] / "scripts" / "format.py"
+    spec = importlib.util.spec_from_file_location("format_repo", script_path)
+    if spec is None or spec.loader is None:
+        raise AssertionError(f"Failed to load script module: {script_path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
 def _load_update_script_module():
     """Load the maintenance script as a module so tests exercise real helpers."""
     script_path = ROOT / "scripts" / "update_sdk_artifacts.py"
@@ -68,75 +80,116 @@ def test_generation_has_single_maintenance_entrypoint_script() -> None:
     assert scripts == ["update_sdk_artifacts.py"]
 
 
-def test_root_fmt_recipe_formats_justfile_rust_python_sdk_and_scripts() -> None:
-    """The repo fmt command should format the justfile, Rust, the Python SDK, and scripts."""
+def test_root_fmt_recipes_use_shared_formatter_driver() -> None:
+    """The root formatting recipes should use the shared cross-platform driver."""
     justfile = ROOT.parents[1] / "justfile"
     lines = justfile.read_text().splitlines()
     fmt_index = lines.index("fmt:")
-    next_recipe_index = next(
-        index
-        for index in range(fmt_index + 1, len(lines))
-        if lines[index] and not lines[index].startswith((" ", "\t", "#"))
-    )
-    fmt_recipe = lines[fmt_index:next_recipe_index]
-    actual = {
-        "working_directory": lines[0],
-        "previous_comment": next(
-            line for line in reversed(lines[:fmt_index]) if line.startswith("#")
-        ),
-        "commands": [line.strip() for line in fmt_recipe[1:] if line.strip()],
-    }
-    expected = {
-        "working_directory": 'set working-directory := "codex-rs"',
-        "previous_comment": "# Format the justfile, Rust, Python SDK code, and Python scripts.",
-        "commands": [
-            "just --unstable --fmt",
-            "cargo fmt -- --config imports_granularity=Item {stderr-null}",
-            "uv run --frozen --project ../sdk/python --extra dev ruff check --fix --fix-only ../sdk/python",
-            "uv run --frozen --project ../sdk/python --extra dev ruff format ../sdk/python",
-            "# Root scripts have their own locked Ruff environment.",
-            "uv run --frozen --project ../scripts ruff format ../scripts",
-        ],
-    }
-
-    assert actual == expected, (
-        "The root `just fmt` recipe must run Just fmt, Rust fmt, and Ruff for Python SDK code and scripts. "
-        "Fix the `fmt` recipe in `justfile`, then run `just fmt`.\n"
-        f"Expected: {json.dumps(expected, indent=2)}\n"
-        f"Actual: {json.dumps(actual, indent=2)}"
-    )
-
-
-def test_root_fmt_check_recipe_checks_all_formatters() -> None:
-    """The repo fmt check should validate everything formatted by the fmt recipe."""
-    justfile = ROOT.parents[1] / "justfile"
-    lines = justfile.read_text().splitlines()
     fmt_check_index = lines.index("fmt-check:")
     next_recipe_index = next(
         index
         for index in range(fmt_check_index + 1, len(lines))
         if lines[index] and not lines[index].startswith((" ", "\t", "#"))
     )
-    fmt_check_recipe = lines[fmt_check_index:next_recipe_index]
-
-    fmt_commands = [
-        line.strip()
-        for line in lines[lines.index("fmt:") + 1 : fmt_check_index]
-        if line.strip() and not line.strip().startswith("#")
-    ]
-    fmt_to_fmt_check = {
-        "just --unstable --fmt": "just --unstable --fmt --check",
-        "cargo fmt -- --config imports_granularity=Item {stderr-null}": "cargo fmt -- --config imports_granularity=Item --check {stderr-null}",
-        "uv run --frozen --project ../sdk/python --extra dev ruff check --fix --fix-only ../sdk/python": "uv run --frozen --project ../sdk/python --extra dev ruff check --diff ../sdk/python",
-        "uv run --frozen --project ../sdk/python --extra dev ruff format ../sdk/python": "uv run --frozen --project ../sdk/python --extra dev ruff format --check ../sdk/python",
-        "uv run --frozen --project ../scripts ruff format ../scripts": "uv run --frozen --project ../scripts ruff format --check ../scripts",
+    actual = {
+        "working_directory": lines[0],
+        "fmt_comment": next(line for line in reversed(lines[:fmt_index]) if line.startswith("#")),
+        "fmt_commands": [
+            line.strip()
+            for line in lines[fmt_index + 1 : fmt_check_index]
+            if line.strip() and not line.startswith("#")
+        ],
+        "fmt_check_comment": next(
+            line for line in reversed(lines[:fmt_check_index]) if line.startswith("#")
+        ),
+        "fmt_check_commands": [
+            line.strip() for line in lines[fmt_check_index + 1 : next_recipe_index] if line.strip()
+        ],
     }
-    assert fmt_check_recipe[1] == "    # Keep this recipe in sync with `fmt` above."
-    assert [
-        line.strip()
-        for line in fmt_check_recipe[1:]
-        if line.strip() and not line.strip().startswith("#")
-    ] == [fmt_to_fmt_check[command] for command in fmt_commands]
+    expected = {
+        "working_directory": 'set working-directory := "codex-rs"',
+        "fmt_comment": "# Format the justfile, Rust, Python SDK code, and Python scripts.",
+        "fmt_commands": ["{{ python }} ../scripts/format.py"],
+        "fmt_check_comment": "# Check formatting without modifying files.",
+        "fmt_check_commands": ["{{ python }} ../scripts/format.py --check"],
+    }
+
+    assert actual == expected, (
+        "The root formatting recipes must use the shared formatter driver. "
+        "Fix the recipes in `justfile`, then run `just fmt`.\n"
+        f"Expected: {json.dumps(expected, indent=2)}\n"
+        f"Actual: {json.dumps(actual, indent=2)}"
+    )
+
+
+def test_root_format_driver_covers_all_formatter_groups() -> None:
+    """The shared driver should retain every formatter in both modes."""
+    script = _load_root_format_script_module()
+    formatters = script.formatter_groups(check=False)
+    checks = script.formatter_groups(check=True)
+
+    assert [group.name for group in formatters] == [
+        "Just",
+        "Rust",
+        "Python SDK",
+        "Python scripts",
+    ]
+    assert [group.name for group in checks] == [group.name for group in formatters]
+    assert [len(group.commands) for group in formatters] == [1, 1, 3, 2]
+    assert [len(group.commands) for group in checks] == [
+        len(group.commands) for group in formatters
+    ]
+    assert formatters[2].commands[0] == checks[2].commands[0]
+    assert formatters[2].commands[0].args == (
+        "uv",
+        "sync",
+        "--frozen",
+        "--project",
+        "sdk/python",
+        "--extra",
+        "dev",
+        "--inexact",
+        "--no-install-package",
+        "openai-codex-cli-bin",
+    )
+    assert formatters[2].commands[1].args[-5:] == (
+        "ruff",
+        "check",
+        "--fix",
+        "--fix-only",
+        "sdk/python",
+    )
+    assert checks[2].commands[1].args[-4:] == (
+        "ruff",
+        "check",
+        "--diff",
+        "sdk/python",
+    )
+    assert formatters[0].commands[-1].args == ("just", "--unstable", "--fmt")
+    assert checks[0].commands[-1].args == ("just", "--unstable", "--fmt", "--check")
+    assert formatters[1].commands[-1].args == (
+        "cargo",
+        "fmt",
+        "--",
+        "--config",
+        "imports_granularity=Item",
+    )
+    assert checks[1].commands[-1].args == (
+        "cargo",
+        "fmt",
+        "--",
+        "--config",
+        "imports_granularity=Item",
+        "--check",
+    )
+    assert [group.commands[-1].args[-3:] for group in formatters[2:]] == [
+        ("ruff", "format", "sdk/python"),
+        ("ruff", "format", "scripts"),
+    ]
+    assert [group.commands[-1].args[-4:] for group in checks[2:]] == [
+        ("ruff", "format", "--check", "sdk/python"),
+        ("ruff", "format", "--check", "scripts"),
+    ]
 
 
 def test_generate_types_wires_all_generation_steps() -> None:
