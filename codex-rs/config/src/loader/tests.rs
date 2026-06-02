@@ -43,6 +43,14 @@ impl ExecutorFileSystem for TestFileSystem {
         tokio::fs::read(path.as_path()).await
     }
 
+    async fn read_file_no_follow(
+        &self,
+        path: &AbsolutePathBuf,
+        _sandbox: Option<&FileSystemSandboxContext>,
+    ) -> FileSystemResult<Vec<u8>> {
+        tokio::fs::read(path.as_path()).await
+    }
+
     async fn write_file(
         &self,
         _path: &AbsolutePathBuf,

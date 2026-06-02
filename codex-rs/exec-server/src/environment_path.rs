@@ -236,6 +236,14 @@ mod tests {
             Ok(b"skill contents".to_vec())
         }
 
+        async fn read_file_no_follow(
+            &self,
+            path: &AbsolutePathBuf,
+            sandbox: Option<&FileSystemSandboxContext>,
+        ) -> io::Result<Vec<u8>> {
+            self.read_file(path, sandbox).await
+        }
+
         async fn write_file(
             &self,
             _path: &AbsolutePathBuf,

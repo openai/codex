@@ -156,6 +156,13 @@ pub trait ExecutorFileSystem: Send + Sync {
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<Vec<u8>>;
 
+    /// Reads a file while rejecting symlinks in any path component.
+    async fn read_file_no_follow(
+        &self,
+        path: &AbsolutePathBuf,
+        sandbox: Option<&FileSystemSandboxContext>,
+    ) -> FileSystemResult<Vec<u8>>;
+
     /// Reads a file and decodes it as UTF-8 text.
     async fn read_file_text(
         &self,
@@ -163,6 +170,16 @@ pub trait ExecutorFileSystem: Send + Sync {
         sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<String> {
         let bytes = self.read_file(path, sandbox).await?;
+        String::from_utf8(bytes).map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))
+    }
+
+    /// Reads a file without following symlinks and decodes it as UTF-8 text.
+    async fn read_file_text_no_follow(
+        &self,
+        path: &AbsolutePathBuf,
+        sandbox: Option<&FileSystemSandboxContext>,
+    ) -> FileSystemResult<String> {
+        let bytes = self.read_file_no_follow(path, sandbox).await?;
         String::from_utf8(bytes).map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))
     }
 

@@ -2742,6 +2742,7 @@ dependencies = [
  "codex-utils-cargo-bin",
  "codex-utils-cli",
  "codex-utils-oss",
+ "codex-utils-path",
  "codex-utils-sandbox-summary",
  "core_test_support",
  "libc",
@@ -2782,6 +2783,7 @@ dependencies = [
  "codex-sandboxing",
  "codex-test-binary-support",
  "codex-utils-absolute-path",
+ "codex-utils-path",
  "codex-utils-pty",
  "codex-utils-rustls-provider",
  "ctor 0.6.3",
@@ -4062,6 +4064,7 @@ version = "0.0.0"
 dependencies = [
  "codex-utils-absolute-path",
  "dunce",
+ "libc",
  "pretty_assertions",
  "tempfile",
 ]

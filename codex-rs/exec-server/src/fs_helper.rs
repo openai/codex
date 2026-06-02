@@ -189,10 +189,14 @@ pub(crate) async fn run_direct_request(
     let file_system = DirectFileSystem;
     match request {
         FsHelperRequest::ReadFile(params) => {
-            let data = file_system
-                .read_file(&params.path, /*sandbox*/ None)
-                .await
-                .map_err(map_fs_error)?;
+            let data = if params.no_follow_symlinks {
+                file_system
+                    .read_file_no_follow(&params.path, /*sandbox*/ None)
+                    .await
+            } else {
+                file_system.read_file(&params.path, /*sandbox*/ None).await
+            }
+            .map_err(map_fs_error)?;
             Ok(FsHelperPayload::ReadFile(FsReadFileResponse {
                 data_base64: STANDARD.encode(data),
             }))

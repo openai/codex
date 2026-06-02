@@ -52,11 +52,16 @@ impl FileSystemHandler {
         &self,
         params: FsReadFileParams,
     ) -> Result<FsReadFileResponse, JSONRPCErrorError> {
-        let bytes = self
-            .file_system
-            .read_file(&params.path, params.sandbox.as_ref())
-            .await
-            .map_err(map_fs_error)?;
+        let bytes = if params.no_follow_symlinks {
+            self.file_system
+                .read_file_no_follow(&params.path, params.sandbox.as_ref())
+                .await
+        } else {
+            self.file_system
+                .read_file(&params.path, params.sandbox.as_ref())
+                .await
+        }
+        .map_err(map_fs_error)?;
         Ok(FsReadFileResponse {
             data_base64: STANDARD.encode(bytes),
         })
@@ -269,6 +274,7 @@ mod tests {
                         sandbox_policy,
                         sandbox_cwd.clone(),
                     )),
+                    no_follow_symlinks: false,
                 })
                 .await
                 .expect("read file");

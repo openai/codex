@@ -738,6 +738,42 @@ async fn file_system_sandboxed_read_rejects_symlink_escape(use_remote: bool) -> 
 #[test_case(false ; "local")]
 #[test_case(true ; "remote")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn file_system_read_file_no_follow_rejects_symlinked_parent(use_remote: bool) -> Result<()> {
+    let context = create_file_system_context(use_remote).await?;
+    let file_system = context.file_system;
+
+    let tmp = TempDir::new()?;
+    let tmp = tmp.path().canonicalize()?;
+    let target_dir = tmp.join("target");
+    let symlinked_dir = tmp.join("link");
+    std::fs::create_dir(&target_dir)?;
+    let target_path = target_dir.join("payload");
+    std::fs::write(&target_path, "original")?;
+    symlink(&target_dir, &symlinked_dir)?;
+
+    let contents = file_system
+        .read_file_no_follow(&absolute_path(target_path), /*sandbox*/ None)
+        .await
+        .with_context(|| format!("mode={use_remote}"))?;
+    assert_eq!(contents, b"original");
+
+    if file_system
+        .read_file_no_follow(
+            &absolute_path(symlinked_dir.join("payload")),
+            /*sandbox*/ None,
+        )
+        .await
+        .is_ok()
+    {
+        anyhow::bail!("symlinked parent should fail");
+    }
+
+    Ok(())
+}
+
+#[test_case(false ; "local")]
+#[test_case(true ; "remote")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn file_system_sandboxed_read_rejects_symlink_parent_dotdot_escape(
     use_remote: bool,
 ) -> Result<()> {

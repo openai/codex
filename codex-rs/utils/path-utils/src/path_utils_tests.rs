@@ -1,7 +1,11 @@
 #[cfg(unix)]
 mod symlinks {
+    use super::super::open_file_for_read_no_follow;
+    use super::super::open_file_for_write_no_follow;
     use super::super::resolve_symlink_write_paths;
     use pretty_assertions::assert_eq;
+    use std::io::Read;
+    use std::io::Write;
     use std::os::unix::fs::symlink;
 
     #[test]
@@ -17,6 +21,59 @@ mod symlinks {
 
         assert_eq!(resolved.read_path, None);
         assert_eq!(resolved.write_path, a);
+        Ok(())
+    }
+
+    #[test]
+    fn no_follow_read_rejects_symlinked_parent_directory() -> std::io::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let dir = dir.path().canonicalize()?;
+        let target_dir = dir.join("target");
+        let symlinked_dir = dir.join("link");
+        std::fs::create_dir(&target_dir)?;
+        std::fs::write(target_dir.join("payload"), "secret")?;
+        symlink(&target_dir, &symlinked_dir)?;
+
+        let err = open_file_for_read_no_follow(&symlinked_dir.join("payload"))
+            .expect_err("symlinked parent should fail");
+
+        assert!(err.raw_os_error().is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn no_follow_write_rejects_symlinked_parent_directory() -> std::io::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let dir = dir.path().canonicalize()?;
+        let target_dir = dir.join("target");
+        let symlinked_dir = dir.join("link");
+        std::fs::create_dir(&target_dir)?;
+        std::fs::write(target_dir.join("payload"), "original")?;
+        symlink(&target_dir, &symlinked_dir)?;
+
+        let err = open_file_for_write_no_follow(&symlinked_dir.join("payload"))
+            .expect_err("symlinked parent should fail");
+
+        assert!(err.raw_os_error().is_some());
+        assert_eq!(
+            std::fs::read_to_string(target_dir.join("payload"))?,
+            "original"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn no_follow_helpers_read_and_write_regular_file() -> std::io::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().canonicalize()?.join("payload");
+
+        let mut writer = open_file_for_write_no_follow(&path)?;
+        writer.write_all(b"hello")?;
+        let mut reader = open_file_for_read_no_follow(&path)?;
+        let mut contents = String::new();
+        reader.read_to_string(&mut contents)?;
+
+        assert_eq!(contents, "hello");
         Ok(())
     }
 }

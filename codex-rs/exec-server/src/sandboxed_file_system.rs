@@ -97,6 +97,33 @@ impl ExecutorFileSystem for SandboxedFileSystem {
                 FsHelperRequest::ReadFile(FsReadFileParams {
                     path: path.clone(),
                     sandbox: None,
+                    no_follow_symlinks: false,
+                }),
+            )
+            .await?
+            .expect_read_file()
+            .map_err(map_sandbox_error)?;
+        STANDARD.decode(response.data_base64).map_err(|err| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("fs/readFile returned invalid base64 dataBase64: {err}"),
+            )
+        })
+    }
+
+    async fn read_file_no_follow(
+        &self,
+        path: &AbsolutePathBuf,
+        sandbox: Option<&FileSystemSandboxContext>,
+    ) -> FileSystemResult<Vec<u8>> {
+        let sandbox = require_platform_sandbox(sandbox)?;
+        let response = self
+            .run_sandboxed(
+                sandbox,
+                FsHelperRequest::ReadFile(FsReadFileParams {
+                    path: path.clone(),
+                    sandbox: None,
+                    no_follow_symlinks: true,
                 }),
             )
             .await?

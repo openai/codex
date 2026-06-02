@@ -7,6 +7,8 @@ use std::sync::LazyLock;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 use tokio::io;
+#[cfg(unix)]
+use tokio::io::AsyncReadExt;
 
 use crate::CopyOptions;
 use crate::CreateDirectoryOptions;
@@ -109,6 +111,15 @@ impl ExecutorFileSystem for LocalFileSystem {
         file_system.read_file(path, sandbox).await
     }
 
+    async fn read_file_no_follow(
+        &self,
+        path: &AbsolutePathBuf,
+        sandbox: Option<&FileSystemSandboxContext>,
+    ) -> FileSystemResult<Vec<u8>> {
+        let (file_system, sandbox) = self.file_system_for(sandbox)?;
+        file_system.read_file_no_follow(path, sandbox).await
+    }
+
     async fn write_file(
         &self,
         path: &AbsolutePathBuf,
@@ -201,6 +212,17 @@ impl ExecutorFileSystem for UnsandboxedFileSystem {
     ) -> FileSystemResult<Vec<u8>> {
         reject_platform_sandbox_context(sandbox)?;
         self.file_system.read_file(path, /*sandbox*/ None).await
+    }
+
+    async fn read_file_no_follow(
+        &self,
+        path: &AbsolutePathBuf,
+        sandbox: Option<&FileSystemSandboxContext>,
+    ) -> FileSystemResult<Vec<u8>> {
+        reject_platform_sandbox_context(sandbox)?;
+        self.file_system
+            .read_file_no_follow(path, /*sandbox*/ None)
+            .await
     }
 
     async fn write_file(
@@ -315,6 +337,33 @@ impl ExecutorFileSystem for DirectFileSystem {
             ));
         }
         tokio::fs::read(path.as_path()).await
+    }
+
+    async fn read_file_no_follow(
+        &self,
+        path: &AbsolutePathBuf,
+        sandbox: Option<&FileSystemSandboxContext>,
+    ) -> FileSystemResult<Vec<u8>> {
+        reject_sandbox_context(sandbox)?;
+        #[cfg(unix)]
+        {
+            let file = codex_utils_path::open_file_for_read_no_follow(path.as_path())?;
+            let metadata = file.metadata()?;
+            if metadata.len() > MAX_READ_FILE_BYTES {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("file is too large to read: limit is {MAX_READ_FILE_BYTES} bytes"),
+                ));
+            }
+            let mut file = tokio::fs::File::from_std(file);
+            let mut contents = Vec::new();
+            file.read_to_end(&mut contents).await?;
+            Ok(contents)
+        }
+        #[cfg(not(unix))]
+        {
+            self.read_file(path, /*sandbox*/ None).await
+        }
     }
 
     async fn write_file(
