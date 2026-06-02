@@ -74,10 +74,8 @@ impl ThreadGoalRequestProcessor {
         }
         self.emit_thread_goal_snapshot(thread_id).await;
         // App-server owns resume response and snapshot ordering, so wait until
-        // those are sent before letting core start goal continuation.
-        if let Err(err) = thread.continue_active_goal_if_idle().await {
-            tracing::warn!("failed to continue active goal after resume: {err}");
-        }
+        // those are sent before letting extensions schedule idle work.
+        thread.emit_thread_idle_lifecycle_if_idle().await;
     }
 
     pub(crate) async fn pending_resume_goal_state(

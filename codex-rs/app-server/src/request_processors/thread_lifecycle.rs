@@ -616,10 +616,8 @@ pub(super) async fn handle_pending_thread_resume_request(
         }
     }
 
-    if pending.emit_thread_goal_update
-        && let Err(err) = conversation.apply_goal_resume_runtime_effects().await
-    {
-        tracing::warn!("failed to apply goal resume runtime effects: {err}");
+    if pending.emit_thread_goal_update {
+        conversation.emit_thread_resume_lifecycle().await;
     }
 
     let ThreadConfigSnapshot {
@@ -691,11 +689,9 @@ pub(super) async fn handle_pending_thread_resume_request(
         .replay_requests_to_connection_for_thread(connection_id, conversation_id)
         .await;
     // App-server owns resume response and snapshot ordering, so wait until
-    // replay completes before letting core start goal continuation.
-    if pending.emit_thread_goal_update
-        && let Err(err) = conversation.continue_active_goal_if_idle().await
-    {
-        tracing::warn!("failed to continue active goal after running-thread resume: {err}");
+    // replay completes before letting extensions schedule idle work.
+    if pending.emit_thread_goal_update {
+        conversation.emit_thread_idle_lifecycle_if_idle().await;
     }
 }
 

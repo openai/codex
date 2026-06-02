@@ -148,7 +148,7 @@ impl CodexThread {
         self.codex.session_loop_termination.clone().await;
     }
 
-    pub(crate) async fn emit_thread_resume_lifecycle(&self) {
+    pub async fn emit_thread_resume_lifecycle(&self) {
         for contributor in self
             .codex
             .session
@@ -163,6 +163,13 @@ impl CodexThread {
                 })
                 .await;
         }
+    }
+
+    pub async fn emit_thread_idle_lifecycle_if_idle(&self) {
+        self.codex
+            .session
+            .emit_thread_idle_lifecycle_if_idle()
+            .await;
     }
 
     pub async fn apply_goal_resume_runtime_effects(&self) -> anyhow::Result<()> {
