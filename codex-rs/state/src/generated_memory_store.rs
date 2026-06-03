@@ -20,7 +20,7 @@ macro_rules! generated_memory_store {
         /// phase-2 consolidation lease. Callers rely on [`MemoryStore`]
         /// ownership-token semantics: successful writes return `false` after
         /// the caller loses the relevant job.
-        pub trait GeneratedMemoryStore: Send + Sync {
+        pub trait GeneratedMemoryStore: Send + Sync + 'static {
             $( $(#[$method_doc])* fn $method<$lifetime>(
                 &$lifetime self,
                 $($arg: $arg_type),*
