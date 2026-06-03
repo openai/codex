@@ -39,8 +39,6 @@ jobs:
         working-directory: codex-rs
     env:
       CARGO_PROFILE_RELEASE_LTO: ${{ inputs.release-lto }}
-      CARGO_PROFILE_RELEASE_DEBUG: full
-      CARGO_PROFILE_RELEASE_STRIP: "false"
 
     strategy:
       fail-fast: false
@@ -134,22 +132,10 @@ jobs:
       - name: Stage Windows binaries
         shell: bash
         run: |
-          release_dir="target/${{ matrix.target }}/release"
-          output_dir="$release_dir/staged-${{ matrix.bundle }}"
+          output_dir="target/${{ matrix.target }}/release/staged-${{ matrix.bundle }}"
           mkdir -p "$output_dir"
           for binary in ${{ matrix.binaries }}; do
-            pdb_name="${binary//-/_}"
-            pdb_path="$release_dir/${pdb_name}.pdb"
-            if [[ ! -f "$pdb_path" ]]; then
-              pdb_path="$release_dir/${binary}.pdb"
-            fi
-            if [[ ! -f "$pdb_path" ]]; then
-              echo "PDB for $binary not found at $release_dir/${pdb_name}.pdb or $release_dir/${binary}.pdb" >&2
-              exit 1
-            fi
-
-            cp "$release_dir/${binary}.exe" "$output_dir/${binary}.exe"
-            cp "$pdb_path" "$output_dir/${binary}.pdb"
+            cp "target/${{ matrix.target }}/release/${binary}.exe" "$output_dir/${binary}.exe"
           done
 
       - name: Upload Windows binaries
@@ -231,23 +217,6 @@ jobs:
           endpoint: ${{ secrets.AZURE_TRUSTED_SIGNING_ENDPOINT }}
           account-name: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
           certificate-profile-name: ${{ secrets.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME }}
-
-      - name: Build symbols archive
-        shell: bash
-        run: |
-          bash "${GITHUB_WORKSPACE}/.github/scripts/archive-release-symbols-and-strip-binaries.sh" \
-            --target "${{ matrix.target }}" \
-            --artifact-name "${{ matrix.target }}" \
-            --release-dir "target/${{ matrix.target }}/release" \
-            --archive-dir "symbols-dist/${{ matrix.target }}" \
-            --binaries "${WINDOWS_BINARIES}"
-
-      - name: Upload symbols archive
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
-        with:
-          name: ${{ matrix.target }}-symbols
-          path: codex-rs/symbols-dist/${{ matrix.target }}/*
-          if-no-files-found: error
 
       - name: Stage artifacts
         shell: bash

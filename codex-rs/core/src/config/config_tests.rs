@@ -9914,6 +9914,7 @@ enabled = true
             .unwrap_or_default()
             .contains("maximum concurrency"),
     );
+    assert!(config.multi_agent_v2.hide_spawn_agent_metadata);
     assert!(config.multi_agent_v2.non_code_mode_only);
 
     Ok(())

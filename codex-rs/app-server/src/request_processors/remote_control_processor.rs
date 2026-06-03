@@ -3,6 +3,10 @@ use crate::error_code::invalid_request;
 use crate::transport::RemoteControlHandle;
 use crate::transport::RemoteControlUnavailable;
 use codex_app_server_protocol::JSONRPCErrorError;
+use codex_app_server_protocol::RemoteControlClientsListParams;
+use codex_app_server_protocol::RemoteControlClientsListResponse;
+use codex_app_server_protocol::RemoteControlClientsRevokeParams;
+use codex_app_server_protocol::RemoteControlClientsRevokeResponse;
 use codex_app_server_protocol::RemoteControlDisableResponse;
 use codex_app_server_protocol::RemoteControlEnableResponse;
 use codex_app_server_protocol::RemoteControlPairingStartParams;
@@ -55,6 +59,26 @@ impl RemoteControlRequestProcessor {
             .map_err(map_pairing_start_error)
     }
 
+    pub(crate) async fn clients_list(
+        &self,
+        params: RemoteControlClientsListParams,
+    ) -> Result<RemoteControlClientsListResponse, JSONRPCErrorError> {
+        self.handle()?
+            .list_clients(params)
+            .await
+            .map_err(map_client_management_error)
+    }
+
+    pub(crate) async fn clients_revoke(
+        &self,
+        params: RemoteControlClientsRevokeParams,
+    ) -> Result<RemoteControlClientsRevokeResponse, JSONRPCErrorError> {
+        self.handle()?
+            .revoke_client(params)
+            .await
+            .map_err(map_client_management_error)
+    }
+
     fn handle(&self) -> Result<&RemoteControlHandle, JSONRPCErrorError> {
         self.remote_control_handle
             .as_ref()
@@ -71,6 +95,16 @@ fn map_pairing_start_error(err: io::Error) -> JSONRPCErrorError {
         invalid_request(err.to_string())
     } else {
         internal_error(err.to_string())
+    }
+}
+
+fn map_client_management_error(err: io::Error) -> JSONRPCErrorError {
+    match err.kind() {
+        io::ErrorKind::InvalidInput
+        | io::ErrorKind::NotFound
+        | io::ErrorKind::PermissionDenied
+        | io::ErrorKind::WouldBlock => invalid_request(err.to_string()),
+        _ => internal_error(err.to_string()),
     }
 }
 

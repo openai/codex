@@ -1059,7 +1059,7 @@ impl Default for MultiAgentV2Config {
                 DEFAULT_MULTI_AGENT_V2_SUBAGENT_USAGE_HINT_TEXT.to_string(),
             ),
             tool_namespace: None,
-            hide_spawn_agent_metadata: false,
+            hide_spawn_agent_metadata: true,
             non_code_mode_only: true,
         }
     }

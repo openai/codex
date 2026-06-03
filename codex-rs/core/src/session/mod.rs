@@ -654,7 +654,7 @@ impl Codex {
             error!("Failed to create session: {e:#}");
             map_session_init_error(&e, &config.codex_home)
         })?;
-        let thread_id = session.conversation_id;
+        let thread_id = session.thread_id;
 
         // This task will run until Op::Shutdown is received.
         let session_for_loop = Arc::clone(&session);
@@ -1369,7 +1369,7 @@ impl Session {
 
         ShellSnapshot::refresh_snapshot(
             codex_home.clone(),
-            self.conversation_id,
+            self.thread_id,
             next_cwd.clone(),
             self.services.user_shell.as_ref().clone(),
             self.services.shell_snapshot_tx.clone(),
@@ -1640,7 +1640,7 @@ impl Session {
         self.services
             .analytics_events_client
             .track_turn_codex_error(TurnCodexErrorFact::from_codex_err(
-                self.conversation_id.to_string(),
+                self.thread_id.to_string(),
                 turn_context.sub_id.clone(),
                 error,
             ));
@@ -1819,7 +1819,7 @@ impl Session {
         self.send_event(
             turn_context,
             EventMsg::ItemStarted(ItemStartedEvent {
-                thread_id: self.conversation_id,
+                thread_id: self.thread_id,
                 turn_id: turn_context.sub_id.clone(),
                 item: item.clone(),
                 started_at_ms: now_unix_timestamp_ms(),
@@ -1837,7 +1837,7 @@ impl Session {
         self.send_event(
             turn_context,
             EventMsg::ItemCompleted(ItemCompletedEvent {
-                thread_id: self.conversation_id,
+                thread_id: self.thread_id,
                 turn_id: turn_context.sub_id.clone(),
                 item,
                 completed_at_ms: now_unix_timestamp_ms(),
@@ -2900,7 +2900,7 @@ impl Session {
             let subagents = self
                 .services
                 .agent_control
-                .format_environment_context_subagents(self.conversation_id)
+                .format_environment_context_subagents(self.thread_id)
                 .await;
             contextual_user_sections.push(
                 crate::context::EnvironmentContext::from_turn_context(turn_context, shell.as_ref())

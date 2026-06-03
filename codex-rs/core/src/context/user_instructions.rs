@@ -7,7 +7,7 @@ pub(crate) struct UserInstructions {
 }
 
 impl ContextualUserFragment for UserInstructions {
-    fn role() -> &'static str {
+    fn role(&self) -> &'static str {
         "user"
     }
 

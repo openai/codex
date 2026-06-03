@@ -1,3 +1,4 @@
+use super::auth::RemoteControlConnectionAuth;
 use super::pairing_unavailable_error;
 use super::protocol::EnrollRemoteServerRequest;
 use super::protocol::EnrollRemoteServerResponse;
@@ -6,7 +7,6 @@ use super::protocol::RemoteControlTarget;
 use super::protocol::StartRemoteControlPairingRequest;
 use super::protocol::StartRemoteControlPairingResponse;
 use axum::http::HeaderMap;
-use codex_api::SharedAuthProvider;
 use codex_app_server_protocol::RemoteControlPairingStartResponse;
 use codex_login::default_client::build_reqwest_client;
 use codex_state::RemoteControlEnrollmentRecord;
@@ -149,11 +149,6 @@ impl RemoteControlEnrollment {
         self.remote_control_token = None;
         self.expires_at = None;
     }
-}
-
-pub(super) struct RemoteControlConnectionAuth {
-    pub(super) auth_provider: SharedAuthProvider,
-    pub(super) account_id: String,
 }
 
 pub(super) async fn load_persisted_remote_control_enrollment(

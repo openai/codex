@@ -265,7 +265,7 @@ async fn run_guardian_review(
     let action_summary = guardian_assessment_action(&request);
     let reviewed_action = guardian_reviewed_action(&request);
     let review_tracking = GuardianReviewTrackContext::new(
-        session.conversation_id.to_string(),
+        session.thread_id.to_string(),
         assessment_turn_id.clone(),
         review_id.clone(),
         target_item_id.clone(),

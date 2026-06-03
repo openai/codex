@@ -19,7 +19,7 @@ use tokio::sync::Semaphore;
 ///
 /// A session has at most 1 running task at a time, and can be interrupted by user input.
 pub(crate) struct Session {
-    pub(crate) conversation_id: ThreadId,
+    pub(crate) thread_id: ThreadId,
     pub(crate) installation_id: String,
     pub(super) tx_event: Sender<Event>,
     pub(super) agent_status: watch::Sender<AgentStatus>,
@@ -465,7 +465,7 @@ async fn warm_plugins_and_skills_for_session_init(
 impl Session {
     /// Returns the concrete identity for this thread.
     pub(crate) fn thread_id(&self) -> ThreadId {
-        self.conversation_id
+        self.thread_id
     }
 
     /// Returns the identity shared by the root thread and all descendant threads.
@@ -1055,7 +1055,7 @@ impl Session {
                 watch::channel(false);
 
             let sess = Arc::new(Session {
-                conversation_id: thread_id,
+                thread_id,
                 installation_id,
                 tx_event: tx_event.clone(),
                 agent_status,

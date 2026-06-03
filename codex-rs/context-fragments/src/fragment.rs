@@ -1,25 +1,30 @@
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
-use std::marker::PhantomData;
 
 /// Type-erased registration for a contextual user fragment.
 ///
 /// Implementations are used by context filtering code to recognize injected
 /// fragments without constructing the concrete context payload.
-pub(crate) trait FragmentRegistration: Sync {
+pub trait FragmentRegistration: Sync {
     fn matches_text(&self, text: &str) -> bool;
 }
 
-pub(crate) struct FragmentRegistrationProxy<T> {
-    _marker: PhantomData<fn() -> T>,
+pub struct FragmentRegistrationProxy<T> {
+    _marker: std::marker::PhantomData<fn() -> T>,
 }
 
 impl<T> FragmentRegistrationProxy<T> {
-    pub(crate) const fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
-            _marker: PhantomData,
+            _marker: std::marker::PhantomData,
         }
+    }
+}
+
+impl<T> Default for FragmentRegistrationProxy<T> {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -39,9 +44,7 @@ impl<T: ContextualUserFragment> FragmentRegistration for FragmentRegistrationPro
 /// in which case the default helpers render only the body and never match
 /// arbitrary text.
 pub trait ContextualUserFragment {
-    fn role() -> &'static str
-    where
-        Self: Sized;
+    fn role(&self) -> &'static str;
 
     fn markers(&self) -> (&'static str, &'static str);
 
@@ -75,7 +78,18 @@ pub trait ContextualUserFragment {
     {
         ResponseItem::Message {
             id: None,
-            role: Self::role().to_string(),
+            role: self.role().to_string(),
+            content: vec![ContentItem::InputText {
+                text: self.render(),
+            }],
+            phase: None,
+        }
+    }
+
+    fn into_boxed_response_item(self: Box<Self>) -> ResponseItem {
+        ResponseItem::Message {
+            id: None,
+            role: self.role().to_string(),
             content: vec![ContentItem::InputText {
                 text: self.render(),
             }],
@@ -88,7 +102,7 @@ pub trait ContextualUserFragment {
         Self: Sized,
     {
         ResponseInputItem::Message {
-            role: Self::role().to_string(),
+            role: self.role().to_string(),
             content: vec![ContentItem::InputText {
                 text: self.render(),
             }],
@@ -97,7 +111,7 @@ pub trait ContextualUserFragment {
     }
 }
 
-fn matches_marked_text(start_marker: &str, end_marker: &str, text: &str) -> bool {
+pub(crate) fn matches_marked_text(start_marker: &str, end_marker: &str, text: &str) -> bool {
     if start_marker.is_empty() || end_marker.is_empty() {
         return false;
     }

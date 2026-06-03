@@ -69,6 +69,8 @@ use codex_analytics::InvocationType;
 use codex_analytics::TurnResolvedConfigFact;
 use codex_analytics::build_track_events_context;
 use codex_async_utils::OrCancelExt;
+use codex_extension_api::TurnInputContext;
+use codex_extension_api::TurnInputEnvironment;
 use codex_features::Feature;
 use codex_git_utils::get_git_repo_root;
 use codex_git_utils::get_git_repo_root_with_fs;
@@ -467,7 +469,7 @@ async fn build_skills_and_plugins(
         .collect::<Vec<_>>();
     let tracking = build_track_events_context(
         turn_context.model_info.slug.clone(),
-        sess.conversation_id.to_string(),
+        sess.thread_id.to_string(),
         turn_context.sub_id.clone(),
     );
     let loaded_plugins = sess
@@ -513,6 +515,9 @@ async fn build_skills_and_plugins(
     };
     let skills_outcome = turn_context.turn_skills.outcome.as_ref();
     let connector_slug_counts = build_connector_slug_counts(&available_connectors);
+    let extension_injection_items =
+        build_extension_turn_input_items(sess, turn_context, &user_input, cancellation_token)
+            .await?;
     let skill_name_counts_lower =
         build_skill_name_counts(&skills_outcome.skills, &skills_outcome.disabled_paths).1;
     let mentioned_skills = collect_explicit_skill_mentions(
@@ -588,7 +593,59 @@ async fn build_skills_and_plugins(
 
     let mut injection_items = skill_items;
     injection_items.extend(plugin_items);
+    injection_items.extend(extension_injection_items);
     Some((injection_items, explicitly_enabled_connectors))
+}
+
+async fn build_extension_turn_input_items(
+    sess: &Arc<Session>,
+    turn_context: &TurnContext,
+    user_input: &[UserInput],
+    cancellation_token: &CancellationToken,
+) -> Option<Vec<ResponseItem>> {
+    let contributors = sess.services.extensions.turn_input_contributors().to_vec();
+    if contributors.is_empty() {
+        return Some(Vec::new());
+    }
+
+    let environments = turn_context
+        .environments
+        .turn_environments
+        .iter()
+        .enumerate()
+        .map(|(index, environment)| TurnInputEnvironment {
+            environment_id: environment.environment_id.clone(),
+            cwd: environment.cwd.as_path().to_path_buf(),
+            is_primary: index == 0,
+        })
+        .collect::<Vec<_>>();
+
+    let input = TurnInputContext {
+        turn_id: turn_context.sub_id.to_string(),
+        user_input: user_input.to_vec(),
+        environments,
+    };
+
+    let mut items = Vec::new();
+    for contributor in contributors {
+        let contributed_fragments = contributor
+            .contribute(
+                input.clone(),
+                &sess.services.session_extension_data,
+                &sess.services.thread_extension_data,
+                turn_context.extension_data.as_ref(),
+            )
+            .or_cancel(cancellation_token)
+            .await
+            .ok()?;
+        items.extend(
+            contributed_fragments
+                .into_iter()
+                .map(ContextualUserFragment::into_boxed_response_item),
+        );
+    }
+
+    Some(items)
 }
 
 async fn track_turn_resolved_config_analytics(
@@ -608,7 +665,7 @@ async fn track_turn_resolved_config_analytics(
         .analytics_events_client
         .track_turn_resolved_config(TurnResolvedConfigFact {
             turn_id: turn_context.sub_id.clone(),
-            thread_id: sess.conversation_id.to_string(),
+            thread_id: sess.thread_id.to_string(),
             num_input_images: input
                 .iter()
                 .filter_map(|item| match item {
@@ -1249,7 +1306,7 @@ impl ProposedPlanItemState {
             return;
         }
         let event = PlanDeltaEvent {
-            thread_id: sess.conversation_id.to_string(),
+            thread_id: sess.thread_id.to_string(),
             turn_id: turn_context.sub_id.clone(),
             item_id: self.item_id.clone(),
             delta: delta.to_string(),
@@ -1425,7 +1482,7 @@ async fn handle_plan_segments(
                 maybe_emit_pending_agent_message_start(sess, turn_context, state, item_id).await;
 
                 let event = AgentMessageContentDeltaEvent {
-                    thread_id: sess.conversation_id.to_string(),
+                    thread_id: sess.thread_id.to_string(),
                     turn_id: turn_context.sub_id.clone(),
                     item_id: item_id.to_string(),
                     delta,
@@ -1479,7 +1536,7 @@ async fn emit_streamed_assistant_text_delta(
         return;
     }
     let event = AgentMessageContentDeltaEvent {
-        thread_id: sess.conversation_id.to_string(),
+        thread_id: sess.thread_id.to_string(),
         turn_id: turn_context.sub_id.clone(),
         item_id: item_id.to_string(),
         delta: parsed.visible_text,
@@ -2045,7 +2102,7 @@ async fn try_run_sampling_request(
                         .await;
                     } else {
                         let event = AgentMessageContentDeltaEvent {
-                            thread_id: sess.conversation_id.to_string(),
+                            thread_id: sess.thread_id.to_string(),
                             turn_id: turn_context.sub_id.clone(),
                             item_id,
                             delta,
@@ -2084,7 +2141,7 @@ async fn try_run_sampling_request(
                         continue;
                     }
                     let event = ReasoningContentDeltaEvent {
-                        thread_id: sess.conversation_id.to_string(),
+                        thread_id: sess.thread_id.to_string(),
                         turn_id: turn_context.sub_id.clone(),
                         item_id: active.id(),
                         delta,
@@ -2120,7 +2177,7 @@ async fn try_run_sampling_request(
                         continue;
                     }
                     let event = ReasoningRawContentDeltaEvent {
-                        thread_id: sess.conversation_id.to_string(),
+                        thread_id: sess.thread_id.to_string(),
                         turn_id: turn_context.sub_id.clone(),
                         item_id: active.id(),
                         delta,

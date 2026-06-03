@@ -486,7 +486,7 @@ mod tests {
         let (session, turn, rx) = crate::session::tests::make_session_and_context_with_rx().await;
         let expected_path = crate::stream_events_utils::image_generation_artifact_path(
             &turn.config.codex_home,
-            &session.conversation_id.to_string(),
+            &session.thread_id.to_string(),
             "call-image",
         );
         let invocation = ToolInvocation {
