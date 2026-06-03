@@ -3849,10 +3849,10 @@ fn resolve_default_permissions<'a>(
     let Some(allowed_permissions) = requirements_toml.allowed_permissions.as_ref() else {
         return Ok(selected_permissions);
     };
-    let Some(fallback_permissions) = allowed_permissions.first().map(String::as_str) else {
+    let Some(fallback_permissions) = requirements_toml.default_permissions.as_deref() else {
         return Err(std::io::Error::new(
             ErrorKind::InvalidInput,
-            "requirements.toml allowed_permissions must include at least one profile",
+            "requirements.toml default_permissions must be set when allowed_permissions is configured",
         ));
     };
 
@@ -3886,6 +3886,12 @@ fn validate_required_permission_profile_catalog(
     };
 
     let Some(allowed_permissions) = requirements_toml.allowed_permissions.as_ref() else {
+        if requirements_toml.default_permissions.is_some() {
+            return Err(std::io::Error::new(
+                ErrorKind::InvalidInput,
+                "requirements.toml default_permissions requires allowed_permissions",
+            ));
+        }
         return Ok(());
     };
     if allowed_permissions.is_empty() {
@@ -3904,6 +3910,24 @@ fn validate_required_permission_profile_catalog(
                 ),
             ));
         }
+    }
+
+    let Some(default_permissions) = requirements_toml.default_permissions.as_deref() else {
+        return Err(std::io::Error::new(
+            ErrorKind::InvalidInput,
+            "requirements.toml default_permissions must be set when allowed_permissions is configured",
+        ));
+    };
+    if !allowed_permissions
+        .iter()
+        .any(|allowed_permission| allowed_permission == default_permissions)
+    {
+        return Err(std::io::Error::new(
+            ErrorKind::InvalidInput,
+            format!(
+                "requirements.toml default_permissions `{default_permissions}` must be included in allowed_permissions"
+            ),
+        ));
     }
 
     Ok(())

@@ -140,6 +140,12 @@
             }
           ]
         },
+        "defaultPermissions": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "enforceResidency": {
           "anyOf": [
             {
