@@ -1166,11 +1166,7 @@ async fn multi_agent_v2_spawn_returns_path_and_send_message_accepts_relative_pat
     let child_thread_id = session
         .services
         .agent_control
-        .resolve_agent_reference(
-            session.thread_id,
-            &turn.session_source,
-            "test_process",
-        )
+        .resolve_agent_reference(session.thread_id, &turn.session_source, "test_process")
         .await
         .expect("relative path should resolve");
     let child_snapshot = manager
@@ -3385,11 +3381,7 @@ async fn multi_agent_v2_wait_agent_returns_summary_for_mailbox_activity() {
     let agent_id = session
         .services
         .agent_control
-        .resolve_agent_reference(
-            session.thread_id,
-            &turn.session_source,
-            "test_process",
-        )
+        .resolve_agent_reference(session.thread_id, &turn.session_source, "test_process")
         .await
         .expect("relative path should resolve");
     let worker_path = session

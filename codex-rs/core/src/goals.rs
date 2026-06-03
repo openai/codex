@@ -595,12 +595,8 @@ impl Session {
                 )
             })?;
 
-        set_thread_preview_from_goal_objective(
-            &state_db,
-            self.thread_id,
-            goal.objective.as_str(),
-        )
-        .await;
+        set_thread_preview_from_goal_objective(&state_db, self.thread_id, goal.objective.as_str())
+            .await;
         let goal_id = goal.goal_id.clone();
         self.emit_goal_created_metric();
         let goal = protocol_goal_from_state(goal);
