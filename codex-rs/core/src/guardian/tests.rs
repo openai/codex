@@ -755,6 +755,41 @@ fn collect_guardian_transcript_entries_includes_recent_tool_calls_and_output() {
 }
 
 #[test]
+fn collect_guardian_transcript_entries_redacts_access_token_fields_in_tool_output() {
+    let items = vec![
+        ResponseItem::FunctionCall {
+            id: None,
+            name: "salesforce_org_list".to_string(),
+            namespace: None,
+            arguments: "{}".to_string(),
+            call_id: "call-1".to_string(),
+        },
+        ResponseItem::FunctionCallOutput {
+            call_id: "call-1".to_string(),
+            output: codex_protocol::models::FunctionCallOutputPayload::from_text(
+                r#"{"result":[{"accessToken":"secret-value","alias":"dev","instanceUrl":"https://example.my.salesforce.com"},{"access_token":"another-secret-value","alias":"staging"}],"status":0}"#
+                    .to_string(),
+            ),
+        },
+    ];
+
+    let entries = collect_guardian_transcript_entries(&items);
+    let output: serde_json::Value =
+        serde_json::from_str(&entries[1].text).expect("redacted tool output should remain JSON");
+
+    assert_eq!(output["result"][0]["accessToken"], "<redacted>");
+    assert_eq!(output["result"][0]["alias"], "dev");
+    assert_eq!(output["result"][1]["access_token"], "<redacted>");
+    assert_eq!(output["result"][1]["alias"], "staging");
+    assert_eq!(
+        output["result"][0]["instanceUrl"],
+        "https://example.my.salesforce.com"
+    );
+    assert!(!entries[1].text.contains("secret-value"));
+    assert!(!entries[1].text.contains("another-secret-value"));
+}
+
+#[test]
 fn guardian_truncate_text_keeps_prefix_suffix_and_xml_marker() {
     let content = "prefix ".repeat(200) + &" suffix".repeat(200);
 

@@ -26,6 +26,8 @@ use super::GuardianAssessment;
 use super::TRUNCATION_TAG;
 use super::approval_request::format_guardian_action_pretty;
 
+const REDACTED_GUARDIAN_TRANSCRIPT_VALUE: &str = "<redacted>";
+
 /// Transcript entry retained for guardian review after filtering.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct GuardianTranscriptEntry {
@@ -425,8 +427,11 @@ pub(crate) fn collect_guardian_transcript_entries(
     };
     let content_entry =
         |kind, content| content_items_to_text(content).and_then(|text| non_empty_entry(kind, text));
-    let serialized_entry =
-        |kind, serialized: Option<String>| serialized.and_then(|text| non_empty_entry(kind, text));
+    let serialized_entry = |kind, serialized: Option<String>| {
+        serialized
+            .map(redact_guardian_tool_evidence)
+            .and_then(|text| non_empty_entry(kind, text))
+    };
 
     for item in items {
         let entry = match item {
@@ -463,10 +468,10 @@ pub(crate) fn collect_guardian_transcript_entries(
                 ..
             } => {
                 tool_names_by_call_id.insert(call_id.clone(), name.clone());
-                (!arguments.trim().is_empty()).then(|| GuardianTranscriptEntry {
-                    kind: GuardianTranscriptEntryKind::Tool(format!("tool {name} call")),
-                    text: arguments.clone(),
-                })
+                non_empty_entry(
+                    GuardianTranscriptEntryKind::Tool(format!("tool {name} call")),
+                    redact_guardian_tool_evidence(arguments.clone()),
+                )
             }
             ResponseItem::CustomToolCall {
                 call_id,
@@ -475,10 +480,10 @@ pub(crate) fn collect_guardian_transcript_entries(
                 ..
             } => {
                 tool_names_by_call_id.insert(call_id.clone(), name.clone());
-                (!input.trim().is_empty()).then(|| GuardianTranscriptEntry {
-                    kind: GuardianTranscriptEntryKind::Tool(format!("tool {name} call")),
-                    text: input.clone(),
-                })
+                non_empty_entry(
+                    GuardianTranscriptEntryKind::Tool(format!("tool {name} call")),
+                    redact_guardian_tool_evidence(input.clone()),
+                )
             }
             ResponseItem::WebSearchCall { action, .. } => action.as_ref().and_then(|action| {
                 serialized_entry(
@@ -499,7 +504,7 @@ pub(crate) fn collect_guardian_transcript_entries(
                             |name| format!("tool {name} result"),
                         ),
                     ),
-                    text,
+                    redact_guardian_tool_evidence(text),
                 )
             }),
             _ => None,
@@ -511,6 +516,49 @@ pub(crate) fn collect_guardian_transcript_entries(
     }
 
     entries
+}
+
+fn redact_guardian_tool_evidence(text: String) -> String {
+    let Ok(mut value) = serde_json::from_str::<Value>(&text) else {
+        return text;
+    };
+    if !redact_access_token_fields(&mut value) {
+        return text;
+    }
+    serde_json::to_string(&value).unwrap_or(text)
+}
+
+fn redact_access_token_fields(value: &mut Value) -> bool {
+    match value {
+        Value::Array(values) => {
+            let mut redacted_any = false;
+            for value in values {
+                redacted_any |= redact_access_token_fields(value);
+            }
+            redacted_any
+        }
+        Value::Object(fields) => {
+            let mut redacted_any = false;
+            for (field_name, value) in fields {
+                if is_access_token_field_name(field_name) {
+                    *value = Value::String(REDACTED_GUARDIAN_TRANSCRIPT_VALUE.to_string());
+                    redacted_any = true;
+                } else {
+                    redacted_any |= redact_access_token_fields(value);
+                }
+            }
+            redacted_any
+        }
+        _ => false,
+    }
+}
+
+fn is_access_token_field_name(field_name: &str) -> bool {
+    field_name
+        .chars()
+        .filter(char::is_ascii_alphanumeric)
+        .map(|ch| ch.to_ascii_lowercase())
+        .eq("accesstoken".chars())
 }
 
 pub(crate) fn guardian_truncate_text(content: &str, token_cap: usize) -> (String, bool) {
