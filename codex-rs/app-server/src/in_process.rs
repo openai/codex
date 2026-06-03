@@ -349,7 +349,7 @@ impl InProcessClientHandle {
 /// the handle, so callers receive a ready-to-use runtime. If initialize fails,
 /// the runtime is shut down and an `InvalidData` error is returned.
 pub async fn start(args: InProcessStartArgs) -> IoResult<InProcessClientHandle> {
-    start_with_optional_auth_stores(args, None).await
+    start_with_optional_auth_stores(args, /*auth_stores*/ None).await
 }
 
 /// Starts an in-process runtime backed by caller-provided auth stores.
