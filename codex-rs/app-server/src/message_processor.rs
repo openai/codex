@@ -1313,11 +1313,13 @@ impl MessageProcessor {
                     .await
             }
             ClientRequest::GetAccountRateLimits { .. } => {
-                self.account_processor.get_account_rate_limits().await
+                self.account_processor
+                    .get_account_rate_limits(app_server_client_name.as_deref())
+                    .await
             }
             ClientRequest::SendAddCreditsNudgeEmail { params, .. } => {
                 self.account_processor
-                    .send_add_credits_nudge_email(params)
+                    .send_add_credits_nudge_email(params, app_server_client_name.as_deref())
                     .await
             }
             ClientRequest::GitDiffToRemote { params, .. } => {

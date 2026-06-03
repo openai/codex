@@ -20,9 +20,11 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 codex-backend-openapi-models = { path = "../codex-backend-openapi-models" }
 codex-api = { workspace = true }
 codex-client = { workspace = true }
+codex-http-state = { workspace = true }
 codex-login = { workspace = true }
 codex-model-provider = { workspace = true }
 codex-protocol = { workspace = true }
 
 [dev-dependencies]
 pretty_assertions = "1"
+tempfile = { workspace = true }
