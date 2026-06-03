@@ -70,6 +70,21 @@ fn create_test_tool_with_connector(
     tool
 }
 
+fn create_codex_apps_test_tool(
+    callable_namespace: &str,
+    callable_name: &str,
+    connector_id: &str,
+) -> ToolInfo {
+    let mut tool = create_test_tool_with_connector(
+        CODEX_APPS_MCP_SERVER_NAME,
+        callable_name,
+        connector_id,
+        None,
+    );
+    tool.callable_namespace = callable_namespace.to_string();
+    tool
+}
+
 fn create_codex_apps_tools_cache_context(
     codex_home: PathBuf,
     account_id: Option<&str>,
@@ -337,6 +352,84 @@ fn test_normalize_tools_duplicated_names_skipped() {
     assert_eq!(
         model_tool_names(&model_tools),
         HashSet::from([ToolName::namespaced("mcp__server1", "duplicate_tool")])
+    );
+}
+
+#[test]
+fn test_normalize_tools_prioritizes_implicit_codex_apps_link_id() {
+    let explicit = create_codex_apps_test_tool(
+        "codex_apps__calendar",
+        "create_event",
+        "connector_aaa_calendar",
+    );
+    let mut implicit = create_codex_apps_test_tool(
+        "codex_apps__search_service",
+        "_web_run",
+        "connector_zzz_search_service",
+    );
+    implicit.tool.meta = Some(Meta(
+        serde_json::json!({
+            "link_id": "implicit_link::connector_openai_search_service",
+        })
+        .as_object()
+        .expect("object")
+        .clone(),
+    ));
+
+    let model_tools = normalize_tools_for_model_with_prefix(
+        vec![explicit, implicit],
+        /*prefix_mcp_tool_names*/ true,
+    );
+
+    assert_eq!(
+        model_tools
+            .iter()
+            .map(ToolInfo::canonical_tool_name)
+            .collect::<Vec<_>>(),
+        vec![
+            ToolName::namespaced("mcp__codex_apps__search_service", "_web_run"),
+            ToolName::namespaced("mcp__codex_apps__calendar", "create_event"),
+        ]
+    );
+}
+
+#[test]
+fn test_normalize_tools_prioritizes_implicit_codex_apps_resource_uri() {
+    let explicit = create_codex_apps_test_tool(
+        "codex_apps__calendar",
+        "create_event",
+        "connector_aaa_calendar",
+    );
+    let mut implicit = create_codex_apps_test_tool(
+        "codex_apps__search_service",
+        "_web_run",
+        "connector_zzz_search_service",
+    );
+    implicit.tool.meta = Some(Meta(
+        serde_json::json!({
+            "_codex_apps": {
+                "resource_uri": "connectors://connector_openai_search_service/implicit_link::connector_openai_search_service/web_run",
+            },
+        })
+        .as_object()
+        .expect("object")
+        .clone(),
+    ));
+
+    let model_tools = normalize_tools_for_model_with_prefix(
+        vec![explicit, implicit],
+        /*prefix_mcp_tool_names*/ true,
+    );
+
+    assert_eq!(
+        model_tools
+            .iter()
+            .map(ToolInfo::canonical_tool_name)
+            .collect::<Vec<_>>(),
+        vec![
+            ToolName::namespaced("mcp__codex_apps__search_service", "_web_run"),
+            ToolName::namespaced("mcp__codex_apps__calendar", "create_event"),
+        ]
     );
 }
 

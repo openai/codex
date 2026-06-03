@@ -20,12 +20,17 @@ use sha1::Digest;
 use sha1::Sha1;
 use tracing::warn;
 
+use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp::sanitize_responses_api_tool_name;
 
 pub(crate) const MCP_TOOLS_CACHE_WRITE_DURATION_METRIC: &str =
     "codex.mcp.tools.cache_write.duration_ms";
 
 const LEGACY_MCP_TOOL_NAME_PREFIX: &str = "mcp__";
+const CODEX_APPS_META_KEY: &str = "_codex_apps";
+const CODEX_APPS_LINK_ID_KEY: &str = "link_id";
+const CODEX_APPS_RESOURCE_URI_KEY: &str = "resource_uri";
+const CODEX_APPS_IMPLICIT_LINK_ID_PREFIX: &str = "implicit_link::";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolInfo {
@@ -229,7 +234,15 @@ where
         }
     }
 
-    candidates.sort_by(|left, right| left.raw_tool_identity.cmp(&right.raw_tool_identity));
+    candidates.sort_by(|left, right| {
+        left.tool
+            .server_name
+            .cmp(&right.tool.server_name)
+            .then_with(|| {
+                codex_apps_tool_priority(&left.tool).cmp(&codex_apps_tool_priority(&right.tool))
+            })
+            .then_with(|| left.raw_tool_identity.cmp(&right.raw_tool_identity))
+    });
 
     let mut used_names = HashSet::new();
     let mut model_tools = Vec::new();
@@ -255,6 +268,38 @@ struct CallableToolCandidate {
     raw_tool_identity: String,
     callable_namespace: String,
     callable_name: String,
+}
+
+fn codex_apps_tool_priority(tool: &ToolInfo) -> u8 {
+    if tool.server_name == CODEX_APPS_MCP_SERVER_NAME && is_implicit_codex_apps_tool(tool) {
+        0
+    } else {
+        1
+    }
+}
+
+fn is_implicit_codex_apps_tool(tool: &ToolInfo) -> bool {
+    let Some(meta) = tool.tool.meta.as_deref() else {
+        return false;
+    };
+
+    meta.get(CODEX_APPS_LINK_ID_KEY)
+        .and_then(JsonValue::as_str)
+        .is_some_and(is_implicit_link_id)
+        || meta
+            .get(CODEX_APPS_META_KEY)
+            .and_then(JsonValue::as_object)
+            .and_then(|codex_apps| codex_apps.get(CODEX_APPS_RESOURCE_URI_KEY))
+            .and_then(JsonValue::as_str)
+            .is_some_and(resource_uri_has_implicit_link_segment)
+}
+
+fn is_implicit_link_id(link_id: &str) -> bool {
+    link_id.starts_with(CODEX_APPS_IMPLICIT_LINK_ID_PREFIX)
+}
+
+fn resource_uri_has_implicit_link_segment(resource_uri: &str) -> bool {
+    resource_uri.split('/').any(is_implicit_link_id)
 }
 
 const MCP_TOOL_NAME_DELIMITER: &str = "__";
