@@ -14,21 +14,21 @@ use crate::connection::CHANNEL_CAPACITY;
 use crate::connection::JsonRpcConnection;
 use crate::connection::JsonRpcConnectionEvent;
 use crate::connection::JsonRpcTransport;
+use crate::noise_channel::InitiatorHandshake;
+use crate::noise_channel::NoiseChannelIdentity;
+use crate::noise_channel::NoiseChannelPublicKey;
+use crate::noise_channel::NoiseTransport;
+use crate::noise_channel::noise_channel_prologue;
+use crate::noise_relay::message_framing::JsonRpcMessageDecoder;
+use crate::noise_relay::message_framing::NOISE_RECORD_PLAINTEXT_LEN;
+use crate::noise_relay::message_framing::frame_jsonrpc_message;
+use crate::noise_relay::ordered_ciphertext::OrderedCiphertextFrames;
+use crate::noise_relay::take_next_sequence;
 use crate::relay::RelayFrameBodyKind;
 use crate::relay::decode_relay_message_frame;
 use crate::relay::encode_relay_message_frame;
 use crate::relay_proto::RelayData;
 use crate::relay_proto::RelayMessageFrame;
-use crate::secure_channel::InitiatorHandshake;
-use crate::secure_channel::SecureChannelIdentity;
-use crate::secure_channel::SecureChannelPublicKey;
-use crate::secure_channel::SecureTransport;
-use crate::secure_channel::secure_channel_prologue;
-use crate::secure_relay::message_framing::JsonRpcMessageDecoder;
-use crate::secure_relay::message_framing::SECURE_RECORD_PLAINTEXT_LEN;
-use crate::secure_relay::message_framing::frame_jsonrpc_message;
-use crate::secure_relay::ordered_ciphertext::OrderedCiphertextFrames;
-use crate::secure_relay::take_next_sequence;
 
 /// Adapt one harness rendezvous websocket into an authenticated JSON-RPC connection.
 ///
@@ -36,13 +36,13 @@ use crate::secure_relay::take_next_sequence;
 /// hybrid IK against the registry-pinned exec-server key. Rendezvous can see
 /// stream metadata and ciphertext, but never JSON-RPC plaintext or either
 /// endpoint's private key.
-pub(crate) fn secure_harness_connection_from_websocket<T, E>(
+pub(crate) fn noise_harness_connection_from_websocket<T, E>(
     stream: T,
     connection_label: String,
     environment_id: String,
     executor_registration_id: String,
-    identity: SecureChannelIdentity,
-    responder_public_key: SecureChannelPublicKey,
+    identity: NoiseChannelIdentity,
+    responder_public_key: NoiseChannelPublicKey,
     harness_key_authorization: String,
 ) -> JsonRpcConnection
 where
@@ -61,13 +61,13 @@ where
         // virtual relay stream before emitting any handshake bytes. A captured
         // handshake cannot be spliced onto a different routed connection.
         let prologue =
-            match secure_channel_prologue(&environment_id, &executor_registration_id, &stream_id) {
+            match noise_channel_prologue(&environment_id, &executor_registration_id, &stream_id) {
                 Ok(prologue) => prologue,
                 Err(error) => {
                     send_disconnected(
                         &incoming_tx,
                         &disconnected_tx,
-                        format!("failed to build secure relay prologue: {error}"),
+                        format!("failed to build Noise relay prologue: {error}"),
                     )
                     .await;
                     return;
@@ -84,7 +84,7 @@ where
                 send_disconnected(
                     &incoming_tx,
                     &disconnected_tx,
-                    format!("failed to start secure relay handshake: {error}"),
+                    format!("failed to start Noise relay handshake: {error}"),
                 )
                 .await;
                 return;
@@ -119,7 +119,7 @@ where
                 send_disconnected(
                     &incoming_tx,
                     &disconnected_tx,
-                    "secure relay websocket closed during handshake".to_string(),
+                    "Noise relay websocket closed during handshake".to_string(),
                 )
                 .await;
                 return;
@@ -130,7 +130,7 @@ where
                     send_disconnected(
                         &incoming_tx,
                         &disconnected_tx,
-                        "secure relay websocket closed during handshake".to_string(),
+                        "Noise relay websocket closed during handshake".to_string(),
                     )
                     .await;
                     return;
@@ -140,7 +140,7 @@ where
                     send_disconnected(
                         &incoming_tx,
                         &disconnected_tx,
-                        "secure relay transport expects binary protobuf frames".to_string(),
+                        "Noise relay transport expects binary protobuf frames".to_string(),
                     )
                     .await;
                     return;
@@ -150,7 +150,7 @@ where
                         &incoming_tx,
                         &disconnected_tx,
                         format!(
-                            "failed to read secure relay websocket from {connection_label}: {error}"
+                            "failed to read Noise relay websocket from {connection_label}: {error}"
                         ),
                     )
                     .await;
@@ -163,7 +163,7 @@ where
                     send_disconnected(
                         &incoming_tx,
                         &disconnected_tx,
-                        format!("failed to parse secure relay frame: {error}"),
+                        format!("failed to parse Noise relay frame: {error}"),
                     )
                     .await;
                     return;
@@ -188,7 +188,7 @@ where
                             send_disconnected(
                                 &incoming_tx,
                                 &disconnected_tx,
-                                format!("secure relay handshake failed: {error}"),
+                                format!("Noise relay handshake failed: {error}"),
                             )
                             .await;
                             return;
@@ -201,7 +201,7 @@ where
                         &disconnected_tx,
                         frame
                             .into_reset_reason()
-                            .unwrap_or_else(|| "secure relay reset during handshake".to_string()),
+                            .unwrap_or_else(|| "Noise relay reset during handshake".to_string()),
                     )
                     .await;
                     return;
@@ -215,7 +215,7 @@ where
                     send_disconnected(
                         &incoming_tx,
                         &disconnected_tx,
-                        "secure relay received data before handshake completion".to_string(),
+                        "Noise relay received data before handshake completion".to_string(),
                     )
                     .await;
                     return;
@@ -238,22 +238,22 @@ where
                     let framed = match frame_jsonrpc_message(&message) {
                         Ok(framed) => framed,
                         Err(error) => {
-                            warn!("failed to frame JSON-RPC payload for secure relay: {error}");
+                            warn!("failed to frame JSON-RPC payload for Noise relay: {error}");
                             break;
                         }
                     };
-                    for plaintext_record in framed.chunks(SECURE_RECORD_PLAINTEXT_LEN) {
+                    for plaintext_record in framed.chunks(NOISE_RECORD_PLAINTEXT_LEN) {
                         let seq = match take_next_sequence(&mut next_outbound_seq) {
                             Ok(seq) => seq,
                             Err(error) => {
-                                warn!("secure relay sequence exhausted: {error}");
+                                warn!("Noise relay sequence exhausted: {error}");
                                 break 'relay;
                             }
                         };
                         let ciphertext = match transport.encrypt(plaintext_record) {
                             Ok(ciphertext) => ciphertext,
                             Err(error) => {
-                                warn!("failed to encrypt JSON-RPC payload for secure relay: {error}");
+                                warn!("failed to encrypt JSON-RPC payload for Noise relay: {error}");
                                 break 'relay;
                             }
                         };
@@ -320,7 +320,7 @@ where
                                 Ok(RelayFrameBodyKind::Handshake) | Err(_) => {
                                     send_malformed(
                                         &incoming_tx,
-                                        "secure relay received invalid post-handshake frame".to_string(),
+                                        "Noise relay received invalid post-handshake frame".to_string(),
                                     )
                                     .await;
                                     break;
@@ -332,13 +332,13 @@ where
                         Ok(Message::Text(_)) => {
                             send_malformed(
                                 &incoming_tx,
-                                "secure relay transport expects binary protobuf frames".to_string(),
+                                "Noise relay transport expects binary protobuf frames".to_string(),
                             )
                             .await;
                             break;
                         }
                         Err(error) => {
-                            debug!("secure relay websocket read failed: {error}");
+                            debug!("Noise relay websocket read failed: {error}");
                             break;
                         }
                     }
@@ -359,7 +359,7 @@ where
 
 async fn receive_data(
     inbound_ciphertexts: &mut OrderedCiphertextFrames,
-    transport: &mut SecureTransport,
+    transport: &mut NoiseTransport,
     decoder: &mut JsonRpcMessageDecoder,
     data: RelayData,
     incoming_tx: &mpsc::Sender<JsonRpcConnectionEvent>,

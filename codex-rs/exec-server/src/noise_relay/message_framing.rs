@@ -3,8 +3,8 @@ use codex_app_server_protocol::JSONRPCMessage;
 use crate::ExecServerError;
 
 const LENGTH_PREFIX_BYTES: usize = size_of::<u32>();
-const MAX_SECURE_JSONRPC_MESSAGE_LEN: usize = 64 * 1024 * 1024;
-pub(crate) const SECURE_RECORD_PLAINTEXT_LEN: usize = 60 * 1024;
+const MAX_NOISE_JSONRPC_MESSAGE_LEN: usize = 64 * 1024 * 1024;
+pub(crate) const NOISE_RECORD_PLAINTEXT_LEN: usize = 60 * 1024;
 
 /// Serialize one JSON-RPC message into the encrypted record byte stream.
 ///
@@ -16,9 +16,9 @@ pub(crate) fn frame_jsonrpc_message(message: &JSONRPCMessage) -> Result<Vec<u8>,
     let mut framed = vec![0; LENGTH_PREFIX_BYTES];
     serde_json::to_writer(&mut framed, message)?;
     let message_len = framed.len() - LENGTH_PREFIX_BYTES;
-    if message_len > MAX_SECURE_JSONRPC_MESSAGE_LEN {
+    if message_len > MAX_NOISE_JSONRPC_MESSAGE_LEN {
         return Err(ExecServerError::Protocol(
-            "secure relay JSON-RPC message exceeds maximum length".to_string(),
+            "Noise relay JSON-RPC message exceeds maximum length".to_string(),
         ));
     }
     framed[..LENGTH_PREFIX_BYTES].copy_from_slice(&(message_len as u32).to_be_bytes());
@@ -37,9 +37,9 @@ impl JsonRpcMessageDecoder {
         &mut self,
         plaintext_record: &[u8],
     ) -> Result<Vec<JSONRPCMessage>, ExecServerError> {
-        if plaintext_record.len() > SECURE_RECORD_PLAINTEXT_LEN {
+        if plaintext_record.len() > NOISE_RECORD_PLAINTEXT_LEN {
             return Err(ExecServerError::Protocol(
-                "secure relay plaintext record exceeds maximum length".to_string(),
+                "Noise relay plaintext record exceeds maximum length".to_string(),
             ));
         }
         self.buffered.extend_from_slice(plaintext_record);
@@ -63,9 +63,9 @@ impl JsonRpcMessageDecoder {
         }
 
         // Even before a message is complete, keep reassembly memory bounded.
-        if self.buffered.len() > LENGTH_PREFIX_BYTES + MAX_SECURE_JSONRPC_MESSAGE_LEN {
+        if self.buffered.len() > LENGTH_PREFIX_BYTES + MAX_NOISE_JSONRPC_MESSAGE_LEN {
             return Err(ExecServerError::Protocol(
-                "secure relay JSON-RPC reassembly buffer exceeds maximum length".to_string(),
+                "Noise relay JSON-RPC reassembly buffer exceeds maximum length".to_string(),
             ));
         }
         Ok(messages)
@@ -78,9 +78,9 @@ impl JsonRpcMessageDecoder {
         let message_len = u32::from_be_bytes([prefix[0], prefix[1], prefix[2], prefix[3]]) as usize;
         // Zero-length is never a JSON-RPC message, and rejecting an oversized
         // declaration immediately avoids waiting for attacker-controlled data.
-        if message_len == 0 || message_len > MAX_SECURE_JSONRPC_MESSAGE_LEN {
+        if message_len == 0 || message_len > MAX_NOISE_JSONRPC_MESSAGE_LEN {
             return Err(ExecServerError::Protocol(
-                "secure relay JSON-RPC message has invalid length".to_string(),
+                "Noise relay JSON-RPC message has invalid length".to_string(),
             ));
         }
         Ok(Some(message_len))

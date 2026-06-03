@@ -75,20 +75,20 @@ async fn register_environment_posts_with_auth_provider_headers() {
 #[tokio::test]
 async fn register_noise_environment_posts_security_profile_and_public_key() {
     let server = MockServer::start().await;
-    let executor_public_key = SecureChannelIdentity::generate()
+    let executor_public_key = NoiseChannelIdentity::generate()
         .expect("identity")
         .public_key();
     Mock::given(method("POST"))
         .and(path("/cloud/environment/environment-requested/register"))
         .and(header("authorization", "Bearer registry-token"))
         .and(body_partial_json(serde_json::json!({
-            "security_profile": SECURE_RELAY_SECURITY_PROFILE,
+            "security_profile": NOISE_RELAY_SECURITY_PROFILE,
             "executor_public_key": executor_public_key.clone(),
         })))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "environment_id": "environment-requested",
-            "url": "wss://rendezvous.test/secure",
-            "security_profile": SECURE_RELAY_SECURITY_PROFILE,
+            "url": "wss://rendezvous.test/noise",
+            "security_profile": NOISE_RELAY_SECURITY_PROFILE,
             "executor_registration_id": "registration-1",
         })))
         .mount(&server)
@@ -99,14 +99,14 @@ async fn register_noise_environment_posts_security_profile_and_public_key() {
     let response = client
         .register_noise_environment("environment-requested", &executor_public_key)
         .await
-        .expect("register secure environment");
+        .expect("register Noise environment");
 
     assert_eq!(
         response,
         EnvironmentRegistryNoiseRegistrationResponse {
             environment_id: "environment-requested".to_string(),
-            url: "wss://rendezvous.test/secure".to_string(),
-            security_profile: SECURE_RELAY_SECURITY_PROFILE.to_string(),
+            url: "wss://rendezvous.test/noise".to_string(),
+            security_profile: NOISE_RELAY_SECURITY_PROFILE.to_string(),
             executor_registration_id: "registration-1".to_string(),
         }
     );
@@ -174,7 +174,7 @@ fn remote_environment_config_accepts_cloud_environment_id() {
     .expect("config");
 
     assert_eq!(config.environment_id, environment_id);
-    assert_eq!(config.relay_security, RemoteRelaySecurity::Legacy);
+    assert_eq!(config.relay_protocol, RemoteRelayProtocol::Legacy);
 }
 
 #[test]

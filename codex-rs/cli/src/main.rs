@@ -1620,7 +1620,7 @@ async fn run_exec_server_command(
             remote_config.name = name;
         }
         if cmd.enable_noise {
-            remote_config.relay_security = codex_exec_server::RemoteRelaySecurity::Noise;
+            remote_config.relay_protocol = codex_exec_server::RemoteRelayProtocol::Noise;
         }
         codex_exec_server::run_remote_environment(remote_config, runtime_paths).await?;
         Ok(())

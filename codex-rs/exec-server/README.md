@@ -29,7 +29,7 @@ then reconnects to the service-provided rendezvous websocket as the environment.
 It uses the legacy relay contract by default for compatibility with existing
 registries and harnesses. `--enable-noise` explicitly opts into Noise-encrypted
 relay registration and requires both the registry and harness to support the
-secure relay contract. Container entrypoints can make the same explicit choice
+Noise relay contract. Container entrypoints can make the same explicit choice
 by setting `CODEX_EXEC_SERVER_ENABLE_NOISE=true`.
 It uses the standard Codex ChatGPT sign-in state; run `codex login` first when
 remote registration needs authentication. Containerized callers that receive an

@@ -94,7 +94,7 @@ impl RelayMessageFrame {
     }
 
     /// Validate cleartext routing metadata before a frame reaches either the
-    /// direct JSON-RPC parser or the secure relay state machine.
+    /// direct JSON-RPC parser or the Noise relay state machine.
     ///
     /// The encrypted path intentionally leaves this metadata visible to
     /// rendezvous, so it must be canonical and tightly bounded everywhere.
@@ -377,7 +377,7 @@ where
 /// The physical websocket carries protobuf [`RelayMessageFrame`] values. Each
 /// frame's `stream_id` selects an independent logical JSON-RPC connection, so a
 /// single registered exec-server can serve multiple orchestrator sessions.
-/// This runner intentionally preserves the protocol used before secure relay
+/// This runner intentionally preserves the protocol used before Noise relay
 /// support was introduced. Callers must select the separate secure runner when
 /// Noise protection was explicitly negotiated during registration.
 ///

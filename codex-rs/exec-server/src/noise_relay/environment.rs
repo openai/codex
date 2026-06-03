@@ -21,25 +21,27 @@ use crate::connection::CHANNEL_CAPACITY;
 use crate::connection::JsonRpcConnection;
 use crate::connection::JsonRpcConnectionEvent;
 use crate::connection::JsonRpcTransport;
+use crate::noise_channel::NoiseChannelIdentity;
+use crate::noise_channel::NoiseChannelPublicKey;
+use crate::noise_channel::NoiseTransport;
+use crate::noise_channel::PendingResponderHandshake;
+use crate::noise_channel::noise_channel_prologue;
+use crate::noise_relay::message_framing::JsonRpcMessageDecoder;
+use crate::noise_relay::message_framing::NOISE_RECORD_PLAINTEXT_LEN;
+use crate::noise_relay::message_framing::frame_jsonrpc_message;
+use crate::noise_relay::ordered_ciphertext::OrderedCiphertextFrames;
+use crate::noise_relay::take_next_sequence;
 use crate::relay::RelayFrameBodyKind;
 use crate::relay::decode_relay_message_frame;
 use crate::relay::encode_relay_message_frame;
 use crate::relay_proto::RelayData;
 use crate::relay_proto::RelayMessageFrame;
-use crate::secure_channel::PendingResponderHandshake;
-use crate::secure_channel::SecureChannelIdentity;
-use crate::secure_channel::SecureChannelPublicKey;
-use crate::secure_channel::SecureTransport;
-use crate::secure_channel::secure_channel_prologue;
-use crate::secure_relay::message_framing::JsonRpcMessageDecoder;
-use crate::secure_relay::message_framing::SECURE_RECORD_PLAINTEXT_LEN;
-use crate::secure_relay::message_framing::frame_jsonrpc_message;
-use crate::secure_relay::ordered_ciphertext::OrderedCiphertextFrames;
-use crate::secure_relay::take_next_sequence;
 use crate::server::ConnectionProcessor;
 
-const SECURE_RELAY_RESET_REASON: &str = "secure_relay_protocol_error";
-const MAX_ACTIVE_SECURE_RELAY_STREAMS: usize = 128;
+// This value is already part of the relay wire contract. Keep it stable even
+// though the source module now uses the more precise Noise terminology.
+const NOISE_RELAY_RESET_REASON: &str = "secure_relay_protocol_error";
+const MAX_ACTIVE_NOISE_RELAY_STREAMS: usize = 128;
 const MAX_PENDING_HANDSHAKE_VALIDATIONS: usize = 32;
 const HARNESS_KEY_VALIDATION_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -51,7 +53,7 @@ const HARNESS_KEY_VALIDATION_TIMEOUT: Duration = Duration::from_secs(10);
 pub(crate) trait HarnessKeyValidator: Send + Sync {
     fn validate_harness_key(
         &self,
-        harness_public_key: &SecureChannelPublicKey,
+        harness_public_key: &NoiseChannelPublicKey,
         authorization: &str,
     ) -> impl std::future::Future<Output = Result<(), ExecServerError>> + Send;
 }
@@ -62,12 +64,12 @@ pub(crate) trait HarnessKeyValidator: Send + Sync {
 /// outer websocket and rendezvous route are treated as untrusted delivery:
 /// malformed, unauthorized, or cryptographically invalid streams fail closed
 /// without creating a `JsonRpcConnection`.
-pub(crate) async fn run_secure_multiplexed_environment<S, V>(
+pub(crate) async fn run_noise_multiplexed_environment<S, V>(
     stream: WebSocketStream<S>,
     processor: ConnectionProcessor,
     environment_id: String,
     executor_registration_id: String,
-    identity: SecureChannelIdentity,
+    identity: NoiseChannelIdentity,
     validator: V,
 ) where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
@@ -76,7 +78,7 @@ pub(crate) async fn run_secure_multiplexed_environment<S, V>(
     let mut websocket = stream;
     let (physical_outgoing_tx, mut physical_outgoing_rx) =
         mpsc::channel::<Vec<u8>>(CHANNEL_CAPACITY);
-    let mut streams: HashMap<String, SecureVirtualStream> = HashMap::new();
+    let mut streams: HashMap<String, NoiseVirtualStream> = HashMap::new();
     let mut pending_handshakes: HashMap<String, PendingHandshake> = HashMap::new();
     let mut validation_tasks: JoinSet<HarnessKeyValidationResult> = JoinSet::new();
     let mut next_validation_id = 0u64;
@@ -115,12 +117,12 @@ pub(crate) async fn run_secure_multiplexed_environment<S, V>(
                             continue;
                         };
                         if let Err(error) = validation_result.result {
-                            warn!("secure relay harness key validation failed: {error}");
+                            warn!("Noise relay harness key validation failed: {error}");
                             send_reset(&physical_outgoing_tx, validation_result.stream_id).await;
                             continue;
                         }
-                        if streams.len() >= MAX_ACTIVE_SECURE_RELAY_STREAMS {
-                            warn!("secure relay has too many active streams");
+                        if streams.len() >= MAX_ACTIVE_NOISE_RELAY_STREAMS {
+                            warn!("Noise relay has too many active streams");
                             send_reset(&physical_outgoing_tx, validation_result.stream_id).await;
                             continue;
                         }
@@ -131,7 +133,7 @@ pub(crate) async fn run_secure_multiplexed_environment<S, V>(
                         let (transport, response) = match pending.handshake.complete() {
                             Ok(completed) => completed,
                             Err(error) => {
-                                warn!("failed to complete secure relay handshake: {error}");
+                                warn!("failed to complete Noise relay handshake: {error}");
                                 send_reset(&physical_outgoing_tx, validation_result.stream_id).await;
                                 continue;
                             }
@@ -149,7 +151,7 @@ pub(crate) async fn run_secure_multiplexed_environment<S, V>(
                         }
                         streams.insert(
                             validation_result.stream_id.clone(),
-                            spawn_secure_virtual_stream(
+                            spawn_noise_virtual_stream(
                                 validation_result.stream_id,
                                 processor.clone(),
                                 physical_outgoing_tx.clone(),
@@ -158,7 +160,7 @@ pub(crate) async fn run_secure_multiplexed_environment<S, V>(
                         );
                     }
                     Some(Err(error)) => {
-                        warn!("secure relay harness key validation task failed: {error}");
+                        warn!("Noise relay harness key validation task failed: {error}");
                         let stream_ids = pending_handshakes.keys().cloned().collect::<Vec<_>>();
                         pending_handshakes.clear();
                         for stream_id in stream_ids {
@@ -173,18 +175,18 @@ pub(crate) async fn run_secure_multiplexed_environment<S, V>(
                 Some(Ok(Message::Binary(payload))) => match decode_relay_message_frame(payload.as_ref()) {
                     Ok(frame) => frame,
                     Err(error) => {
-                        warn!("dropping malformed secure relay frame from harness: {error}");
+                        warn!("dropping malformed Noise relay frame from harness: {error}");
                         continue;
                     }
                 },
                 Some(Ok(Message::Close(_))) | None => break,
                 Some(Ok(Message::Ping(_) | Message::Pong(_) | Message::Frame(_))) => continue,
                 Some(Ok(Message::Text(_))) => {
-                    warn!("dropping non-binary secure relay frame from harness");
+                    warn!("dropping non-binary Noise relay frame from harness");
                     continue;
                 }
                 Some(Err(error)) => {
-                    debug!("secure multiplexed environment websocket read failed: {error}");
+                    debug!("Noise multiplexed environment websocket read failed: {error}");
                     break;
                 }
             }
@@ -193,7 +195,7 @@ pub(crate) async fn run_secure_multiplexed_environment<S, V>(
         let kind = match frame.validate() {
             Ok(kind) => kind,
             Err(error) => {
-                warn!("dropping invalid secure relay frame: {error}");
+                warn!("dropping invalid Noise relay frame: {error}");
                 continue;
             }
         };
@@ -206,24 +208,24 @@ pub(crate) async fn run_secure_multiplexed_environment<S, V>(
                     send_reset(&physical_outgoing_tx, stream_id).await;
                     continue;
                 }
-                if streams.len() >= MAX_ACTIVE_SECURE_RELAY_STREAMS {
-                    warn!("secure relay has too many active streams");
+                if streams.len() >= MAX_ACTIVE_NOISE_RELAY_STREAMS {
+                    warn!("Noise relay has too many active streams");
                     send_reset(&physical_outgoing_tx, stream_id).await;
                     continue;
                 }
                 if validation_tasks.len() >= MAX_PENDING_HANDSHAKE_VALIDATIONS {
-                    warn!("secure relay has too many pending harness key validations");
+                    warn!("Noise relay has too many pending harness key validations");
                     send_reset(&physical_outgoing_tx, stream_id).await;
                     continue;
                 }
-                let prologue = match secure_channel_prologue(
+                let prologue = match noise_channel_prologue(
                     &environment_id,
                     &executor_registration_id,
                     &stream_id,
                 ) {
                     Ok(prologue) => prologue,
                     Err(error) => {
-                        warn!("failed to build secure relay prologue: {error}");
+                        warn!("failed to build Noise relay prologue: {error}");
                         send_reset(&physical_outgoing_tx, stream_id).await;
                         continue;
                     }
@@ -231,7 +233,7 @@ pub(crate) async fn run_secure_multiplexed_environment<S, V>(
                 let request = match frame.into_handshake_payload() {
                     Ok(request) => request,
                     Err(error) => {
-                        warn!("failed to read secure relay handshake frame: {error}");
+                        warn!("failed to read Noise relay handshake frame: {error}");
                         send_reset(&physical_outgoing_tx, stream_id).await;
                         continue;
                     }
@@ -240,7 +242,7 @@ pub(crate) async fn run_secure_multiplexed_environment<S, V>(
                     match PendingResponderHandshake::read_request(&identity, &prologue, &request) {
                         Ok(pending) => pending,
                         Err(error) => {
-                            warn!("failed to read secure relay handshake request: {error}");
+                            warn!("failed to read Noise relay handshake request: {error}");
                             send_reset(&physical_outgoing_tx, stream_id).await;
                             continue;
                         }
@@ -252,7 +254,7 @@ pub(crate) async fn run_secure_multiplexed_environment<S, V>(
                 let authorization = match std::str::from_utf8(pending.payload()) {
                     Ok(authorization) => authorization.to_string(),
                     Err(_) => {
-                        warn!("secure relay handshake authorization is not UTF-8");
+                        warn!("Noise relay handshake authorization is not UTF-8");
                         send_reset(&physical_outgoing_tx, stream_id).await;
                         continue;
                     }
@@ -260,7 +262,7 @@ pub(crate) async fn run_secure_multiplexed_environment<S, V>(
                 let harness_public_key = pending.initiator_public_key().clone();
                 let validation_id = next_validation_id;
                 let Some(next_id) = next_validation_id.checked_add(1) else {
-                    warn!("secure relay harness key validation id exhausted");
+                    warn!("Noise relay harness key validation id exhausted");
                     send_reset(&physical_outgoing_tx, stream_id).await;
                     continue;
                 };
@@ -286,7 +288,7 @@ pub(crate) async fn run_secure_multiplexed_environment<S, V>(
                     {
                         Ok(result) => result,
                         Err(_) => Err(ExecServerError::Protocol(
-                            "timed out validating secure relay harness key".to_string(),
+                            "timed out validating Noise relay harness key".to_string(),
                         )),
                     };
                     HarnessKeyValidationResult {
@@ -308,14 +310,14 @@ pub(crate) async fn run_secure_multiplexed_environment<S, V>(
                 let data = match frame.into_data() {
                     Ok(data) => data,
                     Err(error) => {
-                        warn!("dropping malformed secure relay data frame: {error}");
+                        warn!("dropping malformed Noise relay data frame: {error}");
                         streams.remove(&stream_id);
                         send_reset(&physical_outgoing_tx, stream_id).await;
                         continue;
                     }
                 };
                 if let Err(error) = stream.receive_data(data).await {
-                    warn!("failed to process secure relay payload: {error}");
+                    warn!("failed to process Noise relay payload: {error}");
                     streams.remove(&stream_id);
                     send_reset(&physical_outgoing_tx, stream_id).await;
                 }
@@ -348,15 +350,15 @@ struct HarnessKeyValidationResult {
     result: Result<(), ExecServerError>,
 }
 
-struct SecureVirtualStream {
+struct NoiseVirtualStream {
     incoming_tx: mpsc::Sender<JsonRpcConnectionEvent>,
     disconnected_tx: watch::Sender<bool>,
-    transport: Arc<Mutex<SecureTransport>>,
+    transport: Arc<Mutex<NoiseTransport>>,
     inbound_ciphertexts: OrderedCiphertextFrames,
     inbound_decoder: JsonRpcMessageDecoder,
 }
 
-impl SecureVirtualStream {
+impl NoiseVirtualStream {
     async fn disconnect(self, reason: Option<String>) {
         let _ = self.disconnected_tx.send(true);
         let _ = self
@@ -388,12 +390,12 @@ impl SecureVirtualStream {
     }
 }
 
-fn spawn_secure_virtual_stream(
+fn spawn_noise_virtual_stream(
     stream_id: String,
     processor: ConnectionProcessor,
     physical_outgoing_tx: mpsc::Sender<Vec<u8>>,
-    transport: SecureTransport,
-) -> SecureVirtualStream {
+    transport: NoiseTransport,
+) -> NoiseVirtualStream {
     let (json_outgoing_tx, mut json_outgoing_rx) = mpsc::channel(CHANNEL_CAPACITY);
     let (incoming_tx, incoming_rx) = mpsc::channel(CHANNEL_CAPACITY);
     let (disconnected_tx, disconnected_rx) = watch::channel(false);
@@ -409,15 +411,15 @@ fn spawn_secure_virtual_stream(
             let framed = match frame_jsonrpc_message(&message) {
                 Ok(framed) => framed,
                 Err(error) => {
-                    warn!("failed to frame secure virtual stream JSON-RPC payload: {error}");
+                    warn!("failed to frame Noise virtual stream JSON-RPC payload: {error}");
                     break;
                 }
             };
-            for plaintext_record in framed.chunks(SECURE_RECORD_PLAINTEXT_LEN) {
+            for plaintext_record in framed.chunks(NOISE_RECORD_PLAINTEXT_LEN) {
                 let seq = match take_next_sequence(&mut next_seq) {
                     Ok(seq) => seq,
                     Err(error) => {
-                        warn!("secure virtual stream sequence exhausted: {error}");
+                        warn!("Noise virtual stream sequence exhausted: {error}");
                         break 'writer;
                     }
                 };
@@ -430,7 +432,7 @@ fn spawn_secure_virtual_stream(
                 let ciphertext = match ciphertext {
                     Ok(ciphertext) => ciphertext,
                     Err(error) => {
-                        warn!("failed to encrypt secure virtual stream payload: {error}");
+                        warn!("failed to encrypt Noise virtual stream payload: {error}");
                         break 'writer;
                     }
                 };
@@ -449,7 +451,7 @@ fn spawn_secure_virtual_stream(
         // exits, including processor shutdown or a cryptographic/send failure.
         // Otherwise the peer could wait indefinitely on a dead stream.
         let reset =
-            RelayMessageFrame::reset(writer_stream_id, SECURE_RELAY_RESET_REASON.to_string());
+            RelayMessageFrame::reset(writer_stream_id, NOISE_RELAY_RESET_REASON.to_string());
         let _ = physical_outgoing_tx
             .send(encode_relay_message_frame(&reset))
             .await;
@@ -466,7 +468,7 @@ fn spawn_secure_virtual_stream(
         processor.run_connection(connection).await;
     });
 
-    SecureVirtualStream {
+    NoiseVirtualStream {
         incoming_tx,
         disconnected_tx,
         transport,
@@ -476,7 +478,7 @@ fn spawn_secure_virtual_stream(
 }
 
 async fn send_reset(physical_outgoing_tx: &mpsc::Sender<Vec<u8>>, stream_id: String) {
-    let reset = RelayMessageFrame::reset(stream_id, SECURE_RELAY_RESET_REASON.to_string());
+    let reset = RelayMessageFrame::reset(stream_id, NOISE_RELAY_RESET_REASON.to_string());
     let _ = physical_outgoing_tx
         .send(encode_relay_message_frame(&reset))
         .await;

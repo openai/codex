@@ -23,9 +23,9 @@ use crate::ProcessId;
 use crate::client_api::ExecServerClientConnectOptions;
 use crate::client_api::ExecServerTransportParams;
 use crate::client_api::HttpClient;
+use crate::client_api::NoiseRendezvousConnectArgs;
+use crate::client_api::NoiseRendezvousConnectBundle;
 use crate::client_api::RemoteExecServerConnectArgs;
-use crate::client_api::SecureRendezvousConnectArgs;
-use crate::client_api::SecureRendezvousConnectBundle;
 use crate::client_api::StdioExecServerConnectArgs;
 use crate::connection::JsonRpcConnection;
 use crate::process::ExecProcessEvent;
@@ -117,8 +117,8 @@ impl From<RemoteExecServerConnectArgs> for ExecServerClientConnectOptions {
     }
 }
 
-impl From<SecureRendezvousConnectArgs> for ExecServerClientConnectOptions {
-    fn from(value: SecureRendezvousConnectArgs) -> Self {
+impl From<NoiseRendezvousConnectArgs> for ExecServerClientConnectOptions {
+    fn from(value: NoiseRendezvousConnectArgs) -> Self {
         Self {
             client_name: value.client_name,
             initialize_timeout: value.initialize_timeout,
@@ -149,10 +149,10 @@ impl RemoteExecServerConnectArgs {
     }
 }
 
-impl SecureRendezvousConnectArgs {
+impl NoiseRendezvousConnectArgs {
     pub fn new(
-        bundle: SecureRendezvousConnectBundle,
-        harness_identity: crate::SecureChannelIdentity,
+        bundle: NoiseRendezvousConnectBundle,
+        harness_identity: crate::NoiseChannelIdentity,
         client_name: String,
     ) -> Self {
         Self {
@@ -260,7 +260,7 @@ impl LazyRemoteExecServerClient {
                 if matches!(
                     &self.transport_params,
                     ExecServerTransportParams::WebSocketUrl { .. }
-                        | ExecServerTransportParams::SecureRendezvous { .. }
+                        | ExecServerTransportParams::NoiseRendezvous { .. }
                 ) =>
             {
                 ExecServerClient::connect_for_transport(self.transport_params.clone()).await?
@@ -348,7 +348,7 @@ pub enum ExecServerError {
     #[error("environment registry request failed: {0}")]
     EnvironmentRegistryRequest(#[from] reqwest::Error),
     #[error(transparent)]
-    SecureChannel(#[from] crate::SecureChannelError),
+    NoiseChannel(#[from] crate::NoiseChannelError),
 }
 
 impl ExecServerClient {

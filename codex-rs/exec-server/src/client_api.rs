@@ -9,8 +9,8 @@ use crate::ExecServerError;
 use crate::HttpRequestParams;
 use crate::HttpRequestResponse;
 use crate::HttpResponseBodyStream;
-use crate::SecureChannelIdentity;
-use crate::SecureChannelPublicKey;
+use crate::NoiseChannelIdentity;
+use crate::NoiseChannelPublicKey;
 
 pub(crate) const DEFAULT_REMOTE_EXEC_SERVER_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 pub(crate) const DEFAULT_REMOTE_EXEC_SERVER_INITIALIZE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -33,19 +33,19 @@ pub struct RemoteExecServerConnectArgs {
     pub resume_session_id: Option<String>,
 }
 
-/// Registry-authorized material for one secure rendezvous connection attempt.
+/// Registry-authorized material for one Noise rendezvous connection attempt.
 #[derive(Clone)]
-pub struct SecureRendezvousConnectBundle {
+pub struct NoiseRendezvousConnectBundle {
     pub websocket_url: String,
     pub environment_id: String,
     pub executor_registration_id: String,
-    pub executor_public_key: SecureChannelPublicKey,
+    pub executor_public_key: NoiseChannelPublicKey,
     pub harness_key_authorization: String,
 }
 
-impl std::fmt::Debug for SecureRendezvousConnectBundle {
+impl std::fmt::Debug for NoiseRendezvousConnectBundle {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SecureRendezvousConnectBundle")
+        f.debug_struct("NoiseRendezvousConnectBundle")
             .field(
                 "websocket_url",
                 &redacted_websocket_url(&self.websocket_url),
@@ -58,20 +58,20 @@ impl std::fmt::Debug for SecureRendezvousConnectBundle {
     }
 }
 
-/// Connection arguments for an authenticated secure rendezvous exec-server.
+/// Connection arguments for an authenticated Noise rendezvous exec-server.
 #[derive(Clone)]
-pub struct SecureRendezvousConnectArgs {
-    pub bundle: SecureRendezvousConnectBundle,
-    pub harness_identity: SecureChannelIdentity,
+pub struct NoiseRendezvousConnectArgs {
+    pub bundle: NoiseRendezvousConnectBundle,
+    pub harness_identity: NoiseChannelIdentity,
     pub client_name: String,
     pub connect_timeout: Duration,
     pub initialize_timeout: Duration,
     pub resume_session_id: Option<String>,
 }
 
-impl std::fmt::Debug for SecureRendezvousConnectArgs {
+impl std::fmt::Debug for NoiseRendezvousConnectArgs {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SecureRendezvousConnectArgs")
+        f.debug_struct("NoiseRendezvousConnectArgs")
             .field("bundle", &self.bundle)
             .field("harness_identity", &"<redacted>")
             .field("client_name", &self.client_name)
@@ -82,19 +82,19 @@ impl std::fmt::Debug for SecureRendezvousConnectArgs {
     }
 }
 
-/// Supplies fresh registry-authorized material for secure rendezvous connections.
+/// Supplies fresh registry-authorized material for Noise rendezvous connections.
 ///
 /// Implementations must preserve one endpoint-local harness identity while
 /// refreshing short-lived registry material for every physical connection attempt.
-pub trait SecureRendezvousConnectProvider: Send + Sync {
+pub trait NoiseRendezvousConnectProvider: Send + Sync {
     /// Environment ID this provider is authorized to connect to.
     fn environment_id(&self) -> &str;
 
     /// Returns a fresh atomic bundle for one physical connection attempt.
-    fn connect_args(&self) -> BoxFuture<'_, Result<SecureRendezvousConnectArgs, ExecServerError>>;
+    fn connect_args(&self) -> BoxFuture<'_, Result<NoiseRendezvousConnectArgs, ExecServerError>>;
 }
 
-pub type SharedSecureRendezvousConnectProvider = Arc<dyn SecureRendezvousConnectProvider>;
+pub type SharedNoiseRendezvousConnectProvider = Arc<dyn NoiseRendezvousConnectProvider>;
 
 /// Stdio connection arguments for a command-backed exec-server.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -122,8 +122,8 @@ pub(crate) enum ExecServerTransportParams {
         connect_timeout: Duration,
         initialize_timeout: Duration,
     },
-    SecureRendezvous {
-        provider: SharedSecureRendezvousConnectProvider,
+    NoiseRendezvous {
+        provider: SharedNoiseRendezvousConnectProvider,
     },
     #[allow(dead_code)]
     StdioCommand {
@@ -145,8 +145,8 @@ impl std::fmt::Debug for ExecServerTransportParams {
                 .field("connect_timeout", connect_timeout)
                 .field("initialize_timeout", initialize_timeout)
                 .finish(),
-            Self::SecureRendezvous { provider } => f
-                .debug_struct("SecureRendezvous")
+            Self::NoiseRendezvous { provider } => f
+                .debug_struct("NoiseRendezvous")
                 .field("environment_id", &provider.environment_id())
                 .finish(),
             Self::StdioCommand {

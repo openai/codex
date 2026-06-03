@@ -6,7 +6,7 @@ use crate::ExecServerError;
 use crate::ExecServerRuntimePaths;
 use crate::ExecutorFileSystem;
 use crate::HttpClient;
-use crate::SharedSecureRendezvousConnectProvider;
+use crate::SharedNoiseRendezvousConnectProvider;
 use crate::client::LazyRemoteExecServerClient;
 use crate::client::http_client::ReqwestHttpClient;
 use crate::client_api::ExecServerTransportParams;
@@ -280,10 +280,10 @@ impl EnvironmentManager {
 
     /// Adds or replaces a named remote environment that connects through an
     /// authenticated, end-to-end encrypted rendezvous stream.
-    pub fn upsert_secure_environment(
+    pub fn upsert_noise_environment(
         &self,
         environment_id: String,
-        provider: SharedSecureRendezvousConnectProvider,
+        provider: SharedNoiseRendezvousConnectProvider,
     ) -> Result<(), ExecServerError> {
         if environment_id.is_empty() {
             return Err(ExecServerError::Protocol(
@@ -292,11 +292,11 @@ impl EnvironmentManager {
         }
         if environment_id != provider.environment_id() {
             return Err(ExecServerError::Protocol(
-                "secure environment id does not match connection provider".to_string(),
+                "Noise environment id does not match connection provider".to_string(),
             ));
         }
         let environment = Environment::remote_with_transport(
-            ExecServerTransportParams::SecureRendezvous { provider },
+            ExecServerTransportParams::NoiseRendezvous { provider },
             self.local_runtime_paths.clone(),
         );
         self.environments
@@ -411,7 +411,7 @@ impl Environment {
                 websocket_url: exec_server_url,
                 ..
             } => Some(exec_server_url.clone()),
-            ExecServerTransportParams::SecureRendezvous { .. } => None,
+            ExecServerTransportParams::NoiseRendezvous { .. } => None,
             ExecServerTransportParams::StdioCommand { .. } => None,
         };
         let client = LazyRemoteExecServerClient::new(remote_transport.clone());

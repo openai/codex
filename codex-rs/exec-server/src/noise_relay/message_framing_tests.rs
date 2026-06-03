@@ -3,8 +3,8 @@ use codex_app_server_protocol::JSONRPCNotification;
 use pretty_assertions::assert_eq;
 
 use super::JsonRpcMessageDecoder;
-use super::MAX_SECURE_JSONRPC_MESSAGE_LEN;
-use super::SECURE_RECORD_PLAINTEXT_LEN;
+use super::MAX_NOISE_JSONRPC_MESSAGE_LEN;
+use super::NOISE_RECORD_PLAINTEXT_LEN;
 use super::frame_jsonrpc_message;
 use crate::ExecServerError;
 
@@ -21,7 +21,7 @@ fn fragments_and_reassembles_large_jsonrpc_message() {
 
     let mut decoder = JsonRpcMessageDecoder::default();
     let mut decoded = Vec::new();
-    for record in framed.chunks(SECURE_RECORD_PLAINTEXT_LEN) {
+    for record in framed.chunks(NOISE_RECORD_PLAINTEXT_LEN) {
         decoded.extend(decoder.push(record).unwrap());
     }
 
@@ -31,12 +31,12 @@ fn fragments_and_reassembles_large_jsonrpc_message() {
 #[test]
 fn rejects_declared_message_length_above_limit_without_payload() {
     let mut decoder = JsonRpcMessageDecoder::default();
-    let declared_len = (MAX_SECURE_JSONRPC_MESSAGE_LEN as u32 + 1).to_be_bytes();
+    let declared_len = (MAX_NOISE_JSONRPC_MESSAGE_LEN as u32 + 1).to_be_bytes();
 
     assert!(matches!(
         decoder.push(&declared_len),
         Err(ExecServerError::Protocol(message))
-            if message == "secure relay JSON-RPC message has invalid length"
+            if message == "Noise relay JSON-RPC message has invalid length"
     ));
 }
 
@@ -45,8 +45,8 @@ fn rejects_oversized_plaintext_record() {
     let mut decoder = JsonRpcMessageDecoder::default();
 
     assert!(matches!(
-        decoder.push(&vec![0; SECURE_RECORD_PLAINTEXT_LEN + 1]),
+        decoder.push(&vec![0; NOISE_RECORD_PLAINTEXT_LEN + 1]),
         Err(ExecServerError::Protocol(message))
-            if message == "secure relay plaintext record exceeds maximum length"
+            if message == "Noise relay plaintext record exceeds maximum length"
     ));
 }

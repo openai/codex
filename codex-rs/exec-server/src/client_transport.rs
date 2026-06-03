@@ -12,15 +12,15 @@ use codex_utils_rustls_provider::ensure_rustls_crypto_provider;
 
 use crate::ExecServerClient;
 use crate::ExecServerError;
+use crate::client_api::NoiseRendezvousConnectArgs;
 use crate::client_api::RemoteExecServerConnectArgs;
-use crate::client_api::SecureRendezvousConnectArgs;
 use crate::client_api::StdioExecServerCommand;
 use crate::client_api::StdioExecServerConnectArgs;
 use crate::client_api::redacted_websocket_url;
 use crate::connection::JsonRpcConnection;
+use crate::noise_relay::noise_harness_connection_from_websocket;
+use crate::noise_relay::noise_relay_websocket_config;
 use crate::relay::harness_connection_from_websocket;
-use crate::secure_relay::secure_harness_connection_from_websocket;
-use crate::secure_relay::secure_relay_websocket_config;
 
 const ENVIRONMENT_CLIENT_NAME: &str = "codex-environment";
 
@@ -43,15 +43,14 @@ impl ExecServerClient {
                 })
                 .await
             }
-            crate::client_api::ExecServerTransportParams::SecureRendezvous { provider } => {
+            crate::client_api::ExecServerTransportParams::NoiseRendezvous { provider } => {
                 let args = provider.connect_args().await?;
                 if args.bundle.environment_id != provider.environment_id() {
                     return Err(ExecServerError::Protocol(
-                        "secure rendezvous provider returned a different environment id"
-                            .to_string(),
+                        "Noise rendezvous provider returned a different environment id".to_string(),
                     ));
                 }
-                Self::connect_secure_rendezvous(args).await
+                Self::connect_noise_rendezvous(args).await
             }
             crate::client_api::ExecServerTransportParams::StdioCommand {
                 command,
@@ -94,8 +93,8 @@ impl ExecServerClient {
         Self::connect(connection, args.into()).await
     }
 
-    pub async fn connect_secure_rendezvous(
-        args: SecureRendezvousConnectArgs,
+    pub async fn connect_noise_rendezvous(
+        args: NoiseRendezvousConnectArgs,
     ) -> Result<Self, ExecServerError> {
         ensure_rustls_crypto_provider();
         let websocket_url = args.bundle.websocket_url.clone();
@@ -105,7 +104,7 @@ impl ExecServerClient {
             connect_timeout,
             connect_async_with_config(
                 websocket_url.as_str(),
-                Some(secure_relay_websocket_config()),
+                Some(noise_relay_websocket_config()),
                 /*disable_nagle*/ false,
             ),
         )
@@ -119,8 +118,8 @@ impl ExecServerClient {
             source,
         })?;
 
-        let connection_label = format!("secure exec-server rendezvous websocket {diagnostic_url}");
-        let connection = secure_harness_connection_from_websocket(
+        let connection_label = format!("Noise exec-server rendezvous websocket {diagnostic_url}");
+        let connection = noise_harness_connection_from_websocket(
             stream,
             connection_label,
             args.bundle.environment_id.clone(),

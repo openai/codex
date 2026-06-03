@@ -11,7 +11,7 @@ const MAX_PENDING_BYTES: usize = 1024 * 1024;
 /// Relay delivery can be duplicated or reordered, but Noise transport nonces
 /// are strictly ordered. This type absorbs only a small reliable-delivery
 /// window and releases ciphertexts exactly once in nonce order. It must sit
-/// before `SecureTransport::decrypt`; attempting to decrypt a future record
+/// before `NoiseTransport::decrypt`; attempting to decrypt a future record
 /// would advance or desynchronize cryptographic state.
 #[derive(Default)]
 pub(crate) struct OrderedCiphertextFrames {
@@ -39,7 +39,7 @@ impl OrderedCiphertextFrames {
             // while forcing unbounded pre-decryption state.
             if seq - self.next_seq > MAX_REORDER_DISTANCE {
                 return Err(ExecServerError::Protocol(
-                    "secure relay ciphertext exceeds reorder window".to_string(),
+                    "Noise relay ciphertext exceeds reorder window".to_string(),
                 ));
             }
             let pending_bytes = self
@@ -47,12 +47,12 @@ impl OrderedCiphertextFrames {
                 .checked_add(payload.len())
                 .ok_or_else(|| {
                     ExecServerError::Protocol(
-                        "secure relay pending ciphertext byte count overflowed".to_string(),
+                        "Noise relay pending ciphertext byte count overflowed".to_string(),
                     )
                 })?;
             if self.pending.len() >= MAX_PENDING_FRAMES || pending_bytes > MAX_PENDING_BYTES {
                 return Err(ExecServerError::Protocol(
-                    "secure relay pending ciphertext buffer is full".to_string(),
+                    "Noise relay pending ciphertext buffer is full".to_string(),
                 ));
             }
             self.pending.insert(seq, payload);
@@ -74,7 +74,7 @@ impl OrderedCiphertextFrames {
 
     fn advance(&mut self) -> Result<(), ExecServerError> {
         self.next_seq = self.next_seq.checked_add(1).ok_or_else(|| {
-            ExecServerError::Protocol("secure relay sequence number exhausted".to_string())
+            ExecServerError::Protocol("Noise relay sequence number exhausted".to_string())
         })?;
         Ok(())
     }

@@ -13,15 +13,15 @@ use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::Message;
 
 use super::HarnessKeyValidator;
-use super::run_secure_multiplexed_environment;
+use super::run_noise_multiplexed_environment;
 use crate::ExecServerError;
 use crate::ExecServerRuntimePaths;
+use crate::noise_channel::InitiatorHandshake;
+use crate::noise_channel::NoiseChannelIdentity;
+use crate::noise_channel::NoiseChannelPublicKey;
+use crate::noise_channel::noise_channel_prologue;
 use crate::relay::encode_relay_message_frame;
 use crate::relay_proto::RelayMessageFrame;
-use crate::secure_channel::InitiatorHandshake;
-use crate::secure_channel::SecureChannelIdentity;
-use crate::secure_channel::SecureChannelPublicKey;
-use crate::secure_channel::secure_channel_prologue;
 use crate::server::ConnectionProcessor;
 
 const ENVIRONMENT_ID: &str = "environment-1";
@@ -36,7 +36,7 @@ struct BlockingValidator {
 impl HarnessKeyValidator for BlockingValidator {
     fn validate_harness_key(
         &self,
-        _harness_public_key: &SecureChannelPublicKey,
+        _harness_public_key: &NoiseChannelPublicKey,
         _authorization: &str,
     ) -> impl std::future::Future<Output = Result<(), ExecServerError>> + Send {
         let calls = Arc::clone(&self.calls);
@@ -58,10 +58,10 @@ async fn pending_harness_key_validation_does_not_block_new_handshakes() -> Resul
     let environment_websocket = accept_async(socket).await?;
     let (mut harness_websocket, _response) = harness_connection.await??;
 
-    let environment_identity = SecureChannelIdentity::generate()?;
-    let harness_identity = SecureChannelIdentity::generate()?;
+    let environment_identity = NoiseChannelIdentity::generate()?;
+    let harness_identity = NoiseChannelIdentity::generate()?;
     let calls = Arc::new(AtomicUsize::new(0));
-    let environment_task = tokio::spawn(run_secure_multiplexed_environment(
+    let environment_task = tokio::spawn(run_noise_multiplexed_environment(
         environment_websocket,
         ConnectionProcessor::new(ExecServerRuntimePaths::new(
             std::env::current_exe()?,
@@ -77,8 +77,7 @@ async fn pending_harness_key_validation_does_not_block_new_handshakes() -> Resul
     ));
 
     for stream_id in ["stream-1", "stream-2"] {
-        let prologue =
-            secure_channel_prologue(ENVIRONMENT_ID, EXECUTOR_REGISTRATION_ID, stream_id)?;
+        let prologue = noise_channel_prologue(ENVIRONMENT_ID, EXECUTOR_REGISTRATION_ID, stream_id)?;
         let (_handshake, request) = InitiatorHandshake::start(
             &harness_identity,
             &environment_identity.public_key(),

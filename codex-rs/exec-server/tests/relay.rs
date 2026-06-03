@@ -22,14 +22,14 @@ use codex_exec_server::ExecServerClient;
 use codex_exec_server::ExecServerError;
 use codex_exec_server::ExecServerRuntimePaths;
 use codex_exec_server::FsReadFileParams;
+use codex_exec_server::NoiseChannelIdentity;
+use codex_exec_server::NoiseChannelPublicKey;
+use codex_exec_server::NoiseRendezvousConnectArgs;
+use codex_exec_server::NoiseRendezvousConnectBundle;
+use codex_exec_server::NoiseRendezvousConnectProvider;
 use codex_exec_server::ProcessId;
 use codex_exec_server::RemoteEnvironmentConfig;
-use codex_exec_server::RemoteRelaySecurity;
-use codex_exec_server::SecureChannelIdentity;
-use codex_exec_server::SecureChannelPublicKey;
-use codex_exec_server::SecureRendezvousConnectArgs;
-use codex_exec_server::SecureRendezvousConnectBundle;
-use codex_exec_server::SecureRendezvousConnectProvider;
+use codex_exec_server::RemoteRelayProtocol;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use futures::FutureExt;
 use futures::SinkExt;
@@ -56,7 +56,7 @@ use wiremock::matchers::header;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
 
-const ENVIRONMENT_ID: &str = "env-secure-relay-test";
+const ENVIRONMENT_ID: &str = "env-noise-relay-test";
 const EXECUTOR_REGISTRATION_ID: &str = "registration-1";
 const HARNESS_KEY_AUTHORIZATION: &str = "harness-key-authorization";
 const REGISTRY_TOKEN: &str = "registry-token";
@@ -74,16 +74,16 @@ impl AuthProvider for StaticRegistryAuthProvider {
     }
 }
 
-struct FailingSecureConnectProvider {
+struct FailingNoiseConnectProvider {
     attempts: Arc<AtomicUsize>,
 }
 
-impl SecureRendezvousConnectProvider for FailingSecureConnectProvider {
+impl NoiseRendezvousConnectProvider for FailingNoiseConnectProvider {
     fn environment_id(&self) -> &str {
         ENVIRONMENT_ID
     }
 
-    fn connect_args(&self) -> BoxFuture<'_, Result<SecureRendezvousConnectArgs, ExecServerError>> {
+    fn connect_args(&self) -> BoxFuture<'_, Result<NoiseRendezvousConnectArgs, ExecServerError>> {
         self.attempts.fetch_add(1, Ordering::SeqCst);
         async {
             Err(ExecServerError::Protocol(
@@ -94,20 +94,20 @@ impl SecureRendezvousConnectProvider for FailingSecureConnectProvider {
     }
 }
 
-struct WrongEnvironmentSecureConnectProvider {
-    harness_identity: SecureChannelIdentity,
-    executor_public_key: SecureChannelPublicKey,
+struct WrongEnvironmentNoiseConnectProvider {
+    harness_identity: NoiseChannelIdentity,
+    executor_public_key: NoiseChannelPublicKey,
 }
 
-impl SecureRendezvousConnectProvider for WrongEnvironmentSecureConnectProvider {
+impl NoiseRendezvousConnectProvider for WrongEnvironmentNoiseConnectProvider {
     fn environment_id(&self) -> &str {
         ENVIRONMENT_ID
     }
 
-    fn connect_args(&self) -> BoxFuture<'_, Result<SecureRendezvousConnectArgs, ExecServerError>> {
+    fn connect_args(&self) -> BoxFuture<'_, Result<NoiseRendezvousConnectArgs, ExecServerError>> {
         async move {
-            Ok(SecureRendezvousConnectArgs::new(
-                SecureRendezvousConnectBundle {
+            Ok(NoiseRendezvousConnectArgs::new(
+                NoiseRendezvousConnectBundle {
                     websocket_url: "ws://127.0.0.1:1".to_string(),
                     environment_id: "wrong-environment".to_string(),
                     executor_registration_id: EXECUTOR_REGISTRATION_ID.to_string(),
@@ -115,7 +115,7 @@ impl SecureRendezvousConnectProvider for WrongEnvironmentSecureConnectProvider {
                     harness_key_authorization: HARNESS_KEY_AUTHORIZATION.to_string(),
                 },
                 self.harness_identity.clone(),
-                "secure-relay-test".to_string(),
+                "noise-relay-test".to_string(),
             ))
         }
         .boxed()
@@ -150,7 +150,7 @@ async fn remote_environment_uses_legacy_relay_by_default() -> Result<()> {
         ENVIRONMENT_ID.to_string(),
         static_registry_auth_provider(),
     )?;
-    assert_eq!(config.relay_security, RemoteRelaySecurity::Legacy);
+    assert_eq!(config.relay_protocol, RemoteRelayProtocol::Legacy);
     let remote_environment = tokio::spawn(codex_exec_server::run_remote_environment(
         config,
         runtime_paths,
@@ -205,18 +205,18 @@ async fn remote_environment_uses_legacy_relay_by_default() -> Result<()> {
 }
 
 #[tokio::test]
-async fn secure_environment_refreshes_bundle_for_each_connection_attempt() -> Result<()> {
+async fn noise_environment_refreshes_bundle_for_each_connection_attempt() -> Result<()> {
     let attempts = Arc::new(AtomicUsize::new(0));
     let manager = EnvironmentManager::without_environments();
-    manager.upsert_secure_environment(
+    manager.upsert_noise_environment(
         ENVIRONMENT_ID.to_string(),
-        Arc::new(FailingSecureConnectProvider {
+        Arc::new(FailingNoiseConnectProvider {
             attempts: Arc::clone(&attempts),
         }),
     )?;
     let backend = manager
         .get_environment(ENVIRONMENT_ID)
-        .context("secure environment should be materialized")?
+        .context("Noise environment should be materialized")?
         .get_exec_backend();
 
     for attempt in 1..=2 {
@@ -244,18 +244,18 @@ async fn secure_environment_refreshes_bundle_for_each_connection_attempt() -> Re
 }
 
 #[tokio::test]
-async fn secure_environment_rejects_provider_bundle_for_another_environment() -> Result<()> {
+async fn noise_environment_rejects_provider_bundle_for_another_environment() -> Result<()> {
     let manager = EnvironmentManager::without_environments();
-    manager.upsert_secure_environment(
+    manager.upsert_noise_environment(
         ENVIRONMENT_ID.to_string(),
-        Arc::new(WrongEnvironmentSecureConnectProvider {
-            harness_identity: SecureChannelIdentity::generate()?,
-            executor_public_key: SecureChannelIdentity::generate()?.public_key(),
+        Arc::new(WrongEnvironmentNoiseConnectProvider {
+            harness_identity: NoiseChannelIdentity::generate()?,
+            executor_public_key: NoiseChannelIdentity::generate()?.public_key(),
         }),
     )?;
     let backend = manager
         .get_environment(ENVIRONMENT_ID)
-        .context("secure environment should be materialized")?
+        .context("Noise environment should be materialized")?
         .get_exec_backend();
 
     let result = backend
@@ -274,7 +274,7 @@ async fn secure_environment_rejects_provider_bundle_for_another_environment() ->
     assert!(matches!(
         result,
         Err(ExecServerError::Protocol(ref message))
-            if message == "secure rendezvous provider returned a different environment id"
+            if message == "Noise rendezvous provider returned a different environment id"
     ));
     Ok(())
 }
@@ -313,7 +313,7 @@ async fn remote_environment_routes_encrypted_exec_server_rpc() -> Result<()> {
         ENVIRONMENT_ID.to_string(),
         static_registry_auth_provider(),
     )?;
-    config.relay_security = RemoteRelaySecurity::Noise;
+    config.relay_protocol = RemoteRelayProtocol::Noise;
     let remote_environment = tokio::spawn(codex_exec_server::run_remote_environment(
         config,
         runtime_paths,
@@ -321,9 +321,9 @@ async fn remote_environment_routes_encrypted_exec_server_rpc() -> Result<()> {
 
     let environment_websocket = accept_websocket(&listener, "environment").await?;
     let executor_public_key = registered_executor_public_key(&registry).await?;
-    let harness_identity = SecureChannelIdentity::generate()?;
-    let client_args = SecureRendezvousConnectArgs::new(
-        SecureRendezvousConnectBundle {
+    let harness_identity = NoiseChannelIdentity::generate()?;
+    let client_args = NoiseRendezvousConnectArgs::new(
+        NoiseRendezvousConnectBundle {
             websocket_url: format!("{rendezvous_url}/relay?role=harness"),
             environment_id: ENVIRONMENT_ID.to_string(),
             executor_registration_id: EXECUTOR_REGISTRATION_ID.to_string(),
@@ -331,10 +331,10 @@ async fn remote_environment_routes_encrypted_exec_server_rpc() -> Result<()> {
             harness_key_authorization: HARNESS_KEY_AUTHORIZATION.to_string(),
         },
         harness_identity,
-        "secure-relay-test".to_string(),
+        "noise-relay-test".to_string(),
     );
     let client_task =
-        tokio::spawn(async move { ExecServerClient::connect_secure_rendezvous(client_args).await });
+        tokio::spawn(async move { ExecServerClient::connect_noise_rendezvous(client_args).await });
     let harness_websocket = accept_websocket(&listener, "harness").await?;
     let captured_frames = Arc::new(Mutex::new(Vec::new()));
     let relay_task = tokio::spawn(proxy_relay_frames(
@@ -344,7 +344,7 @@ async fn remote_environment_routes_encrypted_exec_server_rpc() -> Result<()> {
     ));
     let client = timeout(TEST_TIMEOUT, client_task)
         .await
-        .context("secure harness client should connect")???;
+        .context("Noise harness client should connect")???;
 
     let response = client
         .exec(ExecParams {
@@ -403,7 +403,7 @@ async fn accept_websocket(
         .map_err(Into::into)
 }
 
-async fn registered_executor_public_key(registry: &MockServer) -> Result<SecureChannelPublicKey> {
+async fn registered_executor_public_key(registry: &MockServer) -> Result<NoiseChannelPublicKey> {
     let requests = registry
         .received_requests()
         .await
@@ -468,7 +468,7 @@ fn assert_relay_data_is_encrypted(captured_frames: &Mutex<Vec<Vec<u8>>>) -> Resu
         let payload = String::from_utf8_lossy(&data.payload);
         assert!(!payload.contains("initialize"));
         assert!(!payload.contains("process/start"));
-        assert!(!payload.contains("secure-relay-test"));
+        assert!(!payload.contains("noise-relay-test"));
     }
     assert!(
         data_frames >= 4,

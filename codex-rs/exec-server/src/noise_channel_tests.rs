@@ -2,19 +2,19 @@ use pretty_assertions::assert_eq;
 
 use super::InitiatorHandshake;
 use super::MAX_TRANSPORT_RECORDS_PER_DIRECTION;
+use super::NOISE_CHANNEL_SUITE;
+use super::NoiseChannelError;
+use super::NoiseChannelIdentity;
+use super::NoiseChannelPublicKey;
 use super::PendingResponderHandshake;
-use super::SECURE_CHANNEL_SUITE;
-use super::SecureChannelError;
-use super::SecureChannelIdentity;
-use super::SecureChannelPublicKey;
-use super::secure_channel_prologue;
+use super::noise_channel_prologue;
 
 #[test]
 fn hybrid_ik_roundtrip_authenticates_both_endpoints() {
-    let initiator = SecureChannelIdentity::generate().expect("generate initiator identity");
-    let responder = SecureChannelIdentity::generate().expect("generate responder identity");
+    let initiator = NoiseChannelIdentity::generate().expect("generate initiator identity");
+    let responder = NoiseChannelIdentity::generate().expect("generate responder identity");
     let prologue =
-        secure_channel_prologue("env-1", "registration-1", "stream-1").expect("build prologue");
+        noise_channel_prologue("env-1", "registration-1", "stream-1").expect("build prologue");
     let authorization = b"harness-key-authorization";
 
     let (initiator_handshake, request) = InitiatorHandshake::start(
@@ -66,11 +66,11 @@ fn hybrid_ik_roundtrip_authenticates_both_endpoints() {
 
 #[test]
 fn initiator_rejects_wrong_responder_key() {
-    let initiator = SecureChannelIdentity::generate().expect("generate initiator identity");
-    let expected_responder = SecureChannelIdentity::generate().expect("generate expected identity");
-    let actual_responder = SecureChannelIdentity::generate().expect("generate actual identity");
+    let initiator = NoiseChannelIdentity::generate().expect("generate initiator identity");
+    let expected_responder = NoiseChannelIdentity::generate().expect("generate expected identity");
+    let actual_responder = NoiseChannelIdentity::generate().expect("generate actual identity");
     let prologue =
-        secure_channel_prologue("env-1", "registration-1", "stream-1").expect("build prologue");
+        noise_channel_prologue("env-1", "registration-1", "stream-1").expect("build prologue");
 
     let (_initiator_handshake, request) = InitiatorHandshake::start(
         &initiator,
@@ -87,12 +87,12 @@ fn initiator_rejects_wrong_responder_key() {
 
 #[test]
 fn responder_rejects_mismatched_prologue() {
-    let initiator = SecureChannelIdentity::generate().expect("generate initiator identity");
-    let responder = SecureChannelIdentity::generate().expect("generate responder identity");
+    let initiator = NoiseChannelIdentity::generate().expect("generate initiator identity");
+    let responder = NoiseChannelIdentity::generate().expect("generate responder identity");
     let initiator_prologue =
-        secure_channel_prologue("env-1", "registration-1", "stream-1").expect("build prologue");
+        noise_channel_prologue("env-1", "registration-1", "stream-1").expect("build prologue");
     let responder_prologue =
-        secure_channel_prologue("env-1", "registration-1", "stream-2").expect("build prologue");
+        noise_channel_prologue("env-1", "registration-1", "stream-2").expect("build prologue");
     let (_initiator_handshake, request) = InitiatorHandshake::start(
         &initiator,
         &responder.public_key(),
@@ -109,7 +109,7 @@ fn responder_rejects_mismatched_prologue() {
 #[test]
 fn prologue_encoding_is_stable_and_unambiguous() {
     let prologue =
-        secure_channel_prologue("env-1", "registration-1", "stream-1").expect("build prologue");
+        noise_channel_prologue("env-1", "registration-1", "stream-1").expect("build prologue");
 
     assert_eq!(
         prologue,
@@ -123,10 +123,10 @@ fn prologue_encoding_is_stable_and_unambiguous() {
 
 #[test]
 fn transport_rejects_tampered_ciphertext() {
-    let initiator = SecureChannelIdentity::generate().expect("generate initiator identity");
-    let responder = SecureChannelIdentity::generate().expect("generate responder identity");
+    let initiator = NoiseChannelIdentity::generate().expect("generate initiator identity");
+    let responder = NoiseChannelIdentity::generate().expect("generate responder identity");
     let prologue =
-        secure_channel_prologue("env-1", "registration-1", "stream-1").expect("build prologue");
+        noise_channel_prologue("env-1", "registration-1", "stream-1").expect("build prologue");
     let (initiator_handshake, request) = InitiatorHandshake::start(
         &initiator,
         &responder.public_key(),
@@ -153,10 +153,10 @@ fn transport_rejects_tampered_ciphertext() {
 
 #[test]
 fn transport_rejects_exhausted_receiving_nonce_before_decryption() {
-    let initiator = SecureChannelIdentity::generate().expect("generate initiator identity");
-    let responder = SecureChannelIdentity::generate().expect("generate responder identity");
+    let initiator = NoiseChannelIdentity::generate().expect("generate initiator identity");
+    let responder = NoiseChannelIdentity::generate().expect("generate responder identity");
     let prologue =
-        secure_channel_prologue("env-1", "registration-1", "stream-1").expect("build prologue");
+        noise_channel_prologue("env-1", "registration-1", "stream-1").expect("build prologue");
     let (initiator_handshake, request) = InitiatorHandshake::start(
         &initiator,
         &responder.public_key(),
@@ -182,7 +182,7 @@ fn transport_rejects_exhausted_receiving_nonce_before_decryption() {
 
     assert!(matches!(
         responder_transport.decrypt(&ciphertext),
-        Err(SecureChannelError::InvalidState(
+        Err(NoiseChannelError::InvalidState(
             "transport record nonce exhausted"
         ))
     ));
@@ -190,10 +190,10 @@ fn transport_rejects_exhausted_receiving_nonce_before_decryption() {
 
 #[test]
 fn transport_rejects_replayed_ciphertext() {
-    let initiator = SecureChannelIdentity::generate().expect("generate initiator identity");
-    let responder = SecureChannelIdentity::generate().expect("generate responder identity");
+    let initiator = NoiseChannelIdentity::generate().expect("generate initiator identity");
+    let responder = NoiseChannelIdentity::generate().expect("generate responder identity");
     let prologue =
-        secure_channel_prologue("env-1", "registration-1", "stream-1").expect("build prologue");
+        noise_channel_prologue("env-1", "registration-1", "stream-1").expect("build prologue");
     let (initiator_handshake, request) = InitiatorHandshake::start(
         &initiator,
         &responder.public_key(),
@@ -222,19 +222,19 @@ fn transport_rejects_replayed_ciphertext() {
     );
     assert!(matches!(
         responder_transport.decrypt(&ciphertext),
-        Err(SecureChannelError::Transport(_))
+        Err(NoiseChannelError::Transport(_))
     ));
 }
 
 #[test]
 fn public_key_validation_rejects_unknown_suite() {
-    let key = SecureChannelIdentity::generate()
+    let key = NoiseChannelIdentity::generate()
         .expect("generate identity")
         .public_key();
     let json = serde_json::to_value(key).expect("serialize key");
     let mut object = json.as_object().expect("key object").clone();
     object.insert("suite".to_string(), serde_json::json!("unknown"));
-    let key: SecureChannelPublicKey =
+    let key: NoiseChannelPublicKey =
         serde_json::from_value(serde_json::Value::Object(object)).expect("deserialize key");
 
     assert!(key.validate().is_err());
@@ -242,11 +242,11 @@ fn public_key_validation_rejects_unknown_suite() {
 
 #[test]
 fn public_key_serializes_with_expected_suite() {
-    let key = SecureChannelIdentity::generate()
+    let key = NoiseChannelIdentity::generate()
         .expect("generate identity")
         .public_key();
 
     let json = serde_json::to_value(key).expect("serialize key");
 
-    assert_eq!(json["suite"], SECURE_CHANNEL_SUITE);
+    assert_eq!(json["suite"], NOISE_CHANNEL_SUITE);
 }
