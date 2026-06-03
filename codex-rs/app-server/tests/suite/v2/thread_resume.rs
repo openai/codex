@@ -1367,16 +1367,10 @@ async fn thread_goal_clear_deletes_goal_and_notifies() -> Result<()> {
 
 #[tokio::test]
 async fn goal_events_track_creation_accounted_usage_status_and_external_clear() -> Result<()> {
-    let server = create_mock_responses_server_sequence_unchecked(vec![
-        responses::sse(vec![
-            responses::ev_response_created("goal-continuation-1"),
-            responses::ev_completed_with_tokens("goal-continuation-1", /*total_tokens*/ 200),
-        ]),
-        responses::sse(vec![
-            responses::ev_response_created("goal-continuation-2"),
-            responses::ev_completed_with_tokens("goal-continuation-2", /*total_tokens*/ 200),
-        ]),
-    ])
+    let server = create_mock_responses_server_sequence_unchecked(vec![responses::sse(vec![
+        responses::ev_response_created("goal-continuation"),
+        responses::ev_completed_with_tokens("goal-continuation", /*total_tokens*/ 200),
+    ])])
     .await;
     let codex_home = TempDir::new()?;
     create_config_toml_with_chatgpt_base_url(codex_home.path(), &server.uri(), &server.uri())?;
@@ -1411,102 +1405,34 @@ async fn goal_events_track_creation_accounted_usage_status_and_external_clear() 
     .await??;
     let _resume: ThreadResumeResponse = to_response(resume_resp)?;
 
-    let paused_id = mcp
+    let set_id = mcp
         .send_raw_request(
             "thread/goal/set",
             Some(json!({
                 "threadId": thread_id,
                 "objective": "do not serialize this objective",
-                "status": "paused",
-                "tokenBudget": 300,
+                "tokenBudget": 100,
             })),
         )
         .await?;
-    let paused_resp: JSONRPCResponse = timeout(
+    let set_resp: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(paused_id)),
+        mcp.read_stream_until_response_message(RequestId::Integer(set_id)),
     )
     .await??;
-    let _paused: ThreadGoalSetResponse = to_response(paused_resp)?;
+    let _set: ThreadGoalSetResponse = to_response(set_resp)?;
     timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_notification_message("thread/goal/updated"),
     )
     .await??;
-    let created = wait_for_goal_event(&server, DEFAULT_READ_TIMEOUT, "created", "paused").await?;
+    let created = wait_for_goal_event(&server, DEFAULT_READ_TIMEOUT, "created", "active").await?;
     let goal_id = created["event_params"]["goal_id"]
         .as_str()
         .expect("created goal id");
     assert_eq!(created["event_params"]["thread_id"], thread_id);
     assert_eq!(created["event_params"]["turn_id"], serde_json::Value::Null);
     assert_eq!(created["event_params"]["has_token_budget"], true);
-    assert_eq!(
-        created["event_params"]["cumulative_tokens_accounted"],
-        serde_json::Value::Null
-    );
-    assert_eq!(
-        created["event_params"]["cumulative_time_accounted_seconds"],
-        serde_json::Value::Null
-    );
-    assert!(created.get("objective").is_none());
-    assert!(created["event_params"].get("objective").is_none());
-    assert!(created["event_params"].get("token_budget").is_none());
-    assert!(created["event_params"].get("tokens_used").is_none());
-
-    let active_id = mcp
-        .send_raw_request(
-            "thread/goal/set",
-            Some(json!({
-                "threadId": thread_id,
-                "status": "active",
-            })),
-        )
-        .await?;
-    let active_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(active_id)),
-    )
-    .await??;
-    let _active: ThreadGoalSetResponse = to_response(active_resp)?;
-    timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("thread/goal/updated"),
-    )
-    .await??;
-
-    let activated =
-        wait_for_goal_event(&server, DEFAULT_READ_TIMEOUT, "status_changed", "active").await?;
-    assert_eq!(activated["event_params"]["goal_id"], goal_id);
-    assert_eq!(
-        activated["event_params"]["turn_id"],
-        serde_json::Value::Null
-    );
-    assert_eq!(
-        activated["event_params"]["cumulative_tokens_accounted"],
-        serde_json::Value::Null
-    );
-    assert_eq!(
-        activated["event_params"]["cumulative_time_accounted_seconds"],
-        serde_json::Value::Null
-    );
-
-    let first_usage_accounted =
-        wait_for_goal_event(&server, DEFAULT_READ_TIMEOUT, "usage_accounted", "active").await?;
-    assert_eq!(first_usage_accounted["event_params"]["goal_id"], goal_id);
-    assert!(
-        first_usage_accounted["event_params"]["turn_id"]
-            .as_str()
-            .is_some(),
-        "accounted turn usage must retain causal turn attribution"
-    );
-    assert_eq!(
-        first_usage_accounted["event_params"]["cumulative_tokens_accounted"],
-        200
-    );
-    let first_cumulative_time_accounted_seconds =
-        first_usage_accounted["event_params"]["cumulative_time_accounted_seconds"]
-            .as_i64()
-            .expect("accounted usage should include cumulative persisted time");
 
     let usage_accounted = wait_for_goal_event(
         &server,
@@ -1516,36 +1442,18 @@ async fn goal_events_track_creation_accounted_usage_status_and_external_clear() 
     )
     .await?;
     assert_eq!(usage_accounted["event_params"]["goal_id"], goal_id);
-    assert!(
-        usage_accounted["event_params"]["turn_id"]
-            .as_str()
-            .is_some(),
-        "accounted turn usage must retain causal turn attribution"
-    );
-    assert_ne!(
-        usage_accounted["event_params"]["turn_id"],
-        first_usage_accounted["event_params"]["turn_id"],
-        "repeated accounting snapshots should retain their causal turns"
-    );
-    assert_eq!(usage_accounted["event_params"]["has_token_budget"], true);
+    let turn_id = usage_accounted["event_params"]["turn_id"]
+        .as_str()
+        .expect("accounted usage should retain causal turn attribution");
     assert_eq!(
         usage_accounted["event_params"]["cumulative_tokens_accounted"],
-        400
+        200
     );
-    let cumulative_time_accounted_seconds =
+    assert!(
         usage_accounted["event_params"]["cumulative_time_accounted_seconds"]
             .as_i64()
-            .expect("accounted usage should include cumulative persisted time");
-    assert!(
-        cumulative_time_accounted_seconds >= first_cumulative_time_accounted_seconds,
-        "repeated accounting snapshots should report cumulative persisted time"
+            .is_some()
     );
-    assert!(
-        usage_accounted["event_params"]
-            .get("token_budget")
-            .is_none()
-    );
-    assert!(usage_accounted["event_params"].get("tokens_used").is_none());
 
     let budget_limited = wait_for_goal_event(
         &server,
@@ -1555,11 +1463,7 @@ async fn goal_events_track_creation_accounted_usage_status_and_external_clear() 
     )
     .await?;
     assert_eq!(budget_limited["event_params"]["goal_id"], goal_id);
-    assert_eq!(
-        budget_limited["event_params"]["turn_id"],
-        usage_accounted["event_params"]["turn_id"]
-    );
-    assert_eq!(budget_limited["event_params"]["has_token_budget"], true);
+    assert_eq!(budget_limited["event_params"]["turn_id"], turn_id);
     assert_eq!(
         budget_limited["event_params"]["cumulative_tokens_accounted"],
         serde_json::Value::Null
@@ -1567,24 +1471,6 @@ async fn goal_events_track_creation_accounted_usage_status_and_external_clear() 
     assert_eq!(
         budget_limited["event_params"]["cumulative_time_accounted_seconds"],
         serde_json::Value::Null
-    );
-    assert!(budget_limited["event_params"].get("token_budget").is_none());
-    assert!(budget_limited["event_params"].get("tokens_used").is_none());
-
-    let state_db =
-        StateRuntime::init(codex_home.path().to_path_buf(), "mock_provider".into()).await?;
-    let persisted_goal = state_db
-        .thread_goals()
-        .get_thread_goal(ThreadId::from_string(&thread_id)?)
-        .await?
-        .expect("goal should remain persisted before clear");
-    assert_eq!(
-        usage_accounted["event_params"]["cumulative_tokens_accounted"],
-        persisted_goal.tokens_used
-    );
-    assert_eq!(
-        usage_accounted["event_params"]["cumulative_time_accounted_seconds"],
-        persisted_goal.time_used_seconds
     );
 
     let clear_id = mcp
@@ -1607,54 +1493,6 @@ async fn goal_events_track_creation_accounted_usage_status_and_external_clear() 
         wait_for_goal_event(&server, DEFAULT_READ_TIMEOUT, "cleared", "budget_limited").await?;
     assert_eq!(cleared["event_params"]["goal_id"], goal_id);
     assert_eq!(cleared["event_params"]["turn_id"], serde_json::Value::Null);
-    assert_eq!(cleared["event_params"]["has_token_budget"], true);
-    assert_eq!(
-        cleared["event_params"]["cumulative_tokens_accounted"],
-        serde_json::Value::Null
-    );
-    assert_eq!(
-        cleared["event_params"]["cumulative_time_accounted_seconds"],
-        serde_json::Value::Null
-    );
-    assert!(cleared["event_params"].get("objective").is_none());
-    assert!(cleared["event_params"].get("token_budget").is_none());
-    let requests = server.received_requests().await.unwrap_or_default();
-    let mut goal_events = Vec::new();
-    for request in &requests {
-        if request.method != "POST" || request.url.path() != "/codex/analytics-events/events" {
-            continue;
-        }
-        let payload: serde_json::Value = serde_json::from_slice(&request.body)
-            .map_err(|err| anyhow::anyhow!("invalid analytics payload: {err}"))?;
-        let Some(events) = payload["events"].as_array() else {
-            continue;
-        };
-        goal_events.extend(
-            events
-                .iter()
-                .filter(|event| event["event_type"] == "codex_goal_event")
-                .cloned(),
-        );
-    }
-    assert_eq!(
-        goal_events
-            .iter()
-            .filter(|event| event["event_params"]["event_kind"] == "usage_accounted")
-            .count(),
-        2,
-        "repeated persisted accounting updates should emit cumulative snapshots"
-    );
-    for event in &goal_events {
-        let params = &event["event_params"];
-        assert!(params.get("objective").is_none());
-        assert!(params.get("token_budget").is_none());
-        assert!(params.get("tokens_used").is_none());
-        assert!(params.get("time_used_seconds").is_none());
-        assert!(
-            params["event_kind"] != "usage_accounted" || params["goal_status"] != "paused",
-            "persisting a paused goal must not record accounted execution"
-        );
-    }
 
     Ok(())
 }

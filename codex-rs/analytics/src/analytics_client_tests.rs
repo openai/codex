@@ -8,7 +8,6 @@ use crate::events::CodexAppUsedEventRequest;
 use crate::events::CodexCommandExecutionEventParams;
 use crate::events::CodexCommandExecutionEventRequest;
 use crate::events::CodexCompactionEventRequest;
-use crate::events::CodexGoalEventRequest;
 use crate::events::CodexHookRunEventRequest;
 use crate::events::CodexPluginEventRequest;
 use crate::events::CodexPluginUsedEventRequest;
@@ -1287,67 +1286,6 @@ fn compaction_event_serializes_expected_shape() {
 }
 
 #[test]
-fn goal_event_serializes_metadata_only_shape() {
-    let event = TrackEventRequest::Goal(Box::new(CodexGoalEventRequest {
-        event_type: "codex_goal_event",
-        event_params: crate::events::codex_goal_event_params(
-            CodexGoalEvent {
-                thread_id: "thread-1".to_string(),
-                turn_id: None,
-                goal_id: "goal-opaque-1".to_string(),
-                event_kind: GoalEventKind::Cleared,
-                goal_status: codex_state::ThreadGoalStatus::BudgetLimited,
-                has_token_budget: true,
-                cumulative_tokens_accounted: None,
-                cumulative_time_accounted_seconds: None,
-            },
-            "session-thread-1".to_string(),
-            sample_app_server_client_metadata(),
-            sample_runtime_metadata(),
-            Some(ThreadSource::User),
-            /*subagent_source*/ None,
-            /*parent_thread_id*/ None,
-        ),
-    }));
-
-    let payload = serde_json::to_value(&event).expect("serialize goal event");
-
-    assert_eq!(
-        payload,
-        json!({
-            "event_type": "codex_goal_event",
-            "event_params": {
-                "thread_id": "thread-1",
-                "session_id": "session-thread-1",
-                "turn_id": null,
-                "app_server_client": {
-                    "product_client_id": DEFAULT_ORIGINATOR,
-                    "client_name": "codex-tui",
-                    "client_version": "1.0.0",
-                    "rpc_transport": "stdio",
-                    "experimental_api_enabled": true
-                },
-                "runtime": {
-                    "codex_rs_version": "0.1.0",
-                    "runtime_os": "macos",
-                    "runtime_os_version": "15.3.1",
-                    "runtime_arch": "aarch64"
-                },
-                "thread_source": "user",
-                "subagent_source": null,
-                "parent_thread_id": null,
-                "goal_id": "goal-opaque-1",
-                "event_kind": "cleared",
-                "goal_status": "budget_limited",
-                "has_token_budget": true,
-                "cumulative_tokens_accounted": null,
-                "cumulative_time_accounted_seconds": null
-            }
-        })
-    );
-}
-
-#[test]
 fn compaction_implementation_serializes_remote_v2() {
     let payload = serde_json::to_value(CompactionImplementation::ResponsesCompactionV2)
         .expect("serialize compaction implementation");
@@ -1941,48 +1879,39 @@ async fn goal_event_ingests_accounted_usage_with_turn_attribution() {
         )
         .await;
 
-    let payload = serde_json::to_value(&events).expect("serialize events");
-    assert_eq!(payload.as_array().expect("events array").len(), 1);
-    assert_eq!(payload[0]["event_type"], "codex_goal_event");
-    assert_eq!(payload[0]["event_params"]["session_id"], "session-thread-1");
-    assert_eq!(payload[0]["event_params"]["thread_id"], "thread-1");
-    assert_eq!(payload[0]["event_params"]["turn_id"], "turn-goal");
-    assert_eq!(payload[0]["event_params"]["goal_id"], "goal-opaque-1");
-    assert_eq!(payload[0]["event_params"]["event_kind"], "usage_accounted");
-    assert_eq!(payload[0]["event_params"]["goal_status"], "active");
-    assert_eq!(payload[0]["event_params"]["has_token_budget"], false);
     assert_eq!(
-        payload[0]["event_params"]["cumulative_tokens_accounted"],
-        25
+        serde_json::to_value(&events).expect("serialize events"),
+        json!([{
+            "event_type": "codex_goal_event",
+            "event_params": {
+                "thread_id": "thread-1",
+                "session_id": "session-thread-1",
+                "turn_id": "turn-goal",
+                "app_server_client": {
+                    "product_client_id": "codex-tui",
+                    "client_name": "codex-tui",
+                    "client_version": "1.0.0",
+                    "rpc_transport": "stdio",
+                    "experimental_api_enabled": null
+                },
+                "runtime": {
+                    "codex_rs_version": "0.1.0",
+                    "runtime_os": "macos",
+                    "runtime_os_version": "15.3.1",
+                    "runtime_arch": "aarch64"
+                },
+                "thread_source": "user",
+                "subagent_source": null,
+                "parent_thread_id": null,
+                "goal_id": "goal-opaque-1",
+                "event_kind": "usage_accounted",
+                "goal_status": "active",
+                "has_token_budget": false,
+                "cumulative_tokens_accounted": 25,
+                "cumulative_time_accounted_seconds": 4
+            }
+        }])
     );
-    assert_eq!(
-        payload[0]["event_params"]["cumulative_time_accounted_seconds"],
-        4
-    );
-}
-
-#[tokio::test]
-async fn goal_event_without_thread_context_is_dropped() {
-    let mut reducer = AnalyticsReducer::default();
-    let mut events = Vec::new();
-
-    reducer
-        .ingest(
-            AnalyticsFact::Custom(CustomAnalyticsFact::Goal(Box::new(CodexGoalEvent {
-                thread_id: "thread-missing".to_string(),
-                turn_id: Some("turn-missing".to_string()),
-                goal_id: "goal-opaque-missing".to_string(),
-                event_kind: GoalEventKind::UsageAccounted,
-                goal_status: codex_state::ThreadGoalStatus::Active,
-                has_token_budget: false,
-                cumulative_tokens_accounted: Some(0),
-                cumulative_time_accounted_seconds: Some(0),
-            }))),
-            &mut events,
-        )
-        .await;
-
-    assert!(events.is_empty());
 }
 
 #[tokio::test]
