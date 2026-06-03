@@ -1283,7 +1283,12 @@ async fn install_host_owned_codex_apps_manager(session: &Session, turn_context: 
 
 #[tokio::test]
 async fn codex_apps_auth_elicitation_feature_disabled_returns_original_result() {
-    let (session, turn_context, rx_event) = make_session_and_context_with_rx().await;
+    let (session, mut turn_context, rx_event) = make_session_and_context_with_rx().await;
+    let mut features = Features::with_defaults();
+    features.disable(Feature::AuthElicitation);
+    Arc::get_mut(&mut turn_context)
+        .expect("single turn context ref")
+        .features = ManagedFeatures::from(features);
     install_host_owned_codex_apps_manager(&session, &turn_context).await;
     let result = codex_apps_auth_failure_result();
     let metadata = codex_apps_auth_failure_metadata();
