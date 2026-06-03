@@ -83,8 +83,8 @@ delegate remote configuration selection to that wrapper. The wrapper reads the
 GitHub Actions repository and event payload rather than relying on workflow
 files to duplicate tenant-selection logic. It also normalizes GitHub Actions
 startup options so all Bazel launches in a job reuse the same server and
-in-memory analysis cache. CI target-discovery helpers must use their `--ci`
-mode or `.github/scripts/run-bazel-query-ci.sh` for the same reason.
+in-memory analysis cache. Target-discovery and lockfile helpers delegate to the
+same wrapper so their callers do not need to select CI-specific startup options.
 
 Loading-phase target-discovery `bazel query` commands run locally because they
 only enumerate labels and do not need remote caches or execution.

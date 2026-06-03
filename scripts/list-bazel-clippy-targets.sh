@@ -20,19 +20,15 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Resolve the dynamic targets before printing anything so callers do not
-# continue with a partial list if `bazel query` fails. CI target discovery uses
-# the same startup settings as the later CI build; local discovery inherits the
-# default startup settings used by `just bazel-clippy`.
+# continue with a partial list if `bazel query` fails. The query helper routes
+# Bazel through the shared wrapper so local and CI calls inherit the appropriate
+# startup options.
 query='kind("rust_test rule", attr(tags, "manual", //codex-rs/... except //codex-rs/v8-poc/...))'
-if [[ "${GITHUB_ACTIONS:-}" == "true" ]]; then
-  manual_rust_test_targets="$(
-    ./.github/scripts/run-bazel-query-ci.sh \
-      --output=label \
-      -- "${query}"
-  )"
-else
-  manual_rust_test_targets="$(bazel query --output=label "${query}")"
-fi
+manual_rust_test_targets="$(
+  ./.github/scripts/run-bazel-query-ci.sh \
+    --output=label \
+    -- "${query}"
+)"
 if [[ "${RUNNER_OS:-}" != "Windows" ]]; then
   # Non-Windows clippy jobs lint the native test binaries; the
   # Windows-cross binaries exist only for the fast Windows test leg.
