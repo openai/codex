@@ -1,5 +1,6 @@
 use anyhow::Result;
 use codex_exec_server::CreateDirectoryOptions;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once;
@@ -7,6 +8,8 @@ use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::test_codex::TestCodexBuilder;
 use core_test_support::test_codex::test_codex;
+use std::sync::Arc;
+use tempfile::TempDir;
 
 async fn agents_instructions(mut builder: TestCodexBuilder) -> Result<String> {
     let server = start_mock_server().await;
@@ -136,6 +139,57 @@ async fn agents_docs_are_concatenated_from_project_root_to_cwd() -> Result<()> {
         root_pos < child_pos,
         "expected root doc before child doc: {instructions}"
     );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn selected_environment_sources_match_model_visible_instructions() -> Result<()> {
+    let server = start_mock_server().await;
+    let resp_mock = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
+    )
+    .await;
+    let home = Arc::new(TempDir::new()?);
+    let global_agents = home.path().join("AGENTS.md");
+    std::fs::write(&global_agents, "global doc")?;
+
+    let mut builder = test_codex()
+        .with_home(home)
+        .with_workspace_setup(|cwd, fs| async move {
+            fs.write_file(
+                &cwd.join("AGENTS.md"),
+                b"project doc".to_vec(),
+                /*sandbox*/ None,
+            )
+            .await?;
+            Ok::<(), anyhow::Error>(())
+        });
+    let test = builder.build_with_remote_env(&server).await?;
+    let project_agents = test
+        .fs()
+        .canonicalize(
+            &test.executor_environment().cwd().join("AGENTS.md"),
+            /*sandbox*/ None,
+        )
+        .await?;
+    let global_agents =
+        AbsolutePathBuf::try_from(std::fs::canonicalize(global_agents)?).expect("absolute path");
+
+    assert_eq!(
+        test.codex.instruction_sources().await,
+        vec![global_agents, project_agents]
+    );
+
+    test.submit_turn("hello").await?;
+    let instructions = resp_mock
+        .single_request()
+        .message_input_texts("user")
+        .into_iter()
+        .find(|text| text.starts_with("# AGENTS.md instructions for "))
+        .expect("instructions message");
+    assert!(instructions.contains("global doc\n\n--- project-doc ---\n\nproject doc"));
 
     Ok(())
 }

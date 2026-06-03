@@ -402,6 +402,40 @@ async fn thread_start_response_excludes_empty_project_instruction_source() -> Re
     Ok(())
 }
 
+#[tokio::test]
+async fn thread_start_without_selected_environment_excludes_instruction_sources() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml_without_approval_policy(codex_home.path(), &server.uri())?;
+    std::fs::write(codex_home.path().join("AGENTS.md"), "global instructions")?;
+    let workspace = TempDir::new()?;
+    std::fs::write(workspace.path().join("AGENTS.md"), "project instructions")?;
+
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            cwd: Some(workspace.path().display().to_string()),
+            environments: Some(Vec::new()),
+            ..Default::default()
+        })
+        .await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let ThreadStartResponse {
+        instruction_sources,
+        ..
+    } = to_response::<ThreadStartResponse>(response)?;
+
+    assert!(instruction_sources.is_empty());
+
+    Ok(())
+}
+
 #[cfg(windows)]
 fn normalize_path_for_comparison(path: impl AsRef<Path>) -> PathBuf {
     let path = path.as_ref();
