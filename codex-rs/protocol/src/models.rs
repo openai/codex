@@ -2916,7 +2916,10 @@ mod tests {
     #[test]
     fn local_image_open_tag_escapes_path() {
         assert_eq!(
-            local_image_open_tag_text_with_path(1, std::path::Path::new(r#"/tmp/a&"<b>.png"#)),
+            local_image_open_tag_text_with_path(
+                /*label_number*/ 1,
+                std::path::Path::new(r#"/tmp/a&"<b>.png"#),
+            ),
             r#"<image name=[Image #1] path="/tmp/a&amp;&quot;&lt;b&gt;.png">"#
         );
     }
