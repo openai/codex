@@ -11,6 +11,7 @@ use codex_protocol::user_input::UserInput;
 use core_test_support::responses::ResponsesRequest;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
+use core_test_support::responses::ev_completed_with_tokens;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
@@ -231,6 +232,84 @@ async fn window_id_rolls_back_across_compaction_and_persists_on_resume() -> Resu
             (initial_thread_id.clone(), 1),
             (initial_thread_id.clone(), 0),
             (initial_thread_id, 0),
+        ]
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn window_id_keeps_pre_turn_compaction_after_rolling_back_its_user_turn() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let request_log = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![ev_completed_with_tokens(
+                "resp-1", /*total_tokens*/ 50,
+            )]),
+            sse(vec![ev_completed_with_tokens(
+                "resp-2", /*total_tokens*/ 150,
+            )]),
+            sse(vec![
+                ev_assistant_message("msg-3", "summary"),
+                ev_completed_with_tokens("resp-3", /*total_tokens*/ 30),
+            ]),
+            sse(vec![
+                ev_assistant_message("msg-4", "rolled back"),
+                ev_completed_with_tokens("resp-4", /*total_tokens*/ 30),
+            ]),
+            sse(vec![ev_completed("resp-5")]),
+        ],
+    )
+    .await;
+
+    let mut builder = test_codex().with_config(|config| {
+        config.model_provider.name = "Non-OpenAI Model provider".to_string();
+        config.compact_prompt = Some(SUMMARIZATION_PROMPT.to_string());
+        config.model_context_window = Some(1_000);
+        config.model_auto_compact_token_limit = Some(100);
+    });
+    let initial = builder.build(&server).await?;
+    let initial_thread = Arc::clone(&initial.codex);
+    let rollout_path = initial
+        .session_configured
+        .rollout_path
+        .clone()
+        .expect("rollout path");
+
+    submit_user_turn(&initial_thread, "first").await?;
+    submit_user_turn(&initial_thread, "second").await?;
+    submit_user_turn(&initial_thread, "rolled back after pre-turn compact").await?;
+    initial_thread
+        .submit(Op::ThreadRollback { num_turns: 1 })
+        .await?;
+    wait_for_event(&initial_thread, |event| {
+        matches!(event, EventMsg::ThreadRolledBack(_))
+    })
+    .await;
+    shutdown_thread(&initial_thread).await?;
+
+    let resumed = builder
+        .resume(&server, initial.home.clone(), rollout_path)
+        .await?;
+    submit_user_turn(&resumed.codex, "after resume").await?;
+    shutdown_thread(&resumed.codex).await?;
+
+    let requests = request_log.requests();
+    assert_eq!(requests.len(), 5, "expected five model requests");
+
+    let window_ids = requests.iter().map(window_id_parts).collect::<Vec<_>>();
+    let thread_id = window_ids[0].0.clone();
+    assert_eq!(
+        window_ids,
+        vec![
+            (thread_id.clone(), 0),
+            (thread_id.clone(), 0),
+            (thread_id.clone(), 0),
+            (thread_id.clone(), 1),
+            (thread_id, 1),
         ]
     );
 

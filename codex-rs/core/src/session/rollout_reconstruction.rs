@@ -79,6 +79,7 @@ struct ActiveReplaySegment {
     turn_id: Option<String>,
     counts_as_user_turn: bool,
     compaction_count: u64,
+    pre_user_compaction_count: u64,
     previous_turn_settings: Option<PreviousTurnSettings>,
     reference_context_item: TurnReferenceContextItem,
     base_replacement_history_index: Option<usize>,
@@ -103,6 +104,8 @@ fn finalize_active_segment(
     // `EventMsg::UserMessage`.
     if *pending_rollback_turns > 0 {
         if active_segment.counts_as_user_turn {
+            *window_generation =
+                window_generation.saturating_add(active_segment.pre_user_compaction_count);
             *pending_rollback_turns -= 1;
         }
         return;
@@ -168,6 +171,12 @@ impl Session {
                         active_segment.get_or_insert_with(ActiveReplaySegment::default);
                     active_segment.compaction_count =
                         active_segment.compaction_count.saturating_add(1);
+                    // A compaction seen after the user boundary in reverse replay occurred before
+                    // the user input, so it survives rollback of that user turn.
+                    if active_segment.counts_as_user_turn {
+                        active_segment.pre_user_compaction_count =
+                            active_segment.pre_user_compaction_count.saturating_add(1);
+                    }
                     // Looking backward, compaction clears any older baseline unless a newer
                     // `TurnContextItem` in this same segment has already re-established it.
                     if !reconstruction_complete
