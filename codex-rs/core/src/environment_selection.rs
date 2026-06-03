@@ -269,6 +269,7 @@ url = "ws://127.0.0.1:8765"
             &[TurnEnvironmentSelection {
                 environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
                 cwd: cwd.clone(),
+                workspace_roots: Vec::new(),
             }],
         )
         .await
@@ -282,6 +283,7 @@ url = "ws://127.0.0.1:8765"
                 environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
                 environment: remote_environment.clone(),
                 cwd: cwd.clone(),
+                workspace_roots: Vec::new(),
                 shell: None,
             }],
         };
@@ -292,6 +294,7 @@ url = "ws://127.0.0.1:8765"
                     environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
                     environment: remote_environment,
                     cwd: cwd.clone(),
+                    workspace_roots: Vec::new(),
                     shell: None,
                 },
             ],

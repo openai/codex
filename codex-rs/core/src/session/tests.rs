@@ -5908,6 +5908,7 @@ async fn workspace_mutation_permission_response_forces_session_scope() {
                     &turn_context,
                     "workspace-mutation".to_string(),
                     codex_protocol::request_permissions::RequestPermissionsArgs {
+                        environment_id: Some(codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string()),
                         reason: Some("persist workspace mutation".to_string()),
                         permissions: requested_permissions,
                     },
@@ -5949,10 +5950,17 @@ async fn workspace_mutation_permission_response_forces_session_scope() {
         .expect("workspace mutation response");
     assert_eq!(response.scope, PermissionGrantScope::Session);
     assert_eq!(
-        session.granted_session_permissions().await,
+        session
+            .granted_session_permissions(codex_exec_server::LOCAL_ENVIRONMENT_ID)
+            .await,
         Some(requested_permissions.into())
     );
-    assert_eq!(session.granted_turn_permissions().await, None);
+    assert_eq!(
+        session
+            .granted_turn_permissions(codex_exec_server::LOCAL_ENVIRONMENT_ID)
+            .await,
+        None
+    );
 }
 
 #[tokio::test]

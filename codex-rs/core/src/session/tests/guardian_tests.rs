@@ -235,6 +235,7 @@ async fn workspace_mutation_permissions_approved_by_guardian_use_session_scope()
             &turn_context,
             "perm-call-workspace-mutation".to_string(),
             RequestPermissionsArgs {
+                environment_id: Some(codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string()),
                 reason: Some("persist workspace mutation".to_string()),
                 permissions: requested_permissions.clone(),
             },
@@ -259,7 +260,9 @@ async fn workspace_mutation_permissions_approved_by_guardian_use_session_scope()
         })
     );
     assert_eq!(
-        session.granted_session_permissions().await,
+        session
+            .granted_session_permissions(codex_exec_server::LOCAL_ENVIRONMENT_ID)
+            .await,
         Some(requested_permissions.into())
     );
 }

@@ -586,6 +586,7 @@ async fn zsh_fork_unified_exec_keeps_shell_parameter_when_remote_environment_ava
                     .expect("remote test environment"),
                 ),
                 cwd: remote_cwd,
+                workspace_roots: Vec::new(),
                 shell: None,
             });
     })
