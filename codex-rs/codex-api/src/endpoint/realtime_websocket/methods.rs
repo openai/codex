@@ -1,3 +1,4 @@
+use crate::auth::SharedAuthProvider;
 use crate::endpoint::realtime_websocket::methods_common::conversation_function_call_output_message;
 use crate::endpoint::realtime_websocket::methods_common::conversation_item_create_message;
 use crate::endpoint::realtime_websocket::methods_common::normalized_session_mode;
@@ -550,11 +551,21 @@ fn contains_transcript_entry(entries: &[RealtimeTranscriptEntry], role: &str, te
 
 pub struct RealtimeWebsocketClient {
     provider: Provider,
+    auth: Option<SharedAuthProvider>,
 }
 
 impl RealtimeWebsocketClient {
     pub fn new(provider: Provider) -> Self {
-        Self { provider }
+        Self {
+            provider,
+            auth: None,
+        }
+    }
+
+    /// Applies URL-aware auth during handshakes and observes handshake responses.
+    pub fn with_auth(mut self, auth: SharedAuthProvider) -> Self {
+        self.auth = Some(auth);
+        self
     }
 
     pub async fn connect(
@@ -653,6 +664,10 @@ impl RealtimeWebsocketClient {
             default_headers,
         );
         request.headers_mut().extend(headers);
+        if let Some(auth) = self.auth.as_ref() {
+            auth.add_auth_headers_for_url(ws_url.as_str(), request.headers_mut());
+        }
+        let request_headers = request.headers().clone();
 
         info!("connecting realtime websocket: {ws_url}");
         // Realtime websocket TLS should honor the same custom-CA env vars as the rest of Codex's
@@ -660,14 +675,39 @@ impl RealtimeWebsocketClient {
         let connector = maybe_build_rustls_client_config_with_custom_ca()
             .map_err(|err| ApiError::Stream(format!("failed to configure websocket TLS: {err}")))?
             .map(tokio_tungstenite::Connector::Rustls);
-        let (stream, response) = tokio_tungstenite::connect_async_tls_with_config(
+        let connect_result = tokio_tungstenite::connect_async_tls_with_config(
             request,
             Some(websocket_config()),
             false,
             connector,
         )
-        .await
-        .map_err(|err| ApiError::Stream(format!("failed to connect realtime websocket: {err}")))?;
+        .await;
+        let (stream, response) = match connect_result {
+            Ok((stream, response)) => {
+                if let Some(auth) = self.auth.as_ref() {
+                    auth.observe_response_headers(
+                        ws_url.as_str(),
+                        &request_headers,
+                        response.headers(),
+                    );
+                }
+                (stream, response)
+            }
+            Err(err) => {
+                if let Some(auth) = self.auth.as_ref()
+                    && let WsError::Http(response) = &err
+                {
+                    auth.observe_response_headers(
+                        ws_url.as_str(),
+                        &request_headers,
+                        response.headers(),
+                    );
+                }
+                return Err(ApiError::Stream(format!(
+                    "failed to connect realtime websocket: {err}"
+                )));
+            }
+        };
         info!(
             ws_url = %ws_url,
             status = %response.status(),

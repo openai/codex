@@ -1,7 +1,11 @@
 use std::collections::HashMap;
 use std::future::Future;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
+use codex_api::AuthProvider;
 use codex_api::Provider;
 use codex_api::RealtimeAudioFrame;
 use codex_api::RealtimeEvent;
@@ -19,11 +23,15 @@ use codex_protocol::protocol::RealtimeVoice;
 use futures::SinkExt;
 use futures::StreamExt;
 use http::HeaderMap;
+use http::HeaderValue;
 use serde_json::Value;
 use serde_json::json;
 use tokio::net::TcpListener;
 use tokio_tungstenite::accept_async;
+use tokio_tungstenite::accept_hdr_async;
 use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::tungstenite::handshake::server::Request;
+use tokio_tungstenite::tungstenite::handshake::server::Response;
 
 type RealtimeWsStream = tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>;
 
@@ -72,6 +80,37 @@ fn test_provider(base_url: String) -> Provider {
             retry_transport: false,
         },
         stream_idle_timeout: Duration::from_secs(5),
+    }
+}
+
+struct HandshakeAuthProvider {
+    observed_response: Arc<AtomicBool>,
+}
+
+impl AuthProvider for HandshakeAuthProvider {
+    fn add_auth_headers(&self, _headers: &mut HeaderMap) {}
+
+    fn add_auth_headers_for_url(&self, request_url: &str, headers: &mut HeaderMap) {
+        assert!(request_url.starts_with("ws://127.0.0.1:"));
+        headers.insert("x-test-auth-state", HeaderValue::from_static("sent-state"));
+    }
+
+    fn observe_response_headers(
+        &self,
+        request_url: &str,
+        request_headers: &HeaderMap,
+        response_headers: &HeaderMap,
+    ) {
+        assert!(request_url.starts_with("ws://127.0.0.1:"));
+        assert_eq!(
+            request_headers.get("x-test-auth-state"),
+            Some(&HeaderValue::from_static("sent-state")),
+        );
+        if response_headers.get("x-test-auth-state-update")
+            == Some(&HeaderValue::from_static("rotated-state"))
+        {
+            self.observed_response.store(true, Ordering::Relaxed);
+        }
     }
 }
 
@@ -198,6 +237,66 @@ async fn realtime_ws_e2e_session_create_and_event_flow() {
         })
     );
 
+    connection.close().await.expect("close");
+    server.await.expect("server task");
+}
+
+#[tokio::test]
+async fn realtime_ws_e2e_applies_and_observes_url_aware_auth() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("listener should bind");
+    let addr = listener.local_addr().expect("local addr");
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.expect("accept");
+        let mut ws = accept_hdr_async(stream, |request: &Request, mut response: Response| {
+            assert_eq!(
+                request.headers().get("x-test-auth-state"),
+                Some(&HeaderValue::from_static("sent-state")),
+            );
+            response.headers_mut().insert(
+                "x-test-auth-state-update",
+                HeaderValue::from_static("rotated-state"),
+            );
+            Ok(response)
+        })
+        .await
+        .expect("accept ws");
+        let first = ws
+            .next()
+            .await
+            .expect("first msg")
+            .expect("first msg ok")
+            .into_text()
+            .expect("text");
+        let first_json: Value = serde_json::from_str(&first).expect("json");
+        assert_eq!(first_json["type"], "session.update");
+    });
+
+    let observed_response = Arc::new(AtomicBool::new(false));
+    let client = RealtimeWebsocketClient::new(test_provider(format!("http://{addr}"))).with_auth(
+        Arc::new(HandshakeAuthProvider {
+            observed_response: Arc::clone(&observed_response),
+        }),
+    );
+    let connection = client
+        .connect(
+            RealtimeSessionConfig {
+                instructions: "backend prompt".to_string(),
+                model: Some("realtime-test-model".to_string()),
+                session_id: Some("conv_123".to_string()),
+                event_parser: RealtimeEventParser::V1,
+                session_mode: RealtimeSessionMode::Conversational,
+                output_modality: RealtimeOutputModality::Audio,
+                voice: RealtimeVoice::Cove,
+            },
+            HeaderMap::new(),
+            HeaderMap::new(),
+        )
+        .await
+        .expect("connect");
+
+    assert!(observed_response.load(Ordering::Relaxed));
     connection.close().await.expect("close");
     server.await.expect("server task");
 }
