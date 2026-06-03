@@ -19,6 +19,6 @@ expression: "render_lines(&view, 112)"
   SubagentStart         0           0           0           When a subagent is created                          
   SubagentStop          0           0           0           Right before a subagent ends its turn               
   Stop                  0           0           0           Right before Codex ends its turn                    
-  Interrupt             0           0           0           Right before an interrupted turn is aborted
+  Interrupt             0           0           0           Right before an interrupted turn is aborted         
                                                                                                                 
   Press t to trust all; enter to review hooks; esc to close

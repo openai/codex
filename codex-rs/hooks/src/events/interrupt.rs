@@ -194,7 +194,11 @@ mod tests {
 
     #[test]
     fn empty_stdout_succeeds() {
-        let parsed = parse_completed(&handler(), run_result(Some(0), "", ""), None);
+        let parsed = parse_completed(
+            &handler(),
+            run_result(Some(0), "", ""),
+            /*turn_id*/ None,
+        );
 
         assert_eq!(parsed.data, InterruptHandlerData);
         assert_eq!(parsed.completed.run.status, HookRunStatus::Completed);
