@@ -86,14 +86,24 @@ impl CodeModeService {
         &self,
         request: codex_code_mode::WaitRequest,
     ) -> Result<codex_code_mode::WaitOutcome, String> {
-        self.session().await?.wait(request).await
+        match self.session.get() {
+            Some(session) => session.wait(request).await,
+            None => Ok(codex_code_mode::WaitOutcome::MissingCell(
+                missing_cell_response(request.cell_id),
+            )),
+        }
     }
 
     pub(crate) async fn terminate(
         &self,
         cell_id: CellId,
     ) -> Result<codex_code_mode::WaitOutcome, String> {
-        self.session().await?.terminate(cell_id).await
+        match self.session.get() {
+            Some(session) => session.terminate(cell_id).await,
+            None => Ok(codex_code_mode::WaitOutcome::MissingCell(
+                missing_cell_response(cell_id),
+            )),
+        }
     }
 
     pub(crate) async fn shutdown(&self) -> Result<(), String> {
@@ -139,6 +149,14 @@ impl CodeModeService {
                     .create_session(self.dispatch_broker.clone())
             })
             .await
+    }
+}
+
+fn missing_cell_response(cell_id: CellId) -> RuntimeResponse {
+    RuntimeResponse::Result {
+        error_text: Some(format!("exec cell {cell_id} not found")),
+        cell_id,
+        content_items: Vec::new(),
     }
 }
 
