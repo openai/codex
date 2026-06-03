@@ -28,15 +28,12 @@ pub(super) struct PreparedInitialHistory {
 
 impl PreparedInitialHistory {
     pub(super) fn new(history: InitialHistory) -> Self {
-        let reconstruction_plan = match &history {
-            InitialHistory::Resumed(resumed_history) => {
-                Some(Session::reconstruct_rollout_plan(&resumed_history.history))
-            }
-            InitialHistory::Forked(rollout_items) => {
-                Some(Session::reconstruct_rollout_plan(rollout_items))
-            }
+        let rollout_items = match &history {
+            InitialHistory::Resumed(resumed_history) => Some(resumed_history.history.as_slice()),
+            InitialHistory::Forked(rollout_items) => Some(rollout_items.as_slice()),
             InitialHistory::New | InitialHistory::Cleared => None,
         };
+        let reconstruction_plan = rollout_items.map(Session::reconstruct_rollout_plan);
         Self {
             history,
             reconstruction_plan,
