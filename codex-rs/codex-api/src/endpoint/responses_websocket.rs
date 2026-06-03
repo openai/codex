@@ -22,6 +22,7 @@ use http::StatusCode;
 use serde::Deserialize;
 use serde_json::Value;
 use serde_json::map::Map as JsonMap;
+use std::net::IpAddr;
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::Duration;
@@ -32,6 +33,7 @@ use tokio::sync::oneshot;
 use tokio::time::Instant;
 use tokio_tungstenite::MaybeTlsStream;
 use tokio_tungstenite::WebSocketStream;
+use tokio_tungstenite::client_async_tls_with_config;
 use tokio_tungstenite::connect_async_tls_with_config;
 use tokio_tungstenite::tungstenite::Error as WsError;
 use tokio_tungstenite::tungstenite::Message;
@@ -531,13 +533,30 @@ async fn connect_websocket(
         .map_err(|err| ApiError::Stream(format!("failed to configure websocket TLS: {err}")))?
         .map(tokio_tungstenite::Connector::Rustls);
 
-    let response = connect_async_tls_with_config(
-        request,
-        Some(websocket_config()),
-        false, // `false` means "do not disable Nagle", which is tungstenite's recommended default.
-        connector,
-    )
-    .await;
+    let loopback_address = url.host_str().and_then(|host| {
+        host.parse::<IpAddr>()
+            .ok()
+            .filter(IpAddr::is_loopback)
+            .and_then(|_| url.port_or_known_default().map(|port| (host, port)))
+    });
+    let response = if let Some(address) = loopback_address {
+        // Explicit loopback providers must not be routed through an ambient proxy.
+        match TcpStream::connect(address).await {
+            Ok(stream) => {
+                client_async_tls_with_config(request, stream, Some(websocket_config()), connector)
+                    .await
+            }
+            Err(error) => Err(WsError::Io(error)),
+        }
+    } else {
+        connect_async_tls_with_config(
+            request,
+            Some(websocket_config()),
+            false, // `false` means "do not disable Nagle", which is tungstenite's recommended default.
+            connector,
+        )
+        .await
+    };
 
     let (stream, response) = match response {
         Ok((stream, response)) => {
@@ -866,6 +885,10 @@ async fn send_websocket_request(
 
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "responses_websocket_auth_integration_tests.rs"]
+mod auth_integration_tests;
 
 #[cfg(test)]
 mod tests {
