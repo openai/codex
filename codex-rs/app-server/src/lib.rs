@@ -6,7 +6,7 @@ use codex_config::LoaderOverrides;
 use codex_config::NoopThreadConfigLoader;
 use codex_config::RemoteThreadConfigLoader;
 use codex_config::ThreadConfigLoader;
-use codex_core::ThreadManagerStorageDeps;
+pub use codex_core::ThreadManagerStorageDeps;
 pub use codex_core::artifact_store::ArtifactStore;
 pub use codex_core::artifact_store::LocalArtifactStore;
 use codex_core::config::Config;
