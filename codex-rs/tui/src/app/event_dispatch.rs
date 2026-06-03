@@ -736,7 +736,7 @@ impl App {
             },
             AppEvent::TokenActivityLoaded { request_id, result } => {
                 if let Err(err) = &result {
-                    tracing::warn!("account/tokenUsage/read failed during TUI refresh: {err}");
+                    tracing::warn!("account/usage/read failed during TUI refresh: {err}");
                 }
                 if self
                     .chat_widget
