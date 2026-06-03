@@ -279,7 +279,19 @@ impl CodexThread {
         self.codex.session.inject_if_running(items).await
     }
 
-    /// Starts a regular turn with model-visible items only if the thread is idle.
+    /// Starts an automatic regular turn with model-visible items only when idle
+    /// work is allowed for this thread.
+    ///
+    /// This is the required entry point for extensions that want to launch
+    /// model-visible work from `ThreadLifecycleContributor::on_thread_idle`.
+    /// The call succeeds only if no user/client-triggered turn is queued, no
+    /// task is currently active, and the thread is not in Plan mode. Active
+    /// Review tasks are rejected by the active-task check because Review turns
+    /// are not steerable.
+    ///
+    /// On rejection, the original `items` are returned unchanged so the caller
+    /// can decide whether to drop them, retry later, or log why no automatic
+    /// turn was started.
     pub async fn try_start_turn_if_idle(
         &self,
         items: Vec<ResponseItem>,
