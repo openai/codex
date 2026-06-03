@@ -401,7 +401,11 @@ impl Session {
                 Ok(())
             }),
             GoalRuntimeEvent::ExternalClear { goal } => Box::pin(async move {
-                self.track_goal_analytics_event(&goal, None, GoalEventKind::Cleared);
+                self.track_goal_analytics_event(
+                    &goal,
+                    /*turn_id*/ None,
+                    GoalEventKind::Cleared,
+                );
                 self.clear_stopped_thread_goal_runtime_state().await;
                 Ok(())
             }),
@@ -668,7 +672,7 @@ impl Session {
             .is_some_and(|previous_goal| previous_goal.goal_id != goal.goal_id);
         if previous_goal.is_none() || replaced_existing_goal {
             self.emit_goal_created_metric();
-            self.track_goal_analytics_event(&goal, None, GoalEventKind::Created);
+            self.track_goal_analytics_event(&goal, /*turn_id*/ None, GoalEventKind::Created);
         }
         let objective_changed = previous_goal
             .as_ref()
@@ -678,7 +682,7 @@ impl Session {
             .and_then(|previous_goal| (!replaced_existing_goal).then_some(previous_goal.status));
         self.emit_goal_resumed_metric_if_status_changed(previous_status, goal.status);
         self.emit_goal_terminal_metrics_if_status_changed(previous_status, &goal);
-        self.track_goal_status_change(&goal, previous_status, None);
+        self.track_goal_status_change(&goal, previous_status, /*turn_id*/ None);
         let goal_for_steering = objective_changed.then(|| protocol_goal_from_state(goal.clone()));
         let goal_id = goal.goal_id.clone();
         let status = goal.status;
