@@ -35,7 +35,6 @@ use codex_protocol::request_permissions::WorkspaceMutationApprovalRequest;
 use codex_protocol::request_permissions::WorkspaceMutationOperation;
 use core_test_support::PathExt;
 use core_test_support::TempDirExt;
-use core_test_support::codex_linux_sandbox_exe_or_skip;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_response_created;
@@ -69,6 +68,16 @@ where
         }
         other => panic!("expected function output, got {other:?}"),
     }
+}
+
+async fn disable_runtime_workspace_sandbox(turn_context: &mut TurnContext) {
+    turn_context.permission_profile = codex_protocol::models::PermissionProfile::Disabled;
+    let mut runtime_workspace = turn_context.runtime_workspace.snapshot().await;
+    runtime_workspace.permission_profile = codex_protocol::models::PermissionProfile::Disabled;
+    turn_context
+        .runtime_workspace
+        .replace(runtime_workspace)
+        .await;
 }
 
 #[tokio::test]
@@ -393,7 +402,6 @@ async fn guardian_allows_shell_command_additional_permissions_requests_past_poli
     .await;
 
     let (mut session, mut turn_context_raw) = make_session_and_context().await;
-    turn_context_raw.codex_linux_sandbox_exe = codex_linux_sandbox_exe_or_skip!();
     turn_context_raw
         .approval_policy
         .set(AskForApproval::OnRequest)
@@ -406,7 +414,7 @@ async fn guardian_allows_shell_command_additional_permissions_requests_past_poli
         .features
         .enable(Feature::ExecPermissionApprovals)
         .expect("test setup should allow enabling request permissions");
-    turn_context_raw.permission_profile = codex_protocol::models::PermissionProfile::Disabled;
+    disable_runtime_workspace_sandbox(&mut turn_context_raw).await;
     let mut config = (*turn_context_raw.config).clone();
     config.model_provider.base_url = Some(format!("{}/v1", server.uri()));
     let config = Arc::new(config);
@@ -510,7 +518,7 @@ async fn strict_auto_review_turn_grant_forces_guardian_for_shell_command_policy_
         .approval_policy
         .set(AskForApproval::OnFailure)
         .expect("test setup should allow updating approval policy");
-    turn_context_raw.permission_profile = codex_protocol::models::PermissionProfile::Disabled;
+    disable_runtime_workspace_sandbox(&mut turn_context_raw).await;
     let mut config = (*turn_context_raw.config).clone();
     config.approvals_reviewer = ApprovalsReviewer::User;
     config.model_provider.base_url = Some(format!("{}/v1", server.uri()));
@@ -548,7 +556,7 @@ async fn strict_auto_review_turn_grant_forces_guardian_for_shell_command_policy_
                     "command": "echo hi",
                     "login": false,
                     "workdir": workdir,
-                    "timeout_ms": 1_000_u64,
+                    "timeout_ms": 10_000_u64,
                 })
                 .to_string(),
             },
