@@ -4,6 +4,8 @@ use anyhow::Context;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use codex_config::types::AuthCredentialsStoreMode;
+use codex_http_state::HttpStateStore;
+use codex_http_state::HttpStateSurface;
 use codex_login::ServerOptions;
 use codex_login::auth::load_auth_dot_json;
 use codex_login::run_device_code_login;
@@ -16,6 +18,7 @@ use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::Request;
 use wiremock::ResponseTemplate;
+use wiremock::matchers::body_string_contains;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
 
@@ -91,10 +94,12 @@ async fn mock_poll_token_single(server: &MockServer, endpoint: &str, response: R
 async fn mock_oauth_token_single(server: &MockServer, jwt: String) {
     Mock::given(method("POST"))
         .and(path("/oauth/token"))
+        .and(body_string_contains("surface=codex_cli"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "id_token": jwt.clone(),
             "access_token": "access-token-123",
-            "refresh_token": "refresh-token-123"
+            "refresh_token": "refresh-token-123",
+            "state": "ois1.header.nonce.ciphertext"
         })))
         .mount(server)
         .await;
@@ -156,6 +161,10 @@ async fn device_code_login_integration_succeeds() -> anyhow::Result<()> {
     assert_eq!(tokens.refresh_token, "refresh-token-123");
     assert_eq!(tokens.id_token.raw_jwt, jwt);
     assert_eq!(tokens.account_id.as_deref(), Some(WORKSPACE_ID_ALLOWED));
+    assert_eq!(
+        HttpStateStore::new(codex_home.path().to_path_buf()).get(HttpStateSurface::CodexCli)?,
+        Some("ois1.header.nonce.ciphertext".to_string())
+    );
     Ok(())
 }
 

@@ -1281,12 +1281,16 @@ impl MessageProcessor {
             }
             ClientRequest::LoginAccount { params, .. } => {
                 self.account_processor
-                    .login_account(request_id.clone(), params)
+                    .login_account(
+                        request_id.clone(),
+                        params,
+                        app_server_client_name.as_deref(),
+                    )
                     .await
             }
             ClientRequest::LogoutAccount { .. } => {
                 self.account_processor
-                    .logout_account(request_id.clone())
+                    .logout_account(request_id.clone(), app_server_client_name.as_deref())
                     .await
             }
             ClientRequest::CancelLoginAccount { params, .. } => {

@@ -39,6 +39,7 @@ use chrono::Utc;
 use codex_app_server_protocol::AuthMode;
 use codex_client::build_reqwest_client_with_custom_ca;
 use codex_config::types::AuthCredentialsStoreMode;
+use codex_http_state::HttpStateSurface;
 use codex_utils_template::Template;
 use rand::RngCore;
 use serde_json::Value as JsonValue;
@@ -72,6 +73,7 @@ pub struct ServerOptions {
     pub forced_chatgpt_workspace_id: Option<Vec<String>>,
     pub codex_streamlined_login: bool,
     pub cli_auth_credentials_store_mode: AuthCredentialsStoreMode,
+    pub http_state_surface: HttpStateSurface,
 }
 
 impl ServerOptions {
@@ -92,6 +94,7 @@ impl ServerOptions {
             forced_chatgpt_workspace_id,
             codex_streamlined_login: false,
             cli_auth_credentials_store_mode,
+            http_state_surface: HttpStateSurface::CodexCli,
         }
     }
 }
@@ -335,8 +338,15 @@ async fn process_request(
                 }
             };
 
-            match exchange_code_for_tokens(&opts.issuer, &opts.client_id, redirect_uri, pkce, &code)
-                .await
+            match exchange_code_for_tokens(
+                &opts.issuer,
+                &opts.client_id,
+                opts.http_state_surface,
+                redirect_uri,
+                pkce,
+                &code,
+            )
+            .await
             {
                 Ok(tokens) => {
                     if let Err(message) = ensure_workspace_allowed(
@@ -358,9 +368,8 @@ async fn process_request(
                     if let Err(err) = persist_tokens_async(
                         &opts.codex_home,
                         api_key.clone(),
-                        tokens.id_token.clone(),
-                        tokens.access_token.clone(),
-                        tokens.refresh_token.clone(),
+                        &tokens,
+                        opts.http_state_surface,
                         opts.cli_auth_credentials_store_mode,
                     )
                     .await
@@ -606,6 +615,7 @@ pub(crate) struct ExchangedTokens {
     pub id_token: String,
     pub access_token: String,
     pub refresh_token: String,
+    pub state: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -714,6 +724,7 @@ fn sanitize_url_for_logging(url: &str) -> String {
 pub(crate) async fn exchange_code_for_tokens(
     issuer: &str,
     client_id: &str,
+    http_state_surface: HttpStateSurface,
     redirect_uri: &str,
     pkce: &PkceCodes,
     code: &str,
@@ -723,6 +734,7 @@ pub(crate) async fn exchange_code_for_tokens(
         id_token: String,
         access_token: String,
         refresh_token: String,
+        state: Option<String>,
     }
 
     let client = build_reqwest_client_with_custom_ca(reqwest::Client::builder())?;
@@ -737,11 +749,12 @@ pub(crate) async fn exchange_code_for_tokens(
         .post(token_endpoint)
         .header("Content-Type", "application/x-www-form-urlencoded")
         .body(format!(
-            "grant_type=authorization_code&code={}&redirect_uri={}&client_id={}&code_verifier={}",
+            "grant_type=authorization_code&code={}&redirect_uri={}&client_id={}&code_verifier={}&surface={}",
             urlencoding::encode(code),
             urlencoding::encode(redirect_uri),
             urlencoding::encode(client_id),
-            urlencoding::encode(&pkce.code_verifier)
+            urlencoding::encode(&pkce.code_verifier),
+            urlencoding::encode(http_state_surface.as_str()),
         ))
         .send()
         .await;
@@ -781,6 +794,7 @@ pub(crate) async fn exchange_code_for_tokens(
         id_token: tokens.id_token,
         access_token: tokens.access_token,
         refresh_token: tokens.refresh_token,
+        state: tokens.state,
     })
 }
 
@@ -789,15 +803,20 @@ pub(crate) async fn exchange_code_for_tokens(
 pub(crate) async fn persist_tokens_async(
     codex_home: &Path,
     api_key: Option<String>,
-    id_token: String,
-    access_token: String,
-    refresh_token: String,
+    tokens: &ExchangedTokens,
+    http_state_surface: HttpStateSurface,
     auth_credentials_store_mode: AuthCredentialsStoreMode,
 ) -> io::Result<()> {
     // Reuse existing synchronous logic but run it off the async runtime.
     let codex_home = codex_home.to_path_buf();
+    let auth_codex_home = codex_home.clone();
+    let id_token = tokens.id_token.clone();
+    let access_token = tokens.access_token.clone();
+    let refresh_token = tokens.refresh_token.clone();
+    let state = tokens.state.clone();
     let (previous_auth, auth) = tokio::task::spawn_blocking(move || {
-        let previous_auth = match load_auth_dot_json(&codex_home, auth_credentials_store_mode) {
+        let previous_auth = match load_auth_dot_json(&auth_codex_home, auth_credentials_store_mode)
+        {
             Ok(auth) => auth,
             Err(err) => {
                 warn!("failed to load previous auth before saving new login: {err}");
@@ -823,11 +842,13 @@ pub(crate) async fn persist_tokens_async(
             last_refresh: Some(Utc::now()),
             agent_identity: None,
         };
-        save_auth(&codex_home, &auth, auth_credentials_store_mode)?;
+        save_auth(&auth_codex_home, &auth, auth_credentials_store_mode)?;
         Ok::<_, io::Error>((previous_auth, auth))
     })
     .await
     .map_err(|e| io::Error::other(format!("persist task failed: {e}")))??;
+
+    crate::http_state::replace_after_login(&codex_home, http_state_surface, state);
 
     if should_revoke_auth_tokens(previous_auth.as_ref(), &auth)
         && let Err(err) = revoke_auth_tokens(previous_auth.as_ref()).await
@@ -1176,10 +1197,12 @@ mod tests {
     use crate::auth::save_auth;
     use crate::token_data::TokenData;
     use crate::token_data::parse_chatgpt_jwt_claims;
+    use codex_http_state::HttpStateSurface;
     use core_test_support::skip_if_no_network;
     use pretty_assertions::assert_eq;
 
     use super::DEFAULT_ISSUER;
+    use super::ExchangedTokens;
     use super::TokenEndpointErrorDetail;
     use super::compose_success_url;
     use super::html_escape;
@@ -1223,9 +1246,13 @@ mod tests {
         persist_tokens_async(
             codex_home.path(),
             /*api_key*/ None,
-            jwt_for_account("new-account"),
-            "new-access".to_string(),
-            "new-refresh".to_string(),
+            &ExchangedTokens {
+                id_token: jwt_for_account("new-account"),
+                access_token: "new-access".to_string(),
+                refresh_token: "new-refresh".to_string(),
+                state: None,
+            },
+            HttpStateSurface::CodexCli,
             AuthCredentialsStoreMode::File,
         )
         .await?;
@@ -1283,9 +1310,13 @@ mod tests {
         persist_tokens_async(
             codex_home.path(),
             /*api_key*/ None,
-            jwt_for_account("new-account"),
-            "new-access".to_string(),
-            "shared-refresh".to_string(),
+            &ExchangedTokens {
+                id_token: jwt_for_account("new-account"),
+                access_token: "new-access".to_string(),
+                refresh_token: "shared-refresh".to_string(),
+                state: None,
+            },
+            HttpStateSurface::CodexCli,
             AuthCredentialsStoreMode::File,
         )
         .await?;

@@ -9,6 +9,8 @@ use std::time::Duration;
 use anyhow::Result;
 use base64::Engine;
 use codex_config::types::AuthCredentialsStoreMode;
+use codex_http_state::HttpStateStore;
+use codex_http_state::HttpStateSurface;
 use codex_login::ServerOptions;
 use codex_login::run_login_server;
 use core_test_support::skip_if_no_network;
@@ -69,6 +71,7 @@ fn start_mock_issuer(chatgpt_account_id: &str) -> (SocketAddr, thread::JoinHandl
                     "id_token": id_token,
                     "access_token": "access-123",
                     "refresh_token": "refresh-123",
+                    "state": "ois1.header.nonce.ciphertext",
                 });
                 let data = serde_json::to_vec(&tokens).unwrap();
                 let mut resp = tiny_http::Response::from_data(data);
@@ -128,6 +131,7 @@ async fn end_to_end_login_flow_persists_auth_json() -> Result<()> {
         force_state: Some(state),
         forced_chatgpt_workspace_id: Some(vec![chatgpt_account_id.to_string()]),
         codex_streamlined_login: false,
+        http_state_surface: HttpStateSurface::CodexDesktop,
     };
     let server = run_login_server(opts)?;
     assert!(
@@ -160,6 +164,10 @@ async fn end_to_end_login_flow_persists_auth_json() -> Result<()> {
     assert_eq!(json["tokens"]["access_token"], "access-123");
     assert_eq!(json["tokens"]["refresh_token"], "refresh-123");
     assert_eq!(json["tokens"]["account_id"], chatgpt_account_id);
+    assert_eq!(
+        HttpStateStore::new(codex_home.clone()).get(HttpStateSurface::CodexDesktop)?,
+        Some("ois1.header.nonce.ciphertext".to_string())
+    );
 
     // Stop mock issuer
     drop(issuer_handle);
@@ -190,6 +198,7 @@ async fn creates_missing_codex_home_dir() -> Result<()> {
         force_state: Some(state),
         forced_chatgpt_workspace_id: None,
         codex_streamlined_login: false,
+        http_state_surface: HttpStateSurface::CodexCli,
     };
     let server = run_login_server(opts)?;
     let login_port = server.actual_port;
@@ -233,6 +242,7 @@ async fn login_server_includes_forced_workspaces_as_one_query_param() -> Result<
             WORKSPACE_ID_SECOND_ALLOWED.to_string(),
         ]),
         codex_streamlined_login: false,
+        http_state_surface: HttpStateSurface::CodexCli,
     };
     let server = run_login_server(opts)?;
     let auth_url = Url::parse(&server.auth_url)?;
@@ -271,6 +281,7 @@ async fn forced_chatgpt_workspace_id_mismatch_blocks_login() -> Result<()> {
         force_state: Some(state.clone()),
         forced_chatgpt_workspace_id: Some(vec![WORKSPACE_ID_ALLOWED.to_string()]),
         codex_streamlined_login: false,
+        http_state_surface: HttpStateSurface::CodexCli,
     };
     let server = run_login_server(opts)?;
     assert!(
@@ -331,6 +342,7 @@ async fn oauth_access_denied_missing_entitlement_blocks_login_with_clear_error()
         force_state: Some(state.clone()),
         forced_chatgpt_workspace_id: None,
         codex_streamlined_login: false,
+        http_state_surface: HttpStateSurface::CodexCli,
     };
     let server = run_login_server(opts)?;
     let login_port = server.actual_port;
@@ -399,6 +411,7 @@ async fn oauth_access_denied_unknown_reason_uses_generic_error_page() -> Result<
         force_state: Some(state.clone()),
         forced_chatgpt_workspace_id: None,
         codex_streamlined_login: false,
+        http_state_surface: HttpStateSurface::CodexCli,
     };
     let server = run_login_server(opts)?;
     let login_port = server.actual_port;
@@ -544,6 +557,7 @@ async fn cancels_previous_login_server_when_port_is_in_use() -> Result<()> {
         force_state: Some("cancel_state".to_string()),
         forced_chatgpt_workspace_id: None,
         codex_streamlined_login: false,
+        http_state_surface: HttpStateSurface::CodexCli,
     };
 
     let first_server = run_login_server(first_opts)?;
@@ -565,6 +579,7 @@ async fn cancels_previous_login_server_when_port_is_in_use() -> Result<()> {
         force_state: Some("cancel_state_2".to_string()),
         forced_chatgpt_workspace_id: None,
         codex_streamlined_login: false,
+        http_state_surface: HttpStateSurface::CodexCli,
     };
 
     let second_server = run_login_server(second_opts)?;

@@ -17,12 +17,14 @@ use codex_app_server_protocol::CancelLoginAccountResponse;
 use codex_app_server_protocol::CancelLoginAccountStatus;
 use codex_app_server_protocol::ChatgptAuthTokensRefreshReason;
 use codex_app_server_protocol::ChatgptAuthTokensRefreshResponse;
+use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::GetAccountParams;
 use codex_app_server_protocol::GetAccountResponse;
 use codex_app_server_protocol::GetAuthStatusParams;
 use codex_app_server_protocol::GetAuthStatusResponse;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCErrorError;
+use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::LoginAccountResponse;
@@ -33,6 +35,8 @@ use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnStatus;
 use codex_config::types::AuthCredentialsStoreMode;
+use codex_http_state::HttpStateStore;
+use codex_http_state::HttpStateSurface;
 use codex_login::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
 use codex_login::login_with_api_key;
 use codex_protocol::account::PlanType as AccountPlanType;
@@ -61,6 +65,7 @@ const WORKSPACE_ID_INITIAL: &str = "123e4567-e89b-42d3-a456-426614174011";
 const WORKSPACE_ID_REFRESHED: &str = "123e4567-e89b-42d3-a456-426614174012";
 const WORKSPACE_ID_DEVICE: &str = "123e4567-e89b-42d3-a456-426614174013";
 const WORKSPACE_ID_STALE: &str = "123e4567-e89b-42d3-a456-426614174014";
+const INTEGRITY_STATE: &str = "ois1.header.nonce.ciphertext";
 
 // Helper to create a minimal config.toml for the app server
 #[derive(Default)]
@@ -72,6 +77,14 @@ struct CreateConfigTomlParams {
     base_url: Option<String>,
     model_provider_id: Option<String>,
     extra_provider_config: Option<String>,
+}
+
+fn client_info(name: &str) -> ClientInfo {
+    ClientInfo {
+        name: name.to_string(),
+        title: None,
+        version: "1.0.0".to_string(),
+    }
 }
 
 fn create_config_toml(codex_home: &Path, params: CreateConfigTomlParams) -> std::io::Result<()> {
@@ -199,11 +212,21 @@ async fn logout_account_removes_auth_and_notifies() -> Result<()> {
         "sk-test-key",
         AuthCredentialsStoreMode::File,
     )?;
+    let http_state = HttpStateStore::new(codex_home.path().to_path_buf());
+    http_state.set(
+        HttpStateSurface::CodexDesktopSsh,
+        INTEGRITY_STATE.to_string(),
+    )?;
     assert!(codex_home.path().join("auth.json").exists());
 
     let mut mcp =
         TestAppServer::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+    let initialized = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.initialize_with_client_info(client_info("codex_desktop_ssh")),
+    )
+    .await??;
+    assert!(matches!(initialized, JSONRPCMessage::Response(_)));
 
     let id = mcp.send_logout_account_request().await?;
     let resp: JSONRPCResponse = timeout(
@@ -232,6 +255,7 @@ async fn logout_account_removes_auth_and_notifies() -> Result<()> {
         !codex_home.path().join("auth.json").exists(),
         "auth.json should be deleted"
     );
+    assert_eq!(http_state.get(HttpStateSurface::CodexDesktopSsh)?, None);
 
     let get_id = mcp
         .send_get_account_request(GetAccountParams {
@@ -913,8 +937,18 @@ async fn login_account_api_key_succeeds_and_notifies() -> Result<()> {
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), CreateConfigTomlParams::default())?;
 
+    let http_state = HttpStateStore::new(codex_home.path().to_path_buf());
+    http_state.set(
+        HttpStateSurface::CodexDesktopSsh,
+        INTEGRITY_STATE.to_string(),
+    )?;
     let mut mcp = TestAppServer::new(codex_home.path()).await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+    let initialized = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.initialize_with_client_info(client_info("codex_desktop_ssh")),
+    )
+    .await??;
+    assert!(matches!(initialized, JSONRPCMessage::Response(_)));
 
     let req_id = mcp
         .send_login_account_api_key_request("sk-test-key")
@@ -953,6 +987,7 @@ async fn login_account_api_key_succeeds_and_notifies() -> Result<()> {
     pretty_assertions::assert_eq!(payload.plan_type, None);
 
     assert!(codex_home.path().join("auth.json").exists());
+    assert_eq!(http_state.get(HttpStateSurface::CodexDesktopSsh)?, None);
     Ok(())
 }
 

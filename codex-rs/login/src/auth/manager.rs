@@ -21,6 +21,7 @@ use codex_agent_identity::decode_agent_identity_jwt;
 use codex_agent_identity::fetch_agent_identity_jwks;
 use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::AuthMode as ApiAuthMode;
+use codex_http_state::HttpStateSurface;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::ModelProviderAuthInfo;
 
@@ -516,6 +517,19 @@ pub async fn logout_with_revoke(
     codex_home: &Path,
     auth_credentials_store_mode: AuthCredentialsStoreMode,
 ) -> std::io::Result<bool> {
+    logout_with_revoke_for_surface(
+        codex_home,
+        auth_credentials_store_mode,
+        HttpStateSurface::CodexCli,
+    )
+    .await
+}
+
+pub async fn logout_with_revoke_for_surface(
+    codex_home: &Path,
+    auth_credentials_store_mode: AuthCredentialsStoreMode,
+    http_state_surface: HttpStateSurface,
+) -> std::io::Result<bool> {
     AuthManager::new(
         codex_home.to_path_buf(),
         /*enable_codex_api_key_env*/ false,
@@ -523,7 +537,7 @@ pub async fn logout_with_revoke(
         /*chatgpt_base_url*/ None,
     )
     .await
-    .logout_with_revoke()
+    .logout_with_revoke_for_surface(http_state_surface)
     .await
 }
 
@@ -533,6 +547,20 @@ pub fn login_with_api_key(
     api_key: &str,
     auth_credentials_store_mode: AuthCredentialsStoreMode,
 ) -> std::io::Result<()> {
+    login_with_api_key_for_surface(
+        codex_home,
+        api_key,
+        auth_credentials_store_mode,
+        HttpStateSurface::CodexCli,
+    )
+}
+
+pub fn login_with_api_key_for_surface(
+    codex_home: &Path,
+    api_key: &str,
+    auth_credentials_store_mode: AuthCredentialsStoreMode,
+    http_state_surface: HttpStateSurface,
+) -> std::io::Result<()> {
     let auth_dot_json = AuthDotJson {
         auth_mode: Some(ApiAuthMode::ApiKey),
         openai_api_key: Some(api_key.to_string()),
@@ -540,7 +568,9 @@ pub fn login_with_api_key(
         last_refresh: None,
         agent_identity: None,
     };
-    save_auth(codex_home, &auth_dot_json, auth_credentials_store_mode)
+    save_auth(codex_home, &auth_dot_json, auth_credentials_store_mode)?;
+    crate::http_state::clear(codex_home, http_state_surface);
+    Ok(())
 }
 
 /// Writes an `auth.json` that contains only the access token.
@@ -549,6 +579,23 @@ pub async fn login_with_access_token(
     access_token: &str,
     auth_credentials_store_mode: AuthCredentialsStoreMode,
     chatgpt_base_url: Option<&str>,
+) -> std::io::Result<()> {
+    login_with_access_token_for_surface(
+        codex_home,
+        access_token,
+        auth_credentials_store_mode,
+        chatgpt_base_url,
+        HttpStateSurface::CodexCli,
+    )
+    .await
+}
+
+pub async fn login_with_access_token_for_surface(
+    codex_home: &Path,
+    access_token: &str,
+    auth_credentials_store_mode: AuthCredentialsStoreMode,
+    chatgpt_base_url: Option<&str>,
+    http_state_surface: HttpStateSurface,
 ) -> std::io::Result<()> {
     let base_url = chatgpt_base_url
         .unwrap_or(DEFAULT_CHATGPT_BACKEND_BASE_URL)
@@ -562,7 +609,9 @@ pub async fn login_with_access_token(
         last_refresh: None,
         agent_identity: Some(access_token.to_string()),
     };
-    save_auth(codex_home, &auth_dot_json, auth_credentials_store_mode)
+    save_auth(codex_home, &auth_dot_json, auth_credentials_store_mode)?;
+    crate::http_state::clear(codex_home, http_state_surface);
+    Ok(())
 }
 
 /// Writes an in-memory auth payload for externally managed ChatGPT tokens.
@@ -571,6 +620,22 @@ pub fn login_with_chatgpt_auth_tokens(
     access_token: &str,
     chatgpt_account_id: &str,
     chatgpt_plan_type: Option<&str>,
+) -> std::io::Result<()> {
+    login_with_chatgpt_auth_tokens_for_surface(
+        codex_home,
+        access_token,
+        chatgpt_account_id,
+        chatgpt_plan_type,
+        HttpStateSurface::CodexCli,
+    )
+}
+
+pub fn login_with_chatgpt_auth_tokens_for_surface(
+    codex_home: &Path,
+    access_token: &str,
+    chatgpt_account_id: &str,
+    chatgpt_plan_type: Option<&str>,
+    http_state_surface: HttpStateSurface,
 ) -> std::io::Result<()> {
     let auth_dot_json = AuthDotJson::from_external_access_token(
         access_token,
@@ -581,7 +646,9 @@ pub fn login_with_chatgpt_auth_tokens(
         codex_home,
         &auth_dot_json,
         AuthCredentialsStoreMode::Ephemeral,
-    )
+    )?;
+    crate::http_state::clear(codex_home, http_state_surface);
+    Ok(())
 }
 
 /// Persist the provided auth payload using the specified backend.
@@ -711,6 +778,7 @@ fn logout_with_message(
     // External auth tokens live in the ephemeral store, but persistent auth may still exist
     // from earlier logins. Clear both so a forced logout truly removes all active auth.
     let removal_result = logout_all_stores(codex_home, auth_credentials_store_mode);
+    crate::http_state::clear(codex_home, HttpStateSurface::CodexCli);
     let error_message = match removal_result {
         Ok(_) => message,
         Err(err) => format!("{message}. Failed to remove auth.json: {err}"),
@@ -1773,23 +1841,40 @@ impl AuthManager {
     /// reloads the in‑memory auth cache so callers immediately observe the
     /// unauthenticated state.
     pub async fn logout(&self) -> std::io::Result<bool> {
-        let removed = logout_all_stores(&self.codex_home, self.auth_credentials_store_mode)?;
+        self.logout_for_surface(HttpStateSurface::CodexCli).await
+    }
+
+    pub async fn logout_for_surface(
+        &self,
+        http_state_surface: HttpStateSurface,
+    ) -> std::io::Result<bool> {
+        let result = logout_all_stores(&self.codex_home, self.auth_credentials_store_mode);
+        crate::http_state::clear(&self.codex_home, http_state_surface);
         // Always reload to clear any cached auth (even if file absent).
         self.reload().await;
-        Ok(removed)
+        result
     }
 
     pub async fn logout_with_revoke(&self) -> std::io::Result<bool> {
+        self.logout_with_revoke_for_surface(HttpStateSurface::CodexCli)
+            .await
+    }
+
+    pub async fn logout_with_revoke_for_surface(
+        &self,
+        http_state_surface: HttpStateSurface,
+    ) -> std::io::Result<bool> {
         let auth_dot_json = self
             .auth_cached()
             .and_then(|auth| auth.get_current_auth_json());
         if let Err(err) = revoke_auth_tokens(auth_dot_json.as_ref()).await {
             tracing::warn!("failed to revoke auth tokens during logout: {err}");
         }
-        let result = logout_all_stores(&self.codex_home, self.auth_credentials_store_mode)?;
+        let result = logout_all_stores(&self.codex_home, self.auth_credentials_store_mode);
+        crate::http_state::clear(&self.codex_home, http_state_surface);
         // Always reload to clear any cached auth (even if file absent).
         self.reload().await;
-        Ok(result)
+        result
     }
 
     pub fn get_api_auth_mode(&self) -> Option<ApiAuthMode> {
