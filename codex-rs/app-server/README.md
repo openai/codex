@@ -1244,7 +1244,7 @@ The app-server streams JSON-RPC notifications while a turn is running. Each turn
 - `turn/plan/updated` — `{ turnId, explanation?, plan }` whenever the agent shares or changes its plan; each `plan` entry is `{ step, status }` with `status` in `pending`, `inProgress`, or `completed`.
 - `model/rerouted` — `{ threadId, turnId, fromModel, toModel, reason }` when the backend reroutes a request to a different model (for example, due to high-risk cyber safety checks).
 - `model/verification` — `{ threadId, turnId, verifications }` when the backend flags additional account verification, such as `trustedAccessForCyber`.
-- `turn/moderationMetadata` — `{ threadId, turnId, metadata }` when a first-party backend supplies turn-scoped moderation metadata for client-side presentation.
+- `turn/moderationMetadata` — experimental; `{ threadId, turnId, metadata }` when a first-party backend supplies turn-scoped moderation metadata for client-side presentation.
 
 Today both notifications carry an empty `items` array even when item events were streamed; rely on `item/*` notifications for the canonical item list until this is fixed.
 
