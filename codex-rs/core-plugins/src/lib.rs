@@ -1,3 +1,4 @@
+pub mod data_store;
 mod discoverable;
 pub mod installed_marketplaces;
 pub mod loader;
@@ -24,6 +25,8 @@ pub const OPENAI_BUNDLED_MARKETPLACE_NAME: &str = "openai-bundled";
 pub type LoadedPlugin = codex_plugin::LoadedPlugin<codex_config::McpServerConfig>;
 pub type PluginLoadOutcome = codex_plugin::PluginLoadOutcome<codex_config::McpServerConfig>;
 
+pub use data_store::LocalPluginDataStore;
+pub use data_store::PluginDataStore;
 pub use discoverable::ToolSuggestDiscoverablePlugin;
 pub use discoverable::ToolSuggestPluginDiscoveryInput;
 pub use manager::ConfiguredMarketplace;

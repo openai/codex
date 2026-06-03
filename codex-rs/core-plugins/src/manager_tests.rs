@@ -1,6 +1,8 @@
 use super::*;
 use crate::LoadedPlugin;
 use crate::PluginLoadOutcome;
+use crate::data_store::LocalPluginDataStore;
+use crate::data_store::PluginDataStore;
 use crate::installed_marketplaces::marketplace_install_root;
 use crate::loader::load_plugins_from_layer_stack;
 use crate::loader::refresh_non_curated_plugin_cache;
@@ -29,10 +31,12 @@ use codex_config::types::McpServerTransportConfig;
 use codex_login::CodexAuth;
 use codex_protocol::protocol::HookEventName;
 use codex_protocol::protocol::Product;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::test_support::PathBufExt;
 use pretty_assertions::assert_eq;
 use std::fs;
 use std::path::Path;
+use std::sync::Arc;
 use tempfile::TempDir;
 use toml::Value;
 use wiremock::Mock;
@@ -44,6 +48,17 @@ use wiremock::matchers::path;
 use wiremock::matchers::query_param;
 
 const MAX_CAPABILITY_SUMMARY_DESCRIPTION_LEN: usize = 1024;
+
+#[derive(Debug)]
+struct FakePluginDataStore {
+    root: AbsolutePathBuf,
+}
+
+impl PluginDataStore for FakePluginDataStore {
+    fn plugin_data_root(&self, _plugin_id: &PluginId) -> AbsolutePathBuf {
+        self.root.clone()
+    }
+}
 
 fn write_plugin_with_version(
     root: &Path,
@@ -3851,10 +3866,70 @@ async fn load_plugins_ignores_project_config_files() {
         &stack,
         std::collections::HashMap::new(),
         &PluginStore::new(codex_home.path().to_path_buf()),
+        &LocalPluginDataStore::from_codex_home(codex_home.path().to_path_buf()).unwrap(),
         Some(Product::Codex),
         /*prefer_remote_curated_conflicts*/ false,
     )
     .await;
 
     assert_eq!(outcome, PluginLoadOutcome::default());
+}
+
+#[tokio::test]
+async fn plugins_for_layer_stack_uses_injected_plugin_data_store() {
+    let codex_home = TempDir::new().unwrap();
+    let plugin_root = codex_home
+        .path()
+        .join("plugins/cache")
+        .join("test/sample/local");
+    let config_path = AbsolutePathBuf::try_from(codex_home.path().join(CONFIG_TOML_FILE)).unwrap();
+    let data_root =
+        AbsolutePathBuf::try_from(codex_home.path().join("injected-plugin-data")).unwrap();
+
+    write_file(
+        &plugin_root.join(".codex-plugin/plugin.json"),
+        r#"{"name":"sample"}"#,
+    );
+    write_file(
+        &plugin_root.join("hooks/hooks.json"),
+        r#"{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"echo startup"}]}]}}"#,
+    );
+    let stack = ConfigLayerStack::new(
+        vec![ConfigLayerEntry::new(
+            ConfigLayerSource::User {
+                file: config_path,
+                profile: None,
+            },
+            toml::from_str(&plugin_config_toml(
+                /*enabled*/ true, /*plugins_feature_enabled*/ true,
+            ))
+            .expect("user config should parse"),
+        )],
+        ConfigRequirements::default(),
+        ConfigRequirementsToml::default(),
+    )
+    .expect("config layer stack should build");
+    let config = PluginsConfigInput::new(
+        stack.clone(),
+        /*plugins_enabled*/ true,
+        /*remote_plugin_enabled*/ false,
+        "https://chatgpt.com/backend-api/".to_string(),
+    );
+    let outcome = PluginsManager::new_with_data_store(
+        codex_home.path().to_path_buf(),
+        Arc::new(FakePluginDataStore {
+            root: data_root.clone(),
+        }),
+    )
+    .plugins_for_layer_stack(&stack, &config)
+    .await;
+
+    assert_eq!(
+        outcome
+            .effective_plugin_hook_sources()
+            .into_iter()
+            .map(|source| source.plugin_data_root)
+            .collect::<Vec<_>>(),
+        vec![data_root]
+    );
 }

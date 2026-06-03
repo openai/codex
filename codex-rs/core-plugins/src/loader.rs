@@ -1,4 +1,5 @@
 use crate::OPENAI_CURATED_MARKETPLACE_NAME;
+use crate::data_store::PluginDataStore;
 use crate::manifest::PluginManifestHooks;
 use crate::manifest::PluginManifestPaths;
 use crate::manifest::load_plugin_manifest;
@@ -113,6 +114,7 @@ pub async fn load_plugins_from_layer_stack(
     config_layer_stack: &ConfigLayerStack,
     extra_plugins: HashMap<String, PluginConfig>,
     store: &PluginStore,
+    data_store: &dyn PluginDataStore,
     restriction_product: Option<Product>,
     prefer_remote_curated_conflicts: bool,
 ) -> PluginLoadOutcome<McpServerConfig> {
@@ -133,6 +135,7 @@ pub async fn load_plugins_from_layer_stack(
             configured_name.clone(),
             &plugin,
             store,
+            data_store,
             restriction_product,
             &skill_config_rules,
         )
@@ -557,6 +560,7 @@ async fn load_plugin(
     config_name: String,
     plugin: &PluginConfig,
     store: &PluginStore,
+    data_store: &dyn PluginDataStore,
     restriction_product: Option<Product>,
     skill_config_rules: &SkillConfigRules,
 ) -> LoadedPlugin<McpServerConfig> {
@@ -659,7 +663,7 @@ async fn load_plugin(
     let (hook_sources, hook_load_warnings) = load_plugin_hooks(
         &plugin_root,
         &loaded_plugin_id,
-        &store.plugin_data_root(&loaded_plugin_id),
+        &data_store.plugin_data_root(&loaded_plugin_id),
         manifest_paths,
     );
     loaded_plugin.hook_sources = hook_sources;
