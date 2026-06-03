@@ -132,6 +132,41 @@ run in `openai/codex`. A missing or malformed pull request event
 payload fails closed to the generic host. For local OpenAI host access, use
 the `user.bazelrc` configuration above.
 
+### Use the CI-warmed developer cache
+
+The platform-matching `verify-release-build` Bazel lane on `main` warms a
+developer fastbuild keyspace for release-shaped Rust builds with debug
+assertions off. On a local Mac or Linux Applied devbox with
+`BUILDBUDDY_API_KEY` set in that command's environment, use
+`scripts/run-bazel-hot-cache-build.sh` to consume that cache without uploading
+locally built artifacts:
+
+```bash
+hot_sha="$(scripts/run-bazel-hot-cache-build.sh --print-latest-hot-main-commit)"
+git worktree add ../codex-hot-cache "${hot_sha}"
+cd ../codex-hot-cache
+scripts/run-bazel-hot-cache-build.sh
+```
+
+If the current checkout is already at a known hot commit, run the script in
+place instead of creating another worktree. On an Applied Linux devbox, run
+the same script from the synced mirror with `BUILDBUDDY_API_KEY` and
+`CODEX_BAZEL_COMMIT_SHA` forwarded only for that remote command; it selects the
+Linux `verify-release-build` cache keyspace instead of the macOS one. Pass
+Bazel target patterns after the script name to build something other than the
+default `//codex-rs/cli:codex`.
+
+For routine developer use, keep Bazel's normal persistent user root and
+repository cache. A fresh worktree already gives Bazel a fresh workspace/output
+base while preserving the shared local Bazel state that makes this workflow
+predictable. Set `BAZEL_OUTPUT_USER_ROOT` only for isolated diagnostic proofs;
+that discards useful local Bazel state and can be much slower even when remote
+cache hits are 100%.
+
+Keep the script-owned option order. Bazel action keys include the generated
+Rust params-file bytes, so moving the platform CI config before the explicit
+Rust debug-assertion flags can turn a hot CI action into a local cache miss.
+
 ## Evolving the setup
 
 When you add or change Rust dependencies, update the Cargo.toml/Cargo.lock as normal.
