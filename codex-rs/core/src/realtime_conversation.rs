@@ -19,6 +19,7 @@ use codex_api::RealtimeSessionMode;
 use codex_api::RealtimeWebsocketClient;
 use codex_api::RealtimeWebsocketEvents;
 use codex_api::RealtimeWebsocketWriter;
+use codex_api::SharedAuthProvider;
 use codex_api::map_api_error;
 use codex_app_server_protocol::AuthMode;
 use codex_config::config_toml::RealtimeWsMode;
@@ -320,6 +321,7 @@ impl RealtimeConversationManager {
                 session_config,
                 call_id: call.call_id,
                 sideband_headers: call.sideband_headers,
+                sideband_auth: call.sideband_auth,
                 input_channels,
                 events_tx,
                 handoff_state: handoff.clone(),
@@ -1029,6 +1031,7 @@ struct RealtimeWebrtcSidebandInputTask {
     session_config: RealtimeSessionConfig,
     call_id: String,
     sideband_headers: HeaderMap,
+    sideband_auth: SharedAuthProvider,
     input_channels: RealtimeInputChannels,
     events_tx: Sender<RealtimeEvent>,
     handoff_state: RealtimeHandoffState,
@@ -1043,6 +1046,7 @@ fn spawn_webrtc_sideband_input_task(input: RealtimeWebrtcSidebandInputTask) -> J
         session_config,
         call_id,
         sideband_headers,
+        sideband_auth,
         input_channels,
         events_tx,
         handoff_state,
@@ -1057,6 +1061,7 @@ fn spawn_webrtc_sideband_input_task(input: RealtimeWebrtcSidebandInputTask) -> J
         }
 
         let connection = match client
+            .with_auth(sideband_auth)
             .connect_webrtc_sideband(
                 session_config,
                 &call_id,
