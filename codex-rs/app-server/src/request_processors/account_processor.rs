@@ -273,11 +273,7 @@ impl AccountRequestProcessor {
             }
         }
 
-        match login_with_api_key(
-            &self.config.codex_home,
-            &params.api_key,
-            self.config.cli_auth_credentials_store_mode,
-        ) {
+        match self.auth_manager.login_with_api_key(&params.api_key) {
             Ok(()) => {
                 self.auth_manager.reload().await;
                 Ok(())
@@ -364,8 +360,11 @@ impl AccountRequestProcessor {
         codex_streamlined_login: bool,
     ) -> Result<LoginAccountResponse, JSONRPCErrorError> {
         let opts = self.login_chatgpt_common(codex_streamlined_login).await?;
-        let server = run_login_server(opts)
-            .map_err(|err| internal_error(format!("failed to start login server: {err}")))?;
+        let server = run_login_server_with_configured_auth_store(
+            opts,
+            self.auth_manager.configured_auth_store(),
+        )
+        .map_err(|err| internal_error(format!("failed to start login server: {err}")))?;
         let login_id = Uuid::new_v4();
         let shutdown_handle = server.cancel_handle();
 
@@ -462,12 +461,17 @@ impl AccountRequestProcessor {
         let thread_manager = Arc::clone(&self.thread_manager);
         let chatgpt_base_url = self.config.chatgpt_base_url.clone();
         let active_login = self.active_login.clone();
+        let configured_auth_store = self.auth_manager.configured_auth_store();
         tokio::spawn(async move {
             let (success, error_msg) = tokio::select! {
                 _ = cancel.cancelled() => {
                     (false, Some("Login was not completed".to_string()))
                 }
-                r = complete_device_code_login(opts, device_code) => {
+                r = complete_device_code_login_with_configured_auth_store(
+                    opts,
+                    device_code,
+                    configured_auth_store,
+                ) => {
                     match r {
                         Ok(()) => (true, None),
                         Err(err) => (false, Some(err.to_string())),
@@ -578,13 +582,13 @@ impl AccountRequestProcessor {
             )));
         }
 
-        login_with_chatgpt_auth_tokens(
-            &self.config.codex_home,
-            &access_token,
-            &chatgpt_account_id,
-            chatgpt_plan_type.as_deref(),
-        )
-        .map_err(|err| internal_error(format!("failed to set external auth: {err}")))?;
+        self.auth_manager
+            .login_with_chatgpt_auth_tokens(
+                &access_token,
+                &chatgpt_account_id,
+                chatgpt_plan_type.as_deref(),
+            )
+            .map_err(|err| internal_error(format!("failed to set external auth: {err}")))?;
         self.auth_manager.reload().await;
         self.config_manager.replace_cloud_config_bundle_loader(
             self.auth_manager.clone(),

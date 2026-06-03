@@ -1628,6 +1628,11 @@ impl AuthManager {
         Arc::new(Self::new_with_stores(stores, enable_codex_api_key_env, chatgpt_base_url).await)
     }
 
+    /// Returns the configured credential store for managed auth writers.
+    pub fn configured_auth_store(&self) -> Arc<dyn AuthCredentialStore> {
+        Arc::clone(&self.stores.configured)
+    }
+
     /// Convenience constructor returning an `Arc` wrapper from resolved config.
     pub async fn shared_from_config(
         config: &impl AuthManagerConfig,
