@@ -21,6 +21,8 @@ use crate::tools::flat_tool_name;
 use crate::tools::network_approval::NetworkApprovalMode;
 use crate::tools::network_approval::NetworkApprovalSpec;
 #[cfg(unix)]
+use crate::tools::runtimes::apply_package_path_prepend;
+#[cfg(unix)]
 use crate::tools::runtimes::apply_zsh_fork_path_prepend;
 use crate::tools::runtimes::build_sandbox_command;
 use crate::tools::runtimes::disable_powershell_profile_for_elevated_windows_sandbox;
@@ -249,23 +251,51 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
         let env = exec_env_for_sandbox_permissions(&req.env, sandbox_permissions);
         let explicit_env_overrides = req.explicit_env_overrides.clone();
         #[cfg(unix)]
-        let (env, explicit_env_overrides) = {
+        let (env, explicit_env_overrides, runtime_path_prepends) = {
             let mut env = env;
-            let mut explicit_env_overrides = explicit_env_overrides;
+            let mut runtime_path_prepends = Vec::new();
+            apply_package_path_prepend(&mut env, &mut runtime_path_prepends);
             if self.backend == ShellRuntimeBackend::ShellCommandZshFork
                 && let Some(shell_zsh_path) = ctx.session.services.shell_zsh_path.as_deref()
             {
-                apply_zsh_fork_path_prepend(&mut env, &mut explicit_env_overrides, shell_zsh_path);
+                apply_zsh_fork_path_prepend(&mut env, &mut runtime_path_prepends, shell_zsh_path);
             }
-            (env, explicit_env_overrides)
+            (env, explicit_env_overrides, runtime_path_prepends)
         };
-        let command = maybe_wrap_shell_lc_with_snapshot(
-            &req.command,
-            session_shell.as_ref(),
-            &req.cwd,
-            &explicit_env_overrides,
-            &env,
-        );
+        let command = {
+            #[cfg(unix)]
+            {
+                if runtime_path_prepends.is_empty() {
+                    maybe_wrap_shell_lc_with_snapshot(
+                        &req.command,
+                        session_shell.as_ref(),
+                        &req.cwd,
+                        &explicit_env_overrides,
+                        &env,
+                    )
+                } else {
+                    crate::tools::runtimes::maybe_wrap_shell_lc_with_snapshot_and_path_prepends(
+                        &req.command,
+                        session_shell.as_ref(),
+                        &req.cwd,
+                        &explicit_env_overrides,
+                        &env,
+                        &runtime_path_prepends,
+                    )
+                }
+            }
+
+            #[cfg(not(unix))]
+            {
+                maybe_wrap_shell_lc_with_snapshot(
+                    &req.command,
+                    session_shell.as_ref(),
+                    &req.cwd,
+                    &explicit_env_overrides,
+                    &env,
+                )
+            }
+        };
         let command = disable_powershell_profile_for_elevated_windows_sandbox(
             &command,
             req.shell_type.as_ref(),
