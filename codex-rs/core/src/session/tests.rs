@@ -3830,6 +3830,85 @@ pub(crate) async fn make_session_configuration_for_tests() -> SessionConfigurati
     }
 }
 
+#[tokio::test]
+async fn emit_subagent_session_started_includes_fork_lineage_from_session_configuration() {
+    use wiremock::Mock;
+    use wiremock::MockServer;
+    use wiremock::ResponseTemplate;
+    use wiremock::matchers::method;
+    use wiremock::matchers::path;
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/codex/analytics-events/events"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&server)
+        .await;
+
+    let auth_manager =
+        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+    let analytics_events_client = AnalyticsEventsClient::new(
+        auth_manager,
+        server.uri(),
+        /*analytics_enabled*/ Some(true),
+    );
+
+    let parent_thread_id = ThreadId::new();
+    let forked_from_thread_id = ThreadId::new();
+    let child_thread_id = ThreadId::new();
+    let mut session_configuration = make_session_configuration_for_tests().await;
+    session_configuration.forked_from_thread_id = Some(forked_from_thread_id);
+
+    emit_subagent_session_started(
+        &analytics_events_client,
+        AppServerClientMetadata {
+            client_name: Some("codex-tui".to_string()),
+            client_version: Some("1.0.0".to_string()),
+        },
+        SessionId::from(child_thread_id),
+        child_thread_id,
+        Some(parent_thread_id),
+        session_configuration.thread_config_snapshot(),
+        SubAgentSource::ThreadSpawn {
+            parent_thread_id,
+            depth: 1,
+            agent_path: None,
+            agent_nickname: None,
+            agent_role: None,
+        },
+    );
+
+    let event = timeout(Duration::from_secs(1), async {
+        'wait_for_event: loop {
+            if let Some(requests) = server.received_requests().await {
+                for request in requests {
+                    let payload: serde_json::Value =
+                        serde_json::from_slice(&request.body).expect("valid analytics payload");
+                    if let Some(event) = payload["events"].as_array().and_then(|events| {
+                        events
+                            .iter()
+                            .find(|event| event["event_type"] == "codex_thread_initialized")
+                    }) {
+                        break 'wait_for_event event.clone();
+                    }
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("subagent initialization analytics should be emitted");
+
+    assert_eq!(
+        event["event_params"]["parent_thread_id"],
+        parent_thread_id.to_string()
+    );
+    assert_eq!(
+        event["event_params"]["forked_from_thread_id"],
+        forked_from_thread_id.to_string()
+    );
+}
+
 fn turn_environments_for_tests(
     environment: &Arc<codex_exec_server::Environment>,
     cwd: &codex_utils_absolute_path::AbsolutePathBuf,
