@@ -150,17 +150,11 @@ impl SessionConfiguration {
     }
 
     pub(super) fn sandbox_policy(&self) -> SandboxPolicy {
-        self.permission_profile()
-            .to_legacy_sandbox_policy(&self.cwd)
-            .unwrap_or_else(|_| {
-                let file_system_sandbox_policy = self.file_system_sandbox_policy();
-                codex_sandboxing::compatibility_sandbox_policy_for_permission_profile(
-                    self.permission_profile_state.permission_profile(),
-                    &file_system_sandbox_policy,
-                    self.network_sandbox_policy(),
-                    &self.cwd,
-                )
-            })
+        let permission_profile = self.permission_profile();
+        codex_sandboxing::compatibility_sandbox_policy_for_permission_profile(
+            &permission_profile,
+            &self.cwd,
+        )
     }
 
     pub(super) fn file_system_sandbox_policy(&self) -> FileSystemSandboxPolicy {
@@ -254,19 +248,7 @@ impl SessionConfiguration {
             next_configuration.windows_sandbox_level = windows_sandbox_level;
         }
 
-        let absolute_cwd = updates
-            .cwd
-            .as_ref()
-            .map(|cwd| {
-                AbsolutePathBuf::relative_to_current_dir(normalize_for_native_workdir(
-                    cwd.as_path(),
-                ))
-                .unwrap_or_else(|e| {
-                    warn!("failed to normalize update cwd: {cwd:?}: {e}");
-                    self.cwd.clone()
-                })
-            })
-            .unwrap_or_else(|| self.cwd.clone());
+        let absolute_cwd = self.resolved_cwd_for_update(updates.cwd.as_ref());
 
         let cwd_changed = absolute_cwd.as_path() != self.cwd.as_path();
         next_configuration.cwd = absolute_cwd;
@@ -330,23 +312,6 @@ impl SessionConfiguration {
                     )?;
                 next_configuration.original_config_do_not_use = Arc::new(config);
             }
-        } else if let Some(sandbox_policy) = updates.sandbox_policy.clone() {
-            let file_system_sandbox_policy =
-                FileSystemSandboxPolicy::from_legacy_sandbox_policy_preserving_deny_entries(
-                    &sandbox_policy,
-                    &next_configuration.cwd,
-                    &current_file_system_sandbox_policy,
-                );
-            let network_sandbox_policy = NetworkSandboxPolicy::from(&sandbox_policy);
-            next_configuration
-                .permission_profile_state
-                .set_legacy_permission_profile(
-                    PermissionProfile::from_runtime_permissions_with_enforcement(
-                        SandboxEnforcement::from_legacy_sandbox_policy(&sandbox_policy),
-                        &file_system_sandbox_policy,
-                        network_sandbox_policy,
-                    ),
-                )?;
         } else if cwd_changed
             && file_system_policy_matches_legacy
             && file_system_policy_has_rebindable_project_root_write
@@ -377,6 +342,17 @@ impl SessionConfiguration {
             next_configuration.app_server_client_version = Some(app_server_client_version);
         }
         Ok(next_configuration)
+    }
+
+    pub(crate) fn resolved_cwd_for_update(&self, cwd: Option<&PathBuf>) -> AbsolutePathBuf {
+        cwd.map(|cwd| {
+            AbsolutePathBuf::relative_to_current_dir(normalize_for_native_workdir(cwd.as_path()))
+                .unwrap_or_else(|e| {
+                    warn!("failed to normalize update cwd: {cwd:?}: {e}");
+                    self.cwd.clone()
+                })
+        })
+        .unwrap_or_else(|| self.cwd.clone())
     }
 
     fn set_permission_profile_projection(
@@ -423,7 +399,6 @@ pub(crate) struct SessionSettingsUpdate {
     pub(crate) profile_workspace_roots: Option<Vec<AbsolutePathBuf>>,
     pub(crate) approval_policy: Option<AskForApproval>,
     pub(crate) approvals_reviewer: Option<ApprovalsReviewer>,
-    pub(crate) sandbox_policy: Option<SandboxPolicy>,
     pub(crate) permission_profile: Option<PermissionProfile>,
     pub(crate) active_permission_profile: Option<ActivePermissionProfile>,
     pub(crate) windows_sandbox_level: Option<WindowsSandboxLevel>,

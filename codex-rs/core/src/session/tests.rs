@@ -916,9 +916,9 @@ async fn new_turn_refreshes_managed_network_proxy_for_sandbox_change() -> anyhow
 
     session
         .new_turn_with_sub_id(
-            "sandbox-policy-change".to_string(),
+            "permission-profile-change".to_string(),
             SessionSettingsUpdate {
-                sandbox_policy: Some(SandboxPolicy::DangerFullAccess),
+                permission_profile: Some(PermissionProfile::Disabled),
                 ..Default::default()
             },
         )
