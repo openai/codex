@@ -1,3 +1,4 @@
+use super::super::enroll::RemoteControlConnectionAuth;
 use super::super::protocol::StartRemoteControlPairingRequest;
 use super::*;
 use pretty_assertions::assert_eq;
@@ -21,6 +22,14 @@ fn remote_control_enrollment(
     }
 }
 
+fn remote_control_connection_auth() -> RemoteControlConnectionAuth {
+    RemoteControlConnectionAuth {
+        auth_provider: codex_model_provider::unauthenticated_auth_provider(),
+        server_token_auth_provider: codex_model_provider::unauthenticated_auth_provider(),
+        account_id: "account-id".to_string(),
+    }
+}
+
 async fn pairing_error(status: &'static str, body: &'static str) -> (String, String) {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
@@ -41,7 +50,10 @@ async fn pairing_error(status: &'static str, body: &'static str) -> (String, Str
     });
 
     let err = remote_control_enrollment(&remote_control_url, "remote-control-token")
-        .start_pairing(StartRemoteControlPairingRequest { manual_code: false })
+        .start_pairing(
+            &remote_control_connection_auth(),
+            StartRemoteControlPairingRequest { manual_code: false },
+        )
         .await
         .expect_err("pairing should fail");
     server_task.await.expect("server task should finish");
@@ -59,7 +71,10 @@ async fn pairing_response_error(body: serde_json::Value) -> String {
     });
 
     let err = remote_control_enrollment(&remote_control_url, "remote-control-token")
-        .start_pairing(StartRemoteControlPairingRequest { manual_code: false })
+        .start_pairing(
+            &remote_control_connection_auth(),
+            StartRemoteControlPairingRequest { manual_code: false },
+        )
         .await
         .expect_err("pairing should fail");
     server_task.await.expect("server task should finish");

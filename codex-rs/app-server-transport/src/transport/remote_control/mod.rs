@@ -174,7 +174,7 @@ impl RemoteControlHandle {
         let pairing_request = || protocol::StartRemoteControlPairingRequest {
             manual_code: params.manual_code,
         };
-        let pairing_response = match enrollment.start_pairing(pairing_request()).await {
+        let pairing_response = match enrollment.start_pairing(&auth, pairing_request()).await {
             Err(err) if err.kind() == io::ErrorKind::PermissionDenied => {
                 clear_pairing_server_token(&self.current_enrollment, &mut enrollment)?;
                 refresh_pairing_enrollment(
@@ -185,7 +185,7 @@ impl RemoteControlHandle {
                     &mut enrollment,
                 )
                 .await?;
-                enrollment.start_pairing(pairing_request()).await
+                enrollment.start_pairing(&auth, pairing_request()).await
             }
             pairing_response => pairing_response,
         };

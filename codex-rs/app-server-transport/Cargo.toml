@@ -25,6 +25,7 @@ clap = { workspace = true, features = ["derive"] }
 codex-api = { workspace = true }
 codex-app-server-protocol = { workspace = true }
 codex-core = { workspace = true }
+codex-http-state = { workspace = true }
 codex-login = { workspace = true }
 codex-model-provider = { workspace = true }
 codex-state = { workspace = true }

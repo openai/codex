@@ -6,6 +6,8 @@ use super::protocol::RemoteControlTarget;
 use super::protocol::StartRemoteControlPairingRequest;
 use super::protocol::StartRemoteControlPairingResponse;
 use axum::http::HeaderMap;
+use axum::http::HeaderValue;
+use axum::http::header::AUTHORIZATION;
 use codex_api::SharedAuthProvider;
 use codex_app_server_protocol::RemoteControlPairingStartResponse;
 use codex_login::default_client::build_reqwest_client;
@@ -45,6 +47,7 @@ pub(super) struct RemoteControlEnrollment {
 impl RemoteControlEnrollment {
     pub(super) async fn start_pairing(
         &self,
+        auth: &RemoteControlConnectionAuth,
         request: StartRemoteControlPairingRequest,
     ) -> io::Result<RemoteControlPairingStartResponse> {
         if self.should_refresh_server_token() {
@@ -55,10 +58,22 @@ impl RemoteControlEnrollment {
             .as_deref()
             .ok_or_else(pairing_unavailable_error)?;
 
+        let mut auth_headers = HeaderMap::new();
+        auth.server_token_auth_provider
+            .add_auth_headers_for_url(&self.remote_control_target.pair_url, &mut auth_headers);
+        auth_headers.insert(
+            AUTHORIZATION,
+            HeaderValue::from_str(&format!("Bearer {remote_control_token}")).map_err(|err| {
+                io::Error::new(
+                    ErrorKind::InvalidInput,
+                    format!("invalid remote control pairing token: {err}"),
+                )
+            })?,
+        );
         let response = build_reqwest_client()
             .post(&self.remote_control_target.pair_url)
             .timeout(REMOTE_CONTROL_PAIRING_TIMEOUT)
-            .bearer_auth(remote_control_token)
+            .headers(auth_headers.clone())
             .json(&request)
             .send()
             .await
@@ -69,6 +84,11 @@ impl RemoteControlEnrollment {
                 ))
             })?;
         let headers = response.headers().clone();
+        auth.server_token_auth_provider.observe_response_headers(
+            &self.remote_control_target.pair_url,
+            &auth_headers,
+            &headers,
+        );
         let status = response.status();
         let body = response.bytes().await.map_err(|err| {
             io::Error::other(format!(
@@ -153,6 +173,7 @@ impl RemoteControlEnrollment {
 
 pub(super) struct RemoteControlConnectionAuth {
     pub(super) auth_provider: SharedAuthProvider,
+    pub(super) server_token_auth_provider: SharedAuthProvider,
     pub(super) account_id: String,
 }
 
@@ -430,11 +451,12 @@ where
 {
     let client = build_reqwest_client();
     let mut auth_headers = HeaderMap::new();
-    auth.auth_provider.add_auth_headers(&mut auth_headers);
+    auth.auth_provider
+        .add_auth_headers_for_url(url, &mut auth_headers);
     let response = client
         .post(url)
         .timeout(REMOTE_CONTROL_ENROLL_TIMEOUT)
-        .headers(auth_headers)
+        .headers(auth_headers.clone())
         .header(REMOTE_CONTROL_ACCOUNT_ID_HEADER, &auth.account_id)
         .header(REMOTE_CONTROL_INSTALLATION_ID_HEADER, installation_id)
         .json(request)
@@ -446,6 +468,8 @@ where
             ))
         })?;
     let headers = response.headers().clone();
+    auth.auth_provider
+        .observe_response_headers(url, &auth_headers, &headers);
     let status = response.status();
     let body = response.bytes().await.map_err(|err| {
         io::Error::other(format!(
@@ -745,6 +769,7 @@ mod tests {
             &remote_control_target,
             &RemoteControlConnectionAuth {
                 auth_provider: codex_model_provider::unauthenticated_auth_provider(),
+                server_token_auth_provider: codex_model_provider::unauthenticated_auth_provider(),
                 account_id: "account_id".to_string(),
             },
             "11111111-1111-4111-8111-111111111111",

@@ -2094,6 +2094,7 @@ dependencies = [
  "codex-app-server-protocol",
  "codex-config",
  "codex-core",
+ "codex-http-state",
  "codex-login",
  "codex-model-provider",
  "codex-state",
