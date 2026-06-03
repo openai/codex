@@ -316,7 +316,7 @@ async fn merges_existing_instructions_with_agents_md() {
 }
 
 #[tokio::test]
-async fn source_less_user_instructions_preserve_separator_without_reporting_a_source() {
+async fn sourceless_user_instructions_preserve_separator_without_reporting_a_source() {
     let tmp = tempfile::tempdir().expect("tempdir");
     fs::write(tmp.path().join("AGENTS.md"), "project doc").unwrap();
 
