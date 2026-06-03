@@ -1085,6 +1085,50 @@ async fn import_repo_agents_md_overwrites_empty_targets() {
     );
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn repo_agents_md_migration_skips_symlink_targets() {
+    let root = TempDir::new().expect("create tempdir");
+    let repo_root = root.path().join("repo");
+    let linked_target = root.path().join("linked-agents.md");
+    fs::create_dir_all(repo_root.join(".git")).expect("create git");
+    fs::write(
+        repo_root.join(EXTERNAL_AGENT_CONFIG_MD),
+        format!("{SOURCE_EXTERNAL_AGENT_DISPLAY_NAME} code guidance"),
+    )
+    .expect("write source");
+    fs::write(&linked_target, "").expect("write linked target");
+    std::os::unix::fs::symlink(&linked_target, repo_root.join("AGENTS.md"))
+        .expect("create target symlink");
+
+    let service = service_for_paths(
+        root.path().join(EXTERNAL_AGENT_DIR),
+        root.path().join(".codex"),
+    );
+    let items = service
+        .detect(ExternalAgentConfigDetectOptions {
+            include_home: false,
+            cwds: Some(vec![repo_root.clone()]),
+        })
+        .await
+        .expect("detect");
+    assert_eq!(items, Vec::<ExternalAgentConfigMigrationItem>::new());
+
+    service
+        .import(vec![ExternalAgentConfigMigrationItem {
+            item_type: ExternalAgentConfigMigrationItemType::AgentsMd,
+            description: String::new(),
+            cwd: Some(repo_root),
+            details: None,
+        }])
+        .await
+        .expect("import");
+    assert_eq!(
+        fs::read_to_string(linked_target).expect("read linked target"),
+        ""
+    );
+}
+
 #[tokio::test]
 async fn detect_repo_prefers_non_empty_external_agent_agents_source() {
     let root = TempDir::new().expect("create tempdir");
