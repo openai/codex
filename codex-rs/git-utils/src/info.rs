@@ -769,6 +769,25 @@ pub async fn resolve_root_git_project_for_trust(
         return None;
     }
 
+    let worktree_dot_git_s = fs
+        .read_file_text(&git_dir_path.join("gitdir"), /*sandbox*/ None)
+        .await
+        .ok()?;
+    let worktree_dot_git_rel = worktree_dot_git_s.trim();
+    if worktree_dot_git_rel.is_empty() {
+        return None;
+    }
+    let worktree_dot_git =
+        AbsolutePathBuf::resolve_path_against_base(worktree_dot_git_rel, git_dir_path.as_path());
+    if fs
+        .canonicalize(&worktree_dot_git, /*sandbox*/ None)
+        .await
+        .ok()?
+        != fs.canonicalize(&dot_git, /*sandbox*/ None).await.ok()?
+    {
+        return None;
+    }
+
     let common_dir = worktrees_dir.parent()?;
     common_dir.parent()
 }

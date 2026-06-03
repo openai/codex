@@ -611,6 +611,11 @@ async fn resolve_root_git_project_for_trust_detects_worktree_pointer_without_git
     std::fs::create_dir_all(&worktree_root).unwrap();
     std::fs::create_dir_all(worktree_root.join("nested")).unwrap();
     std::fs::write(
+        worktree_git_dir.join("gitdir"),
+        format!("{}\n", worktree_root.join(".git").display()),
+    )
+    .unwrap();
+    std::fs::write(
         worktree_root.join(".git"),
         format!("gitdir: {}\n", worktree_git_dir.display()),
     )
@@ -626,6 +631,35 @@ async fn resolve_root_git_project_for_trust_detects_worktree_pointer_without_git
     assert_eq!(
         resolve_root_git_project_for_trust(LOCAL_FS.as_ref(), &nested).await,
         Some(expected)
+    );
+}
+
+#[tokio::test]
+async fn resolve_root_git_project_for_trust_rejects_unrelated_worktree_pointer() {
+    let tmp = TempDir::new().expect("tempdir");
+    let repo_root = tmp.path().join("repo");
+    let worktree_git_dir = repo_root.join(".git").join("worktrees").join("feature-x");
+    let trusted_worktree_root = tmp.path().join("trusted-wt");
+    let unrelated_worktree_root = tmp.path().join("unrelated-wt");
+    std::fs::create_dir_all(&worktree_git_dir).unwrap();
+    std::fs::create_dir_all(&trusted_worktree_root).unwrap();
+    std::fs::create_dir_all(&unrelated_worktree_root).unwrap();
+    std::fs::write(trusted_worktree_root.join(".git"), "").unwrap();
+    std::fs::write(
+        worktree_git_dir.join("gitdir"),
+        format!("{}\n", trusted_worktree_root.join(".git").display()),
+    )
+    .unwrap();
+    std::fs::write(
+        unrelated_worktree_root.join(".git"),
+        format!("gitdir: {}\n", worktree_git_dir.display()),
+    )
+    .unwrap();
+
+    assert!(
+        resolve_root_git_project_for_trust(LOCAL_FS.as_ref(), &unrelated_worktree_root.abs())
+            .await
+            .is_none()
     );
 }
 
