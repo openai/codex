@@ -52,8 +52,13 @@ const INHERIT_ONLY_ACE: u8 = 0x08;
 const ACCESS_ALLOWED_ACE_TYPE: u8 = 0;
 const ACCESS_DENIED_ACE_TYPE: u8 = 1;
 const GENERIC_READ_MASK: u32 = 0x8000_0000;
-const GENERIC_WRITE_MASK: u32 = 0x4000_0000;
 const DENY_ACCESS: i32 = 3;
+const WRITE_DENY_MASK: u32 = FILE_WRITE_DATA
+    | FILE_APPEND_DATA
+    | FILE_WRITE_EA
+    | FILE_WRITE_ATTRIBUTES
+    | DELETE
+    | FILE_DELETE_CHILD;
 
 /// Fetch DACL via handle-based query; caller must LocalFree the returned SD.
 ///
@@ -232,14 +237,6 @@ pub unsafe fn dacl_has_write_deny_for_sid(p_dacl: *mut ACL, psid: *mut c_void) -
     if ok == 0 {
         return false;
     }
-    let deny_write_mask = FILE_GENERIC_WRITE
-        | FILE_WRITE_DATA
-        | FILE_APPEND_DATA
-        | FILE_WRITE_EA
-        | FILE_WRITE_ATTRIBUTES
-        | GENERIC_WRITE_MASK
-        | DELETE
-        | FILE_DELETE_CHILD;
     for i in 0..info.AceCount {
         let mut p_ace: *mut c_void = std::ptr::null_mut();
         if GetAce(p_dacl as *const ACL, i, &mut p_ace) == 0 {
@@ -256,7 +253,8 @@ pub unsafe fn dacl_has_write_deny_for_sid(p_dacl: *mut ACL, psid: *mut c_void) -
         let base = p_ace as usize;
         let sid_ptr =
             (base + std::mem::size_of::<ACE_HEADER>() + std::mem::size_of::<u32>()) as *mut c_void;
-        if EqualSid(sid_ptr, psid) != 0 && (ace.Mask & deny_write_mask) != 0 {
+        // A partial deny does not satisfy the helper's write-protection contract.
+        if EqualSid(sid_ptr, psid) != 0 && (ace.Mask & WRITE_DENY_MASK) == WRITE_DENY_MASK {
             return true;
         }
     }
@@ -484,6 +482,8 @@ pub unsafe fn add_allow_ace(path: &Path, psid: *mut c_void) -> Result<bool> {
 
 /// Adds a deny ACE to prevent write/append/delete for the given SID on the target path.
 ///
+/// Returns `true` when the ACE was added and `false` when it was already present.
+///
 /// # Safety
 /// Caller must ensure `psid` points to a valid SID and `path` refers to an existing file or directory.
 pub unsafe fn add_deny_write_ace(path: &Path, psid: *mut c_void) -> Result<bool> {
@@ -500,16 +500,7 @@ impl DenyAceKind {
     fn mask(self) -> u32 {
         match self {
             Self::Read => FILE_GENERIC_READ | GENERIC_READ_MASK,
-            Self::Write => {
-                FILE_GENERIC_WRITE
-                    | FILE_WRITE_DATA
-                    | FILE_APPEND_DATA
-                    | FILE_WRITE_EA
-                    | FILE_WRITE_ATTRIBUTES
-                    | GENERIC_WRITE_MASK
-                    | DELETE
-                    | FILE_DELETE_CHILD
-            }
+            Self::Write => WRITE_DENY_MASK,
         }
     }
 
@@ -537,8 +528,9 @@ unsafe fn add_deny_ace(path: &Path, psid: *mut c_void, kind: DenyAceKind) -> Res
     if code != ERROR_SUCCESS {
         return Err(anyhow!("GetNamedSecurityInfoW failed: {code}"));
     }
-    let mut added = false;
-    if !kind.already_present(p_dacl, psid) {
+    let result = if kind.already_present(p_dacl, psid) {
+        Ok(false)
+    } else {
         let trustee = TRUSTEE_W {
             pMultipleTrustee: std::ptr::null_mut(),
             MultipleTrusteeOperation: 0,
@@ -553,7 +545,9 @@ unsafe fn add_deny_ace(path: &Path, psid: *mut c_void, kind: DenyAceKind) -> Res
         explicit.Trustee = trustee;
         let mut p_new_dacl: *mut ACL = std::ptr::null_mut();
         let code2 = SetEntriesInAclW(1, &explicit, p_dacl, &mut p_new_dacl);
-        if code2 == ERROR_SUCCESS {
+        let result = if code2 != ERROR_SUCCESS {
+            Err(anyhow!("SetEntriesInAclW failed: {code2}"))
+        } else {
             let code3 = SetNamedSecurityInfoW(
                 to_wide(path).as_ptr() as *mut u16,
                 1,
@@ -563,18 +557,24 @@ unsafe fn add_deny_ace(path: &Path, psid: *mut c_void, kind: DenyAceKind) -> Res
                 p_new_dacl,
                 std::ptr::null_mut(),
             );
-            if code3 == ERROR_SUCCESS {
-                added = true;
+            if code3 != ERROR_SUCCESS {
+                Err(anyhow!(
+                    "SetNamedSecurityInfoW failed for {}: {code3}",
+                    path.display()
+                ))
+            } else {
+                Ok(true)
             }
-            if !p_new_dacl.is_null() {
-                LocalFree(p_new_dacl as HLOCAL);
-            }
+        };
+        if !p_new_dacl.is_null() {
+            LocalFree(p_new_dacl as HLOCAL);
         }
-    }
+        result
+    };
     if !p_sd.is_null() {
         LocalFree(p_sd as HLOCAL);
     }
-    Ok(added)
+    result
 }
 
 /// Adds a deny ACE to prevent reads for the given SID on the target path.
@@ -583,6 +583,8 @@ unsafe fn add_deny_ace(path: &Path, psid: *mut c_void, kind: DenyAceKind) -> Res
 /// keeps the resulting DACL in the order Windows expects for denies to win.
 /// The ACE is inheritable so a deny applied to a materialized directory also
 /// covers files and directories later created underneath it.
+///
+/// Returns `true` when the ACE was added and `false` when it was already present.
 ///
 /// # Safety
 /// Caller must ensure `psid` points to a valid SID and `path` refers to an existing file or directory.
@@ -710,3 +712,7 @@ pub unsafe fn allow_null_device(psid: *mut c_void) {
 }
 const CONTAINER_INHERIT_ACE: u32 = 0x2;
 const OBJECT_INHERIT_ACE: u32 = 0x1;
+
+#[cfg(test)]
+#[path = "acl_tests.rs"]
+mod tests;
