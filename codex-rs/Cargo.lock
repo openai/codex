@@ -3574,6 +3574,7 @@ dependencies = [
  "codex-utils-pty",
  "futures",
  "keyring",
+ "memchr",
  "oauth2",
  "pretty_assertions",
  "reqwest 0.13.4",
