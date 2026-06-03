@@ -66,7 +66,7 @@ jobs:
     needs: resolve-python-release
     permissions:
       contents: read
-    uses: ./.github/workflows/python-runtime-release.yml
+    uses: ./.github/workflows/python-runtime-build.yml
     with:
       runtime_version: ${{ needs.resolve-python-release.outputs.runtime_version }}
 
