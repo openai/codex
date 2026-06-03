@@ -7,6 +7,8 @@ use codex_features::Feature;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::models::AdditionalPermissionProfile as PermissionProfile;
 use codex_protocol::models::FileSystemPermissions;
+#[cfg(target_os = "macos")]
+use codex_protocol::models::MacOsSandboxCapabilities;
 use codex_protocol::models::PermissionProfile as CorePermissionProfile;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
@@ -502,6 +504,90 @@ async fn request_permissions_tool_is_auto_denied_when_granular_request_permissio
             scope: PermissionGrantScope::Turn,
             strict_auto_review: false,
         }
+    );
+
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+#[tokio::test(flavor = "current_thread")]
+async fn managed_macos_capability_survives_additional_permissions_tool_execution() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+
+    let server = start_mock_server().await;
+    let approval_policy = AskForApproval::OnRequest;
+    let macos = MacOsSandboxCapabilities {
+        mach_lookup_services: vec![super::MACOS_SANDBOX_CAPABILITY_PROBE_MACH_SERVICE.to_string()],
+        apple_event_destinations: Vec::new(),
+        launch_services_open: false,
+    };
+    let permission_profile =
+        CorePermissionProfile::read_only().with_macos_sandbox_capabilities(Some(macos));
+    let permission_profile_for_config = permission_profile.clone();
+
+    let mut builder = test_codex().with_config(move |config| {
+        config.permissions.approval_policy = Constrained::allow_any(approval_policy);
+        config
+            .permissions
+            .set_permission_profile(permission_profile_for_config)
+            .expect("set permission profile");
+        config
+            .features
+            .enable(Feature::ExecPermissionApprovals)
+            .expect("test config should allow feature update");
+    });
+    let test = builder.build(&server).await?;
+
+    let requested_dir = test.workspace_path("macos-capability-probe-grant");
+    fs::create_dir_all(&requested_dir)?;
+    let requested_permissions = requested_directory_write_permissions(&requested_dir);
+    let normalized_requested_permissions = normalized_directory_write_permissions(&requested_dir)?;
+    let test_exe = std::env::current_exe()?;
+    let probe_arg = super::MACOS_SANDBOX_CAPABILITY_PROBE_ARG;
+    let command = format!("{test_exe:?} {probe_arg}");
+    let call_id = "managed-macos-capability-with-additional-permissions";
+    let event = shell_event_with_request_permissions(call_id, &command, &requested_permissions)?;
+
+    let _ = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-macos-capability-1"),
+            event,
+            ev_completed("resp-macos-capability-1"),
+        ]),
+    )
+    .await;
+    let results = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-macos-capability-1", "done"),
+            ev_completed("resp-macos-capability-2"),
+        ]),
+    )
+    .await;
+
+    submit_turn(&test, call_id, approval_policy, permission_profile).await?;
+    let approval = expect_exec_approval(&test, &command).await;
+    assert_eq!(
+        approval.additional_permissions,
+        Some(normalized_requested_permissions.into())
+    );
+    test.codex
+        .submit(Op::ExecApproval {
+            id: approval.effective_approval_id(),
+            turn_id: None,
+            decision: ReviewDecision::Approved,
+        })
+        .await?;
+    wait_for_completion(&test).await;
+
+    let result = parse_result(&results.single_request().function_call_output(call_id));
+    assert_eq!(
+        result.exit_code,
+        Some(0),
+        "capability probe should succeed after applying additional permissions: {}",
+        result.stdout
     );
 
     Ok(())

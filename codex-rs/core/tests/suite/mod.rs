@@ -7,13 +7,56 @@ use codex_test_binary_support::TestBinaryDispatchMode;
 use codex_test_binary_support::configure_test_binary_dispatch;
 use ctor::ctor;
 
+#[cfg(target_os = "macos")]
+pub(crate) const MACOS_SANDBOX_CAPABILITY_PROBE_ARG: &str =
+    "--codex-test-macos-sandbox-capability-probe";
+#[cfg(target_os = "macos")]
+pub(crate) const MACOS_SANDBOX_CAPABILITY_PROBE_MACH_SERVICE: &str =
+    "com.apple.coreservices.appleevents";
+
+#[cfg(target_os = "macos")]
+unsafe extern "C" {
+    static bootstrap_port: libc::c_uint;
+    fn bootstrap_look_up(
+        bootstrap_port: libc::c_uint,
+        service_name: *const libc::c_char,
+        service_port: *mut libc::c_uint,
+    ) -> libc::c_int;
+}
+
+#[cfg(target_os = "macos")]
+fn maybe_run_macos_sandbox_capability_probe() {
+    if std::env::args().nth(1).as_deref() != Some(MACOS_SANDBOX_CAPABILITY_PROBE_ARG) {
+        return;
+    }
+
+    let mut service_port = 0;
+    // SAFETY: the service name and output port pointers remain valid for the duration of the call.
+    let result = unsafe {
+        bootstrap_look_up(
+            bootstrap_port,
+            c"com.apple.coreservices.appleevents".as_ptr(),
+            &mut service_port,
+        )
+    };
+    if result != 0 {
+        eprintln!("Mach lookup failed with result {result}");
+        std::process::exit(1);
+    }
+    std::process::exit(0);
+}
+
 // This code runs before any other tests are run.
 // It allows the test binary to behave like codex and dispatch to apply_patch and codex-linux-sandbox
 // based on the arg0.
 // NOTE: this doesn't work on ARM
 #[ctor]
 pub static CODEX_ALIASES_TEMP_DIR: Option<TestBinaryDispatchGuard> = {
-    configure_test_binary_dispatch("codex-core-tests", |exe_name, argv1| {
+    let guard = configure_test_binary_dispatch("codex-core-tests", |exe_name, argv1| {
+        #[cfg(target_os = "macos")]
+        if argv1 == Some(MACOS_SANDBOX_CAPABILITY_PROBE_ARG) {
+            return TestBinaryDispatchMode::Skip;
+        }
         if argv1 == Some(CODEX_CORE_APPLY_PATCH_ARG1) {
             return TestBinaryDispatchMode::DispatchArg0Only;
         }
@@ -24,7 +67,10 @@ pub static CODEX_ALIASES_TEMP_DIR: Option<TestBinaryDispatchGuard> = {
             return TestBinaryDispatchMode::DispatchArg0Only;
         }
         TestBinaryDispatchMode::InstallAliases
-    })
+    });
+    #[cfg(target_os = "macos")]
+    maybe_run_macos_sandbox_capability_probe();
+    guard
 };
 
 #[cfg(not(target_os = "windows"))]
