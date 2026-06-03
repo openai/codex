@@ -17,6 +17,7 @@ use std::io::Write;
 use std::io::{self};
 use std::net::SocketAddr;
 use std::net::TcpStream;
+#[cfg(test)]
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -809,6 +810,7 @@ pub(crate) async fn exchange_code_for_tokens(
 
 /// Persists exchanged credentials using the configured auth store, then
 /// best-effort revokes any superseded managed ChatGPT tokens.
+#[cfg(test)]
 pub(crate) async fn persist_tokens_async(
     codex_home: &Path,
     api_key: Option<String>,
