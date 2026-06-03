@@ -1,9 +1,12 @@
+mod harness;
 mod message_framing;
 mod ordered_ciphertext;
 
 use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 
 use crate::ExecServerError;
+
+pub(crate) use harness::noise_harness_connection_from_websocket;
 
 // This bounds allocation in tungstenite before protobuf and Noise record
 // validation run. It comfortably fits one maximum Noise record plus metadata.
