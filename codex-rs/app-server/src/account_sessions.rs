@@ -311,14 +311,6 @@ impl<'a> AccountSessionsStore<'a> {
         }
     }
 
-    fn clear(&self) -> std::io::Result<()> {
-        match std::fs::remove_file(self.path()) {
-            Ok(()) => Ok(()),
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(err) => Err(err),
-        }
-    }
-
     fn read(&self) -> std::io::Result<Option<StoredAccountSessions>> {
         match std::fs::read_to_string(self.path()) {
             Ok(payload) => serde_json::from_str(&payload)
