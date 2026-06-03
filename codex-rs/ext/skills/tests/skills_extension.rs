@@ -1,5 +1,7 @@
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 
 use codex_core::config::Config;
 use codex_extension_api::ExtensionData;
@@ -28,6 +30,8 @@ use codex_skills_extension::provider::SkillSearchRequest;
 use pretty_assertions::assert_eq;
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
+
+static NEXT_CODEX_HOME_ID: AtomicUsize = AtomicUsize::new(0);
 
 #[tokio::test]
 async fn installed_extension_injects_available_catalog_and_selected_entrypoint() -> TestResult {
@@ -283,9 +287,10 @@ fn test_entry(
 }
 
 async fn default_config() -> std::io::Result<Config> {
+    let id = NEXT_CODEX_HOME_ID.fetch_add(1, Ordering::Relaxed);
     let codex_home = std::env::temp_dir().join(format!(
-        "codex-skills-extension-test-{}",
-        std::process::id()
+        "codex-skills-extension-test-{}-{id}",
+        std::process::id(),
     ));
     std::fs::create_dir_all(&codex_home)?;
     let config =
