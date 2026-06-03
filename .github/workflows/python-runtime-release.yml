@@ -19,16 +19,12 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # PyPI must trust this workflow for manual runtime-only publication and
-  # python-sdk-release.yml when that workflow calls this one before SDK builds.
-  publish-python-runtime:
+  build-python-runtime:
     if: github.repository == 'openai/codex'
-    name: publish-python-runtime
+    name: build-python-runtime
     runs-on: ubuntu-latest
-    environment: pypi
     permissions:
       contents: read
-      id-token: write # Required for PyPI trusted publishing.
 
     steps:
       - name: Checkout repository
@@ -127,6 +123,33 @@ jobs:
           fi
           ls -lh dist/python-runtime
 
+      - name: Upload Python runtime wheels
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: python-runtime-wheels
+          path: dist/python-runtime/*
+          if-no-files-found: error
+
+  # PyPI must trust this workflow for manual runtime-only publication.
+  # Called workflows only build wheels because PyPI does not support reusable
+  # workflows as Trusted Publishers.
+  publish-python-runtime:
+    if: github.event_name == 'workflow_dispatch' && github.repository == 'openai/codex'
+    name: publish-python-runtime
+    needs: build-python-runtime
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      contents: read
+      id-token: write # Required for PyPI trusted publishing.
+
+    steps:
+      - name: Download Python runtime wheels
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: python-runtime-wheels
+          path: dist/python-runtime
+
       - name: Publish Python runtime wheels to PyPI
         uses: pypa/gh-action-pypi-publish@ed0c53931b1dc9bd32cbe73a98c7f6766f8a527e # v1.13.0
         with:
@@ -135,7 +158,7 @@ jobs:
 
       - name: Verify Python runtime wheels are available on PyPI
         env:
-          PYTHON_RUNTIME_VERSION: ${{ steps.python_runtime.outputs.python_version }}
+          PYTHON_RUNTIME_VERSION: ${{ inputs.runtime_version }}
         run: |
           set -euo pipefail
           for attempt in {1..30}; do
