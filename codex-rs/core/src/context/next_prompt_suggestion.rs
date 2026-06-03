@@ -27,7 +27,7 @@ Reply with ONLY the suggestion, no quotes or explanation."#;
 pub(crate) struct NextPromptSuggestionInstructions;
 
 impl ContextualUserFragment for NextPromptSuggestionInstructions {
-    fn role() -> &'static str {
+    fn role(&self) -> &'static str {
         "user"
     }
 
