@@ -1,8 +1,19 @@
 use super::ContextualUserFragment;
 use std::fmt::Display;
 
-/// Returns the model-facing hint for the host's generated-image artifact path.
-pub fn image_generation_output_hint(
+/// Maximum size of the extension's model-facing generated-image path hint.
+const MAX_IMAGE_GENERATION_OUTPUT_HINT_BYTES: usize = 1024;
+
+/// Returns the extension's model-facing hint, or omits it if the path makes it too large.
+pub fn extension_image_generation_output_hint(
+    image_output_dir: impl Display,
+    image_output_path: impl Display,
+) -> Option<String> {
+    let hint = image_generation_hint(image_output_dir, image_output_path);
+    (hint.len() <= MAX_IMAGE_GENERATION_OUTPUT_HINT_BYTES).then_some(hint)
+}
+
+fn image_generation_hint(
     image_output_dir: impl Display,
     image_output_path: impl Display,
 ) -> String {
@@ -40,6 +51,6 @@ impl ContextualUserFragment for ImageGenerationInstructions {
     }
 
     fn body(&self) -> String {
-        image_generation_output_hint(&self.image_output_dir, &self.image_output_path)
+        image_generation_hint(&self.image_output_dir, &self.image_output_path)
     }
 }

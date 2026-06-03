@@ -85,6 +85,7 @@ impl ToolContributor for ImageGenerationExtension {
                 Some(self.auth_manager.clone()),
             )),
             config.codex_home.clone(),
+            thread_store.level_id().to_string(),
         ))]
     }
 }
