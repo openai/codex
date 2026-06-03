@@ -13,7 +13,7 @@
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use codex_api::upload_local_file;
-use codex_client::NativeIntegrityStateContext;
+use codex_http_state::HttpStateContext;
 use codex_login::CodexAuth;
 use serde_json::Value as JsonValue;
 
@@ -34,7 +34,7 @@ pub(crate) async fn rewrite_mcp_tool_arguments_for_openai_files(
         return Ok(Some(arguments_value));
     };
     let auth = sess.services.auth_manager.auth().await;
-    let native_integrity_state = sess.services.model_client.native_integrity_state_context();
+    let http_state = sess.services.model_client.http_state_context();
     let mut rewritten_arguments = arguments.clone();
 
     for field_name in openai_file_input_params {
@@ -44,7 +44,7 @@ pub(crate) async fn rewrite_mcp_tool_arguments_for_openai_files(
         let Some(uploaded_value) = rewrite_argument_value_for_openai_files(
             turn_context,
             auth.as_ref(),
-            native_integrity_state.clone(),
+            http_state.clone(),
             field_name,
             value,
         )
@@ -65,7 +65,7 @@ pub(crate) async fn rewrite_mcp_tool_arguments_for_openai_files(
 async fn rewrite_argument_value_for_openai_files(
     turn_context: &TurnContext,
     auth: Option<&CodexAuth>,
-    native_integrity_state: Option<NativeIntegrityStateContext>,
+    http_state: Option<HttpStateContext>,
     field_name: &str,
     value: &JsonValue,
 ) -> Result<Option<JsonValue>, String> {
@@ -74,7 +74,7 @@ async fn rewrite_argument_value_for_openai_files(
             let rewritten = build_uploaded_local_argument_value(
                 turn_context,
                 auth,
-                native_integrity_state,
+                http_state,
                 field_name,
                 /*index*/ None,
                 path_or_file_ref,
@@ -91,7 +91,7 @@ async fn rewrite_argument_value_for_openai_files(
                 let rewritten = build_uploaded_local_argument_value(
                     turn_context,
                     auth,
-                    native_integrity_state.clone(),
+                    http_state.clone(),
                     field_name,
                     Some(index),
                     path_or_file_ref,
@@ -108,7 +108,7 @@ async fn rewrite_argument_value_for_openai_files(
 async fn build_uploaded_local_argument_value(
     turn_context: &TurnContext,
     auth: Option<&CodexAuth>,
-    native_integrity_state: Option<NativeIntegrityStateContext>,
+    http_state: Option<HttpStateContext>,
     field_name: &str,
     index: Option<usize>,
     file_path: &str,
@@ -128,7 +128,7 @@ async fn build_uploaded_local_argument_value(
     let upload_auth = codex_model_provider::with_native_integrity_state(
         codex_model_provider::auth_provider_from_auth(auth),
         Some(auth),
-        native_integrity_state,
+        http_state,
     );
     let uploaded = upload_local_file(
         turn_context.config.chatgpt_base_url.trim_end_matches('/'),
@@ -244,7 +244,7 @@ mod tests {
         let rewritten = build_uploaded_local_argument_value(
             &turn_context,
             Some(&auth),
-            /*native_integrity_state*/ None,
+            /*http_state*/ None,
             "file",
             /*index*/ None,
             "file_report.csv",
@@ -328,7 +328,7 @@ mod tests {
         let rewritten = rewrite_argument_value_for_openai_files(
             &turn_context,
             Some(&auth),
-            /*native_integrity_state*/ None,
+            /*http_state*/ None,
             "file",
             &serde_json::json!("file_report.csv"),
         )
@@ -446,7 +446,7 @@ mod tests {
         let rewritten = rewrite_argument_value_for_openai_files(
             &turn_context,
             Some(&auth),
-            /*native_integrity_state*/ None,
+            /*http_state*/ None,
             "files",
             &serde_json::json!(["one.csv", "two.csv"]),
         )

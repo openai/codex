@@ -10,8 +10,8 @@ use crate::context::ContextualUserFragment;
 use crate::context::SubagentNotification;
 use crate::init_state_db;
 use assert_matches::assert_matches;
-use codex_client::NativeIntegritySurface;
 use codex_features::Feature;
+use codex_http_state::HttpStateSurface;
 use codex_login::CodexAuth;
 use codex_protocol::AgentPath;
 use codex_protocol::config_types::ModeKind;
@@ -1586,7 +1586,7 @@ async fn spawn_child_completion_notifies_parent_history() {
 }
 
 #[tokio::test]
-async fn spawn_thread_subagent_inherits_parent_native_integrity_surface() {
+async fn spawn_thread_subagent_inherits_parent_http_state_surface() {
     let harness = AgentControlHarness::new().await;
     let (parent_thread_id, parent_thread) = harness.start_thread().await;
     parent_thread
@@ -1625,8 +1625,8 @@ async fn spawn_thread_subagent_inherits_parent_native_integrity_surface() {
             .session
             .services
             .model_client
-            .native_integrity_surface(),
-        Some(NativeIntegritySurface::CodexDesktop)
+            .http_state_surface(),
+        Some(HttpStateSurface::CodexDesktop)
     );
 }
 
