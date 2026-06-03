@@ -94,26 +94,6 @@ impl<'a> AgentsMdManager<'a> {
             .await
     }
 
-    /// Returns all instruction source files included in the current config.
-    pub async fn instruction_sources(&self, fs: &dyn ExecutorFileSystem) -> Vec<AbsolutePathBuf> {
-        // TODO(anp) get RPC interface using cached paths
-        let mut global_instruction_warnings = Vec::new();
-        let mut paths = Self::load_global_instructions(
-            LOCAL_FS.as_ref(),
-            Some(&self.config.codex_home),
-            &mut global_instruction_warnings,
-        )
-        .await
-        .map_or_else(Vec::new, |loaded| loaded.sources().cloned().collect());
-        match self.agents_md_paths(fs).await {
-            Ok(agents_md_paths) => paths.extend(agents_md_paths),
-            Err(err) => {
-                tracing::warn!(error = %err, "failed to discover AGENTS.md docs for instruction sources");
-            }
-        }
-        paths
-    }
-
     async fn user_instructions_with_fs(
         &self,
         fs: &dyn ExecutorFileSystem,
@@ -139,6 +119,29 @@ impl<'a> AgentsMdManager<'a> {
         }
 
         (!loaded.is_empty()).then_some(loaded)
+    }
+
+    /// Returns all instruction source files included in the current config.
+    #[deprecated(note = "TODO(anp) get RPC interface using cached paths")]
+    pub async fn load_instruction_sources(
+        &self,
+        fs: &dyn ExecutorFileSystem,
+    ) -> Vec<AbsolutePathBuf> {
+        let mut global_instruction_warnings = Vec::new();
+        let mut paths = Self::load_global_instructions(
+            LOCAL_FS.as_ref(),
+            Some(&self.config.codex_home),
+            &mut global_instruction_warnings,
+        )
+        .await
+        .map_or_else(Vec::new, |loaded| loaded.sources().cloned().collect());
+        match self.agents_md_paths(fs).await {
+            Ok(agents_md_paths) => paths.extend(agents_md_paths),
+            Err(err) => {
+                tracing::warn!(error = %err, "failed to discover AGENTS.md docs for instruction sources");
+            }
+        }
+        paths
     }
 
     /// Attempt to locate and load AGENTS.md documentation.

@@ -519,10 +519,12 @@ async fn instruction_sources_include_global_before_agents_md_docs() {
         loaded.sources().collect::<Vec<_>>(),
         vec![&global_agents, &project_agents]
     );
+    #[allow(deprecated)]
+    let loaded_instruction_sources = AgentsMdManager::new(&cfg)
+        .load_instruction_sources(LOCAL_FS.as_ref())
+        .await;
     assert_eq!(
-        AgentsMdManager::new(&cfg)
-            .instruction_sources(LOCAL_FS.as_ref())
-            .await,
+        loaded_instruction_sources,
         vec![global_agents, project_agents]
     );
     assert_eq!(

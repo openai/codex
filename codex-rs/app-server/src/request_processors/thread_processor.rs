@@ -659,9 +659,10 @@ impl ThreadRequestProcessor {
             .map(|response| Some(response.into()))
     }
 
+    #[allow(deprecated)]
     async fn instruction_sources_from_config(config: &Config) -> Vec<AbsolutePathBuf> {
         codex_core::AgentsMdManager::new(config)
-            .instruction_sources(LOCAL_FS.as_ref())
+            .load_instruction_sources(LOCAL_FS.as_ref())
             .await
     }
 
