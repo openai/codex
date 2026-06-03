@@ -1,3 +1,4 @@
+mod environment;
 mod harness;
 mod message_framing;
 mod ordered_ciphertext;
@@ -6,6 +7,8 @@ use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 
 use crate::ExecServerError;
 
+pub(crate) use environment::HarnessKeyValidator;
+pub(crate) use environment::run_noise_multiplexed_environment;
 pub(crate) use harness::noise_harness_connection_from_websocket;
 
 // This bounds allocation in tungstenite before protobuf and Noise record
