@@ -1,12 +1,12 @@
-use codex_core_skills::injection::SkillInjection;
+use codex_context_fragments::ContextualUserFragment;
 
-use super::ContextualUserFragment;
+use crate::injection::SkillInjection;
 
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct SkillInstructions {
-    pub(crate) name: String,
-    pub(crate) path: String,
-    pub(crate) contents: String,
+pub struct SkillInstructions {
+    name: String,
+    path: String,
+    contents: String,
 }
 
 impl From<&SkillInjection> for SkillInstructions {

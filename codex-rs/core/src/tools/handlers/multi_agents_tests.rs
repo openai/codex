@@ -1161,7 +1161,7 @@ async fn multi_agent_v2_spawn_returns_path_and_send_message_accepts_relative_pat
     let spawn_result: SpawnAgentResult =
         serde_json::from_str(&content).expect("spawn result should parse");
     assert_eq!(spawn_result.task_name, "/root/test_process");
-    assert!(spawn_result.nickname.is_some());
+    assert_eq!(spawn_result.nickname, None);
 
     let child_thread_id = session
         .services
@@ -2179,7 +2179,7 @@ async fn multi_agent_v2_spawn_omits_agent_id_when_named() {
 
     assert!(result.get("agent_id").is_none());
     assert_eq!(result["task_name"], "/root/test_process");
-    assert!(result.get("nickname").is_some());
+    assert!(result.get("nickname").is_none());
     assert_eq!(success, Some(true));
 }
 
@@ -2436,7 +2436,7 @@ async fn multi_agent_v2_spawn_agent_ignores_configured_max_depth() {
     let result: SpawnAgentResult =
         serde_json::from_str(&content).expect("spawn_agent result should be json");
     assert_eq!(result.task_name, "/root/parent/child");
-    assert!(result.nickname.is_some());
+    assert_eq!(result.nickname, None);
     assert_eq!(success, Some(true));
 }
 
