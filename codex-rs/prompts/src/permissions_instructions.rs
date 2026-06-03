@@ -1,3 +1,4 @@
+use codex_context_fragments::ContextualUserFragment;
 use codex_execpolicy::Policy;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::SandboxMode;
@@ -138,6 +139,24 @@ impl PermissionsInstructions {
             text.push('\n');
         }
         Self { text }
+    }
+}
+
+impl ContextualUserFragment for PermissionsInstructions {
+    fn role() -> &'static str {
+        "developer"
+    }
+
+    fn markers(&self) -> (&'static str, &'static str) {
+        Self::type_markers()
+    }
+
+    fn type_markers() -> (&'static str, &'static str) {
+        ("<permissions instructions>", "</permissions instructions>")
+    }
+
+    fn body(&self) -> String {
+        PermissionsInstructions::body(self)
     }
 }
 
