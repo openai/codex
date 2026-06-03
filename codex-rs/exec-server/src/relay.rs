@@ -22,24 +22,29 @@ use crate::connection::JsonRpcConnection;
 use crate::connection::JsonRpcConnectionEvent;
 use crate::connection::JsonRpcTransport;
 use crate::relay_proto::RelayData;
+use crate::relay_proto::RelayHandshake;
 use crate::relay_proto::RelayMessageFrame;
+use crate::relay_proto::RelayReset;
 use crate::relay_proto::RelayResume;
 use crate::relay_proto::relay_message_frame;
 use crate::server::ConnectionProcessor;
 
 const RELAY_MESSAGE_FRAME_VERSION: u32 = 1;
+const MAX_RELAY_RESET_REASON_BYTES: usize = 256;
+const MAX_RELAY_STREAM_ID_BYTES: usize = 128;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
-enum RelayFrameBodyKind {
+pub(crate) enum RelayFrameBodyKind {
     Data,
     Ack,
     Resume,
     Reset,
     Heartbeat,
+    Handshake,
 }
 
 impl RelayMessageFrame {
-    fn data(stream_id: String, seq: u32, payload: Vec<u8>) -> Self {
+    pub(crate) fn data(stream_id: String, seq: u32, payload: Vec<u8>) -> Self {
         Self {
             version: RELAY_MESSAGE_FRAME_VERSION,
             stream_id,
@@ -54,7 +59,7 @@ impl RelayMessageFrame {
         }
     }
 
-    fn resume(stream_id: String) -> Self {
+    pub(crate) fn resume(stream_id: String) -> Self {
         Self {
             version: RELAY_MESSAGE_FRAME_VERSION,
             stream_id,
@@ -66,16 +71,53 @@ impl RelayMessageFrame {
         }
     }
 
-    fn validate(&self) -> Result<RelayFrameBodyKind, ExecServerError> {
+    pub(crate) fn handshake(stream_id: String, payload: Vec<u8>) -> Self {
+        Self {
+            version: RELAY_MESSAGE_FRAME_VERSION,
+            stream_id,
+            ack: 0,
+            ack_bits: 0,
+            body: Some(relay_message_frame::Body::Handshake(RelayHandshake {
+                payload,
+            })),
+        }
+    }
+
+    pub(crate) fn reset(stream_id: String, reason: String) -> Self {
+        Self {
+            version: RELAY_MESSAGE_FRAME_VERSION,
+            stream_id,
+            ack: 0,
+            ack_bits: 0,
+            body: Some(relay_message_frame::Body::Reset(RelayReset { reason })),
+        }
+    }
+
+    /// Validate cleartext routing metadata before a frame reaches either the
+    /// direct JSON-RPC parser or the Noise relay state machine.
+    ///
+    /// The encrypted path intentionally leaves this metadata visible to
+    /// rendezvous, so it must be canonical and tightly bounded everywhere.
+    pub(crate) fn validate(&self) -> Result<RelayFrameBodyKind, ExecServerError> {
         if self.version != RELAY_MESSAGE_FRAME_VERSION {
             return Err(ExecServerError::Protocol(format!(
                 "unsupported relay message frame version {}",
                 self.version
             )));
         }
-        if self.stream_id.trim().is_empty() {
+        if self.stream_id.is_empty() {
             return Err(ExecServerError::Protocol(
                 "relay message frame is missing stream_id".to_string(),
+            ));
+        }
+        if self.stream_id.trim() != self.stream_id {
+            return Err(ExecServerError::Protocol(
+                "relay message frame stream_id is not canonical".to_string(),
+            ));
+        }
+        if self.stream_id.len() > MAX_RELAY_STREAM_ID_BYTES {
+            return Err(ExecServerError::Protocol(
+                "relay message frame stream_id is too long".to_string(),
             ));
         }
         match self.body.as_ref() {
@@ -90,35 +132,64 @@ impl RelayMessageFrame {
             Some(relay_message_frame::Body::AckFrame(_)) => Ok(RelayFrameBodyKind::Ack),
             Some(relay_message_frame::Body::Resume(_)) => Ok(RelayFrameBodyKind::Resume),
             Some(relay_message_frame::Body::Reset(reset)) => {
-                if reset.reason.is_empty() {
+                if reset.reason.is_empty() || reset.reason.len() > MAX_RELAY_RESET_REASON_BYTES {
                     return Err(ExecServerError::Protocol(
-                        "relay reset message frame is missing reason".to_string(),
+                        "relay reset message frame has invalid reason".to_string(),
                     ));
                 }
                 Ok(RelayFrameBodyKind::Reset)
             }
             Some(relay_message_frame::Body::Heartbeat(_)) => Ok(RelayFrameBodyKind::Heartbeat),
+            Some(relay_message_frame::Body::Handshake(handshake)) => {
+                if handshake.payload.is_empty() {
+                    return Err(ExecServerError::Protocol(
+                        "relay handshake message frame is missing payload".to_string(),
+                    ));
+                }
+                Ok(RelayFrameBodyKind::Handshake)
+            }
             None => Err(ExecServerError::Protocol(
                 "relay message frame is missing body".to_string(),
             )),
         }
     }
 
-    fn into_jsonrpc_message(self) -> Result<JSONRPCMessage, ExecServerError> {
+    pub(crate) fn into_data(self) -> Result<RelayData, ExecServerError> {
         let kind = self.validate()?;
         if kind != RelayFrameBodyKind::Data {
             return Err(ExecServerError::Protocol(
                 "expected relay data message frame".to_string(),
             ));
         }
-        let payload = match self.body {
-            Some(relay_message_frame::Body::Data(data)) => data.payload,
-            _ => Vec::new(),
-        };
+        match self.body {
+            Some(relay_message_frame::Body::Data(data)) => Ok(data),
+            _ => Err(ExecServerError::Protocol(
+                "expected relay data message frame".to_string(),
+            )),
+        }
+    }
+
+    fn into_jsonrpc_message(self) -> Result<JSONRPCMessage, ExecServerError> {
+        let payload = self.into_data()?.payload;
         serde_json::from_slice(&payload).map_err(ExecServerError::Json)
     }
 
-    fn into_reset_reason(self) -> Option<String> {
+    pub(crate) fn into_handshake_payload(self) -> Result<Vec<u8>, ExecServerError> {
+        let kind = self.validate()?;
+        if kind != RelayFrameBodyKind::Handshake {
+            return Err(ExecServerError::Protocol(
+                "expected relay handshake message frame".to_string(),
+            ));
+        }
+        match self.body {
+            Some(relay_message_frame::Body::Handshake(handshake)) => Ok(handshake.payload),
+            _ => Err(ExecServerError::Protocol(
+                "expected relay handshake message frame".to_string(),
+            )),
+        }
+    }
+
+    pub(crate) fn into_reset_reason(self) -> Option<String> {
         match self.body {
             Some(relay_message_frame::Body::Reset(reset)) if !reset.reason.is_empty() => {
                 Some(reset.reason)
@@ -128,16 +199,18 @@ impl RelayMessageFrame {
     }
 }
 
-fn encode_relay_message_frame(frame: &RelayMessageFrame) -> Vec<u8> {
+pub(crate) fn encode_relay_message_frame(frame: &RelayMessageFrame) -> Vec<u8> {
     frame.encode_to_vec()
 }
 
-fn decode_relay_message_frame(payload: &[u8]) -> Result<RelayMessageFrame, ExecServerError> {
+pub(crate) fn decode_relay_message_frame(
+    payload: &[u8],
+) -> Result<RelayMessageFrame, ExecServerError> {
     RelayMessageFrame::decode(payload)
         .map_err(|err| ExecServerError::Protocol(format!("invalid relay message frame: {err}")))
 }
 
-fn jsonrpc_payload(message: &JSONRPCMessage) -> Result<Vec<u8>, ExecServerError> {
+pub(crate) fn jsonrpc_payload(message: &JSONRPCMessage) -> Result<Vec<u8>, ExecServerError> {
     serde_json::to_vec(message).map_err(ExecServerError::Json)
 }
 
@@ -253,7 +326,8 @@ where
                                 }
                                 RelayFrameBodyKind::Ack
                                 | RelayFrameBodyKind::Resume
-                                | RelayFrameBodyKind::Heartbeat => {}
+                                | RelayFrameBodyKind::Heartbeat
+                                | RelayFrameBodyKind::Handshake => {}
                             }
                         }
                         Some(Ok(Message::Close(_))) | None => {
@@ -294,10 +368,22 @@ where
         incoming_rx,
         disconnected_rx,
         task_handles: vec![websocket_task],
-        transport: JsonRpcTransport::Plain,
+        transport: JsonRpcTransport::External,
     }
 }
 
+/// Runs the backwards-compatible, cleartext multiplexed relay protocol.
+///
+/// The physical websocket carries protobuf [`RelayMessageFrame`] values. Each
+/// frame's `stream_id` selects an independent logical JSON-RPC connection, so a
+/// single registered exec-server can serve multiple orchestrator sessions.
+/// This runner intentionally preserves the protocol used before Noise relay
+/// support was introduced. Callers must select the separate secure runner when
+/// Noise protection was explicitly negotiated during registration.
+///
+/// Relay framing is not an authentication boundary. Every frame is validated
+/// before its routing metadata or payload is used, and malformed frames are
+/// dropped without affecting the other virtual streams on the connection.
 pub(crate) async fn run_multiplexed_environment<S>(
     stream: WebSocketStream<S>,
     processor: ConnectionProcessor,
@@ -310,6 +396,9 @@ pub(crate) async fn run_multiplexed_environment<S>(
 
     let mut streams: HashMap<String, VirtualStream> = HashMap::new();
     loop {
+        // Serialize all logical-stream writes through this task so only one
+        // owner writes to the physical websocket. Reads remain in the same
+        // select loop, which also keeps disconnect handling deterministic.
         let frame = tokio::select! {
             maybe_encoded = physical_outgoing_rx.recv() => {
                 let Some(encoded) = maybe_encoded else {
@@ -361,6 +450,11 @@ pub(crate) async fn run_multiplexed_environment<S>(
                         continue;
                     }
                 };
+
+                // A logical connection is created lazily on its first data
+                // frame. The connection processor owns the JSON-RPC lifecycle;
+                // this task only translates between relay and connection
+                // events.
                 let stream = streams.entry(stream_id.clone()).or_insert_with(|| {
                     spawn_virtual_stream(
                         stream_id.clone(),
@@ -382,24 +476,34 @@ pub(crate) async fn run_multiplexed_environment<S>(
                     stream.disconnect(frame.into_reset_reason()).await;
                 }
             }
+            // These control frames are meaningful to other relay protocol
+            // variants. The legacy protocol has no resume or handshake state,
+            // so ignoring them preserves its existing wire behavior.
             RelayFrameBodyKind::Ack
             | RelayFrameBodyKind::Resume
-            | RelayFrameBodyKind::Heartbeat => {}
+            | RelayFrameBodyKind::Heartbeat
+            | RelayFrameBodyKind::Handshake => {}
         }
     }
 
+    // A physical disconnect ends every virtual connection. Notify each
+    // processor explicitly so requests do not remain live after the relay
+    // websocket has disappeared.
     for (_stream_id, stream) in streams {
         stream.disconnect(/*reason*/ None).await;
     }
     drop(physical_outgoing_tx);
 }
 
+/// The exec-server-facing half of one logical connection on the shared relay.
 struct VirtualStream {
     incoming_tx: mpsc::Sender<JsonRpcConnectionEvent>,
     disconnected_tx: watch::Sender<bool>,
 }
 
 impl VirtualStream {
+    /// Marks the logical connection disconnected and supplies the peer's reset
+    /// reason, when one was provided.
     async fn disconnect(self, reason: Option<String>) {
         let _ = self.disconnected_tx.send(true);
         let _ = self
@@ -409,6 +513,8 @@ impl VirtualStream {
     }
 }
 
+/// Creates a logical JSON-RPC connection and forwards its outgoing messages
+/// back to the physical relay writer as legacy cleartext data frames.
 fn spawn_virtual_stream(
     stream_id: String,
     processor: ConnectionProcessor,
@@ -446,7 +552,7 @@ fn spawn_virtual_stream(
         incoming_rx,
         disconnected_rx,
         task_handles: vec![writer_task],
-        transport: JsonRpcTransport::Plain,
+        transport: JsonRpcTransport::External,
     };
     tokio::spawn(async move {
         processor.run_connection(connection).await;
@@ -476,6 +582,7 @@ mod tests {
     use futures::task::AtomicWaker;
     use tokio::net::TcpListener;
     use tokio::time::timeout;
+    use tokio_tungstenite::WebSocketStream;
     use tokio_tungstenite::accept_async;
     use tokio_tungstenite::connect_async;
     use tokio_tungstenite::tungstenite::Message;
