@@ -13,9 +13,11 @@ workspace = true
 [dependencies]
 arc-swap = { workspace = true }
 async-trait = { workspace = true }
+aws-lc-rs = { workspace = true }
 axum = { workspace = true, features = ["http1", "tokio", "ws"] }
 base64 = { workspace = true }
 bytes = { workspace = true }
+clatter = { workspace = true }
 codex-app-server-protocol = { workspace = true }
 codex-api = { workspace = true }
 codex-client = { workspace = true }
