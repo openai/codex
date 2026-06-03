@@ -370,17 +370,17 @@ async fn injected_auth_stores_drive_manager_reads_writes_and_logout() {
     manager
         .login_with_chatgpt_auth_tokens(&access_token, WORKSPACE_ID_ALLOWED, Some("pro"))
         .expect("external token login should save");
-    assert_eq!(
-        ephemeral.load().expect("ephemeral load"),
-        Some(
-            AuthDotJson::from_external_access_token(
-                &access_token,
-                WORKSPACE_ID_ALLOWED,
-                Some("pro"),
-            )
-            .expect("external auth payload")
-        )
-    );
+    let mut stored_external_auth = ephemeral
+        .load()
+        .expect("ephemeral load")
+        .expect("external auth payload should be stored");
+    let mut expected_external_auth =
+        AuthDotJson::from_external_access_token(&access_token, WORKSPACE_ID_ALLOWED, Some("pro"))
+            .expect("external auth payload");
+    assert!(stored_external_auth.last_refresh.is_some());
+    stored_external_auth.last_refresh = None;
+    expected_external_auth.last_refresh = None;
+    assert_eq!(stored_external_auth, expected_external_auth);
 
     manager.reload().await;
     assert!(manager.is_external_chatgpt_auth_active());
