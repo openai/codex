@@ -13,6 +13,7 @@ mod fs_sandbox;
 mod local_file_system;
 mod local_process;
 mod noise_channel;
+mod noise_relay;
 mod process;
 mod process_id;
 mod protocol;
