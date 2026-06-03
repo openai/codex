@@ -1,5 +1,6 @@
 use super::input_queue::InputQueue;
 use super::*;
+use crate::artifact_store::ArtifactStore;
 use crate::config::ConstraintError;
 use crate::goals::GoalRuntimeState;
 use crate::skills::SkillError;
@@ -504,6 +505,7 @@ impl Session {
         environment_manager: Arc<EnvironmentManager>,
         analytics_events_client: Option<AnalyticsEventsClient>,
         thread_store: Arc<dyn ThreadStore>,
+        artifact_store: Arc<dyn ArtifactStore>,
         parent_rollout_thread_trace: ThreadTraceContext,
         attestation_provider: Option<Arc<dyn AttestationProvider>>,
         multi_agent_version: Option<MultiAgentVersion>,
@@ -1030,6 +1032,7 @@ impl Session {
                 state_db: state_db_ctx.clone(),
                 live_thread: live_thread_init.as_ref().cloned(),
                 thread_store: Arc::clone(&thread_store),
+                artifact_store,
                 attestation_provider: attestation_provider.clone(),
                 model_client: ModelClient::new(
                     Some(Arc::clone(&auth_manager)),
