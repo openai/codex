@@ -305,7 +305,6 @@ mod tests {
             today,
         );
 
-        #[expect(clippy::expect_used)]
         let state = state.read().expect("token activity state poisoned");
         match &*state {
             TokenActivityState::Loaded {

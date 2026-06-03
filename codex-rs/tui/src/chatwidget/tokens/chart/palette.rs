@@ -1,13 +1,16 @@
+use ratatui::style::Color;
 use ratatui::style::Style;
 use ratatui::style::Stylize;
 
 use super::TokenActivityView;
-use super::numeric_style;
 use crate::color::blend;
+use crate::render::highlight::foreground_style_for_scopes;
+use crate::style::accent_style;
 use crate::terminal_palette::StdoutColorLevel;
 use crate::terminal_palette::best_color;
 use crate::terminal_palette::default_bg;
 use crate::terminal_palette::default_fg;
+use crate::terminal_palette::rgb_color;
 use crate::terminal_palette::stdout_color_level;
 
 // In low-color terminals we distinguish empty vs active cells by glyph (a
@@ -31,29 +34,33 @@ pub(super) struct TokenActivityPalette {
 
 impl TokenActivityPalette {
     pub(super) fn current() -> Self {
-        let fallback = [
-            Style::default().dim(),
-            Style::default().green().dim(),
-            Style::default().green(),
-            Style::default().light_green(),
-            Style::default().light_green().bold(),
-        ];
-        let fallback_bar_style = Style::default().light_green();
-        let fallback_palette = || Self {
-            styles: fallback,
-            bar_style: fallback_bar_style,
-            uses_color: false,
-        };
-        let (Some(fg), Some(bg), Some(anchor)) = (default_fg(), default_bg(), theme_anchor_rgb())
+        Self::from_parts(
+            default_fg(),
+            default_bg(),
+            stdout_color_level(),
+            theme_activity_style(),
+        )
+    }
+
+    fn from_parts(
+        default_fg: Option<(u8, u8, u8)>,
+        default_bg: Option<(u8, u8, u8)>,
+        color_level: StdoutColorLevel,
+        active_style: Style,
+    ) -> Self {
+        let fallback_palette = || Self::fallback(active_style);
+        let (Some(fg), Some(bg), Some(anchor)) =
+            (default_fg, default_bg, activity_anchor_rgb(active_style))
         else {
             return fallback_palette();
         };
         if matches!(
-            stdout_color_level(),
+            color_level,
             StdoutColorLevel::Ansi16 | StdoutColorLevel::Unknown
         ) {
             return fallback_palette();
         }
+
         let empty_alpha = if crate::color::is_light(bg) {
             0.18
         } else {
@@ -66,13 +73,31 @@ impl TokenActivityPalette {
             } else {
                 blend(anchor, bg, alphas[index])
             };
-            Style::default().fg(best_color(color))
+            Style::default().fg(best_color_for_level(color, color_level))
         });
-        let bar_style = Style::default().fg(best_color(blend(anchor, bg, /*alpha*/ 0.78)));
+        let bar_style = Style::default().fg(best_color_for_level(
+            blend(anchor, bg, /*alpha*/ 0.78),
+            color_level,
+        ));
         Self {
             styles,
             bar_style,
             uses_color: true,
+        }
+    }
+
+    fn fallback(active_style: Style) -> Self {
+        let empty_style = Style::default().dim();
+        Self {
+            styles: [
+                empty_style,
+                active_style,
+                active_style,
+                active_style,
+                active_style,
+            ],
+            bar_style: active_style,
+            uses_color: false,
         }
     }
 
@@ -105,9 +130,141 @@ impl TokenActivityPalette {
     }
 }
 
-fn theme_anchor_rgb() -> Option<(u8, u8, u8)> {
-    match numeric_style().fg? {
-        ratatui::style::Color::Rgb(r, g, b) => Some((r, g, b)),
+fn theme_activity_style() -> Style {
+    foreground_style_for_scopes(&["entity.name.type", "support.type", "variable"])
+        .unwrap_or_else(accent_style)
+        .bold()
+}
+
+fn activity_anchor_rgb(style: Style) -> Option<(u8, u8, u8)> {
+    match style.fg? {
+        Color::Rgb(r, g, b) => Some((r, g, b)),
         _ => None,
+    }
+}
+
+fn best_color_for_level(target: (u8, u8, u8), color_level: StdoutColorLevel) -> Color {
+    match color_level {
+        StdoutColorLevel::TrueColor => rgb_color(target),
+        StdoutColorLevel::Ansi256 => best_color(target),
+        StdoutColorLevel::Ansi16 | StdoutColorLevel::Unknown => Color::default(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+    use ratatui::style::Modifier;
+
+    #[test]
+    fn truecolor_palette_blends_theme_accent_against_dark_background() {
+        let default_fg = Some((240, 240, 240));
+        let default_bg = Some((0, 0, 0));
+        let active_style = Style::default().fg(rgb_color((100, 200, 50))).bold();
+        let palette = TokenActivityPalette::from_parts(
+            default_fg,
+            default_bg,
+            StdoutColorLevel::TrueColor,
+            active_style,
+        );
+
+        assert_eq!(
+            palette.for_level(/*level*/ 0).fg,
+            Some(rgb_color((33, 33, 33)))
+        );
+        assert_eq!(
+            palette.for_level(/*level*/ 1).fg,
+            Some(rgb_color((22, 44, 11)))
+        );
+        assert_eq!(
+            palette.for_level(/*level*/ 4).fg,
+            Some(rgb_color((100, 200, 50)))
+        );
+        assert_eq!(
+            palette.for_bar_level(/*level*/ 4).fg,
+            Some(rgb_color((78, 156, 39)))
+        );
+        assert!(palette.uses_color);
+    }
+
+    #[test]
+    fn truecolor_palette_blends_empty_cell_for_light_background() {
+        let default_fg = Some((0, 0, 0));
+        let default_bg = Some((255, 255, 255));
+        let active_style = Style::default().fg(rgb_color((0, 95, 135))).bold();
+        let palette = TokenActivityPalette::from_parts(
+            default_fg,
+            default_bg,
+            StdoutColorLevel::TrueColor,
+            active_style,
+        );
+
+        assert_eq!(
+            palette.for_level(/*level*/ 0).fg,
+            Some(rgb_color((209, 209, 209)))
+        );
+        assert_eq!(
+            palette.for_level(/*level*/ 4).fg,
+            Some(rgb_color((0, 95, 135)))
+        );
+        assert!(palette.uses_color);
+    }
+
+    #[test]
+    fn ansi16_palette_uses_theme_accent_without_green_fallback() {
+        let default_fg = Some((240, 240, 240));
+        let default_bg = Some((0, 0, 0));
+        let active_style = Style::default().fg(Color::Magenta).bold();
+        let palette = TokenActivityPalette::from_parts(
+            default_fg,
+            default_bg,
+            StdoutColorLevel::Ansi16,
+            active_style,
+        );
+
+        assert_eq!(palette.for_level(/*level*/ 0), Style::default().dim());
+        assert_eq!(palette.for_level(/*level*/ 1), active_style);
+        assert_eq!(palette.for_bar_level(/*level*/ 4), active_style);
+        assert!(!palette.uses_color);
+    }
+
+    #[test]
+    fn non_rgb_theme_accent_remains_active_fallback() {
+        let default_fg = Some((240, 240, 240));
+        let default_bg = Some((0, 0, 0));
+        let active_style = Style::default().fg(Color::Cyan).bold();
+        let palette = TokenActivityPalette::from_parts(
+            default_fg,
+            default_bg,
+            StdoutColorLevel::TrueColor,
+            active_style,
+        );
+
+        assert_eq!(palette.for_level(/*level*/ 1), active_style);
+        assert!(
+            palette
+                .for_level(/*level*/ 1)
+                .add_modifier
+                .contains(Modifier::BOLD)
+        );
+        assert!(!palette.uses_color);
+    }
+
+    #[test]
+    fn missing_terminal_colors_use_theme_accent_fallback() {
+        let default_fg = None;
+        let default_bg = Some((0, 0, 0));
+        let active_style = Style::default().fg(Color::Blue).bold();
+        let palette = TokenActivityPalette::from_parts(
+            default_fg,
+            default_bg,
+            StdoutColorLevel::TrueColor,
+            active_style,
+        );
+
+        assert_eq!(palette.for_level(/*level*/ 0), Style::default().dim());
+        assert_eq!(palette.for_level(/*level*/ 4), active_style);
+        assert!(!palette.uses_color);
     }
 }
