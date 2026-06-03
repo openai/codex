@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::time::Duration;
 
 use futures::future::BoxFuture;
@@ -34,6 +33,11 @@ pub struct RemoteExecServerConnectArgs {
 }
 
 /// Registry-authorized material for one Noise rendezvous connection attempt.
+///
+/// Treat this as an atomic, single-use bundle. The URL authorization, executor
+/// registration, pinned executor key, and harness-key authorization describe one
+/// physical connection attempt and must not be mixed with values from another
+/// registry response.
 pub struct NoiseRendezvousConnectBundle {
     pub websocket_url: String,
     pub environment_id: String,
@@ -58,6 +62,10 @@ impl std::fmt::Debug for NoiseRendezvousConnectBundle {
 }
 
 /// Connection arguments for an authenticated Noise rendezvous exec-server.
+///
+/// `harness_identity` identifies the logical harness endpoint and may be reused
+/// across reconnects. In contrast, callers must supply a fresh
+/// [`NoiseRendezvousConnectBundle`] for each physical connection attempt.
 pub struct NoiseRendezvousConnectArgs {
     pub bundle: NoiseRendezvousConnectBundle,
     pub harness_identity: NoiseChannelIdentity,
@@ -80,20 +88,6 @@ impl std::fmt::Debug for NoiseRendezvousConnectArgs {
     }
 }
 
-/// Supplies fresh registry-authorized material for Noise rendezvous connections.
-///
-/// Implementations must preserve one endpoint-local harness identity while
-/// refreshing short-lived registry material for every physical connection attempt.
-pub trait NoiseRendezvousConnectProvider: Send + Sync {
-    /// Environment ID this provider is authorized to connect to.
-    fn environment_id(&self) -> &str;
-
-    /// Returns a fresh atomic bundle for one physical connection attempt.
-    fn connect_args(&self) -> BoxFuture<'_, Result<NoiseRendezvousConnectArgs, ExecServerError>>;
-}
-
-pub type SharedNoiseRendezvousConnectProvider = Arc<dyn NoiseRendezvousConnectProvider>;
-
 /// Stdio connection arguments for a command-backed exec-server.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct StdioExecServerConnectArgs {
@@ -113,50 +107,18 @@ pub(crate) struct StdioExecServerCommand {
 }
 
 /// Parameters used to connect to a remote exec-server environment.
-#[derive(Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ExecServerTransportParams {
     WebSocketUrl {
         websocket_url: String,
         connect_timeout: Duration,
         initialize_timeout: Duration,
     },
-    NoiseRendezvous {
-        provider: SharedNoiseRendezvousConnectProvider,
-    },
     #[allow(dead_code)]
     StdioCommand {
         command: StdioExecServerCommand,
         initialize_timeout: Duration,
     },
-}
-
-impl std::fmt::Debug for ExecServerTransportParams {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::WebSocketUrl {
-                websocket_url,
-                connect_timeout,
-                initialize_timeout,
-            } => f
-                .debug_struct("WebSocketUrl")
-                .field("websocket_url", websocket_url)
-                .field("connect_timeout", connect_timeout)
-                .field("initialize_timeout", initialize_timeout)
-                .finish(),
-            Self::NoiseRendezvous { provider } => f
-                .debug_struct("NoiseRendezvous")
-                .field("environment_id", &provider.environment_id())
-                .finish(),
-            Self::StdioCommand {
-                command,
-                initialize_timeout,
-            } => f
-                .debug_struct("StdioCommand")
-                .field("command", command)
-                .field("initialize_timeout", initialize_timeout)
-                .finish(),
-        }
-    }
 }
 
 impl ExecServerTransportParams {
@@ -169,6 +131,7 @@ impl ExecServerTransportParams {
     }
 }
 
+/// Removes URL query and fragment data before a rendezvous URL reaches logs or errors.
 pub(crate) fn redacted_websocket_url(websocket_url: &str) -> String {
     match url::Url::parse(websocket_url) {
         Ok(mut url) => {

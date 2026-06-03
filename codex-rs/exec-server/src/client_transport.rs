@@ -44,15 +44,6 @@ impl ExecServerClient {
                 })
                 .await
             }
-            crate::client_api::ExecServerTransportParams::NoiseRendezvous { provider } => {
-                let args = provider.connect_args().await?;
-                if args.bundle.environment_id != provider.environment_id() {
-                    return Err(ExecServerError::Protocol(
-                        "Noise rendezvous provider returned a different environment id".to_string(),
-                    ));
-                }
-                Self::connect_noise_rendezvous(args).await
-            }
             crate::client_api::ExecServerTransportParams::StdioCommand {
                 command,
                 initialize_timeout,
@@ -94,6 +85,12 @@ impl ExecServerClient {
         Self::connect(connection, args.into()).await
     }
 
+    /// Connects to one exec-server through an authenticated, encrypted rendezvous stream.
+    ///
+    /// This method pins the executor's Noise public key from `args`, completes
+    /// the encrypted channel before starting JSON-RPC, and uses the rendezvous
+    /// websocket only as a ciphertext transport. Callers are responsible for
+    /// obtaining a fresh atomic connect bundle for every physical connection.
     pub async fn connect_noise_rendezvous(
         args: NoiseRendezvousConnectArgs,
     ) -> Result<Self, ExecServerError> {

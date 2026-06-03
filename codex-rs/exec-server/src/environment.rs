@@ -9,7 +9,6 @@ use crate::ExecServerError;
 use crate::ExecServerRuntimePaths;
 use crate::ExecutorFileSystem;
 use crate::HttpClient;
-use crate::SharedNoiseRendezvousConnectProvider;
 use crate::client::LazyRemoteExecServerClient;
 use crate::client::http_client::ReqwestHttpClient;
 use crate::client_api::ExecServerTransportParams;
@@ -283,34 +282,6 @@ impl EnvironmentManager {
             .insert(environment_id, Arc::new(environment));
         Ok(())
     }
-
-    /// Adds or replaces a named remote environment that connects through an
-    /// authenticated, end-to-end encrypted rendezvous stream.
-    pub fn upsert_noise_environment(
-        &self,
-        environment_id: String,
-        provider: SharedNoiseRendezvousConnectProvider,
-    ) -> Result<(), ExecServerError> {
-        if environment_id.is_empty() {
-            return Err(ExecServerError::Protocol(
-                "environment id cannot be empty".to_string(),
-            ));
-        }
-        if environment_id != provider.environment_id() {
-            return Err(ExecServerError::Protocol(
-                "Noise environment id does not match connection provider".to_string(),
-            ));
-        }
-        let environment = Environment::remote_with_transport(
-            ExecServerTransportParams::NoiseRendezvous { provider },
-            self.local_runtime_paths.clone(),
-        );
-        self.environments
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(environment_id, Arc::new(environment));
-        Ok(())
-    }
 }
 
 /// Concrete execution/filesystem environment selected for a session.
@@ -449,7 +420,6 @@ impl Environment {
                 websocket_url: exec_server_url,
                 ..
             } => Some(exec_server_url.clone()),
-            ExecServerTransportParams::NoiseRendezvous { .. } => None,
             ExecServerTransportParams::StdioCommand { .. } => None,
         };
         let client = LazyRemoteExecServerClient::new(remote_transport.clone());
