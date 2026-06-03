@@ -121,7 +121,6 @@ use std::sync::Arc;
 
 use crate::config::permissions::BUILT_IN_WORKSPACE_PROFILE;
 use crate::config::permissions::apply_network_proxy_feature_config;
-use crate::config::permissions::builtin_permission_profile;
 use crate::config::permissions::compile_permission_profile_selection;
 use crate::config::permissions::compile_permission_profile_workspace_roots;
 use crate::config::permissions::default_builtin_permission_profile_name;
@@ -2892,14 +2891,15 @@ impl Config {
                 effective_permission_selection.profiles.as_ref(),
                 default_permissions,
             )?;
+            let permission_profile = compile_permission_profile_selection(
+                effective_permission_selection.profiles.as_ref(),
+                default_permissions,
+                builtin_workspace_write_settings,
+                resolved_cwd.as_path(),
+                &mut startup_warnings,
+            )?;
             let (mut file_system_sandbox_policy, network_sandbox_policy) =
-                compile_permission_profile_selection(
-                    effective_permission_selection.profiles.as_ref(),
-                    default_permissions,
-                    builtin_workspace_write_settings,
-                    resolved_cwd.as_path(),
-                    &mut startup_warnings,
-                )?;
+                permission_profile.to_runtime_permissions();
             let mut configured_workspace_roots = compile_permission_profile_workspace_roots(
                 effective_permission_selection.profiles.as_ref(),
                 default_permissions,
@@ -2914,16 +2914,8 @@ impl Config {
             dedupe_absolute_paths(&mut configured_workspace_roots);
             file_system_sandbox_policy = file_system_sandbox_policy
                 .with_materialized_project_roots_for_workspace_roots(&configured_workspace_roots);
-            let permission_profile = if let Some(permission_profile) =
-                builtin_permission_profile(default_permissions, builtin_workspace_write_settings)
-            {
-                permission_profile
-            } else {
-                PermissionProfile::from_runtime_permissions(
-                    &file_system_sandbox_policy,
-                    network_sandbox_policy,
-                )
-            };
+            let permission_profile = permission_profile
+                .with_runtime_permissions(&file_system_sandbox_policy, network_sandbox_policy);
             let active_permission_profile = if using_implicit_builtin_profile
                 && default_permissions == BUILT_IN_WORKSPACE_PROFILE
                 && cfg.sandbox_workspace_write.is_some()
@@ -3412,8 +3404,7 @@ impl Config {
         }
         let effective_file_system_sandbox_policy = effective_file_system_sandbox_policy
             .with_additional_readable_roots(resolved_cwd.as_path(), &helper_readable_roots);
-        let effective_permission_profile = PermissionProfile::from_runtime_permissions_with_enforcement(
-            effective_permission_profile.enforcement(),
+        let effective_permission_profile = effective_permission_profile.with_runtime_permissions(
             &effective_file_system_sandbox_policy,
             effective_network_sandbox_policy,
         );

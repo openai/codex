@@ -310,6 +310,7 @@ mod tests {
                 ],
                 glob_scan_max_depth: None,
             },
+            macos: None,
         };
         let session = ThreadSessionState {
             permission_profile: profile.clone(),

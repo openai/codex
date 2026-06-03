@@ -224,6 +224,24 @@ impl AdditionalPermissionProfile {
     }
 }
 
+#[derive(Debug, Clone, Default, Eq, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+pub struct MacOsSandboxCapabilities {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mach_lookup_services: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub apple_event_destinations: Vec<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub launch_services_open: bool,
+}
+
+impl MacOsSandboxCapabilities {
+    pub fn is_empty(&self) -> bool {
+        self.mach_lookup_services.is_empty()
+            && self.apple_event_destinations.is_empty()
+            && !self.launch_services_open
+    }
+}
+
 #[derive(
     Debug, Clone, Copy, Default, Eq, Hash, PartialEq, Serialize, Deserialize, JsonSchema, TS,
 )]
@@ -317,6 +335,9 @@ pub enum PermissionProfile {
     Managed {
         file_system: ManagedFileSystemPermissions,
         network: NetworkSandboxPolicy,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        macos: Option<MacOsSandboxCapabilities>,
     },
     /// Do not apply an outer sandbox.
     Disabled,
@@ -367,6 +388,7 @@ impl Default for PermissionProfile {
                 glob_scan_max_depth: None,
             },
             network: NetworkSandboxPolicy::Restricted,
+            macos: None,
         }
     }
 }
@@ -378,6 +400,7 @@ impl PermissionProfile {
         Self::Managed {
             file_system: ManagedFileSystemPermissions::from_sandbox_policy(&file_system),
             network: NetworkSandboxPolicy::Restricted,
+            macos: None,
         }
     }
 
@@ -414,6 +437,7 @@ impl PermissionProfile {
         Self::Managed {
             file_system: ManagedFileSystemPermissions::from_sandbox_policy(&file_system),
             network,
+            macos: None,
         }
     }
 
@@ -425,6 +449,7 @@ impl PermissionProfile {
             Self::Managed {
                 file_system,
                 network,
+                macos,
             } => {
                 let file_system = file_system
                     .to_sandbox_policy()
@@ -432,6 +457,7 @@ impl PermissionProfile {
                 Self::Managed {
                     file_system: ManagedFileSystemPermissions::from_sandbox_policy(&file_system),
                     network,
+                    macos,
                 }
             }
             Self::Disabled => Self::Disabled,
@@ -474,6 +500,7 @@ impl PermissionProfile {
                         file_system_sandbox_policy,
                     ),
                     network: network_sandbox_policy,
+                    macos: None,
                 }
             }
         }
@@ -518,11 +545,48 @@ impl PermissionProfile {
         }
     }
 
+    pub fn macos_sandbox_capabilities(&self) -> Option<&MacOsSandboxCapabilities> {
+        match self {
+            Self::Managed { macos, .. } => macos.as_ref(),
+            Self::Disabled | Self::External { .. } => None,
+        }
+    }
+
+    pub fn with_macos_sandbox_capabilities(self, macos: Option<MacOsSandboxCapabilities>) -> Self {
+        match self {
+            Self::Managed {
+                file_system,
+                network,
+                ..
+            } => Self::Managed {
+                file_system,
+                network,
+                macos,
+            },
+            Self::Disabled => Self::Disabled,
+            Self::External { network } => Self::External { network },
+        }
+    }
+
+    pub fn with_runtime_permissions(
+        &self,
+        file_system_sandbox_policy: &FileSystemSandboxPolicy,
+        network_sandbox_policy: NetworkSandboxPolicy,
+    ) -> Self {
+        Self::from_runtime_permissions_with_enforcement(
+            self.enforcement(),
+            file_system_sandbox_policy,
+            network_sandbox_policy,
+        )
+        .with_macos_sandbox_capabilities(self.macos_sandbox_capabilities().cloned())
+    }
+
     pub fn to_legacy_sandbox_policy(&self, cwd: &Path) -> io::Result<SandboxPolicy> {
         match self {
             Self::Managed {
                 file_system,
                 network,
+                ..
             } => file_system
                 .to_sandbox_policy()
                 .to_legacy_sandbox_policy(*network, cwd),
@@ -552,6 +616,8 @@ enum TaggedPermissionProfile {
     Managed {
         file_system: ManagedFileSystemPermissions,
         network: NetworkSandboxPolicy,
+        #[serde(default)]
+        macos: Option<MacOsSandboxCapabilities>,
     },
     Disabled,
     #[serde(rename_all = "snake_case")]
@@ -566,9 +632,11 @@ impl From<TaggedPermissionProfile> for PermissionProfile {
             TaggedPermissionProfile::Managed {
                 file_system,
                 network,
+                macos,
             } => Self::Managed {
                 file_system,
                 network,
+                macos,
             },
             TaggedPermissionProfile::Disabled => Self::Disabled,
             TaggedPermissionProfile::External { network } => Self::External { network },
@@ -1871,6 +1939,7 @@ mod tests {
                     glob_scan_max_depth: NonZeroUsize::new(2),
                 },
                 network: NetworkSandboxPolicy::Enabled,
+                macos: None,
             }
         );
         Ok(())
@@ -1958,6 +2027,7 @@ mod tests {
             PermissionProfile::Managed {
                 file_system: ManagedFileSystemPermissions::Unrestricted,
                 network: NetworkSandboxPolicy::Restricted,
+                macos: None,
             },
             "the legacy ExternalSandbox projection must not hide a split unrestricted filesystem policy"
         );
@@ -1968,6 +2038,33 @@ mod tests {
                 NetworkSandboxPolicy::Restricted,
             )
         );
+    }
+
+    #[test]
+    fn permission_profile_runtime_update_preserves_macos_sandbox_capabilities() -> Result<()> {
+        let macos = MacOsSandboxCapabilities {
+            mach_lookup_services: vec!["com.apple.coreservices.appleevents".to_string()],
+            apple_event_destinations: vec!["com.openai.sky.CUAService".to_string()],
+            launch_services_open: true,
+        };
+        let permission_profile =
+            PermissionProfile::read_only().with_macos_sandbox_capabilities(Some(macos.clone()));
+        let permission_profile = permission_profile.with_runtime_permissions(
+            &FileSystemSandboxPolicy::unrestricted(),
+            NetworkSandboxPolicy::Enabled,
+        );
+
+        assert_eq!(
+            serde_json::from_value::<PermissionProfile>(serde_json::to_value(
+                &permission_profile
+            )?)?,
+            PermissionProfile::Managed {
+                file_system: ManagedFileSystemPermissions::Unrestricted,
+                network: NetworkSandboxPolicy::Enabled,
+                macos: Some(macos),
+            }
+        );
+        Ok(())
     }
 
     #[test]

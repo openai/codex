@@ -75,11 +75,7 @@ pub fn with_managed_mitm_ca_readable_root(
         sandbox_policy_cwd,
         std::slice::from_ref(managed_mitm_ca_trust_bundle_path),
     );
-    PermissionProfile::from_runtime_permissions_with_enforcement(
-        permission_profile.enforcement(),
-        &file_system_sandbox_policy,
-        network_sandbox_policy,
-    )
+    permission_profile.with_runtime_permissions(&file_system_sandbox_policy, network_sandbox_policy)
 }
 
 #[derive(Debug)]
@@ -233,9 +229,8 @@ impl SandboxManager {
                     sandbox_policy_cwd,
                     enforce_managed_network,
                     network,
-                    extra_mach_services: &[],
-                    extra_appleevent_bundle_ids: &[],
-                    allow_lsopen: false,
+                    macos_sandbox_capabilities: effective_permission_profile
+                        .macos_sandbox_capabilities(),
                     extra_allow_unix_sockets: &[],
                 });
                 let mut full_command = Vec::with_capacity(1 + args.len());

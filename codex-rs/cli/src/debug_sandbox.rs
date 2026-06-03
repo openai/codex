@@ -16,6 +16,8 @@ use codex_core::exec_env::create_env;
 use codex_core::spawn::CODEX_SANDBOX_ENV_VAR;
 use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use codex_protocol::config_types::SandboxMode;
+#[cfg(target_os = "macos")]
+use codex_protocol::models::MacOsSandboxCapabilities;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_sandboxing::landlock::allow_network_for_proxy;
 use codex_sandboxing::landlock::create_linux_sandbox_command_args_for_permission_profile;
@@ -312,6 +314,12 @@ async fn run_command_under_sandbox(params: RunCommandUnderSandboxParams<'_>) -> 
         SandboxType::Seatbelt => {
             let (file_system_sandbox_policy, network_sandbox_policy) =
                 runtime_permission_profile.to_runtime_permissions();
+            let macos_sandbox_capabilities = merge_macos_sandbox_capabilities(
+                &runtime_permission_profile,
+                allow_mach_services,
+                allow_appleevent_bundle_ids,
+                allow_lsopen,
+            );
             let args = create_seatbelt_command_args(CreateSeatbeltCommandArgsParams {
                 command,
                 file_system_sandbox_policy: &file_system_sandbox_policy,
@@ -319,9 +327,7 @@ async fn run_command_under_sandbox(params: RunCommandUnderSandboxParams<'_>) -> 
                 sandbox_policy_cwd: sandbox_policy_cwd.as_path(),
                 enforce_managed_network: false,
                 network: network.as_ref(),
-                extra_mach_services: allow_mach_services,
-                extra_appleevent_bundle_ids: allow_appleevent_bundle_ids,
-                allow_lsopen,
+                macos_sandbox_capabilities: macos_sandbox_capabilities.as_ref(),
                 extra_allow_unix_sockets: allow_unix_sockets,
             });
             spawn_debug_sandbox_child(
@@ -396,6 +402,27 @@ async fn run_command_under_sandbox(params: RunCommandUnderSandboxParams<'_>) -> 
     }
 
     handle_exit_status(status);
+}
+
+#[cfg(target_os = "macos")]
+fn merge_macos_sandbox_capabilities(
+    permission_profile: &codex_protocol::models::PermissionProfile,
+    allow_mach_services: &[String],
+    allow_appleevent_bundle_ids: &[String],
+    allow_lsopen: bool,
+) -> Option<MacOsSandboxCapabilities> {
+    let mut macos_sandbox_capabilities = permission_profile
+        .macos_sandbox_capabilities()
+        .cloned()
+        .unwrap_or_default();
+    macos_sandbox_capabilities
+        .mach_lookup_services
+        .extend(allow_mach_services.iter().cloned());
+    macos_sandbox_capabilities
+        .apple_event_destinations
+        .extend(allow_appleevent_bundle_ids.iter().cloned());
+    macos_sandbox_capabilities.launch_services_open |= allow_lsopen;
+    (!macos_sandbox_capabilities.is_empty()).then_some(macos_sandbox_capabilities)
 }
 
 #[cfg(target_os = "windows")]
@@ -829,6 +856,37 @@ mod tests {
 
     fn escape_toml_path(path: &std::path::Path) -> String {
         path.display().to_string().replace('\\', "\\\\")
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn merge_macos_sandbox_capabilities_adds_debug_allowances_to_profile() {
+        let permission_profile = codex_protocol::models::PermissionProfile::read_only()
+            .with_macos_sandbox_capabilities(Some(MacOsSandboxCapabilities {
+                mach_lookup_services: vec!["com.apple.coreservices.appleevents".to_string()],
+                apple_event_destinations: vec!["com.openai.sky.CUAService".to_string()],
+                launch_services_open: false,
+            }));
+
+        assert_eq!(
+            merge_macos_sandbox_capabilities(
+                &permission_profile,
+                &["com.apple.lsd".to_string()],
+                &["com.apple.finder".to_string()],
+                true,
+            ),
+            Some(MacOsSandboxCapabilities {
+                mach_lookup_services: vec![
+                    "com.apple.coreservices.appleevents".to_string(),
+                    "com.apple.lsd".to_string(),
+                ],
+                apple_event_destinations: vec![
+                    "com.openai.sky.CUAService".to_string(),
+                    "com.apple.finder".to_string(),
+                ],
+                launch_services_open: true,
+            })
+        );
     }
 
     fn write_permissions_profile_config(

@@ -229,6 +229,7 @@ fn permission_profile_toml_from_file_system_policy(
         workspace_roots: None,
         filesystem: Some(filesystem),
         network: None,
+        macos: None,
     }
 }
 
@@ -348,7 +349,7 @@ pub(crate) fn compile_permission_profile(
     profile_name: &str,
     policy_cwd: &Path,
     startup_warnings: &mut Vec<String>,
-) -> io::Result<(FileSystemSandboxPolicy, NetworkSandboxPolicy)> {
+) -> io::Result<PermissionProfile> {
     let profile = resolve_permission_profile(permissions, profile_name)?;
     let mut file_system_sandbox_policy = FileSystemSandboxPolicy::restricted(Vec::new());
     let base_network_sandbox_policy = NetworkSandboxPolicy::Restricted;
@@ -405,7 +406,11 @@ pub(crate) fn compile_permission_profile(
     }
     let network_sandbox_policy =
         compile_network_sandbox_policy(profile.network.as_ref(), base_network_sandbox_policy);
-    Ok((file_system_sandbox_policy, network_sandbox_policy))
+    Ok(PermissionProfile::from_runtime_permissions(
+        &file_system_sandbox_policy,
+        network_sandbox_policy,
+    )
+    .with_macos_sandbox_capabilities(profile.macos.map(Into::into)))
 }
 
 pub(crate) fn compile_permission_profile_selection(
@@ -414,9 +419,9 @@ pub(crate) fn compile_permission_profile_selection(
     workspace_write: Option<&SandboxWorkspaceWrite>,
     policy_cwd: &Path,
     startup_warnings: &mut Vec<String>,
-) -> io::Result<(FileSystemSandboxPolicy, NetworkSandboxPolicy)> {
+) -> io::Result<PermissionProfile> {
     if let Some(permission_profile) = builtin_permission_profile(profile_name, workspace_write) {
-        return Ok(permission_profile.to_runtime_permissions());
+        return Ok(permission_profile);
     }
     reject_unknown_builtin_permission_profile(profile_name)?;
 

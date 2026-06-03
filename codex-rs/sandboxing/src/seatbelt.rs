@@ -2,6 +2,7 @@ use codex_network_proxy::NetworkProxy;
 use codex_network_proxy::PROXY_URL_ENV_KEYS;
 use codex_network_proxy::has_proxy_url_env_vars;
 use codex_network_proxy::proxy_url_env_value;
+use codex_protocol::models::MacOsSandboxCapabilities;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::permissions::PROTECTED_METADATA_PATH_NAMES;
@@ -245,8 +246,8 @@ fn seatbelt_string_literal(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
-fn extra_mach_lookup_policy(extra_mach_services: &[String]) -> String {
-    let services = extra_mach_services
+fn mach_lookup_policy(mach_lookup_services: &[String]) -> String {
+    let services = mach_lookup_services
         .iter()
         .map(|service| service.trim())
         .filter(|service| !service.is_empty())
@@ -263,8 +264,8 @@ fn extra_mach_lookup_policy(extra_mach_services: &[String]) -> String {
     format!("(allow mach-lookup\n{services}\n)")
 }
 
-fn extra_appleevent_policy(extra_appleevent_bundle_ids: &[String]) -> String {
-    let bundle_ids = extra_appleevent_bundle_ids
+fn appleevent_policy(apple_event_destinations: &[String]) -> String {
+    let bundle_ids = apple_event_destinations
         .iter()
         .map(|bundle_id| bundle_id.trim())
         .filter(|bundle_id| !bundle_id.is_empty())
@@ -283,13 +284,11 @@ fn extra_appleevent_policy(extra_appleevent_bundle_ids: &[String]) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n");
-    format!(
-        "(allow mach-lookup\n  (global-name \"com.apple.coreservices.appleevents\"))\n(allow appleevent-send\n{destinations}\n)"
-    )
+    format!("(allow appleevent-send\n{destinations}\n)")
 }
 
-fn lsopen_policy(allow_lsopen: bool) -> String {
-    if allow_lsopen {
+fn launch_services_open_policy(launch_services_open: bool) -> String {
+    if launch_services_open {
         "(allow lsopen)".to_string()
     } else {
         String::new()
@@ -639,9 +638,7 @@ fn create_seatbelt_command_args_for_legacy_policy(
         sandbox_policy_cwd,
         enforce_managed_network,
         network,
-        extra_mach_services: &[],
-        extra_appleevent_bundle_ids: &[],
-        allow_lsopen: false,
+        macos_sandbox_capabilities: None,
         extra_allow_unix_sockets: &[],
     })
 }
@@ -654,9 +651,7 @@ pub struct CreateSeatbeltCommandArgsParams<'a> {
     pub sandbox_policy_cwd: &'a Path,
     pub enforce_managed_network: bool,
     pub network: Option<&'a NetworkProxy>,
-    pub extra_mach_services: &'a [String],
-    pub extra_appleevent_bundle_ids: &'a [String],
-    pub allow_lsopen: bool,
+    pub macos_sandbox_capabilities: Option<&'a MacOsSandboxCapabilities>,
     pub extra_allow_unix_sockets: &'a [AbsolutePathBuf],
 }
 
@@ -668,9 +663,7 @@ pub fn create_seatbelt_command_args(args: CreateSeatbeltCommandArgsParams<'_>) -
         sandbox_policy_cwd,
         enforce_managed_network,
         network,
-        extra_mach_services,
-        extra_appleevent_bundle_ids,
-        allow_lsopen,
+        macos_sandbox_capabilities,
         extra_allow_unix_sockets,
     } = args;
 
@@ -768,9 +761,17 @@ pub fn create_seatbelt_command_args(args: CreateSeatbeltCommandArgsParams<'_>) -
     let proxy = proxy_policy_inputs(network, extra_allow_unix_sockets);
     let network_policy =
         dynamic_network_policy_for_network(network_sandbox_policy, enforce_managed_network, &proxy);
-    let mach_lookup_policy = extra_mach_lookup_policy(extra_mach_services);
-    let appleevent_policy = extra_appleevent_policy(extra_appleevent_bundle_ids);
-    let lsopen_policy = lsopen_policy(allow_lsopen);
+    let mach_lookup_policy =
+        mach_lookup_policy(macos_sandbox_capabilities.map_or(&[], |capabilities| {
+            capabilities.mach_lookup_services.as_slice()
+        }));
+    let appleevent_policy =
+        appleevent_policy(macos_sandbox_capabilities.map_or(&[], |capabilities| {
+            capabilities.apple_event_destinations.as_slice()
+        }));
+    let launch_services_open_policy = launch_services_open_policy(
+        macos_sandbox_capabilities.is_some_and(|capabilities| capabilities.launch_services_open),
+    );
 
     let include_platform_defaults = file_system_sandbox_policy.include_platform_defaults();
     let deny_read_policy =
@@ -788,8 +789,8 @@ pub fn create_seatbelt_command_args(args: CreateSeatbeltCommandArgsParams<'_>) -
     if !appleevent_policy.is_empty() {
         policy_sections.push(appleevent_policy);
     }
-    if !lsopen_policy.is_empty() {
-        policy_sections.push(lsopen_policy);
+    if !launch_services_open_policy.is_empty() {
+        policy_sections.push(launch_services_open_policy);
     }
     if include_platform_defaults {
         policy_sections.push(MACOS_RESTRICTED_READ_ONLY_PLATFORM_DEFAULTS.to_string());

@@ -77,6 +77,7 @@ fn unrestricted_managed_profile_with_enabled_network_is_untagged() {
     let profile = PermissionProfile::Managed {
         file_system: ManagedFileSystemPermissions::Unrestricted,
         network: NetworkSandboxPolicy::Enabled,
+        macos: None,
     };
 
     assert_eq!(
@@ -102,6 +103,7 @@ fn root_write_managed_profile_with_enabled_network_is_untagged() {
             glob_scan_max_depth: None,
         },
         network: NetworkSandboxPolicy::Enabled,
+        macos: None,
     };
 
     assert_eq!(
@@ -119,6 +121,7 @@ fn managed_network_enforcement_tags_unrestricted_profiles_as_sandboxed() {
     let profile = PermissionProfile::Managed {
         file_system: ManagedFileSystemPermissions::Unrestricted,
         network: NetworkSandboxPolicy::Enabled,
+        macos: None,
     };
     let expected = get_platform_sandbox(/*windows_sandbox_enabled*/ false)
         .map(SandboxType::as_metric_tag)

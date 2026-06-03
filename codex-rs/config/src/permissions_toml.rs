@@ -11,6 +11,7 @@ use codex_network_proxy::NetworkMode;
 use codex_network_proxy::NetworkProxyConfig;
 use codex_network_proxy::NetworkUnixSocketPermission as ProxyNetworkUnixSocketPermission;
 use codex_network_proxy::normalize_host;
+use codex_protocol::models::MacOsSandboxCapabilities;
 use codex_protocol::permissions::FileSystemAccessMode;
 use indexmap::IndexMap;
 use schemars::JsonSchema;
@@ -116,6 +117,25 @@ pub struct PermissionProfileToml {
     pub workspace_roots: Option<WorkspaceRootsToml>,
     pub filesystem: Option<FilesystemPermissionsToml>,
     pub network: Option<NetworkToml>,
+    pub macos: Option<MacOsSandboxCapabilitiesToml>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields, rename = "MacOsSandboxCapabilities")]
+pub struct MacOsSandboxCapabilitiesToml {
+    pub mach_lookup_services: Option<Vec<String>>,
+    pub apple_event_destinations: Option<Vec<String>>,
+    pub launch_services_open: Option<bool>,
+}
+
+impl From<MacOsSandboxCapabilitiesToml> for MacOsSandboxCapabilities {
+    fn from(value: MacOsSandboxCapabilitiesToml) -> Self {
+        Self {
+            mach_lookup_services: value.mach_lookup_services.unwrap_or_default(),
+            apple_event_destinations: value.apple_event_destinations.unwrap_or_default(),
+            launch_services_open: value.launch_services_open.unwrap_or_default(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]

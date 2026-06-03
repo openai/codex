@@ -75,6 +75,7 @@ mod tests {
                 ],
                 glob_scan_max_depth: None,
             },
+            macos: None,
         };
 
         let compatibility_profile =

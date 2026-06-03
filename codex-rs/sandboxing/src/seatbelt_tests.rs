@@ -19,6 +19,7 @@ use codex_network_proxy::NetworkProxyConfig;
 use codex_network_proxy::NetworkProxyConstraints;
 use codex_network_proxy::NetworkProxyState;
 use codex_network_proxy::build_config_state;
+use codex_protocol::models::MacOsSandboxCapabilities;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
@@ -206,9 +207,7 @@ fn explicit_unreadable_paths_are_excluded_from_full_disk_read_and_write_access()
         sandbox_policy_cwd: Path::new("/"),
         enforce_managed_network: false,
         network: None,
-        extra_mach_services: &[],
-        extra_appleevent_bundle_ids: &[],
-        allow_lsopen: false,
+        macos_sandbox_capabilities: None,
         extra_allow_unix_sockets: &[],
     });
 
@@ -281,9 +280,7 @@ fn explicit_unreadable_paths_are_excluded_from_readable_roots() {
         sandbox_policy_cwd: Path::new("/"),
         enforce_managed_network: false,
         network: None,
-        extra_mach_services: &[],
-        extra_appleevent_bundle_ids: &[],
-        allow_lsopen: false,
+        macos_sandbox_capabilities: None,
         extra_allow_unix_sockets: &[],
     });
 
@@ -587,9 +584,7 @@ fn create_seatbelt_args_allowlists_explicit_unix_socket_paths_without_proxy() {
         sandbox_policy_cwd: cwd.path(),
         enforce_managed_network: false,
         network: None,
-        extra_mach_services: &[],
-        extra_appleevent_bundle_ids: &[],
-        allow_lsopen: false,
+        macos_sandbox_capabilities: None,
         extra_allow_unix_sockets: &extra_allow_unix_sockets,
     });
     let policy = seatbelt_policy_arg(&args);
@@ -648,9 +643,7 @@ async fn create_seatbelt_args_merges_proxy_and_explicit_unix_socket_paths() -> a
         sandbox_policy_cwd: cwd.path(),
         enforce_managed_network: false,
         network: Some(&network_proxy),
-        extra_mach_services: &[],
-        extra_appleevent_bundle_ids: &[],
-        allow_lsopen: false,
+        macos_sandbox_capabilities: None,
         extra_allow_unix_sockets: &extra_allow_unix_sockets,
     });
 
@@ -692,9 +685,7 @@ fn create_seatbelt_args_preserves_full_network_with_explicit_unix_socket_paths()
         sandbox_policy_cwd: cwd.path(),
         enforce_managed_network: false,
         network: None,
-        extra_mach_services: &[],
-        extra_appleevent_bundle_ids: &[],
-        allow_lsopen: false,
+        macos_sandbox_capabilities: None,
         extra_allow_unix_sockets: &extra_allow_unix_sockets,
     });
     let policy = seatbelt_policy_arg(&args);
@@ -739,17 +730,20 @@ fn unix_socket_policy_non_empty_output_is_newline_terminated() {
 }
 
 #[test]
-fn create_seatbelt_args_allowlists_extra_mach_services() {
+fn create_seatbelt_args_allowlists_mach_lookup_services() {
     let cwd = TempDir::new().expect("temp cwd");
     let file_system_policy = FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(
         &SandboxPolicy::new_read_only_policy(),
         cwd.path(),
     );
-    let extra_mach_services = vec![
-        "com.apple.beta".to_string(),
-        "com.apple.alpha".to_string(),
-        "com.apple.beta".to_string(),
-    ];
+    let macos_sandbox_capabilities = MacOsSandboxCapabilities {
+        mach_lookup_services: vec![
+            "com.apple.beta".to_string(),
+            "com.apple.alpha".to_string(),
+            "com.apple.beta".to_string(),
+        ],
+        ..Default::default()
+    };
     let args = create_seatbelt_command_args(CreateSeatbeltCommandArgsParams {
         command: vec!["/usr/bin/true".to_string()],
         file_system_sandbox_policy: &file_system_policy,
@@ -757,9 +751,7 @@ fn create_seatbelt_args_allowlists_extra_mach_services() {
         sandbox_policy_cwd: cwd.path(),
         enforce_managed_network: false,
         network: None,
-        extra_mach_services: &extra_mach_services,
-        extra_appleevent_bundle_ids: &[],
-        allow_lsopen: false,
+        macos_sandbox_capabilities: Some(&macos_sandbox_capabilities),
         extra_allow_unix_sockets: &[],
     });
     let policy = seatbelt_policy_arg(&args);
@@ -787,11 +779,15 @@ fn create_seatbelt_args_allowlists_appleevent_destinations() {
         &SandboxPolicy::new_read_only_policy(),
         cwd.path(),
     );
-    let extra_appleevent_bundle_ids = vec![
-        "com.apple.mail".to_string(),
-        "com.apple.finder".to_string(),
-        "com.apple.mail".to_string(),
-    ];
+    let macos_sandbox_capabilities = MacOsSandboxCapabilities {
+        mach_lookup_services: vec!["com.apple.coreservices.appleevents".to_string()],
+        apple_event_destinations: vec![
+            "com.apple.mail".to_string(),
+            "com.apple.finder".to_string(),
+            "com.apple.mail".to_string(),
+        ],
+        launch_services_open: false,
+    };
     let args = create_seatbelt_command_args(CreateSeatbeltCommandArgsParams {
         command: vec!["/usr/bin/true".to_string()],
         file_system_sandbox_policy: &file_system_policy,
@@ -799,16 +795,14 @@ fn create_seatbelt_args_allowlists_appleevent_destinations() {
         sandbox_policy_cwd: cwd.path(),
         enforce_managed_network: false,
         network: None,
-        extra_mach_services: &[],
-        extra_appleevent_bundle_ids: &extra_appleevent_bundle_ids,
-        allow_lsopen: false,
+        macos_sandbox_capabilities: Some(&macos_sandbox_capabilities),
         extra_allow_unix_sockets: &[],
     });
     let policy = seatbelt_policy_arg(&args);
 
     assert!(
         policy.contains(
-            "(allow mach-lookup\n  (global-name \"com.apple.coreservices.appleevents\"))"
+            "(allow mach-lookup\n  (global-name \"com.apple.coreservices.appleevents\")\n)"
         ),
         "policy should allow lookup of the AppleEvents service:\n{policy}"
     );
@@ -839,12 +833,16 @@ fn create_seatbelt_args_allowlists_appleevent_destinations() {
 }
 
 #[test]
-fn create_seatbelt_args_allows_lsopen_when_requested() {
+fn create_seatbelt_args_appleevent_destinations_do_not_imply_mach_lookup_services() {
     let cwd = TempDir::new().expect("temp cwd");
     let file_system_policy = FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(
         &SandboxPolicy::new_read_only_policy(),
         cwd.path(),
     );
+    let macos_sandbox_capabilities = MacOsSandboxCapabilities {
+        apple_event_destinations: vec!["com.apple.finder".to_string()],
+        ..Default::default()
+    };
     let args = create_seatbelt_command_args(CreateSeatbeltCommandArgsParams {
         command: vec!["/usr/bin/true".to_string()],
         file_system_sandbox_policy: &file_system_policy,
@@ -852,9 +850,41 @@ fn create_seatbelt_args_allows_lsopen_when_requested() {
         sandbox_policy_cwd: cwd.path(),
         enforce_managed_network: false,
         network: None,
-        extra_mach_services: &[],
-        extra_appleevent_bundle_ids: &[],
-        allow_lsopen: true,
+        macos_sandbox_capabilities: Some(&macos_sandbox_capabilities),
+        extra_allow_unix_sockets: &[],
+    });
+    let policy = seatbelt_policy_arg(&args);
+
+    assert!(
+        policy
+            .contains("(allow appleevent-send\n  (appleevent-destination \"com.apple.finder\")\n)"),
+        "policy should allow the requested AppleEvent destination:\n{policy}"
+    );
+    assert!(
+        !policy.contains("com.apple.coreservices.appleevents"),
+        "AppleEvent destinations should not imply a Mach lookup allowance:\n{policy}"
+    );
+}
+
+#[test]
+fn create_seatbelt_args_allows_lsopen_when_requested() {
+    let cwd = TempDir::new().expect("temp cwd");
+    let file_system_policy = FileSystemSandboxPolicy::from_legacy_sandbox_policy_for_cwd(
+        &SandboxPolicy::new_read_only_policy(),
+        cwd.path(),
+    );
+    let macos_sandbox_capabilities = MacOsSandboxCapabilities {
+        launch_services_open: true,
+        ..Default::default()
+    };
+    let args = create_seatbelt_command_args(CreateSeatbeltCommandArgsParams {
+        command: vec!["/usr/bin/true".to_string()],
+        file_system_sandbox_policy: &file_system_policy,
+        network_sandbox_policy: NetworkSandboxPolicy::Restricted,
+        sandbox_policy_cwd: cwd.path(),
+        enforce_managed_network: false,
+        network: None,
+        macos_sandbox_capabilities: Some(&macos_sandbox_capabilities),
         extra_allow_unix_sockets: &[],
     });
     let policy = seatbelt_policy_arg(&args);

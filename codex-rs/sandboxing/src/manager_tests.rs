@@ -8,6 +8,8 @@ use super::with_managed_mitm_ca_readable_root;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::models::FileSystemPermissions;
+#[cfg(target_os = "macos")]
+use codex_protocol::models::MacOsSandboxCapabilities;
 use codex_protocol::models::NetworkPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemAccessMode;
@@ -106,6 +108,63 @@ fn transform_preserves_unrestricted_file_system_policy_for_restricted_network() 
     assert_eq!(
         exec_request.network_sandbox_policy,
         NetworkSandboxPolicy::Restricted
+    );
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn transform_seatbelt_lowers_macos_profile_capabilities() {
+    let manager = SandboxManager::new();
+    let cwd = AbsolutePathBuf::current_dir().expect("current dir");
+    let macos = MacOsSandboxCapabilities {
+        mach_lookup_services: vec!["com.apple.coreservices.appleevents".to_string()],
+        apple_event_destinations: vec!["com.openai.sky.CUAService".to_string()],
+        launch_services_open: true,
+    };
+    let permissions =
+        PermissionProfile::read_only().with_macos_sandbox_capabilities(Some(macos.clone()));
+    let exec_request = manager
+        .transform(SandboxTransformRequest {
+            command: SandboxCommand {
+                program: "true".into(),
+                args: Vec::new(),
+                cwd: cwd.clone(),
+                env: HashMap::new(),
+                additional_permissions: Some(AdditionalPermissionProfile::default()),
+            },
+            permissions: &permissions,
+            sandbox: SandboxType::MacosSeatbelt,
+            enforce_managed_network: false,
+            network: None,
+            sandbox_policy_cwd: cwd.as_path(),
+            codex_linux_sandbox_exe: None,
+            use_legacy_landlock: false,
+            windows_sandbox_level: WindowsSandboxLevel::Disabled,
+            windows_sandbox_private_desktop: false,
+        })
+        .expect("transform");
+
+    assert_eq!(
+        exec_request.permission_profile.macos_sandbox_capabilities(),
+        Some(&macos)
+    );
+    assert!(
+        exec_request
+            .command
+            .iter()
+            .any(|arg| arg.contains("(global-name \"com.apple.coreservices.appleevents\")"))
+    );
+    assert!(
+        exec_request
+            .command
+            .iter()
+            .any(|arg| arg.contains("(appleevent-destination \"com.openai.sky.CUAService\")"))
+    );
+    assert!(
+        exec_request
+            .command
+            .iter()
+            .any(|arg| arg.contains("(allow lsopen)"))
     );
 }
 

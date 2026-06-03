@@ -163,6 +163,7 @@ fn managed_unrestricted_profile_allows_domain_expansion() {
     let permission_profile = PermissionProfile::Managed {
         file_system: ManagedFileSystemPermissions::Unrestricted,
         network: NetworkSandboxPolicy::Restricted,
+        macos: None,
     };
 
     let spec = NetworkProxySpec::from_config_and_constraints(

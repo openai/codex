@@ -499,11 +499,8 @@ pub fn effective_permission_profile(
         effective_file_system_sandbox_policy(&file_system_policy, additional_permissions);
     let effective_network_policy =
         effective_network_sandbox_policy(network_policy, additional_permissions);
-    PermissionProfile::from_runtime_permissions_with_enforcement(
-        permission_profile.enforcement(),
-        &effective_file_system_policy,
-        effective_network_policy,
-    )
+    permission_profile
+        .with_runtime_permissions(&effective_file_system_policy, effective_network_policy)
 }
 
 pub fn should_require_platform_sandbox(

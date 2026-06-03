@@ -4,6 +4,7 @@ use crate::config::ConfigOverrides;
 use codex_config::config_toml::ConfigToml;
 use codex_config::permissions_toml::FilesystemPermissionToml;
 use codex_config::permissions_toml::FilesystemPermissionsToml;
+use codex_config::permissions_toml::MacOsSandboxCapabilitiesToml;
 use codex_config::permissions_toml::NetworkDomainPermissionToml;
 use codex_config::permissions_toml::NetworkDomainPermissionsToml;
 use codex_config::permissions_toml::NetworkToml;
@@ -12,6 +13,7 @@ use codex_config::permissions_toml::NetworkUnixSocketPermissionsToml;
 use codex_config::permissions_toml::PermissionProfileToml;
 use codex_config::permissions_toml::PermissionsToml;
 use codex_config::permissions_toml::WorkspaceRootsToml;
+use codex_protocol::models::MacOsSandboxCapabilities;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
@@ -75,6 +77,7 @@ async fn restricted_read_implicitly_allows_helper_executables() -> std::io::Resu
                             entries: BTreeMap::new(),
                         }),
                         network: None,
+                        macos: None,
                     },
                 )]),
             }),
@@ -330,6 +333,56 @@ allow_local_binding = true
 }
 
 #[test]
+fn permissions_profiles_macos_capabilities_preserve_partial_overrides_and_explicit_revocations() {
+    let permissions = toml::from_str::<PermissionsToml>(
+        r#"
+[base.macos]
+mach_lookup_services = ["com.example.parent"]
+apple_event_destinations = ["com.example.Parent"]
+launch_services_open = true
+
+[child]
+extends = "base"
+
+[child.macos]
+mach_lookup_services = []
+launch_services_open = false
+
+[grandchild]
+extends = "child"
+
+[grandchild.macos]
+apple_event_destinations = []
+"#,
+    )
+    .expect("permissions should deserialize");
+
+    let child = permissions
+        .resolve_profile("child", |_| None)
+        .expect("child profile should resolve");
+    assert_eq!(
+        child.macos,
+        Some(MacOsSandboxCapabilitiesToml {
+            mach_lookup_services: Some(Vec::new()),
+            apple_event_destinations: Some(vec!["com.example.Parent".to_string()]),
+            launch_services_open: Some(false),
+        })
+    );
+
+    let grandchild = permissions
+        .resolve_profile("grandchild", |_| None)
+        .expect("grandchild profile should resolve");
+    assert_eq!(
+        grandchild.macos,
+        Some(MacOsSandboxCapabilitiesToml {
+            mach_lookup_services: Some(Vec::new()),
+            apple_event_destinations: Some(Vec::new()),
+            launch_services_open: Some(false),
+        })
+    );
+}
+
+#[test]
 fn permissions_profiles_reject_undefined_extends_parent() {
     let permissions = toml::from_str::<PermissionsToml>(
         r#"
@@ -449,6 +502,7 @@ fn compile_permission_profile_workspace_roots_resolves_enabled_entries() -> std:
                     }),
                     filesystem: None,
                     network: None,
+                    macos: None,
                 },
             )]),
         }),
@@ -545,7 +599,7 @@ fn glob_scan_max_depth_must_be_positive() {
 fn read_write_trailing_glob_suffix_compiles_as_subpath() -> std::io::Result<()> {
     let cwd = TempDir::new()?;
     let mut startup_warnings = Vec::new();
-    let (file_system_policy, _) = compile_permission_profile(
+    let permission_profile = compile_permission_profile(
         &PermissionsToml {
             entries: BTreeMap::from([(
                 "workspace".to_string(),
@@ -564,6 +618,7 @@ fn read_write_trailing_glob_suffix_compiles_as_subpath() -> std::io::Result<()> 
                         )]),
                     }),
                     network: None,
+                    macos: None,
                 },
             )]),
         },
@@ -571,6 +626,7 @@ fn read_write_trailing_glob_suffix_compiles_as_subpath() -> std::io::Result<()> 
         cwd.path(),
         &mut startup_warnings,
     )?;
+    let file_system_policy = permission_profile.file_system_sandbox_policy();
 
     assert_eq!(
         file_system_policy,
@@ -581,6 +637,60 @@ fn read_write_trailing_glob_suffix_compiles_as_subpath() -> std::io::Result<()> 
             access: FileSystemAccessMode::Read,
         }]),
         "trailing /** should compile as a subtree path instead of a glob pattern"
+    );
+    Ok(())
+}
+
+#[test]
+fn compile_permission_profile_preserves_macos_sandbox_capabilities() -> std::io::Result<()> {
+    let cwd = TempDir::new()?;
+    let macos = MacOsSandboxCapabilities {
+        mach_lookup_services: vec!["com.apple.coreservices.appleevents".to_string()],
+        apple_event_destinations: vec!["com.openai.sky.CUAService".to_string()],
+        launch_services_open: true,
+    };
+    let permission_profile = compile_permission_profile(
+        &PermissionsToml {
+            entries: BTreeMap::from([(
+                "cua".to_string(),
+                PermissionProfileToml {
+                    description: None,
+                    extends: Some(BUILT_IN_WORKSPACE_PROFILE.to_string()),
+                    workspace_roots: None,
+                    filesystem: None,
+                    network: None,
+                    macos: Some(MacOsSandboxCapabilitiesToml {
+                        mach_lookup_services: Some(macos.mach_lookup_services.clone()),
+                        apple_event_destinations: Some(macos.apple_event_destinations.clone()),
+                        launch_services_open: Some(macos.launch_services_open),
+                    }),
+                },
+            )]),
+        },
+        "cua",
+        cwd.path(),
+        &mut Vec::new(),
+    )?;
+
+    assert!(
+        permission_profile
+            .file_system_sandbox_policy()
+            .entries
+            .iter()
+            .any(|entry| matches!(
+                entry,
+                FileSystemSandboxEntry {
+                    path: FileSystemPath::Special {
+                        value: FileSystemSpecialPath::ProjectRoots { subpath: None },
+                    },
+                    access: FileSystemAccessMode::Write,
+                }
+            )),
+        "profile extending :workspace should preserve inherited workspace writes"
+    );
+    assert_eq!(
+        permission_profile.macos_sandbox_capabilities(),
+        Some(&macos)
     );
     Ok(())
 }

@@ -113,6 +113,7 @@ fn app_server_workspace_write_profile(network_enabled: bool) -> PermissionProfil
             ],
             glob_scan_max_depth: None,
         },
+        macos: None,
     }
 }
 
@@ -800,6 +801,7 @@ async fn status_permissions_full_disk_managed_with_network_is_danger_full_access
         .set_permission_profile(PermissionProfile::Managed {
             network: NetworkSandboxPolicy::Enabled,
             file_system: ManagedFileSystemPermissions::Unrestricted,
+            macos: None,
         })
         .expect("set permission profile");
 
@@ -823,6 +825,7 @@ async fn status_permissions_full_disk_managed_without_network_is_external_sandbo
         .set_permission_profile(PermissionProfile::Managed {
             network: NetworkSandboxPolicy::Restricted,
             file_system: ManagedFileSystemPermissions::Unrestricted,
+            macos: None,
         })
         .expect("set permission profile");
 

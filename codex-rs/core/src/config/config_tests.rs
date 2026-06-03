@@ -945,6 +945,7 @@ strip_request_headers = ["authorization"]
                             )])),
                         }),
                     }),
+                    macos: None,
                 },
             )]),
         }
@@ -1113,6 +1114,7 @@ async fn permissions_profiles_proxy_policy_does_not_start_managed_network_proxy_
                             enabled: Some(true),
                             ..Default::default()
                         }),
+                        macos: None,
                     },
                 )]),
             }),
@@ -1165,6 +1167,7 @@ async fn permissions_profiles_proxy_policy_starts_managed_network_proxy() -> std
                             enable_socks5: Some(false),
                             ..Default::default()
                         }),
+                        macos: None,
                     },
                 )]),
             }),
@@ -1319,6 +1322,7 @@ async fn network_proxy_feature_matrix_preserves_sandbox_network_semantics() -> s
                                 enabled: Some(case.network_enabled),
                                 ..Default::default()
                             }),
+                            macos: None,
                         },
                     )]),
                 }),
@@ -1473,6 +1477,7 @@ async fn network_proxy_feature_uses_profile_network_proxy_settings() -> std::io:
                             enable_socks5: Some(false),
                             ..Default::default()
                         }),
+                        macos: None,
                     },
                 )]),
             }),
@@ -1537,6 +1542,7 @@ enabled = false
                             enable_socks5: Some(false),
                             ..Default::default()
                         }),
+                        macos: None,
                     },
                 )]),
             }),
@@ -1591,6 +1597,7 @@ async fn permissions_profiles_network_disabled_by_default_does_not_start_proxy()
                             }),
                             ..Default::default()
                         }),
+                        macos: None,
                     },
                 )]),
             }),
@@ -1641,6 +1648,7 @@ async fn default_permissions_profile_populates_runtime_sandbox_policy() -> std::
                         ]),
                     }),
                     network: None,
+                    macos: None,
                 },
             )]),
         }),
@@ -1736,6 +1744,7 @@ async fn default_permissions_extended_profile_preserves_parent_metadata() -> std
                                 )]),
                             }),
                             network: None,
+                            macos: None,
                         },
                     ),
                     (
@@ -1746,6 +1755,7 @@ async fn default_permissions_extended_profile_preserves_parent_metadata() -> std
                             workspace_roots: None,
                             filesystem: None,
                             network: None,
+                            macos: None,
                         },
                     ),
                 ]),
@@ -1831,6 +1841,7 @@ async fn permission_profile_override_preserves_managed_unrestricted_filesystem()
     let permission_profile = PermissionProfile::Managed {
         file_system: ManagedFileSystemPermissions::Unrestricted,
         network: NetworkSandboxPolicy::Restricted,
+        macos: None,
     };
 
     let config = Config::load_from_base_config_with_overrides(
@@ -1865,6 +1876,7 @@ async fn managed_unrestricted_permission_profile_still_enables_network_requireme
     let permission_profile = PermissionProfile::Managed {
         file_system: ManagedFileSystemPermissions::Unrestricted,
         network: NetworkSandboxPolicy::Enabled,
+        macos: None,
     };
 
     let mut config = Config::load_from_base_config_with_overrides(
@@ -2002,6 +2014,7 @@ async fn permission_profile_override_preserves_configured_network_policy_without
                             }),
                             ..Default::default()
                         }),
+                        macos: None,
                     },
                 )]),
             }),
@@ -2055,6 +2068,7 @@ async fn workspace_root_glob_none_compiles_to_filesystem_pattern_entry() -> std:
                             )]),
                         }),
                         network: None,
+                        macos: None,
                     },
                 )]),
             }),
@@ -2133,6 +2147,7 @@ async fn permissions_profiles_require_default_permissions() -> std::io::Result<(
                             )]),
                         }),
                         network: None,
+                        macos: None,
                     },
                 )]),
             }),
@@ -2271,6 +2286,7 @@ async fn workspace_profile_applies_rules_to_runtime_and_profile_workspace_roots(
                             )]),
                         }),
                         network: None,
+                        macos: None,
                     },
                 )]),
             }),
@@ -2399,6 +2415,7 @@ async fn default_permissions_profile_can_extend_builtin_workspace() -> std::io::
                             enabled: Some(true),
                             ..Default::default()
                         }),
+                        macos: None,
                     },
                 )]),
             }),
@@ -2491,6 +2508,7 @@ async fn default_permissions_profile_can_extend_builtin_read_only() -> std::io::
                             enabled: Some(true),
                             ..Default::default()
                         }),
+                        macos: None,
                     },
                 )]),
             }),
@@ -2935,6 +2953,7 @@ async fn permissions_profiles_allow_direct_write_roots_outside_workspace_root()
                             )]),
                         }),
                         network: None,
+                        macos: None,
                     },
                 )]),
             }),
@@ -3001,6 +3020,7 @@ async fn permissions_profiles_reject_nested_entries_for_non_workspace_roots() ->
                             )]),
                         }),
                         network: None,
+                        macos: None,
                     },
                 )]),
             }),
@@ -3061,6 +3081,7 @@ async fn permissions_profiles_allow_unknown_special_paths() -> std::io::Result<(
             )]),
         }),
         network: None,
+        macos: None,
     })
     .await?;
 
@@ -3110,6 +3131,7 @@ async fn permissions_profiles_allow_unknown_special_paths_with_nested_entries()
             )]),
         }),
         network: None,
+        macos: None,
     })
     .await?;
 
@@ -3140,6 +3162,7 @@ async fn permissions_profiles_allow_missing_filesystem_with_warning() -> std::io
         workspace_roots: None,
         filesystem: None,
         network: None,
+        macos: None,
     })
     .await?;
 
@@ -3174,6 +3197,7 @@ async fn permissions_profiles_allow_empty_filesystem_with_warning() -> std::io::
             entries: BTreeMap::new(),
         }),
         network: None,
+        macos: None,
     })
     .await?;
 
@@ -3218,6 +3242,7 @@ async fn permissions_profiles_reject_workspace_root_parent_traversal() -> std::i
                             )]),
                         }),
                         network: None,
+                        macos: None,
                     },
                 )]),
             }),
@@ -3267,6 +3292,7 @@ async fn permissions_profiles_allow_network_enablement() -> std::io::Result<()> 
                             enabled: Some(true),
                             ..Default::default()
                         }),
+                        macos: None,
                     },
                 )]),
             }),

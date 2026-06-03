@@ -2085,6 +2085,7 @@ mod tests {
                 ],
                 glob_scan_max_depth: None,
             },
+            macos: None,
         };
 
         assert_eq!(
@@ -2115,6 +2116,7 @@ mod tests {
                 ],
                 glob_scan_max_depth: None,
             },
+            macos: None,
         };
 
         assert_eq!(

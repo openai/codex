@@ -122,6 +122,7 @@ mod tests {
                 ],
                 glob_scan_max_depth: None,
             },
+            macos: None,
         };
         let dirs = vec![PathBuf::from("/tmp/extra")];
 
