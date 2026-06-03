@@ -252,7 +252,7 @@ async fn windows_elevated_enforces_deny_read_and_protects_setup_marker() -> anyh
                 "/D".to_string(),
                 "/C".to_string(),
                 format!(
-                    "(type secret.env 1>NUL 2>NUL && echo GLOB-READ || echo GLOB-DENIED) & (type exact-secret.txt 1>NUL 2>NUL && echo EXACT-READ || echo EXACT-DENIED) & (type \"{}\" 1>NUL 2>NUL && echo MARKER-READ || echo MARKER-UNREADABLE) & (echo tampered > \"{}\" 2>NUL && echo MARKER-WRITE || echo MARKER-DENIED) & type public.txt",
+                    "(type secret.env 1>NUL 2>NUL && echo GLOB-READ || echo GLOB-DENIED) & (type exact-secret.txt 1>NUL 2>NUL && echo EXACT-READ || echo EXACT-DENIED) & (type \"{}\" 1>NUL 2>NUL && echo MARKER-READ-ALLOWED || echo MARKER-READ-DENIED) & (echo tampered > \"{}\" 2>NUL && echo MARKER-WRITE-ALLOWED || echo MARKER-WRITE-DENIED) & type public.txt",
                     setup_marker.display(),
                     setup_marker.display()
                 ),
@@ -299,20 +299,20 @@ async fn windows_elevated_enforces_deny_read_and_protects_setup_marker() -> anyh
         "allowed reads should still work: {stdout:?}"
     );
     assert!(
-        stdout.text.contains("MARKER-DENIED"),
+        stdout.text.contains("MARKER-READ-DENIED"),
+        "sandboxed command should not read setup readiness: {stdout:?}"
+    );
+    assert!(
+        stdout.text.contains("MARKER-WRITE-DENIED"),
         "sandboxed command should not modify setup readiness: {stdout:?}"
     );
     assert!(
-        stdout.text.contains("MARKER-READ"),
-        "sandboxed command should reach the setup marker: {stdout:?}"
+        !stdout.text.contains("MARKER-READ-ALLOWED"),
+        "sandboxed command must not read setup readiness: {stdout:?}"
     );
     assert!(
-        !stdout.text.contains("MARKER-WRITE"),
+        !stdout.text.contains("MARKER-WRITE-ALLOWED"),
         "sandboxed command must not modify setup readiness: {stdout:?}"
-    );
-    assert!(
-        !stdout.text.contains("MARKER-UNREADABLE"),
-        "setup marker path should be valid and readable: {stdout:?}"
     );
     assert!(
         sandbox_setup_is_complete(codex_home.path()),

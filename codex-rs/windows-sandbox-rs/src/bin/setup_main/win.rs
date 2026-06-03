@@ -71,6 +71,7 @@ mod setup_runtime_bin;
 use read_acl_mutex::acquire_read_acl_mutex;
 use read_acl_mutex::read_acl_mutex_exists;
 use sandbox_users::commit_setup_marker;
+use sandbox_users::prepare_setup_marker;
 use sandbox_users::provision_sandbox_users;
 use sandbox_users::resolve_sandbox_users_group_sid;
 use sandbox_users::resolve_sid;
@@ -478,20 +479,7 @@ fn real_main() -> Result<()> {
 fn run_setup(payload: &Payload, log: &mut dyn Write, sbx_dir: &Path) -> Result<()> {
     let writes_setup_marker = !payload.refresh_only && payload.mode != SetupMode::ReadAclsOnly;
     if writes_setup_marker {
-        let marker_path = sbx_dir.join("setup_marker.json");
-        match std::fs::remove_file(&marker_path) {
-            Ok(()) => {}
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-            Err(err) => {
-                return Err(anyhow::Error::new(SetupFailure::new(
-                    SetupErrorCode::HelperSetupMarkerWriteFailed,
-                    format!(
-                        "remove setup marker file {} failed: {err}",
-                        marker_path.display()
-                    ),
-                )));
-            }
-        }
+        prepare_setup_marker(&payload.codex_home, &payload.real_user)?;
     }
     match payload.mode {
         SetupMode::ReadAclsOnly => run_read_acl_only(payload, log),
