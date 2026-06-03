@@ -5,7 +5,7 @@ use super::ContextualUserFragment;
 pub(crate) struct LegacyApplyPatchExecCommandWarning;
 
 impl ContextualUserFragment for LegacyApplyPatchExecCommandWarning {
-    fn role() -> &'static str {
+    fn role(&self) -> &'static str {
         "user"
     }
 

@@ -5,10 +5,10 @@ use std::sync::Arc;
 use codex_core::config::Config;
 use codex_extension_api::ConfigContributor;
 use codex_extension_api::ContextContributor;
+use codex_extension_api::ContextualUserFragment;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::PromptFragment;
-use codex_extension_api::ResponseItem;
 use codex_extension_api::ThreadLifecycleContributor;
 use codex_extension_api::ThreadStartInput;
 use codex_extension_api::TurnInputContext;
@@ -89,7 +89,7 @@ impl TurnInputContributor for SkillsExtension {
         _session_store: &ExtensionData,
         _thread_store: &ExtensionData,
         turn_store: &ExtensionData,
-    ) -> Vec<ResponseItem> {
+    ) -> Vec<Box<dyn ContextualUserFragment + Send>> {
         let executor_authorities = input
             .environments
             .iter()

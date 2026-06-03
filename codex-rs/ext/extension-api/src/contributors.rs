@@ -1,8 +1,8 @@
 use std::future::Future;
 use std::sync::Arc;
 
+use codex_context_fragments::ContextualUserFragment;
 use codex_protocol::items::TurnItem;
-use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::TokenUsageInfo;
 use codex_tools::ToolCall;
@@ -98,14 +98,14 @@ pub trait TurnLifecycleContributor: Send + Sync {
 /// host, not in this input.
 #[async_trait::async_trait]
 pub trait TurnInputContributor: Send + Sync {
-    /// Returns additional model input items for one submitted turn.
+    /// Returns additional contextual fragments for one submitted turn.
     async fn contribute(
         &self,
         input: TurnInputContext,
         session_store: &ExtensionData,
         thread_store: &ExtensionData,
         turn_store: &ExtensionData,
-    ) -> Vec<ResponseItem>;
+    ) -> Vec<Box<dyn ContextualUserFragment + Send>>;
 }
 
 /// Contributor for host-owned configuration changes.

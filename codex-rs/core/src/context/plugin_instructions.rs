@@ -12,7 +12,7 @@ impl PluginInstructions {
 }
 
 impl ContextualUserFragment for PluginInstructions {
-    fn role() -> &'static str {
+    fn role(&self) -> &'static str {
         "developer"
     }
 

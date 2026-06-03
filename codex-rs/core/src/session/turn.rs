@@ -628,7 +628,7 @@ async fn build_extension_turn_input_items(
 
     let mut items = Vec::new();
     for contributor in contributors {
-        let contributed_items = contributor
+        let contributed_fragments = contributor
             .contribute(
                 input.clone(),
                 &sess.services.session_extension_data,
@@ -638,7 +638,11 @@ async fn build_extension_turn_input_items(
             .or_cancel(cancellation_token)
             .await
             .ok()?;
-        items.extend(contributed_items);
+        items.extend(
+            contributed_fragments
+                .into_iter()
+                .map(ContextualUserFragment::into_boxed_response_item),
+        );
     }
 
     Some(items)
