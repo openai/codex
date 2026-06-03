@@ -83,6 +83,14 @@ impl Hooks {
             engine,
         }
     }
+    pub fn clone_with_prompt_hook_runner(&self, prompt_hook_runner: PromptHookRunner) -> Self {
+        Self {
+            after_agent: self.after_agent.clone(),
+            engine: self
+                .engine
+                .clone_with_prompt_hook_runner(prompt_hook_runner),
+        }
+    }
 
     pub fn startup_warnings(&self) -> &[String] {
         self.engine.warnings()

@@ -62,7 +62,13 @@ mod tests {
                 pre_tool_use: vec![MatcherGroup {
                     matcher: None,
                     hooks: vec![
-                        HookHandlerConfig::Prompt {},
+                        HookHandlerConfig::Prompt {
+                            prompt: "check $ARGUMENTS".to_string(),
+                            model: None,
+                            timeout_sec: None,
+                            status_message: None,
+                            continue_on_block: false,
+                        },
                         HookHandlerConfig::Command {
                             command: "echo hi".to_string(),
                             command_windows: None,

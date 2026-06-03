@@ -60,10 +60,6 @@ pub(crate) enum ConfiguredHandlerKind {
         command: String,
         timeout_sec: u64,
     },
-    #[allow(
-        dead_code,
-        reason = "constructed by prompt-hook discovery in the follow-up"
-    )]
     Prompt {
         prompt: String,
         model: Option<String>,
@@ -127,6 +123,9 @@ pub struct HookListEntry {
     pub handler_type: HookHandlerType,
     pub matcher: Option<String>,
     pub command: Option<String>,
+    pub prompt: Option<String>,
+    pub model: Option<String>,
+    pub continue_on_block: Option<bool>,
     pub timeout_sec: u64,
     pub status_message: Option<String>,
     pub source_path: AbsolutePathBuf,
@@ -182,6 +181,14 @@ impl ClaudeHooksEngine {
             prompt_hook_runner,
             output_spiller: HookOutputSpiller::new(),
         }
+    }
+    pub(crate) fn clone_with_prompt_hook_runner(
+        &self,
+        prompt_hook_runner: PromptHookRunner,
+    ) -> Self {
+        let mut engine = self.clone();
+        engine.prompt_hook_runner = Some(prompt_hook_runner);
+        engine
     }
 
     pub(crate) fn warnings(&self) -> &[String] {

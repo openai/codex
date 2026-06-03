@@ -5,6 +5,7 @@ use std::time::Duration;
 use codex_analytics::CompactionTrigger;
 use codex_analytics::HookRunFact;
 use codex_analytics::build_track_events_context;
+use codex_hooks::Hooks;
 use codex_hooks::PermissionRequestDecision;
 use codex_hooks::PermissionRequestOutcome;
 use codex_hooks::PermissionRequestRequest;
@@ -42,6 +43,7 @@ use tracing::instrument;
 use crate::context::ContextualUserFragment;
 use crate::context::HookAdditionalContext;
 use crate::event_mapping::parse_turn_item;
+use crate::responses_metadata::CodexResponsesRequestKind;
 use crate::session::TurnInput;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
@@ -97,6 +99,24 @@ impl From<UserPromptSubmitOutcome> for ContextInjectingHookOutcome {
             },
         }
     }
+}
+
+async fn hooks_with_prompt_runner(sess: &Arc<Session>, turn_context: &Arc<TurnContext>) -> Hooks {
+    let responses_metadata = turn_context.turn_metadata_state.to_responses_metadata(
+        sess.installation_id.clone(),
+        sess.current_window_id().await,
+        CodexResponsesRequestKind::Turn,
+    );
+    let prompt_hook_runner = crate::hook_prompt::build_prompt_hook_runner(
+        sess.services.model_client.clone(),
+        Arc::clone(&sess.services.models_manager),
+        turn_context.config.as_ref(),
+        turn_context.session_telemetry.clone(),
+        turn_context.config.service_tier.clone(),
+        responses_metadata,
+    );
+    sess.hooks()
+        .clone_with_prompt_hook_runner(prompt_hook_runner)
 }
 
 #[instrument(level = "trace", skip_all)]
@@ -181,7 +201,7 @@ pub(crate) async fn run_pre_tool_use_hooks(
         tool_use_id,
         tool_input: tool_input.clone(),
     };
-    let hooks = sess.hooks();
+    let hooks = hooks_with_prompt_runner(sess, turn_context).await;
     let preview_runs = hooks.preview_pre_tool_use(&request);
     emit_hook_started_events(sess, turn_context, preview_runs).await;
 
@@ -242,7 +262,7 @@ pub(crate) async fn run_permission_request_hooks(
         run_id_suffix: run_id_suffix.to_string(),
         tool_input: payload.tool_input,
     };
-    let hooks = sess.hooks();
+    let hooks = hooks_with_prompt_runner(sess, turn_context).await;
     let preview_runs = hooks.preview_permission_request(&request);
     emit_hook_started_events(sess, turn_context, preview_runs).await;
 
@@ -285,7 +305,7 @@ pub(crate) async fn run_post_tool_use_hooks(
         tool_input,
         tool_response,
     };
-    let hooks = sess.hooks();
+    let hooks = hooks_with_prompt_runner(sess, turn_context).await;
     let preview_runs = hooks.preview_post_tool_use(&request);
     emit_hook_started_events(sess, turn_context, preview_runs).await;
 
@@ -357,7 +377,7 @@ pub(crate) async fn run_turn_stop_hooks(
         last_assistant_message,
         target,
     };
-    let hooks = sess.hooks();
+    let hooks = hooks_with_prompt_runner(sess, turn_context).await;
     emit_hook_started_events(sess, turn_context, hooks.preview_stop(&request)).await;
 
     let mut outcome = hooks.run_stop(request).await;
@@ -515,7 +535,7 @@ pub(crate) async fn inspect_pending_input(
                 permission_mode: hook_permission_mode(turn_context),
                 prompt: UserMessageItem::new(content).message(),
             };
-            let hooks = sess.hooks();
+            let hooks = hooks_with_prompt_runner(sess, turn_context).await;
             let preview_runs = hooks.preview_user_prompt_submit(&request);
             run_context_injecting_hook(
                 sess,
