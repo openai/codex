@@ -1,6 +1,8 @@
 use super::PluginLoadOutcome;
 use super::startup_remote_sync::start_startup_remote_plugin_sync_once;
 use crate::OPENAI_CURATED_MARKETPLACE_NAME;
+use crate::data_store::LocalPluginDataStore;
+use crate::data_store::PluginDataStore;
 use crate::installed_marketplaces::installed_marketplace_roots_from_layer_stack;
 use crate::loader::configured_curated_plugin_ids_from_codex_home;
 use crate::loader::curated_plugin_cache_version;
@@ -398,6 +400,7 @@ impl From<RemotePluginFetchError> for PluginRemoteSyncError {
 pub struct PluginsManager {
     codex_home: PathBuf,
     store: PluginStore,
+    data_store: Arc<dyn PluginDataStore>,
     featured_plugin_ids_cache: RwLock<Option<CachedFeaturedPluginIds>>,
     configured_marketplace_upgrade_state: RwLock<ConfiguredMarketplaceUpgradeState>,
     non_curated_cache_refresh_state: RwLock<NonCuratedCacheRefreshState>,
@@ -407,6 +410,26 @@ pub struct PluginsManager {
     remote_sync_lock: Semaphore,
     restriction_product: Option<Product>,
     analytics_events_client: RwLock<Option<AnalyticsEventsClient>>,
+}
+
+/// Dependencies owned by one plugins manager.
+#[derive(Clone)]
+pub struct PluginsManagerStorageDeps {
+    data_store: Arc<dyn PluginDataStore>,
+}
+
+impl PluginsManagerStorageDeps {
+    /// Creates dependencies backed by the local Codex Home layout.
+    pub fn from_codex_home(codex_home: PathBuf) -> Result<Self, PluginStoreError> {
+        Ok(Self::new(Arc::new(LocalPluginDataStore::from_codex_home(
+            codex_home,
+        )?)))
+    }
+
+    /// Creates dependencies with an alternative mutable plugin data backend.
+    pub fn new(data_store: Arc<dyn PluginDataStore>) -> Self {
+        Self { data_store }
+    }
 }
 
 #[derive(Clone)]
@@ -420,9 +443,35 @@ impl PluginsManager {
         Self::new_with_restriction_product(codex_home, Some(Product::Codex))
     }
 
+    /// Creates a plugins manager with injected dependencies.
+    pub fn new_with_storage_deps(
+        codex_home: PathBuf,
+        storage_deps: PluginsManagerStorageDeps,
+    ) -> Self {
+        Self::new_with_restriction_product_and_storage_deps(
+            codex_home,
+            Some(Product::Codex),
+            storage_deps,
+        )
+    }
+
     pub fn new_with_restriction_product(
         codex_home: PathBuf,
         restriction_product: Option<Product>,
+    ) -> Self {
+        let storage_deps = PluginsManagerStorageDeps::from_codex_home(codex_home.clone())
+            .unwrap_or_else(|err| panic!("plugin data root should be absolute: {err}"));
+        Self::new_with_restriction_product_and_storage_deps(
+            codex_home,
+            restriction_product,
+            storage_deps,
+        )
+    }
+
+    fn new_with_restriction_product_and_storage_deps(
+        codex_home: PathBuf,
+        restriction_product: Option<Product>,
+        storage_deps: PluginsManagerStorageDeps,
     ) -> Self {
         // Product restrictions are enforced at marketplace admission time for a given CODEX_HOME:
         // listing, install, and curated refresh all consult this restriction context before new
@@ -434,6 +483,7 @@ impl PluginsManager {
         Self {
             codex_home: codex_home.clone(),
             store: PluginStore::new(codex_home),
+            data_store: storage_deps.data_store,
             featured_plugin_ids_cache: RwLock::new(None),
             configured_marketplace_upgrade_state: RwLock::new(
                 ConfiguredMarketplaceUpgradeState::default(),
@@ -491,6 +541,7 @@ impl PluginsManager {
             &config.config_layer_stack,
             self.remote_installed_plugin_configs(),
             &self.store,
+            self.data_store.as_ref(),
             self.restriction_product,
             config.remote_plugin_enabled,
         )
@@ -537,6 +588,7 @@ impl PluginsManager {
             config_layer_stack,
             self.remote_installed_plugin_configs(),
             &self.store,
+            self.data_store.as_ref(),
             self.restriction_product,
             config.remote_plugin_enabled,
         )
@@ -1456,7 +1508,7 @@ impl PluginsManager {
             ),
         )
         .await;
-        let plugin_data_root = self.store.plugin_data_root(&plugin_id);
+        let plugin_data_root = self.data_store.plugin_data_root(&plugin_id);
         let (hook_sources, _hook_load_warnings) =
             load_plugin_hooks(&source_path, &plugin_id, &plugin_data_root, &manifest.paths);
         let hooks = plugin_hook_declarations(&hook_sources)
