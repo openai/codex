@@ -86,3 +86,7 @@ impl JsonRpcMessageDecoder {
         Ok(Some(message_len))
     }
 }
+
+#[cfg(test)]
+#[path = "message_framing_tests.rs"]
+mod tests;
