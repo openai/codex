@@ -421,6 +421,7 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) analytics_events_client: Option<AnalyticsEventsClient>,
     pub(crate) thread_store: Arc<dyn ThreadStore>,
     pub(crate) artifact_store: Arc<dyn ArtifactStore>,
+    pub(crate) shell_snapshot_store: Arc<dyn crate::shell_snapshot::ShellSnapshotStore>,
     pub(crate) attestation_provider: Option<Arc<dyn AttestationProvider>>,
     pub(crate) inherited_multi_agent_version: Option<MultiAgentVersion>,
 }
@@ -502,6 +503,7 @@ impl Codex {
             analytics_events_client,
             thread_store,
             artifact_store,
+            shell_snapshot_store,
             attestation_provider,
             inherited_multi_agent_version,
         } = args;
@@ -649,6 +651,7 @@ impl Codex {
             analytics_events_client,
             thread_store,
             artifact_store,
+            shell_snapshot_store,
             parent_rollout_thread_trace,
             attestation_provider,
             multi_agent_version,
@@ -1353,7 +1356,6 @@ impl Session {
         &self,
         previous_cwd: &AbsolutePathBuf,
         next_cwd: &AbsolutePathBuf,
-        codex_home: &AbsolutePathBuf,
         session_source: &SessionSource,
     ) {
         if previous_cwd == next_cwd {
@@ -1372,7 +1374,7 @@ impl Session {
         }
 
         ShellSnapshot::refresh_snapshot(
-            codex_home.clone(),
+            Arc::clone(&self.services.shell_snapshot_store),
             self.conversation_id,
             next_cwd.clone(),
             self.services.user_shell.as_ref().clone(),
@@ -1393,7 +1395,6 @@ impl Session {
             previous_cwd,
             permission_profile_changed,
             next_cwd,
-            codex_home,
             session_source,
         ) = {
             let mut state = self.state.lock().await;
@@ -1415,7 +1416,6 @@ impl Session {
             let permission_profile_changed =
                 previous_permission_profile != updated_permission_profile;
             let next_cwd = updated.cwd.clone();
-            let codex_home = updated.codex_home.clone();
             let session_source = updated.session_source.clone();
             state.session_configuration = updated;
             (
@@ -1424,18 +1424,12 @@ impl Session {
                 previous_cwd,
                 permission_profile_changed,
                 next_cwd,
-                codex_home,
                 session_source,
             )
         };
 
         self.emit_config_changed_contributors(previous_config.as_ref(), new_config.as_ref());
-        self.maybe_refresh_shell_snapshot_for_cwd(
-            &previous_cwd,
-            &next_cwd,
-            &codex_home,
-            &session_source,
-        );
+        self.maybe_refresh_shell_snapshot_for_cwd(&previous_cwd, &next_cwd, &session_source);
         if permission_profile_changed {
             self.refresh_managed_network_proxy_for_current_permission_profile()
                 .await;

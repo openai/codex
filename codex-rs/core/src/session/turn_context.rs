@@ -609,7 +609,6 @@ impl Session {
                     let next_permission_profile = next.permission_profile();
                     let permission_profile_changed =
                         previous_permission_profile != next_permission_profile;
-                    let codex_home = next.codex_home.clone();
                     let session_source = next.session_source.clone();
                     let previous_config = notify_config_contributors.then(|| {
                         Self::build_effective_session_config(&state.session_configuration)
@@ -622,7 +621,6 @@ impl Session {
                         turn_environments,
                         permission_profile_changed,
                         previous_cwd,
-                        codex_home,
                         session_source,
                         previous_config,
                         new_config,
@@ -637,7 +635,6 @@ impl Session {
             turn_environments,
             permission_profile_changed,
             previous_cwd,
-            codex_home,
             session_source,
             previous_config,
             new_config,
@@ -661,7 +658,6 @@ impl Session {
         self.maybe_refresh_shell_snapshot_for_cwd(
             &previous_cwd,
             &session_configuration.cwd,
-            &codex_home,
             &session_source,
         );
 

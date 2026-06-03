@@ -506,6 +506,7 @@ impl Session {
         analytics_events_client: Option<AnalyticsEventsClient>,
         thread_store: Arc<dyn ThreadStore>,
         artifact_store: Arc<dyn ArtifactStore>,
+        shell_snapshot_store: Arc<dyn crate::shell_snapshot::ShellSnapshotStore>,
         parent_rollout_thread_trace: ThreadTraceContext,
         attestation_provider: Option<Arc<dyn AttestationProvider>>,
         multi_agent_version: Option<MultiAgentVersion>,
@@ -861,7 +862,7 @@ impl Session {
                     tx
                 } else {
                     ShellSnapshot::start_snapshotting(
-                        config.codex_home.clone(),
+                        Arc::clone(&shell_snapshot_store),
                         thread_id,
                         session_configuration.cwd.clone(),
                         &mut default_shell,
@@ -1008,6 +1009,7 @@ impl Session {
                 rollout_thread_trace,
                 user_shell: Arc::new(default_shell),
                 shell_snapshot_tx,
+                shell_snapshot_store,
                 show_raw_agent_reasoning: config.show_raw_agent_reasoning,
                 exec_policy,
                 auth_manager: Arc::clone(&auth_manager),
