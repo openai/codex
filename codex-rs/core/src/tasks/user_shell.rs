@@ -126,7 +126,7 @@ pub(crate) async fn execute_user_shell_command(
     let display_command = session_shell.derive_exec_args(&command, use_login_shell);
     let mut exec_env_map = create_env(
         &turn_context.shell_environment_policy,
-        Some(session.conversation_id),
+        Some(session.thread_id),
     );
     if exec_env_map.contains_key(PROXY_ACTIVE_ENV_KEY) {
         strip_managed_proxy_env(&mut exec_env_map);

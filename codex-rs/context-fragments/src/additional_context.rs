@@ -1,24 +1,25 @@
-use super::ContextualUserFragment;
 use codex_utils_string::truncate_middle_with_token_budget;
+
+use crate::ContextualUserFragment;
 
 const MAX_ADDITIONAL_CONTEXT_VALUE_TOKENS: usize = 1_000;
 const ADDITIONAL_CONTEXT_END_MARKER_SUFFIX: &str = ">";
 const ADDITIONAL_CONTEXT_START_MARKER_PREFIX: &str = "<external_";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct AdditionalContextUserFragment {
+pub struct AdditionalContextUserFragment {
     key: String,
     value: String,
 }
 
 impl AdditionalContextUserFragment {
-    pub(crate) fn new(key: String, value: String) -> Self {
+    pub fn new(key: String, value: String) -> Self {
         Self { key, value }
     }
 }
 
 impl ContextualUserFragment for AdditionalContextUserFragment {
-    fn role() -> &'static str {
+    fn role(&self) -> &'static str {
         "user"
     }
 
@@ -52,19 +53,19 @@ impl ContextualUserFragment for AdditionalContextUserFragment {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct AdditionalContextDeveloperFragment {
+pub struct AdditionalContextDeveloperFragment {
     key: String,
     value: String,
 }
 
 impl AdditionalContextDeveloperFragment {
-    pub(crate) fn new(key: String, value: String) -> Self {
+    pub fn new(key: String, value: String) -> Self {
         Self { key, value }
     }
 }
 
 impl ContextualUserFragment for AdditionalContextDeveloperFragment {
-    fn role() -> &'static str {
+    fn role(&self) -> &'static str {
         "developer"
     }
 

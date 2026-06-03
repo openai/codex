@@ -176,7 +176,7 @@ async fn guardian_test_session_and_turn_with_base_url(
     base_url: &str,
 ) -> (Arc<Session>, Arc<TurnContext>) {
     let (mut session, mut turn) = crate::session::tests::make_session_and_context().await;
-    session.conversation_id = fixed_guardian_parent_session_id();
+    session.thread_id = fixed_guardian_parent_session_id();
     let mut config = (*turn.config).clone();
     config.model_provider.base_url = Some(format!("{base_url}/v1"));
     config.user_instructions = None;
@@ -365,7 +365,7 @@ async fn build_guardian_prompt_full_mode_preserves_initial_review_format() -> an
 #[tokio::test(flavor = "current_thread")]
 async fn build_guardian_prompt_includes_parent_turn_denied_reads() -> anyhow::Result<()> {
     let (mut session, mut turn) = crate::session::tests::make_session_and_context().await;
-    session.conversation_id = fixed_guardian_parent_session_id();
+    session.thread_id = fixed_guardian_parent_session_id();
     let denied_root = test_path_buf("/repo/private").abs();
     let denied_glob = test_path_buf("/repo/private/**").display().to_string();
     turn.permission_profile = PermissionProfile::from_runtime_permissions(
@@ -1415,7 +1415,7 @@ async fn guardian_review_request_layout_matches_model_visible_request_snapshot()
     .await;
 
     let (mut session, mut turn) = crate::session::tests::make_session_and_context().await;
-    session.conversation_id = fixed_guardian_parent_session_id();
+    session.thread_id = fixed_guardian_parent_session_id();
     let temp_cwd = TempDir::new()?;
     let mut config = (*turn.config).clone();
     config.cwd = temp_cwd.abs();
@@ -1464,7 +1464,7 @@ async fn guardian_review_request_layout_matches_model_visible_request_snapshot()
         .as_deref()
         .expect("guardian thread id");
     assert_eq!(assessment.outcome, GuardianAssessmentOutcome::Allow);
-    assert_ne!(guardian_thread_id, session.conversation_id.to_string());
+    assert_ne!(guardian_thread_id, session.thread_id.to_string());
     ThreadId::from_string(guardian_thread_id).expect("guardian thread id should be a valid UUID");
     assert!(matches!(
         metadata.guardian_session_kind,
@@ -1567,7 +1567,7 @@ async fn build_guardian_prompt_items_includes_parent_session_id() -> anyhow::Res
     assert!(
         prompt_text.contains(&format!(
             ">>> TRANSCRIPT END\nReviewed Codex session id: {}\n",
-            session.conversation_id
+            session.thread_id
         )),
         "guardian prompt should expose the parent session id immediately after the transcript end"
     );

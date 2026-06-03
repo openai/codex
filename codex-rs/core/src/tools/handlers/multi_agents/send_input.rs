@@ -58,7 +58,7 @@ impl ToolExecutor<ToolInvocation> for Handler {
                 CollabAgentInteractionBeginEvent {
                     call_id: call_id.clone(),
                     started_at_ms: now_unix_timestamp_ms(),
-                    sender_thread_id: session.conversation_id,
+                    sender_thread_id: session.thread_id,
                     receiver_thread_id,
                     prompt: prompt.clone(),
                 }
@@ -81,7 +81,7 @@ impl ToolExecutor<ToolInvocation> for Handler {
                 CollabAgentInteractionEndEvent {
                     call_id,
                     completed_at_ms: now_unix_timestamp_ms(),
-                    sender_thread_id: session.conversation_id,
+                    sender_thread_id: session.thread_id,
                     receiver_thread_id,
                     receiver_agent_nickname: receiver_agent.agent_nickname,
                     receiver_agent_role: receiver_agent.agent_role,

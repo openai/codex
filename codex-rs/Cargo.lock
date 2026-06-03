@@ -2507,6 +2507,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-context-fragments"
+version = "0.0.0"
+dependencies = [
+ "codex-protocol",
+ "codex-utils-string",
+]
+
+[[package]]
 name = "codex-core"
 version = "0.0.0"
 dependencies = [
@@ -2528,6 +2536,7 @@ dependencies = [
  "codex-code-mode",
  "codex-config",
  "codex-connectors",
+ "codex-context-fragments",
  "codex-core-plugins",
  "codex-core-skills",
  "codex-exec-server",
@@ -2692,6 +2701,7 @@ dependencies = [
  "codex-analytics",
  "codex-app-server-protocol",
  "codex-config",
+ "codex-context-fragments",
  "codex-exec-server",
  "codex-login",
  "codex-model-provider",
@@ -2853,6 +2863,7 @@ name = "codex-extension-api"
 version = "0.0.0"
 dependencies = [
  "async-trait",
+ "codex-context-fragments",
  "codex-protocol",
  "codex-tools",
 ]
@@ -3458,6 +3469,7 @@ name = "codex-prompts"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "codex-context-fragments",
  "codex-execpolicy",
  "codex-git-utils",
  "codex-protocol",
@@ -3713,6 +3725,19 @@ dependencies = [
  "codex-utils-absolute-path",
  "include_dir",
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "codex-skills-extension"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "codex-core",
+ "codex-core-skills",
+ "codex-extension-api",
+ "codex-protocol",
+ "pretty_assertions",
+ "tokio",
 ]
 
 [[package]]

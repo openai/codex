@@ -18,7 +18,7 @@ impl SubagentNotification {
 }
 
 impl ContextualUserFragment for SubagentNotification {
-    fn role() -> &'static str {
+    fn role(&self) -> &'static str {
         "user"
     }
 

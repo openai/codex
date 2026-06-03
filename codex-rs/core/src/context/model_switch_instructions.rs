@@ -14,7 +14,7 @@ impl ModelSwitchInstructions {
 }
 
 impl ContextualUserFragment for ModelSwitchInstructions {
-    fn role() -> &'static str {
+    fn role(&self) -> &'static str {
         "developer"
     }
 
