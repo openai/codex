@@ -2,13 +2,14 @@ use super::*;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 
-const STATE_N: &str = "ois1.a.b.c";
-const STATE_N_PLUS_ONE: &str = "ois1.d.e.f";
+const STATE_N: &str = "state-n";
+const STATE_N_PLUS_ONE: &str = "state-n-plus-one";
 
 #[test]
 fn maps_app_server_client_names_to_bounded_surfaces() {
     assert_eq!(
         [
+            "codex_cli",
             "codex-tui",
             "codex_exec",
             "codex_vscode",
@@ -19,6 +20,7 @@ fn maps_app_server_client_names_to_bounded_surfaces() {
         ]
         .map(HttpStateSurface::from_app_server_client_name),
         [
+            HttpStateSurface::CodexCli,
             HttpStateSurface::CodexTui,
             HttpStateSurface::CodexExec,
             HttpStateSurface::CodexVscode,
@@ -27,6 +29,10 @@ fn maps_app_server_client_names_to_bounded_surfaces() {
             HttpStateSurface::CodexRemoteControl,
             HttpStateSurface::CodexCli,
         ]
+    );
+    assert_eq!(
+        HttpStateSurface::try_from_app_server_client_name("third_party_client"),
+        None
     );
 }
 
@@ -83,7 +89,7 @@ fn compare_and_set_rejects_a_stale_prior_value() {
         !store
             .compare_and_set(
                 HttpStateSurface::CodexCli,
-                "ois1.stale.state.value",
+                "stale-state",
                 STATE_N_PLUS_ONE.to_string(),
             )
             .expect("compare should succeed")
