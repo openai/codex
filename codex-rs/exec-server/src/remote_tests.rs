@@ -119,9 +119,7 @@ async fn validate_harness_key_requires_explicit_valid_response() {
         .expect("identity")
         .public_key();
     Mock::given(method("POST"))
-        .and(path(
-            "/cloud/environment/environment-requested/validate",
-        ))
+        .and(path("/cloud/environment/environment-requested/validate"))
         .and(header("authorization", "Bearer registry-token"))
         .and(body_partial_json(serde_json::json!({
             "executor_registration_id": "registration-1",
