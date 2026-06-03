@@ -10,6 +10,8 @@ use crate::sandboxing::SandboxPermissions;
 use crate::shell::Shell;
 use crate::shell::ShellType;
 use crate::tools::sandboxing::ToolError;
+#[cfg(unix)]
+use codex_install_context::InstallContext;
 #[cfg(target_os = "macos")]
 use codex_network_proxy::CODEX_PROXY_GIT_SSH_COMMAND_MARKER;
 use codex_network_proxy::CUSTOM_CA_ENV_KEYS;
@@ -100,6 +102,34 @@ fn prepend_path_entry(env: &mut HashMap<String, String>, path_entry: &str) -> St
 }
 
 #[cfg(unix)]
+pub(crate) fn apply_package_path_prepend(
+    env: &mut HashMap<String, String>,
+    runtime_path_prepends: &mut Vec<String>,
+) {
+    let Some(path_dir) = InstallContext::current()
+        .package_layout
+        .as_ref()
+        .and_then(|package_layout| package_layout.path_dir.as_ref())
+    else {
+        return;
+    };
+
+    apply_path_prepend(env, runtime_path_prepends, path_dir.as_path());
+}
+
+#[cfg(unix)]
+pub(crate) fn apply_path_prepend(
+    env: &mut HashMap<String, String>,
+    runtime_path_prepends: &mut Vec<String>,
+    path_entry: &Path,
+) {
+    let path_entry = path_entry.to_string_lossy().to_string();
+    prepend_path_entry(env, &path_entry);
+    runtime_path_prepends.retain(|entry| entry != &path_entry);
+    runtime_path_prepends.push(path_entry);
+}
+
+#[cfg(unix)]
 pub(crate) fn prepend_zsh_fork_bin_to_path(
     env: &mut HashMap<String, String>,
     shell_zsh_path: &Path,
@@ -113,15 +143,13 @@ pub(crate) fn prepend_zsh_fork_bin_to_path(
 #[cfg(unix)]
 pub(crate) fn apply_zsh_fork_path_prepend(
     env: &mut HashMap<String, String>,
-    explicit_env_overrides: &mut HashMap<String, String>,
+    runtime_path_prepends: &mut Vec<String>,
     shell_zsh_path: &Path,
 ) {
-    let Some(updated_path) = prepend_zsh_fork_bin_to_path(env, shell_zsh_path) else {
+    let Some(zsh_bin_dir) = shell_zsh_path.parent() else {
         return;
     };
-    // Snapshot wrapping restores explicit overrides after sourcing the shell
-    // snapshot, so capture this PATH override there as well.
-    explicit_env_overrides.insert("PATH".to_string(), updated_path);
+    apply_path_prepend(env, runtime_path_prepends, zsh_bin_dir);
 }
 
 pub(crate) fn disable_powershell_profile_for_elevated_windows_sandbox(
@@ -179,6 +207,24 @@ pub(crate) fn maybe_wrap_shell_lc_with_snapshot(
     explicit_env_overrides: &HashMap<String, String>,
     env: &HashMap<String, String>,
 ) -> Vec<String> {
+    maybe_wrap_shell_lc_with_snapshot_and_path_prepends(
+        command,
+        session_shell,
+        cwd,
+        explicit_env_overrides,
+        env,
+        &[],
+    )
+}
+
+pub(crate) fn maybe_wrap_shell_lc_with_snapshot_and_path_prepends(
+    command: &[String],
+    session_shell: &Shell,
+    cwd: &AbsolutePathBuf,
+    explicit_env_overrides: &HashMap<String, String>,
+    env: &HashMap<String, String>,
+    runtime_path_prepends: &[String],
+) -> Vec<String> {
     if cfg!(windows) {
         return command.to_vec();
     }
@@ -219,8 +265,27 @@ pub(crate) fn maybe_wrap_shell_lc_with_snapshot(
     }
     let (override_captures, override_exports) = build_override_exports(&override_env);
     let (proxy_captures, proxy_exports) = build_proxy_env_exports();
+    let runtime_path_prepend_exports = if explicit_env_overrides.contains_key("PATH") {
+        String::new()
+    } else {
+        runtime_path_prepends
+            .iter()
+            .filter(|entry| !entry.is_empty())
+            .map(|entry| {
+                let entry = shell_single_quote(entry);
+                format!(
+                    "if [ -n \"${{PATH:-}}\" ]; then export PATH='{entry}':\"$PATH\"; else export PATH='{entry}'; fi"
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
     let override_captures = join_shell_blocks([override_captures, proxy_captures]);
-    let override_exports = join_shell_blocks([override_exports, proxy_exports]);
+    let override_exports = join_shell_blocks([
+        override_exports,
+        proxy_exports,
+        runtime_path_prepend_exports,
+    ]);
     let rewritten_script = if override_exports.is_empty() {
         format!(
             "if . '{snapshot_path}' >/dev/null 2>&1; then :; fi\n\nexec '{original_shell}' -c '{original_script}'{trailing_args}"
