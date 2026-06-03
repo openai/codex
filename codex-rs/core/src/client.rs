@@ -62,8 +62,8 @@ use codex_api::build_session_headers;
 use codex_api::create_text_param_for_request;
 use codex_api::response_create_client_metadata;
 use codex_app_server_protocol::AuthMode;
-use codex_client::NativeIntegrityStateContext;
-use codex_client::NativeIntegritySurface;
+use codex_http_state::HttpStateContext;
+use codex_http_state::HttpStateSurface;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_login::RefreshTokenError;
@@ -183,7 +183,7 @@ struct ModelClientState {
     beta_features_header: Option<String>,
     include_attestation: bool,
     attestation_provider: Option<Arc<dyn AttestationProvider>>,
-    native_integrity_state: Option<NativeIntegrityStateContext>,
+    http_state: Option<HttpStateContext>,
     disable_websockets: AtomicBool,
     cached_websocket_session: StdMutex<WebsocketSession>,
 }
@@ -333,10 +333,10 @@ impl ModelClient {
         beta_features_header: Option<String>,
         attestation_provider: Option<Arc<dyn AttestationProvider>>,
     ) -> Self {
-        let native_integrity_state = auth_manager.as_ref().map(|auth_manager| {
-            NativeIntegrityStateContext::new(
+        let http_state = auth_manager.as_ref().map(|auth_manager| {
+            HttpStateContext::new(
                 auth_manager.codex_home().to_path_buf(),
-                native_integrity_surface_for_session_source(&session_source),
+                http_state_surface_for_session_source(&session_source),
             )
         });
         let model_provider = create_model_provider(provider_info, auth_manager);
@@ -363,7 +363,7 @@ impl ModelClient {
                 beta_features_header,
                 include_attestation,
                 attestation_provider,
-                native_integrity_state,
+                http_state,
                 disable_websockets: AtomicBool::new(false),
                 cached_websocket_session: StdMutex::new(WebsocketSession::default()),
             }),
@@ -403,26 +403,26 @@ impl ModelClient {
 
     pub(crate) fn set_app_server_client_name(&self, client_name: Option<&str>) {
         let surface = client_name
-            .map(NativeIntegritySurface::from_app_server_client_name)
-            .unwrap_or(NativeIntegritySurface::CodexCli);
-        self.set_native_integrity_surface(surface);
+            .map(HttpStateSurface::from_app_server_client_name)
+            .unwrap_or(HttpStateSurface::CodexCli);
+        self.set_http_state_surface(surface);
     }
 
-    pub(crate) fn native_integrity_surface(&self) -> Option<NativeIntegritySurface> {
+    pub(crate) fn http_state_surface(&self) -> Option<HttpStateSurface> {
         self.state
-            .native_integrity_state
+            .http_state
             .as_ref()
-            .map(NativeIntegrityStateContext::surface)
+            .map(HttpStateContext::surface)
     }
 
-    pub(crate) fn native_integrity_state_context(&self) -> Option<NativeIntegrityStateContext> {
-        self.state.native_integrity_state.clone()
+    pub(crate) fn http_state_context(&self) -> Option<HttpStateContext> {
+        self.state.http_state.clone()
     }
 
-    pub(crate) fn set_native_integrity_surface(&self, surface: NativeIntegritySurface) {
+    pub(crate) fn set_http_state_surface(&self, surface: HttpStateSurface) {
         if self
             .state
-            .native_integrity_state
+            .http_state
             .as_ref()
             .is_some_and(|state| state.set_surface(surface))
         {
@@ -855,7 +855,7 @@ impl ModelClient {
         let api_auth = with_native_integrity_state(
             self.state.provider.api_auth().await?,
             auth.as_ref(),
-            self.state.native_integrity_state.clone(),
+            self.state.http_state.clone(),
         );
         Ok(CurrentClientSetup {
             auth,
@@ -1780,18 +1780,16 @@ fn subagent_header_value(session_source: &SessionSource) -> Option<String> {
     }
 }
 
-fn native_integrity_surface_for_session_source(
-    session_source: &SessionSource,
-) -> NativeIntegritySurface {
+fn http_state_surface_for_session_source(session_source: &SessionSource) -> HttpStateSurface {
     match session_source {
-        SessionSource::Cli => NativeIntegritySurface::CodexTui,
-        SessionSource::Exec => NativeIntegritySurface::CodexExec,
-        SessionSource::VSCode => NativeIntegritySurface::CodexVscode,
+        SessionSource::Cli => HttpStateSurface::CodexTui,
+        SessionSource::Exec => HttpStateSurface::CodexExec,
+        SessionSource::VSCode => HttpStateSurface::CodexVscode,
         SessionSource::SubAgent(_)
         | SessionSource::Internal(_)
         | SessionSource::Mcp
         | SessionSource::Custom(_)
-        | SessionSource::Unknown => NativeIntegritySurface::CodexCli,
+        | SessionSource::Unknown => HttpStateSurface::CodexCli,
     }
 }
 

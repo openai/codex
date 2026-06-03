@@ -11,6 +11,7 @@ mod transport;
 
 pub use crate::chatgpt_cloudflare_cookies::with_chatgpt_cloudflare_cookie_store;
 pub use crate::chatgpt_hosts::is_allowed_chatgpt_host;
+pub use crate::chatgpt_hosts::is_allowed_chatgpt_request_url;
 pub use crate::custom_ca::BuildCustomCaTransportError;
 /// Test-only subprocess hook for custom CA coverage.
 ///
@@ -40,3 +41,6 @@ pub use crate::transport::ByteStream;
 pub use crate::transport::HttpTransport;
 pub use crate::transport::ReqwestTransport;
 pub use crate::transport::StreamResponse;
+
+pub const INTEGRITY_STATE_HEADER_NAME: &str = "x-oai-is";
+pub const INTEGRITY_STATE_UPDATE_HEADER_NAME: &str = "x-oai-is-update";

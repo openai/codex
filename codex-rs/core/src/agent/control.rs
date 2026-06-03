@@ -312,7 +312,7 @@ impl AgentControl {
                         .session
                         .services
                         .model_client
-                        .native_integrity_surface()
+                        .http_state_surface()
                     {
                         new_thread
                             .thread
@@ -320,7 +320,7 @@ impl AgentControl {
                             .session
                             .services
                             .model_client
-                            .set_native_integrity_surface(surface);
+                            .set_http_state_surface(surface);
                     }
                     parent_thread
                         .codex

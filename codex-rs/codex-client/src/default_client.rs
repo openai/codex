@@ -1,3 +1,5 @@
+use crate::INTEGRITY_STATE_HEADER_NAME;
+use crate::INTEGRITY_STATE_UPDATE_HEADER_NAME;
 use http::Error as HttpError;
 use http::HeaderMap;
 use http::HeaderName;
@@ -115,11 +117,12 @@ impl CodexRequestBuilder {
 
         match self.builder.headers(headers).send().await {
             Ok(response) => {
+                let headers = redacted_headers_for_logging(response.headers());
                 tracing::debug!(
                     method = %self.method,
                     url = %self.url,
                     status = %response.status(),
-                    headers = ?response.headers(),
+                    headers = ?headers,
                     version = ?response.version(),
                     "Request completed"
                 );
@@ -139,6 +142,19 @@ impl CodexRequestBuilder {
             }
         }
     }
+}
+
+fn redacted_headers_for_logging(headers: &HeaderMap) -> HeaderMap {
+    let mut headers = headers.clone();
+    for name in [
+        INTEGRITY_STATE_HEADER_NAME,
+        INTEGRITY_STATE_UPDATE_HEADER_NAME,
+    ] {
+        if headers.contains_key(name) {
+            headers.insert(name, HeaderValue::from_static("<redacted>"));
+        }
+    }
+    headers
 }
 
 struct HeaderMapInjector<'a>(&'a mut HeaderMap);
@@ -174,9 +190,38 @@ mod tests {
     use opentelemetry::trace::TracerProvider;
     use opentelemetry_sdk::propagation::TraceContextPropagator;
     use opentelemetry_sdk::trace::SdkTracerProvider;
+    use pretty_assertions::assert_eq;
     use tracing::trace_span;
     use tracing_subscriber::layer::SubscriberExt;
     use tracing_subscriber::util::SubscriberInitExt;
+
+    #[test]
+    fn redacted_headers_for_logging_hides_integrity_state() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            INTEGRITY_STATE_HEADER_NAME,
+            HeaderValue::from_static("ois1.request.nonce.ciphertext"),
+        );
+        headers.insert(
+            INTEGRITY_STATE_UPDATE_HEADER_NAME,
+            HeaderValue::from_static("ois1.response.nonce.ciphertext"),
+        );
+        headers.insert("x-request-id", HeaderValue::from_static("request-id"));
+
+        let redacted = redacted_headers_for_logging(&headers);
+
+        let mut expected = HeaderMap::new();
+        expected.insert(
+            INTEGRITY_STATE_HEADER_NAME,
+            HeaderValue::from_static("<redacted>"),
+        );
+        expected.insert(
+            INTEGRITY_STATE_UPDATE_HEADER_NAME,
+            HeaderValue::from_static("<redacted>"),
+        );
+        expected.insert("x-request-id", HeaderValue::from_static("request-id"));
+        assert_eq!(redacted, expected);
+    }
 
     #[test]
     fn inject_trace_headers_uses_current_span_context() {

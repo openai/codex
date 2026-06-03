@@ -2,9 +2,9 @@ use codex_api::AuthProvider;
 use codex_api::SharedAuthProvider;
 use codex_client::INTEGRITY_STATE_HEADER_NAME;
 use codex_client::INTEGRITY_STATE_UPDATE_HEADER_NAME;
-use codex_client::NativeIntegrityStateContext;
-use codex_client::NativeIntegritySurface;
 use codex_client::is_allowed_chatgpt_request_url;
+use codex_http_state::HttpStateContext;
+use codex_http_state::HttpStateSurface;
 use http::HeaderMap;
 use http::HeaderValue;
 
@@ -55,12 +55,12 @@ impl AuthProvider for BearerAuthProvider {
 #[derive(Clone)]
 pub(crate) struct NativeIntegrityAuthProvider {
     auth: SharedAuthProvider,
-    state: NativeIntegrityStateContext,
-    surface: NativeIntegritySurface,
+    state: HttpStateContext,
+    surface: HttpStateSurface,
 }
 
 impl NativeIntegrityAuthProvider {
-    pub(crate) fn new(auth: SharedAuthProvider, state: NativeIntegrityStateContext) -> Self {
+    pub(crate) fn new(auth: SharedAuthProvider, state: HttpStateContext) -> Self {
         let surface = state.surface();
         Self {
             auth,
@@ -81,9 +81,9 @@ impl AuthProvider for NativeIntegrityAuthProvider {
             return;
         }
 
-        match self.state.load_for_surface(self.surface) {
-            Ok(Some(state_file)) => {
-                if let Ok(header) = HeaderValue::from_str(&state_file.state) {
+        match self.state.get_for_surface(self.surface) {
+            Ok(Some(state)) => {
+                if let Ok(header) = HeaderValue::from_str(&state) {
                     let _ = headers.insert(INTEGRITY_STATE_HEADER_NAME, header);
                 }
             }
@@ -119,7 +119,7 @@ impl AuthProvider for NativeIntegrityAuthProvider {
             return;
         };
 
-        if let Err(error) = self.state.compare_and_store_for_surface(
+        if let Err(error) = self.state.compare_and_set_for_surface(
             self.surface,
             expected_state,
             next_state.to_string(),
@@ -132,8 +132,7 @@ impl AuthProvider for NativeIntegrityAuthProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use codex_client::NativeIntegrityStateFile;
-    use codex_client::NativeIntegrityStateStore;
+    use codex_http_state::HttpStateStore;
     use pretty_assertions::assert_eq;
     use std::sync::Arc;
     use tempfile::TempDir;
@@ -198,14 +197,14 @@ mod tests {
     #[test]
     fn native_integrity_provider_scopes_and_rotates_surface_state() {
         let codex_home = TempDir::new().expect("tempdir");
-        let context = NativeIntegrityStateContext::new(
+        let context = HttpStateContext::new(
             codex_home.path().to_path_buf(),
-            NativeIntegritySurface::CodexDesktop,
+            HttpStateSurface::CodexDesktop,
         );
-        let store = NativeIntegrityStateStore::new(codex_home.path().to_path_buf());
+        let store = HttpStateStore::new(codex_home.path().to_path_buf());
         store
-            .replace(
-                NativeIntegritySurface::CodexDesktop,
+            .set(
+                HttpStateSurface::CodexDesktop,
                 "ois1.initial.nonce.ciphertext".to_string(),
             )
             .expect("state should store");
@@ -213,10 +212,10 @@ mod tests {
             Arc::new(BearerAuthProvider::new("access-token".to_string())),
             context.clone(),
         );
-        context.set_surface(NativeIntegritySurface::CodexCli);
+        context.set_surface(HttpStateSurface::CodexCli);
         store
-            .replace(
-                NativeIntegritySurface::CodexCli,
+            .set(
+                HttpStateSurface::CodexCli,
                 "ois1.cli.nonce.ciphertext".to_string(),
             )
             .expect("CLI state should store");
@@ -245,21 +244,17 @@ mod tests {
         );
         assert_eq!(
             store
-                .load(NativeIntegritySurface::CodexDesktop)
+                .get(HttpStateSurface::CodexDesktop)
                 .expect("state should load")
                 .expect("state should exist"),
-            NativeIntegrityStateFile {
-                state: "ois1.rotated.nonce.ciphertext".to_string(),
-            }
+            "ois1.rotated.nonce.ciphertext"
         );
         assert_eq!(
             store
-                .load(NativeIntegritySurface::CodexCli)
+                .get(HttpStateSurface::CodexCli)
                 .expect("CLI state should load")
                 .expect("CLI state should exist"),
-            NativeIntegrityStateFile {
-                state: "ois1.cli.nonce.ciphertext".to_string(),
-            }
+            "ois1.cli.nonce.ciphertext"
         );
 
         let mut external_headers = HeaderMap::new();
