@@ -309,10 +309,10 @@ mod tests {
     use wiremock::matchers::method;
     use wiremock::matchers::path;
 
-    const SENT_STATE: &str = "ois1.sent.nonce.ciphertext";
-    const CREATED_STATE: &str = "ois1.created.nonce.ciphertext";
-    const RETRY_STATE: &str = "ois1.retry.nonce.ciphertext";
-    const FINALIZED_STATE: &str = "ois1.finalized.nonce.ciphertext";
+    const SENT_STATE: &str = "sent-state";
+    const CREATED_STATE: &str = "created-state";
+    const RETRY_STATE: &str = "retry-state";
+    const FINALIZED_STATE: &str = "finalized-state";
     type ObservedUpdate = (String, Option<String>);
 
     #[derive(Clone, Default)]
@@ -331,7 +331,7 @@ mod tests {
 
         fn add_auth_headers_for_url(&self, _request_url: &str, headers: &mut http::HeaderMap) {
             self.add_auth_headers(headers);
-            headers.insert("x-oai-is", HeaderValue::from_static(SENT_STATE));
+            headers.insert("x-test-state", HeaderValue::from_static(SENT_STATE));
         }
 
         fn observe_response_headers(
@@ -346,7 +346,7 @@ mod tests {
                 .push((
                     request_url.to_string(),
                     response_headers
-                        .get("x-oai-is-update")
+                        .get("x-test-state-update")
                         .and_then(|value| value.to_str().ok())
                         .map(ToString::to_string),
                 ));
@@ -367,7 +367,7 @@ mod tests {
         Mock::given(method("POST"))
             .and(path("/backend-api/files"))
             .and(header("chatgpt-account-id", "account_id"))
-            .and(header("x-oai-is", SENT_STATE))
+            .and(header("x-test-state", SENT_STATE))
             .and(body_json(serde_json::json!({
                 "file_name": "hello.txt",
                 "file_size": 5,
@@ -375,7 +375,7 @@ mod tests {
             })))
             .respond_with(
                 ResponseTemplate::new(200)
-                    .insert_header("x-oai-is-update", CREATED_STATE)
+                    .insert_header("x-test-state-update", CREATED_STATE)
                     .set_body_json(serde_json::json!({"file_id": "file_123", "upload_url": format!("{}/upload/file_123", server.uri())})),
             )
             .mount(&server)
@@ -391,18 +391,18 @@ mod tests {
         let download_url = format!("{}/download/file_123", server.uri());
         Mock::given(method("POST"))
             .and(path("/backend-api/files/file_123/uploaded"))
-            .and(header("x-oai-is", SENT_STATE))
+            .and(header("x-test-state", SENT_STATE))
             .respond_with(move |_request: &Request| {
                 if finalize_attempts_responder.fetch_add(1, Ordering::SeqCst) == 0 {
                     return ResponseTemplate::new(200)
-                        .insert_header("x-oai-is-update", RETRY_STATE)
+                        .insert_header("x-test-state-update", RETRY_STATE)
                         .set_body_json(serde_json::json!({
                             "status": "retry"
                         }));
                 }
 
                 ResponseTemplate::new(200)
-                    .insert_header("x-oai-is-update", FINALIZED_STATE)
+                    .insert_header("x-test-state-update", FINALIZED_STATE)
                     .set_body_json(serde_json::json!({
                         "status": "success",
                         "download_url": download_url,

@@ -19,10 +19,7 @@ impl crate::auth::AuthProvider for RecordingAuthProvider {
     fn add_auth_headers(&self, _headers: &mut HeaderMap) {}
 
     fn add_auth_headers_for_url(&self, _request_url: &str, headers: &mut HeaderMap) {
-        headers.insert(
-            "x-oai-is",
-            HeaderValue::from_static("ois1.sent.nonce.ciphertext"),
-        );
+        headers.insert("x-test-state", HeaderValue::from_static("sent-state"));
     }
 
     fn observe_response_headers(
@@ -124,14 +121,11 @@ fn test_session() -> (
     HeaderMap,
 ) {
     let mut request_headers = HeaderMap::new();
-    request_headers.insert(
-        "x-oai-is",
-        HeaderValue::from_static("ois1.sent.nonce.ciphertext"),
-    );
+    request_headers.insert("x-test-state", HeaderValue::from_static("sent-state"));
     let mut response_headers = HeaderMap::new();
     response_headers.insert(
-        "x-oai-is-update",
-        HeaderValue::from_static("ois1.rotated.nonce.ciphertext"),
+        "x-test-state-update",
+        HeaderValue::from_static("rotated-state"),
     );
     let transport = RejectingTransport::new(response_headers.clone());
     let auth = Arc::new(RecordingAuthProvider::default());
