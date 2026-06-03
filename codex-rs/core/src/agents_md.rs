@@ -23,7 +23,6 @@ use codex_config::merge_toml_values;
 use codex_config::project_root_markers_from_config;
 use codex_exec_server::Environment;
 use codex_exec_server::ExecutorFileSystem;
-use codex_exec_server::LOCAL_FS;
 use codex_features::Feature;
 use codex_prompts::HIERARCHICAL_AGENTS_MESSAGE;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -119,29 +118,6 @@ impl<'a> AgentsMdManager<'a> {
         }
 
         (!loaded.is_empty()).then_some(loaded)
-    }
-
-    /// Returns all instruction source files included in the current config.
-    #[deprecated(note = "TODO(anp) get RPC interface using cached paths")]
-    pub async fn load_instruction_sources(
-        &self,
-        fs: &dyn ExecutorFileSystem,
-    ) -> Vec<AbsolutePathBuf> {
-        let mut global_instruction_warnings = Vec::new();
-        let mut paths = Self::load_global_instructions(
-            LOCAL_FS.as_ref(),
-            Some(&self.config.codex_home),
-            &mut global_instruction_warnings,
-        )
-        .await
-        .map_or_else(Vec::new, |loaded| loaded.sources().cloned().collect());
-        match self.agents_md_paths(fs).await {
-            Ok(agents_md_paths) => paths.extend(agents_md_paths),
-            Err(err) => {
-                tracing::warn!(error = %err, "failed to discover AGENTS.md docs for instruction sources");
-            }
-        }
-        paths
     }
 
     /// Attempt to locate and load AGENTS.md documentation.

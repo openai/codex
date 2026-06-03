@@ -548,6 +548,11 @@ impl CodexThread {
         self.codex.thread_config_snapshot().await
     }
 
+    /// Returns the files that supplied the thread's loaded model instructions.
+    pub async fn instruction_sources(&self) -> Vec<AbsolutePathBuf> {
+        self.codex.instruction_sources().await
+    }
+
     pub async fn config(&self) -> Arc<crate::config::Config> {
         self.codex.session.get_config().await
     }

@@ -659,13 +659,6 @@ impl ThreadRequestProcessor {
             .map(|response| Some(response.into()))
     }
 
-    #[allow(deprecated)]
-    async fn instruction_sources_from_config(config: &Config) -> Vec<AbsolutePathBuf> {
-        codex_core::AgentsMdManager::new(config)
-            .load_instruction_sources(LOCAL_FS.as_ref())
-            .await
-    }
-
     async fn load_thread(
         &self,
         thread_id: &str,
@@ -1044,7 +1037,6 @@ impl ThreadRequestProcessor {
                 .map_err(|err| config_load_error(&err))?;
         }
 
-        let instruction_sources = Self::instruction_sources_from_config(&config).await;
         let environments = environments.unwrap_or_else(|| {
             listener_task_context
                 .thread_manager
@@ -1114,6 +1106,7 @@ impl ThreadRequestProcessor {
         )
         .await?;
 
+        let instruction_sources = thread.instruction_sources().await;
         let config_snapshot = thread
             .config_snapshot()
             .instrument(tracing::info_span!(
@@ -2525,13 +2518,12 @@ impl ThreadRequestProcessor {
             }
         };
 
-        let instruction_sources = Self::instruction_sources_from_config(&config).await;
         let response_history = thread_history.clone();
 
         match self
             .thread_manager
             .resume_thread_with_history(
-                config.clone(),
+                config,
                 thread_history,
                 self.auth_manager.clone(),
                 self.request_trace_context(&request_id).await,
@@ -2554,6 +2546,7 @@ impl ThreadRequestProcessor {
                     self.outgoing.send_error(request_id, err).await;
                     return Ok(());
                 }
+                let instruction_sources = codex_thread.instruction_sources().await;
                 let SessionConfiguredEvent { rollout_path, .. } = session_configured;
                 let Some(rollout_path) = rollout_path else {
                     let error =
@@ -2854,10 +2847,7 @@ impl ThreadRequestProcessor {
                 /*include_turns*/ false,
             );
             thread_summary.session_id = existing_thread.session_configured().session_id.to_string();
-            let mut config_for_instruction_sources = self.config.as_ref().clone();
-            config_for_instruction_sources.cwd = config_snapshot.cwd.clone();
-            let instruction_sources =
-                Self::instruction_sources_from_config(&config_for_instruction_sources).await;
+            let instruction_sources = existing_thread.instruction_sources().await;
 
             let listener_command_tx = {
                 let thread_state = thread_state.lock().await;
@@ -3234,7 +3224,6 @@ impl ThreadRequestProcessor {
             .map_err(|err| config_load_error(&err))?;
 
         let fallback_model_provider = config.model_provider_id.clone();
-        let instruction_sources = Self::instruction_sources_from_config(&config).await;
 
         let NewThread {
             thread_id,
@@ -3284,6 +3273,8 @@ impl ThreadRequestProcessor {
                 .await
                 .map_err(|err| core_thread_write_error("inherit source thread name", err))?;
         }
+
+        let instruction_sources = forked_thread.instruction_sources().await;
 
         // Auto-attach a conversation listener when forking a thread.
         log_listener_attach_result(
