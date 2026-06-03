@@ -2212,10 +2212,6 @@ impl Session {
         rx_approve
     }
 
-    #[expect(
-        clippy::await_holding_invalid_type,
-        reason = "active turn checks and turn state updates must remain atomic"
-    )]
     pub(crate) async fn request_permissions_for_environment(
         self: &Arc<Self>,
         turn_context: &Arc<TurnContext>,
