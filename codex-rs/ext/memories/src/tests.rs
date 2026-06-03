@@ -12,9 +12,6 @@ use codex_extension_api::ToolExecutor;
 use codex_extension_api::ToolName;
 use codex_extension_api::ToolPayload;
 use codex_tools::ToolOutput;
-use codex_utils_absolute_path::test_support::PathBufExt;
-use codex_utils_absolute_path::test_support::PathExt;
-use codex_utils_absolute_path::test_support::test_path_buf;
 use codex_utils_output_truncation::TruncationPolicy;
 use pretty_assertions::assert_eq;
 use serde_json::json;
@@ -22,6 +19,33 @@ use serde_json::json;
 use crate::extension::MemoriesExtension;
 use crate::extension::MemoriesExtensionConfig;
 use crate::local::LocalMemoriesBackend;
+use crate::prompt_source::MemoryPromptSource;
+use crate::prompt_source::MemoryPromptSummary;
+
+#[derive(Clone)]
+struct FakeMemoryPromptSource {
+    summary: MemoryPromptSummary,
+}
+
+impl MemoryPromptSource for FakeMemoryPromptSource {
+    async fn read_summary(&self) -> Option<MemoryPromptSummary> {
+        Some(self.summary.clone())
+    }
+}
+
+fn memories_extension_config(
+    enabled: bool,
+    dedicated_tools: bool,
+    memory_root: &Path,
+) -> MemoriesExtensionConfig {
+    let backend = LocalMemoriesBackend::from_memory_root(memory_root);
+    MemoriesExtensionConfig {
+        enabled,
+        dedicated_tools,
+        prompt_source: backend.clone(),
+        backend,
+    }
+}
 
 #[test]
 fn memory_tool_namespace_matches_responses_api_identifier() {
@@ -51,11 +75,11 @@ fn tools_are_not_contributed_without_thread_config() {
 fn tools_are_not_contributed_when_disabled() {
     let extension = MemoriesExtension::default();
     let thread_store = ExtensionData::new("thread");
-    thread_store.insert(MemoriesExtensionConfig {
-        enabled: false,
-        dedicated_tools: true,
-        codex_home: test_path_buf("/tmp/codex-home").abs(),
-    });
+    thread_store.insert(memories_extension_config(
+        /*enabled*/ false,
+        /*dedicated_tools*/ true,
+        Path::new("/tmp/codex-home/memories"),
+    ));
 
     assert!(
         extension
@@ -68,11 +92,11 @@ fn tools_are_not_contributed_when_disabled() {
 fn tools_are_not_contributed_when_dedicated_tools_disabled() {
     let extension = MemoriesExtension::default();
     let thread_store = ExtensionData::new("thread");
-    thread_store.insert(MemoriesExtensionConfig {
-        enabled: true,
-        dedicated_tools: false,
-        codex_home: test_path_buf("/tmp/codex-home").abs(),
-    });
+    thread_store.insert(memories_extension_config(
+        /*enabled*/ true,
+        /*dedicated_tools*/ false,
+        Path::new("/tmp/codex-home/memories"),
+    ));
 
     assert!(
         extension
@@ -85,11 +109,11 @@ fn tools_are_not_contributed_when_dedicated_tools_disabled() {
 fn tools_are_contributed_when_enabled_with_dedicated_tools() {
     let extension = MemoriesExtension::default();
     let thread_store = ExtensionData::new("thread");
-    thread_store.insert(MemoriesExtensionConfig {
-        enabled: true,
-        dedicated_tools: true,
-        codex_home: test_path_buf("/tmp/codex-home").abs(),
-    });
+    thread_store.insert(memories_extension_config(
+        /*enabled*/ true,
+        /*dedicated_tools*/ true,
+        Path::new("/tmp/codex-home/memories"),
+    ));
 
     let tool_names = extension
         .tools(&ExtensionData::new("session"), &thread_store)
@@ -114,11 +138,11 @@ fn install_registers_dedicated_tool_contributor() {
     crate::install(&mut builder, /*metrics_client*/ None);
     let registry = builder.build();
     let thread_store = ExtensionData::new("thread");
-    thread_store.insert(MemoriesExtensionConfig {
-        enabled: true,
-        dedicated_tools: true,
-        codex_home: test_path_buf("/tmp/codex-home").abs(),
-    });
+    thread_store.insert(memories_extension_config(
+        /*enabled*/ true,
+        /*dedicated_tools*/ true,
+        Path::new("/tmp/codex-home/memories"),
+    ));
 
     let tool_names = registry
         .tool_contributors()
@@ -159,25 +183,22 @@ fn ad_hoc_tool_definition_includes_filename_contract() {
 }
 
 #[tokio::test]
-async fn prompt_contribution_uses_memory_summary_when_enabled() {
-    let tempdir = tempfile::tempdir().expect("tempdir");
-    let memories_dir = tempdir.path().join("memories");
-    tokio::fs::create_dir_all(&memories_dir)
-        .await
-        .expect("create memories dir");
-    tokio::fs::write(
-        memories_dir.join("memory_summary.md"),
-        "Remember repository-specific implementation preferences.",
-    )
-    .await
-    .expect("write memory summary");
-
-    let extension = MemoriesExtension::default();
+async fn prompt_contribution_uses_injected_prompt_source() {
+    let extension = MemoriesExtension::<LocalMemoriesBackend, FakeMemoryPromptSource>::new(
+        /*metrics_client*/ None,
+    );
     let thread_store = ExtensionData::new("thread");
+    let backend = LocalMemoriesBackend::from_memory_root("/unused/memories");
     thread_store.insert(MemoriesExtensionConfig {
         enabled: true,
         dedicated_tools: false,
-        codex_home: tempdir.path().abs(),
+        prompt_source: FakeMemoryPromptSource {
+            summary: MemoryPromptSummary {
+                base_path: Path::new("/fake/memories").to_path_buf(),
+                content: "Remember repository-specific implementation preferences.".to_string(),
+            },
+        },
+        backend,
     });
 
     let fragments = extension
@@ -190,6 +211,11 @@ async fn prompt_contribution_uses_memory_summary_when_enabled() {
         fragments[0]
             .text()
             .contains("Remember repository-specific implementation preferences.")
+    );
+    assert!(
+        fragments[0]
+            .text()
+            .contains("- /fake/memories/memory_summary.md")
     );
 }
 

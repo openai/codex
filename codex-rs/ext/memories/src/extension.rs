@@ -1,3 +1,4 @@
+use std::marker::PhantomData;
 use std::sync::Arc;
 
 use codex_core::config::Config;
@@ -11,56 +12,74 @@ use codex_extension_api::ThreadStartInput;
 use codex_extension_api::ToolContributor;
 use codex_features::Feature;
 use codex_otel::MetricsClient;
-use codex_utils_absolute_path::AbsolutePathBuf;
 
+use crate::backend::MemoriesBackend;
 use crate::local::LocalMemoriesBackend;
+use crate::prompt_source::MemoryPromptSource;
 use crate::prompts::build_memory_tool_developer_instructions;
 use crate::tools;
 
 /// Contributes Codex memory read-path prompt context and memory read tools.
-#[derive(Clone, Default)]
-pub(crate) struct MemoriesExtension {
+#[derive(Clone)]
+pub(crate) struct MemoriesExtension<B = LocalMemoriesBackend, S = LocalMemoriesBackend> {
     metrics_client: Option<MetricsClient>,
+    storage: PhantomData<fn() -> (B, S)>,
 }
 
-impl MemoriesExtension {
-    fn new(metrics_client: Option<MetricsClient>) -> Self {
-        Self { metrics_client }
+impl Default for MemoriesExtension {
+    fn default() -> Self {
+        Self::new(/*metrics_client*/ None)
     }
 }
 
-#[derive(Clone, Debug)]
-pub(crate) struct MemoriesExtensionConfig {
-    pub(crate) enabled: bool,
-    pub(crate) dedicated_tools: bool,
-    pub(crate) codex_home: AbsolutePathBuf,
-}
-
-impl MemoriesExtensionConfig {
-    fn from_config(config: &Config) -> Self {
+impl<B, S> MemoriesExtension<B, S> {
+    pub(crate) fn new(metrics_client: Option<MetricsClient>) -> Self {
         Self {
-            enabled: config.features.enabled(Feature::MemoryTool) && config.memories.use_memories,
-            dedicated_tools: config.memories.dedicated_tools,
-            codex_home: config.codex_home.clone(),
+            metrics_client,
+            storage: PhantomData,
         }
     }
 }
 
-impl ContextContributor for MemoriesExtension {
+#[derive(Clone)]
+pub(crate) struct MemoriesExtensionConfig<B = LocalMemoriesBackend, S = LocalMemoriesBackend> {
+    pub(crate) enabled: bool,
+    pub(crate) dedicated_tools: bool,
+    pub(crate) backend: B,
+    pub(crate) prompt_source: S,
+}
+
+impl MemoriesExtensionConfig {
+    fn from_config(config: &Config) -> Self {
+        let backend = LocalMemoriesBackend::from_codex_home(&config.codex_home);
+        Self {
+            enabled: config.features.enabled(Feature::MemoryTool) && config.memories.use_memories,
+            dedicated_tools: config.memories.dedicated_tools,
+            prompt_source: backend.clone(),
+            backend,
+        }
+    }
+}
+
+impl<B, S> ContextContributor for MemoriesExtension<B, S>
+where
+    B: MemoriesBackend,
+    S: MemoryPromptSource,
+{
     fn contribute<'a>(
         &'a self,
         _session_store: &'a ExtensionData,
         thread_store: &'a ExtensionData,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Vec<PromptFragment>> + Send + 'a>> {
         Box::pin(async move {
-            let Some(config) = thread_store.get::<MemoriesExtensionConfig>() else {
+            let Some(config) = thread_store.get::<MemoriesExtensionConfig<B, S>>() else {
                 return Vec::new();
             };
             if !config.enabled {
                 return Vec::new();
             }
 
-            build_memory_tool_developer_instructions(&config.codex_home)
+            build_memory_tool_developer_instructions(&config.prompt_source)
                 .await
                 .map(PromptFragment::developer_policy)
                 .into_iter()
@@ -90,23 +109,24 @@ impl ConfigContributor<Config> for MemoriesExtension {
     }
 }
 
-impl ToolContributor for MemoriesExtension {
+impl<B, S> ToolContributor for MemoriesExtension<B, S>
+where
+    B: MemoriesBackend,
+    S: MemoryPromptSource,
+{
     fn tools(
         &self,
         _session_store: &ExtensionData,
         thread_store: &ExtensionData,
     ) -> Vec<Arc<dyn codex_extension_api::ToolExecutor<codex_extension_api::ToolCall>>> {
-        let Some(config) = thread_store.get::<MemoriesExtensionConfig>() else {
+        let Some(config) = thread_store.get::<MemoriesExtensionConfig<B, S>>() else {
             return Vec::new();
         };
         if !config.enabled || !config.dedicated_tools {
             return Vec::new();
         }
 
-        tools::memory_tools(
-            LocalMemoriesBackend::from_codex_home(&config.codex_home),
-            self.metrics_client.clone(),
-        )
+        tools::memory_tools(config.backend.clone(), self.metrics_client.clone())
     }
 }
 

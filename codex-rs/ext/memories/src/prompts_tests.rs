@@ -1,4 +1,5 @@
 use super::*;
+use crate::local::LocalMemoriesBackend;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use tempfile::tempdir;
@@ -17,7 +18,8 @@ async fn build_memory_tool_developer_instructions_renders_embedded_template() {
     .await
     .unwrap();
 
-    let instructions = build_memory_tool_developer_instructions(&codex_home)
+    let source = LocalMemoriesBackend::from_codex_home(&codex_home);
+    let instructions = build_memory_tool_developer_instructions(&source)
         .await
         .unwrap();
 
