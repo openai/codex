@@ -250,6 +250,9 @@ impl ChatWidget {
         };
 
         self.add_boxed_history(cell);
+        if self.thread_id().is_some() {
+            self.open_auto_review_denials_popup();
+        }
         self.request_redraw();
     }
 
