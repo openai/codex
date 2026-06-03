@@ -916,9 +916,9 @@ mod tests {
     use tokio::net::TcpListener;
     use tokio_tungstenite::accept_hdr_async_with_config;
 
-    const SENT_STATE: &str = "ois1.sent.nonce.ciphertext";
-    const HANDSHAKE_STATE: &str = "ois1.handshake.nonce.ciphertext";
-    const WRAPPED_ERROR_STATE: &str = "ois1.error.nonce.ciphertext";
+    const SENT_STATE: &str = "sent-state";
+    const HANDSHAKE_STATE: &str = "handshake-state";
+    const WRAPPED_ERROR_STATE: &str = "wrapped-error-state";
 
     struct RecordingAuthProvider {
         state: StdMutex<String>,
@@ -943,7 +943,7 @@ mod tests {
                 .lock()
                 .expect("state lock should not be poisoned");
             headers.insert(
-                "x-oai-is",
+                "x-test-state",
                 HeaderValue::from_str(&state).expect("state should be a valid header value"),
             );
         }
@@ -955,13 +955,13 @@ mod tests {
             response_headers: &HeaderMap,
         ) {
             let Some(sent_state) = request_headers
-                .get("x-oai-is")
+                .get("x-test-state")
                 .and_then(|value| value.to_str().ok())
             else {
                 return;
             };
             let Some(update_state) = response_headers
-                .get("x-oai-is-update")
+                .get("x-test-state-update")
                 .and_then(|value| value.to_str().ok())
             else {
                 return;
@@ -999,11 +999,11 @@ mod tests {
                         .lock()
                         .expect("request state lock should not be poisoned") = request
                         .headers()
-                        .get("x-oai-is")
+                        .get("x-test-state")
                         .and_then(|value| value.to_str().ok())
                         .map(ToString::to_string);
                     response.headers_mut().insert(
-                        "x-oai-is-update",
+                        "x-test-state-update",
                         HeaderValue::from_static(HANDSHAKE_STATE),
                     );
                     Ok(response)
@@ -1028,7 +1028,7 @@ mod tests {
                             "message": WEBSOCKET_CONNECTION_LIMIT_REACHED_MESSAGE,
                         },
                         "headers": {
-                            "x-oai-is-update": WRAPPED_ERROR_STATE,
+                            "x-test-state-update": WRAPPED_ERROR_STATE,
                         },
                     })
                     .to_string()
