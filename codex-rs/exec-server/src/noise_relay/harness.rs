@@ -368,7 +368,9 @@ async fn receive_data(
     // implicit. A future or duplicate ciphertext passed directly to Clatter
     // would desynchronize the channel.
     for ciphertext in inbound_ciphertexts.push(data.seq, data.payload)? {
-        let plaintext = transport.decrypt(&ciphertext)?;
+        let plaintext = transport.decrypt(&ciphertext).map_err(|error| {
+            ExecServerError::Protocol(format!("Noise relay decryption failed: {error}"))
+        })?;
 
         // The authenticated byte stream can carry partial or multiple JSON-RPC
         // messages; emit only complete, successfully parsed messages.
