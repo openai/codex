@@ -12,9 +12,25 @@
 //! startup. A future input-preservation layer would need to replay unrelated bytes through the same
 //! parser that normal TUI input uses.
 
+use std::time::Duration;
+
+/// Default wall-clock budget for each startup probe group.
+pub(crate) const DEFAULT_TIMEOUT: Duration = Duration::from_millis(100);
+
+/// Default terminal foreground and background colors reported by OSC 10 and OSC 11.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub(crate) struct DefaultColors {
+    /// Default foreground color as an 8-bit RGB tuple.
+    pub(crate) fg: (u8, u8, u8),
+    /// Default background color as an 8-bit RGB tuple.
+    pub(crate) bg: (u8, u8, u8),
+}
+
 #[cfg(unix)]
 #[cfg_attr(test, allow(dead_code))]
 mod imp {
+    use super::DefaultColors;
+    use super::parse_default_colors;
     use std::fs::File;
     use std::fs::OpenOptions;
     use std::io;
@@ -26,18 +42,6 @@ mod imp {
 
     use crossterm::event::KeyboardEnhancementFlags;
     use ratatui::layout::Position;
-
-    /// Default wall-clock budget for each startup probe group.
-    pub(crate) const DEFAULT_TIMEOUT: Duration = Duration::from_millis(100);
-
-    /// Default terminal foreground and background colors reported by OSC 10 and OSC 11.
-    #[derive(Debug, Clone, Copy, Eq, PartialEq)]
-    pub(crate) struct DefaultColors {
-        /// Default foreground color as an 8-bit RGB tuple.
-        pub(crate) fg: (u8, u8, u8),
-        /// Default background color as an 8-bit RGB tuple.
-        pub(crate) bg: (u8, u8, u8),
-    }
 
     /// Results from the TUI's one-shot startup terminal probe.
     #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -389,60 +393,6 @@ mod imp {
         None
     }
 
-    fn parse_osc_color(buffer: &[u8], slot: u8) -> Option<(u8, u8, u8)> {
-        let prefix = format!("\x1B]{slot};");
-        let start = find_subslice(buffer, prefix.as_bytes())?;
-        let payload_start = start + prefix.len();
-        let rest = &buffer[payload_start..];
-        let (payload_end, _terminator_len) = osc_payload_end(rest)?;
-        let payload = std::str::from_utf8(&rest[..payload_end]).ok()?;
-        parse_osc_rgb(payload)
-    }
-
-    fn parse_default_colors(buffer: &[u8]) -> Option<DefaultColors> {
-        let fg = parse_osc_color(buffer, /*slot*/ 10)?;
-        let bg = parse_osc_color(buffer, /*slot*/ 11)?;
-        Some(DefaultColors { fg, bg })
-    }
-
-    fn osc_payload_end(buffer: &[u8]) -> Option<(usize, usize)> {
-        let mut idx = 0;
-        while idx < buffer.len() {
-            match buffer[idx] {
-                0x07 => return Some((idx, 1)),
-                0x1B if buffer.get(idx + 1) == Some(&b'\\') => return Some((idx, 2)),
-                _ => idx += 1,
-            }
-        }
-        None
-    }
-
-    fn parse_osc_rgb(payload: &str) -> Option<(u8, u8, u8)> {
-        let (prefix, values) = payload.trim().split_once(':')?;
-        if !prefix.eq_ignore_ascii_case("rgb") && !prefix.eq_ignore_ascii_case("rgba") {
-            return None;
-        }
-
-        let mut parts = values.split('/');
-        let r = parse_osc_component(parts.next()?)?;
-        let g = parse_osc_component(parts.next()?)?;
-        let b = parse_osc_component(parts.next()?)?;
-        if prefix.eq_ignore_ascii_case("rgba") {
-            parse_osc_component(parts.next()?)?;
-        }
-        parts.next().is_none().then_some((r, g, b))
-    }
-
-    fn parse_osc_component(component: &str) -> Option<u8> {
-        match component.len() {
-            2 => u8::from_str_radix(component, 16).ok(),
-            4 => u16::from_str_radix(component, 16)
-                .ok()
-                .map(|value| (value / 257) as u8),
-            _ => None,
-        }
-    }
-
     /// Parser state for the keyboard enhancement probe.
     ///
     /// `UnsupportedFallback` records that a primary-device-attributes response arrived without
@@ -517,12 +467,6 @@ mod imp {
         None
     }
 
-    fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-        haystack
-            .windows(needle.len())
-            .position(|window| window == needle)
-    }
-
     fn find_all_subslices<'a>(
         haystack: &'a [u8],
         needle: &'a [u8],
@@ -547,53 +491,6 @@ mod imp {
             assert_eq!(
                 parse_cursor_position(b"\x1B[I\x1B[20;10R"),
                 Some(Position { x: 9, y: 19 })
-            );
-        }
-
-        #[test]
-        fn parses_osc_colors_with_bel_and_st() {
-            assert_eq!(
-                parse_osc_color(b"\x1B]10;rgb:ffff/8000/0000\x07", /*slot*/ 10),
-                Some((255, 127, 0))
-            );
-            assert_eq!(
-                parse_osc_color(b"\x1B]11;rgba:00/80/ff/ff\x1B\\", /*slot*/ 11),
-                Some((0, 128, 255))
-            );
-        }
-
-        #[test]
-        fn parses_two_and_four_digit_color_components() {
-            assert_eq!(parse_osc_rgb("rgb:00/80/ff"), Some((0, 128, 255)));
-            assert_eq!(
-                parse_osc_rgb("rgba:ffff/8000/0000/ffff"),
-                Some((255, 127, 0))
-            );
-        }
-
-        #[test]
-        fn parses_default_colors_from_one_buffer() {
-            assert_eq!(
-                parse_default_colors(
-                    b"\x1B]10;rgb:eeee/eeee/eeee\x1B\\\x1B]11;rgb:1111/1111/1111\x07"
-                ),
-                Some(DefaultColors {
-                    fg: (238, 238, 238),
-                    bg: (17, 17, 17)
-                })
-            );
-            assert_eq!(
-                parse_default_colors(
-                    b"\x1B]11;rgb:1111/1111/1111\x07\x1B]10;rgb:eeee/eeee/eeee\x1B\\"
-                ),
-                Some(DefaultColors {
-                    fg: (238, 238, 238),
-                    bg: (17, 17, 17)
-                })
-            );
-            assert_eq!(
-                parse_default_colors(b"\x1B]10;rgb:eeee/eeee/eeee\x1B\\"),
-                None
             );
         }
 
@@ -655,5 +552,289 @@ mod imp {
     }
 }
 
-#[cfg(unix)]
+#[cfg(windows)]
+mod imp {
+    use super::DefaultColors;
+    use super::parse_default_colors;
+    use std::io;
+    use std::io::ErrorKind;
+    use std::time::Duration;
+    use std::time::Instant;
+    use windows_sys::Win32::Foundation::HANDLE;
+    use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+    use windows_sys::Win32::Foundation::WAIT_OBJECT_0;
+    use windows_sys::Win32::Foundation::WAIT_TIMEOUT;
+    use windows_sys::Win32::Storage::FileSystem::ReadFile;
+    use windows_sys::Win32::Storage::FileSystem::WriteFile;
+    use windows_sys::Win32::System::Console::ENABLE_VIRTUAL_TERMINAL_INPUT;
+    use windows_sys::Win32::System::Console::GetConsoleMode;
+    use windows_sys::Win32::System::Console::GetStdHandle;
+    use windows_sys::Win32::System::Console::STD_INPUT_HANDLE;
+    use windows_sys::Win32::System::Console::STD_OUTPUT_HANDLE;
+    use windows_sys::Win32::System::Console::SetConsoleMode;
+    use windows_sys::Win32::System::Threading::WaitForSingleObject;
+
+    /// Queries OSC 10 and OSC 11 default colors under one shared deadline.
+    ///
+    /// The Windows path uses raw console handles because crossterm's public color query helper is
+    /// currently Unix-only. Failures and missing responses are reported as `Ok(None)` by callers so
+    /// terminals without OSC 10/11 support keep the existing conservative palette fallback.
+    pub(crate) fn default_colors(timeout: Duration) -> io::Result<Option<DefaultColors>> {
+        let input = std_handle(STD_INPUT_HANDLE)?;
+        let output = std_handle(STD_OUTPUT_HANDLE)?;
+        let _vt_input = VirtualTerminalInputMode::enable(input)?;
+        write_all(output, b"\x1B]10;?\x1B\\\x1B]11;?\x1B\\")?;
+        read_until(input, timeout, parse_default_colors)
+    }
+
+    fn std_handle(kind: u32) -> io::Result<HANDLE> {
+        let handle = unsafe { GetStdHandle(kind) };
+        if handle == 0 || handle == INVALID_HANDLE_VALUE {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(handle)
+    }
+
+    struct VirtualTerminalInputMode {
+        handle: HANDLE,
+        original_mode: u32,
+    }
+
+    impl VirtualTerminalInputMode {
+        fn enable(handle: HANDLE) -> io::Result<Self> {
+            let mut original_mode = 0;
+            if unsafe { GetConsoleMode(handle, &mut original_mode) } == 0 {
+                return Err(io::Error::last_os_error());
+            }
+
+            let requested_mode = original_mode | ENABLE_VIRTUAL_TERMINAL_INPUT;
+            if unsafe { SetConsoleMode(handle, requested_mode) } == 0 {
+                return Err(io::Error::last_os_error());
+            }
+
+            Ok(Self {
+                handle,
+                original_mode,
+            })
+        }
+    }
+
+    impl Drop for VirtualTerminalInputMode {
+        fn drop(&mut self) {
+            unsafe {
+                SetConsoleMode(self.handle, self.original_mode);
+            }
+        }
+    }
+
+    fn write_all(handle: HANDLE, mut bytes: &[u8]) -> io::Result<()> {
+        while !bytes.is_empty() {
+            let mut written = 0;
+            let ok = unsafe {
+                WriteFile(
+                    handle,
+                    bytes.as_ptr().cast(),
+                    bytes.len().min(u32::MAX as usize) as u32,
+                    &mut written,
+                    std::ptr::null_mut(),
+                )
+            };
+            if ok == 0 {
+                return Err(io::Error::last_os_error());
+            }
+            if written == 0 {
+                return Err(io::Error::from(ErrorKind::WriteZero));
+            }
+            bytes = &bytes[written as usize..];
+        }
+        Ok(())
+    }
+
+    fn read_until<T>(
+        handle: HANDLE,
+        timeout: Duration,
+        mut parse: impl FnMut(&[u8]) -> Option<T>,
+    ) -> io::Result<Option<T>> {
+        let deadline = Instant::now() + timeout;
+        let mut buffer = Vec::new();
+        loop {
+            if let Some(value) = parse(&buffer) {
+                return Ok(Some(value));
+            }
+
+            let now = Instant::now();
+            if now >= deadline {
+                return Ok(None);
+            }
+            let timeout_ms = deadline
+                .saturating_duration_since(now)
+                .as_millis()
+                .min(u32::MAX as u128) as u32;
+            match unsafe { WaitForSingleObject(handle, timeout_ms) } {
+                WAIT_OBJECT_0 => read_once(handle, &mut buffer)?,
+                WAIT_TIMEOUT => return Ok(None),
+                _ => return Err(io::Error::last_os_error()),
+            }
+        }
+    }
+
+    fn read_once(handle: HANDLE, buffer: &mut Vec<u8>) -> io::Result<()> {
+        let mut chunk = [0_u8; 256];
+        let mut read = 0;
+        let ok = unsafe {
+            ReadFile(
+                handle,
+                chunk.as_mut_ptr().cast(),
+                chunk.len() as u32,
+                &mut read,
+                std::ptr::null_mut(),
+            )
+        };
+        if ok == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        buffer.extend_from_slice(&chunk[..read as usize]);
+        Ok(())
+    }
+}
+
+fn parse_osc_color(buffer: &[u8], slot: u8) -> Option<(u8, u8, u8)> {
+    let prefix = format!("\x1B]{slot};");
+    let start = find_subslice(buffer, prefix.as_bytes())?;
+    let payload_start = start + prefix.len();
+    let rest = &buffer[payload_start..];
+    let (payload_end, _terminator_len) = osc_payload_end(rest)?;
+    let payload = std::str::from_utf8(&rest[..payload_end]).ok()?;
+    parse_osc_rgb(payload)
+}
+
+fn parse_default_colors(buffer: &[u8]) -> Option<DefaultColors> {
+    let fg = parse_osc_color(buffer, /*slot*/ 10)?;
+    let bg = parse_osc_color(buffer, /*slot*/ 11)?;
+    Some(DefaultColors { fg, bg })
+}
+
+fn osc_payload_end(buffer: &[u8]) -> Option<(usize, usize)> {
+    let mut idx = 0;
+    while idx < buffer.len() {
+        match buffer[idx] {
+            0x07 => return Some((idx, 1)),
+            0x1B if buffer.get(idx + 1) == Some(&b'\\') => return Some((idx, 2)),
+            _ => idx += 1,
+        }
+    }
+    None
+}
+
+fn parse_osc_rgb(payload: &str) -> Option<(u8, u8, u8)> {
+    let (prefix, values) = payload.trim().split_once(':')?;
+    if !prefix.eq_ignore_ascii_case("rgb") && !prefix.eq_ignore_ascii_case("rgba") {
+        return None;
+    }
+
+    let mut parts = values.split('/');
+    let r = parse_osc_component(parts.next()?)?;
+    let g = parse_osc_component(parts.next()?)?;
+    let b = parse_osc_component(parts.next()?)?;
+    if prefix.eq_ignore_ascii_case("rgba") {
+        parse_osc_component(parts.next()?)?;
+    }
+    parts.next().is_none().then_some((r, g, b))
+}
+
+fn parse_osc_component(component: &str) -> Option<u8> {
+    match component.len() {
+        2 => u8::from_str_radix(component, 16).ok(),
+        4 => u16::from_str_radix(component, 16)
+            .ok()
+            .map(|value| (value / 257) as u8),
+        _ => None,
+    }
+}
+
+fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
+}
+
+#[cfg(any(unix, windows))]
 pub(crate) use imp::*;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn parses_osc_colors_with_bel_and_st() {
+        assert_eq!(
+            parse_osc_color(b"\x1B]10;rgb:ffff/8000/0000\x07", /*slot*/ 10),
+            Some((255, 127, 0))
+        );
+        assert_eq!(
+            parse_osc_color(b"\x1B]11;rgba:00/80/ff/ff\x1B\\", /*slot*/ 11),
+            Some((0, 128, 255))
+        );
+    }
+
+    #[test]
+    fn parses_two_and_four_digit_color_components() {
+        assert_eq!(parse_osc_rgb("rgb:00/80/ff"), Some((0, 128, 255)));
+        assert_eq!(
+            parse_osc_rgb("rgba:ffff/8000/0000/ffff"),
+            Some((255, 127, 0))
+        );
+    }
+
+    #[test]
+    fn parses_default_colors_from_one_buffer() {
+        assert_eq!(
+            parse_default_colors(b"\x1B]10;rgb:eeee/eeee/eeee\x1B\\\x1B]11;rgb:1111/1111/1111\x07"),
+            Some(DefaultColors {
+                fg: (238, 238, 238),
+                bg: (17, 17, 17)
+            })
+        );
+        assert_eq!(
+            parse_default_colors(b"\x1B]11;rgb:1111/1111/1111\x07\x1B]10;rgb:eeee/eeee/eeee\x1B\\"),
+            Some(DefaultColors {
+                fg: (238, 238, 238),
+                bg: (17, 17, 17)
+            })
+        );
+        assert_eq!(
+            parse_default_colors(b"\x1B]10;rgb:eeee/eeee/eeee\x1B\\"),
+            None
+        );
+    }
+
+    #[test]
+    fn ignores_malformed_or_partial_default_color_responses() {
+        assert_eq!(
+            parse_default_colors(b"\x1B]10;rgb:eeee/eeee/eeee\x1B\\\x1B]11;rgb:nope\x07"),
+            None
+        );
+        assert_eq!(
+            parse_default_colors(b"\x1B]10;rgb:eeee/eeee/eeee\x1B\\\x1B]11;rgb:11/11/11/11\x07"),
+            None
+        );
+        assert_eq!(
+            parse_default_colors(b"\x1B]10;rgb:eeee/eeee/eeee\x1B\\\x1B]11;rgb:1111/1111/1111"),
+            None
+        );
+    }
+
+    #[test]
+    fn parses_default_colors_with_unrelated_bytes() {
+        assert_eq!(
+            parse_default_colors(
+                b"typed\x1B]10;rgb:eeee/eeee/eeee\x1B\\noise\x1B]11;rgb:1111/1111/1111\x07"
+            ),
+            Some(DefaultColors {
+                fg: (238, 238, 238),
+                bg: (17, 17, 17),
+            })
+        );
+    }
+}

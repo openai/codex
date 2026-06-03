@@ -68,7 +68,7 @@ pub fn default_bg() -> Option<(u8, u8, u8)> {
     default_colors().map(|c| c.bg)
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub(crate) fn set_default_colors_from_startup_probe(
     colors: Option<crate::terminal_probe::DefaultColors>,
 ) {
@@ -177,7 +177,73 @@ mod imp {
     }
 }
 
-#[cfg(not(all(unix, not(test))))]
+#[cfg(windows)]
+mod imp {
+    use super::DefaultColors;
+    use std::sync::Mutex;
+    use std::sync::OnceLock;
+
+    struct Cache<T> {
+        attempted: bool,
+        value: Option<T>,
+    }
+
+    impl<T> Default for Cache<T> {
+        fn default() -> Self {
+            Self {
+                attempted: false,
+                value: None,
+            }
+        }
+    }
+
+    impl<T: Copy> Cache<T> {
+        fn get_or_init_with(&mut self, mut init: impl FnMut() -> Option<T>) -> Option<T> {
+            if !self.attempted {
+                self.value = init();
+                self.attempted = true;
+            }
+            self.value
+        }
+    }
+
+    fn default_colors_cache() -> &'static Mutex<Cache<DefaultColors>> {
+        static CACHE: OnceLock<Mutex<Cache<DefaultColors>>> = OnceLock::new();
+        CACHE.get_or_init(|| Mutex::new(Cache::default()))
+    }
+
+    pub(super) fn default_colors() -> Option<DefaultColors> {
+        let cache = default_colors_cache();
+        let mut cache = cache.lock().ok()?;
+        cache.get_or_init_with(query_default_colors)
+    }
+
+    pub(super) fn set_default_colors_from_startup_probe(
+        colors: Option<crate::terminal_probe::DefaultColors>,
+    ) {
+        if let Ok(mut cache) = default_colors_cache().lock() {
+            cache.value = colors.map(|colors| DefaultColors {
+                fg: colors.fg,
+                bg: colors.bg,
+            });
+            cache.attempted = true;
+        }
+    }
+
+    pub(super) fn requery_default_colors() {}
+
+    fn query_default_colors() -> Option<DefaultColors> {
+        crate::terminal_probe::default_colors(crate::terminal_probe::DEFAULT_TIMEOUT)
+            .ok()
+            .flatten()
+            .map(|colors| DefaultColors {
+                fg: colors.fg,
+                bg: colors.bg,
+            })
+    }
+}
+
+#[cfg(not(any(all(unix, not(test)), windows)))]
 mod imp {
     use super::DefaultColors;
 
@@ -185,7 +251,7 @@ mod imp {
         None
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     pub(super) fn set_default_colors_from_startup_probe(
         _colors: Option<crate::terminal_probe::DefaultColors>,
     ) {
