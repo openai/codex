@@ -21,7 +21,7 @@ const PERSONAL_ACCESS_TOKEN: &str = "at-cli-test";
 const PERSONAL_ACCESS_TOKEN_AUTHORIZATION: &str = "Bearer at-cli-test";
 const PERSONAL_ACCESS_TOKEN_ACCOUNT_ID: &str = "account-pat";
 const WHOAMI_PATH: &str = "/v1/user-auth-credential/whoami";
-const CLOUD_REQUIREMENTS_PATH: &str = "/backend-api/wham/config/requirements";
+const CLOUD_CONFIG_BUNDLE_PATH: &str = "/backend-api/wham/config/bundle";
 
 fn repo_root() -> std::path::PathBuf {
     #[expect(clippy::expect_used)]
@@ -51,7 +51,7 @@ async fn mount_personal_access_token_startup(server: &MockServer) {
         .mount(server)
         .await;
     Mock::given(method("GET"))
-        .and(path(CLOUD_REQUIREMENTS_PATH))
+        .and(path(CLOUD_CONFIG_BUNDLE_PATH))
         .and(header("authorization", PERSONAL_ACCESS_TOKEN_AUTHORIZATION))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
         .expect(1)
