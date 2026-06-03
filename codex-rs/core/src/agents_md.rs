@@ -26,7 +26,6 @@ use codex_exec_server::ExecutorFileSystem;
 use codex_features::Feature;
 use codex_prompts::HIERARCHICAL_AGENTS_MESSAGE;
 use codex_utils_absolute_path::AbsolutePathBuf;
-use dunce::canonicalize as normalize_path;
 use std::io;
 use toml::Value as TomlValue;
 use tracing::error;
@@ -208,8 +207,8 @@ impl<'a> AgentsMdManager<'a> {
         }
 
         let mut dir = self.config.cwd.clone();
-        if let Ok(canon) = normalize_path(&dir) {
-            dir = AbsolutePathBuf::try_from(canon)?;
+        if let Ok(canon) = fs.canonicalize(&dir, /*sandbox*/ None).await {
+            dir = canon;
         }
 
         let mut merged = TomlValue::Table(toml::map::Map::new());
