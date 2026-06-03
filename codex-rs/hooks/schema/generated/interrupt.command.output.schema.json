@@ -1,0 +1,12 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+    "systemMessage": {
+      "default": null,
+      "type": "string"
+    }
+  },
+  "title": "interrupt.command.output",
+  "type": "object"
+}

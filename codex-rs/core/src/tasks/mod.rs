@@ -27,6 +27,7 @@ use crate::goals::GoalRuntimeEvent;
 use crate::hook_runtime::inspect_pending_input;
 use crate::hook_runtime::record_additional_contexts;
 use crate::hook_runtime::record_pending_input;
+use crate::hook_runtime::run_turn_interrupt_hooks;
 use crate::session::TurnInput;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
@@ -854,6 +855,10 @@ impl Session {
             if let Err(err) = self.flush_rollout().await {
                 warn!("failed to flush interrupted-turn marker before emitting TurnAborted: {err}");
             }
+        }
+
+        if reason == TurnAbortReason::Interrupted {
+            run_turn_interrupt_hooks(self, &task.turn_context).await;
         }
 
         let (completed_at, duration_ms) = task

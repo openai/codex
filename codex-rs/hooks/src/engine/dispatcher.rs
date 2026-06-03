@@ -61,7 +61,9 @@ pub(crate) fn select_handlers_for_matcher_inputs(
                         .any(|input| matches_matcher(handler.matcher.as_deref(), Some(input)))
                 }
             }
-            HookEventName::UserPromptSubmit | HookEventName::Stop => true,
+            HookEventName::UserPromptSubmit | HookEventName::Stop | HookEventName::Interrupt => {
+                true
+            }
         })
         .cloned()
         .collect()
@@ -149,7 +151,8 @@ fn scope_for_event(event_name: HookEventName) -> HookScope {
         | HookEventName::PostCompact
         | HookEventName::UserPromptSubmit
         | HookEventName::SubagentStop
-        | HookEventName::Stop => HookScope::Turn,
+        | HookEventName::Stop
+        | HookEventName::Interrupt => HookScope::Turn,
     }
 }
 
@@ -201,6 +204,34 @@ mod tests {
         ];
 
         let selected = select_handlers(&handlers, HookEventName::Stop, /*matcher_input*/ None);
+
+        assert_eq!(selected.len(), 2);
+        assert_eq!(selected[0].display_order, 0);
+        assert_eq!(selected[1].display_order, 1);
+    }
+
+    #[test]
+    fn select_handlers_ignores_interrupt_matchers() {
+        let handlers = vec![
+            make_handler(
+                HookEventName::Interrupt,
+                Some("^interrupted$"),
+                "echo first",
+                /*display_order*/ 0,
+            ),
+            make_handler(
+                HookEventName::Interrupt,
+                /*matcher*/ None,
+                "echo second",
+                /*display_order*/ 1,
+            ),
+        ];
+
+        let selected = select_handlers(
+            &handlers,
+            HookEventName::Interrupt,
+            /*matcher_input*/ None,
+        );
 
         assert_eq!(selected.len(), 2);
         assert_eq!(selected[0].display_order, 0);

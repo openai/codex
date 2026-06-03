@@ -20,5 +20,6 @@ expression: popup
   SubagentStart         0           0           When a subagent is created
   SubagentStop          0           0           Right before a subagent ends its turn
   Stop                  0           0           Right before Codex ends its turn
+  Interrupt             0           0           Right before an interrupted turn is aborted
 
   Press enter to view hooks; esc to close

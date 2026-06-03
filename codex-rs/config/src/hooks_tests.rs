@@ -238,3 +238,34 @@ commandWindows = "powershell -File C:\\enterprise\\hooks\\pre.ps1"
         }
     );
 }
+
+#[test]
+fn interrupt_hook_events_deserialize_without_matchers() {
+    let parsed: HookEventsToml = toml::from_str(
+        r#"
+[[Interrupt]]
+
+[[Interrupt.hooks]]
+type = "command"
+command = "python3 /tmp/interrupt.py"
+"#,
+    )
+    .expect("interrupt hook events TOML should deserialize");
+
+    assert_eq!(
+        parsed,
+        HookEventsToml {
+            interrupt: vec![MatcherGroup {
+                matcher: None,
+                hooks: vec![HookHandlerConfig::Command {
+                    command: "python3 /tmp/interrupt.py".to_string(),
+                    command_windows: None,
+                    timeout_sec: None,
+                    r#async: false,
+                    status_message: None,
+                }],
+            }],
+            ..Default::default()
+        }
+    );
+}

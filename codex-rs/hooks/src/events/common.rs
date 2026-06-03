@@ -115,7 +115,7 @@ pub(crate) fn matcher_pattern_for_event(
         | HookEventName::SubagentStop
         | HookEventName::PreCompact
         | HookEventName::PostCompact => matcher,
-        HookEventName::UserPromptSubmit | HookEventName::Stop => None,
+        HookEventName::UserPromptSubmit | HookEventName::Stop | HookEventName::Interrupt => None,
     }
 }
 
@@ -260,6 +260,10 @@ mod tests {
         );
         assert_eq!(
             matcher_pattern_for_event(HookEventName::Stop, Some("^done$")),
+            None
+        );
+        assert_eq!(
+            matcher_pattern_for_event(HookEventName::Interrupt, Some("^interrupted$")),
             None
         );
     }

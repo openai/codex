@@ -24,6 +24,8 @@ pub(crate) struct GeneratedHookSchemas {
     pub user_prompt_submit_command_output: Value,
     pub stop_command_input: Value,
     pub stop_command_output: Value,
+    pub interrupt_command_input: Value,
+    pub interrupt_command_output: Value,
 }
 
 pub(crate) fn generated_hook_schemas() -> &'static GeneratedHookSchemas {
@@ -109,6 +111,14 @@ pub(crate) fn generated_hook_schemas() -> &'static GeneratedHookSchemas {
             "stop.command.output",
             include_str!("../../schema/generated/stop.command.output.schema.json"),
         ),
+        interrupt_command_input: parse_json_schema(
+            "interrupt.command.input",
+            include_str!("../../schema/generated/interrupt.command.input.schema.json"),
+        ),
+        interrupt_command_output: parse_json_schema(
+            "interrupt.command.output",
+            include_str!("../../schema/generated/interrupt.command.output.schema.json"),
+        ),
     })
 }
 
@@ -146,5 +156,7 @@ mod tests {
         assert_eq!(schemas.user_prompt_submit_command_output["type"], "object");
         assert_eq!(schemas.stop_command_input["type"], "object");
         assert_eq!(schemas.stop_command_output["type"], "object");
+        assert_eq!(schemas.interrupt_command_input["type"], "object");
+        assert_eq!(schemas.interrupt_command_output["type"], "object");
     }
 }
