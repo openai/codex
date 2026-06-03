@@ -58,6 +58,7 @@ use codex_features::Feature;
 use codex_features::unstable_features_warning_event;
 use codex_hooks::Hooks;
 use codex_hooks::HooksConfig;
+use codex_hooks::PromptHookRunner;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_login::auth_env_telemetry::collect_auth_env_telemetry;
@@ -1482,10 +1483,11 @@ impl Session {
         // layers such as request/session overrides that were present when this session
         // was created.
         let notify_config_contributors = !self.services.extensions.config_contributors().is_empty();
-        let (previous_config, new_config, config) = {
+        let (previous_config, new_config, config, service_tier) = {
             let mut state = self.state.lock().await;
             let previous_config = notify_config_contributors
                 .then(|| Self::build_effective_session_config(&state.session_configuration));
+            let service_tier = state.session_configuration.service_tier.clone();
             let mut config = (*state.session_configuration.original_config_do_not_use).clone();
             config.config_layer_stack = config
                 .config_layer_stack
@@ -1496,15 +1498,23 @@ impl Session {
             state.session_configuration.original_config_do_not_use = Arc::clone(&config);
             let new_config = notify_config_contributors
                 .then(|| Self::build_effective_session_config(&state.session_configuration));
-            (previous_config, new_config, config)
+            (previous_config, new_config, config, service_tier)
         };
         self.emit_config_changed_contributors(previous_config.as_ref(), new_config.as_ref());
         self.services.skills_manager.clear_cache();
         self.services.plugins_manager.clear_cache();
+        let prompt_hook_runner = crate::hook_prompt::build_prompt_hook_runner(
+            self.services.model_client.clone(),
+            Arc::clone(&self.services.models_manager),
+            config.as_ref(),
+            self.services.session_telemetry.clone(),
+            service_tier,
+        );
         let hooks = build_hooks_for_config(
             config.as_ref(),
             self.services.plugins_manager.as_ref(),
             self.services.user_shell.as_ref(),
+            Some(prompt_hook_runner),
         )
         .await;
 
@@ -3382,6 +3392,7 @@ async fn build_hooks_for_config(
     config: &Config,
     plugins_manager: &PluginsManager,
     user_shell: &crate::shell::Shell,
+    prompt_hook_runner: Option<PromptHookRunner>,
 ) -> Hooks {
     let mut hook_shell_argv = user_shell.derive_exec_args("", /*use_login_shell*/ false);
     let hook_shell_program = hook_shell_argv.remove(0);
@@ -3399,7 +3410,7 @@ async fn build_hooks_for_config(
         plugin_hook_load_warnings,
         shell_program: Some(hook_shell_program),
         shell_args: hook_shell_argv,
-        prompt_hook_runner: None,
+        prompt_hook_runner,
     })
 }
 

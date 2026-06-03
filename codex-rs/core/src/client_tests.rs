@@ -2,6 +2,7 @@ use super::AuthRequestTelemetryContext;
 use super::ModelClient;
 use super::PendingUnauthorizedRetry;
 use super::UnauthorizedRecoveryExecution;
+use super::WebsocketSession;
 use super::X_CODEX_INSTALLATION_ID_HEADER;
 use super::X_CODEX_PARENT_THREAD_ID_HEADER;
 use super::X_CODEX_TURN_METADATA_HEADER;
@@ -114,6 +115,24 @@ fn test_model_info() -> ModelInfo {
         "experimental_supported_tools": []
     }))
     .expect("deserialize test model info")
+}
+
+#[test]
+fn isolated_session_does_not_touch_cached_websocket_state() {
+    let model_client = test_model_client(SessionSource::Cli);
+    let cached_websocket_session = WebsocketSession::default();
+    cached_websocket_session.set_connection_reused(/*connection_reused*/ true);
+    model_client.store_cached_websocket_session(cached_websocket_session);
+
+    let isolated_session = model_client.new_isolated_session();
+    assert!(!isolated_session.websocket_session.connection_reused());
+    drop(isolated_session);
+
+    assert!(
+        model_client
+            .take_cached_websocket_session()
+            .connection_reused()
+    );
 }
 
 fn test_session_telemetry() -> SessionTelemetry {

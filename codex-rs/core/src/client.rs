@@ -238,6 +238,7 @@ pub struct ModelClient {
 pub struct ModelClientSession {
     client: ModelClient,
     websocket_session: WebsocketSession,
+    cache_websocket_session_on_drop: bool,
     /// Turn state for sticky routing.
     ///
     /// This is an `OnceLock` that stores the turn state value received from the server
@@ -382,6 +383,18 @@ impl ModelClient {
         ModelClientSession {
             client: self.clone(),
             websocket_session: self.take_cached_websocket_session(),
+            cache_websocket_session_on_drop: true,
+            turn_state: Arc::new(OnceLock::new()),
+        }
+    }
+
+    /// Creates a fresh streaming session that does not read or write the session's cached
+    /// WebSocket state.
+    pub(crate) fn new_isolated_session(&self) -> ModelClientSession {
+        ModelClientSession {
+            client: self.clone(),
+            websocket_session: WebsocketSession::default(),
+            cache_websocket_session_on_drop: false,
             turn_state: Arc::new(OnceLock::new()),
         }
     }
@@ -951,9 +964,11 @@ impl ModelClient {
 
 impl Drop for ModelClientSession {
     fn drop(&mut self) {
-        let websocket_session = std::mem::take(&mut self.websocket_session);
-        self.client
-            .store_cached_websocket_session(websocket_session);
+        if self.cache_websocket_session_on_drop {
+            let websocket_session = std::mem::take(&mut self.websocket_session);
+            self.client
+                .store_cached_websocket_session(websocket_session);
+        }
     }
 }
 

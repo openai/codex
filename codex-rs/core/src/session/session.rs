@@ -942,17 +942,6 @@ impl Session {
                     (None, None)
                 };
 
-            let hooks =
-                build_hooks_for_config(&config, plugins_manager.as_ref(), &default_shell).await;
-            for warning in hooks.startup_warnings() {
-                post_session_configured_events.push(Event {
-                    id: INITIAL_SUBMIT_ID.to_owned(),
-                    msg: EventMsg::Warning(WarningEvent {
-                        message: warning.clone(),
-                    }),
-                });
-            }
-
             let analytics_events_client = analytics_events_client.unwrap_or_else(|| {
                 AnalyticsEventsClient::new(
                     Arc::clone(&auth_manager),
@@ -966,6 +955,49 @@ impl Session {
                 SessionId::from(thread_id)
             };
             let agent_control = agent_control.with_session_id(session_id);
+            let model_client = ModelClient::new(
+                Some(Arc::clone(&auth_manager)),
+                session_id,
+                thread_id,
+                installation_id.clone(),
+                session_configuration.provider.clone(),
+                session_configuration.session_source.clone(),
+                session_configuration.parent_thread_id,
+                config.model_verbosity,
+                config.features.enabled(Feature::EnableRequestCompression),
+                config.features.enabled(Feature::RuntimeMetrics),
+                Self::build_model_client_beta_features_header(config.as_ref()),
+                attestation_provider.clone(),
+            )
+            .with_prompt_cache_key_override(
+                crate::guardian::prompt_cache_key_override_for_review_session(
+                    &session_configuration.session_source,
+                    session_configuration.parent_thread_id,
+                ),
+            );
+            model_client.set_window_generation(window_generation);
+            let prompt_hook_runner = crate::hook_prompt::build_prompt_hook_runner(
+                model_client.clone(),
+                Arc::clone(&models_manager),
+                config.as_ref(),
+                session_telemetry.clone(),
+                session_configuration.service_tier.clone(),
+            );
+            let hooks = build_hooks_for_config(
+                &config,
+                plugins_manager.as_ref(),
+                &default_shell,
+                Some(prompt_hook_runner),
+            )
+            .await;
+            for warning in hooks.startup_warnings() {
+                post_session_configured_events.push(Event {
+                    id: INITIAL_SUBMIT_ID.to_owned(),
+                    msg: EventMsg::Warning(WarningEvent {
+                        message: warning.clone(),
+                    }),
+                });
+            }
             let session_extension_data =
                 codex_extension_api::ExtensionData::new(session_id.to_string());
             let thread_extension_data =
@@ -1031,32 +1063,10 @@ impl Session {
                 live_thread: live_thread_init.as_ref().cloned(),
                 thread_store: Arc::clone(&thread_store),
                 attestation_provider: attestation_provider.clone(),
-                model_client: ModelClient::new(
-                    Some(Arc::clone(&auth_manager)),
-                    session_id,
-                    thread_id,
-                    installation_id.clone(),
-                    session_configuration.provider.clone(),
-                    session_configuration.session_source.clone(),
-                    session_configuration.parent_thread_id,
-                    config.model_verbosity,
-                    config.features.enabled(Feature::EnableRequestCompression),
-                    config.features.enabled(Feature::RuntimeMetrics),
-                    Self::build_model_client_beta_features_header(config.as_ref()),
-                    attestation_provider,
-                )
-                .with_prompt_cache_key_override(
-                    crate::guardian::prompt_cache_key_override_for_review_session(
-                        &session_configuration.session_source,
-                        session_configuration.parent_thread_id,
-                    ),
-                ),
+                model_client,
                 code_mode_service: crate::tools::code_mode::CodeModeService::new(),
                 environment_manager,
             };
-            services
-                .model_client
-                .set_window_generation(window_generation);
             let (out_of_band_elicitation_paused, _out_of_band_elicitation_paused_rx) =
                 watch::channel(false);
 

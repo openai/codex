@@ -47,6 +47,7 @@ use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
+use serde_json::json;
 use std::sync::Arc;
 use std::time::Duration;
 use tempfile::TempDir;
@@ -238,6 +239,23 @@ if payload.get("prompt") == {blocked_prompt_json}:
     });
 
     fs::write(&script_path, script).context("write user prompt submit hook script")?;
+    fs::write(home.join("hooks.json"), hooks.to_string()).context("write hooks.json")?;
+    Ok(())
+}
+
+fn write_user_prompt_submit_prompt_hook(home: &Path) -> Result<()> {
+    let hooks = serde_json::json!({
+        "hooks": {
+            "UserPromptSubmit": [{
+                "hooks": [{
+                    "type": "prompt",
+                    "prompt": "Reject prompts that mention secrets: $ARGUMENTS",
+                    "statusMessage": "checking prompt",
+                }]
+            }]
+        }
+    });
+
     fs::write(home.join("hooks.json"), hooks.to_string()).context("write hooks.json")?;
     Ok(())
 }
@@ -1708,6 +1726,68 @@ async fn multiple_blocking_stop_hooks_persist_multiple_hook_prompt_fragments() -
             SECOND_CONTINUATION_PROMPT.to_string(),
         ],
         "rollout should preserve both hook prompt fragments in order",
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn user_prompt_submit_prompt_hook_runs_isolated_request() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let response = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("prompt-hook-resp"),
+            ev_assistant_message(
+                "prompt-hook-msg",
+                r#"{"ok":false,"reason":"do not mention secrets"}"#,
+            ),
+            ev_completed("prompt-hook-resp"),
+        ]),
+    )
+    .await;
+
+    let mut builder = test_codex()
+        .with_model("gpt-5.4")
+        .with_pre_build_hook(|home| {
+            if let Err(error) = write_user_prompt_submit_prompt_hook(home) {
+                panic!("failed to write user prompt submit prompt hook fixture: {error}");
+            }
+        })
+        .with_config(trust_discovered_hooks);
+    let test = builder.build(&server).await?;
+    let prompt = "secret launch codes";
+
+    test.submit_turn(prompt).await?;
+
+    let request = response.single_request();
+    let body = request.body_json();
+    assert_eq!(body["model"], json!("gpt-5.4"));
+    assert_eq!(body["tools"], json!([]));
+    assert!(
+        request
+            .instructions_text()
+            .starts_with("You evaluate a Codex prompt hook."),
+        "prompt hook request should use isolated hook instructions",
+    );
+    let user_inputs = request.message_input_texts("user");
+    assert_eq!(
+        user_inputs.len(),
+        1,
+        "prompt hook request should contain exactly one user message",
+    );
+    assert_eq!(
+        request.message_input_texts("developer"),
+        Vec::<String>::new(),
+        "prompt hook request should not inherit developer context",
+    );
+    let hook_input = user_inputs.first().context("prompt hook user input")?;
+    assert!(hook_input.contains("Reject prompts that mention secrets:"));
+    assert!(
+        hook_input.contains(prompt),
+        "prompt hook request should include the submitted prompt",
     );
 
     Ok(())

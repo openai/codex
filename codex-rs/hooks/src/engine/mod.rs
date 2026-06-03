@@ -60,10 +60,6 @@ pub(crate) enum ConfiguredHandlerKind {
         command: String,
         timeout_sec: u64,
     },
-    #[allow(
-        dead_code,
-        reason = "constructed by prompt-hook discovery in the follow-up"
-    )]
     Prompt {
         prompt: String,
         model: Option<String>,
@@ -127,6 +123,9 @@ pub struct HookListEntry {
     pub handler_type: HookHandlerType,
     pub matcher: Option<String>,
     pub command: Option<String>,
+    pub prompt: Option<String>,
+    pub model: Option<String>,
+    pub continue_on_block: Option<bool>,
     pub timeout_sec: u64,
     pub status_message: Option<String>,
     pub source_path: AbsolutePathBuf,
