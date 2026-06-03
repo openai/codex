@@ -157,7 +157,7 @@ Example with notification opt-out:
 - `thread/compact/start` — trigger conversation history compaction for a thread; returns `{}` immediately while progress streams through standard turn/item notifications.
 - `thread/shellCommand` — run a user-initiated `!` shell command against a thread; this runs unsandboxed with full access rather than inheriting the thread sandbox policy. Returns `{}` immediately while progress streams through standard turn/item notifications and any active turn receives the formatted output in its message stream.
 - `thread/backgroundTerminals/clean` — terminate all running background terminals for a thread (experimental; requires `capabilities.experimentalApi`); returns `{}` when the cleanup request is accepted.
-- `thread/backgroundTerminals/list` — list running background terminals for a loaded thread (experimental; requires `capabilities.experimentalApi`); returns paginated `data` plus `nextCursor`.
+- `thread/backgroundTerminals/list` — list running background terminals for a loaded thread (experimental; requires `capabilities.experimentalApi`); returns `data` with the running terminal ids.
 - `thread/backgroundTerminals/terminate` — terminate one running background terminal by app-server `processId` (experimental; requires `capabilities.experimentalApi`); returns whether a process was terminated.
 - `thread/rollback` — drop the last N turns from the agent’s in-memory context and persist a rollback marker in the rollout so future resumes see the pruned history; returns the updated `thread` (with `turns` populated) on success.
 - `turn/start` — add user input to a thread and begin Codex generation; responds with the initial `turn` object and streams `turn/started`, `item/*`, and `turn/completed` notifications. `clientUserMessageId` is optional; when supplied, the corresponding `userMessage` item echoes it as `clientId`. Experimental `runtimeWorkspaceRoots` replaces the thread-scoped runtime workspace roots used to materialize `:workspace_roots`; relative paths resolve against the effective turn cwd. Prefer experimental `permissions` profile selection by id for permission overrides; the legacy `sandboxPolicy` field is still accepted but cannot be combined with `permissions`. For `collaborationMode`, `settings.developer_instructions: null` means "use built-in instructions for the selected mode".
@@ -861,23 +861,16 @@ Use `thread/backgroundTerminals/clean` to terminate all running background termi
 
 ### Example: List and terminate background terminals
 
-Use `thread/backgroundTerminals/list` to inspect running background terminals associated with a loaded thread. The returned `processId` is the app-server process id; host OS metadata is nullable.
+Use `thread/backgroundTerminals/list` to inspect running background terminals associated with a loaded thread. The returned `processId` is the app-server process id.
 
 ```json
 { "method": "thread/backgroundTerminals/list", "id": 36, "params": { "threadId": "thr_123" } }
 { "id": 36, "result": { "data": [
     {
         "itemId": "item_456",
-        "processId": "42",
-        "command": "python3 -m http.server",
-        "cwd": "/workspace",
-        "startedAt": 1762488000,
-        "status": "running",
-        "osPid": null,
-        "cpuPercent": null,
-        "rssKb": null
+        "processId": "42"
     }
-], "nextCursor": null } }
+] } }
 ```
 
 Use `thread/backgroundTerminals/terminate` to terminate one running background terminal by that `processId`.

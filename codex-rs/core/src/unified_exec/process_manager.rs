@@ -27,7 +27,6 @@ use crate::tools::runtimes::unified_exec::UnifiedExecRequest as UnifiedExecToolR
 use crate::tools::runtimes::unified_exec::UnifiedExecRuntime;
 use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
-use crate::turn_timing::now_unix_timestamp_ms;
 use crate::unified_exec::ExecCommandRequest;
 use crate::unified_exec::MAX_UNIFIED_EXEC_PROCESSES;
 use crate::unified_exec::MAX_YIELD_TIME_MS;
@@ -824,8 +823,6 @@ impl UnifiedExecProcessManager {
             process: Arc::clone(&process),
             call_id: context.call_id.clone(),
             process_id,
-            cwd: cwd.clone(),
-            started_at_ms: now_unix_timestamp_ms(),
             hook_command,
             tty,
             network_approval,
@@ -1286,12 +1283,9 @@ impl UnifiedExecProcessManager {
             .map(|entry| UnifiedExecProcessSnapshot {
                 process_id: entry.process_id,
                 item_id: entry.call_id.clone(),
-                command: entry.hook_command.clone(),
-                cwd: entry.cwd.clone(),
-                started_at_ms: entry.started_at_ms,
             })
             .collect::<Vec<_>>();
-        snapshots.sort_by_key(|snapshot| (snapshot.started_at_ms, snapshot.process_id));
+        snapshots.sort_by_key(|snapshot| snapshot.process_id);
         snapshots
     }
 

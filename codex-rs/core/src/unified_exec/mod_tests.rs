@@ -50,13 +50,10 @@ fn shell_env() -> HashMap<String, String> {
     std::env::vars().collect()
 }
 
-fn background_terminal(process_id: i32, cwd: AbsolutePathBuf) -> BackgroundTerminalInfo {
+fn background_terminal(process_id: i32) -> BackgroundTerminalInfo {
     BackgroundTerminalInfo {
         item_id: "call".to_string(),
         process_id: process_id.to_string(),
-        command: "bash -i".to_string(),
-        cwd,
-        started_at: 1,
     }
 }
 
@@ -124,8 +121,6 @@ async fn exec_command_with_tty(
             process: Arc::clone(&process),
             call_id: context.call_id.clone(),
             process_id,
-            cwd: cwd.clone(),
-            started_at_ms: 1_000,
             hook_command: cmd.to_string(),
             tty,
             network_approval: None,
@@ -345,12 +340,6 @@ async fn background_terminals_can_be_listed_and_terminated() -> anyhow::Result<(
     skip_if_sandbox!(Ok(()));
 
     let (session, turn) = test_session_and_turn().await;
-    let cwd = turn
-        .environments
-        .primary()
-        .expect("turn environment")
-        .cwd
-        .clone();
 
     let first_shell = exec_command(
         &session, &turn, "bash -i", /*yield_time_ms*/ 2_500, /*workdir*/ None,
@@ -367,8 +356,8 @@ async fn background_terminals_can_be_listed_and_terminated() -> anyhow::Result<(
     assert_eq!(
         session.list_background_terminals().await,
         vec![
-            background_terminal(first_process_id, cwd.clone()),
-            background_terminal(second_process_id, cwd.clone()),
+            background_terminal(first_process_id),
+            background_terminal(second_process_id),
         ]
     );
 
@@ -385,7 +374,7 @@ async fn background_terminals_can_be_listed_and_terminated() -> anyhow::Result<(
 
     assert_eq!(
         session.list_background_terminals().await,
-        vec![background_terminal(second_process_id, cwd)]
+        vec![background_terminal(second_process_id)]
     );
 
     let err = write_stdin(

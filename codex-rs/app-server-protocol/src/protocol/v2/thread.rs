@@ -937,12 +937,6 @@ pub struct ThreadBackgroundTerminalsCleanResponse {}
 #[ts(export_to = "v2/")]
 pub struct ThreadBackgroundTerminalsListParams {
     pub thread_id: String,
-    /// Opaque pagination cursor returned by a previous call.
-    #[ts(optional = nullable)]
-    pub cursor: Option<String>,
-    /// Optional page size; defaults to no limit.
-    #[ts(optional = nullable)]
-    pub limit: Option<u32>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -951,20 +945,6 @@ pub struct ThreadBackgroundTerminalsListParams {
 pub struct ThreadBackgroundTerminal {
     pub item_id: String,
     pub process_id: String,
-    pub command: String,
-    pub cwd: AbsolutePathBuf,
-    pub started_at: i64,
-    pub status: ThreadBackgroundTerminalStatus,
-    pub os_pid: Option<u32>,
-    pub cpu_percent: Option<f64>,
-    pub rss_kb: Option<u64>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub enum ThreadBackgroundTerminalStatus {
-    Running,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -972,9 +952,6 @@ pub enum ThreadBackgroundTerminalStatus {
 #[ts(export_to = "v2/")]
 pub struct ThreadBackgroundTerminalsListResponse {
     pub data: Vec<ThreadBackgroundTerminal>,
-    /// Opaque cursor to pass to the next call to continue after the last item.
-    /// if None, there are no more items to return.
-    pub next_cursor: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

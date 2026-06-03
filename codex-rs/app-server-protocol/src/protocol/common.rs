@@ -2894,8 +2894,6 @@ mod tests {
             request_id: RequestId::Integer(8),
             params: v2::ThreadBackgroundTerminalsListParams {
                 thread_id: "thr_123".to_string(),
-                cursor: Some("2".to_string()),
-                limit: Some(10),
             },
         };
         assert_eq!(
@@ -2903,9 +2901,7 @@ mod tests {
                 "method": "thread/backgroundTerminals/list",
                 "id": 8,
                 "params": {
-                    "threadId": "thr_123",
-                    "cursor": "2",
-                    "limit": 10
+                    "threadId": "thr_123"
                 }
             }),
             serde_json::to_value(&request)?,
