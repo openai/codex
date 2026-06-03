@@ -949,7 +949,7 @@ client_request_definitions! {
         response: v2::GetAccountRateLimitsResponse,
     },
 
-    GetAccountTokenUsage => "account/tokenUsage/read" {
+    GetAccountTokenUsage => "account/usage/read" {
         params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
         serialization: None,
         response: v2::GetAccountTokenUsageResponse,
@@ -2385,10 +2385,10 @@ mod tests {
             params: None,
         };
         assert_eq!(request.id(), &RequestId::Integer(1));
-        assert_eq!(request.method(), "account/tokenUsage/read");
+        assert_eq!(request.method(), "account/usage/read");
         assert_eq!(
             json!({
-                "method": "account/tokenUsage/read",
+                "method": "account/usage/read",
                 "id": 1,
             }),
             serde_json::to_value(&request)?,
