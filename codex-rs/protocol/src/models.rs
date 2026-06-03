@@ -1019,7 +1019,7 @@ pub fn local_image_label_text(label_number: usize) -> String {
     format!("[Image #{label_number}]")
 }
 
-fn local_image_open_tag_text_with_path(label_number: usize, path: &std::path::Path) -> String {
+pub fn local_image_open_tag_text_with_path(label_number: usize, path: &std::path::Path) -> String {
     let label = local_image_label_text(label_number);
     let path = path
         .display()
