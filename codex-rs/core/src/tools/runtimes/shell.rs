@@ -21,6 +21,8 @@ use crate::tools::flat_tool_name;
 use crate::tools::network_approval::NetworkApprovalMode;
 use crate::tools::network_approval::NetworkApprovalSpec;
 #[cfg(unix)]
+use crate::tools::runtimes::apply_package_path_prepend;
+#[cfg(unix)]
 use crate::tools::runtimes::apply_zsh_fork_path_prepend;
 use crate::tools::runtimes::build_sandbox_command;
 use crate::tools::runtimes::disable_powershell_profile_for_elevated_windows_sandbox;
@@ -252,6 +254,7 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
         let (env, explicit_env_overrides) = {
             let mut env = env;
             let mut explicit_env_overrides = explicit_env_overrides;
+            apply_package_path_prepend(&mut env, &mut explicit_env_overrides);
             if self.backend == ShellRuntimeBackend::ShellCommandZshFork
                 && let Some(shell_zsh_path) = ctx.session.services.shell_zsh_path.as_deref()
             {

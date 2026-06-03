@@ -168,6 +168,26 @@ fn explicit_escalation_preserves_user_ca_env() {
 
 #[cfg(unix)]
 #[test]
+fn apply_path_prepend_records_explicit_path_override() {
+    let mut env = HashMap::from([("PATH".to_string(), "/usr/bin:/bin".to_string())]);
+    let mut explicit_env_overrides = HashMap::new();
+
+    apply_path_prepend(
+        &mut env,
+        &mut explicit_env_overrides,
+        PathBuf::from("/package/codex-path").as_path(),
+    );
+
+    let expected = "/package/codex-path:/usr/bin:/bin";
+    assert_eq!(env.get("PATH").map(String::as_str), Some(expected));
+    assert_eq!(
+        explicit_env_overrides.get("PATH").map(String::as_str),
+        Some(expected)
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn apply_zsh_fork_path_prepend_uses_shell_parent() {
     let mut env = HashMap::from([("PATH".to_string(), "/usr/bin:/bin".to_string())]);
     let mut explicit_env_overrides = HashMap::new();
@@ -881,6 +901,55 @@ fn maybe_wrap_shell_lc_with_snapshot_applies_explicit_path_override() {
 
     assert!(output.status.success(), "command failed: {output:?}");
     assert_eq!(String::from_utf8_lossy(&output.stdout), "/worktree/bin");
+}
+
+#[cfg(unix)]
+#[test]
+fn maybe_wrap_shell_lc_with_snapshot_preserves_package_path_prepend() {
+    let dir = tempdir().expect("create temp dir");
+    let snapshot_path = dir.path().join("snapshot.sh");
+    std::fs::write(
+        &snapshot_path,
+        "# Snapshot file\nexport PATH='/snapshot/bin'\n",
+    )
+    .expect("write snapshot");
+    let session_shell = shell_with_snapshot(
+        ShellType::Bash,
+        "/bin/bash",
+        snapshot_path.abs(),
+        dir.path().abs(),
+    );
+    let command = vec![
+        "/bin/bash".to_string(),
+        "-lc".to_string(),
+        "printf '%s' \"$PATH\"".to_string(),
+    ];
+    let package_path_dir = dir.path().join("codex-path");
+    let mut env = HashMap::from([("PATH".to_string(), "/worktree/bin".to_string())]);
+    let mut explicit_env_overrides = HashMap::new();
+    apply_path_prepend(
+        &mut env,
+        &mut explicit_env_overrides,
+        package_path_dir.as_path(),
+    );
+    let rewritten = maybe_wrap_shell_lc_with_snapshot(
+        &command,
+        &session_shell,
+        &dir.path().abs(),
+        &explicit_env_overrides,
+        &env,
+    );
+    let output = Command::new(&rewritten[0])
+        .args(&rewritten[1..])
+        .env("PATH", env.get("PATH").expect("PATH should be set"))
+        .output()
+        .expect("run rewritten command");
+
+    assert!(output.status.success(), "command failed: {output:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        format!("{}:/worktree/bin", package_path_dir.display())
+    );
 }
 
 #[cfg(unix)]
