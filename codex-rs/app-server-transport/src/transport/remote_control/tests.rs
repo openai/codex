@@ -1,7 +1,10 @@
 use super::enroll::REMOTE_CONTROL_ACCOUNT_ID_HEADER;
 use super::enroll::REMOTE_CONTROL_INSTALLATION_ID_HEADER;
+use super::enroll::RemoteControlConnectionAuth;
 use super::enroll::RemoteControlEnrollment;
+use super::enroll::enroll_remote_control_server;
 use super::enroll::load_persisted_remote_control_enrollment;
+use super::enroll::refresh_remote_control_server;
 use super::enroll::update_persisted_remote_control_enrollment;
 use super::protocol::ClientEnvelope;
 use super::protocol::ClientEvent;
@@ -15,7 +18,10 @@ use crate::outgoing_message::QueuedOutgoingMessage;
 use crate::transport::CHANNEL_CAPACITY;
 use crate::transport::ConnectionOrigin;
 use crate::transport::TransportEvent;
+use axum::http::HeaderMap;
+use axum::http::HeaderValue;
 use base64::Engine;
+use codex_api::AuthProvider;
 use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::ConfigWarningNotification;
 use codex_app_server_protocol::JSONRPCMessage;
@@ -26,6 +32,8 @@ use codex_app_server_protocol::ServerNotification;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_core::test_support::auth_manager_from_auth;
 use codex_core::test_support::auth_manager_from_auth_with_home;
+use codex_http_state::HttpStateStore;
+use codex_http_state::HttpStateSurface;
 use codex_login::AuthDotJson;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
@@ -67,6 +75,60 @@ const TEST_REMOTE_CONTROL_URL: &str = "http://127.0.0.1:1/backend-api/wham/remot
 const TEST_REMOTE_CONTROL_SERVER_TOKEN: &str = "Remote Control Token";
 const TEST_REFRESHED_REMOTE_CONTROL_SERVER_TOKEN: &str = "Refreshed Remote Control Token";
 const TEST_REMOTE_CONTROL_SERVER_TOKEN_EXPIRES_AT: &str = "2999-01-01T00:00:00Z";
+const SENT_HTTP_STATE: &str = "ois1.sent.nonce.ciphertext";
+const ROTATED_HTTP_STATE: &str = "ois1.rotated.nonce.ciphertext";
+
+struct RemoteControlHttpStateAuthProvider {
+    store: HttpStateStore,
+}
+
+impl AuthProvider for RemoteControlHttpStateAuthProvider {
+    fn add_auth_headers(&self, _headers: &mut HeaderMap) {}
+
+    fn add_auth_headers_for_url(&self, _request_url: &str, headers: &mut HeaderMap) {
+        if let Ok(Some(state)) = self.store.get(HttpStateSurface::CodexRemoteControl)
+            && let Ok(state) = HeaderValue::from_str(&state)
+        {
+            headers.insert("x-oai-is", state);
+        }
+    }
+
+    fn observe_response_headers(
+        &self,
+        _request_url: &str,
+        request_headers: &HeaderMap,
+        response_headers: &HeaderMap,
+    ) {
+        let Some(sent_state) = request_headers
+            .get("x-oai-is")
+            .and_then(|value| value.to_str().ok())
+        else {
+            return;
+        };
+        let Some(rotated_state) = response_headers
+            .get("x-oai-is-update")
+            .and_then(|value| value.to_str().ok())
+        else {
+            return;
+        };
+        let _ = self.store.compare_and_set(
+            HttpStateSurface::CodexRemoteControl,
+            sent_state,
+            rotated_state.to_string(),
+        );
+    }
+}
+
+fn remote_control_connection_auth_with_http_state(
+    store: HttpStateStore,
+) -> RemoteControlConnectionAuth {
+    let auth_provider = Arc::new(RemoteControlHttpStateAuthProvider { store });
+    RemoteControlConnectionAuth {
+        auth_provider: auth_provider.clone(),
+        server_token_auth_provider: auth_provider,
+        account_id: "account-id".to_string(),
+    }
+}
 
 fn remote_control_auth_manager() -> Arc<AuthManager> {
     auth_manager_from_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
@@ -1114,6 +1176,158 @@ async fn remote_control_transport_clears_outgoing_buffer_when_backend_acks() {
 
     shutdown_token.cancel();
     let _ = remote_task.await;
+}
+
+#[tokio::test]
+async fn enroll_remote_control_server_attaches_and_rotates_http_state() {
+    let codex_home = TempDir::new().expect("temp dir should create");
+    let store = HttpStateStore::new(codex_home.path().to_path_buf());
+    store
+        .set(
+            HttpStateSurface::CodexRemoteControl,
+            SENT_HTTP_STATE.to_string(),
+        )
+        .expect("HTTP state should store");
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("listener should bind");
+    let remote_control_target =
+        normalize_remote_control_url(&remote_control_url_for_listener(&listener))
+            .expect("target should normalize");
+    let server_task = tokio::spawn(async move {
+        let enroll_request = accept_http_request(&listener).await;
+        assert_eq!(
+            enroll_request.request_line,
+            "POST /backend-api/wham/remote/control/server/enroll HTTP/1.1"
+        );
+        assert_eq!(
+            enroll_request.headers.get("x-oai-is"),
+            Some(&SENT_HTTP_STATE.to_string())
+        );
+        assert_eq!(
+            enroll_request.headers.get(REMOTE_CONTROL_ACCOUNT_ID_HEADER),
+            Some(&"account-id".to_string())
+        );
+        assert_eq!(
+            enroll_request
+                .headers
+                .get(REMOTE_CONTROL_INSTALLATION_ID_HEADER),
+            Some(&TEST_INSTALLATION_ID.to_string())
+        );
+        respond_with_status_and_headers(
+            enroll_request.stream,
+            "200 OK",
+            &[("x-oai-is-update", ROTATED_HTTP_STATE)],
+            &remote_control_server_token_response(
+                "server-id",
+                "environment-id",
+                TEST_REMOTE_CONTROL_SERVER_TOKEN,
+            )
+            .to_string(),
+        )
+        .await;
+    });
+
+    let enrollment = enroll_remote_control_server(
+        &remote_control_target,
+        &remote_control_connection_auth_with_http_state(store.clone()),
+        TEST_INSTALLATION_ID,
+        "server-name",
+    )
+    .await
+    .expect("enrollment should succeed");
+    server_task.await.expect("server task should finish");
+    assert_eq!(
+        enrollment.remote_control_token.as_deref(),
+        Some(TEST_REMOTE_CONTROL_SERVER_TOKEN)
+    );
+    assert_eq!(
+        store
+            .get(HttpStateSurface::CodexRemoteControl)
+            .expect("HTTP state should load"),
+        Some(ROTATED_HTTP_STATE.to_string())
+    );
+}
+
+#[tokio::test]
+async fn refresh_remote_control_server_attaches_and_rotates_http_state() {
+    let codex_home = TempDir::new().expect("temp dir should create");
+    let store = HttpStateStore::new(codex_home.path().to_path_buf());
+    store
+        .set(
+            HttpStateSurface::CodexRemoteControl,
+            SENT_HTTP_STATE.to_string(),
+        )
+        .expect("HTTP state should store");
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("listener should bind");
+    let remote_control_target =
+        normalize_remote_control_url(&remote_control_url_for_listener(&listener))
+            .expect("target should normalize");
+    let mut enrollment = RemoteControlEnrollment {
+        remote_control_target,
+        account_id: "account-id".to_string(),
+        environment_id: "environment-id".to_string(),
+        server_id: "server-id".to_string(),
+        server_name: "server-name".to_string(),
+        remote_control_token: Some("stale-token".to_string()),
+        expires_at: None,
+    };
+    let server_task = tokio::spawn(async move {
+        let refresh_request = accept_http_request(&listener).await;
+        assert_eq!(
+            refresh_request.request_line,
+            "POST /backend-api/wham/remote/control/server/refresh HTTP/1.1"
+        );
+        assert_eq!(
+            refresh_request.headers.get("x-oai-is"),
+            Some(&SENT_HTTP_STATE.to_string())
+        );
+        assert_eq!(
+            refresh_request
+                .headers
+                .get(REMOTE_CONTROL_ACCOUNT_ID_HEADER),
+            Some(&"account-id".to_string())
+        );
+        assert_eq!(
+            refresh_request
+                .headers
+                .get(REMOTE_CONTROL_INSTALLATION_ID_HEADER),
+            Some(&TEST_INSTALLATION_ID.to_string())
+        );
+        respond_with_status_and_headers(
+            refresh_request.stream,
+            "200 OK",
+            &[("x-oai-is-update", ROTATED_HTTP_STATE)],
+            &remote_control_server_token_response(
+                "server-id",
+                "environment-id",
+                TEST_REFRESHED_REMOTE_CONTROL_SERVER_TOKEN,
+            )
+            .to_string(),
+        )
+        .await;
+    });
+
+    refresh_remote_control_server(
+        &remote_control_connection_auth_with_http_state(store.clone()),
+        TEST_INSTALLATION_ID,
+        &mut enrollment,
+    )
+    .await
+    .expect("refresh should succeed");
+    server_task.await.expect("server task should finish");
+    assert_eq!(
+        enrollment.remote_control_token.as_deref(),
+        Some(TEST_REFRESHED_REMOTE_CONTROL_SERVER_TOKEN)
+    );
+    assert_eq!(
+        store
+            .get(HttpStateSurface::CodexRemoteControl)
+            .expect("HTTP state should load"),
+        Some(ROTATED_HTTP_STATE.to_string())
+    );
 }
 
 #[tokio::test]
