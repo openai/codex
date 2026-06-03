@@ -29,7 +29,10 @@ pub(super) async fn spawn_review_thread(
     let available_models = sess
         .services
         .models_manager
-        .list_models(RefreshStrategy::OnlineIfUncached)
+        .list_models_for_surface(
+            RefreshStrategy::OnlineIfUncached,
+            parent_turn_context.http_state_surface,
+        )
         .await;
     let unified_exec_shell_mode = UnifiedExecShellMode::for_session(
         codex_tools::unified_exec_feature_mode_for_features(review_features.get()),
@@ -124,6 +127,7 @@ pub(super) async fn spawn_review_thread(
         current_date: parent_turn_context.current_date.clone(),
         timezone: parent_turn_context.timezone.clone(),
         app_server_client_name: parent_turn_context.app_server_client_name.clone(),
+        http_state_surface: parent_turn_context.http_state_surface,
         developer_instructions: None,
         user_instructions: None,
         compact_prompt: parent_turn_context.compact_prompt.clone(),

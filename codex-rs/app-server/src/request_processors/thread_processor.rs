@@ -1,5 +1,6 @@
 use super::*;
 use crate::error_code::method_not_found;
+use codex_http_state::HttpStateSurface;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
 
@@ -1088,6 +1089,9 @@ impl ThreadRequestProcessor {
                 metrics_service_name: service_name,
                 parent_trace: request_trace,
                 environments,
+                http_state_surface: Some(HttpStateSurface::from_app_server_client_name(
+                    app_server_client_name.as_deref().unwrap_or_default(),
+                )),
             })
             .instrument(tracing::info_span!(
                 "app_server.thread_start.create_thread",
@@ -2529,11 +2533,14 @@ impl ThreadRequestProcessor {
 
         match self
             .thread_manager
-            .resume_thread_with_history(
+            .resume_thread_with_history_for_surface(
                 config.clone(),
                 thread_history,
                 self.auth_manager.clone(),
                 self.request_trace_context(&request_id).await,
+                Some(HttpStateSurface::from_app_server_client_name(
+                    app_server_client_name.as_deref().unwrap_or_default(),
+                )),
             )
             .await
         {
@@ -3238,7 +3245,7 @@ impl ThreadRequestProcessor {
             ..
         } = self
             .thread_manager
-            .fork_thread_from_history(
+            .fork_thread_from_history_for_surface(
                 ForkSnapshot::Interrupted,
                 config,
                 InitialHistory::Resumed(ResumedHistory {
@@ -3248,6 +3255,9 @@ impl ThreadRequestProcessor {
                 }),
                 thread_source.map(Into::into),
                 self.request_trace_context(&request_id).await,
+                Some(HttpStateSurface::from_app_server_client_name(
+                    app_server_client_name.as_deref().unwrap_or_default(),
+                )),
             )
             .await
             .map_err(|err| match err {

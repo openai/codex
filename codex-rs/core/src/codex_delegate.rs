@@ -91,6 +91,7 @@ pub(crate) async fn run_codex_thread_interactive(
         extensions: Arc::clone(&parent_session.services.extensions),
         conversation_history,
         session_source: SessionSource::SubAgent(subagent_source.clone()),
+        http_state_surface: parent_session.services.model_client.http_state_surface(),
         forked_from_thread_id,
         parent_thread_id: Some(parent_session.conversation_id),
         thread_source: Some(ThreadSource::Subagent),
@@ -110,13 +111,6 @@ pub(crate) async fn run_codex_thread_interactive(
     }))
     .or_cancel(&cancel_token)
     .await??;
-    if let Some(surface) = parent_session.services.model_client.http_state_surface() {
-        codex
-            .session
-            .services
-            .model_client
-            .set_http_state_surface(surface);
-    }
     let thread_config = codex.thread_config_snapshot().await;
     let client_metadata = parent_session.app_server_client_metadata().await;
     emit_subagent_session_started(

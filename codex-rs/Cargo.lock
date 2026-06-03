@@ -2190,6 +2190,7 @@ dependencies = [
  "codex-api",
  "codex-backend-openapi-models",
  "codex-client",
+ "codex-http-state",
  "codex-login",
  "codex-model-provider",
  "codex-protocol",
@@ -2197,6 +2198,7 @@ dependencies = [
  "reqwest 0.12.28",
  "serde",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -3365,6 +3367,7 @@ dependencies = [
  "chrono",
  "codex-app-server-protocol",
  "codex-collaboration-mode-templates",
+ "codex-http-state",
  "codex-login",
  "codex-otel",
  "codex-protocol",

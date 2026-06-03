@@ -307,21 +307,6 @@ impl AgentControl {
         {
             let client_metadata = match state.get_thread(*parent_thread_id).await {
                 Ok(parent_thread) => {
-                    if let Some(surface) = parent_thread
-                        .codex
-                        .session
-                        .services
-                        .model_client
-                        .http_state_surface()
-                    {
-                        new_thread
-                            .thread
-                            .codex
-                            .session
-                            .services
-                            .model_client
-                            .set_http_state_surface(surface);
-                    }
                     parent_thread
                         .codex
                         .session

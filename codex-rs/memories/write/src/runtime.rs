@@ -251,6 +251,7 @@ impl MemoryStartupContext {
                 metrics_service_name: None,
                 parent_trace: None,
                 environments,
+                http_state_surface: None,
             })
             .await?;
 

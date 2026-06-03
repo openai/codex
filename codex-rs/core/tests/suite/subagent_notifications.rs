@@ -755,6 +755,7 @@ async fn subagent_stop_replaces_stop_and_skips_internal_subagents() -> Result<()
             metrics_service_name: None,
             parent_trace: None,
             environments: Vec::new(),
+            http_state_surface: None,
         })
         .await?;
 

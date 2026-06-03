@@ -1798,6 +1798,15 @@ fn subagent_header_value(session_source: &SessionSource) -> Option<String> {
     }
 }
 
+pub(crate) fn http_state_surface_for_session(
+    session_source: &SessionSource,
+    app_server_client_name: Option<&str>,
+) -> HttpStateSurface {
+    app_server_client_name
+        .map(HttpStateSurface::from_app_server_client_name)
+        .unwrap_or_else(|| http_state_surface_for_session_source(session_source))
+}
+
 fn http_state_surface_for_session_source(session_source: &SessionSource) -> HttpStateSurface {
     match session_source {
         SessionSource::Cli => HttpStateSurface::CodexTui,

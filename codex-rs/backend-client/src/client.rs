@@ -8,6 +8,7 @@ use anyhow::Result;
 use codex_api::SharedAuthProvider;
 use codex_client::build_reqwest_client_with_custom_ca;
 use codex_client::with_chatgpt_cloudflare_cookie_store;
+use codex_http_state::HttpStateContext;
 use codex_login::CodexAuth;
 use codex_login::default_client::get_codex_user_agent;
 use codex_protocol::account::PlanType as AccountPlanType;
@@ -176,6 +177,20 @@ impl Client {
             .with_auth_provider(codex_model_provider::auth_provider_from_auth(auth)))
     }
 
+    pub fn from_auth_with_http_state(
+        base_url: impl Into<String>,
+        auth: &CodexAuth,
+        http_state: HttpStateContext,
+    ) -> Result<Self> {
+        Ok(Self::new(base_url)?
+            .with_user_agent(get_codex_user_agent())
+            .with_auth_provider(codex_model_provider::with_native_integrity_state(
+                codex_model_provider::auth_provider_from_auth(auth),
+                Some(auth),
+                Some(http_state),
+            )))
+    }
+
     pub fn with_auth_provider(mut self, auth: SharedAuthProvider) -> Self {
         self.auth_provider = auth;
         self
@@ -203,14 +218,14 @@ impl Client {
         self
     }
 
-    fn headers(&self) -> HeaderMap {
+    fn headers(&self, url: &str) -> HeaderMap {
         let mut h = HeaderMap::new();
         if let Some(ua) = &self.user_agent {
             h.insert(USER_AGENT, ua.clone());
         } else {
             h.insert(USER_AGENT, HeaderValue::from_static("codex-cli"));
         }
-        self.auth_provider.add_auth_headers(&mut h);
+        self.auth_provider.add_auth_headers_for_url(url, &mut h);
         if let Some(acc) = &self.chatgpt_account_id
             && let Ok(name) = HeaderName::from_bytes(b"ChatGPT-Account-Id")
             && let Ok(hv) = HeaderValue::from_str(acc)
@@ -231,7 +246,10 @@ impl Client {
         method: &str,
         url: &str,
     ) -> Result<(String, String)> {
-        let res = req.send().await?;
+        let request_headers = self.headers(url);
+        let res = req.headers(request_headers.clone()).send().await?;
+        self.auth_provider
+            .observe_response_headers(url, &request_headers, res.headers());
         let status = res.status();
         let ct = res
             .headers()
@@ -252,7 +270,14 @@ impl Client {
         method: &str,
         url: &str,
     ) -> std::result::Result<(String, String), RequestError> {
-        let res = req.send().await.map_err(anyhow::Error::from)?;
+        let request_headers = self.headers(url);
+        let res = req
+            .headers(request_headers.clone())
+            .send()
+            .await
+            .map_err(anyhow::Error::from)?;
+        self.auth_provider
+            .observe_response_headers(url, &request_headers, res.headers());
         let status = res.status();
         let content_type = res
             .headers()
@@ -296,7 +321,7 @@ impl Client {
             PathStyle::CodexApi => format!("{}/api/codex/usage", self.base_url),
             PathStyle::ChatGptApi => format!("{}/wham/usage", self.base_url),
         };
-        let req = self.http.get(&url).headers(self.headers());
+        let req = self.http.get(&url);
         let (body, ct) = self.exec_request(req, "GET", &url).await?;
         let payload: RateLimitStatusPayload = self.decode_json(&url, &ct, &body)?;
         Ok(Self::rate_limit_snapshots_from_payload(payload))
@@ -310,7 +335,6 @@ impl Client {
         let req = self
             .http
             .post(&url)
-            .headers(self.headers())
             .header(CONTENT_TYPE, HeaderValue::from_static("application/json"))
             .json(&SendAddCreditsNudgeEmailRequest { credit_type });
         self.exec_request_detailed(req, "POST", &url).await?;
@@ -328,7 +352,7 @@ impl Client {
             PathStyle::CodexApi => format!("{}/api/codex/tasks/list", self.base_url),
             PathStyle::ChatGptApi => format!("{}/wham/tasks/list", self.base_url),
         };
-        let req = self.http.get(&url).headers(self.headers());
+        let req = self.http.get(&url);
         let req = if let Some(lim) = limit {
             req.query(&[("limit", lim)])
         } else {
@@ -366,7 +390,7 @@ impl Client {
             PathStyle::CodexApi => format!("{}/api/codex/tasks/{}", self.base_url, task_id),
             PathStyle::ChatGptApi => format!("{}/wham/tasks/{}", self.base_url, task_id),
         };
-        let req = self.http.get(&url).headers(self.headers());
+        let req = self.http.get(&url);
         let (body, ct) = self.exec_request(req, "GET", &url).await?;
         let parsed: CodeTaskDetailsResponse = self.decode_json(&url, &ct, &body)?;
         Ok((parsed, body, ct))
@@ -387,7 +411,7 @@ impl Client {
                 self.base_url, task_id, turn_id
             ),
         };
-        let req = self.http.get(&url).headers(self.headers());
+        let req = self.http.get(&url);
         let (body, ct) = self.exec_request(req, "GET", &url).await?;
         self.decode_json::<TurnAttemptsSiblingTurnsResponse>(&url, &ct, &body)
     }
@@ -403,7 +427,7 @@ impl Client {
             PathStyle::CodexApi => format!("{}/api/codex/config/bundle", self.base_url),
             PathStyle::ChatGptApi => format!("{}/wham/config/bundle", self.base_url),
         };
-        let req = self.http.get(&url).headers(self.headers());
+        let req = self.http.get(&url);
         let (body, ct) = self.exec_request_detailed(req, "GET", &url).await?;
         self.decode_json::<ConfigBundleResponse>(&url, &ct, &body)
             .map_err(RequestError::from)
@@ -419,7 +443,6 @@ impl Client {
         let req = self
             .http
             .post(&url)
-            .headers(self.headers())
             .header(CONTENT_TYPE, HeaderValue::from_static("application/json"))
             .json(&request_body);
         let (body, ct) = self.exec_request(req, "POST", &url).await?;
@@ -626,7 +649,52 @@ mod tests {
     use codex_backend_openapi_models::models::AdditionalRateLimitDetails;
     use codex_backend_openapi_models::models::RateLimitReachedKind;
     use codex_backend_openapi_models::models::RateLimitReachedType as BackendRateLimitReachedType;
+    use codex_client::INTEGRITY_STATE_HEADER_NAME;
+    use codex_client::INTEGRITY_STATE_UPDATE_HEADER_NAME;
+    use codex_http_state::HttpStateStore;
+    use codex_http_state::HttpStateSurface;
     use pretty_assertions::assert_eq;
+    use tempfile::TempDir;
+
+    #[test]
+    fn backend_headers_and_response_observation_rotate_native_http_state() {
+        let codex_home = TempDir::new().expect("tempdir");
+        let surface = HttpStateSurface::CodexDesktop;
+        let store = HttpStateStore::new(codex_home.path().to_path_buf());
+        store
+            .set(surface, "ois1.initial.nonce.ciphertext".to_string())
+            .expect("state should store");
+        let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+        let client = Client::from_auth_with_http_state(
+            "https://chatgpt.com/backend-api",
+            &auth,
+            HttpStateContext::new(codex_home.path().to_path_buf(), surface),
+        )
+        .expect("backend client");
+        let url = "https://chatgpt.com/backend-api/wham/usage";
+
+        let request_headers = client.headers(url);
+        assert_eq!(
+            request_headers
+                .get(INTEGRITY_STATE_HEADER_NAME)
+                .and_then(|value| value.to_str().ok()),
+            Some("ois1.initial.nonce.ciphertext")
+        );
+
+        let mut response_headers = HeaderMap::new();
+        response_headers.insert(
+            INTEGRITY_STATE_UPDATE_HEADER_NAME,
+            HeaderValue::from_static("ois1.rotated.nonce.ciphertext"),
+        );
+        client
+            .auth_provider
+            .observe_response_headers(url, &request_headers, &response_headers);
+
+        assert_eq!(
+            store.get(surface).expect("state should load").as_deref(),
+            Some("ois1.rotated.nonce.ciphertext")
+        );
+    }
 
     #[test]
     fn map_plan_type_supports_usage_based_business_variants() {

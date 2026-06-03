@@ -1,5 +1,6 @@
 use super::*;
 use codex_config::config_toml::ConfigToml;
+use codex_http_state::HttpStateSurface;
 use futures::StreamExt;
 
 #[derive(Clone)]
@@ -156,8 +157,9 @@ impl CatalogRequestProcessor {
     pub(crate) async fn model_list(
         &self,
         params: ModelListParams,
+        app_server_client_name: Option<&str>,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        Self::list_models(self.thread_manager.clone(), params)
+        Self::list_models(self.thread_manager.clone(), params, app_server_client_name)
             .await
             .map(|response| Some(response.into()))
     }
@@ -248,13 +250,22 @@ impl CatalogRequestProcessor {
     async fn list_models(
         thread_manager: Arc<ThreadManager>,
         params: ModelListParams,
+        app_server_client_name: Option<&str>,
     ) -> Result<ModelListResponse, JSONRPCErrorError> {
         let ModelListParams {
             limit,
             cursor,
             include_hidden,
         } = params;
-        let models = supported_models(thread_manager, include_hidden.unwrap_or(false)).await;
+        let http_state_surface = HttpStateSurface::from_app_server_client_name(
+            app_server_client_name.unwrap_or_default(),
+        );
+        let models = supported_models(
+            thread_manager,
+            include_hidden.unwrap_or(false),
+            http_state_surface,
+        )
+        .await;
         let total = models.len();
 
         if total == 0 {

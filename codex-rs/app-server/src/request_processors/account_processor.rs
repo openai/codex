@@ -1,4 +1,5 @@
 use super::*;
+use codex_http_state::HttpStateContext;
 use codex_http_state::HttpStateSurface;
 
 // Duration before a browser ChatGPT login attempt is abandoned.
@@ -135,8 +136,9 @@ impl AccountRequestProcessor {
 
     pub(crate) async fn get_account_rate_limits(
         &self,
+        app_server_client_name: Option<&str>,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.get_account_rate_limits_response()
+        self.get_account_rate_limits_response(Self::http_state_surface(app_server_client_name))
             .await
             .map(|response| Some(response.into()))
     }
@@ -144,10 +146,14 @@ impl AccountRequestProcessor {
     pub(crate) async fn send_add_credits_nudge_email(
         &self,
         params: SendAddCreditsNudgeEmailParams,
+        app_server_client_name: Option<&str>,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.send_add_credits_nudge_email_response(params)
-            .await
-            .map(|response| Some(response.into()))
+        self.send_add_credits_nudge_email_response(
+            params,
+            Self::http_state_surface(app_server_client_name),
+        )
+        .await
+        .map(|response| Some(response.into()))
     }
 
     pub(crate) async fn cancel_active_login(&self) {
@@ -876,8 +882,9 @@ impl AccountRequestProcessor {
 
     async fn get_account_rate_limits_response(
         &self,
+        http_state_surface: HttpStateSurface,
     ) -> Result<GetAccountRateLimitsResponse, JSONRPCErrorError> {
-        self.fetch_account_rate_limits()
+        self.fetch_account_rate_limits(http_state_surface)
             .await
             .map(
                 |(rate_limits, rate_limits_by_limit_id)| GetAccountRateLimitsResponse {
@@ -895,8 +902,9 @@ impl AccountRequestProcessor {
     async fn send_add_credits_nudge_email_response(
         &self,
         params: SendAddCreditsNudgeEmailParams,
+        http_state_surface: HttpStateSurface,
     ) -> Result<SendAddCreditsNudgeEmailResponse, JSONRPCErrorError> {
-        self.send_add_credits_nudge_email_inner(params)
+        self.send_add_credits_nudge_email_inner(params, http_state_surface)
             .await
             .map(|status| SendAddCreditsNudgeEmailResponse { status })
     }
@@ -904,8 +912,9 @@ impl AccountRequestProcessor {
     async fn send_add_credits_nudge_email_inner(
         &self,
         params: SendAddCreditsNudgeEmailParams,
+        http_state_surface: HttpStateSurface,
     ) -> Result<AddCreditsNudgeEmailStatus, JSONRPCErrorError> {
-        let Some(auth) = self.auth_manager.auth().await else {
+        let Some(auth) = self.auth_manager.auth_for_surface(http_state_surface).await else {
             return Err(invalid_request(
                 "codex account authentication required to notify workspace owner",
             ));
@@ -917,8 +926,7 @@ impl AccountRequestProcessor {
             ));
         }
 
-        let client = BackendClient::from_auth(self.config.chatgpt_base_url.clone(), &auth)
-            .map_err(|err| internal_error(format!("failed to construct backend client: {err}")))?;
+        let client = self.backend_client(&auth, http_state_surface)?;
 
         match client
             .send_add_credits_nudge_email(Self::backend_credit_type(params.credit_type))
@@ -943,6 +951,7 @@ impl AccountRequestProcessor {
 
     async fn fetch_account_rate_limits(
         &self,
+        http_state_surface: HttpStateSurface,
     ) -> Result<
         (
             CoreRateLimitSnapshot,
@@ -950,7 +959,7 @@ impl AccountRequestProcessor {
         ),
         JSONRPCErrorError,
     > {
-        let Some(auth) = self.auth_manager.auth().await else {
+        let Some(auth) = self.auth_manager.auth_for_surface(http_state_surface).await else {
             return Err(invalid_request(
                 "codex account authentication required to read rate limits",
             ));
@@ -962,8 +971,7 @@ impl AccountRequestProcessor {
             ));
         }
 
-        let client = BackendClient::from_auth(self.config.chatgpt_base_url.clone(), &auth)
-            .map_err(|err| internal_error(format!("failed to construct backend client: {err}")))?;
+        let client = self.backend_client(&auth, http_state_surface)?;
 
         let snapshots = client
             .get_rate_limits_many()
@@ -994,5 +1002,18 @@ impl AccountRequestProcessor {
             .unwrap_or_else(|| snapshots[0].clone());
 
         Ok((primary, rate_limits_by_limit_id))
+    }
+
+    fn backend_client(
+        &self,
+        auth: &CodexAuth,
+        http_state_surface: HttpStateSurface,
+    ) -> Result<BackendClient, JSONRPCErrorError> {
+        BackendClient::from_auth_with_http_state(
+            self.config.chatgpt_base_url.clone(),
+            auth,
+            HttpStateContext::new(self.config.codex_home.to_path_buf(), http_state_surface),
+        )
+        .map_err(|err| internal_error(format!("failed to construct backend client: {err}")))
     }
 }

@@ -2,6 +2,7 @@ use super::*;
 use crate::ModelsManagerConfig;
 use chrono::Utc;
 use codex_app_server_protocol::AuthMode;
+use codex_http_state::HttpStateSurface;
 use codex_login::AuthCredentialsStoreMode;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
@@ -76,6 +77,7 @@ struct TestModelsEndpoint {
     uses_codex_backend: bool,
     responses: Mutex<VecDeque<Vec<ModelInfo>>>,
     fetch_count: AtomicUsize,
+    surfaces: Mutex<Vec<Option<HttpStateSurface>>>,
 }
 
 impl TestModelsEndpoint {
@@ -85,6 +87,7 @@ impl TestModelsEndpoint {
             uses_codex_backend: true,
             responses: Mutex::new(responses.into()),
             fetch_count: AtomicUsize::new(0),
+            surfaces: Mutex::new(Vec::new()),
         })
     }
 
@@ -94,11 +97,19 @@ impl TestModelsEndpoint {
             uses_codex_backend: false,
             responses: Mutex::new(responses.into()),
             fetch_count: AtomicUsize::new(0),
+            surfaces: Mutex::new(Vec::new()),
         })
     }
 
     fn fetch_count(&self) -> usize {
         self.fetch_count.load(Ordering::SeqCst)
+    }
+
+    fn surfaces(&self) -> Vec<Option<HttpStateSurface>> {
+        self.surfaces
+            .lock()
+            .expect("surfaces lock should not be poisoned")
+            .clone()
     }
 }
 
@@ -150,15 +161,20 @@ impl ModelsEndpointClient for TestModelsEndpoint {
         self.has_command_auth
     }
 
-    async fn uses_codex_backend(&self) -> bool {
+    async fn uses_codex_backend(&self, _http_state_surface: Option<HttpStateSurface>) -> bool {
         self.uses_codex_backend
     }
 
     async fn list_models(
         &self,
         _client_version: &str,
+        http_state_surface: Option<HttpStateSurface>,
     ) -> CoreResult<(Vec<ModelInfo>, Option<String>)> {
         self.fetch_count.fetch_add(1, Ordering::SeqCst);
+        self.surfaces
+            .lock()
+            .expect("surfaces lock should not be poisoned")
+            .push(http_state_surface);
         let models = self
             .responses
             .lock()
@@ -334,6 +350,22 @@ async fn get_model_info_rejects_multi_segment_namespace_suffix_matching() {
 }
 
 #[tokio::test]
+async fn list_models_for_surface_attributes_network_refresh() {
+    let codex_home = tempdir().expect("temp dir");
+    let endpoint = TestModelsEndpoint::new(Vec::new());
+    let manager = openai_manager_for_tests(codex_home.path().to_path_buf(), endpoint.clone());
+
+    manager
+        .list_models_for_surface(RefreshStrategy::Online, HttpStateSurface::CodexDesktop)
+        .await;
+
+    assert_eq!(
+        endpoint.surfaces(),
+        vec![Some(HttpStateSurface::CodexDesktop)]
+    );
+}
+
+#[tokio::test]
 async fn refresh_available_models_sorts_by_priority() {
     let remote_models = vec![
         remote_model("priority-low", "Low", /*priority*/ 1),
@@ -500,6 +532,7 @@ async fn refresh_available_models_keeps_merging_for_api_auth() {
         uses_codex_backend: false,
         responses: Mutex::new(vec![remote_models.clone()].into()),
         fetch_count: AtomicUsize::new(0),
+        surfaces: Mutex::new(Vec::new()),
     });
     let manager = openai_manager_for_tests_with_auth(
         codex_home.path().to_path_buf(),
@@ -719,7 +752,7 @@ impl ModelsEndpointClient for TestAuthAwareModelsEndpoint {
         false
     }
 
-    async fn uses_codex_backend(&self) -> bool {
+    async fn uses_codex_backend(&self, _http_state_surface: Option<HttpStateSurface>) -> bool {
         match self.auth_manager.as_ref() {
             Some(auth_manager) => auth_manager
                 .auth()
@@ -733,6 +766,7 @@ impl ModelsEndpointClient for TestAuthAwareModelsEndpoint {
     async fn list_models(
         &self,
         _client_version: &str,
+        _http_state_surface: Option<HttpStateSurface>,
     ) -> CoreResult<(Vec<ModelInfo>, Option<String>)> {
         self.fetch_count.fetch_add(1, Ordering::SeqCst);
         let models = self

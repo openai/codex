@@ -507,6 +507,7 @@ impl Session {
         parent_rollout_thread_trace: ThreadTraceContext,
         attestation_provider: Option<Arc<dyn AttestationProvider>>,
         multi_agent_version: Option<MultiAgentVersion>,
+        http_state_surface: HttpStateSurface,
     ) -> anyhow::Result<Arc<Self>> {
         debug!(
             "Configuring session: model={}; provider={:?}",
@@ -629,7 +630,9 @@ impl Session {
         let config_for_mcp = Arc::clone(&config);
         let mcp_manager_for_mcp = Arc::clone(&mcp_manager);
         let auth_and_mcp_fut = async move {
-            let auth = auth_manager_clone.auth().await;
+            let auth = auth_manager_clone
+                .auth_for_surface(http_state_surface)
+                .await;
             let mcp_servers = mcp_manager_for_mcp
                 .effective_servers(&config_for_mcp, auth.as_ref())
                 .await;
@@ -1054,6 +1057,9 @@ impl Session {
                 code_mode_service: crate::tools::code_mode::CodeModeService::new(),
                 environment_manager,
             };
+            services
+                .model_client
+                .set_http_state_surface(http_state_surface);
             services
                 .model_client
                 .set_window_generation(window_generation);

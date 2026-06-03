@@ -895,7 +895,11 @@ impl MessageProcessor {
                 .map(|response| Some(response.into())),
             ClientRequest::ExternalAgentConfigImport { params, .. } => self
                 .external_agent_config_processor
-                .import(request_id.clone(), params)
+                .import(
+                    request_id.clone(),
+                    params,
+                    app_server_client_name.as_deref(),
+                )
                 .await
                 .map(|()| None),
             ClientRequest::ConfigValueWrite { params, .. } => {
@@ -1198,7 +1202,9 @@ impl MessageProcessor {
                 self.plugin_processor.plugin_uninstall(params).await
             }
             ClientRequest::ModelList { params, .. } => {
-                self.catalog_processor.model_list(params).await
+                self.catalog_processor
+                    .model_list(params, app_server_client_name.as_deref())
+                    .await
             }
             ClientRequest::ExperimentalFeatureList { params, .. } => {
                 self.catalog_processor
@@ -1261,7 +1267,9 @@ impl MessageProcessor {
                 self.turn_processor.thread_realtime_list_voices().await
             }
             ClientRequest::ReviewStart { params, .. } => {
-                self.turn_processor.review_start(&request_id, params).await
+                self.turn_processor
+                    .review_start(&request_id, params, app_server_client_name.as_deref())
+                    .await
             }
             ClientRequest::McpServerOauthLogin { params, .. } => {
                 self.mcp_processor.mcp_server_oauth_login(params).await
@@ -1317,11 +1325,13 @@ impl MessageProcessor {
                     .await
             }
             ClientRequest::GetAccountRateLimits { .. } => {
-                self.account_processor.get_account_rate_limits().await
+                self.account_processor
+                    .get_account_rate_limits(app_server_client_name.as_deref())
+                    .await
             }
             ClientRequest::SendAddCreditsNudgeEmail { params, .. } => {
                 self.account_processor
-                    .send_add_credits_nudge_email(params)
+                    .send_add_credits_nudge_email(params, app_server_client_name.as_deref())
                     .await
             }
             ClientRequest::GitDiffToRemote { params, .. } => {

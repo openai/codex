@@ -4,6 +4,7 @@ use crate::config::ModelsManagerConfig;
 use crate::model_info;
 use async_trait::async_trait;
 use codex_app_server_protocol::AuthMode;
+use codex_http_state::HttpStateSurface;
 use codex_login::AuthManager;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::error::Result as CoreResult;
@@ -35,12 +36,13 @@ pub trait ModelsEndpointClient: fmt::Debug + Send + Sync {
     fn has_command_auth(&self) -> bool;
 
     /// Returns whether the currently resolved auth can use Codex backend-only models.
-    async fn uses_codex_backend(&self) -> bool;
+    async fn uses_codex_backend(&self, http_state_surface: Option<HttpStateSurface>) -> bool;
 
     /// Fetches the latest remote model catalog and optional ETag.
     async fn list_models(
         &self,
         client_version: &str,
+        http_state_surface: Option<HttpStateSurface>,
     ) -> CoreResult<(Vec<ModelInfo>, Option<String>)>;
 }
 
@@ -91,8 +93,36 @@ pub trait ModelsManager: fmt::Debug + Send + Sync {
         .await
     }
 
+    /// List all available models, attributing any network refresh to `http_state_surface`.
+    async fn list_models_for_surface(
+        &self,
+        refresh_strategy: RefreshStrategy,
+        http_state_surface: HttpStateSurface,
+    ) -> Vec<ModelPreset> {
+        async move {
+            let catalog = self
+                .raw_model_catalog_for_surface(refresh_strategy, http_state_surface)
+                .await;
+            self.build_available_models(catalog.models)
+        }
+        .instrument(tracing::info_span!(
+            "list_models",
+            refresh_strategy = %refresh_strategy
+        ))
+        .await
+    }
+
     /// Return the active raw model catalog, refreshing according to the specified strategy.
     async fn raw_model_catalog(&self, refresh_strategy: RefreshStrategy) -> ModelsResponse;
+
+    /// Return the active raw model catalog, attributing any network refresh to `http_state_surface`.
+    async fn raw_model_catalog_for_surface(
+        &self,
+        refresh_strategy: RefreshStrategy,
+        _http_state_surface: HttpStateSurface,
+    ) -> ModelsResponse {
+        self.raw_model_catalog(refresh_strategy).await
+    }
 
     /// Return the current in-memory remote model catalog without refreshing or loading cache state.
     async fn get_remote_models(&self) -> Vec<ModelInfo>;
@@ -157,6 +187,30 @@ pub trait ModelsManager: fmt::Debug + Send + Sync {
         .await
     }
 
+    /// Get the model identifier to use, attributing any network refresh to `http_state_surface`.
+    async fn get_default_model_for_surface(
+        &self,
+        model: &Option<String>,
+        refresh_strategy: RefreshStrategy,
+        http_state_surface: HttpStateSurface,
+    ) -> String {
+        async move {
+            if let Some(model) = model.as_ref() {
+                return model.to_string();
+            }
+            default_model_from_available(
+                self.list_models_for_surface(refresh_strategy, http_state_surface)
+                    .await,
+            )
+        }
+        .instrument(tracing::info_span!(
+            "get_default_model",
+            model.provided = model.is_some(),
+            refresh_strategy = %refresh_strategy
+        ))
+        .await
+    }
+
     // todo(aibrahim): look if we can tighten it to pub(crate)
     /// Look up model metadata, applying remote overrides and config adjustments.
     async fn get_model_info(&self, model: &str, config: &ModelsManagerConfig) -> ModelInfo {
@@ -172,6 +226,15 @@ pub trait ModelsManager: fmt::Debug + Send + Sync {
     ///
     /// Uses `Online` strategy to fetch latest models when ETags differ.
     async fn refresh_if_new_etag(&self, etag: String);
+
+    /// Refresh models for a new ETag, attributing any network refresh to `http_state_surface`.
+    async fn refresh_if_new_etag_for_surface(
+        &self,
+        etag: String,
+        _http_state_surface: HttpStateSurface,
+    ) {
+        self.refresh_if_new_etag(etag).await;
+    }
 }
 
 /// Shared model manager handle used across runtime services.
@@ -235,6 +298,22 @@ impl ModelsManager for OpenAiModelsManager {
         }
     }
 
+    async fn raw_model_catalog_for_surface(
+        &self,
+        refresh_strategy: RefreshStrategy,
+        http_state_surface: HttpStateSurface,
+    ) -> ModelsResponse {
+        if let Err(err) = self
+            .refresh_available_models_for_surface(refresh_strategy, http_state_surface)
+            .await
+        {
+            error!("failed to refresh available models: {err}");
+        }
+        ModelsResponse {
+            models: self.get_remote_models().await,
+        }
+    }
+
     async fn get_remote_models(&self) -> Vec<ModelInfo> {
         self.remote_models.read().await.clone()
     }
@@ -252,6 +331,26 @@ impl ModelsManager for OpenAiModelsManager {
     }
 
     async fn refresh_if_new_etag(&self, etag: String) {
+        self.refresh_if_new_etag_inner(etag, /*http_state_surface*/ None)
+            .await;
+    }
+
+    async fn refresh_if_new_etag_for_surface(
+        &self,
+        etag: String,
+        http_state_surface: HttpStateSurface,
+    ) {
+        self.refresh_if_new_etag_inner(etag, Some(http_state_surface))
+            .await;
+    }
+}
+
+impl OpenAiModelsManager {
+    async fn refresh_if_new_etag_inner(
+        &self,
+        etag: String,
+        http_state_surface: Option<HttpStateSurface>,
+    ) {
         let current_etag = self.get_etag().await;
         if current_etag.clone().is_some() && current_etag.as_deref() == Some(etag.as_str()) {
             if let Err(err) = self.cache_manager.renew_cache_ttl().await {
@@ -259,16 +358,35 @@ impl ModelsManager for OpenAiModelsManager {
             }
             return;
         }
-        if let Err(err) = self.refresh_available_models(RefreshStrategy::Online).await {
+        if let Err(err) = self
+            .refresh_available_models_inner(RefreshStrategy::Online, http_state_surface)
+            .await
+        {
             error!("failed to refresh available models: {err}");
         }
     }
-}
 
-impl OpenAiModelsManager {
     /// Refresh available models according to the specified strategy.
     async fn refresh_available_models(&self, refresh_strategy: RefreshStrategy) -> CoreResult<()> {
-        if !self.should_refresh_models().await {
+        self.refresh_available_models_inner(refresh_strategy, /*http_state_surface*/ None)
+            .await
+    }
+
+    async fn refresh_available_models_for_surface(
+        &self,
+        refresh_strategy: RefreshStrategy,
+        http_state_surface: HttpStateSurface,
+    ) -> CoreResult<()> {
+        self.refresh_available_models_inner(refresh_strategy, Some(http_state_surface))
+            .await
+    }
+
+    async fn refresh_available_models_inner(
+        &self,
+        refresh_strategy: RefreshStrategy,
+        http_state_surface: Option<HttpStateSurface>,
+    ) -> CoreResult<()> {
+        if !self.should_refresh_models(http_state_surface).await {
             if matches!(
                 refresh_strategy,
                 RefreshStrategy::Offline | RefreshStrategy::OnlineIfUncached
@@ -291,18 +409,24 @@ impl OpenAiModelsManager {
                     return Ok(());
                 }
                 info!("models cache: cache miss, fetching remote models");
-                self.fetch_and_update_models().await
+                self.fetch_and_update_models(http_state_surface).await
             }
             RefreshStrategy::Online => {
                 // Always fetch from network
-                self.fetch_and_update_models().await
+                self.fetch_and_update_models(http_state_surface).await
             }
         }
     }
 
-    async fn fetch_and_update_models(&self) -> CoreResult<()> {
+    async fn fetch_and_update_models(
+        &self,
+        http_state_surface: Option<HttpStateSurface>,
+    ) -> CoreResult<()> {
         let client_version = crate::client_version_to_whole();
-        let (models, etag) = self.endpoint_client.list_models(&client_version).await?;
+        let (models, etag) = self
+            .endpoint_client
+            .list_models(&client_version, http_state_surface)
+            .await?;
         self.apply_remote_models(models.clone()).await;
         *self.etag.write().await = etag.clone();
         self.cache_manager
@@ -311,8 +435,11 @@ impl OpenAiModelsManager {
         Ok(())
     }
 
-    async fn should_refresh_models(&self) -> bool {
-        self.endpoint_client.uses_codex_backend().await || self.endpoint_client.has_command_auth()
+    async fn should_refresh_models(&self, http_state_surface: Option<HttpStateSurface>) -> bool {
+        self.endpoint_client
+            .uses_codex_backend(http_state_surface)
+            .await
+            || self.endpoint_client.has_command_auth()
     }
 
     async fn get_etag(&self) -> Option<String> {

@@ -1,4 +1,5 @@
 use super::*;
+use codex_http_state::HttpStateSurface;
 use codex_protocol::protocol::AdditionalContextEntry as CoreAdditionalContextEntry;
 use codex_protocol::protocol::AdditionalContextKind as CoreAdditionalContextKind;
 
@@ -214,8 +215,9 @@ impl TurnRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: ReviewStartParams,
+        app_server_client_name: Option<&str>,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.review_start_inner(request_id, params)
+        self.review_start_inner(request_id, params, app_server_client_name)
             .await
             .map(|()| None)
     }
@@ -1060,6 +1062,7 @@ impl TurnRequestProcessor {
         parent_thread: Arc<CodexThread>,
         review_request: ReviewRequest,
         display_text: &str,
+        http_state_surface: HttpStateSurface,
     ) -> std::result::Result<(), JSONRPCErrorError> {
         parent_thread.ensure_rollout_materialized().await;
         parent_thread.flush_rollout().await.map_err(|err| {
@@ -1087,7 +1090,7 @@ impl TurnRequestProcessor {
             ..
         } = self
             .thread_manager
-            .fork_thread_from_history(
+            .fork_thread_from_history_for_surface(
                 ForkSnapshot::Interrupted,
                 config.clone(),
                 InitialHistory::Resumed(ResumedHistory {
@@ -1097,6 +1100,7 @@ impl TurnRequestProcessor {
                 }),
                 /*thread_source*/ None,
                 self.request_trace_context(request_id).await,
+                Some(http_state_surface),
             )
             .await
             .map_err(|err| {
@@ -1168,6 +1172,7 @@ impl TurnRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: ReviewStartParams,
+        app_server_client_name: Option<&str>,
     ) -> Result<(), JSONRPCErrorError> {
         let ReviewStartParams {
             thread_id,
@@ -1195,6 +1200,9 @@ impl TurnRequestProcessor {
                     parent_thread,
                     review_request,
                     &display_text,
+                    HttpStateSurface::from_app_server_client_name(
+                        app_server_client_name.unwrap_or_default(),
+                    ),
                 )
                 .await?;
             }

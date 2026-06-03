@@ -3405,6 +3405,7 @@ async fn includes_timed_out_message() {
 async fn turn_context_with_model_updates_model_fields() {
     let (session, mut turn_context) = make_session_and_context().await;
     turn_context.reasoning_effort = Some(ReasoningEffortConfig::Minimal);
+    turn_context.http_state_surface = HttpStateSurface::CodexDesktop;
     let updated = turn_context
         .with_model("gpt-5.4".to_string(), &session.services.models_manager)
         .await;
@@ -3436,6 +3437,7 @@ async fn turn_context_with_model_updates_model_fields() {
         updated.truncation_policy,
         expected_model_info.truncation_policy.into()
     );
+    assert_eq!(updated.http_state_surface, HttpStateSurface::CodexDesktop);
 }
 
 #[test]
@@ -4606,6 +4608,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_packaged_zsh() {
         codex_rollout_trace::ThreadTraceContext::disabled(),
         /*attestation_provider*/ None,
         Some(config.multi_agent_version_from_features()),
+        HttpStateSurface::CodexExec,
     )
     .await;
 
@@ -4811,6 +4814,10 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         per_turn_config,
         model_info,
         &models_manager,
+        services
+            .model_client
+            .http_state_surface()
+            .expect("model client should have HTTP state"),
         /*network*/ None,
         turn_environments,
         session_configuration.cwd.clone(),
@@ -4956,6 +4963,7 @@ async fn make_session_with_config_and_rx(
         codex_rollout_trace::ThreadTraceContext::disabled(),
         /*attestation_provider*/ None,
         Some(config.multi_agent_version_from_features()),
+        HttpStateSurface::CodexExec,
     )
     .await?;
 
@@ -5068,6 +5076,7 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
         codex_rollout_trace::ThreadTraceContext::disabled(),
         /*attestation_provider*/ None,
         Some(config.multi_agent_version_from_features()),
+        HttpStateSurface::CodexExec,
     )
     .await?;
 
@@ -6901,6 +6910,10 @@ where
         per_turn_config,
         model_info,
         &models_manager,
+        services
+            .model_client
+            .http_state_surface()
+            .expect("model client should have HTTP state"),
         /*network*/ None,
         turn_environments,
         session_configuration.cwd.clone(),
