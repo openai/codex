@@ -14,8 +14,10 @@ use codex_extension_api::ToolName;
 use codex_extension_api::ToolOutput;
 use codex_extension_api::ToolSpec;
 use codex_extension_api::parse_tool_input_schema_without_compaction;
+use codex_http_state::HttpStateContext;
 use codex_login::default_client::build_reqwest_client;
 use codex_model_provider::SharedModelProvider;
+use codex_model_provider::with_native_integrity_state;
 use codex_protocol::items::WebSearchItem;
 use codex_protocol::models::WebSearchAction;
 use codex_tools::ResponsesApiNamespace;
@@ -36,6 +38,7 @@ const WEB_RUN_DESCRIPTION: &str = include_str!("../web_run_description.md");
 pub(crate) struct WebSearchTool {
     pub(crate) session_id: String,
     pub(crate) provider: SharedModelProvider,
+    pub(crate) http_state: Option<HttpStateContext>,
     pub(crate) settings: SearchSettings,
 }
 
@@ -82,11 +85,15 @@ impl ToolExecutor<ToolCall> for WebSearchTool {
             .api_provider()
             .await
             .map_err(|err| FunctionCallError::Fatal(err.to_string()))?;
-        let auth = self
-            .provider
-            .api_auth()
-            .await
-            .map_err(|err| FunctionCallError::Fatal(err.to_string()))?;
+        let auth = self.provider.auth().await;
+        let auth = with_native_integrity_state(
+            self.provider
+                .api_auth()
+                .await
+                .map_err(|err| FunctionCallError::Fatal(err.to_string()))?,
+            auth.as_ref(),
+            self.http_state.clone(),
+        );
         let client = SearchClient::new(
             ReqwestTransport::new(build_reqwest_client()),
             provider,

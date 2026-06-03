@@ -971,6 +971,7 @@ impl Session {
                 codex_extension_api::ExtensionData::new(session_id.to_string());
             let thread_extension_data =
                 codex_extension_api::ExtensionData::new(thread_id.to_string());
+            thread_extension_data.insert(http_state_surface);
             for contributor in extensions.thread_lifecycle_contributors() {
                 contributor.on_thread_start(codex_extension_api::ThreadStartInput {
                     config: config.as_ref(),

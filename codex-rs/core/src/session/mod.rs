@@ -795,6 +795,12 @@ impl Codex {
             .services
             .model_client
             .set_app_server_client_name(app_server_client_name.as_deref());
+        if let Some(http_state_surface) = self.session.services.model_client.http_state_surface() {
+            self.session
+                .services
+                .thread_extension_data
+                .insert(http_state_surface);
+        }
         self.session
             .update_settings(SessionSettingsUpdate {
                 app_server_client_name,

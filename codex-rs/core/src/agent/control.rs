@@ -321,6 +321,13 @@ impl AgentControl {
                             .services
                             .model_client
                             .set_http_state_surface(surface);
+                        new_thread
+                            .thread
+                            .codex
+                            .session
+                            .services
+                            .thread_extension_data
+                            .insert(surface);
                     }
                     parent_thread
                         .codex
