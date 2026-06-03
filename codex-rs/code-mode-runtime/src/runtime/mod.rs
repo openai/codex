@@ -18,7 +18,6 @@ use crate::enabled_tool_metadata;
 pub(crate) use codex_code_mode::CodeModeToolKind;
 pub(crate) use codex_code_mode::ExecuteRequest;
 pub(crate) use codex_code_mode::FunctionCallOutputContentItem;
-pub(crate) use codex_code_mode::ToolDefinition;
 const EXIT_SENTINEL: &str = "__codex_code_mode_exit__";
 
 #[derive(Debug)]
