@@ -174,17 +174,6 @@ impl ContextManager {
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn remove_last_item(&mut self) -> bool {
-        if let Some(removed) = self.items.pop() {
-            normalize::remove_corresponding_for(&mut self.items, &removed);
-            self.history_version = self.history_version.saturating_add(1);
-            true
-        } else {
-            false
-        }
-    }
-
     pub(crate) fn replace(&mut self, items: Vec<ResponseItem>) {
         self.items = items;
         self.history_version = self.history_version.saturating_add(1);
