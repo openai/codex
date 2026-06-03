@@ -729,7 +729,7 @@ impl AgentControl {
                 state.send_op(agent_id, initial_operation).await,
             )
             .await;
-        if result.is_ok() {
+        if result.is_ok() && !last_task_message.is_empty() {
             self.state
                 .update_last_task_message(agent_id, last_task_message);
         }
