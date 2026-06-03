@@ -4,11 +4,17 @@ use serde::Serialize;
 use serde_json::Value as JsonValue;
 use std::collections::BTreeMap;
 
+use crate::CodeModeSessionConfig;
 use crate::PUBLIC_TOOL_NAME;
+use crate::StoreLoadMode;
 
 const MAX_JS_SAFE_INTEGER: u64 = (1_u64 << 53) - 1;
 const DEFERRED_NESTED_TOOLS_GUIDANCE: &str = r#"Some deferred nested tools may be omitted from this description. They are still available on the global `tools` object and listed in `ALL_TOOLS`.
 To find one, filter `ALL_TOOLS` by `name` and `description`."#;
+const STORE_LOAD_HELPERS_PLACEHOLDER: &str = "{store_load_helpers}";
+const STORE_LOAD_HELPERS_DESCRIPTION: &str = r#"- `store(key: string, value: any)`: stores a serializable value under a string key for later `exec` calls in the same session.
+- `load(key: string)`: returns the stored value for a string key, or `undefined` if it is missing.
+"#;
 const EXEC_DESCRIPTION_TEMPLATE: &str = r#"Run JavaScript code to orchestrate/compose tool calls
 - Evaluates the provided JavaScript code in a fresh V8 isolate as an async module.
 - All nested tools are available on the global `tools` object, for example `await tools.exec_command(...)`. Tool names are exposed as normalized JavaScript identifiers, for example `await tools.mcp__ologs__get_profile(...)`.
@@ -26,9 +32,7 @@ const EXEC_DESCRIPTION_TEMPLATE: &str = r#"Run JavaScript code to orchestrate/co
 - `text(value: string | number | boolean | undefined | null)`: Appends a text item. Non-string values are stringified with `JSON.stringify(...)` when possible.
 - `image(imageUrlOrItem: string | { image_url: string; detail?: "auto" | "low" | "high" | "original" | null } | ImageContent, detail?: "auto" | "low" | "high" | "original" | null)`: Appends an image item. `image_url` can be an HTTPS URL or a base64-encoded `data:` URL. To forward an MCP tool image, pass an individual `ImageContent` block from `result.content`, for example `image(result.content[0])`. MCP image blocks may request detail with `_meta: { "codex/imageDetail": "original" }`. When provided, the second `detail` argument overrides any detail embedded in the first argument.
 - `generatedImage(result: { image_url: string; output_hint?: string })`: Appends an image-generation result and its optional output hint.
-- `store(key: string, value: any)`: stores a serializable value under a string key for later `exec` calls in the same session.
-- `load(key: string)`: returns the stored value for a string key, or `undefined` if it is missing.
-- `notify(value: string | number | boolean | undefined | null)`: immediately injects an extra `custom_tool_call_output` for the current `exec` call. Values are stringified like `text(...)`.
+{store_load_helpers}- `notify(value: string | number | boolean | undefined | null)`: immediately injects an extra `custom_tool_call_output` for the current `exec` call. Values are stringified like `text(...)`.
 - `setTimeout(callback: () => void, delayMs?: number)`: schedules a callback to run later and returns a timeout id. Pending timeouts do not keep `exec` alive by themselves; await an explicit promise if you need to wait for one.
 - `clearTimeout(timeoutId?: number)`: cancels a timeout created by `setTimeout`.
 - `ALL_TOOLS`: metadata for the enabled nested tools as `{ name, description }` entries.
@@ -254,8 +258,30 @@ pub fn build_exec_tool_description(
     code_mode_only: bool,
     deferred_tools_available: bool,
 ) -> String {
+    build_exec_tool_description_with_config(
+        enabled_tools,
+        namespace_descriptions,
+        code_mode_only,
+        deferred_tools_available,
+        CodeModeSessionConfig::default(),
+    )
+}
+
+pub fn build_exec_tool_description_with_config(
+    enabled_tools: &[ToolDefinition],
+    namespace_descriptions: &BTreeMap<String, ToolNamespaceDescription>,
+    code_mode_only: bool,
+    deferred_tools_available: bool,
+    session_config: CodeModeSessionConfig,
+) -> String {
     let mut sections = Vec::new();
-    sections.push(EXEC_DESCRIPTION_TEMPLATE.to_string());
+    let store_load_helpers = match session_config.store_load {
+        StoreLoadMode::Enabled => STORE_LOAD_HELPERS_DESCRIPTION,
+        StoreLoadMode::Disabled => "",
+    };
+    sections.push(
+        EXEC_DESCRIPTION_TEMPLATE.replace(STORE_LOAD_HELPERS_PLACEHOLDER, store_load_helpers),
+    );
     if deferred_tools_available {
         sections.push(DEFERRED_NESTED_TOOLS_GUIDANCE.to_string());
     }
@@ -712,8 +738,11 @@ mod tests {
     use super::ToolNamespaceDescription;
     use super::augment_tool_definition;
     use super::build_exec_tool_description;
+    use super::build_exec_tool_description_with_config;
     use super::normalize_code_mode_identifier;
     use super::parse_exec_source;
+    use crate::CodeModeSessionConfig;
+    use crate::StoreLoadMode;
     use codex_protocol::ToolName;
     use pretty_assertions::assert_eq;
     use serde_json::Value as JsonValue;
@@ -884,6 +913,22 @@ bar"
         );
         assert!(description.contains("`setTimeout(callback: () => void, delayMs?: number)`"));
         assert!(description.contains("`clearTimeout(timeoutId?: number)`"));
+    }
+
+    #[test]
+    fn exec_description_omits_disabled_store_load_helpers() {
+        let description = build_exec_tool_description_with_config(
+            &[],
+            &BTreeMap::new(),
+            /*code_mode_only*/ false,
+            /*deferred_tools_available*/ false,
+            CodeModeSessionConfig {
+                store_load: StoreLoadMode::Disabled,
+            },
+        );
+
+        assert!(!description.contains("`store(key: string, value: any)`"));
+        assert!(!description.contains("`load(key: string)`"));
     }
 
     #[test]

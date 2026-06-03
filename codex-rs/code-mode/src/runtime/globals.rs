@@ -25,8 +25,6 @@ pub(super) fn install_globals(scope: &mut v8::PinScope<'_, '_>) -> Result<(), St
     let text = helper_function(scope, "text", text_callback)?;
     let image = helper_function(scope, "image", image_callback)?;
     let generated_image = helper_function(scope, "generatedImage", generated_image_callback)?;
-    let store = helper_function(scope, "store", store_callback)?;
-    let load = helper_function(scope, "load", load_callback)?;
     let notify = helper_function(scope, "notify", notify_callback)?;
     let yield_control = helper_function(scope, "yield_control", yield_control_callback)?;
     let exit = helper_function(scope, "exit", exit_callback)?;
@@ -38,8 +36,15 @@ pub(super) fn install_globals(scope: &mut v8::PinScope<'_, '_>) -> Result<(), St
     set_global(scope, global, "text", text.into())?;
     set_global(scope, global, "image", image.into())?;
     set_global(scope, global, "generatedImage", generated_image.into())?;
-    set_global(scope, global, "store", store.into())?;
-    set_global(scope, global, "load", load.into())?;
+    if scope
+        .get_slot::<RuntimeState>()
+        .is_some_and(|state| state.stored_values.is_enabled())
+    {
+        let store = helper_function(scope, "store", store_callback)?;
+        let load = helper_function(scope, "load", load_callback)?;
+        set_global(scope, global, "store", store.into())?;
+        set_global(scope, global, "load", load.into())?;
+    }
     set_global(scope, global, "notify", notify.into())?;
     set_global(scope, global, "yield_control", yield_control.into())?;
     set_global(scope, global, "exit", exit.into())?;

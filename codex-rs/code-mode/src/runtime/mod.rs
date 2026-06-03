@@ -20,6 +20,7 @@ use crate::description::ToolDefinition;
 use crate::description::enabled_tool_metadata;
 use crate::response::FunctionCallOutputContentItem;
 use crate::service::CellId;
+use crate::stored_values::StoredValues;
 
 pub const DEFAULT_EXEC_YIELD_TIME_MS: u64 = 10_000;
 pub const DEFAULT_WAIT_YIELD_TIME_MS: u64 = 10_000;
@@ -165,13 +166,13 @@ pub(crate) enum RuntimeEvent {
         text: String,
     },
     Result {
-        stored_value_writes: HashMap<String, JsonValue>,
+        stored_value_writes: StoredValues,
         error_text: Option<String>,
     },
 }
 
 pub(crate) fn spawn_runtime(
-    stored_values: HashMap<String, JsonValue>,
+    stored_values: StoredValues,
     request: ExecuteRequest,
     event_tx: mpsc::UnboundedSender<RuntimeEvent>,
     pending_mode: PendingRuntimeMode,
@@ -224,15 +225,15 @@ struct RuntimeConfig {
     tool_call_id: String,
     enabled_tools: Vec<EnabledToolMetadata>,
     source: String,
-    stored_values: HashMap<String, JsonValue>,
+    stored_values: StoredValues,
 }
 
 pub(super) struct RuntimeState {
     event_tx: mpsc::UnboundedSender<RuntimeEvent>,
     pending_tool_calls: HashMap<String, v8::Global<v8::PromiseResolver>>,
     pending_timeouts: HashMap<u64, timers::ScheduledTimeout>,
-    stored_values: HashMap<String, JsonValue>,
-    stored_value_writes: HashMap<String, JsonValue>,
+    stored_values: StoredValues,
+    stored_value_writes: StoredValues,
     enabled_tools: Vec<EnabledToolMetadata>,
     next_tool_call_id: u64,
     next_timeout_id: u64,
@@ -244,7 +245,7 @@ pub(super) struct RuntimeState {
 pub(super) enum CompletionState {
     Pending,
     Completed {
-        stored_value_writes: HashMap<String, JsonValue>,
+        stored_value_writes: StoredValues,
         error_text: Option<String>,
     },
 }
@@ -289,8 +290,8 @@ fn run_runtime(
         event_tx: event_tx.clone(),
         pending_tool_calls: HashMap::new(),
         pending_timeouts: HashMap::new(),
+        stored_value_writes: config.stored_values.empty_like(),
         stored_values: config.stored_values,
-        stored_value_writes: HashMap::new(),
         enabled_tools: config.enabled_tools,
         next_tool_call_id: 1,
         next_timeout_id: 1,
@@ -300,7 +301,7 @@ fn run_runtime(
     });
 
     if let Err(error_text) = globals::install_globals(scope) {
-        send_result(&event_tx, HashMap::new(), Some(error_text));
+        capture_scope_send_error(scope, &event_tx, Some(error_text));
         return;
     }
 
@@ -418,7 +419,7 @@ fn capture_scope_send_error(
 
 fn send_result(
     event_tx: &mpsc::UnboundedSender<RuntimeEvent>,
-    stored_value_writes: HashMap<String, JsonValue>,
+    stored_value_writes: StoredValues,
     error_text: Option<String>,
 ) {
     let _ = event_tx.send(RuntimeEvent::Result {
@@ -429,7 +430,6 @@ fn send_result(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
     use std::time::Duration;
 
     use pretty_assertions::assert_eq;
@@ -442,6 +442,8 @@ mod tests {
     use super::RuntimeEvent;
     use super::spawn_runtime;
     use crate::FunctionCallOutputContentItem;
+    use crate::StoreLoadMode;
+    use crate::stored_values::StoredValues;
 
     fn execute_request(source: &str) -> ExecuteRequest {
         ExecuteRequest {
@@ -457,7 +459,7 @@ mod tests {
     async fn terminate_execution_stops_cpu_bound_module() {
         let (event_tx, mut event_rx) = mpsc::unbounded_channel();
         let (_runtime_tx, _runtime_control_tx, runtime_terminate_handle) = spawn_runtime(
-            HashMap::new(),
+            StoredValues::from_mode(StoreLoadMode::Enabled),
             execute_request("while (true) {}"),
             event_tx,
             PendingRuntimeMode::Continue,
@@ -493,7 +495,7 @@ mod tests {
     async fn pending_mode_freezes_runtime_commands_until_resume() {
         let (event_tx, mut event_rx) = mpsc::unbounded_channel();
         let (runtime_tx, runtime_control_tx, _runtime_terminate_handle) = spawn_runtime(
-            HashMap::new(),
+            StoredValues::from_mode(StoreLoadMode::Enabled),
             execute_request(
                 r#"
 await new Promise((resolve) => setTimeout(resolve, 60_000));

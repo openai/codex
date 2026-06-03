@@ -18,6 +18,7 @@ use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
+use crate::CodeModeSessionConfig;
 use crate::FunctionCallOutputContentItem;
 use crate::runtime::CodeModeNestedToolCall;
 use crate::runtime::DEFAULT_EXEC_YIELD_TIME_MS;
@@ -33,6 +34,7 @@ use crate::runtime::WaitRequest;
 use crate::runtime::WaitToPendingOutcome;
 use crate::runtime::WaitToPendingRequest;
 use crate::runtime::spawn_runtime;
+use crate::stored_values::StoredValues;
 
 pub type CodeModeSessionResultFuture<'a, T> =
     Pin<Box<dyn Future<Output = Result<T, String>> + Send + 'a>>;
@@ -152,6 +154,7 @@ pub trait CodeModeSession: Send + Sync {
 pub trait CodeModeSessionProvider: Send + Sync {
     fn create_session<'a>(
         &'a self,
+        config: CodeModeSessionConfig,
         delegate: Arc<dyn CodeModeSessionDelegate>,
     ) -> CodeModeSessionProviderFuture<'a>;
 }
@@ -162,11 +165,12 @@ pub struct InProcessCodeModeSessionProvider;
 impl CodeModeSessionProvider for InProcessCodeModeSessionProvider {
     fn create_session<'a>(
         &'a self,
+        config: CodeModeSessionConfig,
         delegate: Arc<dyn CodeModeSessionDelegate>,
     ) -> CodeModeSessionProviderFuture<'a> {
         Box::pin(async move {
             let session: Arc<dyn CodeModeSession> =
-                Arc::new(CodeModeService::with_delegate(delegate));
+                Arc::new(CodeModeService::with_delegate_and_config(delegate, config));
             Ok(session)
         })
     }
@@ -180,7 +184,7 @@ struct CellHandle {
 }
 
 struct Inner {
-    stored_values: Mutex<HashMap<String, JsonValue>>,
+    stored_values: Mutex<StoredValues>,
     cells: Mutex<HashMap<CellId, CellHandle>>,
     delegate: Arc<dyn CodeModeSessionDelegate>,
     shutting_down: AtomicBool,
@@ -193,13 +197,24 @@ pub struct CodeModeService {
 
 impl CodeModeService {
     pub fn new() -> Self {
-        Self::with_delegate(Arc::new(NoopCodeModeSessionDelegate))
+        Self::with_config(CodeModeSessionConfig::default())
+    }
+
+    pub fn with_config(config: CodeModeSessionConfig) -> Self {
+        Self::with_delegate_and_config(Arc::new(NoopCodeModeSessionDelegate), config)
     }
 
     pub fn with_delegate(delegate: Arc<dyn CodeModeSessionDelegate>) -> Self {
+        Self::with_delegate_and_config(delegate, CodeModeSessionConfig::default())
+    }
+
+    pub fn with_delegate_and_config(
+        delegate: Arc<dyn CodeModeSessionDelegate>,
+        config: CodeModeSessionConfig,
+    ) -> Self {
         Self {
             inner: Arc::new(Inner {
-                stored_values: Mutex::new(HashMap::new()),
+                stored_values: Mutex::new(StoredValues::from_mode(config.store_load)),
                 cells: Mutex::new(HashMap::new()),
                 delegate,
                 shutting_down: AtomicBool::new(false),
@@ -875,13 +890,16 @@ mod tests {
     use super::WaitToPendingOutcome;
     use super::WaitToPendingRequest;
     use super::run_cell_control;
+    use crate::CodeModeSessionConfig;
     use crate::CodeModeToolKind;
     use crate::FunctionCallOutputContentItem;
+    use crate::StoreLoadMode;
     use crate::ToolDefinition;
     use crate::runtime::ExecuteRequest;
     use crate::runtime::ExecuteToPendingOutcome;
     use crate::runtime::RuntimeEvent;
     use crate::runtime::spawn_runtime;
+    use crate::stored_values::StoredValues;
 
     fn execute_request(source: &str) -> ExecuteRequest {
         ExecuteRequest {
@@ -909,7 +927,7 @@ mod tests {
 
     fn test_inner() -> Arc<Inner> {
         Arc::new(Inner {
-            stored_values: Mutex::new(HashMap::new()),
+            stored_values: Mutex::new(StoredValues::from_mode(StoreLoadMode::Enabled)),
             cells: Mutex::new(HashMap::new()),
             delegate: Arc::new(NoopCodeModeSessionDelegate),
             shutting_down: std::sync::atomic::AtomicBool::new(false),
@@ -1004,6 +1022,44 @@ mod tests {
                 }],
                 error_text: None,
             }
+        );
+    }
+
+    #[tokio::test]
+    async fn disabled_store_load_does_not_inject_globals_or_allocate_json_storage() {
+        let service = CodeModeService::with_config(CodeModeSessionConfig {
+            store_load: StoreLoadMode::Disabled,
+        });
+
+        let response = execute(
+            &service,
+            ExecuteRequest {
+                source: r#"
+text(JSON.stringify([
+  Object.hasOwn(globalThis, "store"),
+  Object.hasOwn(globalThis, "load"),
+]));
+"#
+                .to_string(),
+                yield_time_ms: None,
+                ..execute_request("")
+            },
+        )
+        .await;
+
+        assert_eq!(
+            response,
+            RuntimeResponse::Result {
+                cell_id: cell_id("1"),
+                content_items: vec![FunctionCallOutputContentItem::InputText {
+                    text: "[false,false]".to_string(),
+                }],
+                error_text: None,
+            }
+        );
+        assert_eq!(
+            *service.inner.stored_values.lock().await,
+            StoredValues::Disabled
         );
     }
 
@@ -1809,7 +1865,7 @@ image({
         let (initial_response_tx, initial_response_rx) = oneshot::channel();
         let (runtime_event_tx, _runtime_event_rx) = mpsc::unbounded_channel();
         let (runtime_tx, runtime_control_tx, runtime_terminate_handle) = spawn_runtime(
-            HashMap::new(),
+            StoredValues::from_mode(StoreLoadMode::Enabled),
             ExecuteRequest {
                 source: "await new Promise(() => {})".to_string(),
                 yield_time_ms: None,
