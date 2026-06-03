@@ -55,7 +55,11 @@ pub(crate) async fn run(
     shell: &CommandShell,
     request: InterruptRequest,
 ) -> InterruptOutcome {
-    let matched = dispatcher::select_handlers(handlers, HookEventName::Interrupt, None);
+    let matched = dispatcher::select_handlers(
+        handlers,
+        HookEventName::Interrupt,
+        /*matcher_input*/ None,
+    );
     if matched.is_empty() {
         return InterruptOutcome::default();
     }
