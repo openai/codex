@@ -34,7 +34,6 @@ pub struct RemoteExecServerConnectArgs {
 }
 
 /// Registry-authorized material for one Noise rendezvous connection attempt.
-#[derive(Clone)]
 pub struct NoiseRendezvousConnectBundle {
     pub websocket_url: String,
     pub environment_id: String,
@@ -59,7 +58,6 @@ impl std::fmt::Debug for NoiseRendezvousConnectBundle {
 }
 
 /// Connection arguments for an authenticated Noise rendezvous exec-server.
-#[derive(Clone)]
 pub struct NoiseRendezvousConnectArgs {
     pub bundle: NoiseRendezvousConnectBundle,
     pub harness_identity: NoiseChannelIdentity,

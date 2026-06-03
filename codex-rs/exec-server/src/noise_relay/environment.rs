@@ -42,6 +42,7 @@ use crate::server::ConnectionProcessor;
 // though the source module now uses the more precise Noise terminology.
 const NOISE_RELAY_RESET_REASON: &str = "secure_relay_protocol_error";
 const MAX_ACTIVE_NOISE_RELAY_STREAMS: usize = 128;
+const MAX_HARNESS_KEY_AUTHORIZATION_BYTES: usize = 4096;
 const MAX_PENDING_HANDSHAKE_VALIDATIONS: usize = 32;
 const HARNESS_KEY_VALIDATION_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -238,7 +239,7 @@ pub(crate) async fn run_noise_multiplexed_environment<S, V>(
                         continue;
                     }
                 };
-                let pending =
+                let mut pending =
                     match PendingResponderHandshake::read_request(&identity, &prologue, &request) {
                         Ok(pending) => pending,
                         Err(error) => {
@@ -251,8 +252,17 @@ pub(crate) async fn run_noise_multiplexed_environment<S, V>(
                 // The authorization is encrypted inside the first IK message.
                 // It is meaningful only alongside the initiator static key
                 // that Clatter authenticated from that same message.
-                let authorization = match std::str::from_utf8(pending.payload()) {
-                    Ok(authorization) => authorization.to_string(),
+                let authorization = match String::from_utf8(pending.take_payload()) {
+                    Ok(authorization)
+                        if authorization.len() <= MAX_HARNESS_KEY_AUTHORIZATION_BYTES =>
+                    {
+                        authorization
+                    }
+                    Ok(_) => {
+                        warn!("Noise relay handshake authorization is too long");
+                        send_reset(&physical_outgoing_tx, stream_id).await;
+                        continue;
+                    }
                     Err(_) => {
                         warn!("Noise relay handshake authorization is not UTF-8");
                         send_reset(&physical_outgoing_tx, stream_id).await;

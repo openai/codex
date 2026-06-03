@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use futures::SinkExt;
+use futures::StreamExt;
 use tokio::net::TcpListener;
 use tokio::sync::Notify;
 use tokio::time::timeout;
@@ -13,6 +14,7 @@ use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::Message;
 
 use super::HarnessKeyValidator;
+use super::MAX_HARNESS_KEY_AUTHORIZATION_BYTES;
 use super::run_noise_multiplexed_environment;
 use crate::ExecServerError;
 use crate::ExecServerRuntimePaths;
@@ -20,6 +22,8 @@ use crate::noise_channel::InitiatorHandshake;
 use crate::noise_channel::NoiseChannelIdentity;
 use crate::noise_channel::NoiseChannelPublicKey;
 use crate::noise_channel::noise_channel_prologue;
+use crate::relay::RelayFrameBodyKind;
+use crate::relay::decode_relay_message_frame;
 use crate::relay::encode_relay_message_frame;
 use crate::relay_proto::RelayMessageFrame;
 use crate::server::ConnectionProcessor;
@@ -96,6 +100,62 @@ async fn pending_harness_key_validation_does_not_block_new_handshakes() -> Resul
         }
     })
     .await?;
+
+    harness_websocket.close(None).await?;
+    timeout(Duration::from_secs(1), environment_task).await??;
+    Ok(())
+}
+
+#[tokio::test]
+async fn oversized_harness_authorization_is_rejected_before_validation() -> Result<()> {
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let websocket_url = format!("ws://{}", listener.local_addr()?);
+    let harness_connection = tokio::spawn(connect_async(websocket_url));
+    let (socket, _peer_addr) = listener.accept().await?;
+    let environment_websocket = accept_async(socket).await?;
+    let (mut harness_websocket, _response) = harness_connection.await??;
+
+    let environment_identity = NoiseChannelIdentity::generate()?;
+    let harness_identity = NoiseChannelIdentity::generate()?;
+    let calls = Arc::new(AtomicUsize::new(0));
+    let environment_task = tokio::spawn(run_noise_multiplexed_environment(
+        environment_websocket,
+        ConnectionProcessor::new(ExecServerRuntimePaths::new(
+            std::env::current_exe()?,
+            /*codex_linux_sandbox_exe*/ None,
+        )?),
+        ENVIRONMENT_ID.to_string(),
+        EXECUTOR_REGISTRATION_ID.to_string(),
+        environment_identity.clone(),
+        BlockingValidator {
+            calls: Arc::clone(&calls),
+            release: Arc::new(Notify::new()),
+        },
+    ));
+
+    let stream_id = "stream-1";
+    let prologue = noise_channel_prologue(ENVIRONMENT_ID, EXECUTOR_REGISTRATION_ID, stream_id)?;
+    let oversized_authorization = vec![b'a'; MAX_HARNESS_KEY_AUTHORIZATION_BYTES + 1];
+    let (_handshake, request) = InitiatorHandshake::start(
+        &harness_identity,
+        &environment_identity.public_key(),
+        &prologue,
+        &oversized_authorization,
+    )?;
+    let frame = RelayMessageFrame::handshake(stream_id.to_string(), request);
+    harness_websocket
+        .send(Message::Binary(encode_relay_message_frame(&frame).into()))
+        .await?;
+
+    let Message::Binary(payload) = timeout(Duration::from_secs(1), harness_websocket.next())
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("environment closed before sending reset"))??
+    else {
+        anyhow::bail!("expected binary reset frame");
+    };
+    let reset = decode_relay_message_frame(payload.as_ref())?;
+    assert_eq!(reset.validate()?, RelayFrameBodyKind::Reset);
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
 
     harness_websocket.close(None).await?;
     timeout(Duration::from_secs(1), environment_task).await??;

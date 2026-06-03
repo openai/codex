@@ -243,8 +243,13 @@ impl PendingResponderHandshake {
         &self.initiator_public_key
     }
 
-    pub(crate) fn payload(&self) -> &[u8] {
-        &self.payload
+    /// Move the authenticated first-message payload out of pending state.
+    ///
+    /// The v1 payload is a short-lived registry authorization and is not
+    /// needed to complete the handshake. Moving it avoids retaining a second
+    /// copy while external authorization is in flight.
+    pub(crate) fn take_payload(&mut self) -> Vec<u8> {
+        std::mem::take(&mut self.payload)
     }
 
     /// Finish the responder handshake after external harness authorization.

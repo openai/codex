@@ -24,7 +24,7 @@ fn hybrid_ik_roundtrip_authenticates_both_endpoints() {
         authorization,
     )
     .expect("start initiator handshake");
-    let responder_handshake =
+    let mut responder_handshake =
         PendingResponderHandshake::read_request(&responder, &prologue, &request)
             .expect("read responder handshake");
 
@@ -32,7 +32,7 @@ fn hybrid_ik_roundtrip_authenticates_both_endpoints() {
         responder_handshake.initiator_public_key(),
         &initiator.public_key()
     );
-    assert_eq!(responder_handshake.payload(), authorization);
+    assert_eq!(responder_handshake.take_payload(), authorization);
 
     let (mut responder_transport, response) = responder_handshake
         .complete()

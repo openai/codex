@@ -113,6 +113,47 @@ async fn register_noise_environment_posts_security_profile_and_public_key() {
 }
 
 #[tokio::test]
+async fn validate_harness_key_requires_explicit_valid_response() {
+    let server = MockServer::start().await;
+    let harness_public_key = NoiseChannelIdentity::generate()
+        .expect("identity")
+        .public_key();
+    Mock::given(method("POST"))
+        .and(path(
+            "/cloud/environment/environment-requested/validate",
+        ))
+        .and(header("authorization", "Bearer registry-token"))
+        .and(body_partial_json(serde_json::json!({
+            "executor_registration_id": "registration-1",
+            "harness_public_key": harness_public_key.clone(),
+            "harness_key_authorization": "authorization-1",
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "valid": false,
+        })))
+        .mount(&server)
+        .await;
+    let client = EnvironmentRegistryClient::new(server.uri(), static_registry_auth_provider())
+        .expect("client");
+
+    let error = client
+        .validate_harness_key(
+            "environment-requested",
+            "registration-1",
+            &harness_public_key,
+            "authorization-1",
+        )
+        .await
+        .expect_err("a false validation response must fail closed");
+
+    assert!(matches!(
+        error,
+        ExecServerError::Protocol(message)
+            if message == "environment registry rejected Noise relay harness key"
+    ));
+}
+
+#[tokio::test]
 async fn register_legacy_environment_does_not_follow_redirects_with_auth_headers() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))

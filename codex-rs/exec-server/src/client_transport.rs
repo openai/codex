@@ -13,6 +13,7 @@ use codex_utils_rustls_provider::ensure_rustls_crypto_provider;
 use crate::ExecServerClient;
 use crate::ExecServerError;
 use crate::client_api::NoiseRendezvousConnectArgs;
+use crate::client_api::NoiseRendezvousConnectBundle;
 use crate::client_api::RemoteExecServerConnectArgs;
 use crate::client_api::StdioExecServerCommand;
 use crate::client_api::StdioExecServerConnectArgs;
@@ -97,9 +98,26 @@ impl ExecServerClient {
         args: NoiseRendezvousConnectArgs,
     ) -> Result<Self, ExecServerError> {
         ensure_rustls_crypto_provider();
-        let websocket_url = args.bundle.websocket_url.clone();
+        // This connect call owns the complete registry-issued bundle. Move each
+        // sensitive value into the transport task exactly once rather than
+        // leaving extra copies of the harness authorization or endpoint identity
+        // alive in `args` after the handshake starts.
+        let NoiseRendezvousConnectArgs {
+            bundle,
+            harness_identity,
+            client_name,
+            connect_timeout,
+            initialize_timeout,
+            resume_session_id,
+        } = args;
+        let NoiseRendezvousConnectBundle {
+            websocket_url,
+            environment_id,
+            executor_registration_id,
+            executor_public_key,
+            harness_key_authorization,
+        } = bundle;
         let diagnostic_url = redacted_websocket_url(&websocket_url);
-        let connect_timeout = args.connect_timeout;
         let (stream, _) = timeout(
             connect_timeout,
             connect_async_with_config(
@@ -122,13 +140,21 @@ impl ExecServerClient {
         let connection = noise_harness_connection_from_websocket(
             stream,
             connection_label,
-            args.bundle.environment_id.clone(),
-            args.bundle.executor_registration_id.clone(),
-            args.harness_identity.clone(),
-            args.bundle.executor_public_key.clone(),
-            args.bundle.harness_key_authorization.clone(),
+            environment_id,
+            executor_registration_id,
+            harness_identity,
+            executor_public_key,
+            harness_key_authorization,
         );
-        Self::connect(connection, args.into()).await
+        Self::connect(
+            connection,
+            crate::client_api::ExecServerClientConnectOptions {
+                client_name,
+                initialize_timeout,
+                resume_session_id,
+            },
+        )
+        .await
     }
 
     pub(crate) async fn connect_stdio_command(

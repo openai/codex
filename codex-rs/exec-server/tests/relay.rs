@@ -299,10 +299,12 @@ async fn remote_environment_routes_encrypted_exec_server_rpc() -> Result<()> {
         .await;
     Mock::given(method("POST"))
         .and(path(format!(
-            "/cloud/environment/{ENVIRONMENT_ID}/validate-harness-key"
+            "/cloud/environment/{ENVIRONMENT_ID}/validate"
         )))
         .and(header("authorization", format!("Bearer {REGISTRY_TOKEN}")))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "valid": true,
+        })))
         .mount(&registry)
         .await;
 

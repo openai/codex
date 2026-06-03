@@ -113,7 +113,7 @@ impl EnvironmentRegistryClient {
             .http
             .post(endpoint_url(
                 &self.base_url,
-                &format!("/cloud/environment/{environment_id}/validate-harness-key"),
+                &format!("/cloud/environment/{environment_id}/validate"),
             ))
             .headers(self.auth_provider.to_auth_headers())
             .json(&EnvironmentRegistryHarnessKeyValidationRequest {
@@ -123,8 +123,14 @@ impl EnvironmentRegistryClient {
             })
             .send()
             .await?;
-        self.parse_json_response::<EnvironmentRegistryHarnessKeyValidationResponse>(response)
+        let response = self
+            .parse_json_response::<EnvironmentRegistryHarnessKeyValidationResponse>(response)
             .await?;
+        if !response.valid {
+            return Err(ExecServerError::Protocol(
+                "environment registry rejected Noise relay harness key".to_string(),
+            ));
+        }
         Ok(())
     }
 
@@ -179,7 +185,9 @@ struct EnvironmentRegistryHarnessKeyValidationRequest<'a> {
 }
 
 #[derive(Deserialize)]
-struct EnvironmentRegistryHarnessKeyValidationResponse {}
+struct EnvironmentRegistryHarnessKeyValidationResponse {
+    valid: bool,
+}
 
 #[derive(Clone)]
 struct RegistryHarnessKeyValidator {
