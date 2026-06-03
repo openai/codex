@@ -58,6 +58,7 @@ use codex_config::types::PluginConfig;
 use codex_config::version_for_toml;
 use codex_core_skills::SkillMetadata;
 use codex_hooks::plugin_hook_declarations;
+use codex_http_state::HttpStateContext;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_plugin::AppConnectorId;
@@ -622,11 +623,40 @@ impl PluginsManager {
         visible_scopes: &[RemotePluginScope],
         on_effective_plugins_changed: Option<Arc<dyn Fn() + Send + Sync + 'static>>,
     ) -> Result<Vec<crate::remote::RemoteMarketplace>, RemotePluginCatalogError> {
-        let plugins = crate::remote::fetch_remote_installed_plugins(
-            &remote_plugin_service_config(config),
+        self.build_and_cache_remote_installed_plugin_marketplaces_with_service_config(
+            remote_plugin_service_config(config),
             auth,
+            visible_scopes,
+            on_effective_plugins_changed,
         )
-        .await?;
+        .await
+    }
+
+    pub async fn build_and_cache_remote_installed_plugin_marketplaces_with_http_state(
+        &self,
+        config: &PluginsConfigInput,
+        auth: Option<&CodexAuth>,
+        visible_scopes: &[RemotePluginScope],
+        on_effective_plugins_changed: Option<Arc<dyn Fn() + Send + Sync + 'static>>,
+        http_state: HttpStateContext,
+    ) -> Result<Vec<crate::remote::RemoteMarketplace>, RemotePluginCatalogError> {
+        self.build_and_cache_remote_installed_plugin_marketplaces_with_service_config(
+            remote_plugin_service_config(config).with_http_state(http_state),
+            auth,
+            visible_scopes,
+            on_effective_plugins_changed,
+        )
+        .await
+    }
+
+    async fn build_and_cache_remote_installed_plugin_marketplaces_with_service_config(
+        &self,
+        service_config: RemotePluginServiceConfig,
+        auth: Option<&CodexAuth>,
+        visible_scopes: &[RemotePluginScope],
+        on_effective_plugins_changed: Option<Arc<dyn Fn() + Send + Sync + 'static>>,
+    ) -> Result<Vec<crate::remote::RemoteMarketplace>, RemotePluginCatalogError> {
+        let plugins = crate::remote::fetch_remote_installed_plugins(&service_config, auth).await?;
         let marketplaces =
             crate::remote::group_remote_installed_plugins_by_marketplaces(&plugins, visible_scopes);
         let changed = self.write_remote_installed_plugins_cache(plugins);
@@ -815,6 +845,34 @@ impl PluginsManager {
         config: &PluginsConfigInput,
         auth: Option<&CodexAuth>,
     ) -> Result<Vec<String>, RemotePluginFetchError> {
+        self.featured_plugin_ids_for_config_with_service_config(
+            config,
+            auth,
+            remote_plugin_service_config(config),
+        )
+        .await
+    }
+
+    pub async fn featured_plugin_ids_for_config_with_http_state(
+        &self,
+        config: &PluginsConfigInput,
+        auth: Option<&CodexAuth>,
+        http_state: HttpStateContext,
+    ) -> Result<Vec<String>, RemotePluginFetchError> {
+        self.featured_plugin_ids_for_config_with_service_config(
+            config,
+            auth,
+            remote_plugin_service_config(config).with_http_state(http_state),
+        )
+        .await
+    }
+
+    async fn featured_plugin_ids_for_config_with_service_config(
+        &self,
+        config: &PluginsConfigInput,
+        auth: Option<&CodexAuth>,
+        service_config: RemotePluginServiceConfig,
+    ) -> Result<Vec<String>, RemotePluginFetchError> {
         if !config.plugins_enabled {
             return Ok(Vec::new());
         }
@@ -824,7 +882,7 @@ impl PluginsManager {
             return Ok(featured_plugin_ids);
         }
         let featured_plugin_ids = crate::remote_legacy::fetch_remote_featured_plugin_ids(
-            &remote_plugin_service_config(config),
+            &service_config,
             auth,
             self.restriction_product,
         )

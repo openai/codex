@@ -1159,33 +1159,49 @@ impl MessageProcessor {
                 self.marketplace_processor.marketplace_upgrade(params).await
             }
             ClientRequest::PluginList { params, .. } => {
-                self.plugin_processor.plugin_list(params).await
+                self.plugin_processor
+                    .plugin_list(params, app_server_client_name.as_deref())
+                    .await
             }
             ClientRequest::PluginInstalled { params, .. } => {
-                self.plugin_processor.plugin_installed(params).await
+                self.plugin_processor
+                    .plugin_installed(params, app_server_client_name.as_deref())
+                    .await
             }
             ClientRequest::PluginRead { params, .. } => {
-                self.plugin_processor.plugin_read(params).await
+                self.plugin_processor
+                    .plugin_read(params, app_server_client_name.as_deref())
+                    .await
             }
             ClientRequest::PluginSkillRead { params, .. } => {
-                self.plugin_processor.plugin_skill_read(params).await
+                self.plugin_processor
+                    .plugin_skill_read(params, app_server_client_name.as_deref())
+                    .await
             }
             ClientRequest::PluginShareSave { params, .. } => {
-                self.plugin_processor.plugin_share_save(params).await
+                self.plugin_processor
+                    .plugin_share_save(params, app_server_client_name.as_deref())
+                    .await
             }
             ClientRequest::PluginShareUpdateTargets { params, .. } => {
                 self.plugin_processor
-                    .plugin_share_update_targets(params)
+                    .plugin_share_update_targets(params, app_server_client_name.as_deref())
                     .await
             }
             ClientRequest::PluginShareList { params, .. } => {
-                self.plugin_processor.plugin_share_list(params).await
+                self.plugin_processor
+                    .plugin_share_list(params, app_server_client_name.as_deref())
+                    .await
             }
             ClientRequest::PluginShareCheckout { params, .. } => {
-                self.plugin_processor.plugin_share_checkout(params).await
+                self.plugin_processor
+                    .plugin_share_checkout(params, app_server_client_name.as_deref())
+                    .await
             }
             ClientRequest::PluginShareDelete { params, .. } => {
-                self.plugin_processor.plugin_share_delete(params).await
+                self.plugin_processor
+                    .plugin_share_delete(params, app_server_client_name.as_deref())
+                    .await
             }
             ClientRequest::AppsList { params, .. } => {
                 self.apps_processor
@@ -1196,10 +1212,14 @@ impl MessageProcessor {
                 self.catalog_processor.skills_config_write(params).await
             }
             ClientRequest::PluginInstall { params, .. } => {
-                self.plugin_processor.plugin_install(params).await
+                self.plugin_processor
+                    .plugin_install(params, app_server_client_name.as_deref())
+                    .await
             }
             ClientRequest::PluginUninstall { params, .. } => {
-                self.plugin_processor.plugin_uninstall(params).await
+                self.plugin_processor
+                    .plugin_uninstall(params, app_server_client_name.as_deref())
+                    .await
             }
             ClientRequest::ModelList { params, .. } => {
                 self.catalog_processor
