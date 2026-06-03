@@ -28,7 +28,7 @@ impl App {
                     .history_wrap_width(tui.terminal.last_known_screen_size.width),
             );
         }
-        // A committed cell can unblock a settled /tokens card that was waiting
+        // A committed cell can unblock a settled /usage card that was waiting
         // behind a transient active cell or a provisional stream tail.
         self.chat_widget
             .request_completed_token_activity_output_insertion();

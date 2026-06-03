@@ -1137,10 +1137,10 @@ async fn usage_error_slash_command_is_available_from_local_recall() {
 }
 
 #[tokio::test]
-async fn signed_out_tokens_command_reports_chatgpt_login_requirement() {
+async fn signed_out_usage_command_reports_chatgpt_login_requirement() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
-    submit_composer_text(&mut chat, "/tokens");
+    submit_composer_text(&mut chat, "/usage");
 
     let cells = drain_insert_history(&mut rx);
     let rendered = cells
@@ -1149,17 +1149,17 @@ async fn signed_out_tokens_command_reports_chatgpt_login_requirement() {
         .collect::<Vec<_>>()
         .join("\n");
     assert!(
-        rendered.contains("Sign in with ChatGPT to use /tokens."),
+        rendered.contains("Sign in with ChatGPT to use /usage."),
         "expected ChatGPT login requirement, got: {rendered:?}"
     );
-    assert_eq!(recall_latest_after_clearing(&mut chat), "/tokens");
+    assert_eq!(recall_latest_after_clearing(&mut chat), "/usage");
 }
 
 #[tokio::test]
-async fn signed_out_tokens_command_with_args_reports_chatgpt_login_requirement() {
+async fn signed_out_usage_command_with_args_reports_chatgpt_login_requirement() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
-    submit_composer_text(&mut chat, "/tokens weekly");
+    submit_composer_text(&mut chat, "/usage weekly");
 
     let cells = drain_insert_history(&mut rx);
     let rendered = cells
@@ -1168,10 +1168,10 @@ async fn signed_out_tokens_command_with_args_reports_chatgpt_login_requirement()
         .collect::<Vec<_>>()
         .join("\n");
     assert!(
-        rendered.contains("Sign in with ChatGPT to use /tokens."),
+        rendered.contains("Sign in with ChatGPT to use /usage."),
         "expected ChatGPT login requirement, got: {rendered:?}"
     );
-    assert_eq!(recall_latest_after_clearing(&mut chat), "/tokens weekly");
+    assert_eq!(recall_latest_after_clearing(&mut chat), "/usage weekly");
 }
 
 #[tokio::test]
@@ -1179,7 +1179,7 @@ async fn clearing_pending_token_activity_refreshes_discards_late_result() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     set_chatgpt_auth(&mut chat);
 
-    chat.dispatch_command(SlashCommand::Tokens);
+    chat.dispatch_command(SlashCommand::Usage);
 
     let request_id = match rx.try_recv() {
         Ok(AppEvent::RefreshTokenActivity { request_id }) => request_id,
@@ -1188,12 +1188,12 @@ async fn clearing_pending_token_activity_refreshes_discards_late_result() {
     assert_eq!(
         chat.pending_token_activity_output()
             .map(|cell| lines_to_single_string(&cell.display_lines(u16::MAX))),
-        Some("/tokens daily\n\n Token activity\n   Loading...\n".to_string()),
+        Some("/usage daily\n\n Token activity\n   Loading...\n".to_string()),
     );
     assert_eq!(
         chat.active_cell_transcript_lines(u16::MAX)
             .map(|lines| lines_to_single_string(&lines)),
-        Some("/tokens daily\n\n Token activity\n   Loading...\n".to_string()),
+        Some("/usage daily\n\n Token activity\n   Loading...\n".to_string()),
     );
 
     chat.clear_pending_token_activity_refreshes();
@@ -1211,7 +1211,7 @@ async fn pending_token_activity_refresh_renders_above_composer_snapshot() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     set_chatgpt_auth(&mut chat);
 
-    chat.dispatch_command(SlashCommand::Tokens);
+    chat.dispatch_command(SlashCommand::Usage);
     assert_matches!(
         rx.try_recv(),
         Ok(AppEvent::RefreshTokenActivity { .. }),
@@ -1238,7 +1238,7 @@ async fn completed_token_activity_refresh_returns_one_history_cell() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     set_chatgpt_auth(&mut chat);
 
-    chat.dispatch_command(SlashCommand::Tokens);
+    chat.dispatch_command(SlashCommand::Usage);
 
     let request_id = match rx.try_recv() {
         Ok(AppEvent::RefreshTokenActivity { request_id }) => request_id,
@@ -1260,7 +1260,7 @@ async fn completed_token_activity_refresh_returns_one_history_cell() {
     assert!(chat.pending_token_activity_output().is_none());
     assert_eq!(
         lines_to_single_string(&cell.display_lines(u16::MAX)),
-        "/tokens daily\n\n Token activity\n   Token activity unavailable\n",
+        "/usage daily\n\n Token activity\n   Token activity unavailable\n",
     );
 }
 
@@ -1269,7 +1269,7 @@ async fn completed_token_activity_refresh_waits_for_active_stream() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     set_chatgpt_auth(&mut chat);
 
-    chat.dispatch_command(SlashCommand::Tokens);
+    chat.dispatch_command(SlashCommand::Usage);
     let request_id = match rx.try_recv() {
         Ok(AppEvent::RefreshTokenActivity { request_id }) => request_id,
         other => panic!("expected token activity refresh request, got {other:?}"),
@@ -1286,7 +1286,7 @@ async fn completed_token_activity_refresh_waits_for_active_stream() {
     assert_eq!(
         chat.pending_token_activity_output()
             .map(|cell| lines_to_single_string(&cell.display_lines(u16::MAX))),
-        Some("/tokens daily\n\n Token activity\n   Token activity unavailable\n".to_string()),
+        Some("/usage daily\n\n Token activity\n   Token activity unavailable\n".to_string()),
     );
 
     chat.finalize_turn();
@@ -1303,7 +1303,7 @@ async fn completed_token_activity_refresh_waits_for_queued_stream_consolidation(
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     set_chatgpt_auth(&mut chat);
 
-    chat.dispatch_command(SlashCommand::Tokens);
+    chat.dispatch_command(SlashCommand::Usage);
     let request_id = match rx.try_recv() {
         Ok(AppEvent::RefreshTokenActivity { request_id }) => request_id,
         other => panic!("expected token activity refresh request, got {other:?}"),
@@ -1330,7 +1330,7 @@ async fn completed_token_activity_refresh_waits_for_active_history_cell() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     set_chatgpt_auth(&mut chat);
 
-    chat.dispatch_command(SlashCommand::Tokens);
+    chat.dispatch_command(SlashCommand::Usage);
     let request_id = match rx.try_recv() {
         Ok(AppEvent::RefreshTokenActivity { request_id }) => request_id,
         other => panic!("expected token activity refresh request, got {other:?}"),
@@ -1360,7 +1360,7 @@ async fn completed_token_activity_refresh_retries_after_plan_item_completion() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     set_chatgpt_auth(&mut chat);
 
-    chat.dispatch_command(SlashCommand::Tokens);
+    chat.dispatch_command(SlashCommand::Usage);
     let request_id = match rx.try_recv() {
         Ok(AppEvent::RefreshTokenActivity { request_id }) => request_id,
         other => panic!("expected token activity refresh request, got {other:?}"),
@@ -1395,7 +1395,7 @@ async fn pending_token_activity_refresh_keeps_composer_visible_in_short_viewport
         std::iter::repeat_n(Line::from("active output"), /*n*/ 20).collect(),
     )));
 
-    chat.dispatch_command(SlashCommand::Tokens);
+    chat.dispatch_command(SlashCommand::Usage);
     assert_matches!(
         rx.try_recv(),
         Ok(AppEvent::RefreshTokenActivity { .. }),
@@ -1426,13 +1426,13 @@ async fn repeated_token_activity_refreshes_keep_only_latest_card() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     set_chatgpt_auth(&mut chat);
 
-    chat.dispatch_command(SlashCommand::Tokens);
+    chat.dispatch_command(SlashCommand::Usage);
     let first_request_id = match rx.try_recv() {
         Ok(AppEvent::RefreshTokenActivity { request_id }) => request_id,
         other => panic!("expected first token activity refresh request, got {other:?}"),
     };
 
-    chat.dispatch_command_with_args(SlashCommand::Tokens, "weekly".to_string(), Vec::new());
+    chat.dispatch_command_with_args(SlashCommand::Usage, "weekly".to_string(), Vec::new());
     let second_request_id = match rx.try_recv() {
         Ok(AppEvent::RefreshTokenActivity { request_id }) => request_id,
         other => panic!("expected second token activity refresh request, got {other:?}"),
@@ -1441,7 +1441,7 @@ async fn repeated_token_activity_refreshes_keep_only_latest_card() {
     assert_eq!(
         chat.pending_token_activity_output()
             .map(|cell| lines_to_single_string(&cell.display_lines(u16::MAX))),
-        Some("/tokens weekly\n\n Token activity\n   Loading...\n".to_string()),
+        Some("/usage weekly\n\n Token activity\n   Loading...\n".to_string()),
     );
     assert!(!chat.finish_token_activity_refresh(
         first_request_id,

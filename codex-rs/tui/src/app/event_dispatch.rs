@@ -739,7 +739,7 @@ impl App {
                     .finish_token_activity_refresh(request_id, result)
                 {
                     // Commit synchronously so an already queued /clear cannot overtake this card.
-                    // Do not route through ChatWidget::add_to_history: /tokens may complete during
+                    // Do not route through ChatWidget::add_to_history: /usage may complete during
                     // active work, and flushing an in-progress tool cell would corrupt its lifecycle.
                     // If an answer stream is active, keep the settled card transient until its
                     // provisional transcript cells have been consolidated.

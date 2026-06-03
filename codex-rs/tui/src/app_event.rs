@@ -293,7 +293,7 @@ pub(crate) enum AppEvent {
         result: Result<Vec<RateLimitSnapshot>, String>,
     },
 
-    /// Fetch account-wide token activity for a `/tokens` history card.
+    /// Fetch account-wide token activity for a `/usage` history card.
     RefreshTokenActivity {
         request_id: u64,
     },
