@@ -21,6 +21,7 @@ use codex_agent_identity::decode_agent_identity_jwt;
 use codex_agent_identity::fetch_agent_identity_jwks;
 use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::AuthMode as ApiAuthMode;
+use codex_http_state::HttpStateSurface;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::ModelProviderAuthInfo;
 
@@ -824,11 +825,13 @@ fn persist_tokens(
 async fn request_chatgpt_token_refresh(
     refresh_token: String,
     client: &CodexHttpClient,
+    http_state_surface: Option<HttpStateSurface>,
 ) -> Result<RefreshResponse, RefreshTokenError> {
     let refresh_request = RefreshRequest {
         client_id: CLIENT_ID,
         grant_type: "refresh_token",
         refresh_token,
+        surface: http_state_surface.map(HttpStateSurface::as_str),
     };
 
     let endpoint = refresh_token_endpoint();
@@ -924,6 +927,8 @@ struct RefreshRequest {
     client_id: &'static str,
     grant_type: &'static str,
     refresh_token: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    surface: Option<&'static str>,
 }
 
 #[derive(Deserialize, Clone)]
@@ -931,6 +936,7 @@ struct RefreshResponse {
     id_token: Option<String>,
     access_token: Option<String>,
     refresh_token: Option<String>,
+    state: Option<String>,
 }
 
 // Shared constant for token refresh (client id used for oauth token refresh flow)
@@ -1086,6 +1092,7 @@ pub struct UnauthorizedRecovery {
     step: UnauthorizedRecoveryStep,
     expected_account_id: Option<String>,
     mode: UnauthorizedRecoveryMode,
+    http_state_surface: Option<HttpStateSurface>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1100,7 +1107,7 @@ impl UnauthorizedRecoveryStepResult {
 }
 
 impl UnauthorizedRecovery {
-    fn new(manager: Arc<AuthManager>) -> Self {
+    fn new(manager: Arc<AuthManager>, http_state_surface: Option<HttpStateSurface>) -> Self {
         let cached_auth = manager.auth_cached();
         let expected_account_id = cached_auth.as_ref().and_then(CodexAuth::get_account_id);
         let mode = if manager.has_external_api_key_auth()
@@ -1121,6 +1128,7 @@ impl UnauthorizedRecovery {
             step,
             expected_account_id,
             mode,
+            http_state_surface,
         }
     }
 
@@ -1227,7 +1235,9 @@ impl UnauthorizedRecovery {
                 }
             }
             UnauthorizedRecoveryStep::RefreshToken => {
-                self.manager.refresh_token_from_authority().await?;
+                self.manager
+                    .refresh_token_from_authority_with_surface(self.http_state_surface)
+                    .await?;
                 self.step = UnauthorizedRecoveryStep::Done;
                 return Ok(UnauthorizedRecoveryStepResult {
                     auth_state_changed: Some(true),
@@ -1649,7 +1659,14 @@ impl AuthManager {
     }
 
     pub fn unauthorized_recovery(self: &Arc<Self>) -> UnauthorizedRecovery {
-        UnauthorizedRecovery::new(Arc::clone(self))
+        UnauthorizedRecovery::new(Arc::clone(self), None)
+    }
+
+    pub fn unauthorized_recovery_for_surface(
+        self: &Arc<Self>,
+        http_state_surface: HttpStateSurface,
+    ) -> UnauthorizedRecovery {
+        UnauthorizedRecovery::new(Arc::clone(self), Some(http_state_surface))
     }
 
     fn external_auth(&self) -> Option<Arc<dyn ExternalAuth>> {
@@ -1692,6 +1709,21 @@ impl AuthManager {
     /// can assume that some other instance already refreshed it. If the persisted
     /// token is the same as the cached, then ask the token authority to refresh.
     pub async fn refresh_token(&self) -> Result<(), RefreshTokenError> {
+        self.refresh_token_with_surface(None).await
+    }
+
+    pub async fn refresh_token_for_surface(
+        &self,
+        http_state_surface: HttpStateSurface,
+    ) -> Result<(), RefreshTokenError> {
+        self.refresh_token_with_surface(Some(http_state_surface))
+            .await
+    }
+
+    async fn refresh_token_with_surface(
+        &self,
+        http_state_surface: Option<HttpStateSurface>,
+    ) -> Result<(), RefreshTokenError> {
         let _refresh_guard = self.refresh_lock.acquire().await.map_err(|_| {
             RefreshTokenError::Permanent(RefreshTokenFailedError::new(
                 RefreshTokenFailedReason::Other,
@@ -1717,7 +1749,10 @@ impl AuthManager {
                 tracing::info!("Skipping token refresh because auth changed after guarded reload.");
                 Ok(())
             }
-            ReloadOutcome::ReloadedNoChange => self.refresh_token_from_authority_impl().await,
+            ReloadOutcome::ReloadedNoChange => {
+                self.refresh_token_from_authority_impl(http_state_surface)
+                    .await
+            }
             ReloadOutcome::Skipped => {
                 Err(RefreshTokenError::Permanent(RefreshTokenFailedError::new(
                     RefreshTokenFailedReason::Other,
@@ -1732,16 +1767,27 @@ impl AuthManager {
     /// observe refreshed token. If the token refresh fails, returns the error to
     /// the caller.
     pub async fn refresh_token_from_authority(&self) -> Result<(), RefreshTokenError> {
+        self.refresh_token_from_authority_with_surface(None).await
+    }
+
+    async fn refresh_token_from_authority_with_surface(
+        &self,
+        http_state_surface: Option<HttpStateSurface>,
+    ) -> Result<(), RefreshTokenError> {
         let _refresh_guard = self.refresh_lock.acquire().await.map_err(|_| {
             RefreshTokenError::Permanent(RefreshTokenFailedError::new(
                 RefreshTokenFailedReason::Other,
                 REFRESH_TOKEN_UNKNOWN_MESSAGE.to_string(),
             ))
         })?;
-        self.refresh_token_from_authority_impl().await
+        self.refresh_token_from_authority_impl(http_state_surface)
+            .await
     }
 
-    async fn refresh_token_from_authority_impl(&self) -> Result<(), RefreshTokenError> {
+    async fn refresh_token_from_authority_impl(
+        &self,
+        http_state_surface: Option<HttpStateSurface>,
+    ) -> Result<(), RefreshTokenError> {
         tracing::info!("Refreshing token");
 
         let auth = match self.auth_cached() {
@@ -1764,8 +1810,12 @@ impl AuthManager {
                         "Token data is not available.",
                     ))
                 })?;
-                self.refresh_and_persist_chatgpt_token(&chatgpt_auth, token_data.refresh_token)
-                    .await
+                self.refresh_and_persist_chatgpt_token(
+                    &chatgpt_auth,
+                    token_data.refresh_token,
+                    http_state_surface,
+                )
+                .await
             }
             CodexAuth::ApiKey(_) | CodexAuth::AgentIdentity(_) => Ok(()),
         };
@@ -1905,8 +1955,10 @@ impl AuthManager {
         &self,
         auth: &ChatgptAuth,
         refresh_token: String,
+        http_state_surface: Option<HttpStateSurface>,
     ) -> Result<(), RefreshTokenError> {
-        let refresh_response = request_chatgpt_token_refresh(refresh_token, auth.client()).await?;
+        let refresh_response =
+            request_chatgpt_token_refresh(refresh_token, auth.client(), http_state_surface).await?;
 
         persist_tokens(
             auth.storage(),
@@ -1916,6 +1968,13 @@ impl AuthManager {
         )
         .map_err(RefreshTokenError::from)?;
         self.reload().await;
+        if let Some(http_state_surface) = http_state_surface {
+            crate::http_state::replace_after_refresh(
+                &self.codex_home,
+                http_state_surface,
+                refresh_response.state,
+            );
+        }
 
         Ok(())
     }

@@ -1316,9 +1316,14 @@ impl ModelClientSession {
         inference_trace: &InferenceTraceContext,
     ) -> Result<ResponseStream> {
         let auth_manager = self.client.state.provider.auth_manager();
-        let mut auth_recovery = auth_manager
-            .as_ref()
-            .map(AuthManager::unauthorized_recovery);
+        let http_state_surface = self.client.http_state_surface();
+        let mut auth_recovery = auth_manager.as_ref().map(|auth_manager| {
+            if let Some(http_state_surface) = http_state_surface {
+                auth_manager.unauthorized_recovery_for_surface(http_state_surface)
+            } else {
+                auth_manager.unauthorized_recovery()
+            }
+        });
         let mut pending_retry = PendingUnauthorizedRetry::default();
         loop {
             let client_setup = self.client.current_client_setup().await?;
@@ -1431,10 +1436,14 @@ impl ModelClientSession {
         inference_trace: &InferenceTraceContext,
     ) -> Result<WebsocketStreamOutcome> {
         let auth_manager = self.client.state.provider.auth_manager();
-
-        let mut auth_recovery = auth_manager
-            .as_ref()
-            .map(AuthManager::unauthorized_recovery);
+        let http_state_surface = self.client.http_state_surface();
+        let mut auth_recovery = auth_manager.as_ref().map(|auth_manager| {
+            if let Some(http_state_surface) = http_state_surface {
+                auth_manager.unauthorized_recovery_for_surface(http_state_surface)
+            } else {
+                auth_manager.unauthorized_recovery()
+            }
+        });
         let mut pending_retry = PendingUnauthorizedRetry::default();
         loop {
             let client_setup = self.client.current_client_setup().await?;

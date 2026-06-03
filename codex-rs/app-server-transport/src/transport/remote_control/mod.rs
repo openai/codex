@@ -263,7 +263,7 @@ async fn refresh_pairing_enrollment(
         if err.kind() != io::ErrorKind::PermissionDenied {
             return handle_pairing_refresh_error(current_enrollment, enrollment, err);
         }
-        let mut auth_recovery = auth_manager.unauthorized_recovery();
+        let mut auth_recovery = websocket::remote_control_auth_recovery(auth_manager);
         let mut auth_change_rx = auth_manager.auth_change_receiver();
         if !websocket::recover_remote_control_auth(&mut auth_recovery, &mut auth_change_rx).await {
             return Err(err);

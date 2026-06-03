@@ -116,8 +116,9 @@ impl AccountRequestProcessor {
     pub(crate) async fn get_account(
         &self,
         params: GetAccountParams,
+        app_server_client_name: Option<&str>,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.get_account_response(params)
+        self.get_account_response(params, Self::http_state_surface(app_server_client_name))
             .await
             .map(|response| Some(response.into()))
     }
@@ -125,8 +126,9 @@ impl AccountRequestProcessor {
     pub(crate) async fn get_auth_status(
         &self,
         params: GetAuthStatusParams,
+        app_server_client_name: Option<&str>,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.get_auth_status_response(params)
+        self.get_auth_status_response(params, Self::http_state_surface(app_server_client_name))
             .await
             .map(|response| Some(response.into()))
     }
@@ -750,11 +752,20 @@ impl AccountRequestProcessor {
         Ok(())
     }
 
-    async fn refresh_token_if_requested(&self, do_refresh: bool) -> RefreshTokenRequestOutcome {
+    async fn refresh_token_if_requested(
+        &self,
+        do_refresh: bool,
+        http_state_surface: HttpStateSurface,
+    ) -> RefreshTokenRequestOutcome {
         if self.auth_manager.is_external_chatgpt_auth_active() {
             return RefreshTokenRequestOutcome::NotAttemptedOrSucceeded;
         }
-        if do_refresh && let Err(err) = self.auth_manager.refresh_token().await {
+        if do_refresh
+            && let Err(err) = self
+                .auth_manager
+                .refresh_token_for_surface(http_state_surface)
+                .await
+        {
             let failed_reason = err.failed_reason();
             if failed_reason.is_none() {
                 tracing::warn!("failed to refresh token while getting account: {err}");
@@ -768,11 +779,13 @@ impl AccountRequestProcessor {
     async fn get_auth_status_response(
         &self,
         params: GetAuthStatusParams,
+        http_state_surface: HttpStateSurface,
     ) -> Result<GetAuthStatusResponse, JSONRPCErrorError> {
         let include_token = params.include_token.unwrap_or(false);
         let do_refresh = params.refresh_token.unwrap_or(false);
 
-        self.refresh_token_if_requested(do_refresh).await;
+        self.refresh_token_if_requested(do_refresh, http_state_surface)
+            .await;
 
         // Determine whether auth is required based on the active model provider.
         // If a custom provider is configured with `requires_openai_auth == false`,
@@ -834,10 +847,12 @@ impl AccountRequestProcessor {
     async fn get_account_response(
         &self,
         params: GetAccountParams,
+        http_state_surface: HttpStateSurface,
     ) -> Result<GetAccountResponse, JSONRPCErrorError> {
         let do_refresh = params.refresh_token;
 
-        self.refresh_token_if_requested(do_refresh).await;
+        self.refresh_token_if_requested(do_refresh, http_state_surface)
+            .await;
 
         let provider = create_model_provider(
             self.config.model_provider.clone(),

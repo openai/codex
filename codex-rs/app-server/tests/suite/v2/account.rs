@@ -1775,6 +1775,78 @@ async fn get_account_with_chatgpt() -> Result<()> {
 }
 
 #[tokio::test]
+async fn get_auth_status_refresh_persists_state_for_initialized_surface() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), CreateConfigTomlParams::default())?;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("stale-access-token")
+            .refresh_token("stale-refresh-token")
+            .account_id(WORKSPACE_ID_STALE)
+            .email("user@example.com")
+            .plan_type("pro"),
+        AuthCredentialsStoreMode::File,
+    )?;
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "access_token": "new-access-token",
+            "refresh_token": "new-refresh-token",
+            "state": "new-state"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let refresh_url = format!("{}/oauth/token", server.uri());
+    let mut mcp = TestAppServer::new_with_env(
+        codex_home.path(),
+        &[
+            ("OPENAI_API_KEY", None),
+            (
+                REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR,
+                Some(refresh_url.as_str()),
+            ),
+        ],
+    )
+    .await?;
+    let initialized = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.initialize_with_client_info(client_info("codex_desktop_ssh")),
+    )
+    .await??;
+    assert!(matches!(initialized, JSONRPCMessage::Response(_)));
+
+    let request_id = mcp
+        .send_get_auth_status_request(GetAuthStatusParams {
+            include_token: Some(true),
+            refresh_token: Some(true),
+        })
+        .await?;
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let _: GetAuthStatusResponse = to_response(resp)?;
+
+    let http_state = HttpStateStore::new(codex_home.path().to_path_buf());
+    assert_eq!(
+        http_state.get(HttpStateSurface::CodexDesktopSsh)?,
+        Some("new-state".to_string()),
+    );
+    let requests = server.received_requests().await.unwrap_or_default();
+    assert_eq!(requests.len(), 1);
+    let body: serde_json::Value = serde_json::from_slice(&requests[0].body)?;
+    assert_eq!(body["surface"], "codex_desktop_ssh");
+
+    server.verify().await;
+    Ok(())
+}
+
+#[tokio::test]
 async fn get_account_omits_chatgpt_after_permanent_refresh_failure() -> Result<()> {
     let codex_home = TempDir::new()?;
     create_config_toml(

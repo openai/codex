@@ -75,6 +75,12 @@ const REMOTE_CONTROL_WEBSOCKET_CONNECT_TIMEOUT: std::time::Duration =
 const REMOTE_CONTROL_CONNECTION_SHUTDOWN_TIMEOUT: std::time::Duration =
     std::time::Duration::from_secs(5);
 
+pub(super) fn remote_control_auth_recovery(
+    auth_manager: &Arc<AuthManager>,
+) -> UnauthorizedRecovery {
+    auth_manager.unauthorized_recovery_for_surface(HttpStateSurface::CodexRemoteControl)
+}
+
 struct BoundedOutboundBuffer {
     buffer_by_stream: HashMap<(ClientId, StreamId), VecDeque<ServerEnvelope>>,
     used_tx: watch::Sender<usize>,
@@ -394,7 +400,7 @@ impl RemoteControlWebsocket {
             &shutdown_token,
         );
         let (outbound_buffer, used_rx) = BoundedOutboundBuffer::new();
-        let auth_recovery = auth_manager.unauthorized_recovery();
+        let auth_recovery = remote_control_auth_recovery(&auth_manager);
         let auth_change_rx = auth_manager.auth_change_receiver();
 
         Self {
@@ -628,7 +634,7 @@ impl RemoteControlWebsocket {
                         return ConnectOutcome::Disabled;
                     }
                     self.reconnect_attempt = 0;
-                    self.auth_recovery = self.auth_manager.unauthorized_recovery();
+                    self.auth_recovery = remote_control_auth_recovery(&self.auth_manager);
                     self.status_publisher
                         .publish_status(RemoteControlConnectionStatus::Connected);
                     let enrollment = self.enrollment.as_ref();
@@ -692,7 +698,7 @@ impl RemoteControlWebsocket {
                             if changed.is_err() {
                                 return ConnectOutcome::Shutdown;
                             }
-                            self.auth_recovery = self.auth_manager.unauthorized_recovery();
+                            self.auth_recovery = remote_control_auth_recovery(&self.auth_manager);
                             self.reconnect_attempt = 0;
                             info!("retrying app-server remote control websocket after auth changed");
                         }
