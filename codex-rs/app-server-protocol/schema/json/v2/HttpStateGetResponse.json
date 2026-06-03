@@ -8,6 +8,6 @@
       ]
     }
   },
-  "title": "NativeIntegrityStateReadResponse",
+  "title": "HttpStateGetResponse",
   "type": "object"
 }

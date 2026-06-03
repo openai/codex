@@ -15,6 +15,6 @@
   "required": [
     "state"
   ],
-  "title": "NativeIntegrityStateWriteParams",
+  "title": "HttpStateSetParams",
   "type": "object"
 }

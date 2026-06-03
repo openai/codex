@@ -8,6 +8,6 @@
   "required": [
     "written"
   ],
-  "title": "NativeIntegrityStateWriteResponse",
+  "title": "HttpStateSetResponse",
   "type": "object"
 }

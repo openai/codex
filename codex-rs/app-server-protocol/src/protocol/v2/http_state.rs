@@ -6,14 +6,14 @@ use ts_rs::TS;
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct NativeIntegrityStateReadResponse {
+pub struct HttpStateGetResponse {
     pub state: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct NativeIntegrityStateWriteParams {
+pub struct HttpStateSetParams {
     pub state: String,
     /// When present, write only if the calling surface still stores this state.
     #[ts(optional = nullable)]
@@ -23,11 +23,11 @@ pub struct NativeIntegrityStateWriteParams {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct NativeIntegrityStateWriteResponse {
+pub struct HttpStateSetResponse {
     pub written: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct NativeIntegrityStateClearResponse {}
+pub struct HttpStateClearResponse {}
