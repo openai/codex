@@ -1,4 +1,4 @@
-//! Renders account token activity and coordinates asynchronous `/tokens` cards.
+//! Renders account token activity and coordinates asynchronous `/usage` cards.
 //!
 //! The slash command builds a composite history cell immediately, but the widget
 //! keeps that cell transient while the account request runs. The transient card is
@@ -72,9 +72,9 @@ pub(super) enum TokenActivityView {
 }
 
 impl TokenActivityView {
-    /// Parses the optional `/tokens` argument into a supported chart view.
+    /// Parses the optional `/usage` argument into a supported chart view.
     ///
-    /// An empty argument selects the daily view so `/tokens` and `/tokens daily`
+    /// An empty argument selects the daily view so `/usage` and `/usage daily`
     /// behave identically. Returning `None` lets the slash-command dispatcher
     /// report unsupported arguments instead of silently choosing a view.
     pub(super) fn parse(value: &str) -> Option<Self> {
@@ -115,7 +115,7 @@ pub(super) struct TokenActivityHandle {
 
 /// Holds the one transient token activity card waiting on its background response.
 ///
-/// The request ID prevents late results from mutating a newer `/tokens` card. The
+/// The request ID prevents late results from mutating a newer `/usage` card. The
 /// cell stays out of transcript history until the matching response completes and
 /// the widget confirms that active output no longer blocks insertion.
 pub(super) struct PendingTokenActivityOutput {
@@ -141,14 +141,14 @@ impl TokenActivityHandle {
     }
 }
 
-/// Renders one `/tokens` card from shared asynchronous state.
+/// Renders one `/usage` card from shared asynchronous state.
 #[derive(Debug)]
 struct TokenActivityHistoryCell {
     view: TokenActivityView,
     state: Arc<RwLock<TokenActivityState>>,
 }
 
-/// Creates the card contents and completion handle for one `/tokens` invocation.
+/// Creates the card contents and completion handle for one `/usage` invocation.
 ///
 /// The composite cell includes the echoed slash command and a loading card from
 /// the start. Callers must retain the returned handle and complete it when the
@@ -157,7 +157,7 @@ pub(super) fn new_token_activity_output(
     view: TokenActivityView,
 ) -> (CompositeHistoryCell, TokenActivityHandle) {
     let command = PlainHistoryCell::new(vec![
-        format!("/tokens {}", view.label().to_lowercase())
+        format!("/usage {}", view.label().to_lowercase())
             .magenta()
             .into(),
     ]);
@@ -464,7 +464,7 @@ fn bar_caption(view: TokenActivityView, values: &[i64]) -> Line<'static> {
     .into()
 }
 
-/// Dim footer that surfaces the other `/tokens` views and emphasizes the
+/// Dim footer that surfaces the other `/usage` views and emphasizes the
 /// active one, so the weekly/cumulative modes are discoverable from the card.
 fn view_footer(active: TokenActivityView) -> Line<'static> {
     let mut spans = vec![Span::styled("   ", label_style())];
@@ -743,7 +743,7 @@ impl ChatWidget {
     ///
     /// Returns `true` when the pending request matched and moved into the completed
     /// slot. Late responses return `false`, including responses for cards replaced
-    /// by a newer `/tokens` invocation or cleared during transcript changes.
+    /// by a newer `/usage` invocation or cleared during transcript changes.
     pub(crate) fn finish_token_activity_refresh(
         &mut self,
         request_id: u64,

@@ -35,7 +35,7 @@ const SIDE_SLASH_COMMAND_UNAVAILABLE_HINT: &str =
 const GOAL_USAGE: &str = "Usage: /goal <objective>";
 const GOAL_USAGE_HINT: &str = "Example: /goal improve benchmark coverage";
 const RAW_USAGE: &str = "Usage: /raw [on|off]";
-const TOKENS_CHATGPT_LOGIN_REQUIRED: &str = "Sign in with ChatGPT to use /tokens.";
+const USAGE_CHATGPT_LOGIN_REQUIRED: &str = "Sign in with ChatGPT to use /usage.";
 
 impl ChatWidget {
     /// Dispatch a bare slash command and record its staged local-history entry.
@@ -415,7 +415,7 @@ impl ChatWidget {
                     );
                 }
             }
-            SlashCommand::Tokens => {
+            SlashCommand::Usage => {
                 if self.ensure_token_activity_command_available() {
                     self.add_token_activity_output(tokens::TokenActivityView::Daily);
                 }
@@ -620,12 +620,12 @@ impl ChatWidget {
         } = prepared;
         let trimmed = args.trim();
         match cmd {
-            SlashCommand::Tokens => {
+            SlashCommand::Usage => {
                 if self.ensure_token_activity_command_available() {
                     match tokens::TokenActivityView::parse(trimmed) {
                         Some(view) => self.add_token_activity_output(view),
                         None => self.add_error_message(
-                            "Usage: /tokens [daily|weekly|cumulative]".to_string(),
+                            "Usage: /usage [daily|weekly|cumulative]".to_string(),
                         ),
                     }
                 }
@@ -975,7 +975,7 @@ impl ChatWidget {
         if self.has_chatgpt_account {
             return true;
         }
-        self.add_error_message(TOKENS_CHATGPT_LOGIN_REQUIRED.to_string());
+        self.add_error_message(USAGE_CHATGPT_LOGIN_REQUIRED.to_string());
         false
     }
 
@@ -986,7 +986,7 @@ impl ChatWidget {
         match cmd {
             SlashCommand::Ide
             | SlashCommand::Status
-            | SlashCommand::Tokens
+            | SlashCommand::Usage
             | SlashCommand::DebugConfig
             | SlashCommand::Ps
             | SlashCommand::Stop
