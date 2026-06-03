@@ -27,6 +27,13 @@ The helper is read-only from a developer machine or devbox:
 Do not change this to upload laptop or devbox artifacts unless the user
 explicitly asks for a cache-warming writer flow.
 
+The helper also bounds the known remote-cache long tail: one Bazel attempt may
+stall after remote-cache progress stops even though the cache keyspace is hot.
+The checked-in helper times out that stalled attempt after `120s`, shuts down
+that attempt's Bazel server, and retries once. Override only for diagnostics
+with `CODEX_BAZEL_HOT_CACHE_TIMEOUT_SECONDS` or
+`CODEX_BAZEL_HOT_CACHE_MAX_ATTEMPTS`.
+
 ## Local Flow
 
 From a Codex checkout with `gh` auth and `BUILDBUDDY_API_KEY` in the command
@@ -90,6 +97,7 @@ The helper sets:
 - `--config=ci-macos` on macOS or `--config=ci-linux` on Linux
 - `--remote_download_toplevel`
 - `--noremote_upload_local_results`
+- bounded retry defaults: `120s` timeout, `2` max attempts
 
 ## Reading Results
 
@@ -107,6 +115,7 @@ bookkeeping, not cache misses.
 - Build mode supports macOS and Linux only.
 - `--print-latest-hot-main-commit` requires `gh` auth.
 - Build mode requires `BUILDBUDDY_API_KEY`.
+- Build mode requires `python3` for bounded retry handling.
 - This is command/config specific. A successful `main` Bazel run is a good hot
   default for this helper's `verify-release-build` shape, not proof that every
   other Bazel command is hot.

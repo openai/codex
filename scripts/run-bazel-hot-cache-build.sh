@@ -18,6 +18,7 @@ provided, builds //codex-rs/cli:codex.
 Requires:
   - macOS or Linux for build mode
   - BUILDBUDDY_API_KEY in the environment for build mode
+  - python3 for bounded retry handling in build mode
   - gh auth for --print-latest-hot-main-commit
 EOF
 }
@@ -99,25 +100,94 @@ bazel_startup_args=()
 if [[ -n "${BAZEL_OUTPUT_USER_ROOT:-}" ]]; then
   bazel_startup_args+=("--output_user_root=${BAZEL_OUTPUT_USER_ROOT}")
 fi
+bazel_timeout_seconds="${CODEX_BAZEL_HOT_CACHE_TIMEOUT_SECONDS:-120}"
+bazel_max_attempts="${CODEX_BAZEL_HOT_CACHE_MAX_ATTEMPTS:-2}"
+if ! [[ "${bazel_timeout_seconds}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "CODEX_BAZEL_HOT_CACHE_TIMEOUT_SECONDS must be a positive integer." >&2
+  exit 1
+fi
+if ! [[ "${bazel_max_attempts}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "CODEX_BAZEL_HOT_CACHE_MAX_ATTEMPTS must be a positive integer." >&2
+  exit 1
+fi
+if ! command -v python3 >/dev/null 2>&1; then
+  echo "python3 is required to bound Bazel hot-cache retries." >&2
+  exit 1
+fi
 
 # Keep the explicit Rust debug-assertion flags before the platform CI config.
 # That matches the verify-release-build CI action key ordering that warms this
 # cache.
-exec "${bazel_bin}" \
-  "${bazel_startup_args[@]}" \
-  --noexperimental_remote_repo_contents_cache \
-  build \
-  --config=buildbuddy-openai-rbe \
-  "--remote_header=x-buildbuddy-api-key=${BUILDBUDDY_API_KEY}" \
-  --compilation_mode=fastbuild \
-  --@rules_rust//rust/settings:extra_rustc_flag=-Cdebug-assertions=no \
-  --@rules_rust//rust/settings:extra_exec_rustc_flag=-Cdebug-assertions=no \
-  "--build_metadata=COMMIT_SHA=${commit_sha}" \
-  --build_metadata=TAG_job=verify-release-build \
-  --build_metadata=TAG_rust_debug_assertions=off \
-  "--config=${bazel_ci_config}" \
-  --remote_download_toplevel \
-  "--repository_cache=${repository_cache}" \
-  --noremote_upload_local_results \
-  -- \
+bazel_command=(
+  "${bazel_bin}"
+  "${bazel_startup_args[@]}"
+  --noexperimental_remote_repo_contents_cache
+  build
+  --config=buildbuddy-openai-rbe
+  "--remote_header=x-buildbuddy-api-key=${BUILDBUDDY_API_KEY}"
+  --compilation_mode=fastbuild
+  --@rules_rust//rust/settings:extra_rustc_flag=-Cdebug-assertions=no
+  --@rules_rust//rust/settings:extra_exec_rustc_flag=-Cdebug-assertions=no
+  "--build_metadata=COMMIT_SHA=${commit_sha}"
+  --build_metadata=TAG_job=verify-release-build
+  --build_metadata=TAG_rust_debug_assertions=off
+  "--config=${bazel_ci_config}"
+  --remote_download_toplevel
+  "--repository_cache=${repository_cache}"
+  --noremote_upload_local_results
+  --
   "${targets[@]}"
+)
+
+run_command_with_timeout() {
+  local timeout_seconds="$1"
+  shift
+  python3 - "${timeout_seconds}" "$@" <<'PY'
+import os
+import signal
+import subprocess
+import sys
+
+timeout_seconds = int(sys.argv[1])
+command = sys.argv[2:]
+process = subprocess.Popen(command, start_new_session=True)
+try:
+    raise SystemExit(process.wait(timeout=timeout_seconds))
+except subprocess.TimeoutExpired:
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        process.wait()
+    raise SystemExit(124)
+PY
+}
+
+shutdown_bazel_server() {
+  run_command_with_timeout 10 \
+    "${bazel_bin}" \
+    "${bazel_startup_args[@]}" \
+    shutdown \
+    >/dev/null 2>&1 || true
+}
+
+for ((attempt = 1; attempt <= bazel_max_attempts; attempt++)); do
+  if run_command_with_timeout "${bazel_timeout_seconds}" "${bazel_command[@]}"; then
+    exit 0
+  else
+    status=$?
+  fi
+  if [[ ${status} -ne 124 || ${attempt} -eq ${bazel_max_attempts} ]]; then
+    exit "${status}"
+  fi
+
+  echo "Bazel hot-cache attempt ${attempt}/${bazel_max_attempts} timed out after ${bazel_timeout_seconds}s; retrying." >&2
+  shutdown_bazel_server
+done

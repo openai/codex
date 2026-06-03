@@ -156,6 +156,12 @@ Linux `verify-release-build` cache keyspace instead of the macOS one. Pass
 Bazel target patterns after the script name to build something other than the
 default `//codex-rs/cli:codex`.
 
+The helper bounds the known remote-cache long tail: if a Bazel attempt stalls
+after remote-cache progress stops, it times out that attempt after `120s`,
+shuts down that attempt's Bazel server, and retries once. Override those
+diagnostic knobs only when needed with `CODEX_BAZEL_HOT_CACHE_TIMEOUT_SECONDS`
+or `CODEX_BAZEL_HOT_CACHE_MAX_ATTEMPTS`.
+
 For routine developer use, keep Bazel's normal persistent user root and
 repository cache. A fresh worktree already gives Bazel a fresh workspace/output
 base while preserving the shared local Bazel state that makes this workflow
