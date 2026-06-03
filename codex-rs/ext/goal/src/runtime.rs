@@ -4,6 +4,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 
 use codex_core::ThreadManager;
+use codex_core::TryStartTurnIfIdleRejectionReason;
 use codex_protocol::ThreadId;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::ThreadGoal;
@@ -307,8 +308,15 @@ impl GoalRuntimeHandle {
             return Ok(());
         };
 
-        if thread.try_start_turn_if_idle(vec![item]).await.is_err() {
-            tracing::debug!("skipping goal continuation because the thread is no longer idle");
+        if let Err(err) = thread.try_start_turn_if_idle(vec![item]).await {
+            let reason = err.reason();
+            tracing::debug!(
+                ?reason,
+                "skipping goal continuation because automatic idle work was rejected"
+            );
+            if reason == TryStartTurnIfIdleRejectionReason::PlanMode {
+                return Ok(());
+            }
         }
 
         let current_turn_is_goal_active = self

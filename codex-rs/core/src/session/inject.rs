@@ -1,6 +1,8 @@
 use super::input_queue::TurnInput;
 use super::session::Session;
 use super::turn_context::TurnContext;
+use crate::codex_thread::TryStartTurnIfIdleError;
+use crate::codex_thread::TryStartTurnIfIdleRejectionReason;
 use crate::state::ActiveTurn;
 use crate::state::TurnState;
 use crate::tasks::RegularTask;
@@ -43,21 +45,30 @@ impl Session {
     pub(crate) async fn try_start_turn_if_idle(
         self: &Arc<Self>,
         input: Vec<ResponseItem>,
-    ) -> Result<(), Vec<ResponseItem>> {
+    ) -> Result<(), TryStartTurnIfIdleError> {
         if input.is_empty() {
             return Ok(());
         }
         if self.input_queue.has_trigger_turn_mailbox_items().await {
-            return Err(input);
+            return Err(TryStartTurnIfIdleError::new(
+                TryStartTurnIfIdleRejectionReason::PendingTriggerTurn,
+                input,
+            ));
         }
         if self.collaboration_mode().await.mode == ModeKind::Plan {
-            return Err(input);
+            return Err(TryStartTurnIfIdleError::new(
+                TryStartTurnIfIdleRejectionReason::PlanMode,
+                input,
+            ));
         }
 
         let turn_state = {
             let mut active_turn = self.active_turn.lock().await;
             if active_turn.is_some() {
-                return Err(input);
+                return Err(TryStartTurnIfIdleError::new(
+                    TryStartTurnIfIdleRejectionReason::Busy,
+                    input,
+                ));
             }
             let active_turn = active_turn.get_or_insert_with(ActiveTurn::default);
             Arc::clone(&active_turn.turn_state)
@@ -66,7 +77,10 @@ impl Session {
         if self.input_queue.has_trigger_turn_mailbox_items().await {
             self.clear_reserved_idle_turn(&turn_state).await;
             self.maybe_start_turn_for_pending_work().await;
-            return Err(input);
+            return Err(TryStartTurnIfIdleError::new(
+                TryStartTurnIfIdleRejectionReason::PendingTriggerTurn,
+                input,
+            ));
         }
 
         let turn_context = self
@@ -74,14 +88,21 @@ impl Session {
             .await;
         if turn_context.collaboration_mode.mode == ModeKind::Plan {
             self.clear_reserved_idle_turn(&turn_state).await;
-            return Err(input);
+            self.maybe_start_turn_for_pending_work().await;
+            return Err(TryStartTurnIfIdleError::new(
+                TryStartTurnIfIdleRejectionReason::PlanMode,
+                input,
+            ));
         }
         self.maybe_emit_unknown_model_warning_for_turn(turn_context.as_ref())
             .await;
         if self.input_queue.has_trigger_turn_mailbox_items().await {
             self.clear_reserved_idle_turn(&turn_state).await;
             self.maybe_start_turn_for_pending_work().await;
-            return Err(input);
+            return Err(TryStartTurnIfIdleError::new(
+                TryStartTurnIfIdleRejectionReason::PendingTriggerTurn,
+                input,
+            ));
         }
         let still_reserved = {
             let active_turn = self.active_turn.lock().await;
@@ -91,7 +112,10 @@ impl Session {
         };
         if !still_reserved {
             self.clear_reserved_idle_turn(&turn_state).await;
-            return Err(input);
+            return Err(TryStartTurnIfIdleError::new(
+                TryStartTurnIfIdleRejectionReason::Busy,
+                input,
+            ));
         }
 
         self.input_queue
