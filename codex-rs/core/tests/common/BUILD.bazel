@@ -5,6 +5,7 @@ codex_rust_crate(
     crate_name = "core_test_support",
     crate_srcs = glob(["*.rs"]),
     deps_extra = [
+        "//codex-rs/code-mode-runtime:code-mode-runtime",
         "@crates//:similar",
     ],
 )
