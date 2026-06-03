@@ -430,24 +430,13 @@ pub enum GoalEventKind {
     Cleared,
 }
 
-#[derive(Clone, Copy, Debug, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum GoalStatus {
-    Active,
-    Paused,
-    Blocked,
-    UsageLimited,
-    BudgetLimited,
-    Complete,
-}
-
 #[derive(Clone)]
 pub struct CodexGoalEvent {
     pub thread_id: String,
     pub turn_id: Option<String>,
     pub goal_id: String,
     pub event_kind: GoalEventKind,
-    pub goal_status: GoalStatus,
+    pub goal_status: codex_state::ThreadGoalStatus,
     pub has_token_budget: bool,
     pub cumulative_tokens_accounted: Option<i64>,
     pub cumulative_time_accounted_seconds: Option<i64>,

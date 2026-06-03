@@ -18,7 +18,6 @@ use crate::tools::handlers::goal_spec::UPDATE_GOAL_TOOL_NAME;
 use anyhow::Context;
 use codex_analytics::CodexGoalEvent;
 use codex_analytics::GoalEventKind;
-use codex_analytics::GoalStatus;
 use codex_features::Feature;
 use codex_otel::GOAL_BLOCKED_METRIC;
 use codex_otel::GOAL_BUDGET_LIMITED_METRIC;
@@ -304,17 +303,6 @@ impl GoalWallClockAccountingSnapshot {
 
     fn active_goal_id(&self) -> Option<String> {
         self.active_goal_id.clone()
-    }
-}
-
-fn analytics_goal_status(status: codex_state::ThreadGoalStatus) -> GoalStatus {
-    match status {
-        codex_state::ThreadGoalStatus::Active => GoalStatus::Active,
-        codex_state::ThreadGoalStatus::Paused => GoalStatus::Paused,
-        codex_state::ThreadGoalStatus::Blocked => GoalStatus::Blocked,
-        codex_state::ThreadGoalStatus::UsageLimited => GoalStatus::UsageLimited,
-        codex_state::ThreadGoalStatus::BudgetLimited => GoalStatus::BudgetLimited,
-        codex_state::ThreadGoalStatus::Complete => GoalStatus::Complete,
     }
 }
 
@@ -1468,7 +1456,7 @@ impl Session {
                 turn_id,
                 goal_id: goal.goal_id.clone(),
                 event_kind,
-                goal_status: analytics_goal_status(goal.status),
+                goal_status: goal.status,
                 has_token_budget: goal.token_budget.is_some(),
                 cumulative_tokens_accounted,
                 cumulative_time_accounted_seconds,

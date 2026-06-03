@@ -53,7 +53,6 @@ use crate::facts::CompactionStrategy;
 use crate::facts::CompactionTrigger;
 use crate::facts::CustomAnalyticsFact;
 use crate::facts::GoalEventKind;
-use crate::facts::GoalStatus;
 use crate::facts::HookRunFact;
 use crate::facts::HookRunInput;
 use crate::facts::InputError;
@@ -1297,7 +1296,7 @@ fn goal_event_serializes_metadata_only_shape() {
                 turn_id: None,
                 goal_id: "goal-opaque-1".to_string(),
                 event_kind: GoalEventKind::Cleared,
-                goal_status: GoalStatus::BudgetLimited,
+                goal_status: codex_state::ThreadGoalStatus::BudgetLimited,
                 has_token_budget: true,
                 cumulative_tokens_accounted: None,
                 cumulative_time_accounted_seconds: None,
@@ -1933,7 +1932,7 @@ async fn goal_event_ingests_accounted_usage_with_turn_attribution() {
                 turn_id: Some("turn-goal".to_string()),
                 goal_id: "goal-opaque-1".to_string(),
                 event_kind: GoalEventKind::UsageAccounted,
-                goal_status: GoalStatus::Active,
+                goal_status: codex_state::ThreadGoalStatus::Active,
                 has_token_budget: false,
                 cumulative_tokens_accounted: Some(25),
                 cumulative_time_accounted_seconds: Some(4),
@@ -1974,7 +1973,7 @@ async fn goal_event_without_thread_context_is_dropped() {
                 turn_id: Some("turn-missing".to_string()),
                 goal_id: "goal-opaque-missing".to_string(),
                 event_kind: GoalEventKind::UsageAccounted,
-                goal_status: GoalStatus::Active,
+                goal_status: codex_state::ThreadGoalStatus::Active,
                 has_token_budget: false,
                 cumulative_tokens_accounted: Some(0),
                 cumulative_time_accounted_seconds: Some(0),
