@@ -20,14 +20,12 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Resolve the dynamic targets before printing anything so callers do not
-# continue with a partial list if `bazel query` fails. The query helper routes
-# Bazel through the shared wrapper so local and CI calls inherit the appropriate
-# startup options.
-query='kind("rust_test rule", attr(tags, "manual", //codex-rs/... except //codex-rs/v8-poc/...))'
+# continue with a partial list if `bazel query` fails. Target discovery is
+# local on all platforms.
 manual_rust_test_targets="$(
   ./.github/scripts/run-bazel-query-ci.sh \
     --output=label \
-    -- "${query}"
+    -- 'kind("rust_test rule", attr(tags, "manual", //codex-rs/... except //codex-rs/v8-poc/...))'
 )"
 if [[ "${RUNNER_OS:-}" != "Windows" ]]; then
   # Non-Windows clippy jobs lint the native test binaries; the
