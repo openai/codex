@@ -113,6 +113,7 @@ impl ChatWidget {
             current_collaboration_mode,
             active_collaboration_mask,
             has_chatgpt_account,
+            has_codex_backend_auth: has_chatgpt_account,
             model_catalog,
             session_telemetry,
             session_header: SessionHeader::new(header_model),
@@ -269,7 +270,7 @@ impl ChatWidget {
             .set_connectors_enabled(widget.connectors_enabled());
         widget
             .bottom_pane
-            .set_token_activity_command_enabled(widget.has_chatgpt_account);
+            .set_token_activity_command_enabled(widget.has_codex_backend_auth);
         widget.refresh_status_surfaces();
 
         widget

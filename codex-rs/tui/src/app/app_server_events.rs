@@ -81,16 +81,22 @@ impl App {
                 return;
             }
             ServerNotification::AccountUpdated(notification) => {
+                let has_chatgpt_account = matches!(
+                    notification.auth_mode,
+                    Some(AuthMode::Chatgpt) | Some(AuthMode::ChatgptAuthTokens)
+                );
+                let has_codex_backend_auth = matches!(
+                    notification.auth_mode,
+                    Some(AuthMode::Chatgpt | AuthMode::ChatgptAuthTokens | AuthMode::AgentIdentity)
+                );
                 self.chat_widget.update_account_state(
                     status_account_display_from_auth_mode(
                         notification.auth_mode,
                         notification.plan_type,
                     ),
                     notification.plan_type,
-                    matches!(
-                        notification.auth_mode,
-                        Some(AuthMode::Chatgpt) | Some(AuthMode::ChatgptAuthTokens)
-                    ),
+                    has_chatgpt_account,
+                    has_codex_backend_auth,
                 );
                 return;
             }

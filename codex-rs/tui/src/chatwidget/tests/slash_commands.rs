@@ -1190,6 +1190,20 @@ async fn signed_out_usage_command_with_args_reports_chatgpt_login_requirement() 
 }
 
 #[tokio::test]
+async fn usage_command_runs_with_backend_auth_without_chatgpt_account_flag() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.update_account_state(
+        /*status_account_display*/ None, /*plan_type*/ None,
+        /*has_chatgpt_account*/ false, /*has_codex_backend_auth*/ true,
+    );
+
+    chat.dispatch_command(SlashCommand::Usage);
+
+    assert_matches!(rx.try_recv(), Ok(AppEvent::RefreshTokenActivity { .. }));
+    assert!(!chat.has_chatgpt_account());
+}
+
+#[tokio::test]
 async fn clearing_pending_token_activity_refreshes_discards_late_result() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     set_chatgpt_auth(&mut chat);
