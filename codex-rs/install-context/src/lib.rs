@@ -6,6 +6,8 @@ use std::sync::OnceLock;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
 const BIN_DIRNAME: &str = "bin";
+const LEGACY_BINARY_DIRNAME: &str = "codex";
+const LEGACY_PATH_DIRNAME: &str = "path";
 const PACKAGE_METADATA_FILENAME: &str = "codex-package.json";
 const PATH_DIRNAME: &str = "codex-path";
 const RELEASES_DIRNAME: &str = "releases";
@@ -184,11 +186,17 @@ impl InstallContext {
 impl CodexPackageLayout {
     fn from_exe(exe_path: &Path) -> Option<Self> {
         let canonical_exe = canonical_absolute_path(exe_path)?;
-        let bin_dir = canonical_exe.parent()?;
-        if bin_dir.file_name() != Some(OsStr::new(BIN_DIRNAME)) {
-            return None;
+        let exe_dir = canonical_exe.parent()?;
+        match exe_dir.file_name() {
+            Some(name) if name == OsStr::new(BIN_DIRNAME) => Self::from_package_bin_dir(exe_dir),
+            Some(name) if name == OsStr::new(LEGACY_BINARY_DIRNAME) => {
+                Self::from_legacy_binary_dir(exe_dir)
+            }
+            Some(_) | None => None,
         }
+    }
 
+    fn from_package_bin_dir(bin_dir: AbsolutePathBuf) -> Option<Self> {
         let package_dir = bin_dir.parent()?;
         if !package_dir.join(PACKAGE_METADATA_FILENAME).is_file() {
             return None;
@@ -197,6 +205,18 @@ impl CodexPackageLayout {
         Some(Self {
             resources_dir: existing_dir(package_dir.join(RESOURCES_DIRNAME)),
             path_dir: existing_dir(package_dir.join(PATH_DIRNAME)),
+            package_dir,
+            bin_dir,
+        })
+    }
+
+    fn from_legacy_binary_dir(bin_dir: AbsolutePathBuf) -> Option<Self> {
+        let package_dir = bin_dir.parent()?;
+        let path_dir = existing_dir(package_dir.join(LEGACY_PATH_DIRNAME))?;
+
+        Some(Self {
+            resources_dir: existing_dir(package_dir.join(RESOURCES_DIRNAME)),
+            path_dir: Some(path_dir),
             package_dir,
             bin_dir,
         })
@@ -507,6 +527,74 @@ mod tests {
             canonical_path_dir
                 .join(default_rg_command())
                 .into_path_buf()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn npm_managed_legacy_package_keeps_path_dir() -> std::io::Result<()> {
+        let package_dir = tempfile::tempdir()?;
+        let bin_dir = package_dir.path().join(LEGACY_BINARY_DIRNAME);
+        let path_dir = package_dir.path().join(LEGACY_PATH_DIRNAME);
+        fs::create_dir_all(&bin_dir)?;
+        fs::create_dir_all(&path_dir)?;
+        let exe_path = bin_dir.join(if cfg!(windows) { "codex.exe" } else { "codex" });
+        fs::write(&exe_path, "")?;
+        fs::write(path_dir.join(default_rg_command()), "")?;
+        let canonical_package_dir =
+            AbsolutePathBuf::from_absolute_path(package_dir.path().canonicalize()?)?;
+        let canonical_bin_dir = AbsolutePathBuf::from_absolute_path(bin_dir.canonicalize()?)?;
+        let canonical_path_dir = AbsolutePathBuf::from_absolute_path(path_dir.canonicalize()?)?;
+
+        let context = InstallContext::from_exe_with_codex_home(
+            /*is_macos*/ false,
+            /*current_exe*/ Some(&exe_path),
+            /*managed_by_npm*/ true,
+            /*managed_by_bun*/ false,
+            /*codex_home*/ None,
+        );
+        assert_eq!(
+            context,
+            InstallContext {
+                method: InstallMethod::Npm,
+                package_layout: Some(CodexPackageLayout {
+                    package_dir: canonical_package_dir,
+                    bin_dir: canonical_bin_dir,
+                    resources_dir: None,
+                    path_dir: Some(canonical_path_dir.clone()),
+                }),
+            }
+        );
+        assert_eq!(
+            context.rg_command(),
+            canonical_path_dir
+                .join(default_rg_command())
+                .into_path_buf()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn legacy_package_layout_requires_path_dir() -> std::io::Result<()> {
+        let package_dir = tempfile::tempdir()?;
+        let bin_dir = package_dir.path().join(LEGACY_BINARY_DIRNAME);
+        fs::create_dir_all(&bin_dir)?;
+        let exe_path = bin_dir.join(if cfg!(windows) { "codex.exe" } else { "codex" });
+        fs::write(&exe_path, "")?;
+
+        let context = InstallContext::from_exe_with_codex_home(
+            /*is_macos*/ false,
+            /*current_exe*/ Some(&exe_path),
+            /*managed_by_npm*/ true,
+            /*managed_by_bun*/ false,
+            /*codex_home*/ None,
+        );
+        assert_eq!(
+            context,
+            InstallContext {
+                method: InstallMethod::Npm,
+                package_layout: None,
+            }
         );
         Ok(())
     }
