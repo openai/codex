@@ -50,7 +50,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
-use crate::AppServerRuntimeStorageDeps;
+use crate::AppServerRuntimeStorageOverrides;
 use crate::analytics_utils::analytics_events_client_from_config;
 use crate::config_manager::ConfigManager;
 use crate::error_code::OVERLOADED_ERROR_CODE;
@@ -349,19 +349,19 @@ impl InProcessClientHandle {
 /// the handle, so callers receive a ready-to-use runtime. If initialize fails,
 /// the runtime is shut down and an `InvalidData` error is returned.
 pub async fn start(args: InProcessStartArgs) -> IoResult<InProcessClientHandle> {
-    start_with_runtime_storage_deps(args, AppServerRuntimeStorageDeps::default()).await
+    start_with_runtime_storage_overrides(args, AppServerRuntimeStorageOverrides::default()).await
 }
 
-/// Starts an in-process app-server runtime with explicit thread storage backends.
+/// Starts an in-process app-server runtime with optional thread storage overrides.
 ///
-/// This is the embedded-host path for supplying executor-visible artifact and
-/// shell snapshot stores without changing the existing start-argument shape.
-pub async fn start_with_runtime_storage_deps(
+/// This is the embedded-host path for replacing the standard local artifact
+/// and shell snapshot stores without changing the existing start-argument shape.
+pub async fn start_with_runtime_storage_overrides(
     args: InProcessStartArgs,
-    runtime_storage_deps: AppServerRuntimeStorageDeps,
+    runtime_storage_overrides: AppServerRuntimeStorageOverrides,
 ) -> IoResult<InProcessClientHandle> {
     let initialize = args.initialize.clone();
-    let client = start_uninitialized(args, runtime_storage_deps).await?;
+    let client = start_uninitialized(args, runtime_storage_overrides).await?;
 
     let initialize_response = client
         .request(ClientRequest::Initialize {
@@ -381,9 +381,18 @@ pub async fn start_with_runtime_storage_deps(
     Ok(client)
 }
 
+/// Compatibility wrapper for existing storage-deps callers.
+#[doc(hidden)]
+pub async fn start_with_runtime_storage_deps(
+    args: InProcessStartArgs,
+    runtime_storage_deps: crate::AppServerRuntimeStorageDeps,
+) -> IoResult<InProcessClientHandle> {
+    start_with_runtime_storage_overrides(args, runtime_storage_deps).await
+}
+
 async fn start_uninitialized(
     args: InProcessStartArgs,
-    runtime_storage_deps: AppServerRuntimeStorageDeps,
+    runtime_storage_overrides: AppServerRuntimeStorageOverrides,
 ) -> IoResult<InProcessClientHandle> {
     let channel_capacity = args.channel_capacity.max(1);
     let installation_id = resolve_installation_id(&args.config.codex_home).await?;
@@ -453,7 +462,7 @@ async fn start_uninitialized(
                 rpc_transport: AppServerRpcTransport::InProcess,
                 remote_control_handle: None,
                 plugin_startup_tasks: crate::PluginStartupTasks::Start,
-                runtime_storage_deps,
+                runtime_storage_overrides,
             }));
             let mut thread_created_rx = processor.thread_created_receiver();
             let session = Arc::new(ConnectionSessionState::new());

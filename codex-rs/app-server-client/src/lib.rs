@@ -26,6 +26,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 pub use codex_app_server::AppServerRuntimeStorageDeps;
+pub use codex_app_server::AppServerRuntimeStorageOverrides;
 pub use codex_app_server::ArtifactStore;
 pub use codex_app_server::LocalArtifactStore;
 pub use codex_app_server::LocalShellSnapshotStore;
@@ -495,18 +496,22 @@ impl InProcessAppServerClient {
     /// internal event queue is saturated later, server requests are rejected
     /// with overload error instead of being silently dropped.
     pub async fn start(args: InProcessClientStartArgs) -> IoResult<Self> {
-        Self::start_with_runtime_storage_deps(args, AppServerRuntimeStorageDeps::default()).await
+        Self::start_with_runtime_storage_overrides(
+            args,
+            AppServerRuntimeStorageOverrides::default(),
+        )
+        .await
     }
 
-    /// Starts the in-process runtime with explicit thread storage backends.
-    pub async fn start_with_runtime_storage_deps(
+    /// Starts the in-process runtime with optional thread storage overrides.
+    pub async fn start_with_runtime_storage_overrides(
         args: InProcessClientStartArgs,
-        runtime_storage_deps: AppServerRuntimeStorageDeps,
+        runtime_storage_overrides: AppServerRuntimeStorageOverrides,
     ) -> IoResult<Self> {
         let channel_capacity = args.channel_capacity.max(1);
-        let mut handle = codex_app_server::in_process::start_with_runtime_storage_deps(
+        let mut handle = codex_app_server::in_process::start_with_runtime_storage_overrides(
             args.into_runtime_start_args(),
-            runtime_storage_deps,
+            runtime_storage_overrides,
         )
         .await?;
         let request_sender = handle.sender();
@@ -622,6 +627,15 @@ impl InProcessAppServerClient {
             event_rx,
             worker_handle,
         })
+    }
+
+    /// Compatibility wrapper for existing storage-deps callers.
+    #[doc(hidden)]
+    pub async fn start_with_runtime_storage_deps(
+        args: InProcessClientStartArgs,
+        runtime_storage_deps: AppServerRuntimeStorageDeps,
+    ) -> IoResult<Self> {
+        Self::start_with_runtime_storage_overrides(args, runtime_storage_deps).await
     }
 
     pub fn request_handle(&self) -> InProcessAppServerRequestHandle {

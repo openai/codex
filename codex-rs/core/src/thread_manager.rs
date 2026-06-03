@@ -177,10 +177,11 @@ pub struct ThreadManager {
     _test_codex_home_guard: Option<TempCodexHomeGuard>,
 }
 
-/// Storage backends used by [`ThreadManager`] for executor-visible artifacts.
+/// Required storage backends owned by [`ThreadManager`].
 ///
-/// Cloud and embedded hosts can provide implementations here without asking
-/// core to treat `codex_home` as a remotely mounted filesystem.
+/// The normal constructor builds this bundle with [`Self::local`]. Cloud and
+/// embedded hosts can replace the full bundle here without asking core to
+/// treat `codex_home` as a remotely mounted filesystem.
 #[derive(Clone)]
 pub struct ThreadManagerStorageDeps {
     /// Stores generated artifacts and materializes executor-readable paths.
@@ -373,7 +374,7 @@ impl ThreadManager {
     }
 
     #[allow(clippy::too_many_arguments)]
-    /// Constructs a thread manager with explicit executor-visible storage backends.
+    /// Constructs a thread manager with its required storage backend bundle.
     pub fn new_with_storage_deps(
         config: &Config,
         auth_manager: Arc<AuthManager>,

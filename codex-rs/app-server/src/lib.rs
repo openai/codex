@@ -421,15 +421,19 @@ impl Default for AppServerRuntimeOptions {
     }
 }
 
-/// Storage backends an app-server host can inject into managed threads.
+/// Optional storage overrides an app-server host can inject into managed threads.
 ///
-/// Leaving these fields unset preserves the standard local `codex_home`
-/// behavior used by the existing app-server entrypoints.
+/// Leaving these fields unset lets each managed thread construct its standard
+/// local [`ThreadManagerStorageDeps`] from the thread config.
 #[derive(Clone, Default)]
-pub struct AppServerRuntimeStorageDeps {
-    /// Optional executor-visible storage backends for app-server threads.
+pub struct AppServerRuntimeStorageOverrides {
+    /// Replaces the thread manager's standard local storage bundle when set.
     pub thread_manager: Option<ThreadManagerStorageDeps>,
 }
+
+/// Compatibility alias for existing storage-deps callers.
+#[doc(hidden)]
+pub type AppServerRuntimeStorageDeps = AppServerRuntimeStorageOverrides;
 
 #[allow(clippy::too_many_arguments)]
 pub async fn run_main_with_transport_options(
@@ -443,7 +447,7 @@ pub async fn run_main_with_transport_options(
     auth: AppServerWebsocketAuthSettings,
     runtime_options: AppServerRuntimeOptions,
 ) -> IoResult<()> {
-    run_main_with_transport_options_and_storage_deps(
+    run_main_with_transport_options_and_storage_overrides(
         arg0_paths,
         cli_config_overrides,
         loader_overrides,
@@ -453,14 +457,14 @@ pub async fn run_main_with_transport_options(
         session_source,
         auth,
         runtime_options,
-        AppServerRuntimeStorageDeps::default(),
+        AppServerRuntimeStorageOverrides::default(),
     )
     .await
 }
 
-/// Runs app-server with explicit storage backends for managed threads.
+/// Runs app-server with optional storage overrides for managed threads.
 #[allow(clippy::too_many_arguments)]
-pub async fn run_main_with_transport_options_and_storage_deps(
+pub async fn run_main_with_transport_options_and_storage_overrides(
     arg0_paths: Arg0DispatchPaths,
     cli_config_overrides: CliConfigOverrides,
     loader_overrides: LoaderOverrides,
@@ -470,7 +474,7 @@ pub async fn run_main_with_transport_options_and_storage_deps(
     session_source: SessionSource,
     auth: AppServerWebsocketAuthSettings,
     runtime_options: AppServerRuntimeOptions,
-    runtime_storage_deps: AppServerRuntimeStorageDeps,
+    runtime_storage_overrides: AppServerRuntimeStorageOverrides,
 ) -> IoResult<()> {
     let (transport_event_tx, mut transport_event_rx) =
         mpsc::channel::<TransportEvent>(CHANNEL_CAPACITY);
@@ -859,7 +863,7 @@ pub async fn run_main_with_transport_options_and_storage_deps(
             rpc_transport: analytics_rpc_transport(&transport),
             remote_control_handle: Some(remote_control_handle.clone()),
             plugin_startup_tasks: runtime_options.plugin_startup_tasks,
-            runtime_storage_deps,
+            runtime_storage_overrides,
         }));
         let mut thread_created_rx = processor.thread_created_receiver();
         let mut running_turn_count_rx = processor.subscribe_running_assistant_turn_count();
@@ -1129,6 +1133,36 @@ pub async fn run_main_with_transport_options_and_storage_deps(
     }
 
     Ok(())
+}
+
+/// Compatibility wrapper for existing storage-deps callers.
+#[allow(clippy::too_many_arguments)]
+#[doc(hidden)]
+pub async fn run_main_with_transport_options_and_storage_deps(
+    arg0_paths: Arg0DispatchPaths,
+    cli_config_overrides: CliConfigOverrides,
+    loader_overrides: LoaderOverrides,
+    strict_config: bool,
+    default_analytics_enabled: bool,
+    transport: AppServerTransport,
+    session_source: SessionSource,
+    auth: AppServerWebsocketAuthSettings,
+    runtime_options: AppServerRuntimeOptions,
+    runtime_storage_deps: AppServerRuntimeStorageDeps,
+) -> IoResult<()> {
+    run_main_with_transport_options_and_storage_overrides(
+        arg0_paths,
+        cli_config_overrides,
+        loader_overrides,
+        strict_config,
+        default_analytics_enabled,
+        transport,
+        session_source,
+        auth,
+        runtime_options,
+        runtime_storage_deps,
+    )
+    .await
 }
 
 fn analytics_rpc_transport(transport: &AppServerTransport) -> AppServerRpcTransport {
