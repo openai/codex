@@ -72,6 +72,21 @@ fn recall_latest_after_clearing(chat: &mut ChatWidget) -> String {
     chat.bottom_pane.composer_text()
 }
 
+fn dispatch_usage_and_expect_refresh(
+    chat: &mut ChatWidget,
+    rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
+) -> u64 {
+    chat.dispatch_command(SlashCommand::Usage);
+    expect_token_activity_refresh(rx)
+}
+
+fn expect_token_activity_refresh(rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>) -> u64 {
+    match rx.try_recv() {
+        Ok(AppEvent::RefreshTokenActivity { request_id }) => request_id,
+        other => panic!("expected token activity refresh request, got {other:?}"),
+    }
+}
+
 fn next_add_to_history_event(rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>) -> String {
     loop {
         match rx.try_recv() {
@@ -1179,12 +1194,7 @@ async fn clearing_pending_token_activity_refreshes_discards_late_result() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     set_chatgpt_auth(&mut chat);
 
-    chat.dispatch_command(SlashCommand::Usage);
-
-    let request_id = match rx.try_recv() {
-        Ok(AppEvent::RefreshTokenActivity { request_id }) => request_id,
-        other => panic!("expected token activity refresh request, got {other:?}"),
-    };
+    let request_id = dispatch_usage_and_expect_refresh(&mut chat, &mut rx);
     assert_eq!(
         chat.pending_token_activity_output()
             .map(|cell| lines_to_single_string(&cell.display_lines(u16::MAX))),
@@ -1211,12 +1221,7 @@ async fn pending_token_activity_refresh_renders_above_composer_snapshot() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     set_chatgpt_auth(&mut chat);
 
-    chat.dispatch_command(SlashCommand::Usage);
-    assert_matches!(
-        rx.try_recv(),
-        Ok(AppEvent::RefreshTokenActivity { .. }),
-        "expected token activity refresh request"
-    );
+    dispatch_usage_and_expect_refresh(&mut chat, &mut rx);
 
     let width: u16 = 80;
     let height = chat.desired_height(width);
@@ -1238,12 +1243,7 @@ async fn completed_token_activity_refresh_returns_one_history_cell() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     set_chatgpt_auth(&mut chat);
 
-    chat.dispatch_command(SlashCommand::Usage);
-
-    let request_id = match rx.try_recv() {
-        Ok(AppEvent::RefreshTokenActivity { request_id }) => request_id,
-        other => panic!("expected token activity refresh request, got {other:?}"),
-    };
+    let request_id = dispatch_usage_and_expect_refresh(&mut chat, &mut rx);
     assert!(chat.pending_token_activity_output().is_some());
 
     assert!(
@@ -1269,11 +1269,7 @@ async fn completed_token_activity_refresh_waits_for_active_stream() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     set_chatgpt_auth(&mut chat);
 
-    chat.dispatch_command(SlashCommand::Usage);
-    let request_id = match rx.try_recv() {
-        Ok(AppEvent::RefreshTokenActivity { request_id }) => request_id,
-        other => panic!("expected token activity refresh request, got {other:?}"),
-    };
+    let request_id = dispatch_usage_and_expect_refresh(&mut chat, &mut rx);
     chat.on_agent_message_delta("partial response".to_string());
     assert!(chat.token_activity_history_insertion_blocked());
 
@@ -1303,11 +1299,7 @@ async fn completed_token_activity_refresh_waits_for_queued_stream_consolidation(
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     set_chatgpt_auth(&mut chat);
 
-    chat.dispatch_command(SlashCommand::Usage);
-    let request_id = match rx.try_recv() {
-        Ok(AppEvent::RefreshTokenActivity { request_id }) => request_id,
-        other => panic!("expected token activity refresh request, got {other:?}"),
-    };
+    let request_id = dispatch_usage_and_expect_refresh(&mut chat, &mut rx);
     chat.on_agent_message_delta("partial response".to_string());
     chat.finalize_completed_assistant_message(/*message*/ None);
     assert!(chat.pending_stream_consolidations > 0);
@@ -1330,11 +1322,7 @@ async fn completed_token_activity_refresh_waits_for_active_history_cell() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     set_chatgpt_auth(&mut chat);
 
-    chat.dispatch_command(SlashCommand::Usage);
-    let request_id = match rx.try_recv() {
-        Ok(AppEvent::RefreshTokenActivity { request_id }) => request_id,
-        other => panic!("expected token activity refresh request, got {other:?}"),
-    };
+    let request_id = dispatch_usage_and_expect_refresh(&mut chat, &mut rx);
     chat.transcript.active_cell = Some(Box::new(PlainHistoryCell::new(vec![Line::from(
         "active tool",
     )])));
@@ -1360,11 +1348,7 @@ async fn completed_token_activity_refresh_retries_after_plan_item_completion() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     set_chatgpt_auth(&mut chat);
 
-    chat.dispatch_command(SlashCommand::Usage);
-    let request_id = match rx.try_recv() {
-        Ok(AppEvent::RefreshTokenActivity { request_id }) => request_id,
-        other => panic!("expected token activity refresh request, got {other:?}"),
-    };
+    let request_id = dispatch_usage_and_expect_refresh(&mut chat, &mut rx);
     let mut controller = crate::streaming::controller::PlanStreamController::new(
         /*width*/ None,
         &chat.config.cwd,
@@ -1395,12 +1379,7 @@ async fn pending_token_activity_refresh_keeps_composer_visible_in_short_viewport
         std::iter::repeat_n(Line::from("active output"), /*n*/ 20).collect(),
     )));
 
-    chat.dispatch_command(SlashCommand::Usage);
-    assert_matches!(
-        rx.try_recv(),
-        Ok(AppEvent::RefreshTokenActivity { .. }),
-        "expected token activity refresh request"
-    );
+    dispatch_usage_and_expect_refresh(&mut chat, &mut rx);
 
     let width: u16 = 80;
     let height: u16 = 8;
@@ -1426,17 +1405,10 @@ async fn repeated_token_activity_refreshes_keep_only_latest_card() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     set_chatgpt_auth(&mut chat);
 
-    chat.dispatch_command(SlashCommand::Usage);
-    let first_request_id = match rx.try_recv() {
-        Ok(AppEvent::RefreshTokenActivity { request_id }) => request_id,
-        other => panic!("expected first token activity refresh request, got {other:?}"),
-    };
+    let first_request_id = dispatch_usage_and_expect_refresh(&mut chat, &mut rx);
 
     chat.dispatch_command_with_args(SlashCommand::Usage, "weekly".to_string(), Vec::new());
-    let second_request_id = match rx.try_recv() {
-        Ok(AppEvent::RefreshTokenActivity { request_id }) => request_id,
-        other => panic!("expected second token activity refresh request, got {other:?}"),
-    };
+    let second_request_id = expect_token_activity_refresh(&mut rx);
 
     assert_eq!(
         chat.pending_token_activity_output()
