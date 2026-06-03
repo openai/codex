@@ -75,6 +75,19 @@ fn workspace_write_excluding_tmp() -> PermissionProfile {
     )
 }
 
+fn workspace_roots_with(
+    mut workspace_roots: Vec<AbsolutePathBuf>,
+    root: &AbsolutePathBuf,
+) -> Vec<AbsolutePathBuf> {
+    if !workspace_roots
+        .iter()
+        .any(|existing| root.as_path().starts_with(existing.as_path()))
+    {
+        workspace_roots.push(root.clone());
+    }
+    workspace_roots
+}
+
 async fn submit_workspace_mutation_turn(
     test: &TestCodex,
     prompt: &str,
@@ -241,6 +254,7 @@ async fn workspace_mutation_updates_same_batch_shell_cwd() -> Result<()> {
     let test = builder.build(&server).await?;
     let next_cwd = test.config.cwd.join("workspace-mutation-next");
     fs::create_dir_all(next_cwd.as_path())?;
+    let next_cwd = AbsolutePathBuf::try_from(next_cwd.as_path().canonicalize()?)?;
     let mutation_call_id = "set-cwd";
     let shell_call_id = "pwd";
     mount_sse_once(
@@ -281,12 +295,14 @@ async fn workspace_mutation_updates_same_batch_shell_cwd() -> Result<()> {
     let mutation_output = request
         .function_call_output_text(mutation_call_id)
         .expect("mutation output");
+    let expected_workspace_roots =
+        workspace_roots_with(test.config.workspace_roots.clone(), &next_cwd);
     assert_eq!(
         serde_json::from_str::<Value>(&mutation_output)?,
         json!({
             "changed": true,
             "cwd": next_cwd,
-            "workspace_roots": test.config.workspace_roots,
+            "workspace_roots": expected_workspace_roots,
         })
     );
     let shell_output = request
@@ -306,6 +322,8 @@ async fn workspace_mutations_run_in_model_provided_order() -> Result<()> {
     let first_cwd = test.config.cwd.join("workspace-mutation-first");
     let second_cwd = first_cwd.join("nested");
     fs::create_dir_all(second_cwd.as_path())?;
+    let first_cwd = AbsolutePathBuf::try_from(first_cwd.as_path().canonicalize()?)?;
+    let second_cwd = AbsolutePathBuf::try_from(second_cwd.as_path().canonicalize()?)?;
     let first_mutation_call_id = "set-first-cwd";
     let second_mutation_call_id = "set-second-cwd";
     let shell_call_id = "pwd";
@@ -352,12 +370,14 @@ async fn workspace_mutations_run_in_model_provided_order() -> Result<()> {
     let first_mutation_output = request
         .function_call_output_text(first_mutation_call_id)
         .expect("first mutation output");
+    let expected_workspace_roots =
+        workspace_roots_with(test.config.workspace_roots.clone(), &first_cwd);
     assert_eq!(
         serde_json::from_str::<Value>(&first_mutation_output)?,
         json!({
             "changed": true,
             "cwd": first_cwd,
-            "workspace_roots": test.config.workspace_roots,
+            "workspace_roots": expected_workspace_roots,
         })
     );
     let second_mutation_output = request
@@ -368,7 +388,7 @@ async fn workspace_mutations_run_in_model_provided_order() -> Result<()> {
         json!({
             "changed": true,
             "cwd": second_cwd,
-            "workspace_roots": test.config.workspace_roots,
+            "workspace_roots": expected_workspace_roots,
         })
     );
     let shell_output = request
@@ -383,7 +403,23 @@ async fn add_workspace_root_under_existing_root_is_noop() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let mut builder = test_codex().with_model("test-gpt-5-codex");
+    let mut builder = test_codex()
+        .with_model("test-gpt-5-codex")
+        .with_config(|config| {
+            let canonical_cwd = AbsolutePathBuf::try_from(
+                config
+                    .cwd
+                    .as_path()
+                    .canonicalize()
+                    .expect("canonicalize test cwd"),
+            )
+            .expect("canonical test cwd should be absolute");
+            config.workspace_roots =
+                workspace_roots_with(config.workspace_roots.clone(), &canonical_cwd);
+            config
+                .permissions
+                .set_workspace_roots(config.workspace_roots.clone());
+        });
     let test = builder.build(&server).await?;
     let covered_child = test.config.cwd.join("covered-child");
     fs::create_dir_all(covered_child.as_path())?;
@@ -673,10 +709,7 @@ async fn set_working_directory_rejects_unreadable_target() -> Result<()> {
         serde_json::from_str::<Value>(&output)?,
         json!({
             "code": "permission_denied",
-            "message": format!(
-                "working directory is not readable under the active permission profile: {}",
-                external_root.as_path().display()
-            ),
+            "message": "workspace mutation target is unavailable under the active permission profile",
             "cwd": test.config.cwd,
             "workspace_roots": test.config.workspace_roots,
         })

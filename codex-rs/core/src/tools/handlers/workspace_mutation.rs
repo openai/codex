@@ -273,10 +273,8 @@ impl ToolExecutor<ToolInvocation> for WorkspaceMutationHandler {
         {
             return workspace_error(
                 "permission_denied",
-                format!(
-                    "working directory is not readable under the active permission profile: {}",
-                    canonical.as_path().display()
-                ),
+                "workspace mutation target is unavailable under the active permission profile"
+                    .to_string(),
                 current.cwd,
                 current.workspace_roots,
             );
