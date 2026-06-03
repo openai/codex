@@ -8,4 +8,8 @@ codex_rust_crate(
         "//conditions:default": ["sandbox"],
     }),
     deps_extra = ["@crates//:v8"],
+    # Ordinary Bazel CI excludes the old V8-backed code-mode unit tests. Keep
+    # the moved runtime tests explicit so wildcard test queries do not pull V8
+    # back into the ordinary Bazel matrix.
+    test_tags = ["manual"],
 )
