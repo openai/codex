@@ -18,6 +18,7 @@ use crate::sandbox_bin_dir;
 const DEV_BUILD_VERSION_SENTINEL: &str = "0.0.0";
 pub(crate) const BIN_DIRNAME: &str = "bin";
 pub(crate) const RESOURCES_DIRNAME: &str = "codex-resources";
+const RUNTIME_RESOURCES_DIRNAME: &str = "resources";
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum HelperExecutable {
@@ -51,9 +52,7 @@ pub(crate) fn helper_bin_dir(codex_home: &Path) -> PathBuf {
 }
 
 pub(crate) fn legacy_lookup(kind: HelperExecutable) -> PathBuf {
-    if let Ok(exe) = std::env::current_exe()
-        && let Some(candidate) = bundled_executable_path_for_exe(&exe, kind.file_name())
-    {
+    if let Some(candidate) = bundled_executable_path_for_runtime_context(kind.file_name()) {
         return candidate;
     }
     PathBuf::from(kind.file_name())
@@ -64,6 +63,19 @@ pub(crate) fn resolve_helper_for_launch(
     codex_home: &Path,
     log_dir: Option<&Path>,
 ) -> PathBuf {
+    if matches!(kind, HelperExecutable::Setup) {
+        let path = legacy_lookup(kind);
+        log_note(
+            &format!(
+                "helper launch resolution: using bundled {} path {} to preserve package ACLs",
+                kind.label(),
+                path.display()
+            ),
+            log_dir,
+        );
+        return path;
+    }
+
     match copy_helper_if_needed(kind, codex_home, log_dir) {
         Ok(path) => {
             log_note(
@@ -178,13 +190,35 @@ fn store_helper_path(cache_key: String, path: PathBuf) {
 }
 
 fn sibling_source_path(kind: HelperExecutable) -> Result<PathBuf> {
-    let exe = std::env::current_exe().context("resolve current executable for helper lookup")?;
-    bundled_executable_path_for_exe(&exe, kind.file_name()).ok_or_else(|| {
+    bundled_executable_path_for_runtime_context(kind.file_name()).ok_or_else(|| {
         anyhow!(
-            "helper not found next to current executable or under {RESOURCES_DIRNAME}: {}",
-            exe.display()
+            "helper not found in runtime resources or next to current executable under {RESOURCES_DIRNAME}"
         )
     })
+}
+
+fn bundled_executable_path_for_runtime_context(file_name: &str) -> Option<PathBuf> {
+    if let Ok(dir) = std::env::current_dir()
+        && matches!(
+            dir.file_name(),
+            Some(name)
+                if name == OsStr::new(RUNTIME_RESOURCES_DIRNAME)
+                    || name == OsStr::new(RESOURCES_DIRNAME)
+        )
+    {
+        let direct_candidate = dir.join(file_name);
+        if direct_candidate.is_file() {
+            return Some(direct_candidate);
+        }
+
+        let resource_candidate = dir.join(RESOURCES_DIRNAME).join(file_name);
+        if resource_candidate.is_file() {
+            return Some(resource_candidate);
+        }
+    }
+
+    let exe = std::env::current_exe().ok()?;
+    bundled_executable_path_for_exe(&exe, file_name)
 }
 
 pub(crate) fn bundled_executable_path_for_exe(exe: &Path, file_name: &str) -> Option<PathBuf> {
@@ -361,7 +395,9 @@ mod tests {
     use super::DEV_BUILD_VERSION_SENTINEL;
     use super::HelperExecutable;
     use super::RESOURCES_DIRNAME;
+    use super::RUNTIME_RESOURCES_DIRNAME;
     use super::bundled_executable_path_for_exe;
+    use super::bundled_executable_path_for_runtime_context;
     use super::copy_from_source_if_needed;
     use super::destination_is_fresh;
     use super::dev_build_suffix;
@@ -537,6 +573,24 @@ mod tests {
                 .expect("helper path");
 
         assert_eq!(resolved, sibling_helper);
+    }
+
+    #[test]
+    fn helper_source_lookup_checks_runtime_resources_dir_before_current_exe() {
+        let tmp = TempDir::new().expect("tempdir");
+        let runtime_resources_dir = tmp.path().join(RUNTIME_RESOURCES_DIRNAME);
+        fs::create_dir_all(&runtime_resources_dir).expect("create runtime resources dir");
+        let helper = runtime_resources_dir.join("codex-windows-sandbox-setup.exe");
+        fs::write(&helper, b"setup").expect("write helper");
+
+        let original_cwd = std::env::current_dir().expect("get cwd");
+        std::env::set_current_dir(&runtime_resources_dir).expect("set cwd");
+        let resolved =
+            bundled_executable_path_for_runtime_context("codex-windows-sandbox-setup.exe")
+                .expect("helper path");
+        std::env::set_current_dir(original_cwd).expect("restore cwd");
+
+        assert_eq!(resolved, helper);
     }
 
     #[test]
