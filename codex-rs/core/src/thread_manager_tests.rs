@@ -333,6 +333,7 @@ async fn start_thread_rejects_explicit_local_environment_when_default_provider_i
                 environment_id: "local".to_string(),
                 cwd: config.cwd.clone(),
             }],
+            http_state_surface: None,
         })
         .await;
     let err = match result {
@@ -463,6 +464,7 @@ async fn start_thread_keeps_internal_threads_hidden_from_normal_lookups() {
             metrics_service_name: None,
             parent_trace: None,
             environments: Vec::new(),
+            http_state_surface: None,
         })
         .await
         .expect("internal thread should start");
@@ -518,6 +520,7 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
             metrics_service_name: None,
             parent_trace: None,
             environments: environments.clone(),
+            http_state_surface: None,
         })
         .await
         .expect("start source thread");
@@ -788,6 +791,7 @@ async fn resume_stopped_thread_from_rollout_preserves_thread_source() {
             metrics_service_name: None,
             parent_trace: None,
             environments: Vec::new(),
+            http_state_surface: None,
         })
         .await
         .expect("start source thread");

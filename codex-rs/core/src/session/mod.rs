@@ -57,6 +57,7 @@ use codex_features::Feature;
 use codex_features::unstable_features_warning_event;
 use codex_hooks::Hooks;
 use codex_hooks::HooksConfig;
+use codex_http_state::HttpStateSurface;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_login::auth_env_telemetry::collect_auth_env_telemetry;
@@ -171,6 +172,7 @@ use tracing::warn;
 use uuid::Uuid;
 
 use crate::client::ModelClient;
+use crate::client::http_state_surface_for_session;
 use crate::codex_thread::ThreadConfigSnapshot;
 use crate::compact::collect_user_messages;
 use crate::config::Config;
@@ -400,6 +402,7 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) extensions: Arc<codex_extension_api::ExtensionRegistry<crate::config::Config>>,
     pub(crate) conversation_history: InitialHistory,
     pub(crate) session_source: SessionSource,
+    pub(crate) http_state_surface: Option<HttpStateSurface>,
     pub(crate) forked_from_thread_id: Option<ThreadId>,
     pub(crate) parent_thread_id: Option<ThreadId>,
     pub(crate) thread_source: Option<ThreadSource>,
@@ -484,6 +487,7 @@ impl Codex {
             extensions,
             conversation_history,
             session_source,
+            http_state_surface,
             forked_from_thread_id,
             parent_thread_id,
             thread_source,
@@ -530,6 +534,9 @@ impl Codex {
         };
 
         let config = Arc::new(config);
+        let http_state_surface = http_state_surface.unwrap_or_else(|| {
+            http_state_surface_for_session(&session_source, /*client*/ None)
+        });
         let refresh_strategy = if session_source.is_non_root_agent() {
             codex_models_manager::manager::RefreshStrategy::Offline
         } else {
@@ -541,10 +548,12 @@ impl Codex {
                 codex_models_manager::manager::RefreshStrategy::Offline
             )
         {
-            let _ = models_manager.list_models(refresh_strategy).await;
+            let _ = models_manager
+                .list_models_for_surface(refresh_strategy, http_state_surface)
+                .await;
         }
         let model = models_manager
-            .get_default_model(&config.model, refresh_strategy)
+            .get_default_model_for_surface(&config.model, refresh_strategy, http_state_surface)
             .await;
 
         // Resolve base instructions for the session. Priority order:
@@ -647,6 +656,7 @@ impl Codex {
             parent_rollout_thread_trace,
             attestation_provider,
             multi_agent_version,
+            http_state_surface,
         ))
         .await
         .map_err(|e| {

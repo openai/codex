@@ -1995,7 +1995,14 @@ async fn try_run_sampling_request(
             }
             ResponseEvent::ModelsEtag(etag) => {
                 // Update internal state with latest models etag
-                sess.services.models_manager.refresh_if_new_etag(etag).await;
+                if let Some(http_state_surface) = sess.services.model_client.http_state_surface() {
+                    sess.services
+                        .models_manager
+                        .refresh_if_new_etag_for_surface(etag, http_state_surface)
+                        .await;
+                } else {
+                    sess.services.models_manager.refresh_if_new_etag(etag).await;
+                }
             }
             ResponseEvent::Completed {
                 response_id,

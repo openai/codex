@@ -10,6 +10,8 @@ use codex_api::auth_header_telemetry;
 use codex_api::map_api_error;
 use codex_feedback::FeedbackRequestTags;
 use codex_feedback::emit_feedback_request_tags_with_auth_env;
+use codex_http_state::HttpStateContext;
+use codex_http_state::HttpStateSurface;
 use codex_login::AuthEnvTelemetry;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
@@ -27,6 +29,7 @@ use http::HeaderMap;
 use tokio::time::timeout;
 
 use crate::auth::resolve_provider_auth;
+use crate::auth::with_native_integrity_state;
 
 const MODELS_REFRESH_TIMEOUT: Duration = Duration::from_secs(5);
 const MODELS_ENDPOINT: &str = "/models";
@@ -81,13 +84,22 @@ impl ModelsEndpointClient for OpenAiModelsEndpoint {
     async fn list_models(
         &self,
         client_version: &str,
+        http_state_surface: Option<HttpStateSurface>,
     ) -> CoreResult<(Vec<ModelInfo>, Option<String>)> {
         let _timer =
             codex_otel::start_global_timer("codex.remote_models.fetch_update.duration_ms", &[]);
         let auth = self.auth().await;
         let auth_mode = auth.as_ref().map(CodexAuth::auth_mode);
         let api_provider = self.provider_info.to_api_provider(auth_mode)?;
-        let api_auth = resolve_provider_auth(auth.as_ref(), &self.provider_info)?;
+        let api_auth = with_native_integrity_state(
+            resolve_provider_auth(auth.as_ref(), &self.provider_info)?,
+            auth.as_ref(),
+            http_state_surface.and_then(|surface| {
+                self.auth_manager.as_ref().map(|auth_manager| {
+                    HttpStateContext::new(auth_manager.codex_home().to_path_buf(), surface)
+                })
+            }),
+        );
         let transport = ReqwestTransport::new(build_reqwest_client());
         let auth_telemetry = auth_header_telemetry(api_auth.as_ref());
         let request_telemetry: Arc<dyn RequestTelemetry> = Arc::new(ModelsRequestTelemetry {

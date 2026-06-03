@@ -1,5 +1,6 @@
 use super::*;
 use crate::SkillLoadOutcome;
+use crate::client::http_state_surface_for_session;
 use crate::config::GhostSnapshotConfig;
 use crate::environment_selection::ResolvedTurnEnvironments;
 use codex_model_provider::SharedModelProvider;
@@ -76,6 +77,7 @@ pub struct TurnContext {
     pub(crate) current_date: Option<String>,
     pub(crate) timezone: Option<String>,
     pub(crate) app_server_client_name: Option<String>,
+    pub(crate) http_state_surface: HttpStateSurface,
     pub(crate) developer_instructions: Option<String>,
     pub(crate) compact_prompt: Option<String>,
     pub(crate) user_instructions: Option<String>,
@@ -224,7 +226,7 @@ impl TurnContext {
         );
         let features = self.features.clone();
         let available_models = models_manager
-            .list_models(RefreshStrategy::OnlineIfUncached)
+            .list_models_for_surface(RefreshStrategy::OnlineIfUncached, self.http_state_surface)
             .await;
 
         Self {
@@ -251,6 +253,7 @@ impl TurnContext {
             current_date: self.current_date.clone(),
             timezone: self.timezone.clone(),
             app_server_client_name: self.app_server_client_name.clone(),
+            http_state_surface: self.http_state_surface,
             developer_instructions: self.developer_instructions.clone(),
             compact_prompt: self.compact_prompt.clone(),
             user_instructions: self.user_instructions.clone(),
@@ -472,6 +475,7 @@ impl Session {
         per_turn_config: Config,
         model_info: ModelInfo,
         models_manager: &SharedModelsManager,
+        http_state_surface: HttpStateSurface,
         network: Option<NetworkProxy>,
         environments: ResolvedTurnEnvironments,
         cwd: AbsolutePathBuf,
@@ -551,6 +555,7 @@ impl Session {
             current_date: Some(current_date),
             timezone: Some(timezone),
             app_server_client_name: session_configuration.app_server_client_name.clone(),
+            http_state_surface,
             developer_instructions: session_configuration.developer_instructions.clone(),
             compact_prompt: session_configuration.compact_prompt.clone(),
             user_instructions: session_configuration.user_instructions.clone(),
@@ -792,6 +797,15 @@ impl Session {
             per_turn_config,
             model_info,
             &self.services.models_manager,
+            self.services
+                .model_client
+                .http_state_surface()
+                .unwrap_or_else(|| {
+                    http_state_surface_for_session(
+                        &session_configuration.session_source,
+                        session_configuration.app_server_client_name.as_deref(),
+                    )
+                }),
             self.services
                 .network_proxy
                 .load_full()

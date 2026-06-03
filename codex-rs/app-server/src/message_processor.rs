@@ -895,7 +895,11 @@ impl MessageProcessor {
                 .map(|response| Some(response.into())),
             ClientRequest::ExternalAgentConfigImport { params, .. } => self
                 .external_agent_config_processor
-                .import(request_id.clone(), params)
+                .import(
+                    request_id.clone(),
+                    params,
+                    app_server_client_name.as_deref(),
+                )
                 .await
                 .map(|()| None),
             ClientRequest::ConfigValueWrite { params, .. } => {
@@ -1188,7 +1192,9 @@ impl MessageProcessor {
                 self.plugin_processor.plugin_uninstall(params).await
             }
             ClientRequest::ModelList { params, .. } => {
-                self.catalog_processor.model_list(params).await
+                self.catalog_processor
+                    .model_list(params, app_server_client_name.as_deref())
+                    .await
             }
             ClientRequest::ExperimentalFeatureList { params, .. } => {
                 self.catalog_processor

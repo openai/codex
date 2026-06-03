@@ -24,6 +24,7 @@ use codex_exec_server::EnvironmentManager;
 use codex_extension_api::ExtensionRegistry;
 use codex_extension_api::empty_extension_registry;
 use codex_features::Feature;
+use codex_http_state::HttpStateSurface;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_model_provider::create_model_provider;
@@ -182,6 +183,7 @@ pub struct StartThreadOptions {
     pub metrics_service_name: Option<String>,
     pub parent_trace: Option<W3cTraceContext>,
     pub environments: Vec<TurnEnvironmentSelection>,
+    pub http_state_surface: Option<HttpStateSurface>,
 }
 
 pub(crate) struct ResumeThreadWithHistoryOptions {
@@ -451,6 +453,17 @@ impl ThreadManager {
             .await
     }
 
+    pub async fn list_models_for_surface(
+        &self,
+        refresh_strategy: RefreshStrategy,
+        http_state_surface: HttpStateSurface,
+    ) -> Vec<ModelPreset> {
+        self.state
+            .models_manager
+            .list_models_for_surface(refresh_strategy, http_state_surface)
+            .await
+    }
+
     pub fn list_collaboration_modes(&self) -> Vec<CollaborationModeMask> {
         self.state.models_manager.list_collaboration_modes()
     }
@@ -576,6 +589,7 @@ impl ThreadManager {
             metrics_service_name: None,
             parent_trace: None,
             environments,
+            http_state_surface: None,
         }))
         .await
     }
@@ -605,6 +619,7 @@ impl ThreadManager {
             Arc::clone(&self.state.auth_manager),
             self.agent_control(),
             session_source,
+            options.http_state_surface,
             /*parent_thread_id*/ None,
             forked_from_thread_id,
             thread_source,
@@ -680,6 +695,24 @@ impl ThreadManager {
         auth_manager: Arc<AuthManager>,
         parent_trace: Option<W3cTraceContext>,
     ) -> CodexResult<NewThread> {
+        self.resume_thread_with_history_for_surface(
+            config,
+            initial_history,
+            auth_manager,
+            parent_trace,
+            /*http_state_surface*/ None,
+        )
+        .await
+    }
+
+    pub async fn resume_thread_with_history_for_surface(
+        &self,
+        config: Config,
+        initial_history: InitialHistory,
+        auth_manager: Arc<AuthManager>,
+        parent_trace: Option<W3cTraceContext>,
+        http_state_surface: Option<HttpStateSurface>,
+    ) -> CodexResult<NewThread> {
         let environments = default_thread_environment_selections(
             self.state.environment_manager.as_ref(),
             &config.cwd,
@@ -693,6 +726,7 @@ impl ThreadManager {
             auth_manager,
             self.agent_control(),
             session_source,
+            http_state_surface,
             /*parent_thread_id*/ None,
             /*forked_from_thread_id*/ None,
             thread_source,
@@ -721,6 +755,7 @@ impl ThreadManager {
             InitialHistory::New,
             Arc::clone(&self.state.auth_manager),
             self.agent_control(),
+            /*http_state_surface*/ None,
             /*parent_thread_id*/ None,
             /*forked_from_thread_id*/ None,
             /*thread_source*/ None,
@@ -754,6 +789,7 @@ impl ThreadManager {
             auth_manager,
             self.agent_control(),
             session_source,
+            /*http_state_surface*/ None,
             /*parent_thread_id*/ None,
             /*forked_from_thread_id*/ None,
             thread_source,
@@ -883,6 +919,30 @@ impl ThreadManager {
             history,
             thread_source,
             parent_trace,
+            /*http_state_surface*/ None,
+        )
+        .await
+    }
+
+    pub async fn fork_thread_from_history_for_surface<S>(
+        &self,
+        snapshot: S,
+        config: Config,
+        history: InitialHistory,
+        thread_source: Option<ThreadSource>,
+        parent_trace: Option<W3cTraceContext>,
+        http_state_surface: Option<HttpStateSurface>,
+    ) -> CodexResult<NewThread>
+    where
+        S: Into<ForkSnapshot>,
+    {
+        self.fork_thread_with_initial_history(
+            snapshot.into(),
+            config,
+            history,
+            thread_source,
+            parent_trace,
+            http_state_surface,
         )
         .await
     }
@@ -894,6 +954,7 @@ impl ThreadManager {
         history: InitialHistory,
         thread_source: Option<ThreadSource>,
         parent_trace: Option<W3cTraceContext>,
+        http_state_surface: Option<HttpStateSurface>,
     ) -> CodexResult<NewThread> {
         // `forked_from_id()` describes this history's existing lineage. When
         // forking a resumed thread, the child copies the resumed thread itself.
@@ -924,6 +985,7 @@ impl ThreadManager {
             history,
             Arc::clone(&self.state.auth_manager),
             self.agent_control(),
+            http_state_surface,
             /*parent_thread_id*/ None,
             forked_from_thread_id,
             thread_source,
@@ -1127,6 +1189,7 @@ impl ThreadManagerState {
             Arc::clone(&self.auth_manager),
             agent_control,
             session_source,
+            /*http_state_surface*/ None,
             parent_thread_id,
             forked_from_thread_id,
             thread_source,
@@ -1163,6 +1226,7 @@ impl ThreadManagerState {
             Arc::clone(&self.auth_manager),
             agent_control,
             session_source,
+            /*http_state_surface*/ None,
             parent_thread_id,
             /*forked_from_thread_id*/ None,
             thread_source,
@@ -1200,6 +1264,7 @@ impl ThreadManagerState {
             Arc::clone(&self.auth_manager),
             agent_control,
             session_source,
+            /*http_state_surface*/ None,
             parent_thread_id,
             forked_from_thread_id,
             thread_source,
@@ -1222,6 +1287,7 @@ impl ThreadManagerState {
         initial_history: InitialHistory,
         auth_manager: Arc<AuthManager>,
         agent_control: AgentControl,
+        http_state_surface: Option<HttpStateSurface>,
         parent_thread_id: Option<ThreadId>,
         forked_from_thread_id: Option<ThreadId>,
         thread_source: Option<ThreadSource>,
@@ -1237,6 +1303,7 @@ impl ThreadManagerState {
             auth_manager,
             agent_control,
             self.session_source.clone(),
+            http_state_surface,
             parent_thread_id,
             forked_from_thread_id,
             thread_source,
@@ -1259,6 +1326,7 @@ impl ThreadManagerState {
         auth_manager: Arc<AuthManager>,
         agent_control: AgentControl,
         session_source: SessionSource,
+        http_state_surface: Option<HttpStateSurface>,
         parent_thread_id: Option<ThreadId>,
         forked_from_thread_id: Option<ThreadId>,
         thread_source: Option<ThreadSource>,
@@ -1320,6 +1388,7 @@ impl ThreadManagerState {
             extensions: Arc::clone(&self.extensions),
             conversation_history: initial_history,
             session_source,
+            http_state_surface,
             forked_from_thread_id,
             parent_thread_id,
             thread_source,

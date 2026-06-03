@@ -34,6 +34,7 @@ use codex_external_agent_sessions::ImportedExternalAgentSession;
 use codex_external_agent_sessions::PendingSessionImport;
 use codex_external_agent_sessions::prepare_validated_session_imports;
 use codex_external_agent_sessions::record_imported_session;
+use codex_http_state::HttpStateSurface;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::InitialHistory;
 use codex_thread_store::ThreadMetadataPatch;
@@ -174,7 +175,11 @@ impl ExternalAgentConfigRequestProcessor {
         &self,
         request_id: ConnectionRequestId,
         params: ExternalAgentConfigImportParams,
+        app_server_client_name: Option<&str>,
     ) -> Result<(), JSONRPCErrorError> {
+        let http_state_surface = HttpStateSurface::from_app_server_client_name(
+            app_server_client_name.unwrap_or_default(),
+        );
         let needs_runtime_refresh = migration_items_need_runtime_refresh(&params.migration_items);
         let has_migration_items = !params.migration_items.is_empty();
         let has_plugin_imports = params.migration_items.iter().any(|item| {
@@ -223,7 +228,10 @@ impl ExternalAgentConfigRequestProcessor {
                         .prepare_validated_session_imports(pending_session_imports);
                     for pending_session_import in pending_session_imports {
                         match session_processor
-                            .import_external_agent_session(pending_session_import.session)
+                            .import_external_agent_session(
+                                pending_session_import.session,
+                                http_state_surface,
+                            )
                             .await
                         {
                             Ok(imported_thread_id) => {
@@ -277,6 +285,7 @@ impl ExternalAgentConfigRequestProcessor {
     async fn import_external_agent_session(
         &self,
         session: ImportedExternalAgentSession,
+        http_state_surface: HttpStateSurface,
     ) -> Result<ThreadId, JSONRPCErrorError> {
         let ImportedExternalAgentSession {
             cwd,
@@ -312,6 +321,7 @@ impl ExternalAgentConfigRequestProcessor {
                 metrics_service_name: None,
                 parent_trace: None,
                 environments,
+                http_state_surface: Some(http_state_surface),
             })
             .await
             .map_err(|err| internal_error(format!("failed to import session: {err}")))?;

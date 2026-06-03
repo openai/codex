@@ -6,6 +6,7 @@ use crate::session::Codex;
 use crate::session::SessionSettingsUpdate;
 use crate::session::SteerInputError;
 use codex_features::Feature;
+use codex_http_state::HttpStateSurface;
 use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ApprovalsReviewer;
@@ -300,6 +301,14 @@ impl CodexThread {
                 mcp_elicitations_auto_deny,
             )
             .await
+    }
+
+    pub fn http_state_surface(&self) -> Option<HttpStateSurface> {
+        self.codex
+            .session
+            .services
+            .model_client
+            .http_state_surface()
     }
 
     /// Preview persistent thread settings overrides without committing them.

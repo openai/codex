@@ -507,6 +507,7 @@ impl Session {
         parent_rollout_thread_trace: ThreadTraceContext,
         attestation_provider: Option<Arc<dyn AttestationProvider>>,
         multi_agent_version: Option<MultiAgentVersion>,
+        http_state_surface: HttpStateSurface,
     ) -> anyhow::Result<Arc<Self>> {
         debug!(
             "Configuring session: model={}; provider={:?}",
@@ -1054,6 +1055,9 @@ impl Session {
                 code_mode_service: crate::tools::code_mode::CodeModeService::new(),
                 environment_manager,
             };
+            services
+                .model_client
+                .set_http_state_surface(http_state_surface);
             services
                 .model_client
                 .set_window_generation(window_generation);

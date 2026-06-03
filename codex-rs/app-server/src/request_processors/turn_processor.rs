@@ -1087,7 +1087,7 @@ impl TurnRequestProcessor {
             ..
         } = self
             .thread_manager
-            .fork_thread_from_history(
+            .fork_thread_from_history_for_surface(
                 ForkSnapshot::Interrupted,
                 config.clone(),
                 InitialHistory::Resumed(ResumedHistory {
@@ -1097,6 +1097,7 @@ impl TurnRequestProcessor {
                 }),
                 /*thread_source*/ None,
                 self.request_trace_context(request_id).await,
+                parent_thread.http_state_surface(),
             )
             .await
             .map_err(|err| {
