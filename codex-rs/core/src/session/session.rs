@@ -502,6 +502,7 @@ impl Session {
         extensions: Arc<codex_extension_api::ExtensionRegistry<crate::config::Config>>,
         agent_control: AgentControl,
         environment_manager: Arc<EnvironmentManager>,
+        code_mode_session_provider: Arc<dyn codex_code_mode::CodeModeSessionProvider>,
         analytics_events_client: Option<AnalyticsEventsClient>,
         thread_store: Arc<dyn ThreadStore>,
         parent_rollout_thread_trace: ThreadTraceContext,

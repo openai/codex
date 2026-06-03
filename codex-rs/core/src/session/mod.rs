@@ -646,6 +646,7 @@ impl Codex {
             extensions,
             agent_control,
             environment_manager,
+            code_mode_session_provider,
             analytics_events_client,
             thread_store,
             parent_rollout_thread_trace,
