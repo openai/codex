@@ -945,6 +945,11 @@ pub struct ThreadBackgroundTerminalsListParams {
 pub struct ThreadBackgroundTerminal {
     pub item_id: String,
     pub process_id: String,
+    pub command: String,
+    pub cwd: AbsolutePathBuf,
+    pub os_pid: Option<u32>,
+    pub cpu_percent: Option<f64>,
+    pub rss_kb: Option<u64>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

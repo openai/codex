@@ -822,6 +822,8 @@ impl Session {
             .map(|process| BackgroundTerminalInfo {
                 item_id: process.item_id,
                 process_id: process.process_id.to_string(),
+                command: process.command,
+                cwd: process.cwd,
             })
             .collect()
     }

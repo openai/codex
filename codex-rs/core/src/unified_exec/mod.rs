@@ -121,6 +121,8 @@ pub(crate) struct WriteStdinRequest<'a> {
 pub(crate) struct UnifiedExecProcessSnapshot {
     pub process_id: i32,
     pub item_id: String,
+    pub command: String,
+    pub cwd: AbsolutePathBuf,
 }
 
 #[derive(Default)]
@@ -161,6 +163,7 @@ struct ProcessEntry {
     process: Arc<UnifiedExecProcess>,
     call_id: String,
     process_id: i32,
+    cwd: AbsolutePathBuf,
     hook_command: String,
     tty: bool,
     network_approval: Option<DeferredNetworkApproval>,

@@ -118,6 +118,8 @@ pub struct CodexThread {
 pub struct BackgroundTerminalInfo {
     pub item_id: String,
     pub process_id: String,
+    pub command: String,
+    pub cwd: AbsolutePathBuf,
 }
 
 /// Conduit for the bidirectional stream of messages that compose a thread

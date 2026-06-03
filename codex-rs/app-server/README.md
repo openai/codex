@@ -861,14 +861,19 @@ Use `thread/backgroundTerminals/clean` to terminate all running background termi
 
 ### Example: List and terminate background terminals
 
-Use `thread/backgroundTerminals/list` to inspect running background terminals associated with a loaded thread. The returned `processId` is the app-server process id.
+Use `thread/backgroundTerminals/list` to inspect running background terminals associated with a loaded thread. The returned `processId` is the app-server process id; host OS metadata is nullable.
 
 ```json
 { "method": "thread/backgroundTerminals/list", "id": 36, "params": { "threadId": "thr_123" } }
 { "id": 36, "result": { "data": [
     {
         "itemId": "item_456",
-        "processId": "42"
+        "processId": "42",
+        "command": "python3 -m http.server",
+        "cwd": "/workspace",
+        "osPid": null,
+        "cpuPercent": null,
+        "rssKb": null
     }
 ] } }
 ```

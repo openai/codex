@@ -823,6 +823,7 @@ impl UnifiedExecProcessManager {
             process: Arc::clone(&process),
             call_id: context.call_id.clone(),
             process_id,
+            cwd: cwd.clone(),
             hook_command,
             tty,
             network_approval,
@@ -1283,6 +1284,8 @@ impl UnifiedExecProcessManager {
             .map(|entry| UnifiedExecProcessSnapshot {
                 process_id: entry.process_id,
                 item_id: entry.call_id.clone(),
+                command: entry.hook_command.clone(),
+                cwd: entry.cwd.clone(),
             })
             .collect::<Vec<_>>();
         snapshots.sort_by_key(|snapshot| snapshot.process_id);

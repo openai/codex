@@ -1750,6 +1750,11 @@ impl ThreadRequestProcessor {
             .map(|terminal| ThreadBackgroundTerminal {
                 item_id: terminal.item_id,
                 process_id: terminal.process_id,
+                command: terminal.command,
+                cwd: terminal.cwd,
+                os_pid: None,
+                cpu_percent: None,
+                rss_kb: None,
             })
             .collect();
 
