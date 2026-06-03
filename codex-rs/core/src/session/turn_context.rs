@@ -172,14 +172,7 @@ impl TurnContext {
         permission_profile: &PermissionProfile,
         cwd: &AbsolutePathBuf,
     ) -> SandboxPolicy {
-        let file_system_sandbox_policy = permission_profile.file_system_sandbox_policy();
-        let network_sandbox_policy = permission_profile.network_sandbox_policy();
-        compatibility_sandbox_policy_for_permission_profile(
-            permission_profile,
-            &file_system_sandbox_policy,
-            network_sandbox_policy,
-            cwd.as_path(),
-        )
+        compatibility_sandbox_policy_for_permission_profile(permission_profile, cwd.as_path())
     }
 
     pub(crate) fn effective_reasoning_effort(&self) -> Option<ReasoningEffortConfig> {
