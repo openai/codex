@@ -96,6 +96,7 @@ impl<'a> AgentsMdManager<'a> {
 
     /// Returns all instruction source files included in the current config.
     pub async fn instruction_sources(&self, fs: &dyn ExecutorFileSystem) -> Vec<AbsolutePathBuf> {
+        // TODO(anp) get RPC interface using cached paths
         let mut global_instruction_warnings = Vec::new();
         let mut paths = Self::load_global_instructions(
             LOCAL_FS.as_ref(),

@@ -644,7 +644,7 @@ pub struct Config {
     /// Defaults to `false`.
     pub show_raw_agent_reasoning: bool,
 
-    /// User-provided instructions, including those loaded from AGENTS.md.
+    /// User-provided instructions from AGENTS.md.
     pub user_instructions: Option<LoadedAgentsMd>,
 
     /// Base instructions override.
