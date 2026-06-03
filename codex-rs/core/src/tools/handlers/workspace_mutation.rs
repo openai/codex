@@ -222,6 +222,7 @@ impl ToolExecutor<ToolInvocation> for WorkspaceMutationHandler {
                     &turn,
                     call_id,
                     RequestPermissionsArgs {
+                        environment_id: None,
                         reason: Some(match self.mutation {
                             WorkspaceMutation::SetWorkingDirectory => format!(
                                 "switch this session's working directory to `{}`",
