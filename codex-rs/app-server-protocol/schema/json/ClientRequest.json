@@ -1581,6 +1581,24 @@
     "ModelProviderCapabilitiesReadParams": {
       "type": "object"
     },
+    "NativeIntegrityStateWriteParams": {
+      "properties": {
+        "expectedState": {
+          "description": "When present, write only if the calling surface still stores this state.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "state": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "state"
+      ],
+      "type": "object"
+    },
     "NetworkAccess": {
       "enum": [
         "restricted",
@@ -5659,6 +5677,76 @@
         "params"
       ],
       "title": "ExperimentalFeature/enablement/setRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "nativeIntegrityState/read"
+          ],
+          "title": "NativeIntegrityState/readRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "type": "null"
+        }
+      },
+      "required": [
+        "id",
+        "method"
+      ],
+      "title": "NativeIntegrityState/readRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "nativeIntegrityState/write"
+          ],
+          "title": "NativeIntegrityState/writeRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/NativeIntegrityStateWriteParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "NativeIntegrityState/writeRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "nativeIntegrityState/clear"
+          ],
+          "title": "NativeIntegrityState/clearRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "type": "null"
+        }
+      },
+      "required": [
+        "id",
+        "method"
+      ],
+      "title": "NativeIntegrityState/clearRequest",
       "type": "object"
     },
     {
