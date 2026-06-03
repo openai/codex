@@ -30,12 +30,21 @@ const WORKSPACE_ID_DISALLOWED: &str = "123e4567-e89b-42d3-a456-426614174002";
 #[derive(Debug, Default)]
 struct FakeAuthCredentialStore {
     auth: Mutex<Option<AuthDotJson>>,
+    delete_error: Mutex<Option<std::io::ErrorKind>>,
 }
 
 impl FakeAuthCredentialStore {
     fn with_auth(auth: AuthDotJson) -> Self {
         Self {
             auth: Mutex::new(Some(auth)),
+            delete_error: Mutex::new(None),
+        }
+    }
+
+    fn with_delete_error(kind: std::io::ErrorKind) -> Self {
+        Self {
+            auth: Mutex::new(None),
+            delete_error: Mutex::new(Some(kind)),
         }
     }
 }
@@ -51,6 +60,9 @@ impl AuthCredentialStore for FakeAuthCredentialStore {
     }
 
     fn delete(&self) -> std::io::Result<bool> {
+        if let Some(kind) = *self.delete_error.lock().expect("fake store lock") {
+            return Err(std::io::Error::new(kind, "fake delete failure"));
+        }
         Ok(self.auth.lock().expect("fake store lock").take().is_some())
     }
 }
@@ -388,6 +400,32 @@ async fn injected_auth_stores_drive_manager_reads_writes_and_logout() {
     assert_eq!(configured.load().expect("configured load"), None);
     assert_eq!(ephemeral.load().expect("ephemeral load"), None);
     assert_eq!(manager.auth_mode(), None);
+}
+
+#[tokio::test]
+async fn injected_auth_store_logout_clears_configured_store_after_ephemeral_delete_error() {
+    let configured = Arc::new(FakeAuthCredentialStore::with_auth(AuthDotJson {
+        auth_mode: Some(ApiAuthMode::ApiKey),
+        openai_api_key: Some("sk-initial".to_string()),
+        tokens: None,
+        last_refresh: None,
+        agent_identity: None,
+    }));
+    let ephemeral = Arc::new(FakeAuthCredentialStore::with_delete_error(
+        std::io::ErrorKind::Other,
+    ));
+    let manager = AuthManager::shared_with_stores(
+        AuthStores {
+            configured: configured.clone(),
+            ephemeral,
+        },
+        /*enable_codex_api_key_env*/ false,
+        /*chatgpt_base_url*/ None,
+    )
+    .await;
+
+    assert!(manager.logout().await.is_err());
+    assert_eq!(configured.load().expect("configured load"), None);
 }
 
 #[tokio::test]

@@ -716,9 +716,18 @@ fn logout_with_message(
 }
 
 fn logout_all_stores(stores: &AuthStores) -> std::io::Result<bool> {
-    let removed_ephemeral = stores.ephemeral.delete()?;
-    let removed_managed = stores.configured.delete()?;
-    Ok(removed_ephemeral || removed_managed)
+    if Arc::ptr_eq(&stores.configured, &stores.ephemeral) {
+        return stores.configured.delete();
+    }
+    let removed_ephemeral = stores.ephemeral.delete();
+    let removed_managed = stores.configured.delete();
+    match (removed_ephemeral, removed_managed) {
+        (Ok(removed_ephemeral), Ok(removed_managed)) => Ok(removed_ephemeral || removed_managed),
+        (Err(err), Ok(_)) | (Ok(_), Err(err)) => Err(err),
+        (Err(ephemeral_err), Err(configured_err)) => Err(std::io::Error::other(format!(
+            "failed to delete ephemeral auth: {ephemeral_err}; failed to delete configured auth: {configured_err}"
+        ))),
+    }
 }
 
 async fn load_auth(

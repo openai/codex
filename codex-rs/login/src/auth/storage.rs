@@ -110,9 +110,10 @@ pub trait AuthCredentialStore: Debug + Send + Sync + 'static {
 
 /// Configured and ephemeral auth stores used by [`crate::auth::AuthManager`].
 ///
-/// `configured` owns managed auth such as API keys and first-party ChatGPT
-/// login. `ephemeral` owns externally supplied ChatGPT auth tokens that should
-/// not be persisted to the configured store.
+/// `configured` owns managed auth loaded by [`crate::auth::AuthManager`], such
+/// as API keys and persisted first-party ChatGPT login. `ephemeral` owns
+/// externally supplied ChatGPT auth tokens that should not be persisted to the
+/// configured store.
 #[derive(Clone, Debug)]
 pub struct AuthStores {
     /// Store for managed auth selected by runtime configuration.
