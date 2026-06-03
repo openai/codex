@@ -28,8 +28,9 @@ use super::external_bearer::BearerTokenRefresher;
 use super::revoke::revoke_auth_tokens;
 pub use crate::auth::agent_identity::AgentIdentityAuth;
 pub use crate::auth::storage::AgentIdentityAuthRecord;
+use crate::auth::storage::AuthCredentialStore;
 pub use crate::auth::storage::AuthDotJson;
-use crate::auth::storage::AuthStorageBackend;
+use crate::auth::storage::AuthStores;
 use crate::auth::storage::create_auth_storage;
 use crate::auth::util::try_parse_error_message;
 use crate::default_client::build_reqwest_client;
@@ -69,7 +70,7 @@ pub struct ApiKeyAuth {
 #[derive(Debug, Clone)]
 pub struct ChatgptAuth {
     state: ChatgptAuthState,
-    storage: Arc<dyn AuthStorageBackend>,
+    storage: Arc<dyn AuthCredentialStore>,
 }
 
 #[derive(Debug, Clone)]
@@ -199,9 +200,8 @@ impl From<RefreshTokenError> for std::io::Error {
 
 impl CodexAuth {
     async fn from_auth_dot_json(
-        codex_home: &Path,
         auth_dot_json: AuthDotJson,
-        auth_credentials_store_mode: AuthCredentialsStoreMode,
+        storage: Arc<dyn AuthCredentialStore>,
         chatgpt_base_url: Option<&str>,
     ) -> std::io::Result<Self> {
         let auth_mode = auth_dot_json.resolved_mode();
@@ -221,17 +221,13 @@ impl CodexAuth {
             return Self::from_agent_identity_jwt(&agent_identity, chatgpt_base_url).await;
         }
 
-        let storage_mode = auth_dot_json.storage_mode(auth_credentials_store_mode);
         let state = ChatgptAuthState {
             auth_dot_json: Arc::new(Mutex::new(Some(auth_dot_json))),
             client,
         };
 
         match auth_mode {
-            ApiAuthMode::Chatgpt => {
-                let storage = create_auth_storage(codex_home.to_path_buf(), storage_mode);
-                Ok(Self::Chatgpt(ChatgptAuth { state, storage }))
-            }
+            ApiAuthMode::Chatgpt => Ok(Self::Chatgpt(ChatgptAuth { state, storage })),
             ApiAuthMode::ChatgptAuthTokens => {
                 Ok(Self::ChatgptAuthTokens(ChatgptAuthTokens { state }))
             }
@@ -455,7 +451,7 @@ impl ChatgptAuth {
         self.current_auth_json().and_then(|auth| auth.tokens)
     }
 
-    fn storage(&self) -> &Arc<dyn AuthStorageBackend> {
+    fn storage(&self) -> &Arc<dyn AuthCredentialStore> {
         &self.storage
     }
 
@@ -710,7 +706,8 @@ fn logout_with_message(
 ) -> std::io::Result<()> {
     // External auth tokens live in the ephemeral store, but persistent auth may still exist
     // from earlier logins. Clear both so a forced logout truly removes all active auth.
-    let removal_result = logout_all_stores(codex_home, auth_credentials_store_mode);
+    let stores = AuthStores::local(codex_home.to_path_buf(), auth_credentials_store_mode);
+    let removal_result = logout_all_stores(&stores);
     let error_message = match removal_result {
         Ok(_) => message,
         Err(err) => format!("{message}. Failed to remove auth.json: {err}"),
@@ -718,15 +715,9 @@ fn logout_with_message(
     Err(std::io::Error::other(error_message))
 }
 
-fn logout_all_stores(
-    codex_home: &Path,
-    auth_credentials_store_mode: AuthCredentialsStoreMode,
-) -> std::io::Result<bool> {
-    if auth_credentials_store_mode == AuthCredentialsStoreMode::Ephemeral {
-        return logout(codex_home, AuthCredentialsStoreMode::Ephemeral);
-    }
-    let removed_ephemeral = logout(codex_home, AuthCredentialsStoreMode::Ephemeral)?;
-    let removed_managed = logout(codex_home, auth_credentials_store_mode)?;
+fn logout_all_stores(stores: &AuthStores) -> std::io::Result<bool> {
+    let removed_ephemeral = stores.ephemeral.delete()?;
+    let removed_managed = stores.configured.delete()?;
     Ok(removed_ephemeral || removed_managed)
 }
 
@@ -736,6 +727,15 @@ async fn load_auth(
     auth_credentials_store_mode: AuthCredentialsStoreMode,
     chatgpt_base_url: Option<&str>,
 ) -> std::io::Result<Option<CodexAuth>> {
+    let stores = AuthStores::local(codex_home.to_path_buf(), auth_credentials_store_mode);
+    load_auth_from_stores(&stores, enable_codex_api_key_env, chatgpt_base_url).await
+}
+
+async fn load_auth_from_stores(
+    stores: &AuthStores,
+    enable_codex_api_key_env: bool,
+    chatgpt_base_url: Option<&str>,
+) -> std::io::Result<Option<CodexAuth>> {
     // API key via env var takes precedence over any other auth method.
     if enable_codex_api_key_env && let Some(api_key) = read_codex_api_key_from_env() {
         return Ok(Some(CodexAuth::from_api_key(api_key.as_str())));
@@ -743,15 +743,10 @@ async fn load_auth(
 
     // External ChatGPT auth tokens live in the in-memory (ephemeral) store. Always check this
     // first so external auth takes precedence over any persisted credentials.
-    let ephemeral_storage = create_auth_storage(
-        codex_home.to_path_buf(),
-        AuthCredentialsStoreMode::Ephemeral,
-    );
-    if let Some(auth_dot_json) = ephemeral_storage.load()? {
+    if let Some(auth_dot_json) = stores.ephemeral.load()? {
         let auth = CodexAuth::from_auth_dot_json(
-            codex_home,
             auth_dot_json,
-            AuthCredentialsStoreMode::Ephemeral,
+            Arc::clone(&stores.ephemeral),
             chatgpt_base_url,
         )
         .await?;
@@ -759,7 +754,7 @@ async fn load_auth(
     }
 
     // If the caller explicitly requested ephemeral auth, there is no persisted fallback.
-    if auth_credentials_store_mode == AuthCredentialsStoreMode::Ephemeral {
+    if Arc::ptr_eq(&stores.configured, &stores.ephemeral) {
         return Ok(None);
     }
 
@@ -770,16 +765,14 @@ async fn load_auth(
     }
 
     // Fall back to the configured persistent store (file/keyring/auto) for managed auth.
-    let storage = create_auth_storage(codex_home.to_path_buf(), auth_credentials_store_mode);
-    let auth_dot_json = match storage.load()? {
+    let auth_dot_json = match stores.configured.load()? {
         Some(auth) => auth,
         None => return Ok(None),
     };
 
     let auth = CodexAuth::from_auth_dot_json(
-        codex_home,
         auth_dot_json,
-        auth_credentials_store_mode,
+        Arc::clone(&stores.configured),
         chatgpt_base_url,
     )
     .await?;
@@ -788,7 +781,7 @@ async fn load_auth(
 
 // Persist refreshed tokens into auth storage and update last_refresh.
 fn persist_tokens(
-    storage: &Arc<dyn AuthStorageBackend>,
+    storage: &Arc<dyn AuthCredentialStore>,
     id_token: Option<String>,
     access_token: Option<String>,
     refresh_token: Option<String>,
@@ -987,17 +980,6 @@ impl AuthDotJson {
             return ApiAuthMode::ApiKey;
         }
         ApiAuthMode::Chatgpt
-    }
-
-    fn storage_mode(
-        &self,
-        auth_credentials_store_mode: AuthCredentialsStoreMode,
-    ) -> AuthCredentialsStoreMode {
-        if self.resolved_mode() == ApiAuthMode::ChatgptAuthTokens {
-            AuthCredentialsStoreMode::Ephemeral
-        } else {
-            auth_credentials_store_mode
-        }
     }
 }
 
@@ -1243,20 +1225,19 @@ impl UnauthorizedRecovery {
     }
 }
 
-/// Central manager providing a single source of truth for auth.json derived
+/// Central manager providing a single source of truth for stored
 /// authentication data. It loads once (or on preference change) and then
 /// hands out cloned `CodexAuth` values so the rest of the program has a
 /// consistent snapshot.
 ///
-/// External modifications to `auth.json` will NOT be observed until
+/// External modifications to auth storage will NOT be observed until
 /// `reload()` is called explicitly. This matches the design goal of avoiding
 /// different parts of the program seeing inconsistent auth data mid‑run.
 pub struct AuthManager {
-    codex_home: PathBuf,
     inner: RwLock<CachedAuth>,
     auth_change_tx: watch::Sender<u64>,
     enable_codex_api_key_env: bool,
-    auth_credentials_store_mode: AuthCredentialsStoreMode,
+    stores: AuthStores,
     forced_chatgpt_workspace_id: RwLock<Option<Vec<String>>>,
     chatgpt_base_url: Option<String>,
     refresh_lock: Semaphore,
@@ -1286,13 +1267,9 @@ pub trait AuthManagerConfig {
 impl Debug for AuthManager {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AuthManager")
-            .field("codex_home", &self.codex_home)
             .field("inner", &self.inner)
             .field("enable_codex_api_key_env", &self.enable_codex_api_key_env)
-            .field(
-                "auth_credentials_store_mode",
-                &self.auth_credentials_store_mode,
-            )
+            .field("stores", &self.stores)
             .field(
                 "forced_chatgpt_workspace_id",
                 &self.forced_chatgpt_workspace_id,
@@ -1314,10 +1291,22 @@ impl AuthManager {
         auth_credentials_store_mode: AuthCredentialsStoreMode,
         chatgpt_base_url: Option<String>,
     ) -> Self {
-        let managed_auth = load_auth(
-            &codex_home,
+        Self::new_with_stores(
+            AuthStores::local(codex_home, auth_credentials_store_mode),
             enable_codex_api_key_env,
-            auth_credentials_store_mode,
+            chatgpt_base_url,
+        )
+        .await
+    }
+
+    async fn new_with_stores(
+        stores: AuthStores,
+        enable_codex_api_key_env: bool,
+        chatgpt_base_url: Option<String>,
+    ) -> Self {
+        let managed_auth = load_auth_from_stores(
+            &stores,
+            enable_codex_api_key_env,
             chatgpt_base_url.as_deref(),
         )
         .await
@@ -1325,14 +1314,13 @@ impl AuthManager {
         .flatten();
         let (auth_change_tx, _auth_change_rx) = watch::channel(0);
         Self {
-            codex_home,
             inner: RwLock::new(CachedAuth {
                 auth: managed_auth,
                 permanent_refresh_failure: None,
             }),
             auth_change_tx,
             enable_codex_api_key_env,
-            auth_credentials_store_mode,
+            stores,
             forced_chatgpt_workspace_id: RwLock::new(None),
             chatgpt_base_url,
             refresh_lock: Semaphore::new(/*permits*/ 1),
@@ -1349,11 +1337,13 @@ impl AuthManager {
         let (auth_change_tx, _auth_change_rx) = watch::channel(0);
 
         Arc::new(Self {
-            codex_home: PathBuf::from("non-existent"),
             inner: RwLock::new(cached),
             auth_change_tx,
             enable_codex_api_key_env: false,
-            auth_credentials_store_mode: AuthCredentialsStoreMode::File,
+            stores: AuthStores::local(
+                PathBuf::from("non-existent"),
+                AuthCredentialsStoreMode::File,
+            ),
             forced_chatgpt_workspace_id: RwLock::new(None),
             chatgpt_base_url: None,
             refresh_lock: Semaphore::new(/*permits*/ 1),
@@ -1369,11 +1359,10 @@ impl AuthManager {
         };
         let (auth_change_tx, _auth_change_rx) = watch::channel(0);
         Arc::new(Self {
-            codex_home,
             inner: RwLock::new(cached),
             auth_change_tx,
             enable_codex_api_key_env: false,
-            auth_credentials_store_mode: AuthCredentialsStoreMode::File,
+            stores: AuthStores::local(codex_home, AuthCredentialsStoreMode::File),
             forced_chatgpt_workspace_id: RwLock::new(None),
             chatgpt_base_url: None,
             refresh_lock: Semaphore::new(/*permits*/ 1),
@@ -1384,14 +1373,16 @@ impl AuthManager {
     pub fn external_bearer_only(config: ModelProviderAuthInfo) -> Arc<Self> {
         let (auth_change_tx, _auth_change_rx) = watch::channel(0);
         Arc::new(Self {
-            codex_home: PathBuf::from("non-existent"),
             inner: RwLock::new(CachedAuth {
                 auth: None,
                 permanent_refresh_failure: None,
             }),
             auth_change_tx,
             enable_codex_api_key_env: false,
-            auth_credentials_store_mode: AuthCredentialsStoreMode::File,
+            stores: AuthStores::local(
+                PathBuf::from("non-existent"),
+                AuthCredentialsStoreMode::File,
+            ),
             forced_chatgpt_workspace_id: RwLock::new(None),
             chatgpt_base_url: None,
             refresh_lock: Semaphore::new(/*permits*/ 1),
@@ -1439,7 +1430,7 @@ impl AuthManager {
         self.auth_cached()
     }
 
-    /// Force a reload of the auth information from auth.json. Returns
+    /// Force a reload of the auth information from auth storage. Returns
     /// whether the auth value changed.
     pub async fn reload(&self) -> bool {
         tracing::info!("Reloading auth");
@@ -1531,10 +1522,9 @@ impl AuthManager {
     }
 
     async fn load_auth_from_storage(&self) -> Option<CodexAuth> {
-        load_auth(
-            &self.codex_home,
+        load_auth_from_stores(
+            &self.stores,
             self.enable_codex_api_key_env,
-            self.auth_credentials_store_mode,
             self.chatgpt_base_url.as_deref(),
         )
         .await
@@ -1619,6 +1609,15 @@ impl AuthManager {
             )
             .await,
         )
+    }
+
+    /// Creates a shared manager backed by caller-provided configured and ephemeral stores.
+    pub async fn shared_with_stores(
+        stores: AuthStores,
+        enable_codex_api_key_env: bool,
+        chatgpt_base_url: Option<String>,
+    ) -> Arc<Self> {
+        Arc::new(Self::new_with_stores(stores, enable_codex_api_key_env, chatgpt_base_url).await)
     }
 
     /// Convenience constructor returning an `Arc` wrapper from resolved config.
@@ -1764,12 +1763,12 @@ impl AuthManager {
         result
     }
 
-    /// Log out by deleting the on‑disk auth.json (if present). Returns Ok(true)
-    /// if a file was removed, Ok(false) if no auth file existed. On success,
+    /// Log out by deleting configured and ephemeral auth records. Returns Ok(true)
+    /// if a record was removed, Ok(false) if no auth record existed. On success,
     /// reloads the in‑memory auth cache so callers immediately observe the
     /// unauthenticated state.
     pub async fn logout(&self) -> std::io::Result<bool> {
-        let removed = logout_all_stores(&self.codex_home, self.auth_credentials_store_mode)?;
+        let removed = logout_all_stores(&self.stores)?;
         // Always reload to clear any cached auth (even if file absent).
         self.reload().await;
         Ok(removed)
@@ -1782,7 +1781,7 @@ impl AuthManager {
         if let Err(err) = revoke_auth_tokens(auth_dot_json.as_ref()).await {
             tracing::warn!("failed to revoke auth tokens during logout: {err}");
         }
-        let result = logout_all_stores(&self.codex_home, self.auth_credentials_store_mode)?;
+        let result = logout_all_stores(&self.stores)?;
         // Always reload to clear any cached auth (even if file absent).
         self.reload().await;
         Ok(result)
@@ -1876,12 +1875,10 @@ impl AuthManager {
         }
         let auth_dot_json =
             AuthDotJson::from_external_tokens(&refreshed).map_err(RefreshTokenError::Transient)?;
-        save_auth(
-            &self.codex_home,
-            &auth_dot_json,
-            AuthCredentialsStoreMode::Ephemeral,
-        )
-        .map_err(RefreshTokenError::Transient)?;
+        self.stores
+            .ephemeral
+            .save(&auth_dot_json)
+            .map_err(RefreshTokenError::Transient)?;
         self.reload().await;
         Ok(())
     }
@@ -1905,6 +1902,33 @@ impl AuthManager {
         self.reload().await;
 
         Ok(())
+    }
+
+    /// Saves API key auth into the configured credential store.
+    pub fn login_with_api_key(&self, api_key: &str) -> std::io::Result<()> {
+        let auth_dot_json = AuthDotJson {
+            auth_mode: Some(ApiAuthMode::ApiKey),
+            openai_api_key: Some(api_key.to_string()),
+            tokens: None,
+            last_refresh: None,
+            agent_identity: None,
+        };
+        self.stores.configured.save(&auth_dot_json)
+    }
+
+    /// Saves externally managed ChatGPT tokens into the ephemeral credential store.
+    pub fn login_with_chatgpt_auth_tokens(
+        &self,
+        access_token: &str,
+        chatgpt_account_id: &str,
+        chatgpt_plan_type: Option<&str>,
+    ) -> std::io::Result<()> {
+        let auth_dot_json = AuthDotJson::from_external_access_token(
+            access_token,
+            chatgpt_account_id,
+            chatgpt_plan_type,
+        )?;
+        self.stores.ephemeral.save(&auth_dot_json)
     }
 }
 
