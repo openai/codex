@@ -92,7 +92,7 @@ async fn installed_extension_loads_host_skills_from_legacy_roots() -> TestResult
     assert_eq!("user", fragments[1].role());
     assert!(fragments[1].render().contains("<name>demo</name>"));
     assert!(fragments[1].render().contains("# Demo"));
-    assert!(fragments[1].render().contains(skill_path_string.as_ref()));
+    assert!(fragments[1].render().contains(&skill_prompt_path));
 
     std::fs::remove_dir_all(codex_home)?;
     Ok(())

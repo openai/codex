@@ -126,6 +126,7 @@ fn catalog_from_outcome(outcome: SkillLoadOutcome) -> SkillCatalog {
 
 fn catalog_entry_from_skill(skill: &SkillMetadata, enabled: bool) -> SkillCatalogEntry {
     let skill_path = skill.path_to_skills_md.to_string_lossy().into_owned();
+    let display_path = skill_path.replace('\\', "/");
     let mut entry = SkillCatalogEntry::new(
         SkillPackageId(skill_path.clone()),
         SkillAuthority::new(SkillSourceKind::Host, HOST_AUTHORITY_ID),
@@ -134,7 +135,7 @@ fn catalog_entry_from_skill(skill: &SkillMetadata, enabled: bool) -> SkillCatalo
         SkillResourceId(skill_path.clone()),
     )
     .with_short_description(skill.short_description.clone())
-    .with_display_path(skill_path)
+    .with_display_path(display_path)
     .with_dependencies(skill.dependencies.clone());
 
     if !enabled {
