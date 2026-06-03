@@ -43,7 +43,7 @@ pub use manager::PluginRemoteSyncError;
 pub use manager::PluginUninstallError;
 pub use manager::PluginsConfigInput;
 pub use manager::PluginsManager;
-pub use manager::PluginsManagerDeps;
+pub use manager::PluginsManagerStorageDeps;
 pub use manager::RemotePluginSyncResult;
 pub use marketplace_upgrade::ConfiguredMarketplaceUpgradeError as PluginMarketplaceUpgradeError;
 pub use marketplace_upgrade::ConfiguredMarketplaceUpgradeOutcome as PluginMarketplaceUpgradeOutcome;
