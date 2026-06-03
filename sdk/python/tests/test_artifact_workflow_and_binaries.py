@@ -261,7 +261,6 @@ def test_schema_normalization_only_flattens_string_literal_oneofs(
     assert flattened == [
         "MessagePhase",
         "TurnItemsView",
-        "PluginAvailability",
         "AuthMode",
         "InputModality",
         "ExperimentalFeatureStage",
