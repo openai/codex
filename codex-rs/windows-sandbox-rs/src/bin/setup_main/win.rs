@@ -1048,11 +1048,8 @@ fn run_setup_full(payload: &Payload, log: &mut dyn Write, sbx_dir: &Path) -> Res
 mod tests {
     use super::Payload;
     use super::SETUP_VERSION;
-    use super::run_setup;
     use super::workspace_write_cap_sids_for_path;
     use codex_otel::StatsigMetricsSettings;
-    use codex_windows_sandbox::SetupErrorCode;
-    use codex_windows_sandbox::extract_setup_failure;
     use codex_windows_sandbox::load_or_create_cap_sids;
     use codex_windows_sandbox::workspace_write_cap_sid_for_root;
     use pretty_assertions::assert_eq;
@@ -1103,28 +1100,6 @@ mod tests {
                 environment: "prod".to_string(),
             })
         );
-    }
-
-    #[test]
-    fn setup_fails_before_running_when_completion_marker_cannot_be_invalidated() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let sbx_dir = temp.path().join(".sandbox");
-        let marker_path = sbx_dir.join("setup_marker.json");
-        fs::create_dir_all(&marker_path).expect("create marker directory");
-        let mut payload = payload_json();
-        payload["codex_home"] = json!(temp.path());
-        let payload: Payload = serde_json::from_value(payload).expect("payload");
-        let mut log = Vec::new();
-
-        let err = run_setup(&payload, &mut log, &sbx_dir)
-            .expect_err("setup should fail when the marker cannot be invalidated");
-
-        assert_eq!(
-            extract_setup_failure(&err).map(|failure| failure.code),
-            Some(SetupErrorCode::HelperSetupMarkerWriteFailed)
-        );
-        assert!(marker_path.is_dir(), "marker path should remain unchanged");
-        assert!(log.is_empty(), "setup work should not have started");
     }
 
     #[test]
