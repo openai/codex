@@ -316,14 +316,15 @@ impl ThreadGoalRequestProcessor {
             let thread_state = thread_state.lock().await;
             thread_state.listener_command_tx()
         };
-        let cleared = state_db
+        let cleared_goal = state_db
             .thread_goals()
             .delete_thread_goal(thread_id)
             .await
             .map_err(|err| internal_error(format!("failed to clear thread goal: {err}")))?;
+        let cleared = cleared_goal.is_some();
 
-        if cleared && let Some(thread) = running_thread.as_ref() {
-            thread.apply_external_goal_clear().await;
+        if let (Some(thread), Some(goal)) = (running_thread.as_ref(), cleared_goal) {
+            thread.apply_external_goal_clear(goal).await;
         }
 
         self.outgoing

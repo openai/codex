@@ -155,6 +155,43 @@ pub(crate) async fn wait_for_analytics_event(
     .await?
 }
 
+pub(crate) async fn wait_for_goal_event(
+    server: &MockServer,
+    read_timeout: Duration,
+    event_kind: &str,
+    goal_status: &str,
+) -> Result<Value> {
+    timeout(read_timeout, async {
+        loop {
+            let Some(requests) = server.received_requests().await else {
+                tokio::time::sleep(Duration::from_millis(25)).await;
+                continue;
+            };
+            for request in &requests {
+                if request.method != "POST"
+                    || request.url.path() != "/codex/analytics-events/events"
+                {
+                    continue;
+                }
+                let payload: Value = serde_json::from_slice(&request.body)
+                    .map_err(|err| anyhow::anyhow!("invalid analytics payload: {err}"))?;
+                let Some(events) = payload["events"].as_array() else {
+                    continue;
+                };
+                if let Some(event) = events.iter().find(|event| {
+                    event["event_type"] == "codex_goal_event"
+                        && event["event_params"]["event_kind"] == event_kind
+                        && event["event_params"]["goal_status"] == goal_status
+                }) {
+                    return Ok::<Value, anyhow::Error>(event.clone());
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await?
+}
+
 pub(crate) fn thread_initialized_event(payload: &Value) -> Result<&Value> {
     let events = payload["events"]
         .as_array()

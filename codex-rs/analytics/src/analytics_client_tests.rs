@@ -8,6 +8,7 @@ use crate::events::CodexAppUsedEventRequest;
 use crate::events::CodexCommandExecutionEventParams;
 use crate::events::CodexCommandExecutionEventRequest;
 use crate::events::CodexCompactionEventRequest;
+use crate::events::CodexGoalEventRequest;
 use crate::events::CodexHookRunEventRequest;
 use crate::events::CodexPluginEventRequest;
 use crate::events::CodexPluginUsedEventRequest;
@@ -43,6 +44,7 @@ use crate::facts::AppInvocation;
 use crate::facts::AppMentionedInput;
 use crate::facts::AppUsedInput;
 use crate::facts::CodexCompactionEvent;
+use crate::facts::CodexGoalEvent;
 use crate::facts::CompactionImplementation;
 use crate::facts::CompactionPhase;
 use crate::facts::CompactionReason;
@@ -50,6 +52,8 @@ use crate::facts::CompactionStatus;
 use crate::facts::CompactionStrategy;
 use crate::facts::CompactionTrigger;
 use crate::facts::CustomAnalyticsFact;
+use crate::facts::GoalEventKind;
+use crate::facts::GoalStatus;
 use crate::facts::HookRunFact;
 use crate::facts::HookRunInput;
 use crate::facts::InputError;
@@ -3227,6 +3231,80 @@ async fn reducer_ingests_plugin_state_changed_fact() {
             }
         }])
     );
+}
+
+#[test]
+fn goal_turn_participated_event_serializes_expected_shape() {
+    let event = TrackEventRequest::Goal(Box::new(CodexGoalEventRequest {
+        event_type: "codex_goal_event",
+        event_params: crate::events::codex_goal_event_params(
+            CodexGoalEvent {
+                thread_id: "thread-1".to_string(),
+                turn_id: Some("turn-1".to_string()),
+                goal_id: "goal-1".to_string(),
+                event_kind: GoalEventKind::TurnParticipated,
+                goal_status: GoalStatus::Complete,
+                has_token_budget: true,
+            },
+            "session-thread-1".to_string(),
+            sample_app_server_client_metadata(),
+            sample_runtime_metadata(),
+            Some(ThreadSource::User),
+            /*subagent_source*/ None,
+            /*parent_thread_id*/ None,
+        ),
+    }));
+
+    let payload = serde_json::to_value(&event).expect("serialize goal event");
+    let params = &payload["event_params"];
+
+    assert_eq!(payload["event_type"], "codex_goal_event");
+    assert_eq!(params["thread_id"], "thread-1");
+    assert_eq!(params["session_id"], "session-thread-1");
+    assert_eq!(params["turn_id"], "turn-1");
+    assert_eq!(params["goal_id"], "goal-1");
+    assert_eq!(params["event_kind"], "turn_participated");
+    assert_eq!(params["goal_status"], "complete");
+    assert_eq!(params["has_token_budget"], true);
+    assert!(params.get("tokens_used").is_none());
+    assert!(params.get("time_used_seconds").is_none());
+    assert!(params.get("turn_tokens_used").is_none());
+    assert!(params.get("turn_active_time_ms").is_none());
+    assert!(params.get("token_usage_complete").is_none());
+    assert!(params.get("token_budget").is_none());
+    assert!(params.get("objective").is_none());
+}
+
+#[test]
+fn goal_lifecycle_event_serializes_expected_shape() {
+    let event = TrackEventRequest::Goal(Box::new(CodexGoalEventRequest {
+        event_type: "codex_goal_event",
+        event_params: crate::events::codex_goal_event_params(
+            CodexGoalEvent {
+                thread_id: "thread-1".to_string(),
+                turn_id: None,
+                goal_id: "goal-1".to_string(),
+                event_kind: GoalEventKind::Cleared,
+                goal_status: GoalStatus::Active,
+                has_token_budget: false,
+            },
+            "session-thread-1".to_string(),
+            sample_app_server_client_metadata(),
+            sample_runtime_metadata(),
+            Some(ThreadSource::User),
+            /*subagent_source*/ None,
+            /*parent_thread_id*/ None,
+        ),
+    }));
+
+    let payload = serde_json::to_value(&event).expect("serialize goal event");
+    let params = &payload["event_params"];
+
+    assert_eq!(params["event_kind"], "cleared");
+    assert_eq!(params["turn_id"], serde_json::Value::Null);
+    assert!(params.get("turn_tokens_used").is_none());
+    assert!(params.get("turn_active_time_ms").is_none());
+    assert!(params.get("token_usage_complete").is_none());
 }
 
 #[test]
