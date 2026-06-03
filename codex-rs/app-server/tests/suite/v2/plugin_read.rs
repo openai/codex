@@ -1433,8 +1433,9 @@ async fn plugin_read_returns_app_needs_auth() -> Result<()> {
             plugin_display_names: Vec::new(),
         },
     ];
-    let tools = vec![connector_tool("beta", "Beta App")?];
-    let (server_url, server_handle) = start_apps_server(connectors, tools).await?;
+    let tools = vec![connector_tool("alpha", "Alpha App")?];
+    let (server_url, server_handle) =
+        start_apps_server(connectors, vec!["beta".to_string()], tools).await?;
 
     let codex_home = TempDir::new()?;
     write_connectors_config(codex_home.path(), &server_url)?;
@@ -1758,7 +1759,8 @@ plugins = true
 
 #[derive(Clone)]
 struct AppsServerState {
-    response: Arc<StdMutex<serde_json::Value>>,
+    directory_response: Arc<StdMutex<serde_json::Value>>,
+    installed_response: Arc<StdMutex<serde_json::Value>>,
 }
 
 #[derive(Clone)]
@@ -1794,12 +1796,19 @@ impl ServerHandler for PluginReadMcpServer {
 
 async fn start_apps_server(
     connectors: Vec<AppInfo>,
+    installed_connector_ids: Vec<String>,
     tools: Vec<Tool>,
 ) -> Result<(String, JoinHandle<()>)> {
     let state = Arc::new(AppsServerState {
-        response: Arc::new(StdMutex::new(
+        directory_response: Arc::new(StdMutex::new(
             json!({ "apps": connectors, "next_token": null }),
         )),
+        installed_response: Arc::new(StdMutex::new(json!({
+            "connectors": installed_connector_ids
+                .into_iter()
+                .map(|id| json!({ "id": id }))
+                .collect::<Vec<_>>()
+        }))),
     });
     let tools = Arc::new(StdMutex::new(tools));
 
@@ -1822,6 +1831,10 @@ async fn start_apps_server(
         .route(
             "/connectors/directory/list_workspace",
             get(list_directory_connectors),
+        )
+        .route(
+            "/connectors/directory/list_installed",
+            get(list_installed_connectors),
         )
         .with_state(state)
         .nest_service("/api/codex/apps", mcp_service);
@@ -1856,7 +1869,41 @@ async fn list_directory_connectors(
         Err(StatusCode::BAD_REQUEST)
     } else {
         let response = state
-            .response
+            .directory_response
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        Ok(Json(response))
+    }
+}
+
+async fn list_installed_connectors(
+    State(state): State<Arc<AppsServerState>>,
+    headers: HeaderMap,
+    uri: Uri,
+) -> Result<impl axum::response::IntoResponse, StatusCode> {
+    let bearer_ok = headers
+        .get(AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value == "Bearer chatgpt-token");
+    let account_ok = headers
+        .get("chatgpt-account-id")
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value == "account-123");
+    let query_ok = uri.query().is_some_and(|query| {
+        query.split('&').any(|pair| pair == "include_actions=false")
+            && query
+                .split('&')
+                .any(|pair| pair == "include_admin_sync=false")
+    });
+
+    if !bearer_ok || !account_ok {
+        Err(StatusCode::UNAUTHORIZED)
+    } else if !query_ok {
+        Err(StatusCode::BAD_REQUEST)
+    } else {
+        let response = state
+            .installed_response
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone();

@@ -26,6 +26,16 @@ use codex_plugin::AppConnectorId;
 
 const DIRECTORY_CONNECTORS_TIMEOUT: Duration = Duration::from_secs(60);
 
+#[derive(serde::Deserialize)]
+struct InstalledConnectorsResponse {
+    connectors: Vec<InstalledConnector>,
+}
+
+#[derive(serde::Deserialize)]
+struct InstalledConnector {
+    id: String,
+}
+
 async fn apps_enabled(config: &Config) -> bool {
     let auth_manager =
         AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ false).await;
@@ -126,6 +136,25 @@ pub async fn list_all_connectors_with_options(
         connectors,
         originator().value.as_str(),
     ))
+}
+
+pub async fn list_installed_connector_ids(config: &Config) -> anyhow::Result<HashSet<String>> {
+    if !apps_enabled(config).await {
+        return Ok(HashSet::new());
+    }
+
+    let response = chatgpt_get_request_with_timeout::<InstalledConnectorsResponse>(
+        config,
+        "/connectors/directory/list_installed?include_actions=false&include_admin_sync=false"
+            .to_string(),
+        Some(DIRECTORY_CONNECTORS_TIMEOUT),
+    )
+    .await?;
+    Ok(response
+        .connectors
+        .into_iter()
+        .map(|connector| connector.id)
+        .collect())
 }
 
 fn connector_directory_cache_context(

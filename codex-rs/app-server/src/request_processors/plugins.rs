@@ -1011,13 +1011,7 @@ impl PluginRequestProcessor {
                     }
                     None => None,
                 };
-                let environment_manager = self.thread_manager.environment_manager();
-                let app_summaries = load_plugin_app_summaries(
-                    &config,
-                    &outcome.plugin.apps,
-                    Arc::clone(&environment_manager),
-                )
-                .await;
+                let app_summaries = load_plugin_app_summaries(&config, &outcome.plugin.apps).await;
                 let visible_skills = outcome
                     .plugin
                     .skills
@@ -1092,13 +1086,7 @@ impl PluginRequestProcessor {
                     .cloned()
                     .map(codex_plugin::AppConnectorId)
                     .collect::<Vec<_>>();
-                let environment_manager = self.thread_manager.environment_manager();
-                let app_summaries = load_plugin_app_summaries(
-                    &config,
-                    &plugin_apps,
-                    Arc::clone(&environment_manager),
-                )
-                .await;
+                let app_summaries = load_plugin_app_summaries(&config, &plugin_apps).await;
                 remote_plugin_detail_to_info(remote_detail, app_summaries)
             }
         };
@@ -1832,58 +1820,42 @@ impl PluginRequestProcessor {
 async fn load_plugin_app_summaries(
     config: &Config,
     plugin_apps: &[codex_plugin::AppConnectorId],
-    environment_manager: Arc<EnvironmentManager>,
 ) -> Vec<AppSummary> {
     if plugin_apps.is_empty() {
         return Vec::new();
     }
 
-    let connectors =
-        match connectors::list_all_connectors_with_options(config, /*force_refetch*/ false).await {
-            Ok(connectors) => connectors,
-            Err(err) => {
-                warn!("failed to load app metadata for plugin/read: {err:#}");
-                connectors::list_cached_all_connectors(config)
-                    .await
-                    .unwrap_or_default()
-            }
-        };
+    let (connectors_result, installed_connector_ids_result) = tokio::join!(
+        connectors::list_all_connectors_with_options(config, /*force_refetch*/ false),
+        connectors::list_installed_connector_ids(config),
+    );
+    let connectors = match connectors_result {
+        Ok(connectors) => connectors,
+        Err(err) => {
+            warn!("failed to load app metadata for plugin/read: {err:#}");
+            connectors::list_cached_all_connectors(config)
+                .await
+                .unwrap_or_default()
+        }
+    };
 
     let plugin_connectors = connectors::connectors_for_plugin_apps(connectors, plugin_apps);
 
-    let accessible_connectors =
-        match connectors::list_accessible_connectors_from_mcp_tools_with_environment_manager(
-            config,
-            /*force_refetch*/ false,
-            environment_manager,
-        )
-        .await
-        {
-            Ok(status) if status.codex_apps_ready => status.connectors,
-            Ok(_) => {
-                return plugin_connectors
-                    .into_iter()
-                    .map(AppSummary::from)
-                    .collect();
-            }
-            Err(err) => {
-                warn!("failed to load app auth state for plugin/read: {err:#}");
-                return plugin_connectors
-                    .into_iter()
-                    .map(AppSummary::from)
-                    .collect();
-            }
-        };
-
-    let accessible_ids = accessible_connectors
-        .iter()
-        .map(|connector| connector.id.as_str())
-        .collect::<HashSet<_>>();
+    let installed_connector_ids = match installed_connector_ids_result {
+        Ok(installed_connector_ids) => installed_connector_ids,
+        Err(err) => {
+            warn!("failed to load installed apps for plugin/read: {err:#}");
+            return plugin_connectors
+                .into_iter()
+                .map(AppSummary::from)
+                .collect();
+        }
+    };
 
     plugin_connectors
         .into_iter()
         .map(|connector| {
-            let needs_auth = !accessible_ids.contains(connector.id.as_str());
+            let needs_auth = !installed_connector_ids.contains(connector.id.as_str());
             AppSummary {
                 id: connector.id,
                 name: connector.name,
