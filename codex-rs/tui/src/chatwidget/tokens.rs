@@ -10,8 +10,8 @@
 //! output and stream consolidation no longer block insertion.
 //!
 //! Chart rendering is intentionally terminal-native. Daily mode displays a
-//! GitHub-style 52-week calendar, while weekly and cumulative modes reuse the same
-//! grid as bottom-aligned bars. Truecolor terminals encode activity intensity with
+//! GitHub-style 52-week calendar, while weekly and cumulative modes render
+//! bottom-aligned bars. Truecolor terminals encode daily activity intensity with
 //! color. Lower-color terminals fall back to distinct hollow and filled glyphs so
 //! empty days remain legible.
 //!
@@ -55,6 +55,7 @@ use crate::terminal_palette::stdout_color_level;
 // the grid perfectly aligned and free of texture noise.
 const EMPTY_CELL_GLYPH: &str = "□";
 const ACTIVE_CELL_GLYPH: &str = "■";
+const BAR_CELL_GLYPH: &str = "█";
 const WEEK_COUNT: usize = 52;
 const DAY_COUNT: usize = 7;
 const CELL_COUNT: usize = WEEK_COUNT * DAY_COUNT;
@@ -255,7 +256,7 @@ impl TokenActivityHistoryCell {
                     } else {
                         palette.for_bar_level(levels[index])
                     };
-                    spans.push(Span::styled(palette.glyph(levels[index]), style));
+                    spans.push(Span::styled(palette.glyph(self.view, levels[index]), style));
                 }
             }
             lines.push(spans.into());
@@ -432,7 +433,10 @@ fn legend_line(palette: &TokenActivityPalette) -> Line<'static> {
         if level > 0 {
             spans.push(" ".into());
         }
-        spans.push(Span::styled(palette.glyph(level), palette.for_level(level)));
+        spans.push(Span::styled(
+            palette.glyph(TokenActivityView::Daily, level),
+            palette.for_level(level),
+        ));
     }
     spans.push(Span::styled(" More", label_style()));
     spans.into()
@@ -672,10 +676,15 @@ impl TokenActivityPalette {
         }
     }
 
-    /// The glyph for a cell at `level`. In truecolor we always use the filled
-    /// glyph and let color carry the intensity; in low-color we use the hollow
-    /// glyph for empty cells so they remain visible without a color gradient.
-    fn glyph(&self, level: usize) -> &'static str {
+    /// The glyph for a cell at `level`. Daily truecolor renders every visible
+    /// cell with the same square glyph and lets color carry the intensity; in
+    /// low-color we use the hollow glyph for empty cells so they remain visible
+    /// without a color gradient. Bar views use full blocks for filled height and
+    /// spaces for empty height so the silhouette reads as a column chart.
+    fn glyph(&self, view: TokenActivityView, level: usize) -> &'static str {
+        if view != TokenActivityView::Daily {
+            return if level == 0 { " " } else { BAR_CELL_GLYPH };
+        }
         if self.uses_color || level > 0 {
             ACTIVE_CELL_GLYPH
         } else {
