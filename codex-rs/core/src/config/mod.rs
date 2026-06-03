@@ -1292,14 +1292,11 @@ impl Config {
         }
     }
 
-    pub(crate) fn validate_config_selected_multi_agent_version(
-        &self,
-        multi_agent_version: MultiAgentVersion,
-    ) -> std::io::Result<()> {
-        if multi_agent_version == MultiAgentVersion::V2 && self.agent_max_threads.is_some() {
+    pub(crate) fn validate_multi_agent_v2_config(&self) -> std::io::Result<()> {
+        if self.features.enabled(Feature::MultiAgentV2) && self.agent_max_threads.is_some() {
             Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
-                "agents.max_threads cannot be set when features.multi_agent_v2 selects the multi-agent runtime",
+                "agents.max_threads cannot be set when features.multi_agent_v2 is enabled",
             ))
         } else {
             Ok(())

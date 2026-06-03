@@ -557,15 +557,9 @@ impl Codex {
             .await;
         let multi_agent_version =
             resolve_multi_agent_version(&conversation_history, inherited_multi_agent_version);
-        if multi_agent_version
-            .or(model_info.multi_agent_version)
-            .is_none()
-        {
-            let multi_agent_version = config.multi_agent_version_from_features();
-            config
-                .validate_config_selected_multi_agent_version(multi_agent_version)
-                .map_err(|err| CodexErr::InvalidRequest(err.to_string()))?;
-        }
+        config
+            .validate_multi_agent_v2_config()
+            .map_err(|err| CodexErr::InvalidRequest(err.to_string()))?;
         let base_instructions = config
             .base_instructions
             .clone()
