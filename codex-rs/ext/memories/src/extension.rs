@@ -1,6 +1,11 @@
 use std::marker::PhantomData;
 use std::sync::Arc;
 
+use crate::backend::MemoriesBackend;
+use crate::local::LocalMemoriesBackend;
+use crate::prompt_source::MemoryPromptSource;
+use crate::prompts::build_memory_tool_developer_instructions;
+use crate::tools;
 use codex_core::config::Config;
 use codex_extension_api::ConfigContributor;
 use codex_extension_api::ContextContributor;
@@ -12,12 +17,6 @@ use codex_extension_api::ThreadStartInput;
 use codex_extension_api::ToolContributor;
 use codex_features::Feature;
 use codex_otel::MetricsClient;
-
-use crate::backend::MemoriesBackend;
-use crate::local::LocalMemoriesBackend;
-use crate::prompt_source::MemoryPromptSource;
-use crate::prompts::build_memory_tool_developer_instructions;
-use crate::tools;
 
 /// Contributes Codex memory read-path prompt context and memory read tools.
 #[derive(Clone)]
@@ -39,24 +38,46 @@ impl<B, S> MemoriesExtension<B, S> {
             storage: PhantomData,
         }
     }
+
+    fn store_thread_state(thread_store: &ExtensionData, config: &Config) {
+        thread_store.insert(MemoriesExtensionConfig::from_config(config));
+        thread_store.insert(MemoriesExtensionStorageDeps::local(config));
+    }
 }
 
-#[derive(Clone)]
-pub(crate) struct MemoriesExtensionConfig<B = LocalMemoriesBackend, S = LocalMemoriesBackend> {
+#[derive(Clone, Debug)]
+pub(crate) struct MemoriesExtensionConfig {
     pub(crate) enabled: bool,
     pub(crate) dedicated_tools: bool,
-    pub(crate) backend: B,
-    pub(crate) prompt_source: S,
 }
 
 impl MemoriesExtensionConfig {
     fn from_config(config: &Config) -> Self {
-        let backend = LocalMemoriesBackend::from_codex_home(&config.codex_home);
         Self {
             enabled: config.features.enabled(Feature::MemoryTool) && config.memories.use_memories,
             dedicated_tools: config.memories.dedicated_tools,
-            prompt_source: backend.clone(),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct MemoriesExtensionStorageDeps<B = LocalMemoriesBackend, S = LocalMemoriesBackend> {
+    pub(crate) backend: B,
+    pub(crate) prompt_source: S,
+}
+
+impl MemoriesExtensionStorageDeps {
+    fn local(config: &Config) -> Self {
+        let backend = LocalMemoriesBackend::from_codex_home(&config.codex_home);
+        Self::new(backend.clone(), backend)
+    }
+}
+
+impl<B, S> MemoriesExtensionStorageDeps<B, S> {
+    pub(crate) fn new(backend: B, prompt_source: S) -> Self {
+        Self {
             backend,
+            prompt_source,
         }
     }
 }
@@ -72,14 +93,17 @@ where
         thread_store: &'a ExtensionData,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Vec<PromptFragment>> + Send + 'a>> {
         Box::pin(async move {
-            let Some(config) = thread_store.get::<MemoriesExtensionConfig<B, S>>() else {
+            let Some(config) = thread_store.get::<MemoriesExtensionConfig>() else {
                 return Vec::new();
             };
             if !config.enabled {
                 return Vec::new();
             }
+            let Some(deps) = thread_store.get::<MemoriesExtensionStorageDeps<B, S>>() else {
+                return Vec::new();
+            };
 
-            build_memory_tool_developer_instructions(&config.prompt_source)
+            build_memory_tool_developer_instructions(&deps.prompt_source)
                 .await
                 .map(PromptFragment::developer_policy)
                 .into_iter()
@@ -91,9 +115,7 @@ where
 #[async_trait::async_trait]
 impl ThreadLifecycleContributor<Config> for MemoriesExtension {
     async fn on_thread_start(&self, input: ThreadStartInput<'_, Config>) {
-        input
-            .thread_store
-            .insert(MemoriesExtensionConfig::from_config(input.config));
+        Self::store_thread_state(input.thread_store, input.config);
     }
 }
 
@@ -105,7 +127,7 @@ impl ConfigContributor<Config> for MemoriesExtension {
         _previous_config: &Config,
         new_config: &Config,
     ) {
-        thread_store.insert(MemoriesExtensionConfig::from_config(new_config));
+        Self::store_thread_state(thread_store, new_config);
     }
 }
 
@@ -119,14 +141,17 @@ where
         _session_store: &ExtensionData,
         thread_store: &ExtensionData,
     ) -> Vec<Arc<dyn codex_extension_api::ToolExecutor<codex_extension_api::ToolCall>>> {
-        let Some(config) = thread_store.get::<MemoriesExtensionConfig<B, S>>() else {
+        let Some(config) = thread_store.get::<MemoriesExtensionConfig>() else {
             return Vec::new();
         };
         if !config.enabled || !config.dedicated_tools {
             return Vec::new();
         }
+        let Some(deps) = thread_store.get::<MemoriesExtensionStorageDeps<B, S>>() else {
+            return Vec::new();
+        };
 
-        tools::memory_tools(config.backend.clone(), self.metrics_client.clone())
+        tools::memory_tools(deps.backend.clone(), self.metrics_client.clone())
     }
 }
 
