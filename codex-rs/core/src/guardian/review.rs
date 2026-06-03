@@ -5,6 +5,7 @@ use codex_analytics::GuardianReviewFailureReason;
 use codex_analytics::GuardianReviewTerminalStatus;
 use codex_analytics::GuardianReviewTrackContext;
 use codex_analytics::GuardianReviewedAction;
+use codex_features::Feature;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
@@ -18,9 +19,12 @@ use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::WarningEvent;
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
+use tracing::warn;
 
+use crate::config::Config;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::turn_timing::now_unix_timestamp_ms;
@@ -157,6 +161,33 @@ pub(crate) fn routes_approval_to_guardian_with_reviewer(
         turn.approval_policy.value(),
         AskForApproval::OnRequest | AskForApproval::Granular(_)
     ) && approvals_reviewer == ApprovalsReviewer::AutoReview
+}
+
+pub(crate) fn maybe_warm_guardian_review_session(session: Arc<Session>, turn: Arc<TurnContext>) {
+    if !turn.features.enabled(Feature::GuardianSessionWarmup)
+        || turn.session_source.is_non_root_agent()
+        || !routes_approval_to_guardian(turn.as_ref())
+    {
+        return;
+    }
+
+    drop(tokio::spawn(async move {
+        let started_at = Instant::now();
+        let result = warm_guardian_review_session(Arc::clone(&session), turn).await;
+        let status = match &result {
+            Ok(true) => "ready",
+            Ok(false) => "already_initialized",
+            Err(_) => "failed",
+        };
+        session.services.session_telemetry.record_startup_phase(
+            "guardian_review_session_warmup",
+            started_at.elapsed(),
+            Some(status),
+        );
+        if let Err(err) = result {
+            warn!("guardian review session warmup failed: {err:#}");
+        }
+    }));
 }
 
 pub(crate) fn is_guardian_reviewer_source(
@@ -665,69 +696,11 @@ pub(super) async fn run_guardian_review_session(
     schema: serde_json::Value,
     external_cancel: Option<CancellationToken>,
 ) -> (GuardianReviewOutcome, GuardianReviewAnalyticsResult) {
-    let network_proxy = session.services.network_proxy.load_full();
-    let live_network_config = match network_proxy.as_ref() {
-        Some(network_proxy) => match network_proxy.proxy().current_cfg().await {
-            Ok(config) => Some(config),
-            Err(err) => {
-                return (
-                    GuardianReviewOutcome::Error(GuardianReviewError::prompt_build(err)),
-                    GuardianReviewAnalyticsResult::without_session(),
-                );
-            }
-        },
-        None => None,
-    };
-    let available_models = session
-        .services
-        .models_manager
-        .list_models(codex_models_manager::manager::RefreshStrategy::Offline)
-        .await;
-    let preferred_reasoning_effort = |supports_low: bool, fallback| {
-        if supports_low {
-            Some(codex_protocol::openai_models::ReasoningEffort::Low)
-        } else {
-            fallback
-        }
-    };
-    let model_override = turn.model_info.auto_review_model_override.as_deref();
-    let review_model_id =
-        model_override.unwrap_or_else(|| turn.provider.approval_review_preferred_model());
-    let review_model = available_models
-        .iter()
-        .find(|preset| preset.model == review_model_id);
-    let (guardian_model, guardian_reasoning_effort) = if let Some(preset) = review_model {
-        let reasoning_effort = preferred_reasoning_effort(
-            preset
-                .supported_reasoning_efforts
-                .iter()
-                .any(|effort| effort.effort == codex_protocol::openai_models::ReasoningEffort::Low),
-            Some(preset.default_reasoning_effort),
-        );
-        (review_model_id.to_string(), reasoning_effort)
-    } else {
-        let reasoning_effort = preferred_reasoning_effort(
-            turn.model_info
-                .supported_reasoning_levels
-                .iter()
-                .any(|preset| preset.effort == codex_protocol::openai_models::ReasoningEffort::Low),
-            turn.reasoning_effort
-                .or(turn.model_info.default_reasoning_level),
-        );
-        (
-            model_override
-                .unwrap_or(turn.model_info.slug.as_str())
-                .to_string(),
-            reasoning_effort,
-        )
-    };
-    let guardian_config = build_guardian_review_session_config(
-        turn.config.as_ref(),
-        live_network_config.clone(),
-        guardian_model.as_str(),
+    let ResolvedGuardianReviewSessionConfig {
+        guardian_config,
+        guardian_model,
         guardian_reasoning_effort,
-    );
-    let guardian_config = match guardian_config {
+    } = match resolve_guardian_review_session_config(session.as_ref(), turn.as_ref()).await {
         Ok(config) => config,
         Err(err) => {
             return (
@@ -799,6 +772,89 @@ pub(super) async fn run_guardian_review_session(
             session_analytics_result,
         ),
     }
+}
+
+struct ResolvedGuardianReviewSessionConfig {
+    guardian_config: Config,
+    guardian_model: String,
+    guardian_reasoning_effort: Option<codex_protocol::openai_models::ReasoningEffort>,
+}
+
+pub(super) async fn warm_guardian_review_session(
+    session: Arc<Session>,
+    turn: Arc<TurnContext>,
+) -> anyhow::Result<bool> {
+    let resolved_config =
+        resolve_guardian_review_session_config(session.as_ref(), turn.as_ref()).await?;
+    session
+        .guardian_review_session
+        .warm_trunk(Arc::clone(&session), turn, resolved_config.guardian_config)
+        .await
+}
+
+async fn resolve_guardian_review_session_config(
+    session: &Session,
+    turn: &TurnContext,
+) -> anyhow::Result<ResolvedGuardianReviewSessionConfig> {
+    let network_proxy = session.services.network_proxy.load_full();
+    let live_network_config = match network_proxy.as_ref() {
+        Some(network_proxy) => Some(network_proxy.proxy().current_cfg().await?),
+        None => None,
+    };
+    let available_models = session
+        .services
+        .models_manager
+        .list_models(codex_models_manager::manager::RefreshStrategy::Offline)
+        .await;
+    let preferred_reasoning_effort = |supports_low: bool, fallback| {
+        if supports_low {
+            Some(codex_protocol::openai_models::ReasoningEffort::Low)
+        } else {
+            fallback
+        }
+    };
+    let model_override = turn.model_info.auto_review_model_override.as_deref();
+    let review_model_id =
+        model_override.unwrap_or_else(|| turn.provider.approval_review_preferred_model());
+    let review_model = available_models
+        .iter()
+        .find(|preset| preset.model == review_model_id);
+    let (guardian_model, guardian_reasoning_effort) = if let Some(preset) = review_model {
+        let reasoning_effort = preferred_reasoning_effort(
+            preset
+                .supported_reasoning_efforts
+                .iter()
+                .any(|effort| effort.effort == codex_protocol::openai_models::ReasoningEffort::Low),
+            Some(preset.default_reasoning_effort),
+        );
+        (review_model_id.to_string(), reasoning_effort)
+    } else {
+        let reasoning_effort = preferred_reasoning_effort(
+            turn.model_info
+                .supported_reasoning_levels
+                .iter()
+                .any(|preset| preset.effort == codex_protocol::openai_models::ReasoningEffort::Low),
+            turn.reasoning_effort
+                .or(turn.model_info.default_reasoning_level),
+        );
+        (
+            model_override
+                .unwrap_or(turn.model_info.slug.as_str())
+                .to_string(),
+            reasoning_effort,
+        )
+    };
+    let guardian_config = build_guardian_review_session_config(
+        turn.config.as_ref(),
+        live_network_config,
+        guardian_model.as_str(),
+        guardian_reasoning_effort,
+    )?;
+    Ok(ResolvedGuardianReviewSessionConfig {
+        guardian_config,
+        guardian_model,
+        guardian_reasoning_effort,
+    })
 }
 
 #[cfg(test)]

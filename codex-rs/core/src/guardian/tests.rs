@@ -1576,6 +1576,62 @@ async fn build_guardian_prompt_items_includes_parent_session_id() -> anyhow::Res
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn warmed_guardian_trunk_is_reused_by_first_review() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let request_log = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-guardian"),
+            ev_assistant_message(
+                "msg-guardian",
+                "{\"risk_level\":\"low\",\"user_authorization\":\"high\",\"outcome\":\"allow\",\"rationale\":\"warmed guardian rationale\"}",
+            ),
+            ev_completed("resp-guardian"),
+        ]),
+    )
+    .await;
+    let (session, turn) = guardian_test_session_and_turn(&server).await;
+
+    assert!(warm_guardian_review_session_for_test(Arc::clone(&session), Arc::clone(&turn)).await?);
+    seed_guardian_parent_history(&session, &turn).await;
+    let outcome = run_guardian_review_session_for_test(
+        Arc::clone(&session),
+        Arc::clone(&turn),
+        GuardianApprovalRequest::Shell {
+            id: "shell-1".to_string(),
+            command: vec!["git".to_string(), "push".to_string()],
+            cwd: test_path_buf("/repo/codex-rs/core").abs(),
+            sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
+            additional_permissions: None,
+            justification: Some("Need to push the docs fix.".to_string()),
+        },
+        /*retry_reason*/ None,
+        guardian_output_schema(),
+        /*external_cancel*/ None,
+    )
+    .await;
+    let (GuardianReviewOutcome::Completed(assessment), metadata) = outcome else {
+        panic!("expected guardian assessment");
+    };
+
+    assert_eq!(assessment.outcome, GuardianAssessmentOutcome::Allow);
+    assert!(matches!(
+        metadata.guardian_session_kind,
+        Some(codex_analytics::GuardianReviewSessionKind::TrunkReused)
+    ));
+    assert_eq!(metadata.had_prior_review_context, Some(false));
+    assert_eq!(
+        request_log.requests().len(),
+        1,
+        "warmup should initialize the trunk without performing a review"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 

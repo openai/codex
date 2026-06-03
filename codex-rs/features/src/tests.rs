@@ -102,6 +102,14 @@ fn guardian_approval_is_stable_and_enabled_by_default() {
 }
 
 #[test]
+fn guardian_session_warmup_is_under_development_and_disabled_by_default() {
+    let spec = Feature::GuardianSessionWarmup.info();
+
+    assert_eq!(spec.stage, Stage::UnderDevelopment);
+    assert_eq!(Feature::GuardianSessionWarmup.default_enabled(), false);
+}
+
+#[test]
 fn external_migration_is_experimental_and_disabled_by_default() {
     let spec = Feature::ExternalMigration.info();
     let stage = spec.stage;

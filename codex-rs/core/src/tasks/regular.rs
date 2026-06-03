@@ -54,6 +54,7 @@ impl SessionTask for RegularTask {
         });
         sess.send_event(ctx.as_ref(), event).await;
         sess.set_server_reasoning_included(/*included*/ false).await;
+        crate::guardian::maybe_warm_guardian_review_session(Arc::clone(&sess), Arc::clone(&ctx));
         let prewarmed_client_session = match sess
             .consume_startup_prewarm_for_regular_turn(&cancellation_token)
             .await

@@ -87,6 +87,7 @@ pub(crate) struct GuardianReviewSessionManager {
 struct GuardianReviewSessionState {
     trunk: Option<Arc<GuardianReviewSession>>,
     ephemeral_reviews: Vec<Arc<GuardianReviewSession>>,
+    shutdown: bool,
 }
 
 struct GuardianReviewSession {
@@ -290,6 +291,7 @@ impl GuardianReviewSessionManager {
     pub(crate) async fn shutdown(&self) {
         let (review_session, ephemeral_reviews) = {
             let mut state = self.state.lock().await;
+            state.shutdown = true;
             (
                 state.trunk.take(),
                 std::mem::take(&mut state.ephemeral_reviews),
@@ -301,6 +303,44 @@ impl GuardianReviewSessionManager {
         for review_session in ephemeral_reviews {
             review_session.shutdown().await;
         }
+    }
+
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "warmup and review session trunk spawning must stay serialized"
+    )]
+    pub(crate) async fn warm_trunk(
+        &self,
+        parent_session: Arc<Session>,
+        parent_turn: Arc<TurnContext>,
+        spawn_config: Config,
+    ) -> anyhow::Result<bool> {
+        let reuse_key = GuardianReviewSessionReuseKey::from_spawn_config(&spawn_config);
+        let mut state = self.state.lock().await;
+        if state.shutdown || state.trunk.is_some() {
+            return Ok(false);
+        }
+
+        let spawn_cancel_token = CancellationToken::new();
+        let review_session = run_before_review_deadline_with_cancel(
+            tokio::time::Instant::now() + GUARDIAN_REVIEW_TIMEOUT,
+            /*external_cancel*/ None,
+            &spawn_cancel_token,
+            Box::pin(spawn_guardian_review_session(
+                &parent_session,
+                &parent_turn,
+                spawn_config,
+                reuse_key,
+                spawn_cancel_token.clone(),
+                /*fork_snapshot*/ None,
+            )),
+        )
+        .await
+        .map_err(|outcome| {
+            anyhow!("guardian review session warmup did not complete: {outcome:?}")
+        })??;
+        state.trunk = Some(Arc::new(review_session));
+        Ok(true)
     }
 
     #[expect(
@@ -337,7 +377,8 @@ impl GuardianReviewSessionManager {
                         params.external_cancel.as_ref(),
                         &spawn_cancel_token,
                         Box::pin(spawn_guardian_review_session(
-                            &params,
+                            &params.parent_session,
+                            &params.parent_turn,
                             params.spawn_config.clone(),
                             next_reuse_key.clone(),
                             spawn_cancel_token.clone(),
@@ -543,7 +584,8 @@ impl GuardianReviewSessionManager {
             params.external_cancel.as_ref(),
             &spawn_cancel_token,
             Box::pin(spawn_guardian_review_session(
-                &params,
+                &params.parent_session,
+                &params.parent_turn,
                 fork_config,
                 reuse_key,
                 spawn_cancel_token.clone(),
@@ -582,7 +624,8 @@ impl GuardianReviewSessionManager {
 }
 
 async fn spawn_guardian_review_session(
-    params: &GuardianReviewSessionParams,
+    parent_session: &Arc<Session>,
+    parent_turn: &Arc<TurnContext>,
     spawn_config: Config,
     reuse_key: GuardianReviewSessionReuseKey,
     cancel_token: CancellationToken,
@@ -598,10 +641,10 @@ async fn spawn_guardian_review_session(
     };
     let codex = Box::pin(run_codex_thread_interactive(
         spawn_config,
-        params.parent_session.services.auth_manager.clone(),
-        params.parent_session.services.models_manager.clone(),
-        Arc::clone(&params.parent_session),
-        Arc::clone(&params.parent_turn),
+        parent_session.services.auth_manager.clone(),
+        parent_session.services.models_manager.clone(),
+        Arc::clone(parent_session),
+        Arc::clone(parent_turn),
         cancel_token.clone(),
         SubAgentSource::Other(GUARDIAN_REVIEWER_NAME.to_string()),
         initial_history,
@@ -958,6 +1001,7 @@ pub(crate) fn build_guardian_review_session_config(
         Feature::Plugins,
         Feature::WebSearchRequest,
         Feature::WebSearchCached,
+        Feature::GuardianSessionWarmup,
     ] {
         guardian_config.features.disable(feature).map_err(|err| {
             anyhow::anyhow!(
@@ -1142,6 +1186,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn warm_trunk_does_not_spawn_after_shutdown() {
+        let manager = GuardianReviewSessionManager::default();
+        manager.shutdown().await;
+        let params = test_review_params().await;
+
+        assert!(
+            !manager
+                .warm_trunk(
+                    params.parent_session,
+                    params.parent_turn,
+                    params.spawn_config,
+                )
+                .await
+                .expect("warmup after shutdown should be a no-op")
+        );
+    }
+
+    #[tokio::test]
     async fn guardian_review_session_config_change_invalidates_cached_session() {
         let parent_config = crate::config::test_config().await;
         let cached_spawn_config = build_guardian_review_session_config(
@@ -1258,6 +1320,29 @@ mod tests {
         .expect("guardian config");
 
         assert!(!guardian_config.features.enabled(Feature::CodexHooks));
+    }
+
+    #[tokio::test]
+    async fn guardian_review_session_config_disables_warmup() {
+        let mut parent_config = crate::config::test_config().await;
+        parent_config
+            .features
+            .enable(Feature::GuardianSessionWarmup)
+            .expect("enable guardian session warmup on parent config");
+
+        let guardian_config = build_guardian_review_session_config(
+            &parent_config,
+            /*live_network_config*/ None,
+            "active-model",
+            /*reasoning_effort*/ None,
+        )
+        .expect("guardian config");
+
+        assert!(
+            !guardian_config
+                .features
+                .enabled(Feature::GuardianSessionWarmup)
+        );
     }
 
     #[tokio::test]

@@ -32,6 +32,7 @@ pub(crate) use approval_request::guardian_approval_request_to_json;
 pub(crate) use review::guardian_rejection_message;
 pub(crate) use review::guardian_timeout_message;
 pub(crate) use review::is_guardian_reviewer_source;
+pub(crate) use review::maybe_warm_guardian_review_session;
 pub(crate) use review::new_guardian_review_id;
 #[cfg(test)]
 pub(crate) use review::record_guardian_denial_for_test;
@@ -169,6 +170,8 @@ use prompt::render_guardian_transcript_entries;
 use review::GuardianReviewOutcome;
 #[cfg(test)]
 use review::run_guardian_review_session as run_guardian_review_session_for_test;
+#[cfg(test)]
+use review::warm_guardian_review_session as warm_guardian_review_session_for_test;
 #[cfg(test)]
 use review_session::build_guardian_review_session_config as build_guardian_review_session_config_for_test;
 

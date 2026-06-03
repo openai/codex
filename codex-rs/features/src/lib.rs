@@ -190,6 +190,8 @@ pub enum Feature {
     DefaultModeRequestUserInput,
     /// Enable automatic review for approval prompts.
     GuardianApproval,
+    /// Warm the reusable automatic-review session before its first approval prompt.
+    GuardianSessionWarmup,
     /// Enable persisted thread goals and automatic goal continuation.
     Goals,
     /// Route MCP tool approval prompts through the MCP elicitation request path.
@@ -1116,6 +1118,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "guardian_approval",
         stage: Stage::Stable,
         default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::GuardianSessionWarmup,
+        key: "guardian_session_warmup",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::Goals,
