@@ -1,3 +1,4 @@
+use std::ffi::OsString;
 use std::fs::File;
 use std::future::Future;
 use std::path::Path;
@@ -5,6 +6,7 @@ use std::path::PathBuf;
 
 use codex_apply_patch::CODEX_CORE_APPLY_PATCH_ARG1;
 use codex_exec_server::CODEX_FS_HELPER_ARG1;
+use codex_install_context::InstallContext;
 use codex_sandboxing::landlock::CODEX_LINUX_SANDBOX_ARG0;
 use codex_utils_home_dir::find_codex_home;
 #[cfg(unix)]
@@ -285,10 +287,11 @@ where
 /// - WINDOWS: `apply_patch.bat` batch script to invoke the current executable
 ///   with the hidden `--codex-run-as-apply-patch` flag.
 ///
-/// This temporary directory is prepended to the PATH environment variable so
-/// that `apply_patch` can be on the PATH without requiring the user to
-/// install a separate `apply_patch` executable, simplifying the deployment of
-/// Codex CLI.
+/// This temporary directory, followed by the package-managed `codex-path`
+/// directory when present, is prepended to the PATH environment variable so
+/// that `apply_patch` and bundled package helpers can be on the PATH without
+/// requiring the user to install separate executables, simplifying the
+/// deployment of Codex CLI.
 /// Note: In debug builds the temp-dir guard is disabled to ease local testing.
 ///
 /// IMPORTANT: This function modifies the PATH environment variable, so it MUST
@@ -371,23 +374,8 @@ pub fn prepend_path_entry_for_codex_aliases() -> std::io::Result<Arg0PathEntryGu
         }
     }
 
-    #[cfg(unix)]
-    const PATH_SEPARATOR: &str = ":";
-
-    #[cfg(windows)]
-    const PATH_SEPARATOR: &str = ";";
-
-    let updated_path_env_var = match std::env::var_os("PATH") {
-        Some(existing_path) => {
-            let mut path_env_var =
-                std::ffi::OsString::with_capacity(path.as_os_str().len() + 1 + existing_path.len());
-            path_env_var.push(path);
-            path_env_var.push(PATH_SEPARATOR);
-            path_env_var.push(existing_path);
-            path_env_var
-        }
-        None => path.as_os_str().to_owned(),
-    };
+    let updated_path_env_var =
+        path_env_with_codex_entries(path, InstallContext::current(), std::env::var_os("PATH"));
 
     unsafe {
         std::env::set_var("PATH", updated_path_env_var);
@@ -418,6 +406,39 @@ pub fn prepend_path_entry_for_codex_aliases() -> std::io::Result<Arg0PathEntryGu
     };
 
     Ok(Arg0PathEntryGuard::new(temp_dir, lock_file, paths))
+}
+
+fn path_env_with_codex_entries(
+    arg0_dir: &Path,
+    install_context: &InstallContext,
+    existing_path: Option<OsString>,
+) -> OsString {
+    #[cfg(unix)]
+    const PATH_SEPARATOR: &str = ":";
+
+    #[cfg(windows)]
+    const PATH_SEPARATOR: &str = ";";
+
+    let package_path_dir = install_context
+        .package_layout
+        .as_ref()
+        .and_then(|package_layout| package_layout.path_dir.as_ref());
+    let capacity = arg0_dir.as_os_str().len()
+        + package_path_dir.map_or(0, |path_dir| 1 + path_dir.as_os_str().len())
+        + existing_path
+            .as_ref()
+            .map_or(0, |existing_path| 1 + existing_path.len());
+    let mut path_env_var = OsString::with_capacity(capacity);
+    path_env_var.push(arg0_dir);
+    if let Some(path_dir) = package_path_dir {
+        path_env_var.push(PATH_SEPARATOR);
+        path_env_var.push(path_dir.as_path());
+    }
+    if let Some(existing_path) = existing_path {
+        path_env_var.push(PATH_SEPARATOR);
+        path_env_var.push(existing_path);
+    }
+    path_env_var
 }
 
 fn janitor_cleanup(temp_root: &Path) -> std::io::Result<()> {
@@ -475,6 +496,11 @@ mod tests {
     use super::run_main_with_arg0_guard;
     #[cfg(unix)]
     use anyhow::ensure;
+    use codex_install_context::CodexPackageLayout;
+    use codex_install_context::InstallContext;
+    use codex_install_context::InstallMethod;
+    use codex_utils_absolute_path::AbsolutePathBuf;
+    use pretty_assertions::assert_eq;
     use std::fs;
     use std::fs::File;
     use std::path::Path;
@@ -509,6 +535,42 @@ mod tests {
         assert_eq!(
             linux_sandbox_exe_path(Some(&path_entry), Some(PathBuf::from("/usr/bin/codex"))),
             Some(alias_path),
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn path_env_includes_arg0_dir_package_path_dir_and_existing_path() -> anyhow::Result<()> {
+        let temp_dir = TempDir::new()?;
+        let arg0_dir = temp_dir.path().join("arg0");
+        let package_dir = temp_dir.path().join("package");
+        let bin_dir = package_dir.join("bin");
+        let path_dir = package_dir.join("codex-path");
+        let existing_dir = temp_dir.path().join("existing-bin");
+        fs::create_dir_all(&arg0_dir)?;
+        fs::create_dir_all(&bin_dir)?;
+        fs::create_dir_all(&path_dir)?;
+        fs::create_dir_all(&existing_dir)?;
+        let path_dir = AbsolutePathBuf::from_absolute_path(path_dir.canonicalize()?)?;
+        let install_context = InstallContext {
+            method: InstallMethod::Other,
+            package_layout: Some(CodexPackageLayout {
+                package_dir: AbsolutePathBuf::from_absolute_path(package_dir.canonicalize()?)?,
+                bin_dir: AbsolutePathBuf::from_absolute_path(bin_dir.canonicalize()?)?,
+                resources_dir: None,
+                path_dir: Some(path_dir.clone()),
+            }),
+        };
+
+        let updated_path = super::path_env_with_codex_entries(
+            &arg0_dir,
+            &install_context,
+            Some(existing_dir.as_os_str().to_owned()),
+        );
+
+        assert_eq!(
+            std::env::split_paths(&updated_path).collect::<Vec<_>>(),
+            vec![arg0_dir, path_dir.as_path().to_path_buf(), existing_dir,],
         );
         Ok(())
     }
