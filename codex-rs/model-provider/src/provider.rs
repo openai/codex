@@ -51,7 +51,6 @@ pub struct ProviderAccountState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderAccountError {
     MissingChatgptAccountDetails,
-    MissingChatgptPlanType,
 }
 
 impl fmt::Display for ProviderAccountError {
@@ -62,9 +61,6 @@ impl fmt::Display for ProviderAccountError {
                     f,
                     "email and plan type are required for chatgpt authentication"
                 )
-            }
-            Self::MissingChatgptPlanType => {
-                write!(f, "plan type is required for chatgpt authentication")
             }
         }
     }
@@ -216,26 +212,17 @@ impl ModelProvider for ConfiguredModelProvider {
                     CodexAuth::ApiKey(_) => Ok(ProviderAccount::ApiKey),
                     CodexAuth::Chatgpt(_)
                     | CodexAuth::ChatgptAuthTokens(_)
-                    | CodexAuth::AgentIdentity(_) => {
+                    | CodexAuth::AgentIdentity(_)
+                    | CodexAuth::PersonalAccessToken(_) => {
                         let email = auth.get_account_email();
                         let plan_type = auth.account_plan_type();
 
                         match (email, plan_type) {
-                            (Some(email), Some(plan_type)) => Ok(ProviderAccount::Chatgpt {
-                                email: Some(email),
-                                plan_type,
-                            }),
+                            (Some(email), Some(plan_type)) => {
+                                Ok(ProviderAccount::Chatgpt { email, plan_type })
+                            }
                             _ => Err(ProviderAccountError::MissingChatgptAccountDetails),
                         }
-                    }
-                    CodexAuth::PersonalAccessToken(_) => {
-                        let plan_type = auth
-                            .account_plan_type()
-                            .ok_or(ProviderAccountError::MissingChatgptPlanType)?;
-                        Ok(ProviderAccount::Chatgpt {
-                            email: auth.get_account_email(),
-                            plan_type,
-                        })
                     }
                 })
                 .transpose()?

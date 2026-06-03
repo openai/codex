@@ -138,10 +138,8 @@ async fn login_with_access_token_writes_only_personal_access_token() {
         .and(path("/v1/user-auth-credential/whoami"))
         .and(header("authorization", "Bearer at-login-test"))
         .respond_with(
-            ResponseTemplate::new(200).set_body_json(personal_access_token_whoami(
-                WORKSPACE_ID_ALLOWED,
-                /*email*/ None,
-            )),
+            ResponseTemplate::new(200)
+                .set_body_json(personal_access_token_whoami(WORKSPACE_ID_ALLOWED)),
         )
         .expect(1)
         .mount(&server)
@@ -186,10 +184,8 @@ async fn login_with_access_token_rejects_personal_access_token_workspace_mismatc
         .and(path("/v1/user-auth-credential/whoami"))
         .and(header("authorization", "Bearer at-workspace-mismatch"))
         .respond_with(
-            ResponseTemplate::new(200).set_body_json(personal_access_token_whoami(
-                WORKSPACE_ID_DISALLOWED,
-                /*email*/ None,
-            )),
+            ResponseTemplate::new(200)
+                .set_body_json(personal_access_token_whoami(WORKSPACE_ID_DISALLOWED)),
         )
         .expect(1)
         .mount(&server)
@@ -895,10 +891,8 @@ async fn load_auth_reads_personal_access_token_from_env() {
         .and(path("/v1/user-auth-credential/whoami"))
         .and(header("authorization", "Bearer at-env-test"))
         .respond_with(
-            ResponseTemplate::new(200).set_body_json(personal_access_token_whoami(
-                WORKSPACE_ID_ALLOWED,
-                /*email*/ None,
-            )),
+            ResponseTemplate::new(200)
+                .set_body_json(personal_access_token_whoami(WORKSPACE_ID_ALLOWED)),
         )
         .expect(2)
         .mount(&server)
@@ -928,7 +922,10 @@ async fn load_auth_reads_personal_access_token_from_env() {
         );
         assert_eq!(auth.get_account_id().as_deref(), Some(WORKSPACE_ID_ALLOWED));
         assert_eq!(auth.get_chatgpt_user_id().as_deref(), Some("user-123"));
-        assert_eq!(auth.get_account_email(), None);
+        assert_eq!(
+            auth.get_account_email().as_deref(),
+            Some("user@example.com")
+        );
         assert_eq!(auth.account_plan_type(), Some(AccountPlanType::Business));
         assert!(auth.is_fedramp_account());
     }
@@ -947,10 +944,8 @@ async fn enforce_login_restrictions_logs_out_for_personal_access_token_workspace
     Mock::given(method("GET"))
         .and(path("/v1/user-auth-credential/whoami"))
         .respond_with(
-            ResponseTemplate::new(200).set_body_json(personal_access_token_whoami(
-                WORKSPACE_ID_DISALLOWED,
-                /*email*/ None,
-            )),
+            ResponseTemplate::new(200)
+                .set_body_json(personal_access_token_whoami(WORKSPACE_ID_DISALLOWED)),
         )
         .expect(2)
         .mount(&server)
@@ -996,10 +991,8 @@ async fn personal_access_token_does_not_offer_unauthorized_recovery() {
     Mock::given(method("GET"))
         .and(path("/v1/user-auth-credential/whoami"))
         .respond_with(
-            ResponseTemplate::new(200).set_body_json(personal_access_token_whoami(
-                WORKSPACE_ID_ALLOWED,
-                /*email*/ None,
-            )),
+            ResponseTemplate::new(200)
+                .set_body_json(personal_access_token_whoami(WORKSPACE_ID_ALLOWED)),
         )
         .expect(1)
         .mount(&server)
@@ -1358,9 +1351,9 @@ fn test_jwks_body() -> serde_json::Value {
     })
 }
 
-fn personal_access_token_whoami(account_id: &str, email: Option<&str>) -> serde_json::Value {
+fn personal_access_token_whoami(account_id: &str) -> serde_json::Value {
     json!({
-        "email": email,
+        "email": "user@example.com",
         "chatgpt_user_id": "user-123",
         "chatgpt_account_id": account_id,
         "chatgpt_plan_type": "business",

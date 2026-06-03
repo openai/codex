@@ -1,5 +1,0 @@
----
-source: tui/src/status/tests.rs
-expression: account_line
----
-│  Account:       Business                                                 │

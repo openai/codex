@@ -405,7 +405,7 @@ impl CodexAuth {
     pub fn get_account_email(&self) -> Option<String> {
         match self {
             Self::AgentIdentity(auth) => Some(auth.email().to_string()),
-            Self::PersonalAccessToken(auth) => auth.email().map(str::to_string),
+            Self::PersonalAccessToken(auth) => Some(auth.email().to_string()),
             _ => self.get_current_token_data().and_then(|t| t.id_token.email),
         }
     }

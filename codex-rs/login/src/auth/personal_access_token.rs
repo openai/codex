@@ -14,7 +14,7 @@ const WHOAMI_PATH: &str = "/v1/user-auth-credential/whoami";
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 struct PersonalAccessTokenMetadata {
-    email: Option<String>,
+    email: String,
     chatgpt_user_id: String,
     chatgpt_account_id: String,
     chatgpt_plan_type: String,
@@ -58,8 +58,8 @@ impl PersonalAccessTokenAuth {
         &self.metadata.chatgpt_user_id
     }
 
-    pub fn email(&self) -> Option<&str> {
-        self.metadata.email.as_deref()
+    pub fn email(&self) -> &str {
+        &self.metadata.email
     }
 
     pub fn plan_type(&self) -> AccountPlanType {
