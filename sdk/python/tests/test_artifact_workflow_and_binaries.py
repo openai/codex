@@ -262,11 +262,12 @@ def test_schema_normalization_only_flattens_string_literal_oneofs(
         "MessagePhase",
         "TurnItemsView",
         "AuthMode",
+        "PluginAvailability",
         "InputModality",
         "ExperimentalFeatureStage",
-        "AutoCompactTokenLimitScope",
-        "CommandExecOutputStream",
         "ProcessOutputStream",
+        "CommandExecOutputStream",
+        "AutoCompactTokenLimitScope",
     ]
 
 
