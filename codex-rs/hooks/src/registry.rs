@@ -5,6 +5,7 @@ use tokio::process::Command;
 use crate::engine::ClaudeHooksEngine;
 use crate::engine::CommandShell;
 use crate::engine::HookListEntry;
+use crate::engine::PromptHookRunner;
 use crate::events::compact::PostCompactRequest;
 use crate::events::compact::PreCompactOutcome;
 use crate::events::compact::PreCompactRequest;
@@ -36,6 +37,7 @@ pub struct HooksConfig {
     pub plugin_hook_load_warnings: Vec<String>,
     pub shell_program: Option<String>,
     pub shell_args: Vec<String>,
+    pub prompt_hook_runner: Option<PromptHookRunner>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -74,6 +76,7 @@ impl Hooks {
                 program: config.shell_program.unwrap_or_default(),
                 args: config.shell_args,
             },
+            config.prompt_hook_runner,
         );
         Self {
             after_agent,

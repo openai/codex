@@ -1,3 +1,4 @@
+use codex_protocol::protocol::HookEventName;
 use schemars::JsonSchema;
 use schemars::r#gen::SchemaGenerator;
 use schemars::r#gen::SchemaSettings;
@@ -117,6 +118,24 @@ pub(crate) enum HookEventNameWire {
     SubagentStop,
     #[serde(rename = "Stop")]
     Stop,
+}
+
+/// Wire spelling for hook event names as they appear in hook config, schema
+/// fixtures, and user-visible hook warnings. Keep this beside
+/// `HookEventNameWire` so schema and display labels change together.
+pub(crate) fn hook_event_wire_name(event_name: HookEventName) -> &'static str {
+    match event_name {
+        HookEventName::PreToolUse => "PreToolUse",
+        HookEventName::PermissionRequest => "PermissionRequest",
+        HookEventName::PostToolUse => "PostToolUse",
+        HookEventName::PreCompact => "PreCompact",
+        HookEventName::PostCompact => "PostCompact",
+        HookEventName::SessionStart => "SessionStart",
+        HookEventName::UserPromptSubmit => "UserPromptSubmit",
+        HookEventName::SubagentStart => "SubagentStart",
+        HookEventName::SubagentStop => "SubagentStop",
+        HookEventName::Stop => "Stop",
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

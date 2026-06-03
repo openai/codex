@@ -10,6 +10,7 @@ use tracing::Span;
 
 use super::CommandShell;
 use super::ConfiguredHandler;
+use super::ConfiguredHandlerKind;
 use super::dispatcher::hook_event_name_label;
 use super::dispatcher::hook_execution_mode_label;
 use super::dispatcher::hook_handler_type_label;
@@ -42,7 +43,7 @@ pub(crate) struct CommandRunResult {
         hook.source = hook_source_label(handler.source),
         hook.display_order = handler.display_order,
         hook.configured_order = configured_order,
-        hook.timeout_sec = handler.timeout_sec,
+        hook.timeout_sec = handler.timeout_sec(),
         hook.command_outcome = tracing::field::Empty,
     )
 )]
@@ -98,7 +99,7 @@ pub(crate) async fn run_command(
         );
     }
 
-    let timeout_duration = Duration::from_secs(handler.timeout_sec);
+    let timeout_duration = Duration::from_secs(handler.timeout_sec());
     match timeout(timeout_duration, child.wait_with_output()).await {
         Ok(Ok(output)) => finish_command_run(
             started_at,
@@ -129,7 +130,7 @@ pub(crate) async fn run_command(
                 exit_code: None,
                 stdout: String::new(),
                 stderr: String::new(),
-                error: Some(format!("hook timed out after {}s", handler.timeout_sec)),
+                error: Some(format!("hook timed out after {}s", handler.timeout_sec())),
                 outcome: "timeout",
             },
         ),
@@ -162,16 +163,23 @@ fn finish_command_run(
 }
 
 fn build_command(shell: &CommandShell, handler: &ConfiguredHandler) -> Command {
+    let ConfiguredHandlerKind::Command {
+        command: command_text,
+        ..
+    } = &handler.kind
+    else {
+        panic!("prompt handler cannot run as a command hook");
+    };
     let mut command = if shell.program.is_empty() {
         default_shell_command()
     } else {
         Command::new(&shell.program)
     };
     if shell.program.is_empty() {
-        command.arg(&handler.command);
+        command.arg(command_text);
     } else {
         command.args(&shell.args);
-        command.arg(&handler.command);
+        command.arg(command_text);
     }
     command.envs(&handler.env);
     command

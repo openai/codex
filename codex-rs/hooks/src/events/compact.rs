@@ -103,11 +103,15 @@ pub(crate) async fn run_pre(
     };
 
     let results = dispatcher::execute_handlers(
-        shell,
         matched,
         input_json,
-        request.cwd.as_path(),
-        Some(request.turn_id),
+        dispatcher::HandlerExecutionContext {
+            shell,
+            prompt_runner: None,
+            cwd: request.cwd.as_path(),
+            default_model: request.model.clone(),
+            turn_id: Some(request.turn_id.clone()),
+        },
         parse_pre_completed,
     )
     .await;
@@ -185,11 +189,15 @@ pub(crate) async fn run_post(
     };
 
     let results = dispatcher::execute_handlers(
-        shell,
         matched,
         input_json,
-        request.cwd.as_path(),
-        Some(request.turn_id),
+        dispatcher::HandlerExecutionContext {
+            shell,
+            prompt_runner: None,
+            cwd: request.cwd.as_path(),
+            default_model: request.model.clone(),
+            turn_id: Some(request.turn_id.clone()),
+        },
         parse_post_completed,
     )
     .await;
@@ -432,6 +440,7 @@ mod tests {
     use super::post_command_input_json;
     use super::pre_command_input_json;
     use crate::engine::ConfiguredHandler;
+    use crate::engine::ConfiguredHandlerKind;
     use crate::engine::command_runner::CommandRunResult;
 
     #[test]
@@ -597,8 +606,10 @@ mod tests {
         ConfiguredHandler {
             event_name,
             matcher: None,
-            command: "python3 compact_hook.py".to_string(),
-            timeout_sec: 5,
+            kind: ConfiguredHandlerKind::Command {
+                command: "python3 compact_hook.py".to_string(),
+                timeout_sec: 5,
+            },
             status_message: Some("running compact hook".to_string()),
             source_path: test_path_buf("/tmp/hooks.json").abs(),
             source: codex_protocol::protocol::HookSource::User,
