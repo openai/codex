@@ -702,6 +702,9 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
         codex_thread_store::LocalThreadStoreConfig::from_config(&config),
         /*state_db*/ None,
     ));
+    let shell_snapshot_store = Arc::new(
+        crate::shell_snapshot::LocalShellSnapshotStore::from_codex_home(&config.codex_home),
+    );
 
     let CodexSpawnOk { codex, .. } = Codex::spawn(CodexSpawnArgs {
         config,
@@ -733,6 +736,7 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
         },
         analytics_events_client: None,
         thread_store,
+        shell_snapshot_store,
         attestation_provider: None,
         inherited_multi_agent_version: None,
     })

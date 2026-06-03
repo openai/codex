@@ -1,5 +1,7 @@
+use std::future::Future;
 use std::io::ErrorKind;
 use std::path::Path;
+use std::pin::Pin;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
@@ -35,9 +37,144 @@ const SNAPSHOT_RETENTION: Duration = Duration::from_secs(60 * 60 * 24 * 3); // 3
 const SNAPSHOT_DIR: &str = "shell_snapshots";
 const EXCLUDED_EXPORT_VARS: &[&str] = &["PWD", "OLDPWD"];
 
+/// Persists executor-local shell snapshot files and owns retention cleanup.
+/// Implementations must return local readable paths because shell execution sources snapshots.
+pub trait ShellSnapshotStore: Send + Sync + 'static {
+    /// Allocates the final and temporary paths for one snapshot generation.
+    fn snapshot_paths(&self, session_id: ThreadId, shell_type: ShellType) -> ShellSnapshotPaths;
+
+    /// Removes stale inactive snapshots according to the store's retention policy.
+    fn cleanup_stale_snapshots(
+        &self,
+        active_session_id: ThreadId,
+        state_db: Option<StateDbHandle>,
+    ) -> ShellSnapshotStoreFuture<'_>;
+}
+
+/// Future returned by shell snapshot store cleanup work.
+pub type ShellSnapshotStoreFuture<'a> = Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>>;
+
+#[derive(Clone)]
+/// Codex Home backed executor-local shell snapshot store.
+pub struct LocalShellSnapshotStore {
+    codex_home: AbsolutePathBuf,
+}
+
+impl LocalShellSnapshotStore {
+    /// Constructs a local shell snapshot store rooted at one Codex Home.
+    pub fn from_codex_home(codex_home: &AbsolutePathBuf) -> Self {
+        Self {
+            codex_home: codex_home.clone(),
+        }
+    }
+
+    fn snapshot_dir(&self) -> AbsolutePathBuf {
+        self.codex_home.join(SNAPSHOT_DIR)
+    }
+
+    async fn cleanup_stale_snapshots_impl(
+        &self,
+        active_session_id: ThreadId,
+        state_db: Option<StateDbHandle>,
+    ) -> Result<()> {
+        let snapshot_dir = self.snapshot_dir();
+
+        let mut entries = match fs::read_dir(&snapshot_dir).await {
+            Ok(entries) => entries,
+            Err(err) if err.kind() == ErrorKind::NotFound => return Ok(()),
+            Err(err) => return Err(err.into()),
+        };
+
+        let now = SystemTime::now();
+        let active_session_id = active_session_id.to_string();
+
+        while let Some(entry) = entries.next_entry().await? {
+            if !entry.file_type().await?.is_file() {
+                continue;
+            }
+
+            let path = entry.path();
+
+            let file_name = entry.file_name();
+            let file_name = file_name.to_string_lossy();
+            let Some(session_id) = snapshot_session_id_from_file_name(&file_name) else {
+                remove_snapshot_file(&path).await;
+                continue;
+            };
+            if session_id == active_session_id {
+                continue;
+            }
+
+            let rollout_path =
+                find_thread_path_by_id_str(&self.codex_home, session_id, state_db.as_deref())
+                    .await?;
+            let Some(rollout_path) = rollout_path else {
+                remove_snapshot_file(&path).await;
+                continue;
+            };
+
+            let modified = match fs::metadata(&rollout_path).await.and_then(|m| m.modified()) {
+                Ok(modified) => modified,
+                Err(err) => {
+                    tracing::warn!(
+                        "Failed to check rollout age for snapshot {}: {err:?}",
+                        path.display()
+                    );
+                    continue;
+                }
+            };
+
+            if now
+                .duration_since(modified)
+                .ok()
+                .is_some_and(|age| age >= SNAPSHOT_RETENTION)
+            {
+                remove_snapshot_file(&path).await;
+            }
+        }
+
+        Ok(())
+    }
+}
+
+impl ShellSnapshotStore for LocalShellSnapshotStore {
+    fn snapshot_paths(&self, session_id: ThreadId, shell_type: ShellType) -> ShellSnapshotPaths {
+        let extension = match shell_type {
+            ShellType::PowerShell => "ps1",
+            _ => "sh",
+        };
+        let nonce = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let snapshot_dir = self.snapshot_dir();
+
+        ShellSnapshotPaths {
+            path: snapshot_dir.join(format!("{session_id}.{nonce}.{extension}")),
+            temp_path: snapshot_dir.join(format!("{session_id}.tmp-{nonce}")),
+        }
+    }
+
+    fn cleanup_stale_snapshots(
+        &self,
+        active_session_id: ThreadId,
+        state_db: Option<StateDbHandle>,
+    ) -> ShellSnapshotStoreFuture<'_> {
+        Box::pin(self.cleanup_stale_snapshots_impl(active_session_id, state_db))
+    }
+}
+
+/// Final and temporary local paths for one shell snapshot generation.
+pub struct ShellSnapshotPaths {
+    /// Final path sourced by later shell execution.
+    pub path: AbsolutePathBuf,
+    /// Temporary path populated before validation and rename.
+    pub temp_path: AbsolutePathBuf,
+}
+
 impl ShellSnapshot {
-    pub fn start_snapshotting(
-        codex_home: AbsolutePathBuf,
+    pub(crate) fn start_snapshotting(
+        shell_snapshot_store: Arc<dyn ShellSnapshotStore>,
         session_id: ThreadId,
         session_cwd: AbsolutePathBuf,
         shell: &mut Shell,
@@ -48,7 +185,7 @@ impl ShellSnapshot {
         shell.shell_snapshot = shell_snapshot_rx;
 
         Self::spawn_snapshot_task(
-            codex_home,
+            shell_snapshot_store,
             session_id,
             session_cwd,
             shell.clone(),
@@ -60,8 +197,8 @@ impl ShellSnapshot {
         shell_snapshot_tx
     }
 
-    pub fn refresh_snapshot(
-        codex_home: AbsolutePathBuf,
+    pub(crate) fn refresh_snapshot(
+        shell_snapshot_store: Arc<dyn ShellSnapshotStore>,
         session_id: ThreadId,
         session_cwd: AbsolutePathBuf,
         shell: Shell,
@@ -70,7 +207,7 @@ impl ShellSnapshot {
         state_db: Option<StateDbHandle>,
     ) {
         Self::spawn_snapshot_task(
-            codex_home,
+            shell_snapshot_store,
             session_id,
             session_cwd,
             shell,
@@ -81,7 +218,7 @@ impl ShellSnapshot {
     }
 
     fn spawn_snapshot_task(
-        codex_home: AbsolutePathBuf,
+        shell_snapshot_store: Arc<dyn ShellSnapshotStore>,
         session_id: ThreadId,
         session_cwd: AbsolutePathBuf,
         snapshot_shell: Shell,
@@ -92,13 +229,24 @@ impl ShellSnapshot {
         let snapshot_span = info_span!("shell_snapshot", thread_id = %session_id);
         tokio::spawn(
             async move {
+                let cleanup_shell_snapshot_store = Arc::clone(&shell_snapshot_store);
+                let cleanup_session_id = session_id;
+                let cleanup_state_db = state_db.clone();
+                tokio::spawn(async move {
+                    if let Err(err) = cleanup_shell_snapshot_store
+                        .cleanup_stale_snapshots(cleanup_session_id, cleanup_state_db)
+                        .await
+                    {
+                        tracing::warn!("Failed to clean up shell snapshots: {err:?}");
+                    }
+                });
+
                 let timer = session_telemetry.start_timer("codex.shell_snapshot.duration_ms", &[]);
                 let snapshot = ShellSnapshot::try_new(
-                    &codex_home,
+                    shell_snapshot_store.as_ref(),
                     session_id,
                     &session_cwd,
                     &snapshot_shell,
-                    state_db,
                 )
                 .await
                 .map(Arc::new);
@@ -117,38 +265,13 @@ impl ShellSnapshot {
     }
 
     async fn try_new(
-        codex_home: &AbsolutePathBuf,
+        shell_snapshot_store: &dyn ShellSnapshotStore,
         session_id: ThreadId,
         session_cwd: &AbsolutePathBuf,
         shell: &Shell,
-        state_db: Option<StateDbHandle>,
     ) -> std::result::Result<Self, &'static str> {
-        // File to store the snapshot
-        let extension = match shell.shell_type {
-            ShellType::PowerShell => "ps1",
-            _ => "sh",
-        };
-        let nonce = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .map(|duration| duration.as_nanos())
-            .unwrap_or(0);
-        let path = codex_home
-            .join(SNAPSHOT_DIR)
-            .join(format!("{session_id}.{nonce}.{extension}"));
-        let temp_path = codex_home
-            .join(SNAPSHOT_DIR)
-            .join(format!("{session_id}.tmp-{nonce}"));
-
-        // Clean the (unlikely) leaked snapshot files.
-        let codex_home = codex_home.clone();
-        let cleanup_session_id = session_id;
-        tokio::spawn(async move {
-            if let Err(err) =
-                cleanup_stale_snapshots(&codex_home, cleanup_session_id, state_db).await
-            {
-                tracing::warn!("Failed to clean up shell snapshots: {err:?}");
-            }
-        });
+        let ShellSnapshotPaths { path, temp_path } =
+            shell_snapshot_store.snapshot_paths(session_id, shell.shell_type.clone());
 
         // Make the new snapshot.
         if let Err(err) =
@@ -492,72 +615,6 @@ $envVars | ForEach-Object {
     "`$env:{0}='{1}'" -f $_.Name, $escaped
 }
 "##
-}
-
-/// Removes shell snapshots that either lack a matching session rollout file or
-/// whose rollouts have not been updated within the retention window.
-/// The active session id is exempt from cleanup.
-pub async fn cleanup_stale_snapshots(
-    codex_home: &AbsolutePathBuf,
-    active_session_id: ThreadId,
-    state_db: Option<StateDbHandle>,
-) -> Result<()> {
-    let snapshot_dir = codex_home.join(SNAPSHOT_DIR);
-
-    let mut entries = match fs::read_dir(&snapshot_dir).await {
-        Ok(entries) => entries,
-        Err(err) if err.kind() == ErrorKind::NotFound => return Ok(()),
-        Err(err) => return Err(err.into()),
-    };
-
-    let now = SystemTime::now();
-    let active_session_id = active_session_id.to_string();
-
-    while let Some(entry) = entries.next_entry().await? {
-        if !entry.file_type().await?.is_file() {
-            continue;
-        }
-
-        let path = entry.path();
-
-        let file_name = entry.file_name();
-        let file_name = file_name.to_string_lossy();
-        let Some(session_id) = snapshot_session_id_from_file_name(&file_name) else {
-            remove_snapshot_file(&path).await;
-            continue;
-        };
-        if session_id == active_session_id {
-            continue;
-        }
-
-        let rollout_path =
-            find_thread_path_by_id_str(codex_home, session_id, state_db.as_deref()).await?;
-        let Some(rollout_path) = rollout_path else {
-            remove_snapshot_file(&path).await;
-            continue;
-        };
-
-        let modified = match fs::metadata(&rollout_path).await.and_then(|m| m.modified()) {
-            Ok(modified) => modified,
-            Err(err) => {
-                tracing::warn!(
-                    "Failed to check rollout age for snapshot {}: {err:?}",
-                    path.display()
-                );
-                continue;
-            }
-        };
-
-        if now
-            .duration_since(modified)
-            .ok()
-            .is_some_and(|age| age >= SNAPSHOT_RETENTION)
-        {
-            remove_snapshot_file(&path).await;
-        }
-    }
-
-    Ok(())
 }
 
 async fn remove_snapshot_file(path: &Path) {
