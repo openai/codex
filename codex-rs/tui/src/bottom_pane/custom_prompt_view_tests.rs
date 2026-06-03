@@ -35,6 +35,32 @@ fn paste_burst_newline_does_not_submit_short_first_line() {
 }
 
 #[test]
+fn paste_burst_newline_after_tab_does_not_submit() {
+    let (mut view, submitted_rx) = custom_prompt_view("");
+    let now = Instant::now();
+    let mut ms = 0;
+
+    view.handle_key_event_at(KeyEvent::from(KeyCode::Char('x')), now + elapsed(ms));
+    ms += 1;
+    view.handle_key_event_at(KeyEvent::from(KeyCode::Tab), now + elapsed(ms));
+    ms += 1;
+    view.handle_key_event_at(KeyEvent::from(KeyCode::Enter), now + elapsed(ms));
+    ms += 1;
+    for ch in "rest".chars() {
+        view.handle_key_event_at(KeyEvent::from(KeyCode::Char(ch)), now + elapsed(ms));
+        ms += 1;
+    }
+
+    assert!(submitted_rx.try_recv().is_err());
+    assert!(!view.is_complete());
+
+    view.handle_key_event_at(KeyEvent::from(KeyCode::Enter), now + elapsed(/*ms*/ 200));
+
+    assert_eq!(submitted_rx.try_recv(), Ok("x\nrest".to_string()));
+    assert!(view.is_complete());
+}
+
+#[test]
 fn delayed_enter_after_typing_submits() {
     let (mut view, submitted_rx) = custom_prompt_view("");
     let now = Instant::now();

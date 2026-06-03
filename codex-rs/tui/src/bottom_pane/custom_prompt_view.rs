@@ -118,6 +118,22 @@ impl CustomPromptView {
                     self.paste_burst.extend_window(now);
                 }
             }
+            KeyEvent {
+                code: KeyCode::Tab,
+                modifiers,
+                ..
+            } if !has_ctrl_or_alt(modifiers) && self.textarea.allows_paste_burst() => {
+                let in_paste_burst = self
+                    .paste_burst
+                    .newline_should_insert_instead_of_submit(now)
+                    || self
+                        .paste_burst
+                        .recent_plain_char_was_within_burst_interval(now);
+                self.textarea.input(key_event);
+                if in_paste_burst {
+                    self.paste_burst.extend_window(now);
+                }
+            }
             other => {
                 self.textarea.input(other);
                 self.paste_burst.clear_after_explicit_paste();
