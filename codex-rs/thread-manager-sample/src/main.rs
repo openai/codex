@@ -181,6 +181,8 @@ fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::R
         explicit_permission_profile_mode: false,
         custom_permission_profiles: Vec::new(),
         approvals_reviewer: ApprovalsReviewer::User,
+        app_approvals_reviewers: BTreeMap::new(),
+        configured_app_approvals_reviewers: BTreeMap::new(),
         enforce_residency: Constrained::allow_any(/*initial_value*/ None),
         hide_agent_reasoning: false,
         show_raw_agent_reasoning: false,

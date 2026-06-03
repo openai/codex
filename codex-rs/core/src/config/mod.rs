@@ -638,7 +638,7 @@ pub struct Config {
 
     /// Configured app reviewer values used to recompute effective overrides
     /// when the thread-level reviewer changes.
-    configured_app_approvals_reviewers: BTreeMap<String, ApprovalsReviewer>,
+    pub configured_app_approvals_reviewers: BTreeMap<String, ApprovalsReviewer>,
 
     /// enforce_residency means web traffic cannot be routed outside of a
     /// particular geography. HTTP clients should direct their requests
