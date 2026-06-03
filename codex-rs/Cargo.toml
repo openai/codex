@@ -485,6 +485,7 @@ unwrap_used = "deny"
 ignored = [
     "codex-agent-graph-store",
     "codex-goal-extension",
+    "codex-process", # Registered before callers migrate to spawn_managed().
     "icu_provider",
     "openssl-sys",
     "codex-v8-poc",
