@@ -26,10 +26,10 @@ use crate::request_processors::ExternalAgentConfigRequestProcessor;
 use crate::request_processors::FeedbackRequestProcessor;
 use crate::request_processors::FsRequestProcessor;
 use crate::request_processors::GitRequestProcessor;
+use crate::request_processors::HttpStateRequestProcessor;
 use crate::request_processors::InitializeRequestProcessor;
 use crate::request_processors::MarketplaceRequestProcessor;
 use crate::request_processors::McpRequestProcessor;
-use crate::request_processors::NativeIntegrityStateRequestProcessor;
 use crate::request_processors::PluginRequestProcessor;
 use crate::request_processors::ProcessExecRequestProcessor;
 use crate::request_processors::RemoteControlRequestProcessor;
@@ -177,7 +177,7 @@ pub(crate) struct MessageProcessor {
     initialize_processor: InitializeRequestProcessor,
     marketplace_processor: MarketplaceRequestProcessor,
     mcp_processor: McpRequestProcessor,
-    native_integrity_state_processor: NativeIntegrityStateRequestProcessor,
+    http_state_processor: HttpStateRequestProcessor,
     plugin_processor: PluginRequestProcessor,
     remote_control_processor: RemoteControlRequestProcessor,
     search_processor: SearchRequestProcessor,
@@ -402,8 +402,7 @@ impl MessageProcessor {
             outgoing.clone(),
             config_manager.clone(),
         );
-        let native_integrity_state_processor =
-            NativeIntegrityStateRequestProcessor::new(config.codex_home.to_path_buf());
+        let http_state_processor = HttpStateRequestProcessor::new(config.codex_home.to_path_buf());
         let plugin_processor = PluginRequestProcessor::new(
             auth_manager.clone(),
             Arc::clone(&thread_manager),
@@ -507,7 +506,7 @@ impl MessageProcessor {
             initialize_processor,
             marketplace_processor,
             mcp_processor,
-            native_integrity_state_processor,
+            http_state_processor,
             plugin_processor,
             remote_control_processor,
             search_processor,
@@ -937,16 +936,16 @@ impl MessageProcessor {
                 .clients_revoke(params)
                 .await
                 .map(|response| Some(response.into())),
-            ClientRequest::NativeIntegrityStateRead { .. } => self
-                .native_integrity_state_processor
-                .read(app_server_client_name.as_deref())
+            ClientRequest::HttpStateGet { .. } => self
+                .http_state_processor
+                .get(app_server_client_name.as_deref())
                 .map(|response| Some(response.into())),
-            ClientRequest::NativeIntegrityStateWrite { params, .. } => self
-                .native_integrity_state_processor
-                .write(app_server_client_name.as_deref(), params)
+            ClientRequest::HttpStateSet { params, .. } => self
+                .http_state_processor
+                .set(app_server_client_name.as_deref(), params)
                 .map(|response| Some(response.into())),
-            ClientRequest::NativeIntegrityStateClear { .. } => self
-                .native_integrity_state_processor
+            ClientRequest::HttpStateClear { .. } => self
+                .http_state_processor
                 .clear(app_server_client_name.as_deref())
                 .map(|response| Some(response.into())),
             ClientRequest::ConfigRequirementsRead { params: _, .. } => self

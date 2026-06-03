@@ -1083,6 +1083,24 @@
       },
       "type": "object"
     },
+    "HttpStateSetParams": {
+      "properties": {
+        "expectedState": {
+          "description": "When present, write only if the calling surface still stores this state.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "state": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "state"
+      ],
+      "type": "object"
+    },
     "ImageDetail": {
       "enum": [
         "auto",
@@ -1579,24 +1597,6 @@
       "type": "object"
     },
     "ModelProviderCapabilitiesReadParams": {
-      "type": "object"
-    },
-    "NativeIntegrityStateWriteParams": {
-      "properties": {
-        "expectedState": {
-          "description": "When present, write only if the calling surface still stores this state.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "state": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "state"
-      ],
       "type": "object"
     },
     "NetworkAccess": {
@@ -5686,9 +5686,9 @@
         },
         "method": {
           "enum": [
-            "nativeIntegrityState/read"
+            "httpState/get"
           ],
-          "title": "NativeIntegrityState/readRequestMethod",
+          "title": "HttpState/getRequestMethod",
           "type": "string"
         },
         "params": {
@@ -5699,7 +5699,7 @@
         "id",
         "method"
       ],
-      "title": "NativeIntegrityState/readRequest",
+      "title": "HttpState/getRequest",
       "type": "object"
     },
     {
@@ -5709,13 +5709,13 @@
         },
         "method": {
           "enum": [
-            "nativeIntegrityState/write"
+            "httpState/set"
           ],
-          "title": "NativeIntegrityState/writeRequestMethod",
+          "title": "HttpState/setRequestMethod",
           "type": "string"
         },
         "params": {
-          "$ref": "#/definitions/NativeIntegrityStateWriteParams"
+          "$ref": "#/definitions/HttpStateSetParams"
         }
       },
       "required": [
@@ -5723,7 +5723,7 @@
         "method",
         "params"
       ],
-      "title": "NativeIntegrityState/writeRequest",
+      "title": "HttpState/setRequest",
       "type": "object"
     },
     {
@@ -5733,9 +5733,9 @@
         },
         "method": {
           "enum": [
-            "nativeIntegrityState/clear"
+            "httpState/clear"
           ],
-          "title": "NativeIntegrityState/clearRequestMethod",
+          "title": "HttpState/clearRequestMethod",
           "type": "string"
         },
         "params": {
@@ -5746,7 +5746,7 @@
         "id",
         "method"
       ],
-      "title": "NativeIntegrityState/clearRequest",
+      "title": "HttpState/clearRequest",
       "type": "object"
     },
     {

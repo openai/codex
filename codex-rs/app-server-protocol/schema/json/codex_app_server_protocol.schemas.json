@@ -1580,9 +1580,9 @@
             },
             "method": {
               "enum": [
-                "nativeIntegrityState/read"
+                "httpState/get"
               ],
-              "title": "NativeIntegrityState/readRequestMethod",
+              "title": "HttpState/getRequestMethod",
               "type": "string"
             },
             "params": {
@@ -1593,7 +1593,7 @@
             "id",
             "method"
           ],
-          "title": "NativeIntegrityState/readRequest",
+          "title": "HttpState/getRequest",
           "type": "object"
         },
         {
@@ -1603,13 +1603,13 @@
             },
             "method": {
               "enum": [
-                "nativeIntegrityState/write"
+                "httpState/set"
               ],
-              "title": "NativeIntegrityState/writeRequestMethod",
+              "title": "HttpState/setRequestMethod",
               "type": "string"
             },
             "params": {
-              "$ref": "#/definitions/v2/NativeIntegrityStateWriteParams"
+              "$ref": "#/definitions/v2/HttpStateSetParams"
             }
           },
           "required": [
@@ -1617,7 +1617,7 @@
             "method",
             "params"
           ],
-          "title": "NativeIntegrityState/writeRequest",
+          "title": "HttpState/setRequest",
           "type": "object"
         },
         {
@@ -1627,9 +1627,9 @@
             },
             "method": {
               "enum": [
-                "nativeIntegrityState/clear"
+                "httpState/clear"
               ],
-              "title": "NativeIntegrityState/clearRequestMethod",
+              "title": "HttpState/clearRequestMethod",
               "type": "string"
             },
             "params": {
@@ -1640,7 +1640,7 @@
             "id",
             "method"
           ],
-          "title": "NativeIntegrityState/clearRequest",
+          "title": "HttpState/clearRequest",
           "type": "object"
         },
         {
@@ -10307,6 +10307,57 @@
         "title": "HooksListResponse",
         "type": "object"
       },
+      "HttpStateClearResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "HttpStateClearResponse",
+        "type": "object"
+      },
+      "HttpStateGetResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "state": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "title": "HttpStateGetResponse",
+        "type": "object"
+      },
+      "HttpStateSetParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "expectedState": {
+            "description": "When present, write only if the calling surface still stores this state.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "title": "HttpStateSetParams",
+        "type": "object"
+      },
+      "HttpStateSetResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "written": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "written"
+        ],
+        "title": "HttpStateSetResponse",
+        "type": "object"
+      },
       "ImageDetail": {
         "enum": [
           "auto",
@@ -11858,57 +11909,6 @@
           "verifications"
         ],
         "title": "ModelVerificationNotification",
-        "type": "object"
-      },
-      "NativeIntegrityStateClearResponse": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "title": "NativeIntegrityStateClearResponse",
-        "type": "object"
-      },
-      "NativeIntegrityStateReadResponse": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "properties": {
-          "state": {
-            "type": [
-              "string",
-              "null"
-            ]
-          }
-        },
-        "title": "NativeIntegrityStateReadResponse",
-        "type": "object"
-      },
-      "NativeIntegrityStateWriteParams": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "properties": {
-          "expectedState": {
-            "description": "When present, write only if the calling surface still stores this state.",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "state": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "state"
-        ],
-        "title": "NativeIntegrityStateWriteParams",
-        "type": "object"
-      },
-      "NativeIntegrityStateWriteResponse": {
-        "$schema": "http://json-schema.org/draft-07/schema#",
-        "properties": {
-          "written": {
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "written"
-        ],
-        "title": "NativeIntegrityStateWriteResponse",
         "type": "object"
       },
       "NetworkAccess": {
