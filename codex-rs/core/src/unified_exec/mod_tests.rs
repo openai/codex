@@ -93,11 +93,10 @@ async fn exec_command_with_tty(
 ) -> Result<ExecCommandToolOutput, UnifiedExecError> {
     let manager = &session.services.unified_exec_manager;
     let process_id = manager.allocate_process_id().await;
-    let turn_environment = turn.environments.primary().expect("turn environment");
-    let cwd = workdir.as_ref().map_or_else(
-        || turn_environment.cwd.clone(),
-        |workdir| turn_environment.cwd.join(workdir),
-    );
+    #[allow(deprecated)]
+    let cwd = workdir
+        .as_ref()
+        .map_or_else(|| turn.cwd.clone(), |workdir| turn.cwd.join(workdir));
     let command = vec!["bash".to_string(), "-lc".to_string(), cmd.to_string()];
     let request = test_exec_request(turn, command.clone(), cwd.clone(), shell_env());
 
@@ -108,7 +107,11 @@ async fn exec_command_with_tty(
                 &request,
                 tty,
                 Box::new(NoopSpawnLifecycle),
-                turn_environment.environment.as_ref(),
+                turn.environments
+                    .primary()
+                    .expect("turn environment")
+                    .environment
+                    .as_ref(),
             )
             .await?,
     );
