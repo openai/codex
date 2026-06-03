@@ -456,6 +456,7 @@ impl Session {
             &state_db,
             codex_state::GoalAccountingMode::ActiveOnly,
             TerminalMetricEmission::Emit,
+            Some(turn_context.sub_id.clone()),
         )
         .await?;
         let mut replacing_goal = false;
@@ -608,6 +609,7 @@ impl Session {
             &state_db,
             codex_state::GoalAccountingMode::ActiveOnly,
             TerminalMetricEmission::Emit,
+            Some(turn_context.sub_id.clone()),
         )
         .await?;
         let goal = state_db
@@ -1117,6 +1119,7 @@ impl Session {
             &state_db,
             codex_state::GoalAccountingMode::ActiveOnly,
             TerminalMetricEmission::Suppress,
+            /*turn_id*/ None,
         )
         .await?;
         Ok(())
@@ -1127,6 +1130,7 @@ impl Session {
         state_db: &StateDbHandle,
         mode: codex_state::GoalAccountingMode,
         terminal_metric_emission: TerminalMetricEmission,
+        turn_id: Option<String>,
     ) -> anyhow::Result<Option<ThreadGoal>> {
         let _accounting_permit = self.goal_runtime.accounting_permit().await?;
         let (time_delta_seconds, expected_goal_id) = {
@@ -1164,6 +1168,12 @@ impl Session {
                     .await
                     .wall_clock
                     .mark_accounted(time_delta_seconds);
+                self.track_goal_analytics_event(
+                    &goal,
+                    turn_id.clone(),
+                    GoalEventKind::UsageAccounted,
+                );
+                self.track_goal_status_change(&goal, previous_status, turn_id);
                 let goal = protocol_goal_from_state(goal);
                 Ok(Some(goal))
             }
