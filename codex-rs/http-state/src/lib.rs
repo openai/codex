@@ -29,16 +29,21 @@ pub enum HttpStateSurface {
 }
 
 impl HttpStateSurface {
-    pub fn from_app_server_client_name(client_name: &str) -> Self {
+    pub fn try_from_app_server_client_name(client_name: &str) -> Option<Self> {
         match client_name {
-            "codex-tui" => Self::CodexTui,
-            "codex_exec" => Self::CodexExec,
-            "codex_vscode" => Self::CodexVscode,
-            "codex_desktop" => Self::CodexDesktop,
-            "codex_desktop_ssh" => Self::CodexDesktopSsh,
-            "codex_remote_control" => Self::CodexRemoteControl,
-            _ => Self::CodexCli,
+            "codex_cli" => Some(Self::CodexCli),
+            "codex-tui" => Some(Self::CodexTui),
+            "codex_exec" => Some(Self::CodexExec),
+            "codex_vscode" => Some(Self::CodexVscode),
+            "codex_desktop" => Some(Self::CodexDesktop),
+            "codex_desktop_ssh" => Some(Self::CodexDesktopSsh),
+            "codex_remote_control" => Some(Self::CodexRemoteControl),
+            _ => None,
         }
+    }
+
+    pub fn from_app_server_client_name(client_name: &str) -> Self {
+        Self::try_from_app_server_client_name(client_name).unwrap_or(Self::CodexCli)
     }
 
     pub const fn as_str(self) -> &'static str {
