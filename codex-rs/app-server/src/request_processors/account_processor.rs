@@ -238,7 +238,7 @@ impl AccountRequestProcessor {
 
     async fn sync_auth_after_account_session_change(&self) {
         self.auth_manager.reload().await;
-        self.config_manager.replace_cloud_requirements_loader(
+        self.config_manager.replace_cloud_config_bundle_loader(
             self.auth_manager.clone(),
             self.config.chatgpt_base_url.clone(),
         );
