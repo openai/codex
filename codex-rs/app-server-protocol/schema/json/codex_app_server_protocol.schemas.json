@@ -1840,9 +1840,9 @@
             },
             "method": {
               "enum": [
-                "account/tokenUsage/read"
+                "account/usage/read"
               ],
-              "title": "Account/tokenUsage/readRequestMethod",
+              "title": "Account/usage/readRequestMethod",
               "type": "string"
             },
             "params": {
@@ -1853,7 +1853,7 @@
             "id",
             "method"
           ],
-          "title": "Account/tokenUsage/readRequest",
+          "title": "Account/usage/readRequest",
           "type": "object"
         },
         {
