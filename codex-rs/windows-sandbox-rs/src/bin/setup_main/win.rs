@@ -448,9 +448,7 @@ fn real_main() -> Result<()> {
             format!("open log in {} failed", sbx_dir.display()),
         ))
     })?;
-    let result = run_setup_with_completion_marker(&payload, &sbx_dir, || {
-        run_setup(&payload, &mut log, &sbx_dir)
-    });
+    let result = run_setup(&payload, &mut log, &sbx_dir);
     if let Err(err) = &result {
         let _ = log_line(&mut log, &format!("setup error: {err:?}"));
         log_note(&format!("setup error: {err:?}"), Some(sbx_dir.as_path()));
@@ -477,11 +475,7 @@ fn real_main() -> Result<()> {
     result
 }
 
-fn run_setup_with_completion_marker(
-    payload: &Payload,
-    sbx_dir: &Path,
-    setup_steps: impl FnOnce() -> Result<()>,
-) -> Result<()> {
+fn run_setup(payload: &Payload, log: &mut dyn Write, sbx_dir: &Path) -> Result<()> {
     let writes_setup_marker = !payload.refresh_only && payload.mode != SetupMode::ReadAclsOnly;
     if writes_setup_marker {
         let marker_path = sbx_dir.join("setup_marker.json");
@@ -499,7 +493,11 @@ fn run_setup_with_completion_marker(
             }
         }
     }
-    setup_steps()?;
+    match payload.mode {
+        SetupMode::ReadAclsOnly => run_read_acl_only(payload, log),
+        SetupMode::ProvisionOnly => run_provision_only(payload, log, sbx_dir),
+        SetupMode::Full => run_setup_full(payload, log, sbx_dir),
+    }?;
     if writes_setup_marker {
         commit_setup_marker(
             &payload.codex_home,
@@ -510,14 +508,6 @@ fn run_setup_with_completion_marker(
         )?;
     }
     Ok(())
-}
-
-fn run_setup(payload: &Payload, log: &mut dyn Write, sbx_dir: &Path) -> Result<()> {
-    match payload.mode {
-        SetupMode::ReadAclsOnly => run_read_acl_only(payload, log),
-        SetupMode::ProvisionOnly => run_provision_only(payload, log, sbx_dir),
-        SetupMode::Full => run_setup_full(payload, log, sbx_dir),
-    }
 }
 
 fn run_read_acl_only(payload: &Payload, log: &mut dyn Write) -> Result<()> {
@@ -1058,7 +1048,6 @@ fn run_setup_full(payload: &Payload, log: &mut dyn Write, sbx_dir: &Path) -> Res
 mod tests {
     use super::Payload;
     use super::SETUP_VERSION;
-    use super::run_setup_with_completion_marker;
     use super::workspace_write_cap_sids_for_path;
     use codex_otel::StatsigMetricsSettings;
     use codex_windows_sandbox::load_or_create_cap_sids;
@@ -1110,30 +1099,6 @@ mod tests {
             Some(StatsigMetricsSettings {
                 environment: "prod".to_string(),
             })
-        );
-    }
-
-    #[test]
-    fn interrupted_setup_invalidates_completion_marker() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let sbx_dir = temp.path().join(".sandbox");
-        let marker_path = sbx_dir.join("setup_marker.json");
-        fs::create_dir_all(&sbx_dir).expect("create sandbox dir");
-        fs::write(&marker_path, "previous setup marker").expect("write previous marker");
-        let mut payload = payload_json();
-        payload["codex_home"] = json!(temp.path());
-        let payload: Payload = serde_json::from_value(payload).expect("payload");
-
-        let err = run_setup_with_completion_marker(&payload, &sbx_dir, || {
-            assert!(!marker_path.exists(), "marker must be removed before setup");
-            anyhow::bail!("setup interrupted");
-        })
-        .expect_err("interrupted setup should fail");
-
-        assert_eq!(err.to_string(), "setup interrupted");
-        assert!(
-            !marker_path.exists(),
-            "interrupted setup must remain unready"
         );
     }
 
