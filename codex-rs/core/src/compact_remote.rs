@@ -9,7 +9,6 @@ use crate::compact::insert_initial_context_before_last_real_user_or_summary;
 use crate::context_manager::ContextManager;
 use crate::context_manager::TotalTokenUsageBreakdown;
 use crate::context_manager::estimate_response_item_model_visible_bytes;
-use crate::context_manager::is_codex_generated_item;
 use crate::hook_runtime::PostCompactHookOutcome;
 use crate::hook_runtime::PreCompactHookOutcome;
 use crate::hook_runtime::run_post_compact_hooks;
@@ -28,6 +27,8 @@ use codex_protocol::error::Result as CodexResult;
 use codex_protocol::items::ContextCompactionItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::BaseInstructions;
+use codex_protocol::models::FunctionCallOutputBody;
+use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::CompactedItem;
 use codex_protocol::protocol::EventMsg;
@@ -37,6 +38,9 @@ use futures::TryFutureExt;
 use tokio_util::sync::CancellationToken;
 use tracing::error;
 use tracing::info;
+
+const CONTEXT_WINDOW_TRUNCATED_OUTPUT_MESSAGE: &str =
+    "Output exceeded the available model context and was truncated";
 
 pub(crate) async fn run_inline_remote_auto_compact_task(
     sess: Arc<Session>,
@@ -168,21 +172,21 @@ async fn run_remote_compact_task_inner_impl(
         .await;
     let mut history = sess.clone_history().await;
     let base_instructions = sess.get_base_instructions().await;
-    let deleted_items = trim_function_call_history_to_fit_context_window(
+    let rewritten_outputs = trim_function_call_history_to_fit_context_window(
         &mut history,
         turn_context.as_ref(),
         &base_instructions,
     );
-    if deleted_items > 0 {
+    if rewritten_outputs > 0 {
         info!(
             turn_id = %turn_context.sub_id,
-            deleted_items,
-            "trimmed history items before remote compaction"
+            rewritten_outputs,
+            "rewrote history outputs before remote compaction"
         );
     }
-    // This is the history selected for remote compaction, after any trimming required to fit the
-    // compact endpoint. The checkpoint below records it separately from the next sampling request,
-    // whose prompt will repeat current developer/context prefix items.
+    // This is the history selected for remote compaction, after any output rewriting required to
+    // fit the compact endpoint. The checkpoint below records it separately from the next sampling
+    // request, whose prompt will repeat current developer/context prefix items.
     let trace_input_history = history.raw_items().to_vec();
     let prompt_input = history.for_prompt(&turn_context.model_info.input_modalities);
     let tool_router = built_tools(
@@ -379,26 +383,68 @@ pub(crate) fn trim_function_call_history_to_fit_context_window(
     turn_context: &TurnContext,
     base_instructions: &BaseInstructions,
 ) -> usize {
-    let mut deleted_items = 0usize;
     let Some(context_window) = turn_context.model_context_window() else {
-        return deleted_items;
+        return 0;
     };
+    let mut rewritten_outputs = 0usize;
+    let item_count = history.raw_items().len();
 
-    while history
-        .estimate_token_count_with_base_instructions(base_instructions)
-        .is_some_and(|estimated_tokens| estimated_tokens > context_window)
-    {
-        let Some(last_item) = history.raw_items().last() else {
+    for index in (0..item_count).rev() {
+        if history
+            .estimate_token_count_with_base_instructions(base_instructions)
+            .is_none_or(|estimated_tokens| estimated_tokens <= context_window)
+        {
+            break;
+        }
+        let Some(rewritten_item) = history
+            .raw_items()
+            .get(index)
+            .and_then(rewritten_output_for_context_window)
+        else {
             break;
         };
-        if !is_codex_generated_item(last_item) {
-            break;
-        }
-        if !history.remove_last_item() {
-            break;
-        }
-        deleted_items += 1;
+        let mut items = history.raw_items().to_vec();
+        items[index] = rewritten_item;
+        history.replace(items);
+        rewritten_outputs += 1;
     }
 
-    deleted_items
+    rewritten_outputs
+}
+
+fn rewritten_output_for_context_window(item: &ResponseItem) -> Option<ResponseItem> {
+    Some(match item {
+        ResponseItem::FunctionCallOutput { call_id, output } => ResponseItem::FunctionCallOutput {
+            call_id: call_id.clone(),
+            output: truncated_output_payload(output),
+        },
+        ResponseItem::CustomToolCallOutput {
+            call_id,
+            name,
+            output,
+        } => ResponseItem::CustomToolCallOutput {
+            call_id: call_id.clone(),
+            name: name.clone(),
+            output: truncated_output_payload(output),
+        },
+        ResponseItem::ToolSearchOutput {
+            call_id,
+            status,
+            execution,
+            ..
+        } => ResponseItem::ToolSearchOutput {
+            call_id: call_id.clone(),
+            status: status.clone(),
+            execution: execution.clone(),
+            tools: Vec::new(),
+        },
+        _ => return None,
+    })
+}
+
+fn truncated_output_payload(output: &FunctionCallOutputPayload) -> FunctionCallOutputPayload {
+    FunctionCallOutputPayload {
+        body: FunctionCallOutputBody::Text(CONTEXT_WINDOW_TRUNCATED_OUTPUT_MESSAGE.to_string()),
+        success: output.success,
+    }
 }
