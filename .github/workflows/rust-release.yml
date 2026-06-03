@@ -8,6 +8,9 @@
 # Tag releases sign macOS binaries and DMGs through the protected `codesigning`
 # GitHub environment and Azure Key Vault before final verification on macOS.
 #
+# To test that signing path without publishing a release, create a no-dot
+# `rust-vsigning-test-*` tag and manually dispatch `release_mode=signing_test`.
+#
 # To use external macOS signing, manually dispatch `release_mode=build_unsigned`,
 # sign the unsigned macOS artifacts in a secure enclave, upload the signed handoff
 # archive as a GitHub Release asset, then manually dispatch
@@ -23,11 +26,12 @@ on:
   workflow_dispatch:
     inputs:
       release_mode:
-        description: "build_unsigned creates unsigned macOS handoff artifacts; promote_signed finishes a release from signed macOS handoff artifacts."
+        description: "signing_test signs and verifies macOS artifacts without publishing; build_unsigned creates unsigned macOS handoff artifacts; promote_signed finishes a release from signed macOS handoff artifacts."
         required: false
         type: choice
         default: build_unsigned
         options:
+          - signing_test
           - build_unsigned
           - promote_signed
       sign_macos:
@@ -49,12 +53,14 @@ on:
         type: string
 
 concurrency:
-  group: ${{ github.workflow }}
+  group: ${{ github.event_name == 'workflow_dispatch' && inputs.release_mode == 'signing_test' && format('{0}-signing-test-{1}', github.workflow, github.ref_name) || github.workflow }}
   cancel-in-progress: true
 
 jobs:
   tag-check:
     runs-on: ubuntu-latest
+    outputs:
+      build_matrix: ${{ steps.build_matrix.outputs.matrix }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -74,7 +80,13 @@ jobs:
           case "${RELEASE_MODE}" in
             signed)
               if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
-                echo "❌  Manual rust-release runs must use release_mode=build_unsigned or release_mode=promote_signed"
+                echo "❌  Manual rust-release runs must use release_mode=signing_test, release_mode=build_unsigned, or release_mode=promote_signed"
+                exit 1
+              fi
+              ;;
+            signing_test)
+              if [[ "${GITHUB_EVENT_NAME}" != "workflow_dispatch" ]]; then
+                echo "❌  release_mode=signing_test is only valid for manual runs"
                 exit 1
               fi
               ;;
@@ -113,26 +125,119 @@ jobs:
           esac
 
           if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" && "${REQUESTED_SIGN_MACOS}" == "true" ]]; then
-            echo "::warning title=Deprecated sign_macos input ignored::Use release_mode=build_unsigned or release_mode=promote_signed instead."
+            echo "::warning title=Deprecated sign_macos input ignored::Use release_mode=signing_test, release_mode=build_unsigned, or release_mode=promote_signed instead."
           fi
 
-          # 1. Must be a tag and match the regex
+          # All release modes must run from a tag.
           [[ "${GITHUB_REF_TYPE}" == "tag" ]] \
-            || { echo "❌  Not a tag push"; exit 1; }
+            || { echo "❌  Not a tag ref"; exit 1; }
+
+          if [[ "${RELEASE_MODE}" == "signing_test" ]]; then
+            [[ "${GITHUB_REF_NAME}" =~ ^rust-vsigning-test-[A-Za-z0-9_-]+$ ]] \
+              || { echo "❌  Signing-test tag '${GITHUB_REF_NAME}' must match rust-vsigning-test-* and contain no dots"; exit 1; }
+            echo "✅  Signing-test tag accepted (${GITHUB_REF_NAME})"
+            echo "::endgroup::"
+            exit 0
+          fi
+
+          # Release tags must match the version in Cargo.toml.
           [[ "${GITHUB_REF_NAME}" =~ ^rust-v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)(\.[0-9]+)?)?$ ]] \
             || { echo "❌  Tag '${GITHUB_REF_NAME}' doesn't match expected format"; exit 1; }
 
-          # 2. Extract versions
           tag_ver="${GITHUB_REF_NAME#rust-v}"
           cargo_ver="$(grep -m1 '^version' codex-rs/Cargo.toml \
                         | sed -E 's/version *= *"([^"]+)".*/\1/')"
 
-          # 3. Compare
           [[ "${tag_ver}" == "${cargo_ver}" ]] \
             || { echo "❌  Tag ${tag_ver} ≠ Cargo.toml ${cargo_ver}"; exit 1; }
 
           echo "✅  Tag and Cargo.toml agree (${tag_ver})"
           echo "::endgroup::"
+
+      - name: Define build matrix
+        id: build_matrix
+        shell: bash
+        env:
+          RELEASE_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.release_mode || 'signed' }}
+        run: |
+          set -euo pipefail
+
+          matrix="$(
+            jq -cn --arg release_mode "$RELEASE_MODE" '
+              [
+                {
+                  runner: "macos-15-xlarge",
+                  target: "aarch64-apple-darwin",
+                  bundle: "primary",
+                  artifact_name: "aarch64-apple-darwin",
+                  binaries: "codex codex-responses-api-proxy",
+                  build_dmg: "true"
+                },
+                {
+                  runner: "macos-15-xlarge",
+                  target: "aarch64-apple-darwin",
+                  bundle: "app-server",
+                  artifact_name: "aarch64-apple-darwin-app-server",
+                  binaries: "codex-app-server",
+                  build_dmg: "false"
+                },
+                {
+                  runner: "macos-15-xlarge",
+                  target: "x86_64-apple-darwin",
+                  bundle: "primary",
+                  artifact_name: "x86_64-apple-darwin",
+                  binaries: "codex codex-responses-api-proxy",
+                  build_dmg: "true"
+                },
+                {
+                  runner: "macos-15-xlarge",
+                  target: "x86_64-apple-darwin",
+                  bundle: "app-server",
+                  artifact_name: "x86_64-apple-darwin-app-server",
+                  binaries: "codex-app-server",
+                  build_dmg: "false"
+                },
+                {
+                  runner: "codex-linux-x64-xl",
+                  target: "x86_64-unknown-linux-musl",
+                  bundle: "primary",
+                  artifact_name: "x86_64-unknown-linux-musl",
+                  binaries: "codex codex-responses-api-proxy bwrap",
+                  build_dmg: "false"
+                },
+                {
+                  runner: "codex-linux-x64-xl",
+                  target: "x86_64-unknown-linux-musl",
+                  bundle: "app-server",
+                  artifact_name: "x86_64-unknown-linux-musl-app-server",
+                  binaries: "codex-app-server",
+                  build_dmg: "false"
+                },
+                {
+                  runner: "codex-linux-arm64",
+                  target: "aarch64-unknown-linux-musl",
+                  bundle: "primary",
+                  artifact_name: "aarch64-unknown-linux-musl",
+                  binaries: "codex codex-responses-api-proxy bwrap",
+                  build_dmg: "false"
+                },
+                {
+                  runner: "codex-linux-arm64",
+                  target: "aarch64-unknown-linux-musl",
+                  bundle: "app-server",
+                  artifact_name: "aarch64-unknown-linux-musl-app-server",
+                  binaries: "codex-app-server",
+                  build_dmg: "false"
+                }
+              ]
+              | if $release_mode == "signing_test"
+                then map(select(.target | endswith("-apple-darwin")))
+                else .
+                end
+              | {include: .}
+            '
+          )"
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
 
   build:
     if: ${{ github.event_name != 'workflow_dispatch' || inputs.release_mode != 'promote_signed' }}
@@ -160,57 +265,7 @@ jobs:
 
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - runner: macos-15-xlarge
-            target: aarch64-apple-darwin
-            bundle: primary
-            artifact_name: aarch64-apple-darwin
-            binaries: "codex codex-responses-api-proxy"
-            build_dmg: "true"
-          - runner: macos-15-xlarge
-            target: aarch64-apple-darwin
-            bundle: app-server
-            artifact_name: aarch64-apple-darwin-app-server
-            binaries: "codex-app-server"
-            build_dmg: "false"
-          - runner: macos-15-xlarge
-            target: x86_64-apple-darwin
-            bundle: primary
-            artifact_name: x86_64-apple-darwin
-            binaries: "codex codex-responses-api-proxy"
-            build_dmg: "true"
-          - runner: macos-15-xlarge
-            target: x86_64-apple-darwin
-            bundle: app-server
-            artifact_name: x86_64-apple-darwin-app-server
-            binaries: "codex-app-server"
-            build_dmg: "false"
-          # Release artifacts intentionally ship MUSL-linked Linux binaries.
-          - runner: codex-linux-x64-xl
-            target: x86_64-unknown-linux-musl
-            bundle: primary
-            artifact_name: x86_64-unknown-linux-musl
-            binaries: "codex codex-responses-api-proxy bwrap"
-            build_dmg: "false"
-          - runner: codex-linux-x64-xl
-            target: x86_64-unknown-linux-musl
-            bundle: app-server
-            artifact_name: x86_64-unknown-linux-musl-app-server
-            binaries: "codex-app-server"
-            build_dmg: "false"
-          - runner: codex-linux-arm64
-            target: aarch64-unknown-linux-musl
-            bundle: primary
-            artifact_name: aarch64-unknown-linux-musl
-            binaries: "codex codex-responses-api-proxy bwrap"
-            build_dmg: "false"
-          - runner: codex-linux-arm64
-            target: aarch64-unknown-linux-musl
-            bundle: app-server
-            artifact_name: aarch64-unknown-linux-musl-app-server
-            binaries: "codex-app-server"
-            build_dmg: "false"
+      matrix: ${{ fromJSON(needs.tag-check.outputs.build_matrix) }}
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -518,7 +573,7 @@ jobs:
             codex-rs/dist/${{ matrix.target }}/*
 
   sign-macos-binaries:
-    if: ${{ github.event_name != 'workflow_dispatch' }}
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.release_mode == 'signing_test' }}
     needs: build
     name: Sign macOS binaries - ${{ matrix.target }} - ${{ matrix.bundle }}
     runs-on: ubuntu-latest
@@ -637,7 +692,7 @@ jobs:
           if-no-files-found: warn
 
   package-macos:
-    if: ${{ github.event_name != 'workflow_dispatch' }}
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.release_mode == 'signing_test' }}
     needs: sign-macos-binaries
     name: Package macOS artifacts - ${{ matrix.target }} - ${{ matrix.bundle }}
     runs-on: macos-15-xlarge
@@ -764,7 +819,7 @@ jobs:
             --archive-dir "dist/${TARGET}"
 
       - name: Build Python runtime wheel
-        if: ${{ matrix.bundle == 'primary' }}
+        if: ${{ matrix.bundle == 'primary' && inputs.release_mode != 'signing_test' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -797,7 +852,7 @@ jobs:
           "${RUNNER_TEMP}/python-runtime-build-venv/bin/python" -m build --wheel --outdir "$wheel_dir" "$stage_dir"
 
       - name: Upload Python runtime wheel
-        if: ${{ matrix.bundle == 'primary' }}
+        if: ${{ matrix.bundle == 'primary' && inputs.release_mode != 'signing_test' }}
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: python-runtime-wheel-${{ matrix.target }}
@@ -827,7 +882,7 @@ jobs:
           if-no-files-found: error
 
   sign-macos-dmg:
-    if: ${{ github.event_name != 'workflow_dispatch' }}
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.release_mode == 'signing_test' }}
     needs: package-macos
     name: Sign macOS DMG - ${{ matrix.target }}
     runs-on: ubuntu-latest
@@ -924,7 +979,7 @@ jobs:
           if-no-files-found: warn
 
   finalize-macos:
-    if: ${{ github.event_name != 'workflow_dispatch' }}
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.release_mode == 'signing_test' }}
     needs:
       - package-macos
       - sign-macos-dmg
@@ -1080,6 +1135,7 @@ jobs:
           cp "$dmg_path" "dist/${target}/codex-${target}.dmg"
 
       - name: Upload verified macOS artifacts
+        if: ${{ inputs.release_mode != 'signing_test' }}
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: ${{ matrix.artifact_name }}
@@ -1326,7 +1382,7 @@ jobs:
             codex-rs/dist/${{ matrix.target }}/*
 
   build-windows:
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.release_mode != 'promote_signed' }}
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.release_mode == 'build_unsigned' }}
     needs: tag-check
     uses: ./.github/workflows/rust-release-windows.yml
     with:
@@ -1334,7 +1390,7 @@ jobs:
     secrets: inherit
 
   argument-comment-lint-release-assets:
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.release_mode != 'promote_signed' }}
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.release_mode == 'build_unsigned' }}
     name: argument-comment-lint release assets
     needs: tag-check
     uses: ./.github/workflows/rust-release-argument-comment-lint.yml
@@ -1342,7 +1398,7 @@ jobs:
       publish: true
 
   zsh-release-assets:
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.release_mode != 'promote_signed' }}
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.release_mode == 'build_unsigned' }}
     name: zsh release assets
     needs: tag-check
     uses: ./.github/workflows/rust-release-zsh.yml
@@ -1359,6 +1415,7 @@ jobs:
     if: >-
       ${{
         always() &&
+        (github.event_name != 'workflow_dispatch' || inputs.release_mode != 'signing_test') &&
         needs.tag-check.result == 'success' &&
         (
           (
