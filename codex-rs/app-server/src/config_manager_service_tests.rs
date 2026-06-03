@@ -2,6 +2,7 @@ use super::*;
 use anyhow::Result;
 use codex_app_server_protocol::AppConfig;
 use codex_app_server_protocol::AppToolApproval;
+use codex_app_server_protocol::ApprovalsReviewer;
 use codex_app_server_protocol::AppsConfig;
 use codex_app_server_protocol::AskForApproval;
 use codex_config::CloudConfigBundleLoader;
@@ -292,6 +293,80 @@ async fn write_value_supports_nested_app_paths() -> Result<()> {
                 },
             )]),
         })
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn read_reports_app_reviewer_after_app_requirements_are_applied() -> Result<()> {
+    let tmp = tempdir().expect("tempdir");
+    std::fs::write(
+        tmp.path().join(CONFIG_TOML_FILE),
+        r#"
+approvals_reviewer = "user"
+
+[apps.calendar]
+approvals_reviewer = "user"
+"#,
+    )?;
+
+    let service = ConfigManager::new_for_tests(
+        tmp.path().to_path_buf(),
+        vec![],
+        LoaderOverrides::without_managed_config_for_tests(),
+        CloudConfigBundleFixture::loader_with_enterprise_requirement(
+            r#"
+allowed_approvals_reviewers = ["user", "auto_review"]
+
+[apps.calendar.allowed_approvals_reviewers]
+user = false
+auto_review = true
+
+[apps.drive.allowed_approvals_reviewers]
+user = false
+auto_review = true
+"#,
+        ),
+    );
+
+    let read = service
+        .read(ConfigReadParams {
+            include_layers: true,
+            cwd: None,
+        })
+        .await
+        .expect("config read succeeds");
+
+    assert_eq!(
+        read.config
+            .apps
+            .as_ref()
+            .and_then(|apps| apps.apps.get("calendar"))
+            .and_then(|app| app.approvals_reviewer),
+        Some(ApprovalsReviewer::AutoReview)
+    );
+    assert_eq!(
+        read.config
+            .apps
+            .as_ref()
+            .and_then(|apps| apps.apps.get("drive"))
+            .map(|app| (app.enabled, app.approvals_reviewer)),
+        Some((true, Some(ApprovalsReviewer::AutoReview)))
+    );
+    assert!(
+        read.layers
+            .expect("layers should be included")
+            .iter()
+            .any(|layer| {
+                layer
+                    .config
+                    .get("apps")
+                    .and_then(|apps| apps.get("calendar"))
+                    .and_then(|calendar| calendar.get("approvals_reviewer"))
+                    == Some(&serde_json::json!("user"))
+            }),
+        "raw config layers should preserve the configured reviewer"
     );
 
     Ok(())

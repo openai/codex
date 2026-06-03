@@ -581,29 +581,10 @@ pub(crate) fn mcp_approvals_reviewer(
         return config.approvals_reviewer;
     }
 
-    let app_reviewer = read_user_apps_config(config).and_then(|apps_config| {
-        connector_id
-            .and_then(|connector_id| apps_config.apps.get(connector_id))
-            .and_then(|app| app.approvals_reviewer)
-    });
-    let reviewer_constraint = config
-        .config_layer_stack
-        .requirements()
-        .approvals_reviewer_constraint_for_app(connector_id);
-
-    app_approvals_reviewer(config, app_reviewer, reviewer_constraint)
-}
-
-fn app_approvals_reviewer(
-    config: &Config,
-    configured: Option<ApprovalsReviewer>,
-    reviewer_constraint: &codex_config::ConstrainedWithSource<ApprovalsReviewer>,
-) -> ApprovalsReviewer {
-    configured
-        .into_iter()
-        .chain([config.approvals_reviewer])
-        .find(|reviewer| reviewer_constraint.can_set(reviewer).is_ok())
-        .unwrap_or_else(|| reviewer_constraint.value())
+    connector_id
+        .and_then(|connector_id| config.app_approvals_reviewers.get(connector_id))
+        .copied()
+        .unwrap_or(config.approvals_reviewer)
 }
 
 fn read_apps_config(config: &Config) -> Option<AppsConfigToml> {

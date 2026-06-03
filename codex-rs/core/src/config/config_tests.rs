@@ -9711,6 +9711,51 @@ async fn root_approvals_reviewer_falls_back_when_disallowed_by_requirements() ->
 }
 
 #[tokio::test]
+async fn app_approvals_reviewer_falls_back_when_disallowed_by_requirements() -> std::io::Result<()>
+{
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"approvals_reviewer = "user"
+
+[apps.calendar]
+approvals_reviewer = "user"
+"#,
+    )?;
+
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .cloud_config_bundle(
+            CloudConfigBundleFixture::loader_with_enterprise_requirement(
+                r#"allowed_approvals_reviewers = ["user", "auto_review"]
+
+[apps.calendar.allowed_approvals_reviewers]
+user = false
+auto_review = true
+"#,
+            ),
+        )
+        .build()
+        .await?;
+
+    assert_eq!(
+        config.app_approvals_reviewers.get("calendar"),
+        Some(&ApprovalsReviewer::AutoReview)
+    );
+    assert!(
+        config.startup_warnings.iter().any(|warning| {
+            warning.contains(
+                "Configured value for `apps.calendar.approvals_reviewer` is disallowed by requirements",
+            )
+        }),
+        "{:?}",
+        config.startup_warnings
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn profile_approvals_reviewer_falls_back_when_disallowed_by_requirements()
 -> std::io::Result<()> {
     let codex_home = TempDir::new()?;

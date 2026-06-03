@@ -17,7 +17,12 @@ use codex_config::ConfigLayerStack;
 use codex_config::ConfigLayerStackOrdering;
 use codex_config::ConfigRequirementsToml;
 use codex_config::config_toml::ConfigToml;
+use codex_config::configured_app_approvals_reviewers;
 use codex_config::merge_toml_values;
+use codex_config::resolve_app_approvals_reviewers;
+use codex_config::resolve_approvals_reviewer;
+use codex_config::types::AppConfig as AppConfigToml;
+use codex_config::types::ApprovalsReviewer;
 use codex_core::config::deserialize_config_toml_with_base;
 use codex_core::config::edit::ConfigEdit;
 use codex_core::config::edit::ConfigEditsBuilder;
@@ -125,9 +130,35 @@ impl ConfigManager {
         };
 
         let effective = layers.effective_config();
-        let effective_config_toml: ConfigToml = effective
+        let mut effective_config_toml: ConfigToml = effective
             .try_into()
             .map_err(|err| ConfigManagerError::toml("invalid configuration", err))?;
+        let requirements = layers.requirements();
+        let global_reviewer = resolve_approvals_reviewer(
+            effective_config_toml.approvals_reviewer,
+            ApprovalsReviewer::User,
+            &requirements.approvals_reviewer,
+        );
+        let configured_app_reviewers =
+            configured_app_approvals_reviewers(effective_config_toml.apps.as_ref());
+        let app_reviewers = resolve_app_approvals_reviewers(
+            &configured_app_reviewers,
+            global_reviewer,
+            &requirements.approvals_reviewer,
+            &requirements.app_approvals_reviewers,
+        );
+        if !app_reviewers.is_empty() {
+            let apps = effective_config_toml.apps.get_or_insert_default();
+            for (app_id, reviewer) in app_reviewers {
+                apps.apps
+                    .entry(app_id)
+                    .or_insert_with(|| AppConfigToml {
+                        enabled: true,
+                        ..Default::default()
+                    })
+                    .approvals_reviewer = Some(reviewer);
+            }
+        }
 
         let json_value = serde_json::to_value(&effective_config_toml)
             .map_err(|err| ConfigManagerError::json("failed to serialize configuration", err))?;

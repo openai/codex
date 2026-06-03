@@ -576,6 +576,45 @@ auto_review = {auto_review}
     }
 }
 
+#[tokio::test]
+async fn app_approvals_reviewer_is_recomputed_when_global_reviewer_changes() {
+    let codex_home = tempdir().expect("tempdir should succeed");
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"approvals_reviewer = "user"
+"#,
+    )
+    .expect("write config");
+    let mut config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .cloud_config_bundle(
+            CloudConfigBundleFixture::loader_with_enterprise_requirement(
+                r#"
+allowed_approvals_reviewers = ["user", "auto_review"]
+
+[apps.calendar.allowed_approvals_reviewers]
+user = true
+auto_review = true
+"#,
+            ),
+        )
+        .build()
+        .await
+        .expect("config should build");
+
+    assert_eq!(
+        mcp_approvals_reviewer(&config, CODEX_APPS_MCP_SERVER_NAME, Some("calendar")),
+        ApprovalsReviewer::User
+    );
+
+    config.set_approvals_reviewer(ApprovalsReviewer::AutoReview);
+
+    assert_eq!(
+        mcp_approvals_reviewer(&config, CODEX_APPS_MCP_SERVER_NAME, Some("calendar")),
+        ApprovalsReviewer::AutoReview
+    );
+}
+
 #[test]
 fn requirements_disabled_connector_overrides_enabled_connector() {
     let mut effective_apps = AppsConfigToml {

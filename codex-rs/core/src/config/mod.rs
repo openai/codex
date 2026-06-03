@@ -633,6 +633,13 @@ pub struct Config {
     /// ARC.
     pub approvals_reviewer: ApprovalsReviewer,
 
+    /// Effective reviewer overrides for individual apps.
+    pub app_approvals_reviewers: BTreeMap<String, ApprovalsReviewer>,
+
+    /// Configured app reviewer values used to recompute effective overrides
+    /// when the thread-level reviewer changes.
+    configured_app_approvals_reviewers: BTreeMap<String, ApprovalsReviewer>,
+
     /// enforce_residency means web traffic cannot be routed outside of a
     /// particular geography. HTTP clients should direct their requests
     /// using backend-specific headers or URLs to enforce this.
@@ -1282,6 +1289,19 @@ impl ConfigBuilder {
 }
 
 impl Config {
+    pub(crate) fn set_approvals_reviewer(&mut self, approvals_reviewer: ApprovalsReviewer) {
+        self.approvals_reviewer = approvals_reviewer;
+        self.app_approvals_reviewers = codex_config::resolve_app_approvals_reviewers(
+            &self.configured_app_approvals_reviewers,
+            approvals_reviewer,
+            &self.config_layer_stack.requirements().approvals_reviewer,
+            &self
+                .config_layer_stack
+                .requirements()
+                .app_approvals_reviewers,
+        );
+    }
+
     pub(crate) fn multi_agent_version_from_features(&self) -> MultiAgentVersion {
         if self.features.enabled(Feature::MultiAgentV2) {
             MultiAgentVersion::V2
@@ -2553,7 +2573,7 @@ impl Config {
         let ConfigRequirements {
             approval_policy: mut constrained_approval_policy,
             approvals_reviewer: mut constrained_approvals_reviewer,
-            app_approvals_reviewers: _,
+            app_approvals_reviewers: constrained_app_approvals_reviewers,
             permission_profile: mut constrained_permission_profile,
             windows_sandbox_mode: mut constrained_windows_sandbox_mode,
             web_search_mode: mut constrained_web_search_mode,
@@ -3320,6 +3340,34 @@ impl Config {
             &mut constrained_approvals_reviewer,
             &mut startup_warnings,
         )?;
+        let configured_app_approvals_reviewers =
+            codex_config::configured_app_approvals_reviewers(cfg.apps.as_ref());
+        let app_approvals_reviewers = codex_config::resolve_app_approvals_reviewers(
+            &configured_app_approvals_reviewers,
+            constrained_approvals_reviewer.value(),
+            &constrained_approvals_reviewer,
+            &constrained_app_approvals_reviewers,
+        );
+        for (app_id, configured_reviewer) in &configured_app_approvals_reviewers {
+            let constraint = constrained_app_approvals_reviewers
+                .get(app_id)
+                .unwrap_or(&constrained_approvals_reviewer);
+            if let Err(err) = constraint.can_set(configured_reviewer) {
+                let fallback_value = app_approvals_reviewers
+                    .get(app_id)
+                    .copied()
+                    .unwrap_or_else(|| constrained_approvals_reviewer.value());
+                tracing::warn!(
+                    error = %err,
+                    ?fallback_value,
+                    requirement_source = ?constraint.source,
+                    "configured app approvals reviewer is disallowed by requirements; falling back to required value for apps.{app_id}.approvals_reviewer"
+                );
+                startup_warnings.push(format!(
+                    "Configured value for `apps.{app_id}.approvals_reviewer` is disallowed by requirements; falling back to required value {fallback_value:?}. Details: {err}"
+                ));
+            }
+        }
         let permission_profile_was_constrained = apply_requirement_constrained_value(
             "permission_profile",
             permission_profile,
@@ -3430,6 +3478,8 @@ impl Config {
             explicit_permission_profile_mode,
             custom_permission_profiles,
             approvals_reviewer: constrained_approvals_reviewer.value(),
+            app_approvals_reviewers,
+            configured_app_approvals_reviewers,
             enforce_residency: enforce_residency.value,
             notify: cfg.notify,
             user_instructions,

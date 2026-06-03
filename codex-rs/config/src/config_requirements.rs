@@ -10,6 +10,7 @@ use serde::de::Error as _;
 use serde::de::value::Error as ValueDeserializerError;
 use serde::de::value::StrDeserializer;
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::fmt;
 use wildmatch::WildMatchPattern;
 
@@ -20,6 +21,7 @@ use crate::ConstraintError;
 use crate::ManagedHooksRequirementsToml;
 use crate::mcp_types::AppToolApproval;
 use crate::permissions_toml::PermissionProfileToml;
+use crate::types::AppsConfigToml;
 use crate::types::WindowsSandboxModeToml;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -221,6 +223,58 @@ impl ConfigRequirements {
             .and_then(|connector_id| self.app_approvals_reviewers.get(connector_id))
             .unwrap_or(&self.approvals_reviewer)
     }
+}
+
+/// Returns explicit per-app reviewer choices from ordinary config layers.
+pub fn configured_app_approvals_reviewers(
+    apps: Option<&AppsConfigToml>,
+) -> BTreeMap<String, ApprovalsReviewer> {
+    apps.into_iter()
+        .flat_map(|apps| &apps.apps)
+        .filter_map(|(app_id, app)| {
+            app.approvals_reviewer
+                .map(|reviewer| (app_id.clone(), reviewer))
+        })
+        .collect()
+}
+
+/// Resolves a configured reviewer and fallback against one managed constraint.
+pub fn resolve_approvals_reviewer(
+    configured: Option<ApprovalsReviewer>,
+    fallback: ApprovalsReviewer,
+    constraint: &ConstrainedWithSource<ApprovalsReviewer>,
+) -> ApprovalsReviewer {
+    configured
+        .into_iter()
+        .chain([fallback])
+        .find(|reviewer| constraint.can_set(reviewer).is_ok())
+        .unwrap_or_else(|| constraint.value())
+}
+
+/// Resolves effective reviewers for apps with an explicit reviewer or managed
+/// app-specific constraint.
+pub fn resolve_app_approvals_reviewers(
+    configured: &BTreeMap<String, ApprovalsReviewer>,
+    global_reviewer: ApprovalsReviewer,
+    global_constraint: &ConstrainedWithSource<ApprovalsReviewer>,
+    app_constraints: &BTreeMap<String, ConstrainedWithSource<ApprovalsReviewer>>,
+) -> BTreeMap<String, ApprovalsReviewer> {
+    configured
+        .keys()
+        .chain(app_constraints.keys())
+        .cloned()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .map(|app_id| {
+            let constraint = app_constraints.get(&app_id).unwrap_or(global_constraint);
+            let reviewer = resolve_approvals_reviewer(
+                configured.get(&app_id).copied(),
+                global_reviewer,
+                constraint,
+            );
+            (app_id, reviewer)
+        })
+        .collect()
 }
 
 #[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
