@@ -305,9 +305,13 @@ pub async fn run_remote_environment(
     let processor = ConnectionProcessor::new(runtime_paths);
     let protocol_state = match config.relay_protocol {
         RemoteRelayProtocol::Legacy => RemoteRelayProtocolState::Legacy,
-        RemoteRelayProtocol::Noise => {
-            RemoteRelayProtocolState::Noise(NoiseChannelIdentity::generate()?)
-        }
+        RemoteRelayProtocol::Noise => RemoteRelayProtocolState::Noise(
+            NoiseChannelIdentity::generate().map_err(|error| {
+                ExecServerError::Protocol(format!(
+                    "failed to generate Noise relay identity: {error}"
+                ))
+            })?,
+        ),
     };
     let mut backoff = Duration::from_secs(1);
 
