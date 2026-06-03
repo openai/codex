@@ -131,13 +131,16 @@ async fn remote_control_handle_starts_pairing_before_websocket_connects() {
     remote_handle
         .current_enrollment
         .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .await
         .as_mut()
         .expect("current enrollment should exist")
         .expires_at = Some(OffsetDateTime::now_utc() + time::Duration::seconds(29));
 
     let response = remote_handle
-        .start_pairing(RemoteControlPairingStartParams { manual_code: true })
+        .start_pairing(
+            RemoteControlPairingStartParams { manual_code: true },
+            /*app_server_client_name*/ None,
+        )
         .await
         .expect("pairing should use the current server before websocket connect");
     server_task.await.expect("server task should finish");
@@ -219,7 +222,10 @@ async fn remote_control_handle_refreshes_after_pairing_auth_failure() {
     );
 
     let response = remote_handle
-        .start_pairing(RemoteControlPairingStartParams::default())
+        .start_pairing(
+            RemoteControlPairingStartParams::default(),
+            /*app_server_client_name*/ None,
+        )
         .await
         .expect("pairing should refresh after server token auth failure");
     server_task.await.expect("server task should finish");
@@ -332,13 +338,16 @@ async fn remote_control_handle_recovers_auth_before_refreshing_pairing() {
     remote_handle
         .current_enrollment
         .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .await
         .as_mut()
         .expect("current enrollment should exist")
         .expires_at = Some(OffsetDateTime::now_utc() + time::Duration::seconds(29));
 
     let response = remote_handle
-        .start_pairing(RemoteControlPairingStartParams::default())
+        .start_pairing(
+            RemoteControlPairingStartParams::default(),
+            /*app_server_client_name*/ None,
+        )
         .await
         .expect("pairing should refresh after auth recovery");
     server_task.await.expect("server task should finish");
@@ -414,21 +423,16 @@ async fn start_remote_control_pairing_preserves_expiry_parse_error_context() {
 }
 
 #[tokio::test]
-async fn remote_control_handle_disable_clears_current_enrollment() {
+async fn remote_control_handle_disable_keeps_current_enrollment() {
     let remote_handle = remote_control_handle_with_current_enrollment(
         TEST_REMOTE_CONTROL_URL,
         remote_control_auth_manager(),
     );
 
     remote_handle.disable();
-    remote_handle.enable().expect("enable should succeed");
-    assert_eq!(
-        remote_handle
-            .start_pairing(RemoteControlPairingStartParams::default())
-            .await
-            .expect_err("re-enabled remote control should wait for a current server")
-            .to_string(),
-        "remote control pairing is unavailable until enrollment completes"
+    assert!(
+        remote_handle.current_enrollment.lock().await.is_some(),
+        "disabled remote control should keep the selected pairing server"
     );
 }
 
@@ -458,7 +462,10 @@ async fn remote_control_handle_discards_pairing_response_after_auth_change() {
         let remote_handle = remote_handle.clone();
         async move {
             remote_handle
-                .start_pairing(RemoteControlPairingStartParams::default())
+                .start_pairing(
+                    RemoteControlPairingStartParams::default(),
+                    /*app_server_client_name*/ None,
+                )
                 .await
         }
     });
