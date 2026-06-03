@@ -944,6 +944,9 @@ pub(crate) fn ensure_workspace_allowed(
     ensure_workspace_account_allowed(Some(expected), actual)
 }
 
+/// Validates an already known ChatGPT account ID against an optional workspace restriction.
+///
+/// PAT login calls this directly because `/whoami` supplies the account ID without an ID token.
 pub(crate) fn ensure_workspace_account_allowed(
     expected: Option<&[String]>,
     actual: &str,

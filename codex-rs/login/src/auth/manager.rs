@@ -63,7 +63,6 @@ impl PartialEq for CodexAuth {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::PersonalAccessToken(a), Self::PersonalAccessToken(b)) => a == b,
-            (Self::PersonalAccessToken(_), _) | (_, Self::PersonalAccessToken(_)) => false,
             _ => self.api_auth_mode() == other.api_auth_mode(),
         }
     }
@@ -312,6 +311,10 @@ impl CodexAuth {
 
     pub fn is_api_key_auth(&self) -> bool {
         self.auth_mode() == AuthMode::ApiKey
+    }
+
+    pub fn is_personal_access_token_auth(&self) -> bool {
+        self.auth_mode() == AuthMode::PersonalAccessToken
     }
 
     pub fn is_chatgpt_auth(&self) -> bool {
@@ -1236,7 +1239,7 @@ impl UnauthorizedRecovery {
             .manager
             .auth_cached()
             .as_ref()
-            .is_some_and(|auth| matches!(auth, CodexAuth::PersonalAccessToken(_)))
+            .is_some_and(CodexAuth::is_personal_access_token_auth)
         {
             return "not_refreshable_auth";
         }
@@ -1579,11 +1582,6 @@ impl AuthManager {
     fn auths_equal_for_refresh(a: Option<&CodexAuth>, b: Option<&CodexAuth>) -> bool {
         match (a, b) {
             (None, None) => true,
-            (Some(CodexAuth::PersonalAccessToken(a)), Some(CodexAuth::PersonalAccessToken(b))) => {
-                a == b
-            }
-            (Some(CodexAuth::PersonalAccessToken(_)), Some(_))
-            | (Some(_), Some(CodexAuth::PersonalAccessToken(_))) => false,
             (Some(a), Some(b)) => match (a.api_auth_mode(), b.api_auth_mode()) {
                 (ApiAuthMode::ApiKey, ApiAuthMode::ApiKey) => a.api_key() == b.api_key(),
                 (ApiAuthMode::Chatgpt, ApiAuthMode::Chatgpt)
@@ -1596,6 +1594,7 @@ impl AuthManager {
                     }
                     _ => false,
                 },
+                (ApiAuthMode::PersonalAccessToken, ApiAuthMode::PersonalAccessToken) => a == b,
                 _ => false,
             },
             _ => false,
@@ -1787,9 +1786,10 @@ impl AuthManager {
             ))
         })?;
         let auth_before_reload = self.auth_cached();
-        if auth_before_reload.as_ref().is_some_and(|auth| {
-            auth.is_api_key_auth() || matches!(auth, CodexAuth::PersonalAccessToken(_))
-        }) {
+        if auth_before_reload
+            .as_ref()
+            .is_some_and(|auth| auth.is_api_key_auth() || auth.is_personal_access_token_auth())
+        {
             return Ok(());
         }
         let expected_account_id = auth_before_reload
