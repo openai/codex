@@ -6,8 +6,13 @@ use codex_config::LoaderOverrides;
 use codex_config::NoopThreadConfigLoader;
 use codex_config::RemoteThreadConfigLoader;
 use codex_config::ThreadConfigLoader;
+pub use codex_core::ThreadManagerStorageDeps;
+pub use codex_core::artifact_store::ArtifactStore;
+pub use codex_core::artifact_store::LocalArtifactStore;
 use codex_core::config::Config;
 use codex_core::resolve_installation_id;
+pub use codex_core::shell_snapshot::LocalShellSnapshotStore;
+pub use codex_core::shell_snapshot::ShellSnapshotStore;
 use codex_login::AuthManager;
 use codex_utils_cli::CliConfigOverrides;
 use std::collections::HashMap;
@@ -416,6 +421,16 @@ impl Default for AppServerRuntimeOptions {
     }
 }
 
+/// Optional storage overrides an app-server host can inject into managed threads.
+///
+/// Leaving these fields unset lets each managed thread construct its standard
+/// local [`ThreadManagerStorageDeps`] from the thread config.
+#[derive(Clone, Default)]
+pub struct AppServerRuntimeStorageOverrides {
+    /// Replaces the thread manager's standard local storage bundle when set.
+    pub thread_manager: Option<ThreadManagerStorageDeps>,
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn run_main_with_transport_options(
     arg0_paths: Arg0DispatchPaths,
@@ -427,6 +442,35 @@ pub async fn run_main_with_transport_options(
     session_source: SessionSource,
     auth: AppServerWebsocketAuthSettings,
     runtime_options: AppServerRuntimeOptions,
+) -> IoResult<()> {
+    run_main_with_transport_options_and_storage_overrides(
+        arg0_paths,
+        cli_config_overrides,
+        loader_overrides,
+        strict_config,
+        default_analytics_enabled,
+        transport,
+        session_source,
+        auth,
+        runtime_options,
+        AppServerRuntimeStorageOverrides::default(),
+    )
+    .await
+}
+
+/// Runs app-server with optional storage overrides for managed threads.
+#[allow(clippy::too_many_arguments)]
+pub async fn run_main_with_transport_options_and_storage_overrides(
+    arg0_paths: Arg0DispatchPaths,
+    cli_config_overrides: CliConfigOverrides,
+    loader_overrides: LoaderOverrides,
+    strict_config: bool,
+    default_analytics_enabled: bool,
+    transport: AppServerTransport,
+    session_source: SessionSource,
+    auth: AppServerWebsocketAuthSettings,
+    runtime_options: AppServerRuntimeOptions,
+    runtime_storage_overrides: AppServerRuntimeStorageOverrides,
 ) -> IoResult<()> {
     let (transport_event_tx, mut transport_event_rx) =
         mpsc::channel::<TransportEvent>(CHANNEL_CAPACITY);
@@ -815,6 +859,7 @@ pub async fn run_main_with_transport_options(
             rpc_transport: analytics_rpc_transport(&transport),
             remote_control_handle: Some(remote_control_handle.clone()),
             plugin_startup_tasks: runtime_options.plugin_startup_tasks,
+            runtime_storage_overrides,
         }));
         let mut thread_created_rx = processor.thread_created_receiver();
         let mut running_turn_count_rx = processor.subscribe_running_assistant_turn_count();
