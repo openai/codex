@@ -22,7 +22,6 @@ use super::CancellationEvent;
 use super::bottom_pane_view::BottomPaneView;
 use super::bottom_pane_view::ViewCompletion;
 use super::paste_burst::CharDecision;
-use super::paste_burst::FlushResult;
 use super::paste_burst::PasteBurst;
 use super::textarea::TextArea;
 use super::textarea::TextAreaState;
@@ -107,19 +106,13 @@ impl CustomPromptView {
                 modifiers,
                 ..
             } if !has_ctrl_or_alt(modifiers) && self.textarea.allows_paste_burst() => {
-                let burst_retro_chars = match self.paste_burst.on_plain_char_no_hold(now) {
-                    Some(CharDecision::BeginBuffer { retro_chars }) => {
-                        Some(usize::from(retro_chars) + 1)
-                    }
-                    _ => None,
-                };
+                let paste_like_burst = matches!(
+                    self.paste_burst.on_plain_char_no_hold(now),
+                    Some(CharDecision::BeginBuffer { .. })
+                );
                 self.textarea.input(key_event);
-                if let Some(retro_chars) = burst_retro_chars {
-                    let cursor = self.textarea.cursor();
-                    let before_cursor = &self.textarea.text()[..cursor];
-                    let _ = self
-                        .paste_burst
-                        .decide_begin_buffer(now, before_cursor, retro_chars);
+                if paste_like_burst {
+                    self.paste_burst.extend_window(now);
                 }
             }
             other => {
@@ -129,12 +122,8 @@ impl CustomPromptView {
         }
     }
 
-    fn flush_paste_burst_detector(&mut self, now: Instant) -> bool {
-        let flushed = !matches!(self.paste_burst.flush_if_due(now), FlushResult::None);
-        if flushed {
-            self.paste_burst.clear_after_explicit_paste();
-        }
-        flushed
+    fn flush_paste_burst_detector(&mut self, now: Instant) {
+        let _ = self.paste_burst.flush_if_due(now);
     }
 }
 
@@ -166,7 +155,8 @@ impl BottomPaneView for CustomPromptView {
     }
 
     fn flush_paste_burst_if_due(&mut self) -> bool {
-        self.flush_paste_burst_detector(Instant::now())
+        self.flush_paste_burst_detector(Instant::now());
+        false
     }
 
     fn is_in_paste_burst(&self) -> bool {
@@ -175,53 +165,8 @@ impl BottomPaneView for CustomPromptView {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn paste_burst_newline_does_not_submit() {
-        let (submitted, submitted_rx) = std::sync::mpsc::channel();
-        let mut view = CustomPromptView::new(
-            "Edit goal".to_string(),
-            "Type a goal objective and press Enter".to_string(),
-            "existing".to_string(),
-            /*context_label*/ None,
-            Box::new(move |text| {
-                submitted.send(text).expect("send submitted text");
-            }),
-        );
-        let now = Instant::now();
-
-        for (idx, ch) in " first".chars().enumerate() {
-            view.handle_key_event_at(KeyEvent::from(KeyCode::Char(ch)), now + elapsed(idx));
-        }
-        view.handle_key_event_at(KeyEvent::from(KeyCode::Enter), now + elapsed(6));
-        for (idx, ch) in "second".chars().enumerate() {
-            view.handle_key_event_at(KeyEvent::from(KeyCode::Char(ch)), now + elapsed(7 + idx));
-        }
-
-        assert!(submitted_rx.try_recv().is_err());
-        assert!(!view.is_complete());
-
-        view.flush_paste_burst_detector(
-            now + elapsed(40) + PasteBurst::recommended_active_flush_delay(),
-        );
-        view.handle_key_event_at(
-            KeyEvent::from(KeyCode::Enter),
-            now + elapsed(80) + PasteBurst::recommended_active_flush_delay(),
-        );
-
-        assert_eq!(
-            submitted_rx.try_recv(),
-            Ok("existing first\nsecond".to_string())
-        );
-        assert!(view.is_complete());
-    }
-
-    fn elapsed(ms: usize) -> std::time::Duration {
-        std::time::Duration::from_millis(ms as u64)
-    }
-}
+#[path = "custom_prompt_view_tests.rs"]
+mod tests;
 
 impl Renderable for CustomPromptView {
     fn desired_height(&self, width: u16) -> u16 {

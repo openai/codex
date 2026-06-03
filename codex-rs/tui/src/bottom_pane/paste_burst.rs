@@ -10,11 +10,16 @@
 //!   paste once enough chars have arrived.
 //!
 //! This module provides the `PasteBurst` state machine. `ChatComposer` feeds it only "plain"
-//! character events (no Ctrl/Alt) and uses its decisions to either:
+//! character events (no Ctrl/Alt) and uses the full buffering decisions to either:
 //!
 //! - briefly hold a first ASCII char (flicker suppression),
 //! - buffer a burst as a single pasted string, or
 //! - let input flow through as normal typing.
+//!
+//! Simpler bottom-pane views can also use the same detector without buffering: insert characters
+//! immediately, call [`PasteBurst::on_plain_char_no_hold`], and use
+//! [`PasteBurst::extend_window`] when a paste-like burst is observed so Enter is treated as a
+//! newline during the burst.
 //!
 //! # Call Pattern
 //!
@@ -32,6 +37,9 @@
 //!   [`PasteBurst::flush_before_modified_input`] to avoid leaving buffered text "stuck", and then
 //!   [`PasteBurst::clear_window_after_non_char`] so subsequent typing does not get grouped into a
 //!   previous burst.
+//! - If the caller inserted every char immediately and is using `PasteBurst` only as an Enter
+//!   suppression detector, it can skip buffering and simply call [`PasteBurst::extend_window`] when
+//!   [`PasteBurst::on_plain_char_no_hold`] returns [`CharDecision::BeginBuffer`].
 //!
 //! # State Variables
 //!
@@ -106,10 +114,10 @@
 //! - [`PasteBurst::on_plain_char_no_hold`] never holds (used for IME/non-ASCII paths), since
 //!   holding a non-ASCII character can feel like dropped input.
 //!
-//! # Contract With `ChatComposer`
+//! # Contract With Callers
 //!
-//! `PasteBurst` does not mutate the UI text buffer on its own. The caller (`ChatComposer`) must
-//! interpret decisions and apply the corresponding UI edits:
+//! `PasteBurst` does not mutate the UI text buffer on its own. Callers must interpret decisions
+//! and apply the corresponding UI edits. `ChatComposer` uses the full buffering contract:
 //!
 //! - For each plain ASCII `KeyCode::Char`, call [`PasteBurst::on_plain_char`].
 //!   - [`CharDecision::RetainFirstChar`]: do **not** insert the char into the textarea yet.
