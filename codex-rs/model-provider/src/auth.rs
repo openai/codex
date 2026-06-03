@@ -130,7 +130,9 @@ pub fn with_native_integrity_state(
     let Some(state) = state else {
         return auth_provider;
     };
-    let Some(CodexAuth::Chatgpt(_) | CodexAuth::ChatgptAuthTokens(_)) = auth else {
+    let Some(CodexAuth::Chatgpt(_) | CodexAuth::ChatgptAuthTokens(_) | CodexAuth::AgentIdentity(_)) =
+        auth
+    else {
         return auth_provider;
     };
     Arc::new(NativeIntegrityAuthProvider::new(auth_provider, state))

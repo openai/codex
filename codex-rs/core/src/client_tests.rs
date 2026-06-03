@@ -13,12 +13,15 @@ use crate::GenerateAttestationFuture;
 use codex_api::ApiError;
 use codex_api::ResponseEvent;
 use codex_app_server_protocol::AuthMode;
+use codex_http_state::HttpStateStore;
+use codex_http_state::HttpStateSurface;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_model_provider::BearerAuthProvider;
 use codex_model_provider_info::CHATGPT_CODEX_BASE_URL;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::WireApi;
+use codex_model_provider_info::built_in_model_providers;
 use codex_model_provider_info::create_oss_provider_with_base_url;
 use codex_otel::SessionTelemetry;
 use codex_protocol::SessionId;
@@ -68,10 +71,31 @@ fn test_model_client_with_parent(
     session_source: SessionSource,
     parent_thread_id: Option<ThreadId>,
 ) -> ModelClient {
+    test_model_client_with_parent_and_auth(
+        session_source,
+        parent_thread_id,
+        /*auth_manager*/ None,
+    )
+}
+
+fn test_model_client_with_parent_and_auth(
+    session_source: SessionSource,
+    parent_thread_id: Option<ThreadId>,
+    auth_manager: Option<Arc<AuthManager>>,
+) -> ModelClient {
     let provider = create_oss_provider_with_base_url("https://example.com/v1", WireApi::Responses);
+    test_model_client_with_provider(session_source, parent_thread_id, auth_manager, provider)
+}
+
+fn test_model_client_with_provider(
+    session_source: SessionSource,
+    parent_thread_id: Option<ThreadId>,
+    auth_manager: Option<Arc<AuthManager>>,
+    provider: ModelProviderInfo,
+) -> ModelClient {
     let thread_id = ThreadId::new();
     ModelClient::new(
-        /*auth_manager*/ None,
+        auth_manager,
         thread_id.into(),
         thread_id,
         /*installation_id*/ "11111111-1111-4111-8111-111111111111".to_string(),
@@ -320,6 +344,77 @@ fn build_ws_client_metadata_includes_window_lineage_and_turn_metadata() {
             ),
         ])
     );
+}
+
+#[tokio::test]
+async fn current_client_setup_attaches_and_rotates_native_http_state() {
+    let codex_home = TempDir::new().expect("tempdir");
+    let store = HttpStateStore::new(codex_home.path().to_path_buf());
+    store
+        .set(HttpStateSurface::CodexTui, "old-state".to_string())
+        .expect("state should store");
+    let auth_manager = AuthManager::from_auth_for_testing_with_home(
+        CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+        codex_home.path().to_path_buf(),
+    );
+    let client = test_model_client_with_provider(
+        SessionSource::Cli,
+        /*parent_thread_id*/ None,
+        Some(auth_manager),
+        built_in_model_providers(/*openai_base_url*/ None)["openai"].clone(),
+    );
+    let setup = client
+        .current_client_setup()
+        .await
+        .expect("client setup should resolve");
+    let request_url = "https://chatgpt.com/backend-api/codex/responses";
+    let mut request_headers = http::HeaderMap::new();
+    setup
+        .api_auth
+        .add_auth_headers_for_url(request_url, &mut request_headers);
+    assert_eq!(
+        request_headers
+            .get("x-oai-is")
+            .and_then(|value| value.to_str().ok()),
+        Some("old-state"),
+    );
+
+    let mut response_headers = http::HeaderMap::new();
+    response_headers.insert(
+        "x-oai-is-update",
+        http::HeaderValue::from_static("new-state"),
+    );
+    setup
+        .api_auth
+        .observe_response_headers(request_url, &request_headers, &response_headers);
+    assert_eq!(
+        store
+            .get(HttpStateSurface::CodexTui)
+            .expect("state should load"),
+        Some("new-state".to_string()),
+    );
+}
+
+#[test]
+fn surface_change_discards_checked_out_websocket_session() {
+    let codex_home = TempDir::new().expect("tempdir");
+    let auth_manager = AuthManager::from_auth_for_testing_with_home(
+        CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+        codex_home.path().to_path_buf(),
+    );
+    let client = test_model_client_with_parent_and_auth(
+        SessionSource::Cli,
+        /*parent_thread_id*/ None,
+        Some(auth_manager),
+    );
+    let mut session = client.new_session();
+    session.websocket_session.last_response_from_untraced_warmup = true;
+
+    client.set_http_state_surface(HttpStateSurface::CodexDesktop);
+    drop(session);
+
+    let (_, cached_session) = client.take_cached_websocket_session();
+    assert!(!cached_session.last_response_from_untraced_warmup);
 }
 
 #[tokio::test]
