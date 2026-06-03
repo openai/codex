@@ -100,6 +100,7 @@ async fn run_remote_compact_task_inner(
         CompactionImplementation::ResponsesCompact,
         phase,
     );
+    let mut active_context_tokens_before = sess.get_total_token_usage().await;
     let attempt = CompactionAnalyticsAttempt::begin(
         sess.as_ref(),
         turn_context.as_ref(),
@@ -119,6 +120,7 @@ async fn run_remote_compact_task_inner(
                     sess.as_ref(),
                     codex_analytics::CompactionStatus::Interrupted,
                     Some(error),
+                    Some(active_context_tokens_before),
                 )
                 .await;
             return Err(CodexErr::TurnAborted);
@@ -129,6 +131,7 @@ async fn run_remote_compact_task_inner(
         turn_context,
         initial_context_injection,
         compaction_metadata,
+        &mut active_context_tokens_before,
     )
     .await;
     let status = compaction_status_from_result(&result);
@@ -136,11 +139,25 @@ async fn run_remote_compact_task_inner(
     if result.is_ok() {
         let post_compact_outcome = run_post_compact_hooks(sess, turn_context, trigger).await;
         if let PostCompactHookOutcome::Stopped = post_compact_outcome {
-            attempt.track(sess.as_ref(), status, error).await;
+            attempt
+                .track(
+                    sess.as_ref(),
+                    status,
+                    error,
+                    Some(active_context_tokens_before),
+                )
+                .await;
             return Err(CodexErr::TurnAborted);
         }
     }
-    attempt.track(sess.as_ref(), status, error.clone()).await;
+    attempt
+        .track(
+            sess.as_ref(),
+            status,
+            error.clone(),
+            Some(active_context_tokens_before),
+        )
+        .await;
     if let Err(err) = result {
         sess.track_turn_codex_error(turn_context, &err);
         let event = EventMsg::Error(
@@ -157,6 +174,7 @@ async fn run_remote_compact_task_inner_impl(
     turn_context: &Arc<TurnContext>,
     initial_context_injection: InitialContextInjection,
     compaction_metadata: CompactionTurnMetadata,
+    active_context_tokens_before: &mut i64,
 ) -> CodexResult<()> {
     let context_compaction_item = ContextCompactionItem::new();
     // Use the UI compaction item ID as the trace compaction ID so protocol lifecycle events,
@@ -172,17 +190,26 @@ async fn run_remote_compact_task_inner_impl(
         .await;
     let mut history = sess.clone_history().await;
     let base_instructions = sess.get_base_instructions().await;
-    let rewritten_outputs = trim_function_call_history_to_fit_context_window(
-        &mut history,
-        turn_context.as_ref(),
-        &base_instructions,
-    );
+    let (rewritten_outputs, estimated_deleted_tokens) =
+        trim_function_call_history_to_fit_context_window(
+            &mut history,
+            turn_context.as_ref(),
+            &base_instructions,
+        );
     if rewritten_outputs > 0 {
         info!(
             turn_id = %turn_context.sub_id,
             rewritten_outputs,
             "rewrote history outputs before remote compaction"
         );
+    }
+    if estimated_deleted_tokens > 0 {
+        let max_local_deleted_tokens = sess
+            .get_total_token_usage_breakdown()
+            .await
+            .estimated_tokens_of_items_added_since_last_successful_api_response;
+        *active_context_tokens_before = (*active_context_tokens_before)
+            .saturating_sub(estimated_deleted_tokens.min(max_local_deleted_tokens));
     }
     // This is the history selected for remote compaction, after any output rewriting required to
     // fit the compact endpoint. The checkpoint below records it separately from the next sampling
@@ -382,18 +409,21 @@ pub(crate) fn trim_function_call_history_to_fit_context_window(
     history: &mut ContextManager,
     turn_context: &TurnContext,
     base_instructions: &BaseInstructions,
-) -> usize {
+) -> (usize, i64) {
     let Some(context_window) = turn_context.model_context_window() else {
-        return 0;
+        return (0, 0);
     };
     let mut rewritten_outputs = 0usize;
+    let mut estimated_deleted_tokens = 0i64;
     let item_count = history.raw_items().len();
 
     for index in (0..item_count).rev() {
-        if history
-            .estimate_token_count_with_base_instructions(base_instructions)
-            .is_none_or(|estimated_tokens| estimated_tokens <= context_window)
-        {
+        let Some(estimated_tokens_before) =
+            history.estimate_token_count_with_base_instructions(base_instructions)
+        else {
+            break;
+        };
+        if estimated_tokens_before <= context_window {
             break;
         }
         let Some(rewritten_item) = history
@@ -406,10 +436,15 @@ pub(crate) fn trim_function_call_history_to_fit_context_window(
         let mut items = history.raw_items().to_vec();
         items[index] = rewritten_item;
         history.replace(items);
+        let estimated_tokens_after = history
+            .estimate_token_count_with_base_instructions(base_instructions)
+            .unwrap_or_default();
         rewritten_outputs += 1;
+        estimated_deleted_tokens = estimated_deleted_tokens
+            .saturating_add(estimated_tokens_before.saturating_sub(estimated_tokens_after));
     }
 
-    rewritten_outputs
+    (rewritten_outputs, estimated_deleted_tokens)
 }
 
 fn rewritten_output_for_context_window(item: &ResponseItem) -> Option<ResponseItem> {
