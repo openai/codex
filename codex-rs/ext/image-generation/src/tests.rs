@@ -86,6 +86,22 @@ fn generated_output_returns_image_input_and_output_hint() {
 }
 
 #[test]
+fn generated_output_returns_generated_image_helper_input_in_code_mode() {
+    let output = GeneratedImageOutput {
+        result: RESULT.to_string(),
+        output_hint: Some("generated image save hint".to_string()),
+    };
+
+    assert_eq!(
+        output.code_mode_result(&function_payload()),
+        serde_json::json!({
+            "image_url": format!("data:image/png;base64,{RESULT}"),
+            "output_hint": "generated image save hint",
+        })
+    );
+}
+
+#[test]
 fn generated_output_omits_oversized_output_hint() {
     let long_path = "x".repeat(1024);
     let output = GeneratedImageOutput {

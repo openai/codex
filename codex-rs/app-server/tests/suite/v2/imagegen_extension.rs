@@ -162,7 +162,7 @@ const result = await tools.image_gen__imagegen({
   action: "generate",
   prompt: "paint a blue whale",
 });
-image(result);
+generatedImage(result);
 "#,
                 ),
                 responses::ev_completed("resp-1"),
@@ -209,7 +209,12 @@ image(result);
             "detail": "high",
         })
     );
-    assert_eq!(output["output"].as_array().map(Vec::len), Some(2));
+    assert!(
+        output["output"][2]["text"]
+            .as_str()
+            .is_some_and(|text| text.contains("Generated images are saved"))
+    );
+    assert_eq!(output["output"].as_array().map(Vec::len), Some(3));
 
     Ok(())
 }
