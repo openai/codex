@@ -542,6 +542,14 @@ struct ExecServerCommand {
     /// Use Agent Identity auth from CODEX_ACCESS_TOKEN for remote registration.
     #[arg(long = "use-agent-identity-auth", requires = "remote")]
     use_agent_identity_auth: bool,
+
+    /// Opt into Noise-encrypted remote relay communication.
+    #[arg(
+        long = "enable-noise",
+        env = "CODEX_EXEC_SERVER_ENABLE_NOISE",
+        requires = "remote"
+    )]
+    enable_noise: bool,
 }
 
 #[derive(Debug, clap::Subcommand)]
@@ -1610,6 +1618,9 @@ async fn run_exec_server_command(
         )?;
         if let Some(name) = cmd.name {
             remote_config.name = name;
+        }
+        if cmd.enable_noise {
+            remote_config.relay_protocol = codex_exec_server::RemoteRelayProtocol::Noise;
         }
         codex_exec_server::run_remote_environment(remote_config, runtime_paths).await?;
         Ok(())
@@ -3220,6 +3231,30 @@ mod tests {
 
         reject_root_strict_config_for_subcommand(cli.interactive.strict_config, &cli.subcommand)
             .expect("exec-server should support root --strict-config");
+    }
+
+    #[test]
+    fn exec_server_enable_noise_is_explicit_remote_opt_in() {
+        let cli = MultitoolCli::try_parse_from([
+            "codex",
+            "exec-server",
+            "--remote",
+            "https://registry.example",
+            "--environment-id",
+            "environment-1",
+            "--enable-noise",
+        ])
+        .expect("parse");
+
+        assert_matches!(
+            cli.subcommand,
+            Some(Subcommand::ExecServer(ExecServerCommand {
+                enable_noise: true,
+                ..
+            }))
+        );
+        MultitoolCli::try_parse_from(["codex", "exec-server", "--enable-noise"])
+            .expect_err("--enable-noise should require --remote");
     }
 
     #[test]
