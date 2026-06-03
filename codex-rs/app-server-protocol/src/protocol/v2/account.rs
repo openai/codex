@@ -6,6 +6,7 @@ use codex_protocol::protocol::CreditsSnapshot as CoreCreditsSnapshot;
 use codex_protocol::protocol::RateLimitReachedType as CoreRateLimitReachedType;
 use codex_protocol::protocol::RateLimitSnapshot as CoreRateLimitSnapshot;
 use codex_protocol::protocol::RateLimitWindow as CoreRateLimitWindow;
+use codex_protocol::protocol::SpendControlLimitSnapshot as CoreSpendControlLimitSnapshot;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
@@ -137,6 +138,78 @@ pub struct CancelLoginAccountResponse {
     pub status: CancelLoginAccountStatus,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct AccountSessionsAddParams {
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub switch_to_added_account: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct AccountSessionsListParams {
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub refresh_workspace_metadata: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct AccountSessionsLogoutParams {
+    pub session_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct AccountSessionsSwitchParams {
+    pub session_id: String,
+    pub account_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct AccountSessionsResponse {
+    pub active_session_id: Option<String>,
+    pub sessions: Vec<AccountSession>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct AccountSession {
+    pub session_id: String,
+    pub email: Option<String>,
+    pub user_id: Option<String>,
+    pub display_name: Option<String>,
+    pub image_url: Option<String>,
+    pub last_used_at: i64,
+    pub is_active: bool,
+    pub selected_workspace_account_id: Option<String>,
+    pub workspaces: Vec<AccountSessionWorkspace>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct AccountSessionWorkspace {
+    pub account_id: String,
+    pub name: Option<String>,
+    pub image_url: Option<String>,
+    pub kind: Option<AccountSessionWorkspaceKind>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub enum AccountSessionWorkspaceKind {
+    Personal,
+    Workspace,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -247,6 +320,11 @@ pub struct AccountUpdatedNotification {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+/// Sparse rolling rate-limit update.
+///
+/// Clients should merge available values into the most recent `account/rateLimits/read` response
+/// or refetch that snapshot. Nullable account metadata may be unavailable in a rolling update and
+/// does not clear a previously observed value.
 pub struct AccountRateLimitsUpdatedNotification {
     pub rate_limits: RateLimitSnapshot,
 }
@@ -260,6 +338,7 @@ pub struct RateLimitSnapshot {
     pub primary: Option<RateLimitWindow>,
     pub secondary: Option<RateLimitWindow>,
     pub credits: Option<CreditsSnapshot>,
+    pub individual_limit: Option<SpendControlLimitSnapshot>,
     pub plan_type: Option<PlanType>,
     pub rate_limit_reached_type: Option<RateLimitReachedType>,
 }
@@ -272,6 +351,7 @@ impl From<CoreRateLimitSnapshot> for RateLimitSnapshot {
             primary: value.primary.map(RateLimitWindow::from),
             secondary: value.secondary.map(RateLimitWindow::from),
             credits: value.credits.map(CreditsSnapshot::from),
+            individual_limit: value.individual_limit.map(SpendControlLimitSnapshot::from),
             plan_type: value.plan_type,
             rate_limit_reached_type: value
                 .rate_limit_reached_type
@@ -367,6 +447,28 @@ impl From<CoreCreditsSnapshot> for CreditsSnapshot {
             has_credits: value.has_credits,
             unlimited: value.unlimited,
             balance: value.balance,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct SpendControlLimitSnapshot {
+    pub limit: String,
+    pub used: String,
+    pub remaining_percent: i32,
+    #[ts(type = "number")]
+    pub resets_at: i64,
+}
+
+impl From<CoreSpendControlLimitSnapshot> for SpendControlLimitSnapshot {
+    fn from(value: CoreSpendControlLimitSnapshot) -> Self {
+        Self {
+            limit: value.limit,
+            used: value.used,
+            remaining_percent: value.remaining_percent,
+            resets_at: value.resets_at,
         }
     }
 }

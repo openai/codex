@@ -16,12 +16,18 @@ use crate::client::http_client::PendingReqwestHttpBodyStream;
 use crate::client::http_client::ReqwestHttpRequestRunner;
 use crate::protocol::ExecParams;
 use crate::protocol::ExecResponse;
+use crate::protocol::FsCanonicalizeParams;
+use crate::protocol::FsCanonicalizeResponse;
 use crate::protocol::FsCopyParams;
 use crate::protocol::FsCopyResponse;
 use crate::protocol::FsCreateDirectoryParams;
 use crate::protocol::FsCreateDirectoryResponse;
 use crate::protocol::FsGetMetadataParams;
 use crate::protocol::FsGetMetadataResponse;
+use crate::protocol::FsJoinParams;
+use crate::protocol::FsJoinResponse;
+use crate::protocol::FsParentParams;
+use crate::protocol::FsParentResponse;
 use crate::protocol::FsReadDirectoryParams;
 use crate::protocol::FsReadDirectoryResponse;
 use crate::protocol::FsReadFileParams;
@@ -238,6 +244,30 @@ impl ExecServerHandler {
     ) -> Result<FsGetMetadataResponse, JSONRPCErrorError> {
         self.require_initialized_for("filesystem")?;
         self.file_system.get_metadata(params).await
+    }
+
+    pub(crate) async fn fs_canonicalize(
+        &self,
+        params: FsCanonicalizeParams,
+    ) -> Result<FsCanonicalizeResponse, JSONRPCErrorError> {
+        self.require_initialized_for("filesystem")?;
+        self.file_system.canonicalize(params).await
+    }
+
+    pub(crate) async fn fs_join(
+        &self,
+        params: FsJoinParams,
+    ) -> Result<FsJoinResponse, JSONRPCErrorError> {
+        self.require_initialized_for("filesystem")?;
+        self.file_system.join(params).await
+    }
+
+    pub(crate) async fn fs_parent(
+        &self,
+        params: FsParentParams,
+    ) -> Result<FsParentResponse, JSONRPCErrorError> {
+        self.require_initialized_for("filesystem")?;
+        self.file_system.parent(params).await
     }
 
     pub(crate) async fn fs_read_directory(

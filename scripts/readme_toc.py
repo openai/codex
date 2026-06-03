@@ -88,7 +88,7 @@ def check_or_fix(readme_path: Path, fix: bool) -> int:
     current_block = lines[begin_idx + 1 : end_idx]
     current = [l for l in current_block if l.lstrip().startswith("- [")]
     # generate expected ToC from content without current ToC
-    toc_content = lines[:begin_idx] + lines[end_idx+1:]
+    toc_content = lines[:begin_idx] + lines[end_idx + 1 :]
     expected = generate_toc_lines("\n".join(toc_content))
     if current == expected:
         return 0
@@ -109,7 +109,7 @@ def check_or_fix(readme_path: Path, fix: bool) -> int:
         return 1
     # rebuild file with updated ToC
     prefix = lines[: begin_idx + 1]
-    suffix = lines[end_idx+1:]
+    suffix = lines[end_idx + 1 :]
     new_lines = prefix + [""] + expected + [""] + suffix
     readme_path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
     print(f"Updated ToC in {readme_path}.")

@@ -1318,6 +1318,7 @@ mod tests {
             meta: SessionMeta {
                 id: thread_id,
                 forked_from_id: None,
+                parent_thread_id: None,
                 timestamp: metadata.created_at.to_rfc3339(),
                 cwd: PathBuf::new(),
                 originator: String::new(),
@@ -1331,6 +1332,7 @@ mod tests {
                 base_instructions: None,
                 dynamic_tools: None,
                 memory_mode: Some("polluted".to_string()),
+                multi_agent_version: None,
             },
             git: None,
         })];
@@ -1377,6 +1379,7 @@ mod tests {
             meta: SessionMeta {
                 id: thread_id,
                 forked_from_id: None,
+                parent_thread_id: None,
                 timestamp: created_at,
                 cwd: PathBuf::new(),
                 originator: String::new(),
@@ -1390,6 +1393,7 @@ mod tests {
                 base_instructions: None,
                 dynamic_tools: None,
                 memory_mode: None,
+                multi_agent_version: None,
             },
             git: Some(GitInfo {
                 commit_hash: Some(codex_git_utils::GitSha::new("rollout-sha")),

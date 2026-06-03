@@ -1002,7 +1002,7 @@ impl UnifiedExecProcessManager {
         let mut env = local_policy_env.clone();
         env.insert(
             CODEX_THREAD_ID_ENV_VAR.to_string(),
-            context.session.conversation_id.to_string(),
+            context.session.thread_id.to_string(),
         );
         let env = apply_unified_exec_env(env);
         let exec_server_env_config = ExecServerEnvConfig {
@@ -1010,8 +1010,7 @@ impl UnifiedExecProcessManager {
             local_policy_env,
         };
         let mut orchestrator = ToolOrchestrator::new();
-        let mut runtime =
-            UnifiedExecRuntime::new(self, context.turn.unified_exec_shell_mode.clone());
+        let mut runtime = UnifiedExecRuntime::new(self, request.shell_mode.clone());
         let file_system_sandbox_policy = context.turn.file_system_sandbox_policy();
         let exec_approval_requirement = context
             .session

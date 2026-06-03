@@ -60,7 +60,9 @@ fn test_model_info(
         input_modalities: default_input_modalities(),
         used_fallback_model_metadata: false,
         supports_search_tool: false,
+        auto_review_model_override: None,
         tool_mode: None,
+        multi_agent_version: None,
         priority: 1,
         additional_speed_tiers: Vec::new(),
         service_tiers,
@@ -163,6 +165,7 @@ async fn spawn_agent_description_lists_visible_models_and_reasoning_efforts() ->
                 .features
                 .enable(Feature::Collab)
                 .expect("test config should allow feature update");
+            config.multi_agent_v2.hide_spawn_agent_metadata = false;
         });
     let test = builder.build(&server).await?;
     wait_for_model_available(&test.thread_manager.get_models_manager(), "visible-model").await;
@@ -184,7 +187,7 @@ async fn spawn_agent_description_lists_visible_models_and_reasoning_efforts() ->
     );
     assert!(
         description.contains(
-            "Spawned agents inherit your current model by default. If provided, `model` specifies the model to use for the spawned agent."
+            "Spawned agents inherit your current model by default. Omit `model` to use that preferred default; set `model` only when an explicit override is needed."
         ),
         "expected inherited-model guidance in spawn_agent description: {description:?}"
     );

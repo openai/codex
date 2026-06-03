@@ -176,7 +176,7 @@ async fn guardian_test_session_and_turn_with_base_url(
     base_url: &str,
 ) -> (Arc<Session>, Arc<TurnContext>) {
     let (mut session, mut turn) = crate::session::tests::make_session_and_context().await;
-    session.conversation_id = fixed_guardian_parent_session_id();
+    session.thread_id = fixed_guardian_parent_session_id();
     let mut config = (*turn.config).clone();
     config.model_provider.base_url = Some(format!("{base_url}/v1"));
     config.user_instructions = None;
@@ -365,7 +365,7 @@ async fn build_guardian_prompt_full_mode_preserves_initial_review_format() -> an
 #[tokio::test(flavor = "current_thread")]
 async fn build_guardian_prompt_includes_parent_turn_denied_reads() -> anyhow::Result<()> {
     let (mut session, mut turn) = crate::session::tests::make_session_and_context().await;
-    session.conversation_id = fixed_guardian_parent_session_id();
+    session.thread_id = fixed_guardian_parent_session_id();
     let denied_root = test_path_buf("/repo/private").abs();
     let denied_glob = test_path_buf("/repo/private/**").display().to_string();
     turn.permission_profile = PermissionProfile::from_runtime_permissions(
@@ -1100,6 +1100,20 @@ async fn routes_approval_to_guardian_requires_guardian_reviewer() {
 }
 
 #[tokio::test]
+async fn routes_approval_to_guardian_can_use_app_reviewer_override() {
+    let (_session, turn) = crate::session::tests::make_session_and_context().await;
+
+    assert!(!routes_approval_to_guardian_with_reviewer(
+        &turn,
+        ApprovalsReviewer::User
+    ));
+    assert!(routes_approval_to_guardian_with_reviewer(
+        &turn,
+        ApprovalsReviewer::AutoReview
+    ));
+}
+
+#[tokio::test]
 async fn routes_approval_to_guardian_allows_granular_review_policy() {
     let (_session, mut turn) = crate::session::tests::make_session_and_context().await;
     let mut config = (*turn.config).clone();
@@ -1288,6 +1302,95 @@ fn guardian_output_schema_requires_only_outcome_and_allows_optional_details() {
     );
 }
 
+async fn guardian_request_model_for_auto_review_override(
+    auto_review_model_override: Option<String>,
+) -> anyhow::Result<(String, String, String)> {
+    let server = start_mock_server().await;
+    let guardian_assessment = serde_json::json!({
+        "outcome": "allow",
+    })
+    .to_string();
+    let request_log = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-guardian"),
+            ev_assistant_message("msg-guardian", &guardian_assessment),
+            ev_completed("resp-guardian"),
+        ]),
+    )
+    .await;
+
+    let (session, mut turn) = guardian_test_session_and_turn(&server).await;
+    Arc::get_mut(&mut turn)
+        .expect("turn should be unique")
+        .model_info
+        .auto_review_model_override = auto_review_model_override;
+    let parent_model = turn.model_info.slug.clone();
+    let preferred_model = turn.provider.approval_review_preferred_model().to_string();
+    seed_guardian_parent_history(&session, &turn).await;
+
+    let outcome = run_guardian_review_session_for_test(
+        Arc::clone(&session),
+        turn,
+        GuardianApprovalRequest::Shell {
+            id: "shell-1".to_string(),
+            command: vec!["git".to_string(), "push".to_string()],
+            cwd: test_path_buf("/repo/codex-rs/core").abs(),
+            sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
+            additional_permissions: None,
+            justification: None,
+        },
+        Some("Sandbox denied outbound git push to github.com.".to_string()),
+        guardian_output_schema(),
+        /*external_cancel*/ None,
+    )
+    .await;
+    let (GuardianReviewOutcome::Completed(_), _) = outcome else {
+        panic!("expected guardian assessment");
+    };
+
+    let request_model = request_log
+        .single_request()
+        .body_json()
+        .get("model")
+        .and_then(|value| value.as_str())
+        .expect("guardian request should include a model")
+        .to_string();
+
+    Ok((request_model, parent_model, preferred_model))
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn guardian_review_uses_model_catalog_override_when_preferred_review_model_exists()
+-> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let override_model = "guardian-review-model-override".to_string();
+    let (request_model, parent_model, preferred_model) =
+        guardian_request_model_for_auto_review_override(Some(override_model.clone())).await?;
+
+    assert_eq!(request_model, override_model);
+    assert_ne!(request_model, parent_model);
+    assert_ne!(request_model, preferred_model);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn guardian_review_uses_preferred_review_model_without_model_catalog_override()
+-> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let (request_model, parent_model, preferred_model) =
+        guardian_request_model_for_auto_review_override(/*auto_review_model_override*/ None)
+            .await?;
+
+    assert_eq!(request_model, preferred_model);
+    assert_ne!(request_model, parent_model);
+
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn guardian_review_request_layout_matches_model_visible_request_snapshot()
 -> anyhow::Result<()> {
@@ -1312,7 +1415,7 @@ async fn guardian_review_request_layout_matches_model_visible_request_snapshot()
     .await;
 
     let (mut session, mut turn) = crate::session::tests::make_session_and_context().await;
-    session.conversation_id = fixed_guardian_parent_session_id();
+    session.thread_id = fixed_guardian_parent_session_id();
     let temp_cwd = TempDir::new()?;
     let mut config = (*turn.config).clone();
     config.cwd = temp_cwd.abs();
@@ -1361,7 +1464,7 @@ async fn guardian_review_request_layout_matches_model_visible_request_snapshot()
         .as_deref()
         .expect("guardian thread id");
     assert_eq!(assessment.outcome, GuardianAssessmentOutcome::Allow);
-    assert_ne!(guardian_thread_id, session.conversation_id.to_string());
+    assert_ne!(guardian_thread_id, session.thread_id.to_string());
     ThreadId::from_string(guardian_thread_id).expect("guardian thread id should be a valid UUID");
     assert!(matches!(
         metadata.guardian_session_kind,
@@ -1464,7 +1567,7 @@ async fn build_guardian_prompt_items_includes_parent_session_id() -> anyhow::Res
     assert!(
         prompt_text.contains(&format!(
             ">>> TRANSCRIPT END\nReviewed Codex session id: {}\n",
-            session.conversation_id
+            session.thread_id
         )),
         "guardian prompt should expose the parent session id immediately after the transcript end"
     );

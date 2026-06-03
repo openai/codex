@@ -60,6 +60,9 @@ pub(crate) enum StatusLineItem {
     /// Model name with reasoning level suffix.
     ModelWithReasoning,
 
+    /// Current reasoning level.
+    Reasoning,
+
     /// Current working directory path.
     CurrentDir,
 
@@ -144,6 +147,7 @@ impl StatusLineItem {
         match self {
             StatusLineItem::ModelName => "Current model name",
             StatusLineItem::ModelWithReasoning => "Current model name with reasoning level",
+            StatusLineItem::Reasoning => "Current reasoning level",
             StatusLineItem::CurrentDir => "Current working directory",
             StatusLineItem::ProjectRoot => "Project name (omitted when unavailable)",
             StatusLineItem::GitBranch => "Current Git branch (omitted when unavailable)",
@@ -191,6 +195,7 @@ impl StatusLineItem {
         match self {
             StatusLineItem::ModelName => StatusSurfacePreviewItem::Model,
             StatusLineItem::ModelWithReasoning => StatusSurfacePreviewItem::ModelWithReasoning,
+            StatusLineItem::Reasoning => StatusSurfacePreviewItem::Reasoning,
             StatusLineItem::CurrentDir => StatusSurfacePreviewItem::CurrentDir,
             StatusLineItem::ProjectRoot => StatusSurfacePreviewItem::ProjectRoot,
             StatusLineItem::GitBranch => StatusSurfacePreviewItem::GitBranch,
@@ -447,6 +452,15 @@ mod tests {
         assert_eq!(
             "model-name".parse::<StatusLineItem>(),
             Ok(StatusLineItem::ModelName)
+        );
+    }
+
+    #[test]
+    fn reasoning_is_selectable_id() {
+        assert_eq!(StatusLineItem::Reasoning.to_string(), "reasoning");
+        assert_eq!(
+            "reasoning".parse::<StatusLineItem>(),
+            Ok(StatusLineItem::Reasoning)
         );
     }
 

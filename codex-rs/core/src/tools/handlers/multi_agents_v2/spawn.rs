@@ -72,7 +72,7 @@ async fn handle_spawn_agent(
             CollabAgentSpawnBeginEvent {
                 call_id: call_id.clone(),
                 started_at_ms: now_unix_timestamp_ms(),
-                sender_thread_id: session.conversation_id,
+                sender_thread_id: session.thread_id,
                 prompt: prompt.clone(),
                 model: args.model.clone().unwrap_or_default(),
                 reasoning_effort: args.reasoning_effort.unwrap_or_default(),
@@ -108,10 +108,9 @@ async fn handle_spawn_agent(
     )
     .await?;
     apply_spawn_agent_runtime_overrides(&mut config, turn.as_ref())?;
-    apply_spawn_agent_overrides(&mut config, child_depth);
 
     let spawn_source = thread_spawn_source(
-        session.conversation_id,
+        session.thread_id,
         &turn.session_source,
         child_depth,
         role_name,
@@ -144,6 +143,7 @@ async fn handle_spawn_agent(
             SpawnAgentOptions {
                 fork_parent_spawn_call_id: fork_mode.as_ref().map(|_| call_id.clone()),
                 fork_mode,
+                parent_thread_id: Some(session.thread_id),
                 environments: Some(turn.environments.to_selections()),
             },
         ),
@@ -197,7 +197,7 @@ async fn handle_spawn_agent(
             CollabAgentSpawnEndEvent {
                 call_id,
                 completed_at_ms: now_unix_timestamp_ms(),
-                sender_thread_id: session.conversation_id,
+                sender_thread_id: session.thread_id,
                 new_thread_id,
                 new_agent_nickname,
                 new_agent_role,

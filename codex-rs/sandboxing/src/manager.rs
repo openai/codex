@@ -61,6 +61,27 @@ pub fn get_platform_sandbox(windows_sandbox_enabled: bool) -> Option<SandboxType
     }
 }
 
+pub fn with_managed_mitm_ca_readable_root(
+    permission_profile: PermissionProfile,
+    managed_mitm_ca_trust_bundle_path: Option<&AbsolutePathBuf>,
+    sandbox_policy_cwd: &Path,
+) -> PermissionProfile {
+    let Some(managed_mitm_ca_trust_bundle_path) = managed_mitm_ca_trust_bundle_path else {
+        return permission_profile;
+    };
+    let (file_system_sandbox_policy, network_sandbox_policy) =
+        permission_profile.to_runtime_permissions();
+    let file_system_sandbox_policy = file_system_sandbox_policy.with_additional_readable_roots(
+        sandbox_policy_cwd,
+        std::slice::from_ref(managed_mitm_ca_trust_bundle_path),
+    );
+    PermissionProfile::from_runtime_permissions_with_enforcement(
+        permission_profile.enforcement(),
+        &file_system_sandbox_policy,
+        network_sandbox_policy,
+    )
+}
+
 #[derive(Debug)]
 pub struct SandboxCommand {
     pub program: OsString,
@@ -182,8 +203,15 @@ impl SandboxManager {
             windows_sandbox_private_desktop,
         } = request;
         let additional_permissions = command.additional_permissions.take();
+        let managed_mitm_ca_trust_bundle_path =
+            network.and_then(NetworkProxy::managed_mitm_ca_trust_bundle_path);
         let effective_permission_profile =
             effective_permission_profile(permissions, additional_permissions.as_ref());
+        let effective_permission_profile = with_managed_mitm_ca_readable_root(
+            effective_permission_profile,
+            managed_mitm_ca_trust_bundle_path.as_ref(),
+            sandbox_policy_cwd,
+        );
         let (effective_file_system_policy, effective_network_policy) =
             effective_permission_profile.to_runtime_permissions();
         let mut argv = Vec::with_capacity(1 + command.args.len());
@@ -262,19 +290,18 @@ impl SandboxManager {
 
 pub fn compatibility_sandbox_policy_for_permission_profile(
     permissions: &PermissionProfile,
-    file_system_policy: &FileSystemSandboxPolicy,
-    network_policy: NetworkSandboxPolicy,
     cwd: &Path,
 ) -> SandboxPolicy {
     permissions
         .to_legacy_sandbox_policy(cwd)
         .unwrap_or_else(|_| {
+            let (file_system_policy, network_policy) = permissions.to_runtime_permissions();
             compatibility_workspace_write_policy(file_system_policy, network_policy, cwd)
         })
 }
 
 fn compatibility_workspace_write_policy(
-    file_system_policy: &FileSystemSandboxPolicy,
+    file_system_policy: FileSystemSandboxPolicy,
     network_policy: NetworkSandboxPolicy,
     cwd: &Path,
 ) -> SandboxPolicy {

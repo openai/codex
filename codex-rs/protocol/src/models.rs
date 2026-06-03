@@ -374,16 +374,9 @@ impl Default for PermissionProfile {
 impl PermissionProfile {
     /// Managed read-only filesystem access with restricted network access.
     pub fn read_only() -> Self {
+        let file_system = FileSystemSandboxPolicy::read_only();
         Self::Managed {
-            file_system: ManagedFileSystemPermissions::Restricted {
-                entries: vec![FileSystemSandboxEntry {
-                    path: FileSystemPath::Special {
-                        value: FileSystemSpecialPath::Root,
-                    },
-                    access: FileSystemAccessMode::Read,
-                }],
-                glob_scan_max_depth: None,
-            },
+            file_system: ManagedFileSystemPermissions::from_sandbox_policy(&file_system),
             network: NetworkSandboxPolicy::Restricted,
         }
     }
@@ -1026,9 +1019,10 @@ pub fn local_image_label_text(label_number: usize) -> String {
     format!("[Image #{label_number}]")
 }
 
-pub fn local_image_open_tag_text(label_number: usize) -> String {
+pub fn local_image_open_tag_text_with_path(label_number: usize, path: &std::path::Path) -> String {
     let label = local_image_label_text(label_number);
-    format!("{LOCAL_IMAGE_OPEN_TAG_PREFIX}{label}{LOCAL_IMAGE_OPEN_TAG_SUFFIX}")
+    let path = path.display();
+    format!("{LOCAL_IMAGE_OPEN_TAG_PREFIX}{label} path=\"{path}\"{LOCAL_IMAGE_OPEN_TAG_SUFFIX}")
 }
 
 pub fn is_local_image_open_tag_text(text: &str) -> bool {
@@ -1087,7 +1081,7 @@ pub fn local_image_content_items_with_label_number(
             let mut items = Vec::with_capacity(3);
             if let Some(label_number) = label_number {
                 items.push(ContentItem::InputText {
-                    text: local_image_open_tag_text(label_number),
+                    text: local_image_open_tag_text_with_path(label_number, path),
                 });
             }
             items.push(ContentItem::InputImage {
@@ -2873,7 +2867,7 @@ mod tests {
                 detail: None,
             },
             UserInput::LocalImage {
-                path: local_path,
+                path: local_path.clone(),
                 detail: None,
             },
         ]);
@@ -2890,7 +2884,10 @@ mod tests {
                 assert_eq!(
                     content.get(1),
                     Some(&ContentItem::InputText {
-                        text: local_image_open_tag_text(/*label_number*/ 2),
+                        text: local_image_open_tag_text_with_path(
+                            /*label_number*/ 2,
+                            &local_path
+                        ),
                     })
                 );
                 assert!(matches!(
@@ -2908,6 +2905,17 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    #[test]
+    fn local_image_open_tag_preserves_path() {
+        assert_eq!(
+            local_image_open_tag_text_with_path(
+                /*label_number*/ 1,
+                std::path::Path::new(r#"/tmp/a&"<b>.png"#),
+            ),
+            r#"<image name=[Image #1] path="/tmp/a&"<b>.png">"#
+        );
     }
 
     #[test]

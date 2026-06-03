@@ -3,7 +3,6 @@ use std::path::Path;
 
 use crate::OPENAI_CURATED_MARKETPLACE_NAME;
 use crate::PluginsConfigInput;
-use codex_config::CloudRequirementsLoader;
 use codex_config::LoaderOverrides;
 use codex_config::NoopThreadConfigLoader;
 use codex_config::loader::load_config_layers_state;
@@ -106,7 +105,6 @@ pub(crate) async fn load_plugins_config(codex_home: &Path, cwd: &Path) -> Plugin
         Some(cwd),
         &[],
         LoaderOverrides::without_managed_config_for_tests(),
-        CloudRequirementsLoader::default(),
         &NoopThreadConfigLoader,
     )
     .await

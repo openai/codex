@@ -520,9 +520,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn amazon_bedrock_provider_uses_configured_static_catalog_when_present() {
-        let custom_model =
-            codex_models_manager::model_info::model_info_from_slug("custom-bedrock-model");
+    async fn configured_bedrock_catalog_only_allows_default_service_tier() {
+        let configured_model = codex_models_manager::bundled_models_response()
+            .expect("bundled models should parse")
+            .models
+            .into_iter()
+            .find(|model| model.slug == "gpt-5.5")
+            .expect("bundled models should include GPT-5.5");
+        assert!(!configured_model.additional_speed_tiers.is_empty());
+        assert!(!configured_model.service_tiers.is_empty());
 
         let provider = create_model_provider(
             ModelProviderInfo::create_amazon_bedrock_provider(/*aws*/ None),
@@ -531,14 +537,20 @@ mod tests {
         let manager = provider.models_manager(
             test_codex_home(),
             Some(ModelsResponse {
-                models: vec![custom_model],
+                models: vec![configured_model],
             }),
         );
 
         let catalog = manager.raw_model_catalog(RefreshStrategy::Online).await;
 
         assert_eq!(catalog.models.len(), 1);
-        assert_eq!(catalog.models[0].slug, "custom-bedrock-model");
+        assert_eq!(catalog.models[0].slug, "gpt-5.5");
+        assert_eq!(
+            catalog.models[0].additional_speed_tiers,
+            Vec::<String>::new()
+        );
+        assert_eq!(catalog.models[0].service_tiers, Vec::new());
+        assert_eq!(catalog.models[0].default_service_tier, None);
     }
 
     #[tokio::test]

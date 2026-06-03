@@ -122,6 +122,7 @@ fn turn_metadata_state_uses_platform_sandbox_tag() {
         "session-a".to_string(),
         "thread-a".to_string(),
         /*forked_from_thread_id*/ None,
+        /*parent_thread_id*/ None,
         &SessionSource::Exec,
         Some(ThreadSource::User),
         "turn-a".to_string(),
@@ -163,6 +164,7 @@ fn turn_metadata_state_uses_explicit_subagent_thread_source() {
         "session-a".to_string(),
         "thread-a".to_string(),
         /*forked_from_thread_id*/ None,
+        /*parent_thread_id*/ None,
         &SessionSource::Exec,
         Some(ThreadSource::Subagent),
         "turn-a".to_string(),
@@ -191,6 +193,7 @@ fn turn_metadata_state_includes_root_fork_lineage() {
         "session-a".to_string(),
         "thread-a".to_string(),
         Some(source_thread_id),
+        /*parent_thread_id*/ None,
         &SessionSource::Exec,
         Some(ThreadSource::User),
         "turn-a".to_string(),
@@ -223,6 +226,7 @@ fn turn_metadata_state_includes_thread_spawn_subagent_parent_without_fork() {
         "session-a".to_string(),
         "thread-a".to_string(),
         /*forked_from_thread_id*/ None,
+        Some(parent_thread_id),
         &SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
             parent_thread_id,
             depth: 1,
@@ -261,6 +265,7 @@ fn turn_metadata_state_includes_forked_thread_spawn_subagent_lineage() {
         "session-a".to_string(),
         "thread-a".to_string(),
         Some(parent_thread_id),
+        Some(parent_thread_id),
         &SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
             parent_thread_id,
             depth: 1,
@@ -291,38 +296,46 @@ fn turn_metadata_state_includes_forked_thread_spawn_subagent_lineage() {
 }
 
 #[test]
-fn turn_metadata_state_includes_known_parent_for_other_subagent() {
+fn turn_metadata_state_includes_known_parent_for_non_thread_spawn_subagents_without_fork() {
     let temp_dir = TempDir::new().expect("temp dir");
     let cwd = temp_dir.path().abs();
     let permission_profile = PermissionProfile::read_only();
     let parent_thread_id =
         ThreadId::from_string("44444444-4444-4444-8444-444444444444").expect("thread id");
+    let sources = [
+        (SubAgentSource::Review, "review"),
+        (SubAgentSource::Other("guardian".to_string()), "guardian"),
+        (
+            SubAgentSource::Other("agent_job:job-1".to_string()),
+            "agent_job:job-1",
+        ),
+    ];
 
-    let state = TurnMetadataState::new(
-        "session-a".to_string(),
-        "thread-a".to_string(),
-        Some(parent_thread_id),
-        &SessionSource::SubAgent(SubAgentSource::Other("guardian".to_string())),
-        Some(ThreadSource::Subagent),
-        "turn-a".to_string(),
-        cwd,
-        &permission_profile,
-        WindowsSandboxLevel::Disabled,
-        /*enforce_managed_network*/ false,
-    );
+    for (subagent_source, subagent_kind) in sources {
+        let state = TurnMetadataState::new(
+            "session-a".to_string(),
+            "thread-a".to_string(),
+            /*forked_from_thread_id*/ None,
+            Some(parent_thread_id),
+            &SessionSource::SubAgent(subagent_source),
+            Some(ThreadSource::Subagent),
+            "turn-a".to_string(),
+            cwd.clone(),
+            &permission_profile,
+            WindowsSandboxLevel::Disabled,
+            /*enforce_managed_network*/ false,
+        );
 
-    let header = state.current_header_value().expect("header");
-    let json: Value = serde_json::from_str(&header).expect("json");
+        let header = state.current_header_value().expect("header");
+        let json: Value = serde_json::from_str(&header).expect("json");
 
-    assert_eq!(
-        json["forked_from_thread_id"].as_str(),
-        Some("44444444-4444-4444-8444-444444444444")
-    );
-    assert_eq!(
-        json["parent_thread_id"].as_str(),
-        Some("44444444-4444-4444-8444-444444444444")
-    );
-    assert_eq!(json["subagent_kind"].as_str(), Some("guardian"));
+        assert!(json.get("forked_from_thread_id").is_none());
+        assert_eq!(
+            json["parent_thread_id"].as_str(),
+            Some("44444444-4444-4444-8444-444444444444")
+        );
+        assert_eq!(json["subagent_kind"].as_str(), Some(subagent_kind));
+    }
 }
 
 #[test]
@@ -335,6 +348,7 @@ fn turn_metadata_state_includes_turn_started_at_unix_ms_after_start() {
         "session-a".to_string(),
         "thread-a".to_string(),
         /*forked_from_thread_id*/ None,
+        /*parent_thread_id*/ None,
         &SessionSource::Exec,
         Some(ThreadSource::User),
         "turn-a".to_string(),
@@ -364,6 +378,7 @@ fn turn_metadata_state_includes_model_and_reasoning_effort_only_in_request_meta(
         "session-a".to_string(),
         "thread-a".to_string(),
         /*forked_from_thread_id*/ None,
+        /*parent_thread_id*/ None,
         &SessionSource::Exec,
         /*thread_source*/ None,
         "turn-a".to_string(),
@@ -412,6 +427,7 @@ fn turn_metadata_state_marks_user_input_requested_during_turn_only_for_mcp_reque
         "session-a".to_string(),
         "thread-a".to_string(),
         /*forked_from_thread_id*/ None,
+        /*parent_thread_id*/ None,
         &SessionSource::Exec,
         /*thread_source*/ None,
         "turn-a".to_string(),
@@ -464,6 +480,7 @@ fn turn_metadata_state_ignores_client_reserved_metadata_before_start() {
         "session-a".to_string(),
         "thread-a".to_string(),
         /*forked_from_thread_id*/ None,
+        /*parent_thread_id*/ None,
         &SessionSource::Exec,
         Some(ThreadSource::User),
         "turn-a".to_string(),
@@ -511,6 +528,7 @@ fn turn_metadata_state_merges_client_metadata_without_replacing_reserved_fields(
         "session-a".to_string(),
         "thread-a".to_string(),
         Some(source_thread_id),
+        Some(parent_thread_id),
         &SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
             parent_thread_id,
             depth: 1,
@@ -528,6 +546,7 @@ fn turn_metadata_state_merges_client_metadata_without_replacing_reserved_fields(
     state.set_responsesapi_client_metadata(HashMap::from([
         ("fiber_run_id".to_string(), "fiber-123".to_string()),
         ("origin".to_string(), "東京".to_string()),
+        ("workspace_kind".to_string(), "projectless".to_string()),
         ("model".to_string(), "client-supplied".to_string()),
         (
             "reasoning_effort".to_string(),
@@ -562,6 +581,7 @@ fn turn_metadata_state_merges_client_metadata_without_replacing_reserved_fields(
 
     assert_eq!(json["fiber_run_id"].as_str(), Some("fiber-123"));
     assert_eq!(json["origin"].as_str(), Some("東京"));
+    assert_eq!(json["workspace_kind"].as_str(), Some("projectless"));
     assert_eq!(json["model"].as_str(), Some("client-supplied"));
     assert_eq!(json["reasoning_effort"].as_str(), Some("client-supplied"));
     assert_eq!(json["session_id"].as_str(), Some("session-a"));
@@ -601,6 +621,7 @@ fn turn_metadata_state_merges_client_metadata_without_replacing_reserved_fields(
     assert_eq!(meta["model"].as_str(), Some("gpt-5.4"));
     assert_eq!(meta["reasoning_effort"].as_str(), Some("high"));
     assert!(meta.get(WINDOW_ID_KEY).is_none());
+    assert_eq!(state.workspace_kind().as_deref(), Some("projectless"));
 }
 
 #[test]
@@ -612,6 +633,7 @@ fn turn_metadata_state_overlays_compaction_only_on_compaction_requests() {
         "session-a".to_string(),
         "thread-a".to_string(),
         /*forked_from_thread_id*/ None,
+        /*parent_thread_id*/ None,
         &SessionSource::Exec,
         Some(ThreadSource::User),
         "turn-a".to_string(),
@@ -670,6 +692,7 @@ async fn turn_metadata_state_preserves_lineage_after_git_enrichment() {
     let state = TurnMetadataState::new(
         "session-a".to_string(),
         "thread-a".to_string(),
+        Some(parent_thread_id),
         Some(parent_thread_id),
         &SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
             parent_thread_id,

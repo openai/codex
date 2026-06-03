@@ -310,6 +310,7 @@ impl App {
                     thread_id,
                     thread_label,
                     call_id: params.item_id.clone(),
+                    environment_id: params.environment_id.clone(),
                     reason: params.reason.clone(),
                     permissions: params.permissions.clone().into(),
                 }),
@@ -497,7 +498,7 @@ impl App {
         op: &AppCommand,
     ) -> Result<bool> {
         match op {
-            AppCommand::Interrupt => {
+            AppCommand::Interrupt { .. } => {
                 if let Some(turn_id) = self.active_turn_id_for_thread(thread_id).await {
                     app_server.turn_interrupt(thread_id, turn_id).await?;
                 } else {

@@ -31,6 +31,7 @@ codex-apply-patch = { workspace = true }
 codex-async-utils = { workspace = true }
 codex-code-mode = { workspace = true }
 codex-connectors = { workspace = true }
+codex-context-fragments = { workspace = true }
 codex-config = { workspace = true }
 codex-core-plugins = { workspace = true }
 codex-core-skills = { workspace = true }
@@ -54,6 +55,7 @@ codex-plugin = { workspace = true }
 codex-model-provider = { workspace = true }
 codex-protocol = { workspace = true }
 codex-response-debug-context = { workspace = true }
+codex-prompts = { workspace = true }
 codex-rollout = { workspace = true }
 codex-rollout-trace = { workspace = true }
 codex-rmcp-client = { workspace = true }
@@ -72,7 +74,6 @@ codex-utils-plugins = { workspace = true }
 codex-utils-pty = { workspace = true }
 codex-utils-string = { workspace = true }
 codex-utils-stream-parser = { workspace = true }
-codex-utils-template = { workspace = true }
 codex-windows-sandbox = { package = "codex-windows-sandbox", path = "../windows-sandbox-rs" }
 csv = { workspace = true }
 dirs = { workspace = true }

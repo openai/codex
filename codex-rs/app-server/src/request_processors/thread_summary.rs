@@ -179,11 +179,8 @@ pub(crate) fn thread_response_sandbox_policy(
     permission_profile: &codex_protocol::models::PermissionProfile,
     cwd: &Path,
 ) -> codex_app_server_protocol::SandboxPolicy {
-    let file_system_policy = permission_profile.file_system_sandbox_policy();
     let sandbox_policy = codex_sandboxing::compatibility_sandbox_policy_for_permission_profile(
         permission_profile,
-        &file_system_policy,
-        permission_profile.network_sandbox_policy(),
         cwd,
     );
     sandbox_policy.into()
@@ -305,6 +302,7 @@ pub(crate) fn summary_to_thread(
         id: thread_id.clone(),
         session_id: thread_id,
         forked_from_id: None,
+        parent_thread_id: None,
         preview,
         ephemeral: false,
         model_provider,

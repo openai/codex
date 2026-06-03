@@ -31,6 +31,7 @@ use std::sync::Arc;
 use crate::app::App;
 use crate::app_command::AppCommand;
 use crate::app_event::AppEvent;
+use crate::chatwidget::UserMessage;
 #[cfg(test)]
 use crate::history_cell::AgentMessageCell;
 use crate::history_cell::SessionInfoCell;
@@ -229,6 +230,38 @@ impl App {
         }
     }
 
+    pub(crate) fn apply_cancelled_turn_edit(&mut self, prompt: UserMessage) {
+        let user_total = user_count(&self.transcript_cells);
+        let selection = BacktrackSelection {
+            nth_user_message: user_total.saturating_sub(1),
+            prefill: prompt.text.clone(),
+            text_elements: prompt.text_elements.clone(),
+            local_image_paths: prompt
+                .local_images
+                .iter()
+                .map(|image| image.path.clone())
+                .collect(),
+            remote_image_urls: prompt.remote_image_urls.clone(),
+        };
+        if user_total == 0 {
+            if self.backtrack.pending_rollback.is_some() {
+                self.chat_widget
+                    .add_error_message("Backtrack rollback already in progress.".to_string());
+                return;
+            }
+            self.backtrack.pending_rollback = Some(PendingBacktrackRollback {
+                selection,
+                thread_id: self.chat_widget.thread_id(),
+            });
+            self.chat_widget
+                .submit_op(AppCommand::thread_rollback(/*num_turns*/ 1));
+            self.chat_widget.restore_user_message_to_composer(prompt);
+            return;
+        }
+        self.apply_backtrack_rollback(selection);
+        self.chat_widget.restore_user_message_to_composer(prompt);
+    }
+
     /// Open transcript overlay (enters alternate screen and shows full transcript).
     pub(crate) fn open_transcript_overlay(&mut self, tui: &mut tui::Tui) {
         let _ = tui.enter_alt_screen();
@@ -255,25 +288,6 @@ impl App {
         if was_backtrack {
             // Ensure backtrack state is fully reset when overlay closes (e.g. via 'q').
             self.reset_backtrack_state();
-        }
-    }
-
-    /// Re-render the full transcript into the terminal scrollback in one call.
-    /// Useful when switching sessions to ensure prior history remains visible.
-    pub(crate) fn render_transcript_once(&mut self, tui: &mut tui::Tui) {
-        if !self.transcript_cells.is_empty() {
-            let width = self
-                .chat_widget
-                .history_wrap_width(tui.terminal.last_known_screen_size.width);
-            for cell in &self.transcript_cells {
-                tui.insert_history_hyperlink_lines_with_wrap_policy(
-                    cell.display_hyperlink_lines_for_mode(
-                        width,
-                        self.chat_widget.history_render_mode(),
-                    ),
-                    self.history_line_wrap_policy(),
-                );
-            }
         }
     }
 

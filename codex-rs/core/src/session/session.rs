@@ -9,15 +9,17 @@ use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSpecialPath;
+use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TurnEnvironmentSelection;
+use std::sync::OnceLock;
 use tokio::sync::Semaphore;
 
 /// Context for an initialized model agent
 ///
 /// A session has at most 1 running task at a time, and can be interrupted by user input.
 pub(crate) struct Session {
-    pub(crate) conversation_id: ThreadId,
+    pub(crate) thread_id: ThreadId,
     pub(crate) installation_id: String,
     pub(super) tx_event: Sender<Event>,
     pub(super) agent_status: watch::Sender<AgentStatus>,
@@ -29,6 +31,7 @@ pub(crate) struct Session {
     /// The set of enabled features should be invariant for the lifetime of the
     /// session.
     pub(super) features: ManagedFeatures,
+    pub(super) multi_agent_version: OnceLock<MultiAgentVersion>,
     pub(super) pending_mcp_server_refresh_config: Mutex<Option<McpServerRefreshConfig>>,
     pub(crate) conversation: Arc<RealtimeConversationManager>,
     pub(crate) active_turn: Mutex<Option<ActiveTurn>>,
@@ -97,10 +100,11 @@ pub(crate) struct SessionConfiguration {
     pub(super) session_source: SessionSource,
     /// Immediate history source copied into this thread, when this thread was forked.
     pub(super) forked_from_thread_id: Option<ThreadId>,
+    /// Immediate control/spawn parent for this thread, when it has one.
+    pub(super) parent_thread_id: Option<ThreadId>,
     /// Optional analytics source classification for this thread.
     pub(super) thread_source: Option<ThreadSource>,
     pub(super) dynamic_tools: Vec<DynamicToolSpec>,
-    pub(super) persist_extended_history: bool,
     pub(super) inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
     pub(super) user_shell_override: Option<shell::Shell>,
 }
@@ -146,17 +150,11 @@ impl SessionConfiguration {
     }
 
     pub(super) fn sandbox_policy(&self) -> SandboxPolicy {
-        self.permission_profile()
-            .to_legacy_sandbox_policy(&self.cwd)
-            .unwrap_or_else(|_| {
-                let file_system_sandbox_policy = self.file_system_sandbox_policy();
-                codex_sandboxing::compatibility_sandbox_policy_for_permission_profile(
-                    self.permission_profile_state.permission_profile(),
-                    &file_system_sandbox_policy,
-                    self.network_sandbox_policy(),
-                    &self.cwd,
-                )
-            })
+        let permission_profile = self.permission_profile();
+        codex_sandboxing::compatibility_sandbox_policy_for_permission_profile(
+            &permission_profile,
+            &self.cwd,
+        )
     }
 
     pub(super) fn file_system_sandbox_policy(&self) -> FileSystemSandboxPolicy {
@@ -187,6 +185,7 @@ impl SessionConfiguration {
             personality: self.personality,
             collaboration_mode: self.collaboration_mode.clone(),
             session_source: self.session_source.clone(),
+            parent_thread_id: self.parent_thread_id,
             thread_source: self.thread_source,
         }
     }
@@ -466,7 +465,7 @@ async fn warm_plugins_and_skills_for_session_init(
 impl Session {
     /// Returns the concrete identity for this thread.
     pub(crate) fn thread_id(&self) -> ThreadId {
-        self.conversation_id
+        self.thread_id
     }
 
     /// Returns the identity shared by the root thread and all descendant threads.
@@ -501,6 +500,7 @@ impl Session {
         thread_store: Arc<dyn ThreadStore>,
         parent_rollout_thread_trace: ThreadTraceContext,
         attestation_provider: Option<Arc<dyn AttestationProvider>>,
+        multi_agent_version: Option<MultiAgentVersion>,
     ) -> anyhow::Result<Arc<Self>> {
         debug!(
             "Configuring session: model={}; provider={:?}",
@@ -511,12 +511,13 @@ impl Session {
             .forked_from_thread_id
             .or_else(|| initial_history.forked_from_id());
         session_configuration.forked_from_thread_id = forked_from_id;
+        let parent_thread_id = session_configuration
+            .parent_thread_id
+            .or_else(|| initial_history.get_resumed_parent_thread_id());
+        session_configuration.parent_thread_id = parent_thread_id;
+        let multi_agent_version = multi_agent_version.map(OnceLock::from).unwrap_or_default();
+        let initial_multi_agent_version = multi_agent_version.get().copied();
 
-        let event_persistence_mode = if session_configuration.persist_extended_history {
-            ThreadEventPersistenceMode::Extended
-        } else {
-            ThreadEventPersistenceMode::Limited
-        };
         let thread_id = match &initial_history {
             InitialHistory::New | InitialHistory::Cleared | InitialHistory::Forked(_) => {
                 ThreadId::default()
@@ -550,12 +551,14 @@ impl Session {
                             CreateThreadParams {
                                 thread_id,
                                 forked_from_id,
+                                parent_thread_id,
                                 source: session_source,
                                 thread_source: session_configuration.thread_source,
                                 base_instructions: BaseInstructions {
                                     text: session_configuration.base_instructions.clone(),
                                 },
                                 dynamic_tools: session_configuration.dynamic_tools.clone(),
+                                multi_agent_version: initial_multi_agent_version,
                                 metadata: ThreadPersistenceMetadata {
                                     cwd: Some(config.cwd.to_path_buf()),
                                     model_provider: config.model_provider_id.clone(),
@@ -565,7 +568,6 @@ impl Session {
                                         ThreadMemoryMode::Disabled
                                     },
                                 },
-                                event_persistence_mode,
                             },
                         )
                         .await?
@@ -587,7 +589,6 @@ impl Session {
                                         ThreadMemoryMode::Disabled
                                     },
                                 },
-                                event_persistence_mode,
                             },
                         )
                         .await?
@@ -1031,6 +1032,7 @@ impl Session {
                     installation_id.clone(),
                     session_configuration.provider.clone(),
                     session_configuration.session_source.clone(),
+                    session_configuration.parent_thread_id,
                     config.model_verbosity,
                     config.features.enabled(Feature::EnableRequestCompression),
                     config.features.enabled(Feature::RuntimeMetrics),
@@ -1040,7 +1042,7 @@ impl Session {
                 .with_prompt_cache_key_override(
                     crate::guardian::prompt_cache_key_override_for_review_session(
                         &session_configuration.session_source,
-                        session_configuration.forked_from_thread_id,
+                        session_configuration.parent_thread_id,
                     ),
                 ),
                 code_mode_service: crate::tools::code_mode::CodeModeService::new(),
@@ -1053,7 +1055,7 @@ impl Session {
                 watch::channel(false);
 
             let sess = Arc::new(Session {
-                conversation_id: thread_id,
+                thread_id,
                 installation_id,
                 tx_event: tx_event.clone(),
                 agent_status,
@@ -1061,6 +1063,7 @@ impl Session {
                 state: Mutex::new(state),
                 managed_network_proxy_refresh_lock: Semaphore::new(/*permits*/ 1),
                 features: config.features.clone(),
+                multi_agent_version,
                 pending_mcp_server_refresh_config: Mutex::new(None),
                 conversation: Arc::new(RealtimeConversationManager::new()),
                 active_turn: Mutex::new(None),
@@ -1083,6 +1086,7 @@ impl Session {
                     session_id,
                     thread_id,
                     forked_from_id,
+                    parent_thread_id,
                     thread_source: session_configuration.thread_source,
                     thread_name: session_configuration.thread_name.clone(),
                     model: session_configuration.collaboration_mode.model().to_string(),

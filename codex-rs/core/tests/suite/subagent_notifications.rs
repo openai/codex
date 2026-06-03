@@ -752,7 +752,6 @@ async fn subagent_stop_replaces_stop_and_skips_internal_subagents() -> Result<()
             session_source: Some(SessionSource::SubAgent(SubAgentSource::Review)),
             thread_source: None,
             dynamic_tools: Vec::new(),
-            persist_extended_history: false,
             metrics_service_name: None,
             parent_trace: None,
             environments: Vec::new(),
@@ -1185,6 +1184,7 @@ async fn spawn_agent_tool_description_mentions_role_locked_settings() -> Result<
             .features
             .enable(Feature::Collab)
             .expect("test config should allow feature update");
+        config.multi_agent_v2.hide_spawn_agent_metadata = false;
         let role_path = config.codex_home.join("custom-role.toml");
         std::fs::write(
             &role_path,

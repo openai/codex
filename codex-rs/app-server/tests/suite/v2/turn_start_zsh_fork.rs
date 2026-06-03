@@ -7,7 +7,7 @@
 // network access are required the first time the artifact is fetched.
 
 use anyhow::Result;
-use app_test_support::McpProcess;
+use app_test_support::TestAppServer;
 use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_responses_server_sequence;
 use app_test_support::create_mock_responses_server_sequence_unchecked;
@@ -535,12 +535,11 @@ async fn turn_start_shell_zsh_fork_subcommand_decline_marks_parent_declined_v2()
             }],
             cwd: Some(workspace.clone()),
             approval_policy: Some(codex_app_server_protocol::AskForApproval::UnlessTrusted),
-            sandbox_policy: Some(codex_app_server_protocol::SandboxPolicy::WorkspaceWrite {
-                writable_roots: vec![workspace.clone().try_into()?],
-                network_access: false,
-                exclude_tmpdir_env_var: true,
-                exclude_slash_tmp: true,
-            }),
+            // This test is about execve-intercept approval propagation, not
+            // workspace sandboxing. Using full access avoids macOS sandbox
+            // setup failures that can terminate the parent shell before the
+            // second subcommand approval is observed.
+            sandbox_policy: Some(codex_app_server_protocol::SandboxPolicy::DangerFullAccess),
             model: Some("mock-model".to_string()),
             effort: Some(codex_protocol::openai_models::ReasoningEffort::Medium),
             summary: Some(codex_protocol::config_types::ReasoningSummary::Auto),
@@ -744,10 +743,10 @@ async fn create_zsh_test_mcp_process(
     codex_home: &Path,
     zdotdir: &Path,
     zsh_path: &Path,
-) -> Result<McpProcess> {
+) -> Result<TestAppServer> {
     let app_server = create_test_package_app_server(codex_home, zsh_path)?;
     let zdotdir = zdotdir.to_string_lossy().into_owned();
-    McpProcess::new_with_program_and_env(
+    TestAppServer::new_with_program_and_env(
         codex_home,
         &app_server,
         &[("ZDOTDIR", Some(zdotdir.as_str()))],

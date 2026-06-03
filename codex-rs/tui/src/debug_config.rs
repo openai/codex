@@ -2,6 +2,7 @@ use crate::history_cell::PlainHistoryCell;
 use crate::legacy_core::config::Config;
 use crate::session_state::SessionNetworkProxyRuntime;
 use codex_app_server_protocol::ConfigLayerSource;
+use codex_config::CONFIG_TOML_FILE;
 use codex_config::ConfigLayerEntry;
 use codex_config::ConfigLayerStack;
 use codex_config::ConfigLayerStackOrdering;
@@ -13,6 +14,7 @@ use codex_config::RequirementSource;
 use codex_config::ResidencyRequirement;
 use codex_config::SandboxModeRequirement;
 use codex_config::WebSearchModeRequirement;
+use codex_config::format_config_layer_source;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use toml::Value as TomlValue;
@@ -71,7 +73,7 @@ fn render_debug_config_lines(stack: &ConfigLayerStack) -> Vec<Line<'static>> {
         lines.push("  <none>".dim().into());
     } else {
         for (index, layer) in layers.iter().enumerate() {
-            let source = format_config_layer_source(&layer.name);
+            let source = format_config_layer_source(&layer.name, CONFIG_TOML_FILE);
             let status = if layer.is_disabled() {
                 "disabled"
             } else {
@@ -267,9 +269,9 @@ fn render_debug_config_lines(stack: &ConfigLayerStack) -> Vec<Line<'static>> {
 fn render_non_file_layer_details(layer: &ConfigLayerEntry) -> Vec<Line<'static>> {
     match &layer.name {
         ConfigLayerSource::SessionFlags => render_session_flag_details(&layer.config),
-        ConfigLayerSource::Mdm { .. } | ConfigLayerSource::LegacyManagedConfigTomlFromMdm => {
-            render_mdm_layer_details(layer)
-        }
+        ConfigLayerSource::Mdm { .. }
+        | ConfigLayerSource::EnterpriseManaged { .. }
+        | ConfigLayerSource::LegacyManagedConfigTomlFromMdm => render_non_file_layer_value(layer),
         ConfigLayerSource::System { .. }
         | ConfigLayerSource::User { .. }
         | ConfigLayerSource::Project { .. }
@@ -308,21 +310,36 @@ fn format_managed_hooks_requirements(hooks: &ManagedHooksRequirementsToml) -> St
     join_or_empty(parts)
 }
 
-fn render_mdm_layer_details(layer: &ConfigLayerEntry) -> Vec<Line<'static>> {
+fn render_non_file_layer_value(layer: &ConfigLayerEntry) -> Vec<Line<'static>> {
+    let label = non_file_layer_value_label(&layer.name);
     let value = layer
         .raw_toml()
         .map(ToString::to_string)
         .unwrap_or_else(|| format_toml_value(&layer.config));
     if value.is_empty() {
-        return vec!["     MDM value: <empty>".dim().into()];
+        return vec![format!("     {label}: <empty>").dim().into()];
     }
 
     if value.contains('\n') {
-        let mut lines = vec!["     MDM value:".into()];
+        let mut lines = vec![format!("     {label}:").into()];
         lines.extend(value.lines().map(|line| format!("       {line}").into()));
         lines
     } else {
-        vec![format!("     MDM value: {value}").into()]
+        vec![format!("     {label}: {value}").into()]
+    }
+}
+
+fn non_file_layer_value_label(source: &ConfigLayerSource) -> &'static str {
+    match source {
+        ConfigLayerSource::Mdm { .. } | ConfigLayerSource::LegacyManagedConfigTomlFromMdm => {
+            "MDM value"
+        }
+        ConfigLayerSource::EnterpriseManaged { .. } => "Enterprise-managed config value",
+        ConfigLayerSource::SessionFlags
+        | ConfigLayerSource::System { .. }
+        | ConfigLayerSource::User { .. }
+        | ConfigLayerSource::Project { .. }
+        | ConfigLayerSource::LegacyManagedConfigTomlFromFile { .. } => "Layer value",
     }
 }
 
@@ -386,33 +403,6 @@ fn normalize_allowed_web_search_modes(
         normalized.push(WebSearchModeRequirement::Disabled);
     }
     normalized
-}
-
-fn format_config_layer_source(source: &ConfigLayerSource) -> String {
-    match source {
-        ConfigLayerSource::Mdm { domain, key } => {
-            format!("MDM ({domain}:{key})")
-        }
-        ConfigLayerSource::System { file } => {
-            format!("system ({})", file.as_path().display())
-        }
-        ConfigLayerSource::User { file, .. } => {
-            format!("user ({})", file.as_path().display())
-        }
-        ConfigLayerSource::Project { dot_codex_folder } => {
-            format!(
-                "project ({}/config.toml)",
-                dot_codex_folder.as_path().display()
-            )
-        }
-        ConfigLayerSource::SessionFlags => "session-flags".to_string(),
-        ConfigLayerSource::LegacyManagedConfigTomlFromFile { file } => {
-            format!("legacy managed_config.toml ({})", file.as_path().display())
-        }
-        ConfigLayerSource::LegacyManagedConfigTomlFromMdm => {
-            "legacy managed_config.toml (MDM)".to_string()
-        }
-    }
 }
 
 fn format_sandbox_mode_requirement(mode: SandboxModeRequirement) -> String {
@@ -638,7 +628,7 @@ mod tests {
         let requirements = ConfigRequirements {
             approval_policy: ConstrainedWithSource::new(
                 Constrained::allow_any(AskForApproval::OnRequest.to_core()),
-                Some(RequirementSource::CloudRequirements),
+                Some(RequirementSource::LegacyManagedConfigTomlFromMdm),
             ),
             approvals_reviewer: ConstrainedWithSource::new(
                 Constrained::allow_any(ApprovalsReviewer::AutoReview),
@@ -663,25 +653,25 @@ mod tests {
             )),
             enforce_residency: ConstrainedWithSource::new(
                 Constrained::allow_any(Some(ResidencyRequirement::Us)),
-                Some(RequirementSource::CloudRequirements),
+                Some(RequirementSource::LegacyManagedConfigTomlFromMdm),
             ),
             web_search_mode: ConstrainedWithSource::new(
                 Constrained::allow_any(WebSearchMode::Cached),
-                Some(RequirementSource::CloudRequirements),
+                Some(RequirementSource::LegacyManagedConfigTomlFromMdm),
             ),
             allow_managed_hooks_only: Some(Sourced::new(
                 /*value*/ true,
-                RequirementSource::CloudRequirements,
+                RequirementSource::LegacyManagedConfigTomlFromMdm,
             )),
             allow_appshots: Some(Sourced::new(
                 /*value*/ false,
-                RequirementSource::CloudRequirements,
+                RequirementSource::LegacyManagedConfigTomlFromMdm,
             )),
             feature_requirements: Some(Sourced::new(
                 FeatureRequirementsToml {
                     entries: BTreeMap::from([("guardian_approval".to_string(), true)]),
                 },
-                RequirementSource::CloudRequirements,
+                RequirementSource::LegacyManagedConfigTomlFromMdm,
             )),
             network: Some(Sourced::new(
                 NetworkConstraints {
@@ -694,7 +684,7 @@ mod tests {
                     }),
                     ..Default::default()
                 },
-                RequirementSource::CloudRequirements,
+                RequirementSource::LegacyManagedConfigTomlFromMdm,
             )),
             filesystem: Some(Sourced::new(
                 FilesystemConstraints {
@@ -704,7 +694,7 @@ mod tests {
                     file: requirements_file.clone(),
                 },
             )),
-            guardian_policy_config_source: Some(RequirementSource::CloudRequirements),
+            guardian_policy_config_source: Some(RequirementSource::LegacyManagedConfigTomlFromMdm),
             ..ConfigRequirements::default()
         };
 
@@ -718,6 +708,7 @@ mod tests {
             allow_managed_hooks_only: Some(true),
             allow_appshots: Some(false),
             computer_use: None,
+            windows: None,
             guardian_policy_config: Some("Use the managed guardian policy.".to_string()),
             feature_requirements: Some(FeatureRequirementsToml {
                 entries: BTreeMap::from([("guardian_approval".to_string(), true)]),
@@ -758,9 +749,10 @@ mod tests {
         .expect("config layer stack");
 
         let rendered = render_to_text(&render_debug_config_lines(&stack));
-        assert!(
-            rendered.contains("allowed_approval_policies: on-request (source: cloud requirements)")
-        );
+        let requirements_source = (RequirementSource::LegacyManagedConfigTomlFromMdm).to_string();
+        assert!(rendered.contains(&format!(
+            "allowed_approval_policies: on-request (source: {requirements_source})"
+        )));
         assert!(rendered.contains(
             "allowed_approvals_reviewers: guardian_subagent (source: MDM managed_config.toml (legacy))"
         ));
@@ -773,22 +765,28 @@ mod tests {
                 .as_str(),
             )
         );
-        assert!(
-            rendered.contains(
-                "allowed_web_search_modes: cached, disabled (source: cloud requirements)"
-            )
-        );
-        assert!(rendered.contains("allow_managed_hooks_only: true (source: cloud requirements)"));
-        assert!(rendered.contains("allow_appshots: false (source: cloud requirements)"));
-        assert!(
-            rendered.contains("guardian_policy_config: configured (source: cloud requirements)")
-        );
-        assert!(rendered.contains("features: guardian_approval=true (source: cloud requirements)"));
+        assert!(rendered.contains(&format!(
+            "allowed_web_search_modes: cached, disabled (source: {requirements_source})"
+        )));
+        assert!(rendered.contains(&format!(
+            "allow_managed_hooks_only: true (source: {requirements_source})"
+        )));
+        assert!(rendered.contains(&format!(
+            "allow_appshots: false (source: {requirements_source})"
+        )));
+        assert!(rendered.contains(&format!(
+            "guardian_policy_config: configured (source: {requirements_source})"
+        )));
+        assert!(rendered.contains(&format!(
+            "features: guardian_approval=true (source: {requirements_source})"
+        )));
         assert!(rendered.contains("mcp_servers: docs (source: MDM managed_config.toml (legacy))"));
-        assert!(rendered.contains("enforce_residency: us (source: cloud requirements)"));
-        assert!(rendered.contains(
-            "experimental_network: enabled=true, domains={example.com=allow} (source: cloud requirements)"
-        ));
+        assert!(rendered.contains(&format!(
+            "enforce_residency: us (source: {requirements_source})"
+        )));
+        assert!(rendered.contains(&format!(
+            "experimental_network: enabled=true, domains={{example.com=allow}} (source: {requirements_source})"
+        )));
         assert!(
             rendered.contains(
                 format!(
@@ -843,7 +841,7 @@ mod tests {
                     }),
                     ..Default::default()
                 },
-                RequirementSource::CloudRequirements,
+                RequirementSource::LegacyManagedConfigTomlFromMdm,
             )),
             ..ConfigRequirements::default()
         };
@@ -853,9 +851,10 @@ mod tests {
                 .expect("config layer stack");
 
         let rendered = render_to_text(&render_debug_config_lines(&stack));
-        assert!(rendered.contains(
-            "experimental_network: unix_sockets={/tmp/blocked.sock=deny, /tmp/codex.sock=allow} (source: cloud requirements)"
-        ));
+        let requirements_source = (RequirementSource::LegacyManagedConfigTomlFromMdm).to_string();
+        assert!(rendered.contains(&format!(
+            "experimental_network: unix_sockets={{/tmp/blocked.sock=deny, /tmp/codex.sock=allow}} (source: {requirements_source})"
+        )));
     }
 
     #[test]
@@ -896,12 +895,18 @@ model = "managed_model"
 approval_policy = "never"
 "#;
         let mdm_value = toml::from_str::<TomlValue>(raw_mdm_toml).expect("MDM value");
+        let mdm_base_dir = if cfg!(windows) {
+            absolute_path("C:\\codex")
+        } else {
+            absolute_path("/var/lib/codex")
+        };
 
         let stack = ConfigLayerStack::new(
             vec![ConfigLayerEntry::new_with_raw_toml(
                 ConfigLayerSource::LegacyManagedConfigTomlFromMdm,
                 mdm_value,
                 raw_mdm_toml.to_string(),
+                mdm_base_dir,
             )],
             ConfigRequirements::default(),
             ConfigRequirementsToml::default(),
@@ -917,11 +922,49 @@ approval_policy = "never"
     }
 
     #[test]
+    fn debug_config_output_shows_enterprise_managed_layer_value() {
+        let raw_cloud_toml = r#"
+# managed by cloud
+model = "enterprise_model"
+approval_policy = "never"
+"#;
+        let cloud_value = toml::from_str::<TomlValue>(raw_cloud_toml).expect("cloud value");
+        let cloud_base_dir = if cfg!(windows) {
+            absolute_path("C:\\codex")
+        } else {
+            absolute_path("/var/lib/codex")
+        };
+
+        let stack = ConfigLayerStack::new(
+            vec![ConfigLayerEntry::new_with_raw_toml(
+                ConfigLayerSource::EnterpriseManaged {
+                    id: "cfg_123".to_string(),
+                    name: "Base policy".to_string(),
+                },
+                cloud_value,
+                raw_cloud_toml.to_string(),
+                cloud_base_dir,
+            )],
+            ConfigRequirements::default(),
+            ConfigRequirementsToml::default(),
+        )
+        .expect("config layer stack");
+
+        let rendered = render_to_text(&render_debug_config_lines(&stack));
+        assert!(rendered.contains("enterprise-managed (Base policy, cfg_123) (enabled)"));
+        assert!(rendered.contains("Enterprise-managed config value:"));
+        assert!(!rendered.contains("MDM value:"));
+        assert!(rendered.contains("# managed by cloud"));
+        assert!(rendered.contains("model = \"enterprise_model\""));
+        assert!(rendered.contains("approval_policy = \"never\""));
+    }
+
+    #[test]
     fn debug_config_output_normalizes_empty_web_search_mode_list() {
         let requirements = ConfigRequirements {
             web_search_mode: ConstrainedWithSource::new(
                 Constrained::allow_any(WebSearchMode::Disabled),
-                Some(RequirementSource::CloudRequirements),
+                Some(RequirementSource::LegacyManagedConfigTomlFromMdm),
             ),
             ..ConfigRequirements::default()
         };
@@ -936,6 +979,7 @@ approval_policy = "never"
             allow_managed_hooks_only: None,
             allow_appshots: None,
             computer_use: None,
+            windows: None,
             guardian_policy_config: None,
             feature_requirements: None,
             hooks: None,
@@ -952,9 +996,10 @@ approval_policy = "never"
             .expect("config layer stack");
 
         let rendered = render_to_text(&render_debug_config_lines(&stack));
-        assert!(
-            rendered.contains("allowed_web_search_modes: disabled (source: cloud requirements)")
-        );
+        let requirements_source = (RequirementSource::LegacyManagedConfigTomlFromMdm).to_string();
+        assert!(rendered.contains(&format!(
+            "allowed_web_search_modes: disabled (source: {requirements_source})"
+        )));
     }
 
     #[test]
@@ -982,7 +1027,7 @@ approval_policy = "never"
                         ..Default::default()
                     },
                 }),
-                Some(RequirementSource::CloudRequirements),
+                Some(RequirementSource::LegacyManagedConfigTomlFromMdm),
             )),
             ..ConfigRequirements::default()
         };
@@ -997,9 +1042,10 @@ approval_policy = "never"
             .expect("config layer stack");
 
         let rendered = render_to_text(&render_debug_config_lines(&stack));
+        let requirements_source = (RequirementSource::LegacyManagedConfigTomlFromMdm).to_string();
         assert!(rendered.contains("hooks:"));
         assert!(rendered.contains("handlers=1"));
-        assert!(rendered.contains("(source: cloud requirements)"));
+        assert!(rendered.contains(&format!("(source: {requirements_source})")));
     }
 
     #[test]

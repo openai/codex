@@ -90,7 +90,7 @@ async fn sqlite_rollout_path_can_load_history_for_thread(
     path: &std::path::Path,
     thread_id: codex_protocol::ThreadId,
 ) -> bool {
-    if !tokio::fs::try_exists(path).await.unwrap_or(false) {
+    if codex_rollout::existing_rollout_path(path).await.is_none() {
         return false;
     }
     // SQLite metadata can outlive a moved/recreated rollout path. When history is
@@ -107,7 +107,7 @@ pub(super) async fn read_thread_by_rollout_path(
     include_archived: bool,
     include_history: bool,
 ) -> ThreadStoreResult<StoredThread> {
-    let path = resolve_requested_rollout_path(store, rollout_path)?;
+    let path = resolve_requested_rollout_path(store, rollout_path).await?;
     let mut thread = read_thread_from_rollout_path(store, path).await?;
     if !include_archived && thread.archived_at.is_some() {
         return Err(ThreadStoreError::InvalidRequest {
@@ -134,7 +134,7 @@ pub(super) async fn read_thread_by_rollout_path(
     Ok(thread)
 }
 
-fn resolve_requested_rollout_path(
+async fn resolve_requested_rollout_path(
     store: &LocalThreadStore,
     rollout_path: std::path::PathBuf,
 ) -> ThreadStoreResult<std::path::PathBuf> {
@@ -143,7 +143,34 @@ fn resolve_requested_rollout_path(
     } else {
         rollout_path
     };
-    std::fs::canonicalize(&path).map_err(|err| ThreadStoreError::InvalidRequest {
+    match tokio::fs::metadata(path.as_path()).await {
+        Ok(metadata) if metadata.is_dir() => {
+            return Err(ThreadStoreError::InvalidRequest {
+                message: format!(
+                    "failed to resolve rollout path `{}`: path is a directory",
+                    path.display()
+                ),
+            });
+        }
+        Ok(metadata) if !metadata.is_file() => {
+            return Err(ThreadStoreError::InvalidRequest {
+                message: format!(
+                    "failed to resolve rollout path `{}`: path is not a file",
+                    path.display()
+                ),
+            });
+        }
+        _ => {}
+    }
+    let Some(path) = codex_rollout::existing_rollout_path(path.as_path()).await else {
+        return Err(ThreadStoreError::InvalidRequest {
+            message: format!(
+                "failed to resolve rollout path `{}`: file does not exist",
+                path.display()
+            ),
+        });
+    };
+    std::fs::canonicalize(path.as_path()).map_err(|err| ThreadStoreError::InvalidRequest {
         message: format!("failed to resolve rollout path `{}`: {err}", path.display()),
     })
 }
@@ -172,11 +199,9 @@ async fn resolve_rollout_path(
     include_archived: bool,
 ) -> ThreadStoreResult<Option<std::path::PathBuf>> {
     if let Ok(path) = live_writer::rollout_path(store, thread_id).await
-        && tokio::fs::try_exists(path.as_path()).await.map_err(|err| {
-            ThreadStoreError::InvalidRequest {
-                message: format!("failed to check rollout path for thread id {thread_id}: {err}"),
-            }
-        })?
+        && codex_rollout::existing_rollout_path(path.as_path())
+            .await
+            .is_some()
         && (include_archived || !rollout_path_is_archived(store.config.codex_home.as_path(), &path))
     {
         return Ok(Some(path));
@@ -233,8 +258,10 @@ async fn read_thread_from_rollout_path(
     .ok_or_else(|| ThreadStoreError::Internal {
         message: format!("failed to read thread id from {}", path.display()),
     })?;
+    thread.rollout_path = Some(codex_rollout::plain_rollout_path(path.as_path()));
     if let Ok(meta_line) = read_session_meta_line(path.as_path()).await {
         thread.forked_from_id = meta_line.meta.forked_from_id;
+        thread.parent_thread_id = meta_line.meta.parent_thread_id;
         if let Some(model_provider) = meta_line
             .meta
             .model_provider
@@ -286,7 +313,9 @@ async fn stored_thread_from_sqlite_metadata(
         .await
         .ok()
         .map(|meta_line| meta_line.meta);
+    let rollout_path = codex_rollout::plain_rollout_path(metadata.rollout_path.as_path());
     let forked_from_id = session_meta.as_ref().and_then(|meta| meta.forked_from_id);
+    let parent_thread_id = session_meta.as_ref().and_then(|meta| meta.parent_thread_id);
     let preview = metadata
         .preview
         .clone()
@@ -296,8 +325,9 @@ async fn stored_thread_from_sqlite_metadata(
         permission_profile_from_metadata_value(&metadata.sandbox_policy, metadata.cwd.as_path());
     StoredThread {
         thread_id: metadata.id,
-        rollout_path: Some(metadata.rollout_path),
+        rollout_path: Some(rollout_path),
         forked_from_id,
+        parent_thread_id,
         preview,
         name,
         model_provider: if metadata.model_provider.is_empty() {
@@ -357,10 +387,12 @@ fn stored_thread_from_meta_line(
         .and_then(|meta| meta.modified().ok())
         .map(DateTime::<Utc>::from)
         .unwrap_or(created_at);
+    let rollout_path = codex_rollout::plain_rollout_path(path.as_path());
     StoredThread {
         thread_id: meta_line.meta.id,
-        rollout_path: Some(path),
+        rollout_path: Some(rollout_path),
         forked_from_id: meta_line.meta.forked_from_id,
+        parent_thread_id: meta_line.meta.parent_thread_id,
         preview: String::new(),
         name: None,
         model_provider: meta_line

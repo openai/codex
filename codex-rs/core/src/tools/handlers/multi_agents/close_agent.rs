@@ -16,6 +16,13 @@ impl ToolExecutor<ToolInvocation> for Handler {
         create_close_agent_tool_v1()
     }
 
+    fn search_info(&self) -> Option<ToolSearchInfo> {
+        multi_agent_tool_search_info(
+            "close_agent close shutdown stop agent subagent thread status target",
+            self.spec(),
+        )
+    }
+
     async fn handle(
         &self,
         invocation: ToolInvocation,
@@ -46,7 +53,7 @@ async fn handle_close_agent(
             CollabCloseBeginEvent {
                 call_id: call_id.clone(),
                 started_at_ms: now_unix_timestamp_ms(),
-                sender_thread_id: session.conversation_id,
+                sender_thread_id: session.thread_id,
                 receiver_thread_id: agent_id,
             }
             .into(),
@@ -70,7 +77,7 @@ async fn handle_close_agent(
                     CollabCloseEndEvent {
                         call_id: call_id.clone(),
                         completed_at_ms: now_unix_timestamp_ms(),
-                        sender_thread_id: session.conversation_id,
+                        sender_thread_id: session.thread_id(),
                         receiver_thread_id: agent_id,
                         receiver_agent_nickname: receiver_agent.agent_nickname.clone(),
                         receiver_agent_role: receiver_agent.agent_role.clone(),
@@ -92,7 +99,7 @@ async fn handle_close_agent(
             CollabCloseEndEvent {
                 call_id,
                 completed_at_ms: now_unix_timestamp_ms(),
-                sender_thread_id: session.conversation_id,
+                sender_thread_id: session.thread_id,
                 receiver_thread_id: agent_id,
                 receiver_agent_nickname: receiver_agent.agent_nickname,
                 receiver_agent_role: receiver_agent.agent_role,
@@ -109,13 +116,6 @@ async fn handle_close_agent(
 }
 
 impl CoreToolRuntime for Handler {
-    fn search_info(&self) -> Option<ToolSearchInfo> {
-        multi_agent_tool_search_info(
-            "close_agent close shutdown stop agent subagent thread status target",
-            self.spec(),
-        )
-    }
-
     fn matches_kind(&self, payload: &ToolPayload) -> bool {
         matches!(payload, ToolPayload::Function { .. })
     }

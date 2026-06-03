@@ -82,7 +82,7 @@ pub(crate) async fn handle_message_string_tool(
             .is_some_and(AgentPath::is_root)
     {
         return Err(FunctionCallError::RespondToModel(
-            "Tasks can't be assigned to the root agent".to_string(),
+            "Follow-up tasks can't target the root agent".to_string(),
         ));
     }
     session
@@ -91,7 +91,7 @@ pub(crate) async fn handle_message_string_tool(
             CollabAgentInteractionBeginEvent {
                 call_id: call_id.clone(),
                 started_at_ms: now_unix_timestamp_ms(),
-                sender_thread_id: session.conversation_id,
+                sender_thread_id: session.thread_id,
                 receiver_thread_id,
                 prompt: prompt.clone(),
             }
@@ -127,7 +127,7 @@ pub(crate) async fn handle_message_string_tool(
             CollabAgentInteractionEndEvent {
                 call_id,
                 completed_at_ms: now_unix_timestamp_ms(),
-                sender_thread_id: session.conversation_id,
+                sender_thread_id: session.thread_id,
                 receiver_thread_id,
                 receiver_agent_nickname: receiver_agent.agent_nickname,
                 receiver_agent_role: receiver_agent.agent_role,

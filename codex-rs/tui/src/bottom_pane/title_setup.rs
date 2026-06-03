@@ -82,6 +82,8 @@ pub(crate) enum TerminalTitleItem {
     Model,
     /// Current model name with reasoning level.
     ModelWithReasoning,
+    /// Current reasoning level.
+    Reasoning,
     /// Latest checklist task progress from `update_plan` (if available).
     TaskProgress,
 }
@@ -122,6 +124,7 @@ impl TerminalTitleItem {
             TerminalTitleItem::FastMode => "Whether Fast mode is currently active",
             TerminalTitleItem::Model => "Current model name",
             TerminalTitleItem::ModelWithReasoning => "Current model name with reasoning level",
+            TerminalTitleItem::Reasoning => "Current reasoning level",
             TerminalTitleItem::TaskProgress => {
                 "Latest task progress from update_plan (omitted until available)"
             }
@@ -153,6 +156,7 @@ impl TerminalTitleItem {
             TerminalTitleItem::ModelWithReasoning => {
                 Some(StatusSurfacePreviewItem::ModelWithReasoning)
             }
+            TerminalTitleItem::Reasoning => Some(StatusSurfacePreviewItem::Reasoning),
             TerminalTitleItem::TaskProgress => Some(StatusSurfacePreviewItem::TaskProgress),
         }
     }
@@ -517,6 +521,15 @@ mod tests {
     }
 
     #[test]
+    fn reasoning_is_selectable_id() {
+        assert_eq!(TerminalTitleItem::Reasoning.to_string(), "reasoning");
+        assert_eq!(
+            "reasoning".parse::<TerminalTitleItem>(),
+            Ok(TerminalTitleItem::Reasoning)
+        );
+    }
+
+    #[test]
     fn parse_terminal_title_items_accepts_kebab_case_variants() {
         let items = parse_terminal_title_items(
             [
@@ -530,6 +543,7 @@ mod tests {
                 "project-name",
                 "model",
                 "model-with-reasoning",
+                "reasoning",
                 "weekly-limit",
                 "codex-version",
                 "used-tokens",
@@ -553,6 +567,7 @@ mod tests {
                 TerminalTitleItem::Project,
                 TerminalTitleItem::Model,
                 TerminalTitleItem::ModelWithReasoning,
+                TerminalTitleItem::Reasoning,
                 TerminalTitleItem::WeeklyLimit,
                 TerminalTitleItem::CodexVersion,
                 TerminalTitleItem::UsedTokens,

@@ -16,7 +16,7 @@ classifiers = [
   "Intended Audience :: Developers",
   "Topic :: Software Development :: Libraries :: Python Modules",
 ]
-dependencies = ["pydantic>=2.12", "openai-codex-cli-bin==0.132.0"]
+dependencies = ["pydantic>=2.12", "openai-codex-cli-bin==0.137.0a4"]
 
 [project.urls]
 Homepage = "https://github.com/openai/codex"
@@ -78,10 +78,10 @@ combine-as-imports = true
 
 [tool.uv]
 exclude-newer = "7 days"
-exclude-newer-package = { openai-codex-cli-bin = "2026-05-20T21:00:00Z" }
+exclude-newer-package = { openai-codex-cli-bin = "2026-06-03T19:00:00Z" }
 index-strategy = "first-index"
 
 [tool.uv.pip]
 exclude-newer = "7 days"
-exclude-newer-package = { openai-codex-cli-bin = "2026-05-20T21:00:00Z" }
+exclude-newer-package = { openai-codex-cli-bin = "2026-06-03T19:00:00Z" }
 index-strategy = "first-index"

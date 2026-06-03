@@ -20,15 +20,63 @@ use crate::ConstraintError;
 use crate::ManagedHooksRequirementsToml;
 use crate::mcp_types::AppToolApproval;
 use crate::permissions_toml::PermissionProfileToml;
+use crate::types::WindowsSandboxModeToml;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RequirementSource {
     Unknown,
-    MdmManagedPreferences { domain: String, key: String },
-    CloudRequirements,
-    SystemRequirementsToml { file: AbsolutePathBuf },
-    LegacyManagedConfigTomlFromFile { file: AbsolutePathBuf },
+    MdmManagedPreferences {
+        domain: String,
+        key: String,
+    },
+    /// Multiple requirements layers contributed to the final value. Sources are
+    /// stored highest-priority first, matching the order surfaced in errors.
+    Composite {
+        sources: Vec<RequirementSource>,
+    },
+    /// A backend-delivered enterprise-managed layer. `id` is the stable backend
+    /// identifier; `name` is the admin-facing display name.
+    EnterpriseManaged {
+        id: String,
+        name: String,
+    },
+    SystemRequirementsToml {
+        file: AbsolutePathBuf,
+    },
+    LegacyManagedConfigTomlFromFile {
+        file: AbsolutePathBuf,
+    },
     LegacyManagedConfigTomlFromMdm,
+}
+
+impl RequirementSource {
+    pub fn composite(sources: impl IntoIterator<Item = RequirementSource>) -> Self {
+        let mut flattened = Vec::new();
+        for source in sources {
+            source.append_to_composite(&mut flattened);
+        }
+
+        match flattened.len() {
+            0 => RequirementSource::Unknown,
+            1 => flattened.remove(0),
+            _ => RequirementSource::Composite { sources: flattened },
+        }
+    }
+
+    fn append_to_composite(self, flattened: &mut Vec<RequirementSource>) {
+        match self {
+            RequirementSource::Composite { sources } => {
+                for source in sources {
+                    source.append_to_composite(flattened);
+                }
+            }
+            source => {
+                if !flattened.contains(&source) {
+                    flattened.push(source);
+                }
+            }
+        }
+    }
 }
 
 impl fmt::Display for RequirementSource {
@@ -38,8 +86,18 @@ impl fmt::Display for RequirementSource {
             RequirementSource::MdmManagedPreferences { domain, key } => {
                 write!(f, "MDM {domain}:{key}")
             }
-            RequirementSource::CloudRequirements => {
-                write!(f, "cloud requirements")
+            RequirementSource::Composite { sources } => {
+                write!(f, "requirements layers: ")?;
+                for (index, source) in sources.iter().enumerate() {
+                    if index > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{source}")?;
+                }
+                Ok(())
+            }
+            RequirementSource::EnterpriseManaged { id, name } => {
+                write!(f, "enterprise-managed requirements {name} ({id})")
             }
             RequirementSource::SystemRequirementsToml { file } => {
                 write!(f, "{}", file.as_path().display())
@@ -87,6 +145,7 @@ pub struct ConfigRequirements {
     pub approval_policy: ConstrainedWithSource<AskForApproval>,
     pub approvals_reviewer: ConstrainedWithSource<ApprovalsReviewer>,
     pub permission_profile: ConstrainedWithSource<PermissionProfile>,
+    pub windows_sandbox_mode: ConstrainedWithSource<Option<WindowsSandboxModeToml>>,
     pub web_search_mode: ConstrainedWithSource<WebSearchMode>,
     pub allow_managed_hooks_only: Option<Sourced<bool>>,
     pub allow_appshots: Option<Sourced<bool>>,
@@ -118,6 +177,10 @@ impl Default for ConfigRequirements {
             ),
             permission_profile: ConstrainedWithSource::new(
                 Constrained::allow_any(PermissionProfile::read_only()),
+                /*source*/ None,
+            ),
+            windows_sandbox_mode: ConstrainedWithSource::new(
+                Constrained::allow_any(/*initial_value*/ None),
                 /*source*/ None,
             ),
             web_search_mode: ConstrainedWithSource::new(
@@ -649,6 +712,17 @@ impl ComputerUseRequirementsToml {
 }
 
 #[derive(Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+pub struct WindowsRequirementsToml {
+    pub allowed_sandbox_implementations: Option<Vec<WindowsSandboxModeToml>>,
+}
+
+impl WindowsRequirementsToml {
+    pub fn is_empty(&self) -> bool {
+        self.allowed_sandbox_implementations.is_none()
+    }
+}
+
+#[derive(Deserialize, Debug, Clone, Default, PartialEq, Eq)]
 pub struct FeatureRequirementsToml {
     #[serde(flatten)]
     pub entries: BTreeMap<String, bool>,
@@ -754,6 +828,7 @@ pub struct ConfigRequirementsToml {
     pub allow_managed_hooks_only: Option<bool>,
     pub allow_appshots: Option<bool>,
     pub computer_use: Option<ComputerUseRequirementsToml>,
+    pub windows: Option<WindowsRequirementsToml>,
     #[serde(rename = "features", alias = "feature_requirements")]
     pub feature_requirements: Option<FeatureRequirementsToml>,
     pub hooks: Option<ManagedHooksRequirementsToml>,
@@ -806,6 +881,7 @@ pub struct ConfigRequirementsWithSources {
     pub allow_managed_hooks_only: Option<Sourced<bool>>,
     pub allow_appshots: Option<Sourced<bool>>,
     pub computer_use: Option<Sourced<ComputerUseRequirementsToml>>,
+    pub windows: Option<Sourced<WindowsRequirementsToml>>,
     pub feature_requirements: Option<Sourced<FeatureRequirementsToml>>,
     pub hooks: Option<Sourced<ManagedHooksRequirementsToml>>,
     pub mcp_servers: Option<Sourced<BTreeMap<String, McpServerRequirement>>>,
@@ -846,6 +922,7 @@ impl ConfigRequirementsWithSources {
             allow_managed_hooks_only: _,
             allow_appshots: _,
             computer_use: _,
+            windows: _,
             feature_requirements: _,
             hooks: _,
             mcp_servers: _,
@@ -879,6 +956,7 @@ impl ConfigRequirementsWithSources {
                 allow_managed_hooks_only,
                 allow_appshots,
                 computer_use,
+                windows,
                 feature_requirements,
                 hooks,
                 mcp_servers,
@@ -910,6 +988,7 @@ impl ConfigRequirementsWithSources {
             allow_managed_hooks_only,
             allow_appshots,
             computer_use,
+            windows,
             feature_requirements,
             hooks,
             mcp_servers,
@@ -931,6 +1010,7 @@ impl ConfigRequirementsWithSources {
             allow_managed_hooks_only: allow_managed_hooks_only.map(|sourced| sourced.value),
             allow_appshots: allow_appshots.map(|sourced| sourced.value),
             computer_use: computer_use.map(|sourced| sourced.value),
+            windows: windows.map(|sourced| sourced.value),
             feature_requirements: feature_requirements.map(|sourced| sourced.value),
             hooks: hooks.map(|sourced| sourced.value),
             mcp_servers: mcp_servers.map(|sourced| sourced.value),
@@ -960,7 +1040,7 @@ fn hostname_matches_any_pattern(hostname: &str, patterns: &[String]) -> bool {
 
 /// Currently, `external-sandbox` is not supported in config.toml, but it is
 /// supported through programmatic use.
-#[derive(Deserialize, Debug, Clone, Copy, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
 pub enum SandboxModeRequirement {
     #[serde(rename = "read-only")]
     ReadOnly,
@@ -1022,6 +1102,10 @@ impl ConfigRequirementsToml {
                 .as_ref()
                 .is_none_or(ComputerUseRequirementsToml::is_empty)
             && self
+                .windows
+                .as_ref()
+                .is_none_or(WindowsRequirementsToml::is_empty)
+            && self
                 .feature_requirements
                 .as_ref()
                 .is_none_or(FeatureRequirementsToml::is_empty)
@@ -1065,6 +1149,7 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             allow_managed_hooks_only,
             allow_appshots,
             computer_use,
+            windows,
             feature_requirements,
             hooks,
             mcp_servers,
@@ -1171,6 +1256,44 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             }
             None => ConstrainedWithSource::new(
                 Constrained::allow_any(default_permission_profile),
+                /*source*/ None,
+            ),
+        };
+        let windows_sandbox_mode = match windows {
+            Some(Sourced {
+                value:
+                    WindowsRequirementsToml {
+                        allowed_sandbox_implementations: Some(implementations),
+                    },
+                source: requirement_source,
+            }) => {
+                if implementations.is_empty() {
+                    return Err(ConstraintError::empty_field(
+                        "windows.allowed_sandbox_implementations",
+                    ));
+                }
+                // Prefer elevated when both Windows sandbox implementations are allowed.
+                let initial_value = if implementations.contains(&WindowsSandboxModeToml::Elevated) {
+                    WindowsSandboxModeToml::Elevated
+                } else {
+                    WindowsSandboxModeToml::Unelevated
+                };
+
+                let requirement_source_for_error = requirement_source.clone();
+                let constrained =
+                    Constrained::new(Some(initial_value), move |candidate| match candidate {
+                        Some(candidate) if implementations.contains(candidate) => Ok(()),
+                        _ => Err(ConstraintError::InvalidValue {
+                            field_name: "windows.sandbox",
+                            candidate: format!("{candidate:?}"),
+                            allowed: format!("{implementations:?}"),
+                            requirement_source: requirement_source_for_error.clone(),
+                        }),
+                    })?;
+                ConstrainedWithSource::new(constrained, Some(requirement_source))
+            }
+            Some(_) | None => ConstrainedWithSource::new(
+                Constrained::allow_any(/*initial_value*/ None),
                 /*source*/ None,
             ),
         };
@@ -1299,6 +1422,7 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             approval_policy,
             approvals_reviewer,
             permission_profile,
+            windows_sandbox_mode,
             web_search_mode,
             allow_managed_hooks_only,
             allow_appshots,
@@ -1363,6 +1487,25 @@ mod tests {
         )?)
     }
 
+    #[test]
+    fn composite_requirement_source_flattens_and_deduplicates_sources() {
+        let mdm_source = RequirementSource::MdmManagedPreferences {
+            domain: "com.openai.codex".to_string(),
+            key: "requirements_toml_base64".to_string(),
+        };
+        let legacy_source = RequirementSource::LegacyManagedConfigTomlFromMdm;
+
+        assert_eq!(
+            RequirementSource::composite([
+                mdm_source.clone(),
+                RequirementSource::composite([legacy_source.clone(), mdm_source.clone()]),
+            ]),
+            RequirementSource::Composite {
+                sources: vec![mdm_source, legacy_source],
+            }
+        );
+    }
+
     fn with_unknown_source(toml: ConfigRequirementsToml) -> ConfigRequirementsWithSources {
         let ConfigRequirementsToml {
             allowed_approval_policies,
@@ -1374,6 +1517,7 @@ mod tests {
             allow_managed_hooks_only,
             allow_appshots,
             computer_use,
+            windows,
             feature_requirements,
             hooks,
             mcp_servers,
@@ -1401,6 +1545,7 @@ mod tests {
             allow_appshots: allow_appshots
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
             computer_use: computer_use.map(|value| Sourced::new(value, RequirementSource::Unknown)),
+            windows: windows.map(|value| Sourced::new(value, RequirementSource::Unknown)),
             feature_requirements: feature_requirements
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
             hooks: hooks.map(|value| Sourced::new(value, RequirementSource::Unknown)),
@@ -1581,6 +1726,7 @@ mod tests {
             allow_managed_hooks_only: Some(true),
             allow_appshots: Some(false),
             computer_use: Some(computer_use.clone()),
+            windows: None,
             feature_requirements: Some(feature_requirements.clone()),
             hooks: None,
             mcp_servers: None,
@@ -1621,6 +1767,7 @@ mod tests {
                 )),
                 allow_appshots: Some(Sourced::new(/*value*/ false, enforce_source.clone(),)),
                 computer_use: Some(Sourced::new(computer_use, enforce_source.clone())),
+                windows: None,
                 feature_requirements: Some(Sourced::new(
                     feature_requirements,
                     enforce_source.clone(),
@@ -1667,6 +1814,7 @@ mod tests {
                 allow_managed_hooks_only: None,
                 allow_appshots: None,
                 computer_use: None,
+                windows: None,
                 feature_requirements: None,
                 hooks: None,
                 mcp_servers: None,
@@ -1718,6 +1866,7 @@ mod tests {
                 allow_managed_hooks_only: None,
                 allow_appshots: None,
                 computer_use: None,
+                windows: None,
                 feature_requirements: None,
                 hooks: None,
                 mcp_servers: None,
@@ -1737,7 +1886,7 @@ mod tests {
     fn merge_unset_fields_ignores_blank_guardian_override() {
         let mut target = ConfigRequirementsWithSources::default();
         target.merge_unset_fields(
-            RequirementSource::CloudRequirements,
+            RequirementSource::LegacyManagedConfigTomlFromMdm,
             ConfigRequirementsToml {
                 guardian_policy_config: Some("   \n\t".to_string()),
                 ..Default::default()
@@ -2083,8 +2232,11 @@ allowed_approvals_reviewers = ["user"]
 
     #[test]
     fn merge_unset_fields_merges_apps_across_sources_with_enabled_evaluation() {
-        let higher_source = RequirementSource::CloudRequirements;
-        let lower_source = RequirementSource::LegacyManagedConfigTomlFromMdm;
+        let higher_source = RequirementSource::LegacyManagedConfigTomlFromMdm;
+        let lower_source = RequirementSource::MdmManagedPreferences {
+            domain: "com.openai.codex".to_string(),
+            key: "requirements_toml_base64".to_string(),
+        };
         let mut target = ConfigRequirementsWithSources::default();
 
         target.merge_unset_fields(
@@ -2125,7 +2277,7 @@ allowed_approvals_reviewers = ["user"]
         let mut target = ConfigRequirementsWithSources::default();
 
         target.merge_unset_fields(
-            RequirementSource::CloudRequirements,
+            RequirementSource::LegacyManagedConfigTomlFromMdm,
             ConfigRequirementsToml {
                 apps: Some(apps_requirements(&[])),
                 ..Default::default()
@@ -2200,14 +2352,20 @@ allowed_approvals_reviewers = ["user"]
     }
 
     #[test]
-    fn constraint_error_includes_cloud_requirements_source() -> Result<()> {
+    fn constraint_error_includes_composite_requirement_source() -> Result<()> {
         let source: ConfigRequirementsToml = from_str(
             r#"
                 allowed_approval_policies = ["on-request"]
             "#,
         )?;
 
-        let source_location = RequirementSource::CloudRequirements;
+        let source_location = RequirementSource::composite([
+            RequirementSource::MdmManagedPreferences {
+                domain: "com.openai.codex".to_string(),
+                key: "requirements_toml_base64".to_string(),
+            },
+            RequirementSource::LegacyManagedConfigTomlFromMdm,
+        ]);
 
         let mut target = ConfigRequirementsWithSources::default();
         target.merge_unset_fields(source_location.clone(), source);
@@ -2240,7 +2398,7 @@ allowed_approvals_reviewers = ["user"]
             "#,
         )?;
 
-        let source_location = RequirementSource::CloudRequirements;
+        let source_location = RequirementSource::LegacyManagedConfigTomlFromMdm;
         let mut target = ConfigRequirementsWithSources::default();
         target.merge_unset_fields(source_location.clone(), source);
         let requirements = ConfigRequirements::try_from(target)?;
@@ -2352,6 +2510,71 @@ allowed_approvals_reviewers = ["user"]
                 .approvals_reviewer
                 .can_set(&ApprovalsReviewer::User)
                 .is_ok()
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn deserialize_allowed_windows_sandbox_implementations() -> Result<()> {
+        let toml_str = r#"
+            [windows]
+            allowed_sandbox_implementations = ["elevated"]
+        "#;
+        let config: ConfigRequirementsToml = from_str(toml_str)?;
+        let requirements: ConfigRequirements = with_unknown_source(config).try_into()?;
+
+        assert_eq!(
+            requirements.windows_sandbox_mode.value(),
+            Some(WindowsSandboxModeToml::Elevated)
+        );
+        assert!(
+            requirements
+                .windows_sandbox_mode
+                .can_set(&Some(WindowsSandboxModeToml::Elevated))
+                .is_ok()
+        );
+        assert!(
+            requirements
+                .windows_sandbox_mode
+                .can_set(&Some(WindowsSandboxModeToml::Unelevated))
+                .is_err()
+        );
+        assert!(requirements.windows_sandbox_mode.can_set(&None).is_err());
+
+        Ok(())
+    }
+
+    #[test]
+    fn empty_allowed_windows_sandbox_implementations_is_rejected() -> Result<()> {
+        let toml_str = r#"
+            [windows]
+            allowed_sandbox_implementations = []
+        "#;
+        let config: ConfigRequirementsToml = from_str(toml_str)?;
+
+        assert_eq!(
+            ConfigRequirements::try_from(with_unknown_source(config)),
+            Err(ConstraintError::EmptyField {
+                field_name: "windows.allowed_sandbox_implementations".to_string(),
+            })
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn allowed_windows_sandbox_implementations_prefer_elevated_fallback() -> Result<()> {
+        let toml_str = r#"
+            [windows]
+            allowed_sandbox_implementations = ["unelevated", "elevated"]
+        "#;
+        let config: ConfigRequirementsToml = from_str(toml_str)?;
+        let requirements: ConfigRequirements = with_unknown_source(config).try_into()?;
+
+        assert_eq!(
+            requirements.windows_sandbox_mode.value(),
+            Some(WindowsSandboxModeToml::Elevated)
         );
 
         Ok(())
@@ -2485,7 +2708,7 @@ allowed_approvals_reviewers = ["user"]
 
     #[test]
     fn remote_sandbox_config_first_match_overrides_top_level() -> Result<()> {
-        let source = RequirementSource::CloudRequirements;
+        let source = RequirementSource::LegacyManagedConfigTomlFromMdm;
         let mut requirements_toml: ConfigRequirementsToml = from_str(
             r#"
                 allowed_sandbox_modes = ["read-only"]
@@ -2576,7 +2799,7 @@ allowed_approvals_reviewers = ["user"]
 
     #[test]
     fn remote_sandbox_config_does_not_override_higher_precedence_sandbox_modes() -> Result<()> {
-        let high_source = RequirementSource::CloudRequirements;
+        let high_source = RequirementSource::LegacyManagedConfigTomlFromMdm;
         let mut high_precedence: ConfigRequirementsToml = from_str(
             r#"
                 allowed_sandbox_modes = ["read-only"]
@@ -2763,7 +2986,7 @@ statusMessage = "checking"
     fn merge_unset_fields_does_not_overwrite_existing_hooks() -> Result<()> {
         let mut target = ConfigRequirementsWithSources::default();
         target.merge_unset_fields(
-            RequirementSource::CloudRequirements,
+            RequirementSource::LegacyManagedConfigTomlFromMdm,
             from_str::<ConfigRequirementsToml>(
                 r#"
 [hooks]
@@ -2807,7 +3030,7 @@ command = "python3 /system/hooks/pre.py"
         );
         assert_eq!(
             target.hooks.as_ref().map(|hooks| hooks.source.clone()),
-            Some(RequirementSource::CloudRequirements)
+            Some(RequirementSource::LegacyManagedConfigTomlFromMdm)
         );
         Ok(())
     }
@@ -2871,7 +3094,7 @@ command = "python3 /enterprise/hooks/pre.py"
             "/tmp/blocked.sock" = "deny"
         "#;
 
-        let source = RequirementSource::CloudRequirements;
+        let source = RequirementSource::LegacyManagedConfigTomlFromMdm;
         let mut requirements_with_sources = ConfigRequirementsWithSources::default();
         requirements_with_sources.merge_unset_fields(source.clone(), from_str(toml_str)?);
 
@@ -2944,7 +3167,7 @@ command = "python3 /enterprise/hooks/pre.py"
             allow_local_binding = false
         "#;
 
-        let source = RequirementSource::CloudRequirements;
+        let source = RequirementSource::LegacyManagedConfigTomlFromMdm;
         let mut requirements_with_sources = ConfigRequirementsWithSources::default();
         requirements_with_sources.merge_unset_fields(source.clone(), from_str(toml_str)?);
 

@@ -9,6 +9,7 @@ use codex_exec_server::LOCAL_ENVIRONMENT_ID;
 use codex_exec_server::REMOTE_ENVIRONMENT_ID;
 use codex_exec_server::RemoveOptions;
 use codex_features::Feature;
+use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
@@ -22,6 +23,9 @@ use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::TurnEnvironmentSelection;
+use codex_protocol::request_permissions::PermissionGrantScope;
+use codex_protocol::request_permissions::RequestPermissionProfile;
+use codex_protocol::request_permissions::RequestPermissionsResponse;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use core_test_support::PathBufExt;
@@ -329,6 +333,209 @@ async fn exec_command_routes_to_selected_remote_environment() -> Result<()> {
     assert!(
         !multi_env_output.contains("local-routing"),
         "multi-env command should not route to local: {multi_env_output}",
+    );
+
+    test.fs()
+        .remove(
+            &remote_cwd,
+            RemoveOptions {
+                recursive: true,
+                force: true,
+            },
+            /*sandbox*/ None,
+        )
+        .await?;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_request_permissions_grant_unblocks_later_remote_exec() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let Some(_remote_env) = get_remote_test_env() else {
+        return Ok(());
+    };
+
+    let server = start_mock_server().await;
+    let mut builder = test_codex().with_config(|config| {
+        config.use_experimental_unified_exec_tool = true;
+        config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+        config.approvals_reviewer = ApprovalsReviewer::User;
+        config
+            .features
+            .enable(Feature::UnifiedExec)
+            .expect("test config should allow feature update");
+        config
+            .features
+            .enable(Feature::ExecPermissionApprovals)
+            .expect("test config should allow feature update");
+        config
+            .features
+            .enable(Feature::RequestPermissionsTool)
+            .expect("test config should allow feature update");
+    });
+    let test = builder.build_with_remote_and_local_env(&server).await?;
+
+    let local_cwd = TempDir::new()?;
+    let remote_cwd = PathBuf::from(format!(
+        "/tmp/codex-remote-request-permissions-{}",
+        SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis()
+    ))
+    .abs();
+    let relative_write_root = "granted";
+    let relative_target_path = "granted/request-permissions-output.txt";
+    let remote_write_root = remote_cwd.join(relative_write_root);
+    let remote_target_path = remote_cwd.join(relative_target_path);
+    let local_write_root = local_cwd.path().join(relative_write_root);
+    let local_target_path = local_cwd.path().join(relative_target_path);
+    fs::create_dir(&local_write_root)?;
+    test.fs()
+        .create_directory(
+            &remote_write_root,
+            CreateDirectoryOptions { recursive: true },
+            /*sandbox*/ None,
+        )
+        .await?;
+
+    let expected_permissions = RequestPermissionProfile {
+        file_system: Some(FileSystemPermissions::from_read_write_roots(
+            Some(vec![]),
+            Some(vec![remote_write_root.clone()]),
+        )),
+        ..RequestPermissionProfile::default()
+    };
+    let approved_response = RequestPermissionsResponse {
+        permissions: expected_permissions.clone(),
+        scope: PermissionGrantScope::Turn,
+        strict_auto_review: false,
+    };
+    let command = format!(
+        "printf 'remote-request-permissions-ok' > {relative_target_path} && cat {relative_target_path}"
+    );
+    let response_mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-request-permissions-remote-1"),
+                ev_function_call(
+                    "permissions-call",
+                    "request_permissions",
+                    &json!({
+                        "environment_id": REMOTE_ENVIRONMENT_ID,
+                        "reason": "Allow writing inside the selected remote environment",
+                        "permissions": {
+                            "file_system": {
+                                "write": [relative_write_root],
+                            },
+                        },
+                    })
+                    .to_string(),
+                ),
+                ev_completed("resp-request-permissions-remote-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-request-permissions-remote-2"),
+                ev_function_call(
+                    "exec-call",
+                    "exec_command",
+                    &json!({
+                        "shell": "/bin/sh",
+                        "cmd": command,
+                        "login": false,
+                        "yield_time_ms": 1_000,
+                        "environment_id": REMOTE_ENVIRONMENT_ID,
+                    })
+                    .to_string(),
+                ),
+                ev_completed("resp-request-permissions-remote-2"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-request-permissions-remote-3"),
+                ev_assistant_message("msg-request-permissions-remote-1", "done"),
+                ev_completed("resp-request-permissions-remote-3"),
+            ]),
+        ],
+    )
+    .await;
+
+    submit_turn_with_approval_and_environments(
+        &test,
+        "request permissions, then write in the remote environment",
+        vec![
+            TurnEnvironmentSelection {
+                environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
+                cwd: local_cwd.path().abs(),
+            },
+            TurnEnvironmentSelection {
+                environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
+                cwd: remote_cwd.clone(),
+            },
+        ],
+    )
+    .await?;
+
+    let event = wait_for_event(&test.codex, |event| {
+        matches!(
+            event,
+            EventMsg::RequestPermissions(_) | EventMsg::TurnComplete(_)
+        )
+    })
+    .await;
+    let EventMsg::RequestPermissions(request) = event else {
+        panic!("expected remote request_permissions before completion: {event:?}");
+    };
+    assert_eq!(request.call_id, "permissions-call");
+    assert_eq!(
+        request.environment_id.as_deref(),
+        Some(REMOTE_ENVIRONMENT_ID)
+    );
+    assert_eq!(request.cwd.as_ref(), Some(&remote_cwd));
+    assert_eq!(request.permissions, expected_permissions);
+
+    test.codex
+        .submit(Op::RequestPermissionsResponse {
+            id: "permissions-call".to_string(),
+            response: approved_response.clone(),
+        })
+        .await?;
+
+    let event = wait_for_event(&test.codex, |event| {
+        matches!(
+            event,
+            EventMsg::ExecApprovalRequest(_) | EventMsg::TurnComplete(_)
+        )
+    })
+    .await;
+    match event {
+        EventMsg::TurnComplete(_) => {}
+        EventMsg::ExecApprovalRequest(approval) => {
+            panic!("remote request_permissions grant should preapprove exec: {approval:?}");
+        }
+        other => panic!("unexpected event: {other:?}"),
+    }
+
+    let permissions_output: RequestPermissionsResponse = serde_json::from_str(
+        &response_mock
+            .function_call_output_text("permissions-call")
+            .expect("expected request_permissions output"),
+    )?;
+    assert_eq!(permissions_output, approved_response);
+    let exec_output = response_mock
+        .function_call_output_text("exec-call")
+        .expect("expected exec output");
+    assert!(
+        exec_output.contains("remote-request-permissions-ok"),
+        "unexpected exec output: {exec_output}",
+    );
+    assert_eq!(
+        test.fs()
+            .read_file_text(&remote_target_path, /*sandbox*/ None)
+            .await?,
+        "remote-request-permissions-ok"
+    );
+    assert!(
+        !local_target_path.exists(),
+        "remote exec should not write through the local environment"
     );
 
     test.fs()

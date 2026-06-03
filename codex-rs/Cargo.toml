@@ -21,7 +21,7 @@ members = [
     "install-context",
     "codex-backend-openapi-models",
     "code-mode",
-    "cloud-requirements",
+    "cloud-config",
     "cloud-tasks",
     "cloud-tasks-client",
     "cloud-tasks-mock-client",
@@ -29,6 +29,7 @@ members = [
     "collaboration-mode-templates",
     "connectors",
     "config",
+    "context-fragments",
     "shell-command",
     "shell-escalation",
     "skills",
@@ -48,6 +49,7 @@ members = [
     "ext/guardian",
     "ext/image-generation",
     "ext/memories",
+    "ext/skills",
     "ext/web-search",
     "external-agent-migration",
     "external-agent-sessions",
@@ -68,6 +70,7 @@ members = [
     "process-hardening",
     "protocol",
     "realtime-webrtc",
+    "prompts",
     "rollout",
     "rollout-trace",
     "rmcp-client",
@@ -148,12 +151,13 @@ codex-chatgpt = { path = "chatgpt" }
 codex-cli = { path = "cli" }
 codex-client = { path = "codex-client" }
 codex-collaboration-mode-templates = { path = "collaboration-mode-templates" }
-codex-cloud-requirements = { path = "cloud-requirements" }
+codex-cloud-config = { path = "cloud-config" }
 codex-cloud-tasks-client = { path = "cloud-tasks-client" }
 codex-cloud-tasks-mock-client = { path = "cloud-tasks-mock-client" }
 codex-code-mode = { path = "code-mode" }
 codex-config = { path = "config" }
 codex-connectors = { path = "connectors" }
+codex-context-fragments = { path = "context-fragments" }
 codex-core = { path = "core" }
 codex-core-api = { path = "core-api" }
 codex-core-plugins = { path = "core-plugins" }
@@ -197,6 +201,7 @@ codex-model-provider = { path = "model-provider" }
 codex-process-hardening = { path = "process-hardening" }
 codex-protocol = { path = "protocol" }
 codex-realtime-webrtc = { path = "realtime-webrtc" }
+codex-prompts = { path = "prompts" }
 codex-responses-api-proxy = { path = "responses-api-proxy" }
 codex-response-debug-context = { path = "response-debug-context" }
 codex-rmcp-client = { path = "rmcp-client" }

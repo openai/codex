@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use app_test_support::ChatGptAuthFixture;
-use app_test_support::McpProcess;
+use app_test_support::TestAppServer;
 use app_test_support::to_response;
 use app_test_support::write_chatgpt_auth;
 use axum::Json;
@@ -64,7 +64,7 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 #[tokio::test]
 async fn plugin_read_rejects_missing_read_source() -> Result<()> {
     let codex_home = TempDir::new()?;
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -93,7 +93,7 @@ async fn plugin_read_rejects_missing_read_source() -> Result<()> {
 #[tokio::test]
 async fn plugin_read_rejects_multiple_read_sources() -> Result<()> {
     let codex_home = TempDir::new()?;
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -159,7 +159,9 @@ plugins = true
     "keywords": [],
     "interface": {
       "short_description": "Plan and track work",
-      "capabilities": []
+      "capabilities": [],
+      "default_prompt": "Use the legacy Linear prompt",
+      "default_prompts": []
     },
     "skills": []
   }
@@ -190,7 +192,7 @@ plugins = true
         .mount(&server)
         .await;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -217,6 +219,15 @@ plugins = true
     assert_eq!(response.plugin.summary.name, "linear");
     assert_eq!(response.plugin.summary.source, PluginSource::Remote);
     assert_eq!(response.plugin.summary.share_context, None);
+    assert_eq!(
+        response
+            .plugin
+            .summary
+            .interface
+            .as_ref()
+            .and_then(|interface| interface.default_prompt.clone()),
+        Some(vec!["Use the legacy Linear prompt".to_string()])
+    );
     Ok(())
 }
 
@@ -297,7 +308,7 @@ async fn plugin_read_returns_share_context_for_shared_remote_plugin() -> Result<
         .mount(&server)
         .await;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     for remote_marketplace_name in [
@@ -404,6 +415,8 @@ async fn plugin_read_reads_remote_plugin_details_when_remote_plugin_enabled() ->
     "interface": {
       "short_description": "Plan and track work",
       "capabilities": ["Read", "Write"],
+      "default_prompt": "Use the legacy Linear prompt",
+      "default_prompts": ["Create a Linear issue", "Review my Linear projects"],
       "logo_url": "https://example.com/linear.png",
       "screenshot_urls": ["https://example.com/linear-shot.png"]
     },
@@ -478,7 +491,7 @@ async fn plugin_read_reads_remote_plugin_details_when_remote_plugin_enabled() ->
         .mount(&server)
         .await;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -517,6 +530,18 @@ async fn plugin_read_reads_remote_plugin_details_when_remote_plugin_enabled() ->
             "issue-tracking".to_string(),
             "project management".to_string()
         ]
+    );
+    assert_eq!(
+        response
+            .plugin
+            .summary
+            .interface
+            .as_ref()
+            .and_then(|interface| interface.default_prompt.clone()),
+        Some(vec![
+            "Create a Linear issue".to_string(),
+            "Review my Linear projects".to_string(),
+        ])
     );
     assert_eq!(response.plugin.skills.len(), 1);
     assert_eq!(response.plugin.skills[0].name, "plan-work");
@@ -563,7 +588,7 @@ async fn plugin_skill_read_reads_remote_skill_contents_when_remote_plugin_enable
         .mount(&server)
         .await;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -615,7 +640,7 @@ async fn plugin_read_maps_missing_remote_plugin_to_invalid_request() -> Result<(
         .mount(&server)
         .await;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -667,7 +692,7 @@ remote_plugin = true
         AuthCredentialsStoreMode::File,
     )?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -697,7 +722,7 @@ remote_plugin = true
 async fn plugin_read_rejects_invalid_remote_plugin_name() -> Result<()> {
     let codex_home = TempDir::new()?;
     write_remote_plugin_catalog_config(codex_home.path(), "https://example.invalid/backend-api/")?;
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -755,7 +780,7 @@ enabled = true
     )?;
     write_installed_plugin(&codex_home, "openai-curated", "demo-plugin")?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let marketplace_path =
@@ -855,7 +880,7 @@ async fn plugin_read_returns_share_context_for_shared_local_plugin() -> Result<(
         .expect(1)
         .mount(&server)
         .await;
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -981,7 +1006,7 @@ async fn plugin_read_keeps_remote_version_when_share_principals_are_missing() ->
         .expect(1)
         .mount(&server)
         .await;
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -1037,7 +1062,7 @@ async fn plugin_read_falls_back_to_local_share_context_without_remote_auth() -> 
     let plugin_path = AbsolutePathBuf::try_from(repo_root.path().join("demo-plugin"))?;
     write_plugin_share_local_path_mapping(codex_home.path(), "plugins_123", &plugin_path)?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -1095,7 +1120,7 @@ async fn plugin_read_fails_on_malformed_share_mapping() -> Result<()> {
         "not valid json\n",
     )?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -1287,7 +1312,7 @@ enabled = false
     )?;
     write_installed_plugin(&codex_home, "codex-curated", "demo-plugin")?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let marketplace_path =
@@ -1458,7 +1483,7 @@ async fn plugin_read_returns_app_needs_auth() -> Result<()> {
     let marketplace_path =
         AbsolutePathBuf::try_from(repo_root.path().join(".agents/plugins/marketplace.json"))?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -1525,7 +1550,7 @@ async fn plugin_read_accepts_legacy_string_default_prompt() -> Result<()> {
     )?;
     write_plugins_enabled_config(&codex_home)?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -1587,7 +1612,7 @@ async fn plugin_read_describes_uninstalled_git_source_without_cloning() -> Resul
     )?;
     write_plugins_enabled_config(&codex_home)?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -1650,7 +1675,7 @@ async fn plugin_read_returns_invalid_request_when_plugin_is_missing() -> Result<
     )?;
     write_plugins_enabled_config(&codex_home)?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -1703,7 +1728,7 @@ async fn plugin_read_returns_invalid_request_when_plugin_manifest_is_missing() -
     )?;
     write_plugins_enabled_config(&codex_home)?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp

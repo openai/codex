@@ -291,6 +291,15 @@ impl GoalToolExecutor {
         let Some(turn_id) = self.accounting_state.current_turn_id() else {
             return Ok(None);
         };
+        let _accounting_permit = self
+            .accounting_state
+            .progress_accounting_permit()
+            .await
+            .map_err(|err| {
+                FunctionCallError::Fatal(format!(
+                    "goal progress accounting semaphore closed: {err}"
+                ))
+            })?;
         let Some(snapshot) = self.accounting_state.progress_snapshot(turn_id.as_str()) else {
             return Ok(None);
         };
@@ -363,7 +372,7 @@ where
         .map_err(|err| FunctionCallError::RespondToModel(err.to_string()))
 }
 
-fn validate_goal_budget(value: Option<i64>) -> Result<(), String> {
+pub(crate) fn validate_goal_budget(value: Option<i64>) -> Result<(), String> {
     if let Some(value) = value
         && value <= 0
     {
@@ -402,7 +411,7 @@ impl GoalToolResponse {
     }
 }
 
-async fn fill_empty_thread_preview_if_possible(
+pub(crate) async fn fill_empty_thread_preview_if_possible(
     state_db: &codex_state::StateRuntime,
     thread_id: ThreadId,
     goal: &codex_state::ThreadGoal,
@@ -441,7 +450,9 @@ fn protocol_status_from_state(status: codex_state::ThreadGoalStatus) -> ThreadGo
     }
 }
 
-fn state_status_from_protocol(status: ThreadGoalStatus) -> codex_state::ThreadGoalStatus {
+pub(crate) fn state_status_from_protocol(
+    status: ThreadGoalStatus,
+) -> codex_state::ThreadGoalStatus {
     match status {
         ThreadGoalStatus::Active => codex_state::ThreadGoalStatus::Active,
         ThreadGoalStatus::Paused => codex_state::ThreadGoalStatus::Paused,

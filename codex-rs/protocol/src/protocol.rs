@@ -1398,6 +1398,7 @@ pub enum HookSource {
     SessionFlags,
     Plugin,
     CloudRequirements,
+    CloudManagedConfig,
     LegacyManagedConfigFile,
     LegacyManagedConfigMdm,
     #[default]
@@ -2009,6 +2010,7 @@ pub struct RateLimitSnapshot {
     pub primary: Option<RateLimitWindow>,
     pub secondary: Option<RateLimitWindow>,
     pub credits: Option<CreditsSnapshot>,
+    pub individual_limit: Option<SpendControlLimitSnapshot>,
     pub plan_type: Option<crate::account::PlanType>,
     pub rate_limit_reached_type: Option<RateLimitReachedType>,
 }
@@ -2056,6 +2058,14 @@ pub struct CreditsSnapshot {
     pub has_credits: bool,
     pub unlimited: bool,
     pub balance: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, JsonSchema, TS)]
+pub struct SpendControlLimitSnapshot {
+    pub limit: String,
+    pub used: String,
+    pub remaining_percent: i32,
+    pub resets_at: i64,
 }
 
 // Includes prompts, tools and space to call compact.
@@ -2181,8 +2191,9 @@ pub struct UserMessageEvent {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub image_details: Vec<Option<ImageDetail>>,
     /// Local file paths sourced from `UserInput::LocalImage`. These are kept so
-    /// the UI can reattach images when editing history, and should not be sent
-    /// to the model or treated as API-ready URLs.
+    /// the UI can reattach images when editing history. Local image prompts may
+    /// include a display form of the path, but these should not be treated as
+    /// API-ready URLs.
     #[serde(default)]
     pub local_images: Vec<std::path::PathBuf>,
     /// Detail hints for `local_images`, indexed in parallel. Missing entries
@@ -2441,6 +2452,18 @@ impl InitialHistory {
         }
     }
 
+    pub fn get_multi_agent_version(&self) -> Option<MultiAgentVersion> {
+        match self {
+            InitialHistory::New | InitialHistory::Cleared => None,
+            InitialHistory::Resumed(resumed) => {
+                multi_agent_version_from_items(&resumed.history, Some(resumed.conversation_id))
+            }
+            InitialHistory::Forked(items) => {
+                multi_agent_version_from_items(items, /*thread_id*/ None)
+            }
+        }
+    }
+
     pub fn get_resumed_session_sources(&self) -> Option<(SessionSource, Option<ThreadSource>)> {
         let meta = self.get_resumed_session_meta()?;
         Some((meta.source.clone(), meta.thread_source))
@@ -2449,6 +2472,11 @@ impl InitialHistory {
     pub fn get_resumed_thread_source(&self) -> Option<ThreadSource> {
         self.get_resumed_session_meta()
             .and_then(|meta| meta.thread_source)
+    }
+
+    pub fn get_resumed_parent_thread_id(&self) -> Option<ThreadId> {
+        self.get_resumed_session_meta()
+            .and_then(|meta| meta.parent_thread_id)
     }
 
     fn get_resumed_session_meta(&self) -> Option<&SessionMeta> {
@@ -2706,6 +2734,39 @@ impl fmt::Display for InternalSessionSource {
     }
 }
 
+fn multi_agent_version_from_items(
+    items: &[RolloutItem],
+    thread_id: Option<ThreadId>,
+) -> Option<MultiAgentVersion> {
+    let session_meta_version = items.iter().rev().find_map(|item| match item {
+        RolloutItem::SessionMeta(meta_line)
+            if thread_id.is_none_or(|thread_id| meta_line.meta.id == thread_id) =>
+        {
+            meta_line.meta.multi_agent_version
+        }
+        _ => None,
+    });
+
+    session_meta_version.or_else(|| {
+        items.iter().rev().find_map(|item| match item {
+            RolloutItem::TurnContext(turn_context) => turn_context.multi_agent_version,
+            RolloutItem::SessionMeta(_)
+            | RolloutItem::ResponseItem(_)
+            | RolloutItem::Compacted(_)
+            | RolloutItem::EventMsg(_) => None,
+        })
+    })
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum MultiAgentVersion {
+    Disabled,
+    V1,
+    V2,
+}
+
 /// SessionMeta contains session-level data that doesn't correspond to a specific turn.
 ///
 /// NOTE: There used to be an `instructions` field here, which stored user_instructions, but we
@@ -2716,6 +2777,8 @@ pub struct SessionMeta {
     pub id: ThreadId,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub forked_from_id: Option<ThreadId>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_thread_id: Option<ThreadId>,
     pub timestamp: String,
     pub cwd: PathBuf,
     pub originator: String,
@@ -2743,6 +2806,8 @@ pub struct SessionMeta {
     pub dynamic_tools: Option<Vec<DynamicToolSpec>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub memory_mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub multi_agent_version: Option<MultiAgentVersion>,
 }
 
 impl Default for SessionMeta {
@@ -2750,6 +2815,7 @@ impl Default for SessionMeta {
         SessionMeta {
             id: ThreadId::default(),
             forked_from_id: None,
+            parent_thread_id: None,
             timestamp: String::new(),
             cwd: PathBuf::new(),
             originator: String::new(),
@@ -2763,6 +2829,7 @@ impl Default for SessionMeta {
             base_instructions: None,
             dynamic_tools: None,
             memory_mode: None,
+            multi_agent_version: None,
         }
     }
 }
@@ -2841,6 +2908,8 @@ pub struct TurnContextItem {
     pub personality: Option<Personality>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub collaboration_mode: Option<CollaborationMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub multi_agent_version: Option<MultiAgentVersion>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub realtime_active: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -3421,6 +3490,8 @@ pub struct SessionConfiguredEvent {
     pub thread_id: ThreadId,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub forked_from_id: Option<ThreadId>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_thread_id: Option<ThreadId>,
     /// Optional analytics source classification for this thread.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thread_source: Option<ThreadSource>,
@@ -3490,6 +3561,7 @@ impl<'de> Deserialize<'de> for SessionConfiguredEvent {
             #[serde(default)]
             thread_id: Option<ThreadId>,
             forked_from_id: Option<ThreadId>,
+            parent_thread_id: Option<ThreadId>,
             #[serde(default)]
             thread_source: Option<ThreadSource>,
             #[serde(default)]
@@ -3530,6 +3602,7 @@ impl<'de> Deserialize<'de> for SessionConfiguredEvent {
             session_id: wire.session_id,
             thread_id: wire.thread_id.unwrap_or_else(|| wire.session_id.into()),
             forked_from_id: wire.forked_from_id,
+            parent_thread_id: wire.parent_thread_id,
             thread_source: wire.thread_source,
             thread_name: wire.thread_name,
             model: wire.model,
@@ -5260,6 +5333,39 @@ mod tests {
     }
 
     #[test]
+    fn multi_agent_version_uses_newest_present_session_meta_value() -> Result<()> {
+        let thread_id = ThreadId::from_string("67e55044-10b1-426f-9247-bb680e5fe0c8")?;
+        let older_meta = SessionMetaLine {
+            meta: SessionMeta {
+                id: thread_id,
+                multi_agent_version: Some(MultiAgentVersion::V2),
+                ..Default::default()
+            },
+            git: None,
+        };
+        let newer_meta_without_version = SessionMetaLine {
+            meta: SessionMeta {
+                id: thread_id,
+                multi_agent_version: None,
+                ..Default::default()
+            },
+            git: None,
+        };
+
+        assert_eq!(
+            multi_agent_version_from_items(
+                &[
+                    RolloutItem::SessionMeta(older_meta),
+                    RolloutItem::SessionMeta(newer_meta_without_version),
+                ],
+                Some(thread_id),
+            ),
+            Some(MultiAgentVersion::V2)
+        );
+        Ok(())
+    }
+
+    #[test]
     fn turn_context_item_serializes_network_when_present() -> Result<()> {
         let item = TurnContextItem {
             turn_id: None,
@@ -5285,6 +5391,7 @@ mod tests {
             model: "gpt-5".to_string(),
             personality: None,
             collaboration_mode: None,
+            multi_agent_version: None,
             realtime_active: None,
             effort: None,
             summary: ReasoningSummaryConfig::Auto,
@@ -5329,6 +5436,7 @@ mod tests {
                 session_id,
                 thread_id,
                 forked_from_id: None,
+                parent_thread_id: None,
                 thread_source: None,
                 thread_name: None,
                 model: "codex-mini-latest".to_string(),

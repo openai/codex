@@ -3,6 +3,7 @@ use std::time::Instant;
 use crate::facts::AcceptedLineFingerprint;
 use crate::facts::AppInvocation;
 use crate::facts::CodexCompactionEvent;
+use crate::facts::CodexErrKind;
 use crate::facts::CompactionImplementation;
 use crate::facts::CompactionPhase;
 use crate::facts::CompactionReason;
@@ -793,10 +794,14 @@ pub(crate) struct CodexTurnEventParams {
     pub(crate) sandbox_network_access: bool,
     pub(crate) collaboration_mode: Option<&'static str>,
     pub(crate) personality: Option<String>,
+    pub(crate) workspace_kind: Option<String>,
     pub(crate) num_input_images: usize,
     pub(crate) is_first_turn: bool,
     pub(crate) status: Option<TurnStatus>,
     pub(crate) turn_error: Option<CodexErrorInfo>,
+    pub(crate) codex_error_kind: Option<CodexErrKind>,
+    pub(crate) codex_error_subreason: Option<String>,
+    pub(crate) codex_error_http_status_code: Option<u16>,
     pub(crate) steer_count: Option<usize>,
     pub(crate) total_tool_call_count: Option<usize>,
     pub(crate) shell_command_count: Option<usize>,
@@ -1013,6 +1018,7 @@ fn analytics_hook_source(source: HookSource) -> &'static str {
         HookSource::SessionFlags => "session_flags",
         HookSource::Plugin => "plugin",
         HookSource::CloudRequirements => "cloud_requirements",
+        HookSource::CloudManagedConfig => "cloud_managed_config",
         HookSource::LegacyManagedConfigFile => "legacy_managed_config_file",
         HookSource::LegacyManagedConfigMdm => "legacy_managed_config_mdm",
         HookSource::Unknown => "unknown",
@@ -1048,9 +1054,7 @@ pub(crate) fn subagent_thread_started_event_request(
         thread_source: Some(ThreadSource::Subagent),
         initialization_mode: ThreadInitializationMode::New,
         subagent_source: Some(subagent_source_name(&input.subagent_source)),
-        parent_thread_id: input
-            .parent_thread_id
-            .or_else(|| subagent_parent_thread_id(&input.subagent_source)),
+        parent_thread_id: input.parent_thread_id,
         created_at: input.created_at,
     };
     ThreadInitializedEvent {
@@ -1060,19 +1064,7 @@ pub(crate) fn subagent_thread_started_event_request(
 }
 
 pub(crate) fn subagent_source_name(subagent_source: &SubAgentSource) -> String {
-    match subagent_source {
-        SubAgentSource::Review => "review".to_string(),
-        SubAgentSource::Compact => "compact".to_string(),
-        SubAgentSource::ThreadSpawn { .. } => "thread_spawn".to_string(),
-        SubAgentSource::MemoryConsolidation => "memory_consolidation".to_string(),
-        SubAgentSource::Other(other) => other.clone(),
-    }
-}
-
-pub(crate) fn subagent_parent_thread_id(subagent_source: &SubAgentSource) -> Option<String> {
-    subagent_source
-        .parent_thread_id()
-        .map(|parent_thread_id| parent_thread_id.to_string())
+    subagent_source.kind().to_string()
 }
 
 fn analytics_hook_status(status: HookRunStatus) -> HookRunStatus {

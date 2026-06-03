@@ -45,6 +45,7 @@ async fn write_rollout_with_user_event(dir: &Path, thread_id: ThreadId) -> io::R
         meta: SessionMeta {
             id: thread_id,
             forked_from_id: None,
+            parent_thread_id: None,
             timestamp: TEST_TIMESTAMP.to_string(),
             cwd: std::path::PathBuf::from("."),
             originator: "test_originator".to_string(),
@@ -58,6 +59,7 @@ async fn write_rollout_with_user_event(dir: &Path, thread_id: ThreadId) -> io::R
             base_instructions: None,
             dynamic_tools: None,
             memory_mode: None,
+            multi_agent_version: None,
         },
         git: None,
     };

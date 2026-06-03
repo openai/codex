@@ -160,12 +160,13 @@ pub fn arg0_dispatch() -> Option<Arg0PathEntryGuard> {
 /// [`codex_linux_sandbox::run_main`] (which never returns). Otherwise we:
 ///
 /// 1.  Load `.env` values from `~/.codex/.env` before creating any threads.
-/// 2.  Construct a Tokio multi-thread runtime.
-/// 3.  Capture the current executable path and derive the
+/// 2.  Spawn a main runtime thread with a controlled stack size.
+/// 3.  Construct a Tokio multi-thread runtime.
+/// 4.  Capture the current executable path and derive the
 ///     `codex-linux-sandbox` helper path (falling back to the current
 ///     executable if needed) so children can re-invoke the sandbox when running
 ///     on Linux.
-/// 4.  Execute the provided async `main_fn` inside that runtime, forwarding any
+/// 5.  Execute the provided async `main_fn` inside that runtime, forwarding any
 ///     error. Note that `main_fn` receives [`Arg0DispatchPaths`], which
 ///     contains the helper executable paths needed to construct
 ///     [`codex_core::config::Config`].
@@ -174,22 +175,33 @@ pub fn arg0_dispatch() -> Option<Arg0PathEntryGuard> {
 /// in this workspace that depends on these helper CLIs.
 pub fn arg0_dispatch_or_else<F, Fut>(main_fn: F) -> anyhow::Result<()>
 where
-    F: FnOnce(Arg0DispatchPaths) -> Fut,
+    F: FnOnce(Arg0DispatchPaths) -> Fut + Send + 'static,
     Fut: Future<Output = anyhow::Result<()>>,
 {
     // Retain the TempDir so it exists for the lifetime of the invocation of
     // this executable. Admittedly, we could invoke `keep()` on it, but it
     // would be nice to avoid leaving temporary directories behind, if possible.
     let path_entry_guard = arg0_dispatch();
+    let current_exe = std::env::current_exe().ok();
 
-    // Regular invocation – create a Tokio runtime and execute the provided
-    // async entry-point.
-    let runtime = build_runtime()?;
-    runtime.block_on(run_main_with_arg0_guard(
-        path_entry_guard,
-        std::env::current_exe().ok(),
-        main_fn,
-    ))
+    // Regular invocation. Run the async entry point on a thread with the same
+    // stack budget as Tokio workers; `Runtime::block_on` otherwise runs the
+    // top-level future on the caller's OS stack.
+    let handle = std::thread::Builder::new()
+        .name("codex-main".to_string())
+        .stack_size(TOKIO_WORKER_STACK_SIZE_BYTES)
+        .spawn(move || {
+            let runtime = build_runtime()?;
+            runtime.block_on(run_main_with_arg0_guard(
+                path_entry_guard,
+                current_exe,
+                main_fn,
+            ))
+        })?;
+    match handle.join() {
+        Ok(result) => result,
+        Err(payload) => std::panic::resume_unwind(payload),
+    }
 }
 
 async fn run_main_with_arg0_guard<F, Fut>(

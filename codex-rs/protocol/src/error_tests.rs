@@ -35,6 +35,7 @@ fn rate_limit_snapshot() -> RateLimitSnapshot {
             resets_at: Some(secondary_reset_at),
         }),
         credits: None,
+        individual_limit: None,
         plan_type: None,
         rate_limit_reached_type: None,
     }
