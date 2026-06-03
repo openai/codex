@@ -41,7 +41,7 @@ pub(super) async fn fetch_next_prompt_suggestion(
             params: ThreadSuggestNextPromptParams {
                 thread_id: thread_id.to_string(),
                 cancellation_token: Some(cancellation_token),
-                cancel: None,
+                cancel: false,
             },
         })
         .await
@@ -62,7 +62,7 @@ pub(super) async fn cancel_next_prompt_suggestion(
             params: ThreadSuggestNextPromptParams {
                 thread_id: thread_id.to_string(),
                 cancellation_token: Some(cancellation_token),
-                cancel: Some(/*cancel*/ true),
+                cancel: true,
             },
         })
         .await
