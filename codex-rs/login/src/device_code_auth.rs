@@ -196,6 +196,7 @@ pub async fn complete_device_code_login(
     let tokens = crate::server::exchange_code_for_tokens(
         base_url,
         &opts.client_id,
+        opts.http_state_surface,
         &redirect_uri,
         &pkce,
         &code_resp.authorization_code,
@@ -213,9 +214,8 @@ pub async fn complete_device_code_login(
     crate::server::persist_tokens_async(
         &opts.codex_home,
         /*api_key*/ None,
-        tokens.id_token,
-        tokens.access_token,
-        tokens.refresh_token,
+        &tokens,
+        opts.http_state_surface,
         opts.cli_auth_credentials_store_mode,
     )
     .await

@@ -16,6 +16,7 @@ use crate::transport::TransportEvent;
 use crate::transport::remote_control::auth::RemoteControlConnectionAuth;
 use crate::transport::remote_control::auth::load_remote_control_auth;
 use crate::transport::remote_control::auth::recover_remote_control_auth;
+use crate::transport::remote_control::auth::remote_control_auth_recovery;
 use crate::transport::remote_control::client_tracker::ClientTracker;
 use crate::transport::remote_control::client_tracker::REMOTE_CONTROL_IDLE_SWEEP_INTERVAL;
 use crate::transport::remote_control::enroll::RemoteControlEnrollment;
@@ -394,7 +395,7 @@ impl RemoteControlWebsocket {
             &shutdown_token,
         );
         let (outbound_buffer, used_rx) = BoundedOutboundBuffer::new();
-        let auth_recovery = auth_manager.unauthorized_recovery();
+        let auth_recovery = remote_control_auth_recovery(&auth_manager);
         let auth_change_rx = auth_manager.auth_change_receiver();
 
         Self {
@@ -628,7 +629,7 @@ impl RemoteControlWebsocket {
                         return ConnectOutcome::Disabled;
                     }
                     self.reconnect_attempt = 0;
-                    self.auth_recovery = self.auth_manager.unauthorized_recovery();
+                    self.auth_recovery = remote_control_auth_recovery(&self.auth_manager);
                     self.status_publisher
                         .publish_status(RemoteControlConnectionStatus::Connected);
                     let enrollment = self.enrollment.as_ref();
@@ -692,7 +693,7 @@ impl RemoteControlWebsocket {
                             if changed.is_err() {
                                 return ConnectOutcome::Shutdown;
                             }
-                            self.auth_recovery = self.auth_manager.unauthorized_recovery();
+                            self.auth_recovery = remote_control_auth_recovery(&self.auth_manager);
                             self.reconnect_attempt = 0;
                             info!("retrying app-server remote control websocket after auth changed");
                         }
@@ -1126,6 +1127,7 @@ fn set_remote_control_header(
 
 fn build_remote_control_websocket_request(
     websocket_url: &str,
+    auth_provider: &codex_api::SharedAuthProvider,
     enrollment: &RemoteControlEnrollment,
     installation_id: &str,
     subscribe_cursor: Option<&str>,
@@ -1137,6 +1139,7 @@ fn build_remote_control_websocket_request(
         )
     })?;
     let headers = request.headers_mut();
+    auth_provider.add_auth_headers_for_url(websocket_url, headers);
     set_remote_control_header(headers, "x-codex-server-id", &enrollment.server_id)?;
     set_remote_control_header(
         headers,
@@ -1343,10 +1346,12 @@ pub(super) async fn connect_remote_control_websocket(
     publish_current_enrollment(current_enrollment, enrollment_ref);
     let request = build_remote_control_websocket_request(
         &remote_control_target.websocket_url,
+        &auth.server_token_auth_provider,
         enrollment_ref,
         connect_options.installation_id,
         connect_options.subscribe_cursor,
     )?;
+    let request_headers = request.headers().clone();
 
     let websocket_connect_result = tokio::time::timeout(
         REMOTE_CONTROL_WEBSOCKET_CONNECT_TIMEOUT,
@@ -1364,8 +1369,22 @@ pub(super) async fn connect_remote_control_websocket(
     })?;
 
     match websocket_connect_result {
-        Ok((websocket_stream, response)) => Ok((websocket_stream, response.map(|_| ()))),
+        Ok((websocket_stream, response)) => {
+            auth.server_token_auth_provider.observe_response_headers(
+                &remote_control_target.websocket_url,
+                &request_headers,
+                response.headers(),
+            );
+            Ok((websocket_stream, response.map(|_| ())))
+        }
         Err(err) => {
+            if let tungstenite::Error::Http(response) = &err {
+                auth.server_token_auth_provider.observe_response_headers(
+                    &remote_control_target.websocket_url,
+                    &request_headers,
+                    response.headers(),
+                );
+            }
             match &err {
                 tungstenite::Error::Http(response) if response.status().as_u16() == 404 => {
                     info!(
@@ -1542,6 +1561,9 @@ mod tests {
     use codex_app_server_protocol::ServerNotification;
     use codex_config::types::AuthCredentialsStoreMode;
     use codex_core::test_support::auth_manager_from_auth;
+    use codex_http_state::HttpStateContext;
+    use codex_http_state::HttpStateStore;
+    use codex_http_state::HttpStateSurface;
     use codex_login::AuthDotJson;
     use codex_login::CodexAuth;
     use codex_login::save_auth;
@@ -1583,6 +1605,51 @@ mod tests {
             expires_at: remote_control_token
                 .map(|_| time::OffsetDateTime::now_utc() + time::Duration::hours(1)),
         }
+    }
+
+    #[test]
+    fn websocket_request_attaches_integrity_state_without_chatgpt_auth_headers() {
+        let codex_home = TempDir::new().expect("temp dir should create");
+        HttpStateStore::new(codex_home.path().to_path_buf())
+            .set(
+                HttpStateSurface::CodexRemoteControl,
+                "integrity-state".to_string(),
+            )
+            .expect("state should persist");
+        let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+        let auth_provider = codex_model_provider::with_native_integrity_state(
+            codex_model_provider::unauthenticated_auth_provider(),
+            Some(&auth),
+            Some(HttpStateContext::new(
+                codex_home.path().to_path_buf(),
+                HttpStateSurface::CodexRemoteControl,
+            )),
+        );
+
+        let request = build_remote_control_websocket_request(
+            "wss://chatgpt.com/backend-api/wham/remote/control/server",
+            &auth_provider,
+            &remote_control_enrollment(Some(TEST_REMOTE_CONTROL_SERVER_TOKEN)),
+            TEST_INSTALLATION_ID,
+            /*subscribe_cursor*/ None,
+        )
+        .expect("request should build");
+
+        assert_eq!(
+            request
+                .headers()
+                .get("x-oai-is")
+                .and_then(|value| value.to_str().ok()),
+            Some("integrity-state")
+        );
+        assert_eq!(
+            request
+                .headers()
+                .get("authorization")
+                .and_then(|value| value.to_str().ok()),
+            Some("Bearer Remote Control Token")
+        );
+        assert!(!request.headers().contains_key("chatgpt-account-id"));
     }
 
     fn test_current_enrollment() -> CurrentRemoteControlEnrollment {

@@ -1,4 +1,6 @@
 use codex_api::SharedAuthProvider;
+use codex_http_state::HttpStateContext;
+use codex_http_state::HttpStateSurface;
 use codex_login::AuthManager;
 use codex_login::UnauthorizedRecovery;
 use std::io;
@@ -10,7 +12,14 @@ use tracing::warn;
 
 pub(super) struct RemoteControlConnectionAuth {
     pub(super) auth_provider: SharedAuthProvider,
+    pub(super) server_token_auth_provider: SharedAuthProvider,
     pub(super) account_id: String,
+}
+
+pub(super) fn remote_control_auth_recovery(
+    auth_manager: &Arc<AuthManager>,
+) -> UnauthorizedRecovery {
+    auth_manager.unauthorized_recovery_for_surface(HttpStateSurface::CodexRemoteControl)
 }
 
 pub(super) async fn load_remote_control_auth(
@@ -18,7 +27,10 @@ pub(super) async fn load_remote_control_auth(
 ) -> io::Result<RemoteControlConnectionAuth> {
     let mut reloaded = false;
     let auth = loop {
-        let Some(auth) = auth_manager.auth().await else {
+        let Some(auth) = auth_manager
+            .auth_for_surface(HttpStateSurface::CodexRemoteControl)
+            .await
+        else {
             if reloaded {
                 return Err(io::Error::new(
                     ErrorKind::PermissionDenied,
@@ -47,8 +59,21 @@ pub(super) async fn load_remote_control_auth(
         ));
     }
 
+    let http_state = HttpStateContext::new(
+        auth_manager.codex_home().to_path_buf(),
+        HttpStateSurface::CodexRemoteControl,
+    );
     Ok(RemoteControlConnectionAuth {
-        auth_provider: codex_model_provider::auth_provider_from_auth(&auth),
+        auth_provider: codex_model_provider::with_native_integrity_state(
+            codex_model_provider::auth_provider_from_auth(&auth),
+            Some(&auth),
+            Some(http_state.clone()),
+        ),
+        server_token_auth_provider: codex_model_provider::with_native_integrity_state(
+            codex_model_provider::unauthenticated_auth_provider(),
+            Some(&auth),
+            Some(http_state),
+        ),
         account_id: auth.get_account_id().ok_or_else(|| {
             io::Error::new(
                 ErrorKind::WouldBlock,

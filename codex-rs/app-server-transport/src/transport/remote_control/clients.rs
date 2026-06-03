@@ -1,6 +1,7 @@
 use super::auth::RemoteControlConnectionAuth;
 use super::auth::load_remote_control_auth;
 use super::auth::recover_remote_control_auth;
+use super::auth::remote_control_auth_recovery;
 use super::enroll::REMOTE_CONTROL_ACCOUNT_ID_HEADER;
 use super::enroll::format_headers;
 use super::enroll::preview_remote_control_response_body;
@@ -169,7 +170,7 @@ async fn send_client_management_request(
     request: ClientManagementRequest<'_>,
     action: &str,
 ) -> io::Result<ClientManagementResponse> {
-    let mut auth_recovery = auth_manager.unauthorized_recovery();
+    let mut auth_recovery = remote_control_auth_recovery(auth_manager);
     let mut auth_change_rx = auth_manager.auth_change_receiver();
     let auth = load_remote_control_auth(auth_manager).await?;
     let response = send_client_management_request_once(&auth, &request, action).await?;
@@ -188,8 +189,12 @@ async fn send_client_management_request_once(
     action: &str,
 ) -> io::Result<ClientManagementResponse> {
     let client = build_reqwest_client();
+    let request_url = match request {
+        ClientManagementRequest::List { url, .. } | ClientManagementRequest::Revoke { url } => url,
+    };
     let mut auth_headers = HeaderMap::new();
-    auth.auth_provider.add_auth_headers(&mut auth_headers);
+    auth.auth_provider
+        .add_auth_headers_for_url(request_url.as_str(), &mut auth_headers);
     let request = match request {
         ClientManagementRequest::List { url, params } => {
             let mut query = Vec::new();
@@ -215,12 +220,14 @@ async fn send_client_management_request_once(
     };
     let response = request
         .timeout(REMOTE_CONTROL_CLIENT_MANAGEMENT_TIMEOUT)
-        .headers(auth_headers)
+        .headers(auth_headers.clone())
         .header(REMOTE_CONTROL_ACCOUNT_ID_HEADER, &auth.account_id)
         .send()
         .await
         .map_err(|err| io::Error::other(format!("failed to {action}: {err}")))?;
     let headers = response.headers().clone();
+    auth.auth_provider
+        .observe_response_headers(request_url.as_str(), &auth_headers, &headers);
     let status = response.status();
     let body = response
         .bytes()

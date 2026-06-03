@@ -1,4 +1,5 @@
 use super::*;
+use codex_http_state::HttpStateSurface;
 
 // Duration before a browser ChatGPT login attempt is abandoned.
 const LOGIN_CHATGPT_TIMEOUT: Duration = Duration::from_secs(10 * 60);
@@ -85,8 +86,15 @@ impl AccountRequestProcessor {
         &self,
         request_id: ConnectionRequestId,
         params: LoginAccountParams,
+        app_server_client_name: Option<&str>,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.login_v2(request_id, params).await.map(|()| None)
+        self.login_v2(
+            request_id,
+            params,
+            Self::http_state_surface(app_server_client_name),
+        )
+        .await
+        .map(|()| None)
     }
 
     pub(crate) async fn logout_account(
@@ -108,8 +116,9 @@ impl AccountRequestProcessor {
     pub(crate) async fn get_account(
         &self,
         params: GetAccountParams,
+        app_server_client_name: Option<&str>,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.get_account_response(params)
+        self.get_account_response(params, Self::http_state_surface(app_server_client_name))
             .await
             .map(|response| Some(response.into()))
     }
@@ -117,8 +126,9 @@ impl AccountRequestProcessor {
     pub(crate) async fn get_auth_status(
         &self,
         params: GetAuthStatusParams,
+        app_server_client_name: Option<&str>,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.get_auth_status_response(params)
+        self.get_auth_status_response(params, Self::http_state_surface(app_server_client_name))
             .await
             .map(|response| Some(response.into()))
     }
@@ -149,6 +159,10 @@ impl AccountRequestProcessor {
 
     pub(crate) fn clear_external_auth(&self) {
         self.auth_manager.clear_external_auth();
+    }
+
+    fn http_state_surface(app_server_client_name: Option<&str>) -> HttpStateSurface {
+        HttpStateSurface::from_app_server_client_name(app_server_client_name.unwrap_or_default())
     }
 
     fn current_account_updated_notification(&self) -> AccountUpdatedNotification {
@@ -210,6 +224,7 @@ impl AccountRequestProcessor {
         &self,
         request_id: ConnectionRequestId,
         params: LoginAccountParams,
+        http_state_surface: HttpStateSurface,
     ) -> Result<(), JSONRPCErrorError> {
         match params {
             LoginAccountParams::ApiKey { api_key } => {
@@ -219,11 +234,12 @@ impl AccountRequestProcessor {
             LoginAccountParams::Chatgpt {
                 codex_streamlined_login,
             } => {
-                self.login_chatgpt_v2(request_id, codex_streamlined_login)
+                self.login_chatgpt_v2(request_id, codex_streamlined_login, http_state_surface)
                     .await;
             }
             LoginAccountParams::ChatgptDeviceCode => {
-                self.login_chatgpt_device_code_v2(request_id).await;
+                self.login_chatgpt_device_code_v2(request_id, http_state_surface)
+                    .await;
             }
             LoginAccountParams::ChatgptAuthTokens {
                 access_token,
@@ -304,6 +320,7 @@ impl AccountRequestProcessor {
     async fn login_chatgpt_common(
         &self,
         codex_streamlined_login: bool,
+        http_state_surface: HttpStateSurface,
     ) -> std::result::Result<LoginServerOptions, JSONRPCErrorError> {
         let config = self.config.as_ref();
 
@@ -320,6 +337,7 @@ impl AccountRequestProcessor {
         let opts = LoginServerOptions {
             open_browser: false,
             codex_streamlined_login,
+            http_state_surface,
             ..LoginServerOptions::new(
                 config.codex_home.to_path_buf(),
                 CLIENT_ID.to_string(),
@@ -354,16 +372,22 @@ impl AccountRequestProcessor {
         &self,
         request_id: ConnectionRequestId,
         codex_streamlined_login: bool,
+        http_state_surface: HttpStateSurface,
     ) {
-        let result = self.login_chatgpt_response(codex_streamlined_login).await;
+        let result = self
+            .login_chatgpt_response(codex_streamlined_login, http_state_surface)
+            .await;
         self.outgoing.send_result(request_id, result).await;
     }
 
     async fn login_chatgpt_response(
         &self,
         codex_streamlined_login: bool,
+        http_state_surface: HttpStateSurface,
     ) -> Result<LoginAccountResponse, JSONRPCErrorError> {
-        let opts = self.login_chatgpt_common(codex_streamlined_login).await?;
+        let opts = self
+            .login_chatgpt_common(codex_streamlined_login, http_state_surface)
+            .await?;
         let server = run_login_server(opts)
             .map_err(|err| internal_error(format!("failed to start login server: {err}")))?;
         let login_id = Uuid::new_v4();
@@ -426,16 +450,23 @@ impl AccountRequestProcessor {
         })
     }
 
-    async fn login_chatgpt_device_code_v2(&self, request_id: ConnectionRequestId) {
-        let result = self.login_chatgpt_device_code_response().await;
+    async fn login_chatgpt_device_code_v2(
+        &self,
+        request_id: ConnectionRequestId,
+        http_state_surface: HttpStateSurface,
+    ) {
+        let result = self
+            .login_chatgpt_device_code_response(http_state_surface)
+            .await;
         self.outgoing.send_result(request_id, result).await;
     }
 
     async fn login_chatgpt_device_code_response(
         &self,
+        http_state_surface: HttpStateSurface,
     ) -> Result<LoginAccountResponse, JSONRPCErrorError> {
         let opts = self
-            .login_chatgpt_common(/*codex_streamlined_login*/ false)
+            .login_chatgpt_common(/*codex_streamlined_login*/ false, http_state_surface)
             .await?;
         let device_code = request_device_code(&opts)
             .await
@@ -721,11 +752,20 @@ impl AccountRequestProcessor {
         Ok(())
     }
 
-    async fn refresh_token_if_requested(&self, do_refresh: bool) -> RefreshTokenRequestOutcome {
+    async fn refresh_token_if_requested(
+        &self,
+        do_refresh: bool,
+        http_state_surface: HttpStateSurface,
+    ) -> RefreshTokenRequestOutcome {
         if self.auth_manager.is_external_chatgpt_auth_active() {
             return RefreshTokenRequestOutcome::NotAttemptedOrSucceeded;
         }
-        if do_refresh && let Err(err) = self.auth_manager.refresh_token().await {
+        if do_refresh
+            && let Err(err) = self
+                .auth_manager
+                .refresh_token_for_surface(http_state_surface)
+                .await
+        {
             let failed_reason = err.failed_reason();
             if failed_reason.is_none() {
                 tracing::warn!("failed to refresh token while getting account: {err}");
@@ -739,11 +779,13 @@ impl AccountRequestProcessor {
     async fn get_auth_status_response(
         &self,
         params: GetAuthStatusParams,
+        http_state_surface: HttpStateSurface,
     ) -> Result<GetAuthStatusResponse, JSONRPCErrorError> {
         let include_token = params.include_token.unwrap_or(false);
         let do_refresh = params.refresh_token.unwrap_or(false);
 
-        self.refresh_token_if_requested(do_refresh).await;
+        self.refresh_token_if_requested(do_refresh, http_state_surface)
+            .await;
 
         // Determine whether auth is required based on the active model provider.
         // If a custom provider is configured with `requires_openai_auth == false`,
@@ -760,7 +802,7 @@ impl AccountRequestProcessor {
             let auth = if do_refresh {
                 self.auth_manager.auth_cached()
             } else {
-                self.auth_manager.auth().await
+                self.auth_manager.auth_for_surface(http_state_surface).await
             };
             match auth {
                 Some(auth) => {
@@ -805,10 +847,12 @@ impl AccountRequestProcessor {
     async fn get_account_response(
         &self,
         params: GetAccountParams,
+        http_state_surface: HttpStateSurface,
     ) -> Result<GetAccountResponse, JSONRPCErrorError> {
         let do_refresh = params.refresh_token;
 
-        self.refresh_token_if_requested(do_refresh).await;
+        self.refresh_token_if_requested(do_refresh, http_state_surface)
+            .await;
 
         let provider = create_model_provider(
             self.config.model_provider.clone(),

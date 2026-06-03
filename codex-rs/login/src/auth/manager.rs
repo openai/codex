@@ -21,6 +21,7 @@ use codex_agent_identity::decode_agent_identity_jwt;
 use codex_agent_identity::fetch_agent_identity_jwks;
 use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::AuthMode as ApiAuthMode;
+use codex_http_state::HttpStateSurface;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::ModelProviderAuthInfo;
 
@@ -540,7 +541,9 @@ pub fn login_with_api_key(
         last_refresh: None,
         agent_identity: None,
     };
-    save_auth(codex_home, &auth_dot_json, auth_credentials_store_mode)
+    crate::http_state::clear_before_login(codex_home);
+    save_auth(codex_home, &auth_dot_json, auth_credentials_store_mode)?;
+    Ok(())
 }
 
 /// Writes an `auth.json` that contains only the access token.
@@ -562,7 +565,9 @@ pub async fn login_with_access_token(
         last_refresh: None,
         agent_identity: Some(access_token.to_string()),
     };
-    save_auth(codex_home, &auth_dot_json, auth_credentials_store_mode)
+    crate::http_state::clear_before_login(codex_home);
+    save_auth(codex_home, &auth_dot_json, auth_credentials_store_mode)?;
+    Ok(())
 }
 
 /// Writes an in-memory auth payload for externally managed ChatGPT tokens.
@@ -577,11 +582,13 @@ pub fn login_with_chatgpt_auth_tokens(
         chatgpt_account_id,
         chatgpt_plan_type,
     )?;
+    crate::http_state::clear_before_login(codex_home);
     save_auth(
         codex_home,
         &auth_dot_json,
         AuthCredentialsStoreMode::Ephemeral,
-    )
+    )?;
+    Ok(())
 }
 
 /// Persist the provided auth payload using the specified backend.
@@ -711,6 +718,7 @@ fn logout_with_message(
     // External auth tokens live in the ephemeral store, but persistent auth may still exist
     // from earlier logins. Clear both so a forced logout truly removes all active auth.
     let removal_result = logout_all_stores(codex_home, auth_credentials_store_mode);
+    crate::http_state::clear_all(codex_home);
     let error_message = match removal_result {
         Ok(_) => message,
         Err(err) => format!("{message}. Failed to remove auth.json: {err}"),
@@ -817,11 +825,13 @@ fn persist_tokens(
 async fn request_chatgpt_token_refresh(
     refresh_token: String,
     client: &CodexHttpClient,
+    http_state_surface: Option<HttpStateSurface>,
 ) -> Result<RefreshResponse, RefreshTokenError> {
     let refresh_request = RefreshRequest {
         client_id: CLIENT_ID,
         grant_type: "refresh_token",
         refresh_token,
+        surface: http_state_surface.map(HttpStateSurface::as_str),
     };
 
     let endpoint = refresh_token_endpoint();
@@ -917,6 +927,8 @@ struct RefreshRequest {
     client_id: &'static str,
     grant_type: &'static str,
     refresh_token: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    surface: Option<&'static str>,
 }
 
 #[derive(Deserialize, Clone)]
@@ -924,6 +936,8 @@ struct RefreshResponse {
     id_token: Option<String>,
     access_token: Option<String>,
     refresh_token: Option<String>,
+    state: Option<String>,
+    oai_is: Option<String>,
 }
 
 // Shared constant for token refresh (client id used for oauth token refresh flow)
@@ -1079,6 +1093,7 @@ pub struct UnauthorizedRecovery {
     step: UnauthorizedRecoveryStep,
     expected_account_id: Option<String>,
     mode: UnauthorizedRecoveryMode,
+    http_state_surface: Option<HttpStateSurface>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1093,7 +1108,7 @@ impl UnauthorizedRecoveryStepResult {
 }
 
 impl UnauthorizedRecovery {
-    fn new(manager: Arc<AuthManager>) -> Self {
+    fn new(manager: Arc<AuthManager>, http_state_surface: Option<HttpStateSurface>) -> Self {
         let cached_auth = manager.auth_cached();
         let expected_account_id = cached_auth.as_ref().and_then(CodexAuth::get_account_id);
         let mode = if manager.has_external_api_key_auth()
@@ -1114,6 +1129,7 @@ impl UnauthorizedRecovery {
             step,
             expected_account_id,
             mode,
+            http_state_surface,
         }
     }
 
@@ -1220,7 +1236,9 @@ impl UnauthorizedRecovery {
                 }
             }
             UnauthorizedRecoveryStep::RefreshToken => {
-                self.manager.refresh_token_from_authority().await?;
+                self.manager
+                    .refresh_token_from_authority_with_surface(self.http_state_surface)
+                    .await?;
                 self.step = UnauthorizedRecoveryStep::Done;
                 return Ok(UnauthorizedRecoveryStepResult {
                     auth_state_changed: Some(true),
@@ -1429,13 +1447,27 @@ impl AuthManager {
     /// For managed ChatGPT auth that needs a proactive refresh, first performs
     /// a guarded reload and then refreshes only if the on-disk auth is unchanged.
     pub async fn auth(&self) -> Option<CodexAuth> {
+        self.auth_with_surface(/*http_state_surface*/ None).await
+    }
+
+    pub async fn auth_for_surface(
+        &self,
+        http_state_surface: HttpStateSurface,
+    ) -> Option<CodexAuth> {
+        self.auth_with_surface(Some(http_state_surface)).await
+    }
+
+    async fn auth_with_surface(
+        &self,
+        http_state_surface: Option<HttpStateSurface>,
+    ) -> Option<CodexAuth> {
         if let Some(auth) = self.resolve_external_api_key_auth().await {
             return Some(auth);
         }
 
         let auth = self.auth_cached()?;
         if Self::should_refresh_proactively(&auth)
-            && let Err(err) = self.refresh_token().await
+            && let Err(err) = self.refresh_token_with_surface(http_state_surface).await
         {
             tracing::error!("Failed to refresh token: {}", err);
             return Some(auth);
@@ -1642,7 +1674,14 @@ impl AuthManager {
     }
 
     pub fn unauthorized_recovery(self: &Arc<Self>) -> UnauthorizedRecovery {
-        UnauthorizedRecovery::new(Arc::clone(self))
+        UnauthorizedRecovery::new(Arc::clone(self), /*http_state_surface*/ None)
+    }
+
+    pub fn unauthorized_recovery_for_surface(
+        self: &Arc<Self>,
+        http_state_surface: HttpStateSurface,
+    ) -> UnauthorizedRecovery {
+        UnauthorizedRecovery::new(Arc::clone(self), Some(http_state_surface))
     }
 
     fn external_auth(&self) -> Option<Arc<dyn ExternalAuth>> {
@@ -1685,6 +1724,22 @@ impl AuthManager {
     /// can assume that some other instance already refreshed it. If the persisted
     /// token is the same as the cached, then ask the token authority to refresh.
     pub async fn refresh_token(&self) -> Result<(), RefreshTokenError> {
+        self.refresh_token_with_surface(/*http_state_surface*/ None)
+            .await
+    }
+
+    pub async fn refresh_token_for_surface(
+        &self,
+        http_state_surface: HttpStateSurface,
+    ) -> Result<(), RefreshTokenError> {
+        self.refresh_token_with_surface(Some(http_state_surface))
+            .await
+    }
+
+    async fn refresh_token_with_surface(
+        &self,
+        http_state_surface: Option<HttpStateSurface>,
+    ) -> Result<(), RefreshTokenError> {
         let _refresh_guard = self.refresh_lock.acquire().await.map_err(|_| {
             RefreshTokenError::Permanent(RefreshTokenFailedError::new(
                 RefreshTokenFailedReason::Other,
@@ -1710,7 +1765,10 @@ impl AuthManager {
                 tracing::info!("Skipping token refresh because auth changed after guarded reload.");
                 Ok(())
             }
-            ReloadOutcome::ReloadedNoChange => self.refresh_token_from_authority_impl().await,
+            ReloadOutcome::ReloadedNoChange => {
+                self.refresh_token_from_authority_impl(http_state_surface)
+                    .await
+            }
             ReloadOutcome::Skipped => {
                 Err(RefreshTokenError::Permanent(RefreshTokenFailedError::new(
                     RefreshTokenFailedReason::Other,
@@ -1725,16 +1783,28 @@ impl AuthManager {
     /// observe refreshed token. If the token refresh fails, returns the error to
     /// the caller.
     pub async fn refresh_token_from_authority(&self) -> Result<(), RefreshTokenError> {
+        self.refresh_token_from_authority_with_surface(/*http_state_surface*/ None)
+            .await
+    }
+
+    async fn refresh_token_from_authority_with_surface(
+        &self,
+        http_state_surface: Option<HttpStateSurface>,
+    ) -> Result<(), RefreshTokenError> {
         let _refresh_guard = self.refresh_lock.acquire().await.map_err(|_| {
             RefreshTokenError::Permanent(RefreshTokenFailedError::new(
                 RefreshTokenFailedReason::Other,
                 REFRESH_TOKEN_UNKNOWN_MESSAGE.to_string(),
             ))
         })?;
-        self.refresh_token_from_authority_impl().await
+        self.refresh_token_from_authority_impl(http_state_surface)
+            .await
     }
 
-    async fn refresh_token_from_authority_impl(&self) -> Result<(), RefreshTokenError> {
+    async fn refresh_token_from_authority_impl(
+        &self,
+        http_state_surface: Option<HttpStateSurface>,
+    ) -> Result<(), RefreshTokenError> {
         tracing::info!("Refreshing token");
 
         let auth = match self.auth_cached() {
@@ -1757,8 +1827,12 @@ impl AuthManager {
                         "Token data is not available.",
                     ))
                 })?;
-                self.refresh_and_persist_chatgpt_token(&chatgpt_auth, token_data.refresh_token)
-                    .await
+                self.refresh_and_persist_chatgpt_token(
+                    &chatgpt_auth,
+                    token_data.refresh_token,
+                    http_state_surface,
+                )
+                .await
             }
             CodexAuth::ApiKey(_) | CodexAuth::AgentIdentity(_) => Ok(()),
         };
@@ -1773,10 +1847,11 @@ impl AuthManager {
     /// reloads the in‑memory auth cache so callers immediately observe the
     /// unauthenticated state.
     pub async fn logout(&self) -> std::io::Result<bool> {
-        let removed = logout_all_stores(&self.codex_home, self.auth_credentials_store_mode)?;
+        let result = logout_all_stores(&self.codex_home, self.auth_credentials_store_mode);
+        crate::http_state::clear_all(&self.codex_home);
         // Always reload to clear any cached auth (even if file absent).
         self.reload().await;
-        Ok(removed)
+        result
     }
 
     pub async fn logout_with_revoke(&self) -> std::io::Result<bool> {
@@ -1786,10 +1861,11 @@ impl AuthManager {
         if let Err(err) = revoke_auth_tokens(auth_dot_json.as_ref()).await {
             tracing::warn!("failed to revoke auth tokens during logout: {err}");
         }
-        let result = logout_all_stores(&self.codex_home, self.auth_credentials_store_mode)?;
+        let result = logout_all_stores(&self.codex_home, self.auth_credentials_store_mode);
+        crate::http_state::clear_all(&self.codex_home);
         // Always reload to clear any cached auth (even if file absent).
         self.reload().await;
-        Ok(result)
+        result
     }
 
     pub fn get_api_auth_mode(&self) -> Option<ApiAuthMode> {
@@ -1896,8 +1972,14 @@ impl AuthManager {
         &self,
         auth: &ChatgptAuth,
         refresh_token: String,
+        http_state_surface: Option<HttpStateSurface>,
     ) -> Result<(), RefreshTokenError> {
-        let refresh_response = request_chatgpt_token_refresh(refresh_token, auth.client()).await?;
+        let refresh_response =
+            request_chatgpt_token_refresh(refresh_token, auth.client(), http_state_surface).await?;
+        let state = crate::http_state::resolve_token_response_state(
+            refresh_response.state,
+            refresh_response.oai_is,
+        );
 
         persist_tokens(
             auth.storage(),
@@ -1907,6 +1989,9 @@ impl AuthManager {
         )
         .map_err(RefreshTokenError::from)?;
         self.reload().await;
+        if let Some(http_state_surface) = http_state_surface {
+            crate::http_state::replace_after_refresh(&self.codex_home, http_state_surface, state);
+        }
 
         Ok(())
     }

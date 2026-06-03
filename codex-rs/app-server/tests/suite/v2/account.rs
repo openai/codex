@@ -17,12 +17,14 @@ use codex_app_server_protocol::CancelLoginAccountResponse;
 use codex_app_server_protocol::CancelLoginAccountStatus;
 use codex_app_server_protocol::ChatgptAuthTokensRefreshReason;
 use codex_app_server_protocol::ChatgptAuthTokensRefreshResponse;
+use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::GetAccountParams;
 use codex_app_server_protocol::GetAccountResponse;
 use codex_app_server_protocol::GetAuthStatusParams;
 use codex_app_server_protocol::GetAuthStatusResponse;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCErrorError;
+use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::LoginAccountResponse;
@@ -33,6 +35,8 @@ use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnStatus;
 use codex_config::types::AuthCredentialsStoreMode;
+use codex_http_state::HttpStateStore;
+use codex_http_state::HttpStateSurface;
 use codex_login::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
 use codex_login::login_with_api_key;
 use codex_protocol::account::PlanType as AccountPlanType;
@@ -61,6 +65,7 @@ const WORKSPACE_ID_INITIAL: &str = "123e4567-e89b-42d3-a456-426614174011";
 const WORKSPACE_ID_REFRESHED: &str = "123e4567-e89b-42d3-a456-426614174012";
 const WORKSPACE_ID_DEVICE: &str = "123e4567-e89b-42d3-a456-426614174013";
 const WORKSPACE_ID_STALE: &str = "123e4567-e89b-42d3-a456-426614174014";
+const INTEGRITY_STATE: &str = "ois1.header.nonce.ciphertext";
 
 // Helper to create a minimal config.toml for the app server
 #[derive(Default)]
@@ -72,6 +77,14 @@ struct CreateConfigTomlParams {
     base_url: Option<String>,
     model_provider_id: Option<String>,
     extra_provider_config: Option<String>,
+}
+
+fn client_info(name: &str) -> ClientInfo {
+    ClientInfo {
+        name: name.to_string(),
+        title: None,
+        version: "1.0.0".to_string(),
+    }
 }
 
 fn create_config_toml(codex_home: &Path, params: CreateConfigTomlParams) -> std::io::Result<()> {
@@ -180,10 +193,14 @@ async fn mock_device_code_token_failure(server: &MockServer, status: u16) {
 async fn mock_device_code_oauth_token(server: &MockServer, id_token: &str) {
     Mock::given(method("POST"))
         .and(path("/oauth/token"))
+        .and(wiremock::matchers::body_string_contains(
+            "surface=codex_desktop_ssh",
+        ))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "id_token": id_token,
             "access_token": "access-token-123",
             "refresh_token": "refresh-token-123",
+            "state": INTEGRITY_STATE,
         })))
         .mount(server)
         .await;
@@ -199,11 +216,22 @@ async fn logout_account_removes_auth_and_notifies() -> Result<()> {
         "sk-test-key",
         AuthCredentialsStoreMode::File,
     )?;
+    let http_state = HttpStateStore::new(codex_home.path().to_path_buf());
+    http_state.set(
+        HttpStateSurface::CodexDesktopSsh,
+        INTEGRITY_STATE.to_string(),
+    )?;
+    http_state.set(HttpStateSurface::CodexCli, INTEGRITY_STATE.to_string())?;
     assert!(codex_home.path().join("auth.json").exists());
 
     let mut mcp =
         TestAppServer::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+    let initialized = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.initialize_with_client_info(client_info("codex_desktop_ssh")),
+    )
+    .await??;
+    assert!(matches!(initialized, JSONRPCMessage::Response(_)));
 
     let id = mcp.send_logout_account_request().await?;
     let resp: JSONRPCResponse = timeout(
@@ -232,6 +260,8 @@ async fn logout_account_removes_auth_and_notifies() -> Result<()> {
         !codex_home.path().join("auth.json").exists(),
         "auth.json should be deleted"
     );
+    assert_eq!(http_state.get(HttpStateSurface::CodexDesktopSsh)?, None);
+    assert_eq!(http_state.get(HttpStateSurface::CodexCli)?, None);
 
     let get_id = mcp
         .send_get_account_request(GetAccountParams {
@@ -913,8 +943,19 @@ async fn login_account_api_key_succeeds_and_notifies() -> Result<()> {
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), CreateConfigTomlParams::default())?;
 
+    let http_state = HttpStateStore::new(codex_home.path().to_path_buf());
+    http_state.set(
+        HttpStateSurface::CodexDesktopSsh,
+        INTEGRITY_STATE.to_string(),
+    )?;
+    http_state.set(HttpStateSurface::CodexCli, INTEGRITY_STATE.to_string())?;
     let mut mcp = TestAppServer::new(codex_home.path()).await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+    let initialized = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.initialize_with_client_info(client_info("codex_desktop_ssh")),
+    )
+    .await??;
+    assert!(matches!(initialized, JSONRPCMessage::Response(_)));
 
     let req_id = mcp
         .send_login_account_api_key_request("sk-test-key")
@@ -953,6 +994,8 @@ async fn login_account_api_key_succeeds_and_notifies() -> Result<()> {
     pretty_assertions::assert_eq!(payload.plan_type, None);
 
     assert!(codex_home.path().join("auth.json").exists());
+    assert_eq!(http_state.get(HttpStateSurface::CodexDesktopSsh)?, None);
+    assert_eq!(http_state.get(HttpStateSurface::CodexCli)?, None);
     Ok(())
 }
 
@@ -1103,7 +1146,11 @@ async fn login_account_chatgpt_device_code_succeeds_and_notifies() -> Result<()>
         ],
     )
     .await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.initialize_with_client_info(client_info("codex_desktop_ssh")),
+    )
+    .await??;
 
     let request_id = mcp.send_login_account_chatgpt_device_code_request().await?;
     let resp: JSONRPCResponse = timeout(
@@ -1150,6 +1197,11 @@ async fn login_account_chatgpt_device_code_succeeds_and_notifies() -> Result<()>
     assert!(
         codex_home.path().join("auth.json").exists(),
         "auth.json should be created when device code login succeeds"
+    );
+    assert_eq!(
+        HttpStateStore::new(codex_home.path().to_path_buf())
+            .get(HttpStateSurface::CodexDesktopSsh)?,
+        Some(INTEGRITY_STATE.to_string()),
     );
     Ok(())
 }
@@ -1719,6 +1771,78 @@ async fn get_account_with_chatgpt() -> Result<()> {
         requires_openai_auth: true,
     };
     assert_eq!(received, expected);
+    Ok(())
+}
+
+#[tokio::test]
+async fn get_auth_status_refresh_persists_state_for_initialized_surface() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), CreateConfigTomlParams::default())?;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("stale-access-token")
+            .refresh_token("stale-refresh-token")
+            .account_id(WORKSPACE_ID_STALE)
+            .email("user@example.com")
+            .plan_type("pro"),
+        AuthCredentialsStoreMode::File,
+    )?;
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "access_token": "new-access-token",
+            "refresh_token": "new-refresh-token",
+            "state": "new-state"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let refresh_url = format!("{}/oauth/token", server.uri());
+    let mut mcp = TestAppServer::new_with_env(
+        codex_home.path(),
+        &[
+            ("OPENAI_API_KEY", None),
+            (
+                REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR,
+                Some(refresh_url.as_str()),
+            ),
+        ],
+    )
+    .await?;
+    let initialized = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.initialize_with_client_info(client_info("codex_desktop_ssh")),
+    )
+    .await??;
+    assert!(matches!(initialized, JSONRPCMessage::Response(_)));
+
+    let request_id = mcp
+        .send_get_auth_status_request(GetAuthStatusParams {
+            include_token: Some(true),
+            refresh_token: Some(true),
+        })
+        .await?;
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let _: GetAuthStatusResponse = to_response(resp)?;
+
+    let http_state = HttpStateStore::new(codex_home.path().to_path_buf());
+    assert_eq!(
+        http_state.get(HttpStateSurface::CodexDesktopSsh)?,
+        Some("new-state".to_string()),
+    );
+    let requests = server.received_requests().await.unwrap_or_default();
+    assert_eq!(requests.len(), 1);
+    let body: serde_json::Value = serde_json::from_slice(&requests[0].body)?;
+    assert_eq!(body["surface"], "codex_desktop_ssh");
+
+    server.verify().await;
     Ok(())
 }
 

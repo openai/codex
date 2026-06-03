@@ -1291,7 +1291,11 @@ impl MessageProcessor {
             }
             ClientRequest::LoginAccount { params, .. } => {
                 self.account_processor
-                    .login_account(request_id.clone(), params)
+                    .login_account(
+                        request_id.clone(),
+                        params,
+                        app_server_client_name.as_deref(),
+                    )
                     .await
             }
             ClientRequest::LogoutAccount { .. } => {
@@ -1303,10 +1307,14 @@ impl MessageProcessor {
                 self.account_processor.cancel_login_account(params).await
             }
             ClientRequest::GetAccount { params, .. } => {
-                self.account_processor.get_account(params).await
+                self.account_processor
+                    .get_account(params, app_server_client_name.as_deref())
+                    .await
             }
             ClientRequest::GetAuthStatus { params, .. } => {
-                self.account_processor.get_auth_status(params).await
+                self.account_processor
+                    .get_auth_status(params, app_server_client_name.as_deref())
+                    .await
             }
             ClientRequest::GetAccountRateLimits { .. } => {
                 self.account_processor.get_account_rate_limits().await

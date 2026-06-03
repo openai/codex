@@ -8,6 +8,7 @@ mod websocket;
 
 use self::auth::load_remote_control_auth;
 use self::auth::recover_remote_control_auth;
+use self::auth::remote_control_auth_recovery;
 use self::enroll::RemoteControlEnrollment;
 use self::enroll::refresh_remote_control_server;
 use crate::transport::remote_control::websocket::RemoteControlChannels;
@@ -183,7 +184,7 @@ impl RemoteControlHandle {
         let pairing_request = || protocol::StartRemoteControlPairingRequest {
             manual_code: params.manual_code,
         };
-        let pairing_response = match enrollment.start_pairing(pairing_request()).await {
+        let pairing_response = match enrollment.start_pairing(&auth, pairing_request()).await {
             Err(err) if err.kind() == io::ErrorKind::PermissionDenied => {
                 clear_pairing_server_token(&self.current_enrollment, &mut enrollment)?;
                 refresh_pairing_enrollment(
@@ -194,7 +195,7 @@ impl RemoteControlHandle {
                     &mut enrollment,
                 )
                 .await?;
-                enrollment.start_pairing(pairing_request()).await
+                enrollment.start_pairing(&auth, pairing_request()).await
             }
             pairing_response => pairing_response,
         };
@@ -288,7 +289,7 @@ async fn refresh_pairing_enrollment(
         if err.kind() != io::ErrorKind::PermissionDenied {
             return handle_pairing_refresh_error(current_enrollment, enrollment, err);
         }
-        let mut auth_recovery = auth_manager.unauthorized_recovery();
+        let mut auth_recovery = remote_control_auth_recovery(auth_manager);
         let mut auth_change_rx = auth_manager.auth_change_receiver();
         if !recover_remote_control_auth(&mut auth_recovery, &mut auth_change_rx).await {
             return Err(err);

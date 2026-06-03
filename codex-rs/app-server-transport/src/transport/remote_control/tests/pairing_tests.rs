@@ -21,6 +21,14 @@ fn remote_control_enrollment(
     }
 }
 
+fn remote_control_connection_auth() -> RemoteControlConnectionAuth {
+    RemoteControlConnectionAuth {
+        auth_provider: codex_model_provider::unauthenticated_auth_provider(),
+        server_token_auth_provider: codex_model_provider::unauthenticated_auth_provider(),
+        account_id: "account-id".to_string(),
+    }
+}
+
 async fn pairing_error(status: &'static str, body: &'static str) -> (String, String) {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
@@ -41,7 +49,10 @@ async fn pairing_error(status: &'static str, body: &'static str) -> (String, Str
     });
 
     let err = remote_control_enrollment(&remote_control_url, "remote-control-token")
-        .start_pairing(StartRemoteControlPairingRequest { manual_code: false })
+        .start_pairing(
+            &remote_control_connection_auth(),
+            StartRemoteControlPairingRequest { manual_code: false },
+        )
         .await
         .expect_err("pairing should fail");
     server_task.await.expect("server task should finish");
@@ -59,11 +70,74 @@ async fn pairing_response_error(body: serde_json::Value) -> String {
     });
 
     let err = remote_control_enrollment(&remote_control_url, "remote-control-token")
-        .start_pairing(StartRemoteControlPairingRequest { manual_code: false })
+        .start_pairing(
+            &remote_control_connection_auth(),
+            StartRemoteControlPairingRequest { manual_code: false },
+        )
         .await
         .expect_err("pairing should fail");
     server_task.await.expect("server task should finish");
     err.to_string()
+}
+
+#[tokio::test]
+async fn start_pairing_attaches_and_rotates_http_state_without_replacing_authorization() {
+    let codex_home = TempDir::new().expect("temp dir should create");
+    let store = HttpStateStore::new(codex_home.path().to_path_buf());
+    store
+        .set(
+            HttpStateSurface::CodexRemoteControl,
+            SENT_HTTP_STATE.to_string(),
+        )
+        .expect("HTTP state should store");
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("listener should bind");
+    let remote_control_url = remote_control_url_for_listener(&listener);
+    let server_task = tokio::spawn(async move {
+        let pairing_request = accept_http_request(&listener).await;
+        assert_eq!(
+            pairing_request.request_line,
+            "POST /backend-api/wham/remote/control/server/pair HTTP/1.1"
+        );
+        assert_eq!(
+            pairing_request.headers.get("authorization"),
+            Some(&"Bearer remote-control-token".to_string())
+        );
+        assert_eq!(
+            pairing_request.headers.get("x-oai-is"),
+            Some(&SENT_HTTP_STATE.to_string())
+        );
+        respond_with_status_and_headers(
+            pairing_request.stream,
+            "200 OK",
+            &[("x-oai-is-update", ROTATED_HTTP_STATE)],
+            &json!({
+                "pairing_code": "pairing-code",
+                "manual_pairing_code": null,
+                "server_id": "server-id",
+                "environment_id": "environment-id",
+                "expires_at": "3026-05-22T12:34:56Z",
+            })
+            .to_string(),
+        )
+        .await;
+    });
+
+    remote_control_enrollment(&remote_control_url, "remote-control-token")
+        .start_pairing(
+            &remote_control_connection_auth_with_http_state(store.clone()),
+            StartRemoteControlPairingRequest { manual_code: false },
+        )
+        .await
+        .expect("pairing should succeed");
+    server_task.await.expect("server task should finish");
+    assert_eq!(
+        store
+            .get(HttpStateSurface::CodexRemoteControl)
+            .expect("HTTP state should load"),
+        Some(ROTATED_HTTP_STATE.to_string())
+    );
 }
 
 #[tokio::test]

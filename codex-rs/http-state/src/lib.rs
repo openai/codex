@@ -30,6 +30,16 @@ pub enum HttpStateSurface {
 }
 
 impl HttpStateSurface {
+    pub const ALL: [Self; 7] = [
+        Self::CodexCli,
+        Self::CodexTui,
+        Self::CodexExec,
+        Self::CodexVscode,
+        Self::CodexDesktop,
+        Self::CodexDesktopSsh,
+        Self::CodexRemoteControl,
+    ];
+
     pub fn try_from_app_server_client_name(client_name: &str) -> Option<Self> {
         match client_name {
             "codex_cli" => Some(Self::CodexCli),

@@ -9,6 +9,8 @@ use std::time::Duration;
 use anyhow::Result;
 use base64::Engine;
 use codex_config::types::AuthCredentialsStoreMode;
+use codex_http_state::HttpStateStore;
+use codex_http_state::HttpStateSurface;
 use codex_login::ServerOptions;
 use codex_login::run_login_server;
 use core_test_support::skip_if_no_network;
@@ -24,7 +26,10 @@ const WORKSPACE_ID_DISALLOWED: &str = "123e4567-e89b-42d3-a456-426614174002";
 
 // See spawn.rs for details
 
-fn start_mock_issuer(chatgpt_account_id: &str) -> (SocketAddr, thread::JoinHandle<()>) {
+fn start_mock_issuer(
+    chatgpt_account_id: &str,
+    http_state_surface: HttpStateSurface,
+) -> (SocketAddr, thread::JoinHandle<()>) {
     // Bind to a random available port
     let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
     let addr = listener.local_addr().unwrap();
@@ -38,6 +43,12 @@ fn start_mock_issuer(chatgpt_account_id: &str) -> (SocketAddr, thread::JoinHandl
                 // Read body
                 let mut body = String::new();
                 let _ = req.as_reader().read_to_string(&mut body);
+                if body.contains("grant_type=authorization_code") {
+                    assert!(
+                        body.contains(&format!("surface={http_state_surface}")),
+                        "authorization-code exchange should identify the initiating surface"
+                    );
+                }
                 // Build minimal JWT with plan=pro
                 #[derive(serde::Serialize)]
                 struct Header {
@@ -69,6 +80,8 @@ fn start_mock_issuer(chatgpt_account_id: &str) -> (SocketAddr, thread::JoinHandl
                     "id_token": id_token,
                     "access_token": "access-123",
                     "refresh_token": "refresh-123",
+                    "state": "legacy-state",
+                    "oai_is": "ois1.header.nonce.ciphertext",
                 });
                 let data = serde_json::to_vec(&tokens).unwrap();
                 let mut resp = tiny_http::Response::from_data(data);
@@ -92,7 +105,8 @@ async fn end_to_end_login_flow_persists_auth_json() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let chatgpt_account_id = "12345678-0000-0000-0000-000000000000";
-    let (issuer_addr, issuer_handle) = start_mock_issuer(chatgpt_account_id);
+    let (issuer_addr, issuer_handle) =
+        start_mock_issuer(chatgpt_account_id, HttpStateSurface::CodexDesktop);
     let issuer = format!("http://{}:{}", issuer_addr.ip(), issuer_addr.port());
 
     let tmp = tempdir()?;
@@ -128,6 +142,7 @@ async fn end_to_end_login_flow_persists_auth_json() -> Result<()> {
         force_state: Some(state),
         forced_chatgpt_workspace_id: Some(vec![chatgpt_account_id.to_string()]),
         codex_streamlined_login: false,
+        http_state_surface: HttpStateSurface::CodexDesktop,
     };
     let server = run_login_server(opts)?;
     assert!(
@@ -160,6 +175,10 @@ async fn end_to_end_login_flow_persists_auth_json() -> Result<()> {
     assert_eq!(json["tokens"]["access_token"], "access-123");
     assert_eq!(json["tokens"]["refresh_token"], "refresh-123");
     assert_eq!(json["tokens"]["account_id"], chatgpt_account_id);
+    assert_eq!(
+        HttpStateStore::new(codex_home.clone()).get(HttpStateSurface::CodexDesktop)?,
+        Some("ois1.header.nonce.ciphertext".to_string())
+    );
 
     // Stop mock issuer
     drop(issuer_handle);
@@ -170,7 +189,8 @@ async fn end_to_end_login_flow_persists_auth_json() -> Result<()> {
 async fn creates_missing_codex_home_dir() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let (issuer_addr, _issuer_handle) = start_mock_issuer(WORKSPACE_ID_ALLOWED);
+    let (issuer_addr, _issuer_handle) =
+        start_mock_issuer(WORKSPACE_ID_ALLOWED, HttpStateSurface::CodexCli);
     let issuer = format!("http://{}:{}", issuer_addr.ip(), issuer_addr.port());
 
     let tmp = tempdir()?;
@@ -190,6 +210,7 @@ async fn creates_missing_codex_home_dir() -> Result<()> {
         force_state: Some(state),
         forced_chatgpt_workspace_id: None,
         codex_streamlined_login: false,
+        http_state_surface: HttpStateSurface::CodexCli,
     };
     let server = run_login_server(opts)?;
     let login_port = server.actual_port;
@@ -213,7 +234,8 @@ async fn creates_missing_codex_home_dir() -> Result<()> {
 async fn login_server_includes_forced_workspaces_as_one_query_param() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let (issuer_addr, _issuer_handle) = start_mock_issuer(WORKSPACE_ID_ALLOWED);
+    let (issuer_addr, _issuer_handle) =
+        start_mock_issuer(WORKSPACE_ID_ALLOWED, HttpStateSurface::CodexCli);
     let issuer = format!("http://{}:{}", issuer_addr.ip(), issuer_addr.port());
 
     let tmp = tempdir()?;
@@ -233,6 +255,7 @@ async fn login_server_includes_forced_workspaces_as_one_query_param() -> Result<
             WORKSPACE_ID_SECOND_ALLOWED.to_string(),
         ]),
         codex_streamlined_login: false,
+        http_state_surface: HttpStateSurface::CodexCli,
     };
     let server = run_login_server(opts)?;
     let auth_url = Url::parse(&server.auth_url)?;
@@ -254,7 +277,8 @@ async fn login_server_includes_forced_workspaces_as_one_query_param() -> Result<
 async fn forced_chatgpt_workspace_id_mismatch_blocks_login() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let (issuer_addr, _issuer_handle) = start_mock_issuer(WORKSPACE_ID_DISALLOWED);
+    let (issuer_addr, _issuer_handle) =
+        start_mock_issuer(WORKSPACE_ID_DISALLOWED, HttpStateSurface::CodexCli);
     let issuer = format!("http://{}:{}", issuer_addr.ip(), issuer_addr.port());
 
     let tmp = tempdir()?;
@@ -271,6 +295,7 @@ async fn forced_chatgpt_workspace_id_mismatch_blocks_login() -> Result<()> {
         force_state: Some(state.clone()),
         forced_chatgpt_workspace_id: Some(vec![WORKSPACE_ID_ALLOWED.to_string()]),
         codex_streamlined_login: false,
+        http_state_surface: HttpStateSurface::CodexCli,
     };
     let server = run_login_server(opts)?;
     assert!(
@@ -314,7 +339,8 @@ async fn forced_chatgpt_workspace_id_mismatch_blocks_login() -> Result<()> {
 async fn oauth_access_denied_missing_entitlement_blocks_login_with_clear_error() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let (issuer_addr, _issuer_handle) = start_mock_issuer(WORKSPACE_ID_ALLOWED);
+    let (issuer_addr, _issuer_handle) =
+        start_mock_issuer(WORKSPACE_ID_ALLOWED, HttpStateSurface::CodexCli);
     let issuer = format!("http://{}:{}", issuer_addr.ip(), issuer_addr.port());
 
     let tmp = tempdir()?;
@@ -331,6 +357,7 @@ async fn oauth_access_denied_missing_entitlement_blocks_login_with_clear_error()
         force_state: Some(state.clone()),
         forced_chatgpt_workspace_id: None,
         codex_streamlined_login: false,
+        http_state_surface: HttpStateSurface::CodexCli,
     };
     let server = run_login_server(opts)?;
     let login_port = server.actual_port;
@@ -382,7 +409,8 @@ async fn oauth_access_denied_missing_entitlement_blocks_login_with_clear_error()
 async fn oauth_access_denied_unknown_reason_uses_generic_error_page() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let (issuer_addr, _issuer_handle) = start_mock_issuer(WORKSPACE_ID_ALLOWED);
+    let (issuer_addr, _issuer_handle) =
+        start_mock_issuer(WORKSPACE_ID_ALLOWED, HttpStateSurface::CodexCli);
     let issuer = format!("http://{}:{}", issuer_addr.ip(), issuer_addr.port());
 
     let tmp = tempdir()?;
@@ -399,6 +427,7 @@ async fn oauth_access_denied_unknown_reason_uses_generic_error_page() -> Result<
         force_state: Some(state.clone()),
         forced_chatgpt_workspace_id: None,
         codex_streamlined_login: false,
+        http_state_surface: HttpStateSurface::CodexCli,
     };
     let server = run_login_server(opts)?;
     let login_port = server.actual_port;
@@ -490,7 +519,8 @@ async fn falls_back_to_registered_fallback_port_when_default_port_is_in_use() ->
         })
     };
 
-    let (issuer_addr, _issuer_handle) = start_mock_issuer(WORKSPACE_ID_ALLOWED);
+    let (issuer_addr, _issuer_handle) =
+        start_mock_issuer(WORKSPACE_ID_ALLOWED, HttpStateSurface::CodexCli);
     let issuer = format!("http://{}:{}", issuer_addr.ip(), issuer_addr.port());
     let tmp = tempdir()?;
 
@@ -528,7 +558,8 @@ async fn falls_back_to_registered_fallback_port_when_default_port_is_in_use() ->
 async fn cancels_previous_login_server_when_port_is_in_use() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let (issuer_addr, _issuer_handle) = start_mock_issuer(WORKSPACE_ID_ALLOWED);
+    let (issuer_addr, _issuer_handle) =
+        start_mock_issuer(WORKSPACE_ID_ALLOWED, HttpStateSurface::CodexCli);
     let issuer = format!("http://{}:{}", issuer_addr.ip(), issuer_addr.port());
 
     let first_tmp = tempdir()?;
@@ -544,6 +575,7 @@ async fn cancels_previous_login_server_when_port_is_in_use() -> Result<()> {
         force_state: Some("cancel_state".to_string()),
         forced_chatgpt_workspace_id: None,
         codex_streamlined_login: false,
+        http_state_surface: HttpStateSurface::CodexCli,
     };
 
     let first_server = run_login_server(first_opts)?;
@@ -565,6 +597,7 @@ async fn cancels_previous_login_server_when_port_is_in_use() -> Result<()> {
         force_state: Some("cancel_state_2".to_string()),
         forced_chatgpt_workspace_id: None,
         codex_streamlined_login: false,
+        http_state_surface: HttpStateSurface::CodexCli,
     };
 
     let second_server = run_login_server(second_opts)?;

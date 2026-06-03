@@ -5,6 +5,8 @@ use chrono::Duration;
 use chrono::Utc;
 use codex_app_server_protocol::AuthMode;
 use codex_config::types::AuthCredentialsStoreMode;
+use codex_http_state::HttpStateStore;
+use codex_http_state::HttpStateSurface;
 use codex_login::AuthDotJson;
 use codex_login::AuthManager;
 use codex_login::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
@@ -89,6 +91,55 @@ async fn refresh_token_succeeds_updates_storage() -> Result<()> {
         .get_token_data()
         .context("token data should be cached")?;
     assert_eq!(cached, refreshed_tokens);
+
+    server.verify().await;
+    Ok(())
+}
+
+#[serial_test::serial(auth_refresh)]
+#[tokio::test]
+async fn refresh_token_for_surface_sends_surface_and_persists_returned_state() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "access_token": "new-access-token",
+            "refresh_token": "new-refresh-token",
+            "state": "legacy-state",
+            "oai_is": "new-state"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let ctx = RefreshTokenTestContext::new(&server).await?;
+    let initial_auth = AuthDotJson {
+        auth_mode: Some(AuthMode::Chatgpt),
+        openai_api_key: None,
+        tokens: Some(build_tokens(INITIAL_ACCESS_TOKEN, INITIAL_REFRESH_TOKEN)),
+        last_refresh: Some(Utc::now() - Duration::days(1)),
+        agent_identity: None,
+    };
+    ctx.write_auth(&initial_auth).await?;
+
+    let http_state = HttpStateStore::new(ctx.codex_home.path().to_path_buf());
+    http_state.set(HttpStateSurface::CodexDesktop, "old-state".to_string())?;
+
+    ctx.auth_manager
+        .refresh_token_for_surface(HttpStateSurface::CodexDesktop)
+        .await
+        .context("refresh should succeed")?;
+
+    assert_eq!(
+        http_state.get(HttpStateSurface::CodexDesktop)?,
+        Some("new-state".to_string()),
+    );
+    let requests = server.received_requests().await.unwrap_or_default();
+    assert_eq!(requests.len(), 1);
+    let body: serde_json::Value = serde_json::from_slice(&requests[0].body)?;
+    assert_eq!(body["surface"], "codex_desktop");
 
     server.verify().await;
     Ok(())
@@ -213,6 +264,56 @@ async fn auth_refreshes_when_access_token_is_near_expiry() -> Result<()> {
         *refreshed_at >= initial_last_refresh,
         "last_refresh should advance"
     );
+
+    server.verify().await;
+    Ok(())
+}
+
+#[serial_test::serial(auth_refresh)]
+#[tokio::test]
+async fn auth_for_surface_persists_state_from_proactive_refresh() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "access_token": "new-access-token",
+            "refresh_token": "new-refresh-token",
+            "state": "new-state"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let ctx = RefreshTokenTestContext::new(&server).await?;
+    let near_expiry_access_token = access_token_with_expiration(Utc::now() + Duration::minutes(4));
+    ctx.write_auth(&AuthDotJson {
+        auth_mode: Some(AuthMode::Chatgpt),
+        openai_api_key: None,
+        tokens: Some(build_tokens(
+            &near_expiry_access_token,
+            INITIAL_REFRESH_TOKEN,
+        )),
+        last_refresh: Some(Utc::now()),
+        agent_identity: None,
+    })
+    .await?;
+
+    ctx.auth_manager
+        .auth_for_surface(HttpStateSurface::CodexRemoteControl)
+        .await
+        .context("auth should be cached")?;
+
+    let http_state = HttpStateStore::new(ctx.codex_home.path().to_path_buf());
+    assert_eq!(
+        http_state.get(HttpStateSurface::CodexRemoteControl)?,
+        Some("new-state".to_string()),
+    );
+    let requests = server.received_requests().await.unwrap_or_default();
+    assert_eq!(requests.len(), 1);
+    let body: serde_json::Value = serde_json::from_slice(&requests[0].body)?;
+    assert_eq!(body["surface"], "codex_remote_control");
 
     server.verify().await;
     Ok(())

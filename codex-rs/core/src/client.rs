@@ -1431,7 +1431,6 @@ impl ModelClientSession {
         inference_trace: &InferenceTraceContext,
     ) -> Result<WebsocketStreamOutcome> {
         let auth_manager = self.client.state.provider.auth_manager();
-
         let mut auth_recovery = auth_manager
             .as_ref()
             .map(AuthManager::unauthorized_recovery);
