@@ -51,6 +51,12 @@
             "null"
           ]
         },
+        "continueOnBlock": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "currentHash": {
           "type": "string"
         },
@@ -79,7 +85,19 @@
             "null"
           ]
         },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "pluginId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "prompt": {
           "type": [
             "string",
             "null"

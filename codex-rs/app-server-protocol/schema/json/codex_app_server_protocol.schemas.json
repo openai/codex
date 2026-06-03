@@ -8609,6 +8609,32 @@
           },
           {
             "properties": {
+              "continueOnBlock": {
+                "type": "boolean"
+              },
+              "model": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "prompt": {
+                "type": "string"
+              },
+              "statusMessage": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "timeoutSec": {
+                "format": "uint64",
+                "minimum": 0.0,
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
               "type": {
                 "enum": [
                   "prompt"
@@ -8618,6 +8644,8 @@
               }
             },
             "required": [
+              "continueOnBlock",
+              "prompt",
               "type"
             ],
             "title": "PromptConfiguredHookHandler",
@@ -10836,6 +10864,12 @@
               "null"
             ]
           },
+          "continueOnBlock": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
           "currentHash": {
             "type": "string"
           },
@@ -10864,7 +10898,19 @@
               "null"
             ]
           },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "pluginId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "prompt": {
             "type": [
               "string",
               "null"
