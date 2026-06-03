@@ -25,6 +25,7 @@ use std::io::Result as IoResult;
 use std::sync::Arc;
 use std::time::Duration;
 
+pub use codex_app_server::AppServerRuntimeStorageDeps;
 pub use codex_app_server::app_server_control_socket_path;
 pub use codex_app_server::in_process::DEFAULT_IN_PROCESS_CHANNEL_CAPACITY;
 pub use codex_app_server::in_process::InProcessServerEvent;
@@ -489,9 +490,20 @@ impl InProcessAppServerClient {
     /// internal event queue is saturated later, server requests are rejected
     /// with overload error instead of being silently dropped.
     pub async fn start(args: InProcessClientStartArgs) -> IoResult<Self> {
+        Self::start_with_runtime_storage_deps(args, AppServerRuntimeStorageDeps::default()).await
+    }
+
+    /// Starts the in-process runtime with explicit thread storage backends.
+    pub async fn start_with_runtime_storage_deps(
+        args: InProcessClientStartArgs,
+        runtime_storage_deps: AppServerRuntimeStorageDeps,
+    ) -> IoResult<Self> {
         let channel_capacity = args.channel_capacity.max(1);
-        let mut handle =
-            codex_app_server::in_process::start(args.into_runtime_start_args()).await?;
+        let mut handle = codex_app_server::in_process::start_with_runtime_storage_deps(
+            args.into_runtime_start_args(),
+            runtime_storage_deps,
+        )
+        .await?;
         let request_sender = handle.sender();
         let (command_tx, mut command_rx) = mpsc::channel::<ClientCommand>(channel_capacity);
         let (event_tx, event_rx) = mpsc::channel::<InProcessServerEvent>(channel_capacity);

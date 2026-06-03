@@ -177,6 +177,30 @@ pub struct ThreadManager {
     _test_codex_home_guard: Option<TempCodexHomeGuard>,
 }
 
+/// Storage backends used by [`ThreadManager`] for executor-visible artifacts.
+///
+/// Cloud and embedded hosts can provide implementations here without asking
+/// core to treat `codex_home` as a remotely mounted filesystem.
+#[derive(Clone)]
+pub struct ThreadManagerStorageDeps {
+    /// Stores generated artifacts and materializes executor-readable paths.
+    pub artifact_store: Arc<dyn ArtifactStore>,
+    /// Stores executor-local shell snapshots used by shell startup.
+    pub shell_snapshot_store: Arc<dyn ShellSnapshotStore>,
+}
+
+impl ThreadManagerStorageDeps {
+    /// Builds the standard local backends rooted under the configured Codex home.
+    pub fn local(config: &Config) -> Self {
+        Self {
+            artifact_store: Arc::new(LocalArtifactStore::from_codex_home(&config.codex_home)),
+            shell_snapshot_store: Arc::new(LocalShellSnapshotStore::from_codex_home(
+                &config.codex_home,
+            )),
+        }
+    }
+}
+
 pub struct StartThreadOptions {
     pub config: Config,
     pub initial_history: InitialHistory,
@@ -269,7 +293,7 @@ impl ThreadManager {
         installation_id: String,
         attestation_provider: Option<Arc<dyn AttestationProvider>>,
     ) -> Self {
-        Self::new_with_artifact_store(
+        Self::new_with_storage_deps(
             config,
             auth_manager,
             session_source,
@@ -277,7 +301,7 @@ impl ThreadManager {
             extensions,
             analytics_events_client,
             thread_store,
-            Arc::new(LocalArtifactStore::from_codex_home(&config.codex_home)),
+            ThreadManagerStorageDeps::local(config),
             state_db,
             installation_id,
             attestation_provider,
@@ -299,7 +323,9 @@ impl ThreadManager {
         installation_id: String,
         attestation_provider: Option<Arc<dyn AttestationProvider>>,
     ) -> Self {
-        Self::new_with_storage_backends(
+        let mut storage_deps = ThreadManagerStorageDeps::local(config);
+        storage_deps.artifact_store = artifact_store;
+        Self::new_with_storage_deps(
             config,
             auth_manager,
             session_source,
@@ -307,8 +333,7 @@ impl ThreadManager {
             extensions,
             analytics_events_client,
             thread_store,
-            artifact_store,
-            Arc::new(LocalShellSnapshotStore::from_codex_home(&config.codex_home)),
+            storage_deps,
             state_db,
             installation_id,
             attestation_provider,
@@ -330,7 +355,9 @@ impl ThreadManager {
         installation_id: String,
         attestation_provider: Option<Arc<dyn AttestationProvider>>,
     ) -> Self {
-        Self::new_with_storage_backends(
+        let mut storage_deps = ThreadManagerStorageDeps::local(config);
+        storage_deps.shell_snapshot_store = shell_snapshot_store;
+        Self::new_with_storage_deps(
             config,
             auth_manager,
             session_source,
@@ -338,8 +365,7 @@ impl ThreadManager {
             extensions,
             analytics_events_client,
             thread_store,
-            Arc::new(LocalArtifactStore::from_codex_home(&config.codex_home)),
-            shell_snapshot_store,
+            storage_deps,
             state_db,
             installation_id,
             attestation_provider,
@@ -347,7 +373,8 @@ impl ThreadManager {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn new_with_storage_backends(
+    /// Constructs a thread manager with explicit executor-visible storage backends.
+    pub fn new_with_storage_deps(
         config: &Config,
         auth_manager: Arc<AuthManager>,
         session_source: SessionSource,
@@ -355,12 +382,15 @@ impl ThreadManager {
         extensions: Arc<ExtensionRegistry<Config>>,
         analytics_events_client: Option<AnalyticsEventsClient>,
         thread_store: Arc<dyn ThreadStore>,
-        artifact_store: Arc<dyn ArtifactStore>,
-        shell_snapshot_store: Arc<dyn ShellSnapshotStore>,
+        storage_deps: ThreadManagerStorageDeps,
         state_db: Option<StateDbHandle>,
         installation_id: String,
         attestation_provider: Option<Arc<dyn AttestationProvider>>,
     ) -> Self {
+        let ThreadManagerStorageDeps {
+            artifact_store,
+            shell_snapshot_store,
+        } = storage_deps;
         let codex_home = config.codex_home.clone();
         let restriction_product = session_source.restriction_product();
         let (thread_created_tx, _) = broadcast::channel(THREAD_CREATED_CHANNEL_CAPACITY);

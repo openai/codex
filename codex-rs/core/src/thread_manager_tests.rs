@@ -7,6 +7,8 @@ use crate::installation_id::INSTALLATION_ID_FILENAME;
 use crate::rollout::RolloutRecorder;
 use crate::session::session::SessionSettingsUpdate;
 use crate::session::tests::make_session_and_context;
+use crate::shell_snapshot::ShellSnapshotPaths;
+use crate::shell_snapshot::ShellSnapshotStoreFuture;
 use crate::tasks::InterruptedTurnHistoryMarker;
 use crate::tasks::interrupted_turn_history_marker;
 use codex_extension_api::empty_extension_registry;
@@ -52,6 +54,26 @@ impl ArtifactStore for FakeArtifactStore {
     }
 }
 
+struct FakeShellSnapshotStore;
+
+impl ShellSnapshotStore for FakeShellSnapshotStore {
+    fn snapshot_paths(
+        &self,
+        _session_id: ThreadId,
+        _shell_type: crate::shell::ShellType,
+    ) -> ShellSnapshotPaths {
+        unreachable!("shell snapshot paths should not be requested")
+    }
+
+    fn cleanup_stale_snapshots(
+        &self,
+        _active_session_id: ThreadId,
+        _state_db: Option<StateDbHandle>,
+    ) -> ShellSnapshotStoreFuture<'_> {
+        unreachable!("shell snapshot cleanup should not be requested")
+    }
+}
+
 fn user_msg(text: &str) -> ResponseItem {
     ResponseItem::Message {
         id: None,
@@ -84,10 +106,11 @@ fn developer_interrupted_marker() -> ResponseItem {
 }
 
 #[tokio::test]
-async fn start_thread_uses_injected_artifact_store() {
+async fn start_thread_uses_injected_storage_deps() {
     let config = test_config().await;
     let artifact_store: Arc<dyn ArtifactStore> = Arc::new(FakeArtifactStore);
-    let manager = ThreadManager::new_with_artifact_store(
+    let shell_snapshot_store: Arc<dyn ShellSnapshotStore> = Arc::new(FakeShellSnapshotStore);
+    let manager = ThreadManager::new_with_storage_deps(
         &config,
         AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing()),
         SessionSource::Exec,
@@ -95,7 +118,10 @@ async fn start_thread_uses_injected_artifact_store() {
         empty_extension_registry(),
         /*analytics_events_client*/ None,
         thread_store_from_config(&config, /*state_db*/ None),
-        Arc::clone(&artifact_store),
+        ThreadManagerStorageDeps {
+            artifact_store: Arc::clone(&artifact_store),
+            shell_snapshot_store: Arc::clone(&shell_snapshot_store),
+        },
         /*state_db*/ None,
         TEST_INSTALLATION_ID.to_string(),
         /*attestation_provider*/ None,
@@ -105,6 +131,10 @@ async fn start_thread_uses_injected_artifact_store() {
     assert!(Arc::ptr_eq(
         &thread.thread.codex.session.services.artifact_store,
         &artifact_store
+    ));
+    assert!(Arc::ptr_eq(
+        &thread.thread.codex.session.services.shell_snapshot_store,
+        &shell_snapshot_store
     ));
 }
 

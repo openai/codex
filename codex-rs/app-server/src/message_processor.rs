@@ -272,6 +272,7 @@ pub(crate) struct MessageProcessorArgs {
     pub(crate) rpc_transport: AppServerRpcTransport,
     pub(crate) remote_control_handle: Option<RemoteControlHandle>,
     pub(crate) plugin_startup_tasks: crate::PluginStartupTasks,
+    pub(crate) runtime_storage_deps: crate::AppServerRuntimeStorageDeps,
 }
 
 impl MessageProcessor {
@@ -295,6 +296,7 @@ impl MessageProcessor {
             rpc_transport,
             remote_control_handle,
             plugin_startup_tasks,
+            runtime_storage_deps,
         } = args;
         auth_manager.set_external_auth(Arc::new(ExternalAuthRefreshBridge {
             outgoing: outgoing.clone(),
@@ -305,26 +307,45 @@ impl MessageProcessor {
         // resumed, or forked threads to a different persistence backend/root.
         let thread_store = codex_core::thread_store_from_config(config.as_ref(), state_db.clone());
         let environment_manager_for_requests = Arc::clone(&environment_manager);
+        let thread_manager_storage_deps = runtime_storage_deps.thread_manager;
         let thread_manager = Arc::new_cyclic(|thread_manager| {
-            ThreadManager::new(
-                config.as_ref(),
+            let thread_manager_storage_deps = thread_manager_storage_deps.clone();
+            let extensions = thread_extensions(
+                guardian_agent_spawner(thread_manager.clone()),
+                app_server_extension_event_sink(outgoing.clone()),
                 auth_manager.clone(),
-                session_source,
-                environment_manager,
-                thread_extensions(
-                    guardian_agent_spawner(thread_manager.clone()),
-                    app_server_extension_event_sink(outgoing.clone()),
+            );
+            let attestation_provider = Some(app_server_attestation_provider(
+                outgoing.clone(),
+                thread_state_manager.clone(),
+            ));
+            match thread_manager_storage_deps {
+                Some(storage_deps) => ThreadManager::new_with_storage_deps(
+                    config.as_ref(),
                     auth_manager.clone(),
+                    session_source,
+                    environment_manager,
+                    extensions,
+                    Some(analytics_events_client.clone()),
+                    Arc::clone(&thread_store),
+                    storage_deps,
+                    state_db.clone(),
+                    installation_id,
+                    attestation_provider,
                 ),
-                Some(analytics_events_client.clone()),
-                Arc::clone(&thread_store),
-                state_db.clone(),
-                installation_id,
-                Some(app_server_attestation_provider(
-                    outgoing.clone(),
-                    thread_state_manager.clone(),
-                )),
-            )
+                None => ThreadManager::new(
+                    config.as_ref(),
+                    auth_manager.clone(),
+                    session_source,
+                    environment_manager,
+                    extensions,
+                    Some(analytics_events_client.clone()),
+                    Arc::clone(&thread_store),
+                    state_db.clone(),
+                    installation_id,
+                    attestation_provider,
+                ),
+            }
         });
         thread_manager
             .plugins_manager()
