@@ -138,7 +138,11 @@ impl ToolExecutor<ToolInvocation> for RequestPluginInstallHandler {
             .as_ref()
             .is_some_and(|response| response.action == ElicitationAction::Accept);
 
-        let auth = session.services.auth_manager.auth().await;
+        let auth = session
+            .services
+            .auth_manager
+            .auth_for_surface(turn.http_state_surface)
+            .await;
         let completed = if user_confirmed {
             verify_request_plugin_install_completed(&session, &turn, &tool, auth.as_ref()).await
         } else {

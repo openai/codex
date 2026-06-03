@@ -31,6 +31,7 @@ use codex_config::types::AppsConfigToml;
 use codex_config::types::ToolSuggestDiscoverableType;
 use codex_core_plugins::PluginsManager;
 use codex_features::Feature;
+use codex_http_state::HttpStateContext;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_login::default_client::originator;
@@ -88,9 +89,16 @@ pub struct AccessibleConnectorsStatus {
 pub async fn list_accessible_connectors_from_mcp_tools(
     config: &Config,
 ) -> anyhow::Result<Vec<AppInfo>> {
+    list_accessible_connectors_from_mcp_tools_with_http_state(config, /*http_state*/ None).await
+}
+
+pub(crate) async fn list_accessible_connectors_from_mcp_tools_with_http_state(
+    config: &Config,
+    http_state: Option<HttpStateContext>,
+) -> anyhow::Result<Vec<AppInfo>> {
     Ok(
-        list_accessible_connectors_from_mcp_tools_with_options_and_status(
-            config, /*force_refetch*/ false,
+        list_accessible_connectors_from_mcp_tools_with_options_and_status_and_http_state(
+            config, /*force_refetch*/ false, http_state,
         )
         .await?
         .connectors,
@@ -148,9 +156,22 @@ pub(crate) async fn list_tool_suggest_discoverable_tools_with_auth(
 pub async fn list_cached_accessible_connectors_from_mcp_tools(
     config: &Config,
 ) -> Option<Vec<AppInfo>> {
+    list_cached_accessible_connectors_from_mcp_tools_with_http_state(
+        config, /*http_state*/ None,
+    )
+    .await
+}
+
+pub async fn list_cached_accessible_connectors_from_mcp_tools_with_http_state(
+    config: &Config,
+    http_state: Option<&HttpStateContext>,
+) -> Option<Vec<AppInfo>> {
     let auth_manager =
         AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ false).await;
-    let auth = auth_manager.auth().await;
+    let auth = match http_state {
+        Some(http_state) => auth_manager.auth_for_surface(http_state.surface()).await,
+        None => auth_manager.auth().await,
+    };
     if !config
         .features
         .apps_enabled_for_auth(auth.as_ref().is_some_and(CodexAuth::uses_codex_backend))
@@ -198,6 +219,19 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options_and_status(
     config: &Config,
     force_refetch: bool,
 ) -> anyhow::Result<AccessibleConnectorsStatus> {
+    list_accessible_connectors_from_mcp_tools_with_options_and_status_and_http_state(
+        config,
+        force_refetch,
+        /*http_state*/ None,
+    )
+    .await
+}
+
+async fn list_accessible_connectors_from_mcp_tools_with_options_and_status_and_http_state(
+    config: &Config,
+    force_refetch: bool,
+    http_state: Option<HttpStateContext>,
+) -> anyhow::Result<AccessibleConnectorsStatus> {
     // TODO: Wire callers that already own an EnvironmentManager into
     // list_accessible_connectors_from_mcp_tools_with_environment_manager instead
     // of constructing a temporary manager here.
@@ -208,10 +242,11 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options_and_status(
     let environment_manager =
         EnvironmentManager::from_codex_home(config.codex_home.clone(), Some(local_runtime_paths))
             .await?;
-    list_accessible_connectors_from_mcp_tools_with_environment_manager(
+    list_accessible_connectors_from_mcp_tools_with_environment_manager_and_http_state(
         config,
         force_refetch,
         Arc::new(environment_manager),
+        http_state,
     )
     .await
 }
@@ -221,9 +256,27 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_environment_manager(
     force_refetch: bool,
     environment_manager: Arc<EnvironmentManager>,
 ) -> anyhow::Result<AccessibleConnectorsStatus> {
+    list_accessible_connectors_from_mcp_tools_with_environment_manager_and_http_state(
+        config,
+        force_refetch,
+        environment_manager,
+        /*http_state*/ None,
+    )
+    .await
+}
+
+pub async fn list_accessible_connectors_from_mcp_tools_with_environment_manager_and_http_state(
+    config: &Config,
+    force_refetch: bool,
+    environment_manager: Arc<EnvironmentManager>,
+    http_state: Option<HttpStateContext>,
+) -> anyhow::Result<AccessibleConnectorsStatus> {
     let auth_manager =
         AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ false).await;
-    let auth = auth_manager.auth().await;
+    let auth = match http_state.as_ref() {
+        Some(http_state) => auth_manager.auth_for_surface(http_state.surface()).await,
+        None => auth_manager.auth().await,
+    };
     if !config
         .features
         .apps_enabled_for_auth(auth.as_ref().is_some_and(CodexAuth::uses_codex_backend))
@@ -282,6 +335,7 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_environment_manager(
         // one exists, but do not reintroduce the old hidden-local fallback.
         McpRuntimeContext::new(environment_manager, config.cwd.to_path_buf()),
         config.codex_home.to_path_buf(),
+        http_state,
         codex_apps_tools_cache_key(auth.as_ref()),
         host_owned_codex_apps_enabled,
         mcp_config.prefix_mcp_tool_names,

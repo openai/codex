@@ -43,6 +43,7 @@ use async_channel::Sender;
 use codex_config::Constrained;
 use codex_config::McpServerTransportConfig;
 use codex_config::types::OAuthCredentialsStoreMode;
+use codex_http_state::HttpStateContext;
 use codex_login::CodexAuth;
 use codex_protocol::mcp::CallToolResult;
 use codex_protocol::mcp::McpServerInfo;
@@ -220,6 +221,7 @@ impl McpConnectionManager {
         initial_permission_profile: PermissionProfile,
         runtime_context: McpRuntimeContext,
         codex_home: PathBuf,
+        http_state: Option<HttpStateContext>,
         codex_apps_tools_cache_key: CodexAppsToolsCacheKey,
         host_owned_codex_apps_enabled: bool,
         prefix_mcp_tool_names: bool,
@@ -239,9 +241,13 @@ impl McpConnectionManager {
         );
         let tool_plugin_provenance = Arc::new(tool_plugin_provenance);
         let startup_submit_id = submit_id.clone();
-        let codex_apps_auth_provider = auth
-            .filter(|auth| auth.uses_codex_backend())
-            .map(codex_model_provider::auth_provider_from_auth);
+        let codex_apps_auth_provider = auth.filter(|auth| auth.uses_codex_backend()).map(|auth| {
+            codex_model_provider::with_native_integrity_state(
+                codex_model_provider::auth_provider_from_auth(auth),
+                Some(auth),
+                http_state,
+            )
+        });
         let mcp_servers = mcp_servers.clone();
         for (server_name, server) in mcp_servers
             .into_iter()

@@ -415,6 +415,16 @@ impl ModelClient {
         self.state.http_state.clone()
     }
 
+    pub(crate) fn http_state_context_for_surface(
+        &self,
+        surface: HttpStateSurface,
+    ) -> Option<HttpStateContext> {
+        self.state
+            .http_state
+            .as_ref()
+            .map(|state| state.for_surface(surface))
+    }
+
     pub(crate) fn set_http_state_surface(&self, surface: HttpStateSurface) {
         if self
             .state
@@ -869,7 +879,15 @@ impl ModelClient {
     /// This centralizes setup used by both prewarm and normal request paths so they stay in
     /// lockstep when auth/provider resolution changes.
     async fn current_client_setup(&self) -> Result<CurrentClientSetup> {
-        let auth = self.state.provider.auth().await;
+        let auth = match (
+            self.state.provider.auth_manager(),
+            self.http_state_surface(),
+        ) {
+            (Some(auth_manager), Some(http_state_surface)) => {
+                auth_manager.auth_for_surface(http_state_surface).await
+            }
+            _ => self.state.provider.auth().await,
+        };
         let api_provider = self.state.provider.api_provider().await?;
         let api_auth = with_native_integrity_state(
             self.state.provider.api_auth().await?,
@@ -1316,9 +1334,14 @@ impl ModelClientSession {
         inference_trace: &InferenceTraceContext,
     ) -> Result<ResponseStream> {
         let auth_manager = self.client.state.provider.auth_manager();
-        let mut auth_recovery = auth_manager
-            .as_ref()
-            .map(AuthManager::unauthorized_recovery);
+        let http_state_surface = self.client.http_state_surface();
+        let mut auth_recovery = auth_manager.as_ref().map(|auth_manager| {
+            if let Some(http_state_surface) = http_state_surface {
+                auth_manager.unauthorized_recovery_for_surface(http_state_surface)
+            } else {
+                auth_manager.unauthorized_recovery()
+            }
+        });
         let mut pending_retry = PendingUnauthorizedRetry::default();
         loop {
             let client_setup = self.client.current_client_setup().await?;
@@ -1431,9 +1454,14 @@ impl ModelClientSession {
         inference_trace: &InferenceTraceContext,
     ) -> Result<WebsocketStreamOutcome> {
         let auth_manager = self.client.state.provider.auth_manager();
-        let mut auth_recovery = auth_manager
-            .as_ref()
-            .map(AuthManager::unauthorized_recovery);
+        let http_state_surface = self.client.http_state_surface();
+        let mut auth_recovery = auth_manager.as_ref().map(|auth_manager| {
+            if let Some(http_state_surface) = http_state_surface {
+                auth_manager.unauthorized_recovery_for_surface(http_state_surface)
+            } else {
+                auth_manager.unauthorized_recovery()
+            }
+        });
         let mut pending_retry = PendingUnauthorizedRetry::default();
         loop {
             let client_setup = self.client.current_client_setup().await?;

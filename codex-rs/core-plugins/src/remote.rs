@@ -1,16 +1,19 @@
 use crate::store::PLUGINS_CACHE_DIR;
 use crate::store::PluginStore;
+use codex_api::SharedAuthProvider;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::PluginAuthPolicy;
 use codex_app_server_protocol::PluginAvailability;
 use codex_app_server_protocol::PluginInstallPolicy;
 use codex_app_server_protocol::PluginInterface;
 use codex_app_server_protocol::SkillInterface;
+use codex_http_state::HttpStateContext;
 use codex_login::CodexAuth;
 use codex_login::default_client::build_reqwest_client;
 use codex_plugin::PluginId;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use reqwest::RequestBuilder;
+use reqwest::header::HeaderMap;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
@@ -24,6 +27,7 @@ use std::time::Duration;
 use url::Url;
 
 mod catalog_cache;
+pub(crate) mod http_state;
 mod remote_installed_plugin_sync;
 mod share;
 
@@ -91,9 +95,24 @@ const REMOTE_INSTALLED_MARKETPLACE_DISPLAY_ORDER: [(&str, &str); 5] = [
     ),
 ];
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct RemotePluginServiceConfig {
     pub chatgpt_base_url: String,
+    http_state: Option<HttpStateContext>,
+}
+
+impl RemotePluginServiceConfig {
+    pub fn new(chatgpt_base_url: String) -> Self {
+        Self {
+            chatgpt_base_url,
+            http_state: None,
+        }
+    }
+
+    pub fn with_http_state(mut self, http_state: HttpStateContext) -> Self {
+        self.http_state = Some(http_state);
+        self
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -871,7 +890,7 @@ pub async fn fetch_remote_plugin_skill_detail(
 
     let url = remote_plugin_skill_detail_url(config, plugin_id, skill_name)?;
     let client = build_reqwest_client();
-    let request = authenticated_request(client.get(&url), auth)?;
+    let request = authenticated_request(config, client.get(&url), auth, &url);
     let response: RemotePluginSkillDetailResponse = send_and_decode(request, &url).await?;
     if response.plugin_id != plugin_id {
         return Err(RemotePluginCatalogError::UnexpectedPluginId {
@@ -973,7 +992,7 @@ pub async fn install_remote_plugin(
     let base_url = config.chatgpt_base_url.trim_end_matches('/');
     let url = format!("{base_url}/ps/plugins/{plugin_id}/install");
     let client = build_reqwest_client();
-    let request = authenticated_request(client.post(&url), auth)?;
+    let request = authenticated_request(config, client.post(&url), auth, &url);
     let response: RemotePluginMutationResponse = send_and_decode(request, &url).await?;
     if response.id != plugin_id {
         return Err(RemotePluginCatalogError::UnexpectedPluginId {
@@ -1009,7 +1028,7 @@ pub async fn uninstall_remote_plugin(
     let base_url = config.chatgpt_base_url.trim_end_matches('/');
     let url = format!("{base_url}/plugins/{plugin_id}/uninstall");
     let client = build_reqwest_client();
-    let request = authenticated_request(client.post(&url), auth)?;
+    let request = authenticated_request(config, client.post(&url), auth, &url);
     let response: RemotePluginMutationResponse = send_and_decode(request, &url).await?;
     if response.id != plugin_id {
         return Err(RemotePluginCatalogError::UnexpectedPluginId {
@@ -1399,7 +1418,7 @@ async fn get_remote_plugin_list_page(
     let base_url = config.chatgpt_base_url.trim_end_matches('/');
     let url = format!("{base_url}/ps/plugins/list");
     let client = build_reqwest_client();
-    let mut request = authenticated_request(client.get(&url), auth)?;
+    let mut request = authenticated_request(config, client.get(&url), auth, &url);
     request = request.query(&[("scope", scope.api_value())]);
     request = request.query(&[("limit", REMOTE_PLUGIN_LIST_PAGE_LIMIT)]);
     if let Some(collection) = collection {
@@ -1419,7 +1438,7 @@ async fn get_remote_shared_workspace_plugins_page(
     let base_url = config.chatgpt_base_url.trim_end_matches('/');
     let url = format!("{base_url}/ps/plugins/workspace/shared");
     let client = build_reqwest_client();
-    let mut request = authenticated_request(client.get(&url), auth)?;
+    let mut request = authenticated_request(config, client.get(&url), auth, &url);
     request = request.query(&[("limit", REMOTE_PLUGIN_LIST_PAGE_LIMIT)]);
     if let Some(page_token) = page_token {
         request = request.query(&[("pageToken", page_token)]);
@@ -1437,7 +1456,7 @@ async fn get_remote_plugin_installed_page(
     let base_url = config.chatgpt_base_url.trim_end_matches('/');
     let url = format!("{base_url}/ps/plugins/installed");
     let client = build_reqwest_client();
-    let mut request = authenticated_request(client.get(&url), auth)?;
+    let mut request = authenticated_request(config, client.get(&url), auth, &url);
     request = request.query(&[("scope", scope.api_value())]);
     if include_download_urls {
         request = request.query(&[("includeDownloadUrls", true)]);
@@ -1457,7 +1476,7 @@ async fn fetch_plugin_detail(
     let base_url = config.chatgpt_base_url.trim_end_matches('/');
     let url = format!("{base_url}/ps/plugins/{plugin_id}");
     let client = build_reqwest_client();
-    let mut request = authenticated_request(client.get(&url), auth)?;
+    let mut request = authenticated_request(config, client.get(&url), auth, &url);
     if include_download_urls {
         request = request.query(&[("includeDownloadUrls", true)]);
     }
@@ -1496,25 +1515,62 @@ fn ensure_chatgpt_auth(auth: Option<&CodexAuth>) -> Result<&CodexAuth, RemotePlu
 }
 
 fn authenticated_request(
+    config: &RemotePluginServiceConfig,
     request: RequestBuilder,
     auth: &CodexAuth,
-) -> Result<RequestBuilder, RemotePluginCatalogError> {
-    Ok(request
-        .timeout(REMOTE_PLUGIN_CATALOG_TIMEOUT)
-        .headers(codex_model_provider::auth_provider_from_auth(auth).to_auth_headers()))
+    url: &str,
+) -> AuthenticatedRequest {
+    let (auth_provider, request_headers) = http_state::request_headers(config, auth, url);
+    AuthenticatedRequest {
+        request: request
+            .timeout(REMOTE_PLUGIN_CATALOG_TIMEOUT)
+            .headers(request_headers.clone()),
+        auth_provider,
+        request_headers,
+    }
+}
+
+struct AuthenticatedRequest {
+    request: RequestBuilder,
+    auth_provider: SharedAuthProvider,
+    request_headers: HeaderMap,
+}
+
+impl AuthenticatedRequest {
+    fn query<T: Serialize + ?Sized>(mut self, query: &T) -> Self {
+        self.request = self.request.query(query);
+        self
+    }
+
+    fn json<T: Serialize + ?Sized>(mut self, body: &T) -> Self {
+        self.request = self.request.json(body);
+        self
+    }
+
+    async fn send(self, url: &str) -> Result<reqwest::Response, RemotePluginCatalogError> {
+        let response =
+            self.request
+                .send()
+                .await
+                .map_err(|source| RemotePluginCatalogError::Request {
+                    url: url.to_string(),
+                    source,
+                })?;
+        http_state::observe_response_headers(
+            &self.auth_provider,
+            url,
+            &self.request_headers,
+            response.headers(),
+        );
+        Ok(response)
+    }
 }
 
 async fn send_and_decode<T: for<'de> Deserialize<'de>>(
-    request: RequestBuilder,
+    request: AuthenticatedRequest,
     url: &str,
 ) -> Result<T, RemotePluginCatalogError> {
-    let response = request
-        .send()
-        .await
-        .map_err(|source| RemotePluginCatalogError::Request {
-            url: url.to_string(),
-            source,
-        })?;
+    let response = request.send(url).await?;
     let status = response.status();
     let body = response.text().await.unwrap_or_default();
     if !status.is_success() {

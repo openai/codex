@@ -14,6 +14,8 @@ use codex_extension_api::ThreadLifecycleContributor;
 use codex_extension_api::ThreadStartInput;
 use codex_extension_api::ToolContributor;
 use codex_features::Feature;
+use codex_http_state::HttpStateContext;
+use codex_http_state::HttpStateSurface;
 use codex_login::AuthManager;
 use codex_model_provider::create_model_provider;
 use codex_model_provider_info::ModelProviderInfo;
@@ -121,6 +123,9 @@ impl ToolContributor for WebSearchExtension {
                 config.provider.clone(),
                 Some(self.auth_manager.clone()),
             ),
+            http_state: thread_store.get::<HttpStateSurface>().map(|surface| {
+                HttpStateContext::new(self.auth_manager.codex_home().to_path_buf(), *surface)
+            }),
             settings: config.settings.clone(),
         })]
     }

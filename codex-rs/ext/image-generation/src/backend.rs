@@ -3,33 +3,46 @@ use codex_api::ImageGenerationRequest;
 use codex_api::ImageResponse;
 use codex_api::ImagesClient;
 use codex_api::ReqwestTransport;
+use codex_http_state::HttpStateContext;
 use codex_login::default_client::build_reqwest_client;
 use codex_model_provider::SharedModelProvider;
+use codex_model_provider::with_native_integrity_state;
 use http::HeaderMap;
 
 #[derive(Clone)]
 pub(crate) struct CodexImagesBackend {
     provider: SharedModelProvider,
+    http_state: Option<HttpStateContext>,
 }
 
 impl CodexImagesBackend {
     /// Creates a backend that sends image requests through the active model provider.
-    pub(crate) fn new(provider: SharedModelProvider) -> Self {
-        Self { provider }
+    pub(crate) fn new(provider: SharedModelProvider, http_state: Option<HttpStateContext>) -> Self {
+        Self {
+            provider,
+            http_state,
+        }
     }
 
     /// Resolves the provider and auth required for the current image API request.
     async fn client(&self) -> Result<ImagesClient<ReqwestTransport>, String> {
+        let auth = match self.http_state.as_ref() {
+            Some(http_state) => self.provider.auth_for_surface(http_state.surface()).await,
+            None => self.provider.auth().await,
+        };
         let provider = self
             .provider
             .api_provider()
             .await
             .map_err(|err| err.to_string())?;
-        let auth = self
-            .provider
-            .api_auth()
-            .await
-            .map_err(|err| err.to_string())?;
+        let auth = with_native_integrity_state(
+            self.provider
+                .api_auth()
+                .await
+                .map_err(|err| err.to_string())?,
+            auth.as_ref(),
+            self.http_state.clone(),
+        );
         Ok(ImagesClient::new(
             ReqwestTransport::new(build_reqwest_client()),
             provider,

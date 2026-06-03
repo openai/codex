@@ -35,6 +35,7 @@ use codex_config::types::AppToolApproval;
 use codex_config::types::ApprovalsReviewer;
 use codex_features::Feature;
 use codex_hooks::PermissionRequestDecision;
+use codex_http_state::HttpStateContext;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::MCP_TOOL_CODEX_APPS_META_KEY;
 use codex_mcp::McpPermissionPromptAutoApproveContext;
@@ -682,7 +683,11 @@ async fn refresh_codex_apps_after_connector_auth(sess: &Session, turn_context: &
 
     match mcp_tools_result {
         Ok(mcp_tools) => {
-            let auth = sess.services.auth_manager.auth().await;
+            let auth = sess
+                .services
+                .auth_manager
+                .auth_for_surface(turn_context.http_state_surface)
+                .await;
             connectors::refresh_accessible_connectors_cache_from_mcp_tools(
                 &turn_context.config,
                 auth.as_ref(),
@@ -1434,18 +1439,25 @@ pub(crate) async fn lookup_mcp_tool_metadata(
         .into_iter()
         .find(|tool_info| tool_info.server_name == server && tool_info.tool.name == tool_name)?;
     let connector_description = if server == CODEX_APPS_MCP_SERVER_NAME {
-        let connectors = match connectors::list_cached_accessible_connectors_from_mcp_tools(
-            turn_context.config.as_ref(),
-        )
-        .await
-        {
-            Some(connectors) => Some(connectors),
-            None => {
-                connectors::list_accessible_connectors_from_mcp_tools(turn_context.config.as_ref())
-                    .await
-                    .ok()
-            }
-        };
+        let http_state = HttpStateContext::new(
+            turn_context.config.codex_home.to_path_buf(),
+            turn_context.http_state_surface,
+        );
+        let connectors =
+            match connectors::list_cached_accessible_connectors_from_mcp_tools_with_http_state(
+                turn_context.config.as_ref(),
+                Some(&http_state),
+            )
+            .await
+            {
+                Some(connectors) => Some(connectors),
+                None => connectors::list_accessible_connectors_from_mcp_tools_with_http_state(
+                    turn_context.config.as_ref(),
+                    Some(http_state),
+                )
+                .await
+                .ok(),
+            };
         connectors.and_then(|connectors| {
             let connector_id = tool_info.connector_id.as_deref()?;
             connectors

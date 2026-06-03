@@ -78,6 +78,18 @@ fn stores_state_in_one_file_per_surface() {
 }
 
 #[test]
+fn derives_an_independent_surface_selection() {
+    let codex_home = TempDir::new().expect("tempdir");
+    let cli = HttpStateContext::new(codex_home.path().to_path_buf(), HttpStateSurface::CodexCli);
+    let desktop = cli.for_surface(HttpStateSurface::CodexDesktop);
+
+    desktop.set_surface(HttpStateSurface::CodexVscode);
+
+    assert_eq!(cli.surface(), HttpStateSurface::CodexCli);
+    assert_eq!(desktop.surface(), HttpStateSurface::CodexVscode);
+}
+
+#[test]
 fn compare_and_set_rejects_a_stale_prior_value() {
     let codex_home = TempDir::new().expect("tempdir");
     let store = HttpStateStore::new(codex_home.path().to_path_buf());

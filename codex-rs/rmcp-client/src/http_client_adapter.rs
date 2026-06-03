@@ -27,6 +27,7 @@ use reqwest::header::AUTHORIZATION;
 use reqwest::header::CONTENT_TYPE;
 use reqwest::header::HeaderMap;
 use reqwest::header::HeaderName;
+use reqwest::header::HeaderValue;
 use rmcp::model::ClientJsonRpcMessage;
 use rmcp::model::JsonRpcMessage;
 use rmcp::model::ServerJsonRpcMessage;
@@ -93,7 +94,7 @@ impl StreamableHttpClient for StreamableHttpClientAdapter {
         let has_session_id = session_id.is_some();
         let mut headers = self.default_headers.clone();
         headers.extend(custom_headers);
-        self.add_auth_headers(&mut headers);
+        self.add_auth_headers(&uri, &mut headers);
         insert_header(
             &mut headers,
             ACCEPT,
@@ -152,6 +153,7 @@ impl StreamableHttpClient for StreamableHttpClientAdapter {
                 ));
             }
         };
+        self.observe_response_headers(&uri, &headers, &response.headers);
 
         if response.status == StatusCode::NOT_FOUND.as_u16() && session_id.is_some() {
             return Err(StreamableHttpError::Client(
@@ -216,7 +218,7 @@ impl StreamableHttpClient for StreamableHttpClientAdapter {
     ) -> std::result::Result<(), StreamableHttpError<Self::Error>> {
         let mut headers = self.default_headers.clone();
         headers.extend(custom_headers);
-        self.add_auth_headers(&mut headers);
+        self.add_auth_headers(&uri, &mut headers);
         if let Some(auth_token) = auth_token {
             insert_header(
                 &mut headers,
@@ -246,6 +248,7 @@ impl StreamableHttpClient for StreamableHttpClientAdapter {
             .await
             .map_err(StreamableHttpClientAdapterError::from)
             .map_err(StreamableHttpError::Client)?;
+        self.observe_response_headers(&uri, &headers, &response.headers);
 
         if response.status == StatusCode::METHOD_NOT_ALLOWED.as_u16() {
             return Ok(());
@@ -271,7 +274,7 @@ impl StreamableHttpClient for StreamableHttpClientAdapter {
     > {
         let mut headers = self.default_headers.clone();
         headers.extend(custom_headers);
-        self.add_auth_headers(&mut headers);
+        self.add_auth_headers(&uri, &mut headers);
         insert_header(
             &mut headers,
             ACCEPT,
@@ -315,6 +318,7 @@ impl StreamableHttpClient for StreamableHttpClientAdapter {
             .await
             .map_err(StreamableHttpClientAdapterError::from)
             .map_err(StreamableHttpError::Client)?;
+        self.observe_response_headers(&uri, &headers, &response.headers);
 
         if response.status == StatusCode::METHOD_NOT_ALLOWED.as_u16() {
             return Err(StreamableHttpError::ServerDoesNotSupportSse);
@@ -347,9 +351,24 @@ impl StreamableHttpClient for StreamableHttpClientAdapter {
 }
 
 impl StreamableHttpClientAdapter {
-    fn add_auth_headers(&self, headers: &mut HeaderMap) {
+    fn add_auth_headers(&self, request_url: &str, headers: &mut HeaderMap) {
         if let Some(auth_provider) = &self.auth_provider {
-            headers.extend(auth_provider.to_auth_headers());
+            auth_provider.add_auth_headers_for_url(request_url, headers);
+        }
+    }
+
+    fn observe_response_headers(
+        &self,
+        request_url: &str,
+        request_headers: &HeaderMap,
+        response_headers: &[HttpHeader],
+    ) {
+        if let Some(auth_provider) = &self.auth_provider {
+            auth_provider.observe_response_headers(
+                request_url,
+                request_headers,
+                &header_map(response_headers),
+            );
         }
     }
 }
@@ -451,6 +470,18 @@ fn protocol_headers(headers: &HeaderMap) -> Vec<HttpHeader> {
         .collect()
 }
 
+fn header_map(headers: &[HttpHeader]) -> HeaderMap {
+    headers
+        .iter()
+        .filter_map(|header| {
+            Some((
+                HeaderName::from_bytes(header.name.as_bytes()).ok()?,
+                HeaderValue::from_str(&header.value).ok()?,
+            ))
+        })
+        .collect()
+}
+
 fn response_header(headers: &[HttpHeader], name: impl AsRef<str>) -> Option<String> {
     let name = name.as_ref();
     headers
@@ -489,4 +520,86 @@ fn sse_stream_from_body(
         }
     }))
     .boxed()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Mutex as StdMutex;
+
+    use codex_api::AuthProvider;
+    use codex_exec_server::ReqwestHttpClient;
+    use pretty_assertions::assert_eq;
+
+    use super::*;
+
+    #[derive(Debug, Default)]
+    struct RecordingAuthProvider {
+        observed_updates: StdMutex<Vec<(String, String, String)>>,
+    }
+
+    impl AuthProvider for RecordingAuthProvider {
+        fn add_auth_headers(&self, _headers: &mut HeaderMap) {}
+
+        fn add_auth_headers_for_url(&self, _request_url: &str, headers: &mut HeaderMap) {
+            let _ = headers.insert("x-test-state", HeaderValue::from_static("sent-state"));
+        }
+
+        fn observe_response_headers(
+            &self,
+            request_url: &str,
+            request_headers: &HeaderMap,
+            response_headers: &HeaderMap,
+        ) {
+            let sent_state = request_headers
+                .get("x-test-state")
+                .and_then(|value| value.to_str().ok());
+            let update_state = response_headers
+                .get("x-test-state-update")
+                .and_then(|value| value.to_str().ok());
+            if let (Some(sent_state), Some(update_state)) = (sent_state, update_state) {
+                self.observed_updates
+                    .lock()
+                    .expect("observed updates lock should not be poisoned")
+                    .push((
+                        request_url.to_string(),
+                        sent_state.to_string(),
+                        update_state.to_string(),
+                    ));
+            }
+        }
+    }
+
+    #[test]
+    fn uses_url_scoped_auth_and_observes_forwarded_response_headers() {
+        let auth = Arc::new(RecordingAuthProvider::default());
+        let adapter = StreamableHttpClientAdapter::new(
+            Arc::new(ReqwestHttpClient),
+            HeaderMap::new(),
+            Some(auth.clone()),
+        );
+        let request_url = "https://chatgpt.com/backend-api/wham/apps";
+        let mut request_headers = HeaderMap::new();
+
+        adapter.add_auth_headers(request_url, &mut request_headers);
+        adapter.observe_response_headers(
+            request_url,
+            &request_headers,
+            &[HttpHeader {
+                name: "x-test-state-update".to_string(),
+                value: "next-state".to_string(),
+            }],
+        );
+
+        assert_eq!(
+            *auth
+                .observed_updates
+                .lock()
+                .expect("observed updates lock should not be poisoned"),
+            vec![(
+                request_url.to_string(),
+                "sent-state".to_string(),
+                "next-state".to_string(),
+            )]
+        );
+    }
 }

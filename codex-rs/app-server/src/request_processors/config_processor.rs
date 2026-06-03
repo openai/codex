@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+use super::http_state_context;
+use super::http_state_surface;
 use crate::config_manager::ConfigManager;
 use crate::config_manager_service::ConfigManagerError;
 use crate::error_code::internal_error;
@@ -150,6 +152,7 @@ impl ConfigRequestProcessor {
         &self,
         request_id: ConnectionRequestId,
         params: ExperimentalFeatureEnablementSetParams,
+        app_server_client_name: Option<&str>,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
         let should_refresh_apps_list = params.enablement.get("apps").copied() == Some(true);
         let response = self
@@ -162,8 +165,10 @@ impl ConfigRequestProcessor {
             )
             .await;
         if should_refresh_apps_list {
-            self.refresh_apps_list_after_experimental_feature_enablement_set()
-                .await;
+            self.refresh_apps_list_after_experimental_feature_enablement_set(
+                app_server_client_name,
+            )
+            .await;
         }
         Ok(None)
     }
@@ -195,7 +200,10 @@ impl ConfigRequestProcessor {
         Ok(response)
     }
 
-    async fn refresh_apps_list_after_experimental_feature_enablement_set(&self) {
+    async fn refresh_apps_list_after_experimental_feature_enablement_set(
+        &self,
+        app_server_client_name: Option<&str>,
+    ) {
         let config = match self.load_latest_config(/*fallback_cwd*/ None).await {
             Ok(config) => config,
             Err(error) => {
@@ -206,7 +214,11 @@ impl ConfigRequestProcessor {
                 return;
             }
         };
-        let auth = self.auth_manager.auth().await;
+        let http_state = http_state_context(&config, app_server_client_name);
+        let auth = self
+            .auth_manager
+            .auth_for_surface(http_state_surface(app_server_client_name))
+            .await;
         if !config.features.apps_enabled_for_auth(
             auth.as_ref()
                 .is_some_and(codex_login::CodexAuth::uses_codex_backend),
@@ -218,11 +230,16 @@ impl ConfigRequestProcessor {
         let environment_manager = self.thread_manager.environment_manager();
         tokio::spawn(async move {
             let (all_connectors_result, accessible_connectors_result) = tokio::join!(
-                connectors::list_all_connectors_with_options(&config, /*force_refetch*/ true),
-                connectors::list_accessible_connectors_from_mcp_tools_with_environment_manager(
+                connectors::list_all_connectors_with_options_and_http_state(
+                    &config,
+                    /*force_refetch*/ true,
+                    Some(http_state.clone()),
+                ),
+                connectors::list_accessible_connectors_from_mcp_tools_with_environment_manager_and_http_state(
                     &config,
                     /*force_refetch*/ true,
                     Arc::clone(&environment_manager),
+                    Some(http_state),
                 ),
             );
             let all_connectors = match all_connectors_result {

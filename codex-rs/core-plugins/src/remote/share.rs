@@ -4,7 +4,6 @@ use crate::plugin_bundle_archive::pack_plugin_bundle_tar_gz;
 use codex_login::CodexAuth;
 use codex_login::default_client::build_reqwest_client;
 use codex_utils_absolute_path::AbsolutePathBuf;
-use reqwest::RequestBuilder;
 use reqwest::StatusCode;
 use serde::Deserialize;
 use serde::Serialize;
@@ -280,7 +279,7 @@ pub async fn delete_remote_plugin_share(
     let base_url = config.chatgpt_base_url.trim_end_matches('/');
     let url = format!("{base_url}/public/plugins/workspace/{remote_plugin_id}");
     let client = build_reqwest_client();
-    let request = authenticated_request(client.delete(&url), auth)?;
+    let request = authenticated_request(config, client.delete(&url), auth, &url);
     send_and_expect_status(request, &url, &[StatusCode::NO_CONTENT]).await?;
     if let Err(err) = local_paths::remove_plugin_share_local_path(codex_home, remote_plugin_id) {
         warn!(
@@ -313,7 +312,7 @@ pub async fn update_remote_plugin_share_targets(
     let base_url = config.chatgpt_base_url.trim_end_matches('/');
     let url = format!("{base_url}/ps/plugins/{remote_plugin_id}/shares");
     let client = build_reqwest_client();
-    let request = authenticated_request(client.put(&url), auth)?.json(
+    let request = authenticated_request(config, client.put(&url), auth, &url).json(
         &RemotePluginShareUpdateTargetsRequest {
             discoverability,
             targets,
@@ -379,7 +378,7 @@ async fn get_created_workspace_plugins_page(
     let base_url = config.chatgpt_base_url.trim_end_matches('/');
     let url = format!("{base_url}/ps/plugins/workspace/created");
     let client = build_reqwest_client();
-    let mut request = authenticated_request(client.get(&url), auth)?;
+    let mut request = authenticated_request(config, client.get(&url), auth, &url);
     request = request.query(&[("limit", REMOTE_PLUGIN_LIST_PAGE_LIMIT)]);
     if let Some(page_token) = page_token {
         request = request.query(&[("pageToken", page_token)]);
@@ -397,7 +396,7 @@ async fn create_workspace_plugin_upload(
     let base_url = config.chatgpt_base_url.trim_end_matches('/');
     let url = format!("{base_url}/public/plugins/workspace/upload-url");
     let client = build_reqwest_client();
-    let request = authenticated_request(client.post(&url), auth)?.json(
+    let request = authenticated_request(config, client.post(&url), auth, &url).json(
         &RemoteWorkspacePluginUploadUrlRequest {
             filename,
             mime_type: "application/gzip",
@@ -451,7 +450,7 @@ async fn finalize_workspace_plugin_upload(
         format!("{base_url}/public/plugins/workspace")
     };
     let client = build_reqwest_client();
-    let request = authenticated_request(client.post(&url), auth)?.json(&body);
+    let request = authenticated_request(config, client.post(&url), auth, &url).json(&body);
     send_and_decode(request, &url).await
 }
 
@@ -489,17 +488,11 @@ fn archive_plugin_for_upload_with_limit(
 }
 
 async fn send_and_expect_status(
-    request: RequestBuilder,
+    request: AuthenticatedRequest,
     url_for_error: &str,
     expected_statuses: &[StatusCode],
 ) -> Result<(), RemotePluginCatalogError> {
-    let response = request
-        .send()
-        .await
-        .map_err(|source| RemotePluginCatalogError::Request {
-            url: url_for_error.to_string(),
-            source,
-        })?;
+    let response = request.send(url_for_error).await?;
     let status = response.status();
     let body = response.text().await.unwrap_or_default();
     if !expected_statuses.contains(&status) {

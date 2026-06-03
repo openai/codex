@@ -33,8 +33,15 @@ pub(crate) async fn rewrite_mcp_tool_arguments_for_openai_files(
     let Some(arguments) = arguments_value.as_object() else {
         return Ok(Some(arguments_value));
     };
-    let auth = sess.services.auth_manager.auth().await;
-    let http_state = sess.services.model_client.http_state_context();
+    let auth = sess
+        .services
+        .auth_manager
+        .auth_for_surface(turn_context.http_state_surface)
+        .await;
+    let http_state = sess
+        .services
+        .model_client
+        .http_state_context_for_surface(turn_context.http_state_surface);
     let mut rewritten_arguments = arguments.clone();
 
     for field_name in openai_file_input_params {

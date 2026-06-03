@@ -1126,7 +1126,11 @@ pub(crate) async fn built_tools(
     } else {
         None
     };
-    let auth = sess.services.auth_manager.auth().await;
+    let auth = sess
+        .services
+        .auth_manager
+        .auth_for_surface(turn_context.http_state_surface)
+        .await;
     let loaded_plugin_app_connector_ids = loaded_plugins
         .effective_apps()
         .into_iter()

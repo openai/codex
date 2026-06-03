@@ -27,6 +27,8 @@ use codex_config::config_toml::RealtimeWsVersion;
 use codex_login::CodexAuth;
 use codex_login::default_client::default_headers;
 use codex_login::read_openai_api_key_from_env;
+use codex_model_provider::unauthenticated_auth_provider;
+use codex_model_provider::with_native_integrity_state;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
@@ -227,6 +229,7 @@ struct ConversationState {
 
 struct RealtimeStart {
     api_provider: ApiProvider,
+    websocket_auth: SharedAuthProvider,
     extra_headers: Option<HeaderMap>,
     session_config: RealtimeSessionConfig,
     model_client: ModelClient,
@@ -279,6 +282,7 @@ impl RealtimeConversationManager {
     async fn start_inner(&self, start: RealtimeStart) -> CodexResult<RealtimeStartOutput> {
         let RealtimeStart {
             api_provider,
+            websocket_auth,
             extra_headers,
             session_config,
             model_client,
@@ -307,7 +311,7 @@ impl RealtimeConversationManager {
             audio_rx,
         };
 
-        let client = RealtimeWebsocketClient::new(api_provider);
+        let client = RealtimeWebsocketClient::new(api_provider).with_auth(websocket_auth);
         let (task, sdp) = if let Some(sdp) = sdp {
             let call = model_client
                 .create_realtime_call_with_headers(
@@ -601,6 +605,7 @@ pub(crate) async fn handle_start(
 
 struct PreparedRealtimeConversationStart {
     api_provider: ApiProvider,
+    websocket_auth: SharedAuthProvider,
     extra_headers: Option<HeaderMap>,
     requested_realtime_session_id: Option<String>,
     version: RealtimeWsVersion,
@@ -618,7 +623,15 @@ async fn prepare_realtime_start(
         .model_client
         .auth_manager()
         .unwrap_or_else(|| Arc::clone(&sess.services.auth_manager));
-    let auth = auth_manager.auth().await;
+    let auth = match sess.services.model_client.http_state_surface() {
+        Some(http_state_surface) => auth_manager.auth_for_surface(http_state_surface).await,
+        None => auth_manager.auth().await,
+    };
+    let websocket_auth = with_native_integrity_state(
+        unauthenticated_auth_provider(),
+        auth.as_ref(),
+        sess.services.model_client.http_state_context(),
+    );
     let config = sess.get_config().await;
     let transport = params
         .transport
@@ -656,6 +669,7 @@ async fn prepare_realtime_start(
     };
     Ok(PreparedRealtimeConversationStart {
         api_provider,
+        websocket_auth,
         extra_headers,
         requested_realtime_session_id,
         version,
@@ -777,6 +791,7 @@ async fn handle_start_inner(
 ) -> CodexResult<()> {
     let PreparedRealtimeConversationStart {
         api_provider,
+        websocket_auth,
         extra_headers,
         requested_realtime_session_id,
         version,
@@ -790,6 +805,7 @@ async fn handle_start_inner(
     };
     let start = RealtimeStart {
         api_provider,
+        websocket_auth,
         extra_headers,
         session_config,
         model_client: sess.services.model_client.clone(),

@@ -1,4 +1,5 @@
 use codex_core::config::Config;
+use codex_http_state::HttpStateContext;
 use codex_login::AuthManager;
 use codex_login::default_client::create_client;
 
@@ -9,26 +10,34 @@ use std::time::Duration;
 const OAI_PRODUCT_SKU_HEADER: &str = "OAI-Product-Sku";
 const CODEX_PRODUCT_SKU: &str = "codex";
 
-/// Make a GET request to the ChatGPT backend API.
-pub(crate) async fn chatgpt_get_request<T: DeserializeOwned>(
+pub(crate) async fn chatgpt_get_request_with_http_state<T: DeserializeOwned>(
     config: &Config,
     path: String,
+    http_state: HttpStateContext,
 ) -> anyhow::Result<T> {
-    chatgpt_get_request_with_timeout(config, path, /*timeout*/ None).await
+    chatgpt_get_request_with_timeout_and_http_state(
+        config,
+        path,
+        /*timeout*/ None,
+        Some(http_state),
+    )
+    .await
 }
 
-pub(crate) async fn chatgpt_get_request_with_timeout<T: DeserializeOwned>(
+pub(crate) async fn chatgpt_get_request_with_timeout_and_http_state<T: DeserializeOwned>(
     config: &Config,
     path: String,
     timeout: Option<Duration>,
+    http_state: Option<HttpStateContext>,
 ) -> anyhow::Result<T> {
     let chatgpt_base_url = &config.chatgpt_base_url;
     let auth_manager =
         AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ false).await;
-    let auth = auth_manager
-        .auth()
-        .await
-        .ok_or_else(|| anyhow::anyhow!("ChatGPT auth not available"))?;
+    let auth = match http_state.as_ref() {
+        Some(http_state) => auth_manager.auth_for_surface(http_state.surface()).await,
+        None => auth_manager.auth().await,
+    }
+    .ok_or_else(|| anyhow::anyhow!("ChatGPT auth not available"))?;
     anyhow::ensure!(
         auth.uses_codex_backend(),
         "ChatGPT backend requests require Codex backend auth"
@@ -46,9 +55,16 @@ pub(crate) async fn chatgpt_get_request_with_timeout<T: DeserializeOwned>(
         path.trim_start_matches('/')
     );
 
+    let auth_provider = codex_model_provider::with_native_integrity_state(
+        codex_model_provider::auth_provider_from_auth(&auth),
+        Some(&auth),
+        http_state,
+    );
+    let mut request_headers = Default::default();
+    auth_provider.add_auth_headers_for_url(&url, &mut request_headers);
     let mut request = client
         .get(&url)
-        .headers(codex_model_provider::auth_provider_from_auth(&auth).to_auth_headers())
+        .headers(request_headers.clone())
         .header(OAI_PRODUCT_SKU_HEADER, CODEX_PRODUCT_SKU)
         .header("Content-Type", "application/json");
 
@@ -57,6 +73,7 @@ pub(crate) async fn chatgpt_get_request_with_timeout<T: DeserializeOwned>(
     }
 
     let response = request.send().await.context("Failed to send request")?;
+    auth_provider.observe_response_headers(&url, &request_headers, response.headers());
 
     if response.status().is_success() {
         let result: T = response

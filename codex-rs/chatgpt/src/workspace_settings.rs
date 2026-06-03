@@ -5,10 +5,11 @@ use std::time::Instant;
 
 use anyhow::Context;
 use codex_core::config::Config;
+use codex_http_state::HttpStateContext;
 use codex_login::CodexAuth;
 use serde::Deserialize;
 
-use crate::chatgpt_client::chatgpt_get_request_with_timeout;
+use crate::chatgpt_client::chatgpt_get_request_with_timeout_and_http_state;
 
 const WORKSPACE_SETTINGS_TIMEOUT: Duration = Duration::from_secs(10);
 const WORKSPACE_SETTINGS_CACHE_TTL: Duration = Duration::from_secs(15 * 60);
@@ -86,6 +87,18 @@ pub async fn codex_plugins_enabled_for_workspace(
     auth: Option<&CodexAuth>,
     cache: Option<&WorkspaceSettingsCache>,
 ) -> anyhow::Result<bool> {
+    codex_plugins_enabled_for_workspace_with_http_state(
+        config, auth, cache, /*http_state*/ None,
+    )
+    .await
+}
+
+pub async fn codex_plugins_enabled_for_workspace_with_http_state(
+    config: &Config,
+    auth: Option<&CodexAuth>,
+    cache: Option<&WorkspaceSettingsCache>,
+    http_state: Option<HttpStateContext>,
+) -> anyhow::Result<bool> {
     let Some(auth) = auth else {
         return Ok(true);
     };
@@ -115,10 +128,11 @@ pub async fn codex_plugins_enabled_for_workspace(
     }
 
     let encoded_account_id = encode_path_segment(account_id);
-    let settings: WorkspaceSettingsResponse = chatgpt_get_request_with_timeout(
+    let settings: WorkspaceSettingsResponse = chatgpt_get_request_with_timeout_and_http_state(
         config,
         format!("/accounts/{encoded_account_id}/settings"),
         Some(WORKSPACE_SETTINGS_TIMEOUT),
+        http_state,
     )
     .await?;
 

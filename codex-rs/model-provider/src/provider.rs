@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use codex_api::Provider;
 use codex_api::SharedAuthProvider;
+use codex_http_state::HttpStateSurface;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderInfo;
@@ -111,6 +112,14 @@ pub trait ModelProvider: fmt::Debug + Send + Sync {
 
     /// Returns the current provider-scoped auth value, if one is configured.
     async fn auth(&self) -> Option<CodexAuth>;
+
+    /// Returns the current provider-scoped auth value and attributes any refresh to `surface`.
+    async fn auth_for_surface(&self, surface: HttpStateSurface) -> Option<CodexAuth> {
+        match self.auth_manager() {
+            Some(auth_manager) => auth_manager.auth_for_surface(surface).await,
+            None => self.auth().await,
+        }
+    }
 
     /// Returns the current app-visible account state for this provider.
     fn account_state(&self) -> ProviderAccountResult;

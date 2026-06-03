@@ -1597,6 +1597,16 @@ async fn spawn_thread_subagent_inherits_parent_http_state_surface() {
         )
         .await
         .expect("parent client info should update");
+    assert_eq!(
+        parent_thread
+            .codex
+            .session
+            .services
+            .thread_extension_data
+            .get::<HttpStateSurface>()
+            .as_deref(),
+        Some(&HttpStateSurface::CodexDesktop)
+    );
 
     let child_thread_id = harness
         .control
@@ -1627,6 +1637,16 @@ async fn spawn_thread_subagent_inherits_parent_http_state_surface() {
             .model_client
             .http_state_surface(),
         Some(HttpStateSurface::CodexDesktop)
+    );
+    assert_eq!(
+        child_thread
+            .codex
+            .session
+            .services
+            .thread_extension_data
+            .get::<HttpStateSurface>()
+            .as_deref(),
+        Some(&HttpStateSurface::CodexDesktop)
     );
 }
 

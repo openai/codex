@@ -1269,6 +1269,7 @@ async fn install_host_owned_codex_apps_manager(session: &Session, turn_context: 
             turn_context.cwd.to_path_buf()
         }),
         turn_context.config.codex_home.to_path_buf(),
+        /*http_state*/ None,
         codex_mcp::codex_apps_tools_cache_key(auth.as_ref()),
         /*host_owned_codex_apps_enabled*/ true,
         turn_context.config.prefix_mcp_tool_names(),

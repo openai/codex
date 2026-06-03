@@ -1,7 +1,9 @@
 use codex_core::config::Config;
+use codex_http_state::HttpStateContext;
+use codex_http_state::HttpStateSurface;
 use serde::Deserialize;
 
-use crate::chatgpt_client::chatgpt_get_request;
+use crate::chatgpt_client::chatgpt_get_request_with_http_state;
 
 #[derive(Debug, Deserialize)]
 pub struct GetTaskResponse {
@@ -36,5 +38,10 @@ pub struct OutputDiff {
 
 pub(crate) async fn get_task(config: &Config, task_id: String) -> anyhow::Result<GetTaskResponse> {
     let path = format!("/wham/tasks/{task_id}");
-    chatgpt_get_request(config, path).await
+    chatgpt_get_request_with_http_state(
+        config,
+        path,
+        HttpStateContext::new(config.codex_home.to_path_buf(), HttpStateSurface::CodexCli),
+    )
+    .await
 }

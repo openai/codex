@@ -973,6 +973,7 @@ impl Session {
                 codex_extension_api::ExtensionData::new(session_id.to_string());
             let thread_extension_data =
                 codex_extension_api::ExtensionData::new(thread_id.to_string());
+            thread_extension_data.insert(http_state_surface);
             for contributor in extensions.thread_lifecycle_contributors() {
                 contributor.on_thread_start(codex_extension_api::ThreadStartInput {
                     config: config.as_ref(),
@@ -1184,6 +1185,7 @@ impl Session {
                 session_configuration.permission_profile(),
                 mcp_runtime_context,
                 config.codex_home.to_path_buf(),
+                sess.services.model_client.http_state_context(),
                 codex_apps_tools_cache_key(auth),
                 host_owned_codex_apps_enabled,
                 config.prefix_mcp_tool_names(),

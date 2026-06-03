@@ -183,6 +183,7 @@ impl AccountRequestProcessor {
         config_manager: &ConfigManager,
         thread_manager: &Arc<ThreadManager>,
         auth: Option<CodexAuth>,
+        http_state_surface: Option<HttpStateSurface>,
     ) {
         match config_manager
             .load_latest_config(/*fallback_cwd*/ None)
@@ -202,6 +203,9 @@ impl AccountRequestProcessor {
                                 refresh_config_manager.clone(),
                             );
                         })),
+                        http_state_surface.map(|surface| {
+                            HttpStateContext::new(config.codex_home.to_path_buf(), surface)
+                        }),
                     );
             }
             Err(err) => {
@@ -257,6 +261,7 @@ impl AccountRequestProcessor {
                     access_token,
                     chatgpt_account_id,
                     chatgpt_plan_type,
+                    http_state_surface,
                 )
                 .await;
             }
@@ -317,8 +322,10 @@ impl AccountRequestProcessor {
         self.outgoing.send_result(request_id, result).await;
 
         if logged_in {
-            self.send_login_success_notifications(/*login_id*/ None)
-                .await;
+            self.send_login_success_notifications(
+                /*login_id*/ None, /*http_state_surface*/ None,
+            )
+            .await;
         }
     }
 
@@ -411,11 +418,7 @@ impl AccountRequestProcessor {
             });
         }
 
-        let outgoing_clone = self.outgoing.clone();
-        let config_manager = self.config_manager.clone();
-        let thread_manager = Arc::clone(&self.thread_manager);
-        let chatgpt_base_url = self.config.chatgpt_base_url.clone();
-        let active_login = self.active_login.clone();
+        let processor = self.clone();
         let auth_url = server.auth_url.clone();
         tokio::spawn(async move {
             let (success, error_msg) = match tokio::time::timeout(
@@ -432,19 +435,17 @@ impl AccountRequestProcessor {
                 }
             };
 
-            Self::send_chatgpt_login_completion_notifications(
-                &outgoing_clone,
-                config_manager,
-                thread_manager,
-                chatgpt_base_url,
-                login_id,
-                success,
-                error_msg,
-            )
-            .await;
+            processor
+                .send_chatgpt_login_completion_notifications(
+                    login_id,
+                    success,
+                    error_msg,
+                    http_state_surface,
+                )
+                .await;
 
             // Clear the active login if it matches this attempt. It may have been replaced or cancelled.
-            let mut guard = active_login.lock().await;
+            let mut guard = processor.active_login.lock().await;
             if guard.as_ref().map(ActiveLogin::login_id) == Some(login_id) {
                 *guard = None;
             }
@@ -494,11 +495,7 @@ impl AccountRequestProcessor {
         let verification_url = device_code.verification_url.clone();
         let user_code = device_code.user_code.clone();
 
-        let outgoing_clone = self.outgoing.clone();
-        let config_manager = self.config_manager.clone();
-        let thread_manager = Arc::clone(&self.thread_manager);
-        let chatgpt_base_url = self.config.chatgpt_base_url.clone();
-        let active_login = self.active_login.clone();
+        let processor = self.clone();
         tokio::spawn(async move {
             let (success, error_msg) = tokio::select! {
                 _ = cancel.cancelled() => {
@@ -512,18 +509,16 @@ impl AccountRequestProcessor {
                 }
             };
 
-            Self::send_chatgpt_login_completion_notifications(
-                &outgoing_clone,
-                config_manager,
-                thread_manager,
-                chatgpt_base_url,
-                login_id,
-                success,
-                error_msg,
-            )
-            .await;
+            processor
+                .send_chatgpt_login_completion_notifications(
+                    login_id,
+                    success,
+                    error_msg,
+                    http_state_surface,
+                )
+                .await;
 
-            let mut guard = active_login.lock().await;
+            let mut guard = processor.active_login.lock().await;
             if guard.as_ref().map(ActiveLogin::login_id) == Some(login_id) {
                 *guard = None;
             }
@@ -571,6 +566,7 @@ impl AccountRequestProcessor {
         access_token: String,
         chatgpt_account_id: String,
         chatgpt_plan_type: Option<String>,
+        http_state_surface: HttpStateSurface,
     ) {
         let result = self
             .login_chatgpt_auth_tokens_response(access_token, chatgpt_account_id, chatgpt_plan_type)
@@ -579,7 +575,7 @@ impl AccountRequestProcessor {
         self.outgoing.send_result(request_id, result).await;
 
         if logged_in {
-            self.send_login_success_notifications(/*login_id*/ None)
+            self.send_login_success_notifications(/*login_id*/ None, Some(http_state_surface))
                 .await;
         }
     }
@@ -634,11 +630,16 @@ impl AccountRequestProcessor {
         Ok(LoginAccountResponse::ChatgptAuthTokens {})
     }
 
-    async fn send_login_success_notifications(&self, login_id: Option<Uuid>) {
+    async fn send_login_success_notifications(
+        &self,
+        login_id: Option<Uuid>,
+        http_state_surface: Option<HttpStateSurface>,
+    ) {
         Self::maybe_refresh_remote_installed_plugins_cache_for_current_config(
             &self.config_manager,
             &self.thread_manager,
             self.auth_manager.auth_cached(),
+            http_state_surface,
         )
         .await;
 
@@ -661,44 +662,45 @@ impl AccountRequestProcessor {
     }
 
     async fn send_chatgpt_login_completion_notifications(
-        outgoing: &OutgoingMessageSender,
-        config_manager: ConfigManager,
-        thread_manager: Arc<ThreadManager>,
-        chatgpt_base_url: String,
+        &self,
         login_id: Uuid,
         success: bool,
         error_msg: Option<String>,
+        http_state_surface: HttpStateSurface,
     ) {
         let payload_v2 = AccountLoginCompletedNotification {
             login_id: Some(login_id.to_string()),
             success,
             error: error_msg,
         };
-        outgoing
+        self.outgoing
             .send_server_notification(ServerNotification::AccountLoginCompleted(payload_v2))
             .await;
 
         if success {
-            let auth_manager = thread_manager.auth_manager();
+            let auth_manager = self.thread_manager.auth_manager();
             auth_manager.reload().await;
-            config_manager
-                .replace_cloud_config_bundle_loader(auth_manager.clone(), chatgpt_base_url);
-            config_manager
+            self.config_manager.replace_cloud_config_bundle_loader(
+                auth_manager.clone(),
+                self.config.chatgpt_base_url.clone(),
+            );
+            self.config_manager
                 .sync_default_client_residency_requirement()
                 .await;
 
             let auth = auth_manager.auth_cached();
             Self::maybe_refresh_remote_installed_plugins_cache_for_current_config(
-                &config_manager,
-                &thread_manager,
+                &self.config_manager,
+                &self.thread_manager,
                 auth.clone(),
+                Some(http_state_surface),
             )
             .await;
             let payload_v2 = AccountUpdatedNotification {
                 auth_mode: auth.as_ref().map(CodexAuth::api_auth_mode),
                 plan_type: auth.as_ref().and_then(CodexAuth::account_plan_type),
             };
-            outgoing
+            self.outgoing
                 .send_server_notification(ServerNotification::AccountUpdated(payload_v2))
                 .await;
         }
@@ -724,6 +726,7 @@ impl AccountRequestProcessor {
             &self.config_manager,
             &self.thread_manager,
             self.auth_manager.auth_cached(),
+            /*http_state_surface*/ None,
         )
         .await;
 

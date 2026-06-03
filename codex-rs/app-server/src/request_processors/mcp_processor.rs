@@ -1,4 +1,5 @@
 use super::*;
+use codex_http_state::HttpStateContext;
 
 const MCP_TOOL_THREAD_ID_META_KEY: &str = "threadId";
 
@@ -47,8 +48,9 @@ impl McpRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: ListMcpServerStatusParams,
+        app_server_client_name: Option<&str>,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.list_mcp_server_status(request_id, params)
+        self.list_mcp_server_status(request_id, params, app_server_client_name)
             .await
             .map(|()| None)
     }
@@ -57,8 +59,9 @@ impl McpRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: McpResourceReadParams,
+        app_server_client_name: Option<&str>,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.read_mcp_resource(request_id, params)
+        self.read_mcp_resource(request_id, params, app_server_client_name)
             .await
             .map(|()| None)
     }
@@ -195,6 +198,7 @@ impl McpRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: ListMcpServerStatusParams,
+        app_server_client_name: Option<&str>,
     ) -> Result<(), JSONRPCErrorError> {
         let request = request_id.clone();
 
@@ -213,7 +217,11 @@ impl McpRequestProcessor {
         let mcp_config = config
             .to_mcp_config(self.thread_manager.plugins_manager().as_ref())
             .await;
-        let auth = self.auth_manager.auth().await;
+        let http_state = http_state_context(&config, app_server_client_name);
+        let auth = self
+            .auth_manager
+            .auth_for_surface(http_state_surface(app_server_client_name))
+            .await;
         let environment_manager = self.thread_manager.environment_manager();
         // This status path has no turn-selected environment. Use config cwd
         // as the local stdio fallback; named environment stdio MCPs must
@@ -229,6 +237,7 @@ impl McpRequestProcessor {
                 mcp_config,
                 auth,
                 runtime_context,
+                http_state,
             )
             .await;
         });
@@ -242,6 +251,7 @@ impl McpRequestProcessor {
         mcp_config: codex_mcp::McpConfig,
         auth: Option<CodexAuth>,
         runtime_context: McpRuntimeContext,
+        http_state: HttpStateContext,
     ) {
         let result = Self::list_mcp_server_status_response(
             request_id.request_id.to_string(),
@@ -249,6 +259,7 @@ impl McpRequestProcessor {
             mcp_config,
             auth,
             runtime_context,
+            http_state,
         )
         .await;
         outgoing.send_result(request_id, result).await;
@@ -260,6 +271,7 @@ impl McpRequestProcessor {
         mcp_config: codex_mcp::McpConfig,
         auth: Option<CodexAuth>,
         runtime_context: McpRuntimeContext,
+        http_state: HttpStateContext,
     ) -> Result<ListMcpServerStatusResponse, JSONRPCErrorError> {
         let detail = match params.detail.unwrap_or(McpServerStatusDetail::Full) {
             McpServerStatusDetail::Full => McpSnapshotDetail::Full,
@@ -271,6 +283,7 @@ impl McpRequestProcessor {
             auth.as_ref(),
             request_id,
             runtime_context,
+            Some(http_state),
             detail,
         )
         .await;
@@ -341,6 +354,7 @@ impl McpRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: McpResourceReadParams,
+        app_server_client_name: Option<&str>,
     ) -> Result<(), JSONRPCErrorError> {
         let outgoing = Arc::clone(&self.outgoing);
         let McpResourceReadParams {
@@ -364,7 +378,11 @@ impl McpRequestProcessor {
         let mcp_config = config
             .to_mcp_config(self.thread_manager.plugins_manager().as_ref())
             .await;
-        let auth = self.auth_manager.auth().await;
+        let http_state = http_state_context(&config, app_server_client_name);
+        let auth = self
+            .auth_manager
+            .auth_for_surface(http_state_surface(app_server_client_name))
+            .await;
         let environment_manager = self.thread_manager.environment_manager();
         // This threadless resource-read path has no turn cwd or turn-selected
         // environment. Use config cwd only as the local stdio fallback; named
@@ -378,6 +396,7 @@ impl McpRequestProcessor {
                 &mcp_config,
                 auth.as_ref(),
                 runtime_context,
+                Some(http_state),
                 &server,
                 &uri,
             )

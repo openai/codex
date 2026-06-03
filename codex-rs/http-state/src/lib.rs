@@ -247,6 +247,13 @@ impl HttpStateContext {
         true
     }
 
+    pub fn for_surface(&self, surface: HttpStateSurface) -> Self {
+        Self {
+            store: self.store.clone(),
+            surface: Arc::new(RwLock::new(surface)),
+        }
+    }
+
     pub fn get_for_surface(&self, surface: HttpStateSurface) -> io::Result<Option<String>> {
         self.store.get(surface)
     }

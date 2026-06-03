@@ -309,7 +309,11 @@ impl Session {
         store_mode: OAuthCredentialsStoreMode,
         elicitation_reviewer: Option<ElicitationReviewerHandle>,
     ) {
-        let auth = self.services.auth_manager.auth().await;
+        let auth = self
+            .services
+            .auth_manager
+            .auth_for_surface(turn_context.http_state_surface)
+            .await;
         let config = self.get_config().await;
         let mcp_config = config
             .to_mcp_config(self.services.plugins_manager.as_ref())
@@ -351,6 +355,9 @@ impl Session {
             turn_context.permission_profile(),
             mcp_runtime_context,
             config.codex_home.to_path_buf(),
+            self.services
+                .model_client
+                .http_state_context_for_surface(turn_context.http_state_surface),
             codex_apps_tools_cache_key(auth.as_ref()),
             host_owned_codex_apps_enabled,
             mcp_config.prefix_mcp_tool_names,

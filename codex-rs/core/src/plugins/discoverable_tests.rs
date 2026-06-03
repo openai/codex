@@ -320,11 +320,11 @@ remote_plugin = true
     let mut config = load_plugins_config(codex_home.path()).await;
     config.chatgpt_base_url = format!("{}/backend-api", server.uri());
     let plugins_manager = PluginsManager::new(config.codex_home.to_path_buf());
+    let remote_plugin_service_config =
+        RemotePluginServiceConfig::new(config.chatgpt_base_url.clone());
     fetch_and_cache_global_remote_plugin_catalog(
         codex_home.path(),
-        &RemotePluginServiceConfig {
-            chatgpt_base_url: config.chatgpt_base_url.clone(),
-        },
+        &remote_plugin_service_config,
         Some(&auth),
     )
     .await

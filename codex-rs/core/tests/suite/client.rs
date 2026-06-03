@@ -9,8 +9,11 @@ use codex_core::resolve_installation_id;
 use codex_core::thread_store_from_config;
 use codex_extension_api::empty_extension_registry;
 use codex_features::Feature;
+use codex_http_state::HttpStateStore;
+use codex_http_state::HttpStateSurface;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
+use codex_login::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
 use codex_login::default_client::originator;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::WireApi;
@@ -58,6 +61,7 @@ use core_test_support::responses::ev_completed_with_tokens;
 use core_test_support::responses::ev_message_item_added;
 use core_test_support::responses::ev_output_text_delta;
 use core_test_support::responses::ev_response_created;
+use core_test_support::responses::mount_response_sequence;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_once_match;
 use core_test_support::responses::mount_sse_sequence;
@@ -71,6 +75,7 @@ use dunce::canonicalize as normalize_path;
 use futures::StreamExt;
 use pretty_assertions::assert_eq;
 use serde_json::json;
+use std::ffi::OsString;
 use std::io::Write;
 use std::num::NonZeroU64;
 use std::sync::Arc;
@@ -941,6 +946,130 @@ async fn send_provider_auth_request(server: &MockServer, auth: ModelProviderAuth
             break;
         }
     }
+}
+
+struct EnvGuard {
+    key: &'static str,
+    original: Option<OsString>,
+}
+
+impl EnvGuard {
+    fn set(key: &'static str, value: String) -> Self {
+        let original = std::env::var_os(key);
+        // SAFETY: the test is serialized with the other auth-refresh tests.
+        unsafe {
+            std::env::set_var(key, &value);
+        }
+        Self { key, original }
+    }
+}
+
+impl Drop for EnvGuard {
+    fn drop(&mut self) {
+        // SAFETY: the guard restores the original environment value before other tests run.
+        unsafe {
+            match &self.original {
+                Some(value) => std::env::set_var(self.key, value),
+                None => std::env::remove_var(self.key),
+            }
+        }
+    }
+}
+
+#[serial_test::serial(auth_refresh)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn response_401_refresh_preserves_native_http_state_surface() {
+    skip_if_no_network!();
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "access_token": "new-access-token",
+            "refresh_token": "new-refresh-token",
+            "state": "new-state",
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let responses_mock = mount_response_sequence(
+        &server,
+        vec![
+            ResponseTemplate::new(401).set_body_string("unauthorized"),
+            ResponseTemplate::new(401).set_body_string("unauthorized"),
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_raw(
+                    sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
+                    "text/event-stream",
+                ),
+        ],
+    )
+    .await;
+
+    let home = Arc::new(TempDir::new().unwrap());
+    write_auth_json(
+        home.as_ref(),
+        /*openai_api_key*/ None,
+        "pro",
+        "old-access-token",
+        Some("acc-123"),
+    );
+    let store = HttpStateStore::new(home.path().to_path_buf());
+    store
+        .set(HttpStateSurface::CodexExec, "old-state".to_string())
+        .unwrap();
+    let _refresh_endpoint = EnvGuard::set(
+        REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR,
+        format!("{}/oauth/token", server.uri()),
+    );
+    let auth_manager = AuthManager::shared(
+        home.path().to_path_buf(),
+        /*enable_codex_api_key_env*/ false,
+        AuthCredentialsStoreMode::File,
+        /*chatgpt_base_url*/ None,
+    )
+    .await;
+    let mut builder = test_codex()
+        .with_home(home)
+        .with_auth_manager(auth_manager)
+        .with_config(|config| {
+            config.model_catalog =
+                Some(bundled_models_response().expect("bundled models should parse"));
+        });
+    let test = builder.build(&server).await.unwrap();
+
+    test.submit_turn("hello").await.unwrap();
+
+    assert_eq!(
+        store.get(HttpStateSurface::CodexExec).unwrap(),
+        Some("new-state".to_string())
+    );
+    let requests = responses_mock.requests();
+    assert_eq!(requests.len(), 3);
+    assert_eq!(
+        requests[0].header("authorization").as_deref(),
+        Some("Bearer old-access-token")
+    );
+    assert_eq!(
+        requests[1].header("authorization").as_deref(),
+        Some("Bearer old-access-token")
+    );
+    assert_eq!(
+        requests[2].header("authorization").as_deref(),
+        Some("Bearer new-access-token")
+    );
+    let refresh_request = server
+        .received_requests()
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .find(|request| request.url.path() == "/oauth/token")
+        .expect("refresh request");
+    let refresh_body: serde_json::Value =
+        serde_json::from_slice(&refresh_request.body).expect("refresh JSON body");
+    assert_eq!(refresh_body["surface"], "codex_exec");
+    server.verify().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

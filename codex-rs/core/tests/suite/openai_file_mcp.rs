@@ -5,6 +5,8 @@ use std::path::Path;
 
 use anyhow::Context;
 use anyhow::Result;
+use codex_http_state::HttpStateStore;
+use codex_http_state::HttpStateSurface;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use core_test_support::apps_test_server::AppsTestServer;
@@ -32,6 +34,11 @@ use wiremock::matchers::body_json;
 use wiremock::matchers::header;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
+
+const INITIAL_INTEGRITY_STATE: &str = "state-n";
+const INTEGRITY_STATE_HEADER_NAME: &str = "x-oai-is";
+const INTEGRITY_STATE_UPDATE_HEADER_NAME: &str = "x-oai-is-update";
+const UNTRUSTED_INTEGRITY_STATE_UPDATE: &str = "state-n-plus-one";
 
 fn write_post_tool_use_hook(home: &Path) -> Result<()> {
     let script_path = home.join("post_tool_use_hook.py");
@@ -95,10 +102,17 @@ async fn codex_apps_file_params_upload_local_paths_before_mcp_tool_call() -> Res
             "file_size": 11,
             "use_case": "codex",
         })))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "file_id": "file_123",
-            "upload_url": format!("{}/upload/file_123", server.uri()),
-        })))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header(
+                    INTEGRITY_STATE_UPDATE_HEADER_NAME,
+                    UNTRUSTED_INTEGRITY_STATE_UPDATE,
+                )
+                .set_body_json(json!({
+                    "file_id": "file_123",
+                    "upload_url": format!("{}/upload/file_123", server.uri()),
+                })),
+        )
         .expect(1)
         .mount(&server)
         .await;
@@ -150,6 +164,12 @@ async fn codex_apps_file_params_upload_local_paths_before_mcp_tool_call() -> Res
             if let Err(error) = write_post_tool_use_hook(home) {
                 panic!("failed to write apps file post tool use hook fixture: {error}");
             }
+            HttpStateStore::new(home.to_path_buf())
+                .set(
+                    HttpStateSurface::CodexExec,
+                    INITIAL_INTEGRITY_STATE.to_string(),
+                )
+                .expect("initial HTTP state should store");
         })
         .with_config(move |config| {
             trust_discovered_hooks(config);
@@ -217,6 +237,23 @@ async fn codex_apps_file_params_upload_local_paths_before_mcp_tool_call() -> Res
             "uri": "sediment://file_123",
             "file_size_bytes": 11,
         })
+    );
+    assert_eq!(
+        HttpStateStore::new(test.codex_home_path().to_path_buf())
+            .get(HttpStateSurface::CodexExec)?,
+        Some(INITIAL_INTEGRITY_STATE.to_string())
+    );
+    let file_create_request = server
+        .received_requests()
+        .await
+        .context("capture file upload requests")?
+        .into_iter()
+        .find(|request| request.url.path() == "/files")
+        .context("find file create request")?;
+    assert!(
+        !file_create_request
+            .headers
+            .contains_key(INTEGRITY_STATE_HEADER_NAME)
     );
 
     server.verify().await;

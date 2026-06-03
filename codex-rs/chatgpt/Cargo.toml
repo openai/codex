@@ -15,6 +15,7 @@ codex-connectors = { workspace = true }
 codex-core = { workspace = true }
 codex-core-plugins = { workspace = true }
 codex-git-utils = { workspace = true }
+codex-http-state = { workspace = true }
 codex-login = { workspace = true }
 codex-model-provider = { workspace = true }
 codex-plugin = { workspace = true }

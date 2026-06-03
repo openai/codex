@@ -22,6 +22,7 @@ use codex_config::McpServerConfig;
 use codex_config::McpServerTransportConfig;
 use codex_config::types::AppToolApproval;
 use codex_config::types::OAuthCredentialsStoreMode;
+use codex_http_state::HttpStateContext;
 use codex_login::CodexAuth;
 use codex_plugin::PluginCapabilitySummary;
 use codex_protocol::mcp::McpServerInfo;
@@ -264,6 +265,7 @@ pub async fn read_mcp_resource(
     config: &McpConfig,
     auth: Option<&CodexAuth>,
     runtime_context: McpRuntimeContext,
+    http_state: Option<HttpStateContext>,
     server: &str,
     uri: &str,
 ) -> anyhow::Result<ReadResourceResult> {
@@ -288,6 +290,7 @@ pub async fn read_mcp_resource(
         PermissionProfile::default(),
         runtime_context,
         config.codex_home.clone(),
+        http_state,
         codex_apps_tools_cache_key(auth),
         host_owned_codex_apps_enabled,
         config.prefix_mcp_tool_names,
@@ -320,6 +323,7 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
     auth: Option<&CodexAuth>,
     submit_id: String,
     runtime_context: McpRuntimeContext,
+    http_state: Option<HttpStateContext>,
     detail: McpSnapshotDetail,
 ) -> McpServerStatusSnapshot {
     let mcp_servers = effective_mcp_servers(config, auth);
@@ -358,6 +362,7 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
         PermissionProfile::default(),
         runtime_context,
         config.codex_home.clone(),
+        http_state,
         codex_apps_tools_cache_key(auth),
         host_owned_codex_apps_enabled,
         config.prefix_mcp_tool_names,

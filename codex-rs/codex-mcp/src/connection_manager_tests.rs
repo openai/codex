@@ -1180,6 +1180,7 @@ async fn no_local_runtime_fails_local_stdio_but_keeps_local_http_server() {
             PathBuf::from("/tmp"),
         ),
         codex_home.path().to_path_buf(),
+        /*http_state*/ None,
         CodexAppsToolsCacheKey {
             account_id: None,
             chatgpt_user_id: None,

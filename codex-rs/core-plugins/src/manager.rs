@@ -58,6 +58,7 @@ use codex_config::types::PluginConfig;
 use codex_config::version_for_toml;
 use codex_core_skills::SkillMetadata;
 use codex_hooks::plugin_hook_declarations;
+use codex_http_state::HttpStateContext;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_plugin::AppConnectorId;
@@ -173,8 +174,17 @@ struct ConfiguredMarketplaceUpgradeState {
 }
 
 fn remote_plugin_service_config(config: &PluginsConfigInput) -> RemotePluginServiceConfig {
-    RemotePluginServiceConfig {
-        chatgpt_base_url: config.chatgpt_base_url.clone(),
+    RemotePluginServiceConfig::new(config.chatgpt_base_url.clone())
+}
+
+fn remote_plugin_service_config_with_http_state(
+    config: &PluginsConfigInput,
+    http_state: Option<HttpStateContext>,
+) -> RemotePluginServiceConfig {
+    let service_config = remote_plugin_service_config(config);
+    match http_state {
+        Some(http_state) => service_config.with_http_state(http_state),
+        None => service_config,
     }
 }
 
@@ -624,11 +634,40 @@ impl PluginsManager {
         visible_scopes: &[RemotePluginScope],
         on_effective_plugins_changed: Option<Arc<dyn Fn() + Send + Sync + 'static>>,
     ) -> Result<Vec<crate::remote::RemoteMarketplace>, RemotePluginCatalogError> {
-        let plugins = crate::remote::fetch_remote_installed_plugins(
-            &remote_plugin_service_config(config),
+        self.build_and_cache_remote_installed_plugin_marketplaces_with_service_config(
+            remote_plugin_service_config(config),
             auth,
+            visible_scopes,
+            on_effective_plugins_changed,
         )
-        .await?;
+        .await
+    }
+
+    pub async fn build_and_cache_remote_installed_plugin_marketplaces_with_http_state(
+        &self,
+        config: &PluginsConfigInput,
+        auth: Option<&CodexAuth>,
+        visible_scopes: &[RemotePluginScope],
+        on_effective_plugins_changed: Option<Arc<dyn Fn() + Send + Sync + 'static>>,
+        http_state: HttpStateContext,
+    ) -> Result<Vec<crate::remote::RemoteMarketplace>, RemotePluginCatalogError> {
+        self.build_and_cache_remote_installed_plugin_marketplaces_with_service_config(
+            remote_plugin_service_config(config).with_http_state(http_state),
+            auth,
+            visible_scopes,
+            on_effective_plugins_changed,
+        )
+        .await
+    }
+
+    async fn build_and_cache_remote_installed_plugin_marketplaces_with_service_config(
+        &self,
+        service_config: RemotePluginServiceConfig,
+        auth: Option<&CodexAuth>,
+        visible_scopes: &[RemotePluginScope],
+        on_effective_plugins_changed: Option<Arc<dyn Fn() + Send + Sync + 'static>>,
+    ) -> Result<Vec<crate::remote::RemoteMarketplace>, RemotePluginCatalogError> {
+        let plugins = crate::remote::fetch_remote_installed_plugins(&service_config, auth).await?;
         let marketplaces =
             crate::remote::group_remote_installed_plugins_by_marketplaces(&plugins, visible_scopes);
         let changed = self.write_remote_installed_plugins_cache(plugins);
@@ -671,12 +710,14 @@ impl PluginsManager {
         config: &PluginsConfigInput,
         auth: Option<CodexAuth>,
         on_effective_plugins_changed: Option<Arc<dyn Fn() + Send + Sync + 'static>>,
+        http_state: Option<HttpStateContext>,
     ) {
         self.maybe_start_remote_installed_plugins_cache_refresh_with_notify(
             config,
             auth,
             RemoteInstalledPluginsCacheRefreshNotify::IfCacheChanged,
             on_effective_plugins_changed,
+            http_state,
         );
     }
 
@@ -685,12 +726,14 @@ impl PluginsManager {
         config: &PluginsConfigInput,
         auth: Option<CodexAuth>,
         on_effective_plugins_changed: Option<Arc<dyn Fn() + Send + Sync + 'static>>,
+        http_state: Option<HttpStateContext>,
     ) {
         self.maybe_start_remote_installed_plugins_cache_refresh_with_notify(
             config,
             auth,
             RemoteInstalledPluginsCacheRefreshNotify::AfterSuccessfulRefresh,
             on_effective_plugins_changed,
+            http_state,
         );
     }
 
@@ -700,6 +743,7 @@ impl PluginsManager {
         auth: Option<CodexAuth>,
         notify: RemoteInstalledPluginsCacheRefreshNotify,
         on_effective_plugins_changed: Option<Arc<dyn Fn() + Send + Sync + 'static>>,
+        http_state: Option<HttpStateContext>,
     ) {
         if !config.plugins_enabled {
             return;
@@ -707,7 +751,7 @@ impl PluginsManager {
 
         self.schedule_remote_installed_plugins_cache_refresh(
             RemoteInstalledPluginsCacheRefreshRequest {
-                service_config: remote_plugin_service_config(config),
+                service_config: remote_plugin_service_config_with_http_state(config, http_state),
                 auth,
                 notify,
                 on_effective_plugins_changed,
@@ -720,6 +764,7 @@ impl PluginsManager {
         config: &PluginsConfigInput,
         auth: Option<CodexAuth>,
         on_effective_plugins_changed: Option<Arc<dyn Fn() + Send + Sync + 'static>>,
+        http_state: Option<HttpStateContext>,
     ) {
         if !config.plugins_enabled {
             return;
@@ -728,17 +773,19 @@ impl PluginsManager {
         let manager = Arc::clone(self);
         let config_for_refresh = config.clone();
         let auth_for_refresh = auth.clone();
+        let http_state_for_refresh = http_state.clone();
         let on_local_cache_changed = Arc::new(move || {
             manager.maybe_start_remote_installed_plugins_cache_refresh_after_mutation(
                 &config_for_refresh,
                 auth_for_refresh.clone(),
                 on_effective_plugins_changed.clone(),
+                http_state_for_refresh.clone(),
             );
         });
 
         crate::remote::maybe_start_remote_installed_plugin_bundle_sync(
             self.codex_home.clone(),
-            remote_plugin_service_config(config),
+            remote_plugin_service_config_with_http_state(config, http_state),
             auth,
             Some(on_local_cache_changed),
         );
@@ -750,17 +797,20 @@ impl PluginsManager {
         auth: Option<CodexAuth>,
         roots: &[AbsolutePathBuf],
         on_effective_plugins_changed: Option<Arc<dyn Fn() + Send + Sync + 'static>>,
+        http_state: Option<HttpStateContext>,
     ) {
         self.maybe_start_non_curated_plugin_cache_refresh(roots);
         self.maybe_start_remote_installed_plugins_cache_refresh(
             config,
             auth.clone(),
             on_effective_plugins_changed.clone(),
+            http_state.clone(),
         );
         self.maybe_start_remote_installed_plugin_bundle_sync(
             config,
             auth,
             on_effective_plugins_changed,
+            http_state,
         );
     }
 
@@ -817,6 +867,34 @@ impl PluginsManager {
         config: &PluginsConfigInput,
         auth: Option<&CodexAuth>,
     ) -> Result<Vec<String>, RemotePluginFetchError> {
+        self.featured_plugin_ids_for_config_with_service_config(
+            config,
+            auth,
+            remote_plugin_service_config(config),
+        )
+        .await
+    }
+
+    pub async fn featured_plugin_ids_for_config_with_http_state(
+        &self,
+        config: &PluginsConfigInput,
+        auth: Option<&CodexAuth>,
+        http_state: HttpStateContext,
+    ) -> Result<Vec<String>, RemotePluginFetchError> {
+        self.featured_plugin_ids_for_config_with_service_config(
+            config,
+            auth,
+            remote_plugin_service_config(config).with_http_state(http_state),
+        )
+        .await
+    }
+
+    async fn featured_plugin_ids_for_config_with_service_config(
+        &self,
+        config: &PluginsConfigInput,
+        auth: Option<&CodexAuth>,
+        service_config: RemotePluginServiceConfig,
+    ) -> Result<Vec<String>, RemotePluginFetchError> {
         if !config.plugins_enabled {
             return Ok(Vec::new());
         }
@@ -826,7 +904,7 @@ impl PluginsManager {
             return Ok(featured_plugin_ids);
         }
         let featured_plugin_ids = crate::remote_legacy::fetch_remote_featured_plugin_ids(
-            &remote_plugin_service_config(config),
+            &service_config,
             auth,
             self.restriction_product,
         )
@@ -1570,11 +1648,13 @@ impl PluginsManager {
                     &config_for_remote_sync,
                     auth.clone(),
                     on_effective_plugins_changed.clone(),
+                    /*http_state*/ None,
                 );
                 manager.maybe_start_remote_installed_plugin_bundle_sync(
                     &config_for_remote_sync,
                     auth.clone(),
                     on_effective_plugins_changed,
+                    /*http_state*/ None,
                 );
                 if config_for_remote_sync.remote_plugin_enabled {
                     match crate::remote::fetch_and_cache_global_remote_plugin_catalog(
