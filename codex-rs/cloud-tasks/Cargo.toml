@@ -16,12 +16,14 @@ workspace = true
 anyhow = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
 clap = { workspace = true, features = ["derive"] }
+codex-api = { workspace = true }
 codex-client = { workspace = true }
 codex-cloud-tasks-client = { workspace = true }
 # TODO: codex-cloud-tasks-mock-client should be in dev-dependencies.
 codex-cloud-tasks-mock-client = { workspace = true }
 codex-core = { workspace = true }
 codex-git-utils = { workspace = true }
+codex-http-state = { workspace = true }
 codex-login = { path = "../login" }
 codex-model-provider = { workspace = true }
 codex-tui = { workspace = true }

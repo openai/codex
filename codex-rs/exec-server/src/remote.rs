@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use codex_api::SharedAuthProvider;
 use reqwest::StatusCode;
+use reqwest::header::HeaderMap;
 use serde::Deserialize;
 use tokio::time::sleep;
 use tokio_tungstenite::connect_async;
@@ -48,15 +49,24 @@ impl EnvironmentRegistryClient {
         &self,
         environment_id: &str,
     ) -> Result<EnvironmentRegistryRegistrationResponse, ExecServerError> {
+        let request_url = endpoint_url(
+            &self.base_url,
+            &format!("/cloud/environment/{environment_id}/register"),
+        );
+        let mut request_headers = HeaderMap::new();
+        self.auth_provider
+            .add_auth_headers_for_url(&request_url, &mut request_headers);
         let response = self
             .http
-            .post(endpoint_url(
-                &self.base_url,
-                &format!("/cloud/environment/{environment_id}/register"),
-            ))
-            .headers(self.auth_provider.to_auth_headers())
+            .post(&request_url)
+            .headers(request_headers.clone())
             .send()
             .await?;
+        self.auth_provider.observe_response_headers(
+            &request_url,
+            &request_headers,
+            response.headers(),
+        );
         self.parse_json_response(response).await
     }
 
@@ -244,6 +254,7 @@ fn preview_error_body(body: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
+    use std::sync::Mutex as StdMutex;
 
     use codex_api::AuthProvider;
     use http::HeaderMap;
@@ -276,6 +287,43 @@ mod tests {
 
     fn static_registry_auth_provider() -> SharedAuthProvider {
         Arc::new(StaticRegistryAuthProvider)
+    }
+
+    #[derive(Debug, Default)]
+    struct RecordingRegistryAuthProvider {
+        observed_updates: StdMutex<Vec<(String, String, String)>>,
+    }
+
+    impl AuthProvider for RecordingRegistryAuthProvider {
+        fn add_auth_headers(&self, _headers: &mut HeaderMap) {}
+
+        fn add_auth_headers_for_url(&self, _request_url: &str, headers: &mut HeaderMap) {
+            let _ = headers.insert("x-test-state", HeaderValue::from_static("sent-state"));
+        }
+
+        fn observe_response_headers(
+            &self,
+            request_url: &str,
+            request_headers: &HeaderMap,
+            response_headers: &HeaderMap,
+        ) {
+            let sent_state = request_headers
+                .get("x-test-state")
+                .and_then(|value| value.to_str().ok());
+            let update_state = response_headers
+                .get("x-test-state-update")
+                .and_then(|value| value.to_str().ok());
+            if let (Some(sent_state), Some(update_state)) = (sent_state, update_state) {
+                self.observed_updates
+                    .lock()
+                    .expect("observed updates lock should not be poisoned")
+                    .push((
+                        request_url.to_string(),
+                        sent_state.to_string(),
+                        update_state.to_string(),
+                    ));
+            }
+        }
     }
 
     #[tokio::test]
@@ -347,6 +395,47 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[tokio::test]
+    async fn register_environment_uses_url_scoped_auth_and_observes_response_headers() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/cloud/environment/environment-requested/register"))
+            .and(header("x-test-state", "sent-state"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("x-test-state-update", "next-state")
+                    .set_body_json(serde_json::json!({
+                        "environment_id": "env-1",
+                        "url": "wss://rendezvous.test/ws"
+                    })),
+            )
+            .mount(&server)
+            .await;
+        let auth = Arc::new(RecordingRegistryAuthProvider::default());
+        let client =
+            EnvironmentRegistryClient::new(server.uri(), auth.clone()).expect("registry client");
+
+        client
+            .register_environment("environment-requested")
+            .await
+            .expect("register environment");
+
+        assert_eq!(
+            *auth
+                .observed_updates
+                .lock()
+                .expect("observed updates lock should not be poisoned"),
+            vec![(
+                format!(
+                    "{}/cloud/environment/environment-requested/register",
+                    server.uri()
+                ),
+                "sent-state".to_string(),
+                "next-state".to_string(),
+            )]
+        );
     }
 
     #[test]

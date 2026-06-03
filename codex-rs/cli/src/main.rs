@@ -1642,7 +1642,7 @@ async fn load_exec_server_remote_auth_provider(
         let auth =
             CodexAuth::from_agent_identity_jwt(&agent_identity_jwt, Some(&config.chatgpt_base_url))
                 .await?;
-        return Ok(codex_model_provider::auth_provider_from_auth(&auth));
+        return Ok(exec_server_remote_auth_provider(config, &auth));
     }
 
     let auth = load_exec_server_remote_auth(
@@ -1661,7 +1661,21 @@ async fn load_exec_server_remote_auth_provider(
         validate_api_key_remote_host(base_url)?;
     }
 
-    Ok(codex_model_provider::auth_provider_from_auth(&auth))
+    Ok(exec_server_remote_auth_provider(config, &auth))
+}
+
+fn exec_server_remote_auth_provider(
+    config: &codex_core::config::Config,
+    auth: &CodexAuth,
+) -> codex_api::SharedAuthProvider {
+    codex_model_provider::with_native_integrity_state(
+        codex_model_provider::auth_provider_from_auth(auth),
+        Some(auth),
+        Some(codex_http_state::HttpStateContext::new(
+            config.codex_home.to_path_buf(),
+            codex_http_state::HttpStateSurface::CodexExec,
+        )),
+    )
 }
 
 fn is_supported_exec_server_remote_auth(auth: &CodexAuth) -> bool {
@@ -1723,12 +1737,15 @@ async fn load_exec_server_remote_auth(
     let auth_manager =
         AuthManager::shared_from_config(config, /*enable_codex_api_key_env*/ true).await;
 
-    let auth = match auth_manager.auth().await {
+    let auth = match auth_manager
+        .auth_for_surface(codex_http_state::HttpStateSurface::CodexExec)
+        .await
+    {
         Some(auth) => auth,
         None => {
             auth_manager.reload().await;
             auth_manager
-                .auth()
+                .auth_for_surface(codex_http_state::HttpStateSurface::CodexExec)
                 .await
                 .ok_or_else(|| anyhow::anyhow!(missing_auth_error))?
         }

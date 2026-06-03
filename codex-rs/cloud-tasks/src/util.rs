@@ -1,7 +1,12 @@
 use chrono::DateTime;
 use chrono::Local;
 use chrono::Utc;
+use codex_api::SharedAuthProvider;
+use codex_http_state::HttpStateContext;
+use codex_http_state::HttpStateSurface;
 use reqwest::header::HeaderMap;
+use reqwest::header::HeaderValue;
+use reqwest::header::USER_AGENT;
 
 use codex_core::config::Config;
 use codex_login::AuthManager;
@@ -55,26 +60,58 @@ pub async fn load_auth_manager(chatgpt_base_url: Option<String>) -> Option<AuthM
     )
 }
 
-/// Build headers for ChatGPT-backed requests: `User-Agent`, optional `Authorization`,
-/// and optional `ChatGPT-Account-Id`.
-pub async fn build_chatgpt_headers() -> HeaderMap {
-    use reqwest::header::HeaderValue;
-    use reqwest::header::USER_AGENT;
+#[derive(Clone)]
+pub struct ChatGptRequestAuth {
+    user_agent: HeaderValue,
+    auth_provider: Option<SharedAuthProvider>,
+}
 
+impl ChatGptRequestAuth {
+    pub fn headers_for_url(&self, request_url: &str) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(USER_AGENT, self.user_agent.clone());
+        if let Some(auth_provider) = &self.auth_provider {
+            auth_provider.add_auth_headers_for_url(request_url, &mut headers);
+        }
+        headers
+    }
+
+    pub fn observe_response_headers(
+        &self,
+        request_url: &str,
+        request_headers: &HeaderMap,
+        response_headers: &HeaderMap,
+    ) {
+        if let Some(auth_provider) = &self.auth_provider {
+            auth_provider.observe_response_headers(request_url, request_headers, response_headers);
+        }
+    }
+}
+
+/// Build request auth for ChatGPT-backed cloud-task requests.
+pub async fn build_chatgpt_request_auth() -> ChatGptRequestAuth {
     set_user_agent_suffix("codex_cloud_tasks_tui");
     let ua = codex_login::default_client::get_codex_user_agent();
-    let mut headers = HeaderMap::new();
-    headers.insert(
-        USER_AGENT,
-        HeaderValue::from_str(&ua).unwrap_or(HeaderValue::from_static("codex-cli")),
-    );
-    if let Some(am) = load_auth_manager(/*chatgpt_base_url*/ None).await
-        && let Some(auth) = am.auth().await
+    let auth_manager = load_auth_manager(/*chatgpt_base_url*/ None).await;
+    let auth_provider = if let Some(am) = auth_manager
+        && let Some(auth) = am.auth_for_surface(HttpStateSurface::CodexCli).await
         && auth.uses_codex_backend()
     {
-        headers.extend(codex_model_provider::auth_provider_from_auth(&auth).to_auth_headers());
+        Some(codex_model_provider::with_native_integrity_state(
+            codex_model_provider::auth_provider_from_auth(&auth),
+            Some(&auth),
+            Some(HttpStateContext::new(
+                am.codex_home().to_path_buf(),
+                HttpStateSurface::CodexCli,
+            )),
+        ))
+    } else {
+        None
+    };
+    ChatGptRequestAuth {
+        user_agent: HeaderValue::from_str(&ua).unwrap_or(HeaderValue::from_static("codex-cli")),
+        auth_provider,
     }
-    headers
 }
 
 /// Construct a browser-friendly task URL for the given backend base URL.

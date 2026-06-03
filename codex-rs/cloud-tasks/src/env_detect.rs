@@ -1,6 +1,5 @@
 use codex_client::build_reqwest_client_with_custom_ca;
 use reqwest::header::CONTENT_TYPE;
-use reqwest::header::HeaderMap;
 use std::collections::HashMap;
 use tracing::info;
 use tracing::warn;
@@ -24,7 +23,7 @@ pub struct AutodetectSelection {
 
 pub async fn autodetect_environment_id(
     base_url: &str,
-    headers: &HeaderMap,
+    request_auth: &crate::util::ChatGptRequestAuth,
     desired_label: Option<String>,
 ) -> anyhow::Result<AutodetectSelection> {
     // 1) Try repo-specific environments based on local git origins (GitHub only, like VSCode)
@@ -45,7 +44,7 @@ pub async fn autodetect_environment_id(
                 )
             };
             crate::append_error_log(format!("env: GET {url}"));
-            match get_json::<Vec<CodeEnvironment>>(&url, headers).await {
+            match get_json::<Vec<CodeEnvironment>>(&url, request_auth).await {
                 Ok(mut list) => {
                     crate::append_error_log(format!(
                         "env: by-repo returned {} env(s) for {owner}/{repo}",
@@ -75,7 +74,9 @@ pub async fn autodetect_environment_id(
     crate::append_error_log(format!("env: GET {list_url}"));
     // Fetch and log the full environments JSON for debugging
     let http = build_reqwest_client_with_custom_ca(reqwest::Client::builder())?;
+    let headers = request_auth.headers_for_url(&list_url);
     let res = http.get(&list_url).headers(headers.clone()).send().await?;
+    request_auth.observe_response_headers(&list_url, &headers, res.headers());
     let status = res.status();
     let ct = res
         .headers()
@@ -146,10 +147,12 @@ fn pick_environment_row(
 
 async fn get_json<T: serde::de::DeserializeOwned>(
     url: &str,
-    headers: &HeaderMap,
+    request_auth: &crate::util::ChatGptRequestAuth,
 ) -> anyhow::Result<T> {
     let http = build_reqwest_client_with_custom_ca(reqwest::Client::builder())?;
+    let headers = request_auth.headers_for_url(url);
     let res = http.get(url).headers(headers.clone()).send().await?;
+    request_auth.observe_response_headers(url, &headers, res.headers());
     let status = res.status();
     let ct = res
         .headers()
@@ -255,7 +258,7 @@ fn parse_owner_repo(url: &str) -> Option<(String, String)> {
 /// Returns a de-duplicated, sorted set suitable for the TUI modal.
 pub async fn list_environments(
     base_url: &str,
-    headers: &HeaderMap,
+    request_auth: &crate::util::ChatGptRequestAuth,
 ) -> anyhow::Result<Vec<crate::app::EnvironmentRow>> {
     let mut map: HashMap<String, crate::app::EnvironmentRow> = HashMap::new();
 
@@ -274,7 +277,7 @@ pub async fn list_environments(
                     base_url, "github", owner, repo
                 )
             };
-            match get_json::<Vec<CodeEnvironment>>(&url, headers).await {
+            match get_json::<Vec<CodeEnvironment>>(&url, request_auth).await {
                 Ok(list) => {
                     info!("env_tui: by-repo {}:{} -> {} envs", owner, repo, list.len());
                     for e in list {
@@ -312,7 +315,7 @@ pub async fn list_environments(
     } else {
         format!("{base_url}/api/codex/environments")
     };
-    match get_json::<Vec<CodeEnvironment>>(&list_url, headers).await {
+    match get_json::<Vec<CodeEnvironment>>(&list_url, request_auth).await {
         Ok(list) => {
             info!("env_tui: global list -> {} envs", list.len());
             for e in list {

@@ -39,6 +39,8 @@ use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::find_codex_home;
 use codex_features::FEATURES;
+use codex_http_state::HttpStateContext;
+use codex_http_state::HttpStateSurface;
 use codex_install_context::CodexPackageLayout;
 use codex_install_context::InstallContext;
 use codex_install_context::InstallMethod;
@@ -53,6 +55,7 @@ use codex_login::default_client::build_reqwest_client;
 use codex_login::default_client::default_headers;
 use codex_login::load_auth_dot_json;
 use codex_model_provider::create_model_provider;
+use codex_model_provider::with_native_integrity_state;
 use codex_protocol::protocol::AskForApproval;
 use codex_terminal_detection::Multiplexer;
 use codex_terminal_detection::TerminalInfo;
@@ -2261,7 +2264,9 @@ async fn websocket_reachability_check(
     ));
 
     let runtime_provider = create_model_provider(provider.clone(), auth_manager);
-    let auth = runtime_provider.auth().await;
+    let auth = runtime_provider
+        .auth_for_surface(HttpStateSurface::CodexCli)
+        .await;
     details.push(format!(
         "auth mode: {}",
         auth.as_ref().map(auth_mode_name).unwrap_or("none")
@@ -2310,6 +2315,14 @@ async fn websocket_reachability_check(
     extra_headers.insert(
         OPENAI_BETA_HEADER,
         HeaderValue::from_static(RESPONSES_WEBSOCKETS_V2_BETA_HEADER_VALUE),
+    );
+    let api_auth = with_native_integrity_state(
+        api_auth,
+        auth.as_ref(),
+        Some(HttpStateContext::new(
+            config.codex_home.to_path_buf(),
+            HttpStateSurface::CodexCli,
+        )),
     );
     let client = ResponsesWebsocketClient::new(api_provider, api_auth);
     match tokio::time::timeout(

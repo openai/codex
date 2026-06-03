@@ -39,6 +39,7 @@ codex-execpolicy = { workspace = true }
 codex-features = { workspace = true }
 codex-git-utils = { workspace = true }
 codex-install-context = { workspace = true }
+codex-http-state = { workspace = true }
 codex-login = { workspace = true }
 codex-memories-write = { workspace = true }
 codex-mcp = { workspace = true }
