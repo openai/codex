@@ -943,6 +943,14 @@ client_request_definitions! {
         response: v2::AccountSessionsResponse,
     },
 
+    AccountSessionsLogin => "accountSession/login/start" {
+        params: v2::LoginAccountParams,
+        inspect_params: true,
+        serialization: global("account-auth"),
+        manual_payload_conversion: manual,
+        response: v2::LoginAccountResponse,
+    },
+
     AccountSessionsList => "accountSession/list" {
         params: v2::AccountSessionsListParams,
         serialization: global("account-auth"),

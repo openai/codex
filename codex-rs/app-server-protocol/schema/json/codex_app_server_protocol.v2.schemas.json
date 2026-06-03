@@ -2746,6 +2746,30 @@
             },
             "method": {
               "enum": [
+                "accountSession/login/start"
+              ],
+              "title": "AccountSession/login/startRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/LoginAccountParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "AccountSession/login/startRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
                 "accountSession/list"
               ],
               "title": "AccountSession/listRequestMethod",

@@ -86,7 +86,20 @@ impl AccountRequestProcessor {
         request_id: ConnectionRequestId,
         params: LoginAccountParams,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.login_v2(request_id, params).await.map(|()| None)
+        self.login_v2(request_id, params, /*revoke_previous_auth*/ true)
+            .await
+            .map(|()| None)
+    }
+
+    pub(crate) async fn login_account_session(
+        &self,
+        request_id: ConnectionRequestId,
+        params: LoginAccountParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        self.sync_active_account_session()?;
+        self.login_v2(request_id, params, /*revoke_previous_auth*/ false)
+            .await
+            .map(|()| None)
     }
 
     pub(crate) async fn logout_account(
@@ -296,6 +309,7 @@ impl AccountRequestProcessor {
         &self,
         request_id: ConnectionRequestId,
         params: LoginAccountParams,
+        revoke_previous_auth: bool,
     ) -> Result<(), JSONRPCErrorError> {
         match params {
             LoginAccountParams::ApiKey { api_key } => {
@@ -305,11 +319,12 @@ impl AccountRequestProcessor {
             LoginAccountParams::Chatgpt {
                 codex_streamlined_login,
             } => {
-                self.login_chatgpt_v2(request_id, codex_streamlined_login)
+                self.login_chatgpt_v2(request_id, codex_streamlined_login, revoke_previous_auth)
                     .await;
             }
             LoginAccountParams::ChatgptDeviceCode => {
-                self.login_chatgpt_device_code_v2(request_id).await;
+                self.login_chatgpt_device_code_v2(request_id, revoke_previous_auth)
+                    .await;
             }
             LoginAccountParams::ChatgptAuthTokens {
                 access_token,
@@ -351,8 +366,6 @@ impl AccountRequestProcessor {
             ));
         }
 
-        self.sync_active_account_session()?;
-
         // Cancel any active login attempt.
         {
             let mut guard = self.active_login.lock().await;
@@ -392,6 +405,7 @@ impl AccountRequestProcessor {
     async fn login_chatgpt_common(
         &self,
         codex_streamlined_login: bool,
+        revoke_previous_auth: bool,
     ) -> std::result::Result<LoginServerOptions, JSONRPCErrorError> {
         let config = self.config.as_ref();
 
@@ -405,12 +419,10 @@ impl AccountRequestProcessor {
             ));
         }
 
-        self.sync_active_account_session()?;
-
         let opts = LoginServerOptions {
             open_browser: false,
             codex_streamlined_login,
-            revoke_previous_auth: false,
+            revoke_previous_auth,
             ..LoginServerOptions::new(
                 config.codex_home.to_path_buf(),
                 CLIENT_ID.to_string(),
@@ -445,16 +457,22 @@ impl AccountRequestProcessor {
         &self,
         request_id: ConnectionRequestId,
         codex_streamlined_login: bool,
+        revoke_previous_auth: bool,
     ) {
-        let result = self.login_chatgpt_response(codex_streamlined_login).await;
+        let result = self
+            .login_chatgpt_response(codex_streamlined_login, revoke_previous_auth)
+            .await;
         self.outgoing.send_result(request_id, result).await;
     }
 
     async fn login_chatgpt_response(
         &self,
         codex_streamlined_login: bool,
+        revoke_previous_auth: bool,
     ) -> Result<LoginAccountResponse, JSONRPCErrorError> {
-        let opts = self.login_chatgpt_common(codex_streamlined_login).await?;
+        let opts = self
+            .login_chatgpt_common(codex_streamlined_login, revoke_previous_auth)
+            .await?;
         let server = run_login_server(opts)
             .map_err(|err| internal_error(format!("failed to start login server: {err}")))?;
         let login_id = Uuid::new_v4();
@@ -517,16 +535,23 @@ impl AccountRequestProcessor {
         })
     }
 
-    async fn login_chatgpt_device_code_v2(&self, request_id: ConnectionRequestId) {
-        let result = self.login_chatgpt_device_code_response().await;
+    async fn login_chatgpt_device_code_v2(
+        &self,
+        request_id: ConnectionRequestId,
+        revoke_previous_auth: bool,
+    ) {
+        let result = self
+            .login_chatgpt_device_code_response(revoke_previous_auth)
+            .await;
         self.outgoing.send_result(request_id, result).await;
     }
 
     async fn login_chatgpt_device_code_response(
         &self,
+        revoke_previous_auth: bool,
     ) -> Result<LoginAccountResponse, JSONRPCErrorError> {
         let opts = self
-            .login_chatgpt_common(/*codex_streamlined_login*/ false)
+            .login_chatgpt_common(/*codex_streamlined_login*/ false, revoke_previous_auth)
             .await?;
         let device_code = request_device_code(&opts)
             .await
@@ -653,8 +678,6 @@ impl AccountRequestProcessor {
             ));
         }
 
-        self.sync_active_account_session()?;
-
         // Cancel any active login attempt to avoid persisting managed auth state.
         {
             let mut guard = self.active_login.lock().await;
@@ -768,12 +791,6 @@ impl AccountRequestProcessor {
                 drop(active);
             }
         }
-
-        self.sync_active_account_session()?;
-        self.account_sessions_store()
-            .revoke_all_and_clear()
-            .await
-            .map_err(|err| internal_error(format!("failed to clear account sessions: {err}")))?;
 
         match self.auth_manager.logout_with_revoke().await {
             Ok(_) => {}

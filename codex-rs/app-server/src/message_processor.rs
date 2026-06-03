@@ -1289,6 +1289,11 @@ impl MessageProcessor {
             ClientRequest::AccountSessionsAdd { params, .. } => {
                 self.account_processor.add_account_session(params).await
             }
+            ClientRequest::AccountSessionsLogin { params, .. } => {
+                self.account_processor
+                    .login_account_session(request_id.clone(), params)
+                    .await
+            }
             ClientRequest::AccountSessionsList { params, .. } => {
                 self.account_processor.list_account_sessions(params).await
             }

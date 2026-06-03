@@ -289,16 +289,6 @@ impl<'a> AccountSessionsStore<'a> {
         self.save(&stored)
     }
 
-    pub(crate) async fn revoke_all_and_clear(&self) -> std::io::Result<()> {
-        let stored = self.load()?;
-        for session in stored.sessions {
-            if let Err(err) = revoke_auth_dot_json(&session.auth_json).await {
-                tracing::warn!("failed to revoke saved account session during logout: {err}");
-            }
-        }
-        self.clear()
-    }
-
     fn load(&self) -> std::io::Result<StoredAccountSessions> {
         match self.read()? {
             Some(stored) => Ok(stored),
