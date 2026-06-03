@@ -70,11 +70,11 @@ mod sandbox_users;
 mod setup_runtime_bin;
 use read_acl_mutex::acquire_read_acl_mutex;
 use read_acl_mutex::read_acl_mutex_exists;
+use sandbox_users::commit_setup_marker;
 use sandbox_users::provision_sandbox_users;
 use sandbox_users::resolve_sandbox_users_group_sid;
 use sandbox_users::resolve_sid;
 use sandbox_users::sid_bytes_to_psid;
-use sandbox_users::write_setup_marker;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 struct Payload {
@@ -448,36 +448,9 @@ fn real_main() -> Result<()> {
             format!("open log in {} failed", sbx_dir.display()),
         ))
     })?;
-    let writes_setup_marker = !payload.refresh_only && payload.mode != SetupMode::ReadAclsOnly;
-    let result = (|| {
-        if writes_setup_marker {
-            let marker_path = sbx_dir.join("setup_marker.json");
-            match std::fs::remove_file(&marker_path) {
-                Ok(()) => {}
-                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-                Err(err) => {
-                    return Err(anyhow::Error::new(SetupFailure::new(
-                        SetupErrorCode::HelperSetupMarkerWriteFailed,
-                        format!(
-                            "remove setup marker file {} failed: {err}",
-                            marker_path.display()
-                        ),
-                    )));
-                }
-            }
-        }
-        run_setup(&payload, &mut log, &sbx_dir)?;
-        if writes_setup_marker {
-            write_setup_marker(
-                &payload.codex_home,
-                &payload.offline_username,
-                &payload.online_username,
-                &payload.proxy_ports,
-                payload.allow_local_binding,
-            )?;
-        }
-        Ok(())
-    })();
+    let result = run_setup_with_completion_marker(&payload, &sbx_dir, || {
+        run_setup(&payload, &mut log, &sbx_dir)
+    });
     if let Err(err) = &result {
         let _ = log_line(&mut log, &format!("setup error: {err:?}"));
         log_note(&format!("setup error: {err:?}"), Some(sbx_dir.as_path()));
@@ -502,6 +475,41 @@ fn real_main() -> Result<()> {
         }
     }
     result
+}
+
+fn run_setup_with_completion_marker(
+    payload: &Payload,
+    sbx_dir: &Path,
+    setup_steps: impl FnOnce() -> Result<()>,
+) -> Result<()> {
+    let writes_setup_marker = !payload.refresh_only && payload.mode != SetupMode::ReadAclsOnly;
+    if writes_setup_marker {
+        let marker_path = sbx_dir.join("setup_marker.json");
+        match std::fs::remove_file(&marker_path) {
+            Ok(()) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => {
+                return Err(anyhow::Error::new(SetupFailure::new(
+                    SetupErrorCode::HelperSetupMarkerWriteFailed,
+                    format!(
+                        "remove setup marker file {} failed: {err}",
+                        marker_path.display()
+                    ),
+                )));
+            }
+        }
+    }
+    setup_steps()?;
+    if writes_setup_marker {
+        commit_setup_marker(
+            &payload.codex_home,
+            &payload.offline_username,
+            &payload.online_username,
+            &payload.proxy_ports,
+            payload.allow_local_binding,
+        )?;
+    }
+    Ok(())
 }
 
 fn run_setup(payload: &Payload, log: &mut dyn Write, sbx_dir: &Path) -> Result<()> {
@@ -1050,6 +1058,7 @@ fn run_setup_full(payload: &Payload, log: &mut dyn Write, sbx_dir: &Path) -> Res
 mod tests {
     use super::Payload;
     use super::SETUP_VERSION;
+    use super::run_setup_with_completion_marker;
     use super::workspace_write_cap_sids_for_path;
     use codex_otel::StatsigMetricsSettings;
     use codex_windows_sandbox::load_or_create_cap_sids;
@@ -1101,6 +1110,30 @@ mod tests {
             Some(StatsigMetricsSettings {
                 environment: "prod".to_string(),
             })
+        );
+    }
+
+    #[test]
+    fn interrupted_setup_invalidates_completion_marker() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let sbx_dir = temp.path().join(".sandbox");
+        let marker_path = sbx_dir.join("setup_marker.json");
+        fs::create_dir_all(&sbx_dir).expect("create sandbox dir");
+        fs::write(&marker_path, "previous setup marker").expect("write previous marker");
+        let mut payload = payload_json();
+        payload["codex_home"] = json!(temp.path());
+        let payload: Payload = serde_json::from_value(payload).expect("payload");
+
+        let err = run_setup_with_completion_marker(&payload, &sbx_dir, || {
+            assert!(!marker_path.exists(), "marker must be removed before setup");
+            anyhow::bail!("setup interrupted");
+        })
+        .expect_err("interrupted setup should fail");
+
+        assert_eq!(err.to_string(), "setup interrupted");
+        assert!(
+            !marker_path.exists(),
+            "interrupted setup must remain unready"
         );
     }
 

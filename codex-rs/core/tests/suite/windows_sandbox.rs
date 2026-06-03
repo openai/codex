@@ -3,6 +3,7 @@ use codex_core::exec::ExecCapturePolicy;
 use codex_core::exec::ExecParams;
 use codex_core::exec::process_exec_tool_call;
 use codex_core::sandboxing::SandboxPermissions;
+use codex_core::windows_sandbox::sandbox_setup_is_complete;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::exec_output::ExecToolCallOutput;
 use codex_protocol::models::PermissionProfile;
@@ -197,7 +198,7 @@ async fn windows_restricted_token_rejects_exact_and_glob_deny_read_policy() -> a
 
 #[tokio::test]
 #[serial(codex_home)]
-async fn windows_elevated_enforces_exact_and_glob_deny_read_policy() -> anyhow::Result<()> {
+async fn windows_elevated_enforces_deny_read_and_protects_setup_marker() -> anyhow::Result<()> {
     let codex_home = codex_home_for_windows_sandbox_test("windows-elevated-deny-read-codex-home")?;
     let _codex_home_guard = EnvVarGuard::set("CODEX_HOME", codex_home.path().as_os_str());
     stage_windows_sandbox_helpers()?;
@@ -206,6 +207,7 @@ async fn windows_elevated_enforces_exact_and_glob_deny_read_policy() -> anyhow::
     let glob_secret = cwd.join("secret.env");
     let exact_secret = cwd.join("exact-secret.txt");
     let public = cwd.join("public.txt");
+    let setup_marker = codex_home.path().join(".sandbox").join("setup_marker.json");
     std::fs::write(&glob_secret, "glob secret\n")?;
     std::fs::write(&exact_secret, "exact secret\n")?;
     std::fs::write(&public, "public ok\n")?;
@@ -250,7 +252,10 @@ async fn windows_elevated_enforces_exact_and_glob_deny_read_policy() -> anyhow::
                 "cmd.exe".to_string(),
                 "/D".to_string(),
                 "/C".to_string(),
-                "(type secret.env 1>NUL 2>NUL && echo GLOB-READ || echo GLOB-DENIED) & (type exact-secret.txt 1>NUL 2>NUL && echo EXACT-READ || echo EXACT-DENIED) & type public.txt".to_string(),
+                format!(
+                    "(type secret.env 1>NUL 2>NUL && echo GLOB-READ || echo GLOB-DENIED) & (type exact-secret.txt 1>NUL 2>NUL && echo EXACT-READ || echo EXACT-DENIED) & (echo tampered > \"{}\" 2>NUL && echo MARKER-WRITE || echo MARKER-DENIED) & type public.txt",
+                    setup_marker.display()
+                ),
             ],
             cwd: cwd.clone(),
             expiration: 10_000.into(),
@@ -292,6 +297,18 @@ async fn windows_elevated_enforces_exact_and_glob_deny_read_policy() -> anyhow::
     assert!(
         stdout.text.contains("public ok"),
         "allowed reads should still work: {stdout:?}"
+    );
+    assert!(
+        stdout.text.contains("MARKER-DENIED"),
+        "sandboxed command should not modify setup readiness: {stdout:?}"
+    );
+    assert!(
+        !stdout.text.contains("MARKER-WRITE"),
+        "sandboxed command must not modify setup readiness: {stdout:?}"
+    );
+    assert!(
+        sandbox_setup_is_complete(codex_home.path()),
+        "setup should remain ready after the tamper attempt"
     );
     assert_eq!(stderr.text, "");
     Ok(())

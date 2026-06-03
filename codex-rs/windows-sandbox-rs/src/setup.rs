@@ -40,7 +40,7 @@ use windows_sys::Win32::Security::CheckTokenMembership;
 use windows_sys::Win32::Security::FreeSid;
 use windows_sys::Win32::Security::SECURITY_NT_AUTHORITY;
 
-pub const SETUP_VERSION: u32 = 5;
+pub const SETUP_VERSION: u32 = 6;
 pub const OFFLINE_USERNAME: &str = "CodexSandboxOffline";
 pub const ONLINE_USERNAME: &str = "CodexSandboxOnline";
 const ERROR_CANCELLED: u32 = 1223;
@@ -1116,6 +1116,45 @@ mod tests {
             extract_failure(&err).map(|failure| failure.code),
             Some(SetupErrorCode::OrchestratorHelperIncomplete)
         );
+    }
+
+    #[test]
+    fn setup_completion_rejects_previous_setup_version() {
+        let codex_home = TempDir::new().expect("tempdir");
+        fs::create_dir_all(super::sandbox_dir(codex_home.path())).expect("create sandbox dir");
+        fs::create_dir_all(super::sandbox_secrets_dir(codex_home.path()))
+            .expect("create secrets dir");
+        let marker = super::SetupMarker {
+            version: super::SETUP_VERSION - 1,
+            offline_username: "offline".to_string(),
+            online_username: "online".to_string(),
+            created_at: None,
+            proxy_ports: Vec::new(),
+            allow_local_binding: false,
+        };
+        let users = super::SandboxUsersFile {
+            version: super::SETUP_VERSION,
+            offline: super::SandboxUserRecord {
+                username: "offline".to_string(),
+                password: "password".to_string(),
+            },
+            online: super::SandboxUserRecord {
+                username: "online".to_string(),
+                password: "password".to_string(),
+            },
+        };
+        fs::write(
+            super::setup_marker_path(codex_home.path()),
+            serde_json::to_vec(&marker).expect("serialize marker"),
+        )
+        .expect("write marker");
+        fs::write(
+            super::sandbox_users_path(codex_home.path()),
+            serde_json::to_vec(&users).expect("serialize users"),
+        )
+        .expect("write users");
+
+        assert!(!super::sandbox_setup_is_complete(codex_home.path()));
     }
 
     fn permissions_for(

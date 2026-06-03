@@ -35,6 +35,7 @@ use windows_sys::Win32::Security::SID_NAME_USE;
 use codex_windows_sandbox::SETUP_VERSION;
 use codex_windows_sandbox::SetupErrorCode;
 use codex_windows_sandbox::SetupFailure;
+use codex_windows_sandbox::add_deny_write_ace;
 use codex_windows_sandbox::dpapi_protect;
 use codex_windows_sandbox::sandbox_dir;
 use codex_windows_sandbox::sandbox_secrets_dir;
@@ -451,7 +452,7 @@ fn write_secrets(
     Ok(())
 }
 
-pub(super) fn write_setup_marker(
+pub(super) fn commit_setup_marker(
     codex_home: &Path,
     offline_user: &str,
     online_user: &str,
@@ -469,17 +470,48 @@ pub(super) fn write_setup_marker(
         write_roots: Vec::new(),
     };
     let marker_path = sandbox_dir(codex_home).join("setup_marker.json");
+    let pending_marker_path = sandbox_dir(codex_home).join("setup_marker.pending.json");
     let marker_json = serde_json::to_vec_pretty(&marker).map_err(|err| {
         anyhow::Error::new(SetupFailure::new(
             SetupErrorCode::HelperSetupMarkerWriteFailed,
             format!("serialize setup marker failed: {err}"),
         ))
     })?;
-    std::fs::write(&marker_path, marker_json).map_err(|err| {
+    std::fs::write(&pending_marker_path, marker_json).map_err(|err| {
         anyhow::Error::new(SetupFailure::new(
             SetupErrorCode::HelperSetupMarkerWriteFailed,
             format!(
-                "write setup marker file {} failed: {err}",
+                "write pending setup marker file {} failed: {err}",
+                pending_marker_path.display()
+            ),
+        ))
+    })?;
+    let protect_result: Result<()> = (|| {
+        let sandbox_group_sid = resolve_sandbox_users_group_sid()?;
+        let sandbox_group_psid = sid_bytes_to_psid(&sandbox_group_sid)?;
+        let result = unsafe { add_deny_write_ace(&pending_marker_path, sandbox_group_psid) };
+        unsafe {
+            LocalFree(sandbox_group_psid as HLOCAL);
+        }
+        result?;
+        Ok(())
+    })();
+    if let Err(err) = protect_result {
+        let _ = std::fs::remove_file(&pending_marker_path);
+        return Err(anyhow::Error::new(SetupFailure::new(
+            SetupErrorCode::HelperSetupMarkerWriteFailed,
+            format!(
+                "protect setup marker file {} failed: {err}",
+                pending_marker_path.display()
+            ),
+        )));
+    }
+    std::fs::rename(&pending_marker_path, &marker_path).map_err(|err| {
+        let _ = std::fs::remove_file(&pending_marker_path);
+        anyhow::Error::new(SetupFailure::new(
+            SetupErrorCode::HelperSetupMarkerWriteFailed,
+            format!(
+                "commit setup marker file {} failed: {err}",
                 marker_path.display()
             ),
         ))

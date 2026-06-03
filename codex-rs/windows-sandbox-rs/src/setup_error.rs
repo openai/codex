@@ -50,7 +50,7 @@ pub enum SetupErrorCode {
     HelperDpapiProtectFailed,
     /// Helper failed to write the sandbox users secrets file.
     HelperUsersFileWriteFailed,
-    /// Helper failed to write the setup marker file.
+    /// Helper failed to write or protect the setup marker file.
     HelperSetupMarkerWriteFailed,
     /// Helper failed to resolve a SID or convert it to a PSID.
     HelperSidResolveFailed,
