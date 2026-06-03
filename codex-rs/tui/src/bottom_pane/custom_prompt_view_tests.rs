@@ -7,7 +7,7 @@ fn paste_burst_newline_does_not_submit_short_first_line() {
     let now = Instant::now();
 
     for (first_line, second_line) in [("x", "rest"), ("id", "body"), ("foo", "bar")] {
-        let (mut view, submitted_rx) = custom_prompt_view("");
+        let (mut view, submitted_rx) = custom_prompt_view();
         let mut ms = 0;
 
         for ch in first_line.chars() {
@@ -36,7 +36,7 @@ fn paste_burst_newline_does_not_submit_short_first_line() {
 
 #[test]
 fn paste_burst_newline_after_tab_does_not_submit() {
-    let (mut view, submitted_rx) = custom_prompt_view("");
+    let (mut view, submitted_rx) = custom_prompt_view();
     let now = Instant::now();
     let mut ms = 0;
 
@@ -62,7 +62,7 @@ fn paste_burst_newline_after_tab_does_not_submit() {
 
 #[test]
 fn delayed_enter_after_typing_submits() {
-    let (mut view, submitted_rx) = custom_prompt_view("");
+    let (mut view, submitted_rx) = custom_prompt_view();
     let now = Instant::now();
 
     for (idx, ch) in "foo".chars().enumerate() {
@@ -74,12 +74,12 @@ fn delayed_enter_after_typing_submits() {
     assert!(view.is_complete());
 }
 
-fn custom_prompt_view(initial_text: &str) -> (CustomPromptView, Receiver<String>) {
+fn custom_prompt_view() -> (CustomPromptView, Receiver<String>) {
     let (submitted, submitted_rx) = std::sync::mpsc::channel();
     let view = CustomPromptView::new(
         "Edit goal".to_string(),
         "Type a goal objective and press Enter".to_string(),
-        initial_text.to_string(),
+        String::new(),
         /*context_label*/ None,
         Box::new(move |text| {
             submitted.send(text).expect("send submitted text");

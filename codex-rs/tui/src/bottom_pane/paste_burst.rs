@@ -16,11 +16,6 @@
 //! - buffer a burst as a single pasted string, or
 //! - let input flow through as normal typing.
 //!
-//! Simpler bottom-pane views can also use the same detector without buffering: insert characters
-//! immediately, call [`PasteBurst::on_plain_char_no_hold`], and use
-//! [`PasteBurst::extend_window`] when a paste-like burst is observed so Enter is treated as a
-//! newline during the burst.
-//!
 //! # Call Pattern
 //!
 //! `PasteBurst` is a pure state machine: it never mutates the textarea directly. The caller feeds
@@ -37,11 +32,10 @@
 //!   [`PasteBurst::flush_before_modified_input`] to avoid leaving buffered text "stuck", and then
 //!   [`PasteBurst::clear_window_after_non_char`] so subsequent typing does not get grouped into a
 //!   previous burst.
-//! - If the caller inserted every char immediately and is using `PasteBurst` only as an Enter
-//!   suppression detector, it can skip buffering and simply call [`PasteBurst::extend_window`] when
-//!   [`PasteBurst::on_plain_char_no_hold`] returns [`CharDecision::BeginBuffer`]. Its Enter handler
-//!   can also use [`PasteBurst::recent_plain_char_was_within_burst_interval`] so very short pasted
-//!   first lines still keep the following Enter as a newline.
+//! - Direct-insert callers can skip buffering, use
+//!   [`PasteBurst::direct_insert_newline_should_insert`] in their Enter handler, and call
+//!   [`PasteBurst::extend_window`] when Enter or [`PasteBurst::on_plain_char_no_hold`] reports a
+//!   burst-like stream.
 //!
 //! # State Variables
 //!
@@ -343,10 +337,12 @@ impl PasteBurst {
         self.is_active() || in_burst_window
     }
 
-    /// Returns true when Enter arrives too soon after a plain char to be confident it was typed.
-    pub fn recent_plain_char_was_within_burst_interval(&self, now: Instant) -> bool {
-        self.last_plain_char_time
-            .is_some_and(|t| now.duration_since(t) <= PASTE_BURST_CHAR_INTERVAL)
+    /// Decide if Enter should insert a newline for callers that insert chars immediately.
+    pub fn direct_insert_newline_should_insert(&self, now: Instant) -> bool {
+        self.newline_should_insert_instead_of_submit(now)
+            || self
+                .last_plain_char_time
+                .is_some_and(|t| now.duration_since(t) <= PASTE_BURST_CHAR_INTERVAL)
     }
 
     /// Keep the burst window alive.

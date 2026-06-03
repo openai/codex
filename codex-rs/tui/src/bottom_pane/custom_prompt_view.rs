@@ -21,7 +21,6 @@ use super::popup_consts::standard_popup_hint_line;
 use super::CancellationEvent;
 use super::bottom_pane_view::BottomPaneView;
 use super::bottom_pane_view::ViewCompletion;
-use super::paste_burst::CharDecision;
 use super::paste_burst::PasteBurst;
 use super::textarea::TextArea;
 use super::textarea::TextAreaState;
@@ -70,8 +69,6 @@ impl CustomPromptView {
     }
 
     fn handle_key_event_at(&mut self, key_event: KeyEvent, now: Instant) {
-        // Text is inserted immediately below; flushing only expires Enter suppression.
-        self.flush_paste_burst_detector(now);
         match key_event {
             KeyEvent {
                 code: KeyCode::Esc, ..
@@ -83,13 +80,7 @@ impl CustomPromptView {
                 modifiers,
                 ..
             } => {
-                if self
-                    .paste_burst
-                    .newline_should_insert_instead_of_submit(now)
-                    || self
-                        .paste_burst
-                        .recent_plain_char_was_within_burst_interval(now)
-                {
+                if self.paste_burst.direct_insert_newline_should_insert(now) {
                     self.paste_burst.extend_window(now);
                     self.textarea.insert_str("\n");
                     return;
@@ -109,10 +100,7 @@ impl CustomPromptView {
                 modifiers,
                 ..
             } if !has_ctrl_or_alt(modifiers) && self.textarea.allows_paste_burst() => {
-                let paste_like_burst = matches!(
-                    self.paste_burst.on_plain_char_no_hold(now),
-                    Some(CharDecision::BeginBuffer { .. })
-                );
+                let paste_like_burst = self.paste_burst.on_plain_char_no_hold(now).is_some();
                 self.textarea.input(key_event);
                 if paste_like_burst {
                     self.paste_burst.extend_window(now);
@@ -123,12 +111,7 @@ impl CustomPromptView {
                 modifiers,
                 ..
             } if !has_ctrl_or_alt(modifiers) && self.textarea.allows_paste_burst() => {
-                let in_paste_burst = self
-                    .paste_burst
-                    .newline_should_insert_instead_of_submit(now)
-                    || self
-                        .paste_burst
-                        .recent_plain_char_was_within_burst_interval(now);
+                let in_paste_burst = self.paste_burst.direct_insert_newline_should_insert(now);
                 self.textarea.input(key_event);
                 if in_paste_burst {
                     self.paste_burst.extend_window(now);
@@ -139,10 +122,6 @@ impl CustomPromptView {
                 self.paste_burst.clear_after_explicit_paste();
             }
         }
-    }
-
-    fn flush_paste_burst_detector(&mut self, now: Instant) {
-        let _ = self.paste_burst.flush_if_due(now);
     }
 }
 
@@ -171,15 +150,6 @@ impl BottomPaneView for CustomPromptView {
         self.textarea.insert_str(&pasted);
         self.paste_burst.clear_after_explicit_paste();
         true
-    }
-
-    fn flush_paste_burst_if_due(&mut self) -> bool {
-        self.flush_paste_burst_detector(Instant::now());
-        false
-    }
-
-    fn is_in_paste_burst(&self) -> bool {
-        self.paste_burst.is_active()
     }
 }
 
