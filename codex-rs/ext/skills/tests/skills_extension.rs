@@ -89,7 +89,7 @@ async fn installed_extension_injects_available_catalog_and_selected_entrypoint()
                 }],
                 environments: vec![TurnInputEnvironment {
                     environment_id: "env-1".to_string(),
-                    cwd: std::env::current_dir()?,
+                    cwd: std::env::temp_dir(),
                     is_primary: true,
                 }],
             },
