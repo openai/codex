@@ -1061,7 +1061,7 @@ impl Session {
                 watch::channel(false);
 
             let sess = Arc::new(Session {
-                thread_id: thread_id,
+                thread_id,
                 installation_id,
                 tx_event: tx_event.clone(),
                 agent_status,
