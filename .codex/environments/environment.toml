@@ -3,7 +3,7 @@ version = 1
 name = "codex"
 
 [setup]
-script = "sh ./.codex/environments/setup.sh"
+script = "python ./.codex/environments/setup.py"
 
 [[actions]]
 name = "Run"
