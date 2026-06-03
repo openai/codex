@@ -146,7 +146,7 @@ pub(super) fn generated_image_callback(
             return;
         }
     };
-    let image_item = match normalize_output_image(scope, value, None) {
+    let image_item = match normalize_output_image(scope, value, /*detail_override*/ None) {
         Ok(image_item) => image_item,
         Err(()) => return,
     };
