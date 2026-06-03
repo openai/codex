@@ -145,6 +145,7 @@ export type { GuardianApprovalReview } from "./GuardianApprovalReview";
 export type { GuardianApprovalReviewAction } from "./GuardianApprovalReviewAction";
 export type { GuardianApprovalReviewStatus } from "./GuardianApprovalReviewStatus";
 export type { GuardianCommandSource } from "./GuardianCommandSource";
+export type { GuardianDenialKind } from "./GuardianDenialKind";
 export type { GuardianRiskLevel } from "./GuardianRiskLevel";
 export type { GuardianUserAuthorization } from "./GuardianUserAuthorization";
 export type { GuardianWarningNotification } from "./GuardianWarningNotification";

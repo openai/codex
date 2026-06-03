@@ -1520,6 +1520,16 @@
     "GuardianApprovalReview": {
       "description": "[UNSTABLE] Temporary approval auto-review payload used by `item/autoApprovalReview/*` notifications. This shape is expected to change soon.",
       "properties": {
+        "denialKind": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/GuardianDenialKind"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "rationale": {
           "type": [
             "string",
@@ -1766,6 +1776,14 @@
       "enum": [
         "shell",
         "unifiedExec"
+      ],
+      "type": "string"
+    },
+    "GuardianDenialKind": {
+      "description": "[UNSTABLE] Whether a denied action can be explicitly approved for one retry.",
+      "enum": [
+        "soft",
+        "hard"
       ],
       "type": "string"
     },

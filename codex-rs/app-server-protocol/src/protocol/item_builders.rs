@@ -234,6 +234,7 @@ pub fn guardian_auto_approval_review_notification(
         risk_level: assessment.risk_level.map(Into::into),
         user_authorization: assessment.user_authorization.map(Into::into),
         rationale: assessment.rationale.clone(),
+        denial_kind: assessment.denial_kind.map(Into::into),
     };
     let action = assessment.action.clone().into();
     match assessment.status {

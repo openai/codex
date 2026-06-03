@@ -30,8 +30,11 @@ impl RecentAutoReviewDenials {
         self.entries.iter()
     }
 
-    pub(crate) fn take(&mut self, id: &str) -> Option<GuardianAssessmentEvent> {
+    pub(crate) fn take_soft(&mut self, id: &str) -> Option<GuardianAssessmentEvent> {
         let idx = self.entries.iter().position(|entry| entry.id == id)?;
+        if !self.entries[idx].is_explicit_retry_eligible() {
+            return None;
+        }
         self.entries.remove(idx)
     }
 }
@@ -77,6 +80,7 @@ pub(crate) fn action_summary(action: &GuardianAssessmentAction) -> String {
 #[cfg(test)]
 mod tests {
     use codex_protocol::approvals::GuardianCommandSource;
+    use codex_protocol::approvals::GuardianDenialKind;
     use codex_utils_absolute_path::test_support::PathBufExt;
     use codex_utils_absolute_path::test_support::test_path_buf;
     use pretty_assertions::assert_eq;
@@ -94,6 +98,7 @@ mod tests {
             risk_level: None,
             user_authorization: None,
             rationale: Some(format!("rationale {id}")),
+            denial_kind: Some(GuardianDenialKind::Soft),
             decision_source: None,
             action: GuardianAssessmentAction::Command {
                 source: GuardianCommandSource::Shell,
@@ -128,6 +133,23 @@ mod tests {
                 "review-3",
                 "review-2",
             ]
+        );
+    }
+
+    #[test]
+    fn only_soft_denials_can_be_taken_for_approval() {
+        let mut denials = RecentAutoReviewDenials::default();
+        let mut hard = denied_event(1);
+        hard.denial_kind = Some(GuardianDenialKind::Hard);
+        denials.push(hard);
+
+        assert!(denials.take_soft("review-1").is_none());
+        assert_eq!(denials.entries().count(), 1);
+
+        denials.push(denied_event(2));
+        assert_eq!(
+            denials.take_soft("review-2").map(|event| event.id),
+            Some("review-2".to_string())
         );
     }
 }

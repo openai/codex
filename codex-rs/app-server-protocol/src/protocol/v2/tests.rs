@@ -65,7 +65,7 @@ fn approvals_reviewer_serializes_auto_review_and_accepts_legacy_guardian_subagen
     );
     assert_eq!(
         serde_json::to_string(&ApprovalsReviewer::AutoReview).expect("serialize reviewer"),
-        "\"guardian_subagent\""
+        "\"auto_review\""
     );
 
     for value in ["user", "auto_review", "guardian_subagent"] {
@@ -2198,6 +2198,7 @@ fn automatic_approval_review_deserializes_aborted_status() {
             risk_level: None,
             user_authorization: None,
             rationale: None,
+            denial_kind: None,
         }
     );
 }

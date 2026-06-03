@@ -147,19 +147,27 @@ impl Approvable<ShellRequest> for ShellRuntime {
         let guardian_review_id = ctx.guardian_review_id.clone();
         Box::pin(async move {
             if let Some(review_id) = guardian_review_id {
-                return review_approval_request(
-                    session,
-                    turn,
-                    review_id,
-                    GuardianApprovalRequest::Shell {
-                        id: call_id,
-                        command,
-                        cwd: cwd.clone(),
-                        sandbox_permissions: req.sandbox_permissions,
-                        additional_permissions: req.additional_permissions.clone(),
-                        justification: req.justification.clone(),
+                return with_cached_approval(
+                    &session.services,
+                    "shell",
+                    keys,
+                    move || async move {
+                        review_approval_request(
+                            session,
+                            turn,
+                            review_id,
+                            GuardianApprovalRequest::Shell {
+                                id: call_id,
+                                command,
+                                cwd: cwd.clone(),
+                                sandbox_permissions: req.sandbox_permissions,
+                                additional_permissions: req.additional_permissions.clone(),
+                                justification: req.justification.clone(),
+                            },
+                            retry_reason,
+                        )
+                        .await
                     },
-                    retry_reason,
                 )
                 .await;
             }

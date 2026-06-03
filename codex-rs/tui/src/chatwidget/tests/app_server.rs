@@ -438,7 +438,8 @@ async fn live_app_server_guardian_warning_notification_renders_message() {
     chat.handle_server_notification(
         ServerNotification::GuardianWarning(GuardianWarningNotification {
             thread_id: "thread-1".to_string(),
-            message: "Automatic approval review denied the requested action.".to_string(),
+            message: "Turn ended by Auto-review. Run /approve to review eligible soft denials."
+                .to_string(),
         }),
         /*replay_kind*/ None,
     );
@@ -447,9 +448,10 @@ async fn live_app_server_guardian_warning_notification_renders_message() {
     assert_eq!(cells.len(), 1, "expected one warning history cell");
     let rendered = lines_to_single_string(&cells[0]);
     assert!(
-        rendered.contains("Automatic approval review denied the requested action."),
+        rendered.contains("Run /approve to review eligible soft denials."),
         "expected guardian warning notification message, got {rendered}"
     );
+    assert_chatwidget_snapshot!("live_app_server_guardian_warning_notification", rendered);
 }
 
 #[tokio::test]

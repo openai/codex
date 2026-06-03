@@ -4741,6 +4741,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         session_telemetry: session_telemetry.clone(),
         models_manager: Arc::clone(&models_manager),
         tool_approvals: Mutex::new(ApprovalStore::default()),
+        guardian_denied_actions: Mutex::new(Default::default()),
         guardian_rejections: Mutex::new(std::collections::HashMap::new()),
         guardian_rejection_circuit_breaker: Mutex::new(Default::default()),
         runtime_handle: tokio::runtime::Handle::current(),
@@ -6831,6 +6832,7 @@ where
         session_telemetry: session_telemetry.clone(),
         models_manager: Arc::clone(&models_manager),
         tool_approvals: Mutex::new(ApprovalStore::default()),
+        guardian_denied_actions: Mutex::new(Default::default()),
         guardian_rejections: Mutex::new(std::collections::HashMap::new()),
         guardian_rejection_circuit_breaker: Mutex::new(Default::default()),
         runtime_handle: tokio::runtime::Handle::current(),
@@ -8403,6 +8405,14 @@ async fn guardian_auto_review_interrupts_after_three_consecutive_denials() {
         )
     });
     assert_eq!(aborted.reason, TurnAbortReason::Interrupted);
+    assert!(observed.iter().any(|event| {
+        matches!(
+            event,
+            EventMsg::GuardianWarning(event)
+                if event.message.contains("Run /approve")
+                    && event.message.contains("eligible soft denials")
+        )
+    }));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

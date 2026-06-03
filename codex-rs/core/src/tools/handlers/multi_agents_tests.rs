@@ -23,6 +23,7 @@ use codex_model_provider::create_model_provider;
 use codex_model_provider_info::built_in_model_providers;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
+use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::ShellEnvironmentPolicy;
 use codex_protocol::models::BaseInstructions;
@@ -2252,6 +2253,9 @@ async fn spawn_agent_reapplies_runtime_sandbox_after_role_config() {
     turn.approval_policy
         .set(AskForApproval::OnRequest)
         .expect("approval policy should be set");
+    let mut config = (*turn.config).clone();
+    config.approvals_reviewer = ApprovalsReviewer::AutoReview;
+    set_turn_config(&mut turn, config);
     turn.permission_profile = expected_permission_profile.clone();
     assert_ne!(
         expected_permission_profile,
@@ -2291,6 +2295,7 @@ async fn spawn_agent_reapplies_runtime_sandbox_after_role_config() {
         .await;
     assert_eq!(snapshot.sandbox_policy(), expected_sandbox);
     assert_eq!(snapshot.approval_policy, AskForApproval::OnRequest);
+    assert_eq!(snapshot.approvals_reviewer, ApprovalsReviewer::AutoReview);
     assert_eq!(snapshot.permission_profile, expected_permission_profile);
     let child_thread = manager
         .get_thread(agent_id)

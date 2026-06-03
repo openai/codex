@@ -13,6 +13,7 @@ use codex_experimental_api_macros::ExperimentalApi;
 use codex_protocol::approvals::GuardianAssessmentAction as CoreGuardianAssessmentAction;
 use codex_protocol::approvals::GuardianAssessmentDecisionSource as CoreGuardianAssessmentDecisionSource;
 use codex_protocol::approvals::GuardianCommandSource as CoreGuardianCommandSource;
+use codex_protocol::approvals::GuardianDenialKind as CoreGuardianDenialKind;
 use codex_protocol::items::AgentMessageContent as CoreAgentMessageContent;
 use codex_protocol::items::McpToolCallStatus as CoreMcpToolCallStatus;
 use codex_protocol::items::TurnItem as CoreTurnItem;
@@ -469,6 +470,24 @@ impl From<CoreGuardianUserAuthorization> for GuardianUserAuthorization {
     }
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "lowercase")]
+#[ts(export_to = "v2/")]
+/// [UNSTABLE] Whether a denied action can be explicitly approved for one retry.
+pub enum GuardianDenialKind {
+    Soft,
+    Hard,
+}
+
+impl From<CoreGuardianDenialKind> for GuardianDenialKind {
+    fn from(value: CoreGuardianDenialKind) -> Self {
+        match value {
+            CoreGuardianDenialKind::Soft => Self::Soft,
+            CoreGuardianDenialKind::Hard => Self::Hard,
+        }
+    }
+}
+
 /// [UNSTABLE] Temporary approval auto-review payload used by
 /// `item/autoApprovalReview/*` notifications. This shape is expected to change
 /// soon.
@@ -480,6 +499,7 @@ pub struct GuardianApprovalReview {
     pub risk_level: Option<GuardianRiskLevel>,
     pub user_authorization: Option<GuardianUserAuthorization>,
     pub rationale: Option<String>,
+    pub denial_kind: Option<GuardianDenialKind>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]

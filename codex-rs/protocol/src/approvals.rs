@@ -108,6 +108,14 @@ pub enum GuardianAssessmentOutcome {
     Deny,
 }
 
+/// Whether a Guardian denial is eligible for an explicit user-approved retry.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "lowercase")]
+pub enum GuardianDenialKind {
+    Soft,
+    Hard,
+}
+
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum GuardianAssessmentStatus {
@@ -206,12 +214,23 @@ pub struct GuardianAssessmentEvent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub rationale: Option<String>,
+    /// Whether a denied action can be explicitly approved for one retry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub denial_kind: Option<GuardianDenialKind>,
     /// Source that produced the terminal assessment decision.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub decision_source: Option<GuardianAssessmentDecisionSource>,
     /// Canonical action payload that was reviewed.
     pub action: GuardianAssessmentAction,
+}
+
+impl GuardianAssessmentEvent {
+    pub fn is_explicit_retry_eligible(&self) -> bool {
+        self.status == GuardianAssessmentStatus::Denied
+            && self.denial_kind == Some(GuardianDenialKind::Soft)
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
@@ -447,5 +466,39 @@ mod tests {
                 cwd: test_path_buf("/tmp").abs(),
             }
         );
+    }
+
+    #[test]
+    fn only_soft_denials_are_eligible_for_explicit_retry() {
+        let mut event = GuardianAssessmentEvent {
+            id: "guardian-1".to_string(),
+            target_item_id: None,
+            turn_id: "turn-1".to_string(),
+            started_at_ms: 0,
+            completed_at_ms: Some(1),
+            status: GuardianAssessmentStatus::Denied,
+            risk_level: None,
+            user_authorization: None,
+            rationale: None,
+            denial_kind: Some(GuardianDenialKind::Soft),
+            decision_source: None,
+            action: GuardianAssessmentAction::Command {
+                source: GuardianCommandSource::Shell,
+                command: "rm -f /tmp/example".to_string(),
+                cwd: test_path_buf("/tmp").abs(),
+            },
+        };
+
+        assert!(event.is_explicit_retry_eligible());
+
+        event.denial_kind = Some(GuardianDenialKind::Hard);
+        assert!(!event.is_explicit_retry_eligible());
+
+        event.denial_kind = None;
+        assert!(!event.is_explicit_retry_eligible());
+
+        event.denial_kind = Some(GuardianDenialKind::Soft);
+        event.status = GuardianAssessmentStatus::Approved;
+        assert!(!event.is_explicit_retry_eligible());
     }
 }

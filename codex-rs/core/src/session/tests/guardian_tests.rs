@@ -150,13 +150,13 @@ async fn request_permissions_routes_to_guardian_when_reviewer_is_enabled() {
         response,
         Some(RequestPermissionsResponse {
             permissions: requested_permissions.clone(),
-            scope: PermissionGrantScope::Turn,
+            scope: PermissionGrantScope::Session,
             strict_auto_review: false,
         })
     );
     assert_eq!(
         session
-            .granted_turn_permissions(codex_exec_server::LOCAL_ENVIRONMENT_ID)
+            .granted_session_permissions(codex_exec_server::LOCAL_ENVIRONMENT_ID)
             .await,
         Some(requested_permissions.into())
     );

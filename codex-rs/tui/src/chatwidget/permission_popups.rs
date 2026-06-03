@@ -5,6 +5,9 @@
 //! `windows_sandbox_prompts`.
 
 use super::*;
+use codex_protocol::approvals::GuardianDenialKind;
+
+const AUTO_REVIEW_DENIALS_VIEW_ID: &str = "auto-review-denials";
 
 impl ChatWidget {
     /// Open the permissions popup.
@@ -174,6 +177,17 @@ impl ChatWidget {
             return;
         };
 
+        if !self.bottom_pane.replace_selection_view_if_active(
+            AUTO_REVIEW_DENIALS_VIEW_ID,
+            self.auto_review_denials_popup_params(thread_id),
+        ) {
+            self.bottom_pane
+                .show_selection_view(self.auto_review_denials_popup_params(thread_id));
+        }
+        self.request_redraw();
+    }
+
+    fn auto_review_denials_popup_params(&self, thread_id: ThreadId) -> SelectionViewParams {
         let mut items = vec![SelectionItem {
             name: "Command".to_string(),
             description: Some("Rationale".to_string()),
@@ -192,38 +206,59 @@ impl ChatWidget {
                         .rationale
                         .as_deref()
                         .unwrap_or("Auto-review did not include a rationale.");
-                    SelectionItem {
-                        name: summary.clone(),
-                        description: Some(rationale.to_string()),
-                        selected_description: Some(rationale.to_string()),
-                        search_value: Some(format!("{summary} {rationale}")),
-                        actions: vec![Box::new(move |tx| {
+                    let is_soft = event.is_explicit_retry_eligible();
+                    let denial_label = match event.denial_kind {
+                        Some(GuardianDenialKind::Soft) => "Soft deny",
+                        Some(GuardianDenialKind::Hard) => "Hard deny",
+                        None => "Review failure",
+                    };
+                    let description = format!("{denial_label}: {rationale}");
+                    let actions: Vec<SelectionAction> = if is_soft {
+                        vec![Box::new(move |tx| {
                             tx.send(AppEvent::ApproveRecentAutoReviewDenial {
                                 thread_id,
                                 id: id.clone(),
                             });
-                        })],
-                        dismiss_on_select: true,
+                        })]
+                    } else {
+                        Vec::new()
+                    };
+                    SelectionItem {
+                        name: summary.clone(),
+                        description: Some(description.clone()),
+                        selected_description: Some(description.clone()),
+                        search_value: Some(format!("{summary} {description}")),
+                        is_disabled: !is_soft,
+                        disabled_reason: (!is_soft).then(|| {
+                            "Only soft denials are eligible for an explicit retry.".to_string()
+                        }),
+                        actions,
+                        dismiss_on_select: is_soft,
                         ..Default::default()
                     }
                 }),
         );
 
-        self.bottom_pane.show_selection_view(SelectionViewParams {
-            title: Some("Auto-review Denials".to_string()),
-            subtitle: Some("Select a denied action to approve.".to_string()),
+        SelectionViewParams {
+            view_id: Some(AUTO_REVIEW_DENIALS_VIEW_ID),
+            title: Some("Auto-review Denial Recovery".to_string()),
+            subtitle: Some(
+                "Select a soft denial to approve one retry. Hard denials require a safer alternative."
+                    .to_string(),
+            ),
             footer_hint: Some(standard_popup_hint_line()),
             items,
             is_searchable: true,
             col_width_mode: ColumnWidthMode::AutoAllRows,
             ..Default::default()
-        });
-        self.request_redraw();
+        }
     }
 
     pub(crate) fn approve_recent_auto_review_denial(&mut self, thread_id: ThreadId, id: String) {
-        let Some(event) = self.review.recent_auto_review_denials.take(&id) else {
-            self.add_error_message("That auto-review denial is no longer available.".to_string());
+        let Some(event) = self.review.recent_auto_review_denials.take_soft(&id) else {
+            self.add_error_message(
+                "That denial is not eligible for an explicit retry.".to_string(),
+            );
             return;
         };
 

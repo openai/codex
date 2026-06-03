@@ -880,6 +880,7 @@ fn sample_guardian_review_completed(
                 risk_level: None,
                 user_authorization: None,
                 rationale: None,
+                denial_kind: None,
             },
             action: GuardianApprovalReviewAction::Command {
                 source: AppServerGuardianCommandSource::Shell,

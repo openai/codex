@@ -43,6 +43,7 @@ use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::GranularApprovalConfig;
 use codex_protocol::protocol::GuardianAssessmentStatus;
+use codex_protocol::protocol::GuardianDenialKind;
 use codex_protocol::protocol::GuardianRiskLevel;
 use codex_protocol::protocol::GuardianUserAuthorization;
 use codex_protocol::protocol::ReviewDecision;
@@ -56,6 +57,7 @@ use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_response_once;
+use core_test_support::responses::mount_response_sequence;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
@@ -101,6 +103,47 @@ fn guardian_rejection_circuit_breaker_interrupts_after_three_consecutive_denials
         circuit_breaker.record_denial("turn-1"),
         GuardianRejectionCircuitBreakerAction::Continue
     );
+}
+
+#[test]
+fn guardian_denied_action_registry_claims_only_exact_soft_denial_once() {
+    let action = codex_protocol::protocol::GuardianAssessmentAction::Command {
+        source: codex_protocol::protocol::GuardianCommandSource::Shell,
+        command: "rm -f /tmp/guardian".to_string(),
+        cwd: test_path_buf("/tmp").abs(),
+    };
+    let mut event = codex_protocol::protocol::GuardianAssessmentEvent {
+        id: "soft-1".to_string(),
+        target_item_id: None,
+        turn_id: "turn-1".to_string(),
+        started_at_ms: 0,
+        completed_at_ms: Some(1),
+        status: GuardianAssessmentStatus::Denied,
+        risk_level: Some(GuardianRiskLevel::High),
+        user_authorization: Some(GuardianUserAuthorization::Low),
+        rationale: Some("Needs explicit approval".to_string()),
+        denial_kind: Some(GuardianDenialKind::Soft),
+        decision_source: Some(GuardianAssessmentDecisionSource::Agent),
+        action: action.clone(),
+    };
+    let mut registry = GuardianDeniedActionRegistry::default();
+
+    registry.record(event.id.clone(), action.clone(), GuardianDenialKind::Soft);
+    assert!(registry.claim_explicit_retry(&event));
+    assert!(!registry.claim_explicit_retry(&event));
+
+    event.id = "hard-1".to_string();
+    registry.record(event.id.clone(), action.clone(), GuardianDenialKind::Hard);
+    assert!(!registry.claim_explicit_retry(&event));
+
+    event.id = "altered-1".to_string();
+    registry.record(event.id.clone(), action, GuardianDenialKind::Soft);
+    event.action = codex_protocol::protocol::GuardianAssessmentAction::Command {
+        source: codex_protocol::protocol::GuardianCommandSource::Shell,
+        command: "rm -f /tmp/different".to_string(),
+        cwd: test_path_buf("/tmp").abs(),
+    };
+    assert!(!registry.claim_explicit_retry(&event));
 }
 
 #[test]
@@ -1235,6 +1278,7 @@ fn parse_guardian_assessment_extracts_embedded_json() {
             user_authorization: GuardianUserAuthorization::Low,
             outcome: GuardianAssessmentOutcome::Allow,
             rationale: "ok".to_string(),
+            denial_kind: None,
         }
     );
 }
@@ -1251,6 +1295,7 @@ fn parse_guardian_assessment_treats_bare_allow_as_low_risk() {
             user_authorization: GuardianUserAuthorization::Unknown,
             outcome: GuardianAssessmentOutcome::Allow,
             rationale: "Auto-review returned a low-risk allow decision.".to_string(),
+            denial_kind: None,
         }
     );
 }
@@ -1267,8 +1312,36 @@ fn parse_guardian_assessment_treats_bare_deny_as_high_risk() {
             user_authorization: GuardianUserAuthorization::Unknown,
             outcome: GuardianAssessmentOutcome::Deny,
             rationale: "Auto-review returned a deny decision without a rationale.".to_string(),
+            denial_kind: Some(GuardianDenialKind::Soft),
         }
     );
+}
+
+#[test]
+fn parse_guardian_assessment_preserves_explicit_hard_denial() {
+    let parsed = parse_guardian_assessment(Some(
+        r#"{"risk_level":"high","user_authorization":"high","outcome":"deny","denial_kind":"hard","rationale":"Absolute tenant policy deny."}"#,
+    ))
+    .expect("guardian assessment");
+
+    assert_eq!(
+        parsed,
+        GuardianAssessment {
+            risk_level: GuardianRiskLevel::High,
+            user_authorization: GuardianUserAuthorization::High,
+            outcome: GuardianAssessmentOutcome::Deny,
+            rationale: "Absolute tenant policy deny.".to_string(),
+            denial_kind: Some(GuardianDenialKind::Hard),
+        }
+    );
+}
+
+#[test]
+fn parse_guardian_assessment_defaults_critical_denial_to_hard() {
+    let parsed = parse_guardian_assessment(Some(r#"{"risk_level":"critical","outcome":"deny"}"#))
+        .expect("guardian assessment");
+
+    assert_eq!(parsed.denial_kind, Some(GuardianDenialKind::Hard));
 }
 
 #[test]
@@ -1295,6 +1368,10 @@ fn guardian_output_schema_requires_only_outcome_and_allows_optional_details() {
                 },
                 "rationale": {
                     "type": "string"
+                },
+                "denial_kind": {
+                    "type": "string",
+                    "enum": ["soft", "hard"]
                 }
             },
             "required": ["outcome"]
@@ -1496,6 +1573,10 @@ async fn guardian_review_request_layout_matches_model_visible_request_snapshot()
                 },
                 "rationale": {
                     "type": "string"
+                },
+                "denial_kind": {
+                    "type": "string",
+                    "enum": ["soft", "hard"]
                 }
             },
             "required": ["outcome"]
@@ -2072,10 +2153,67 @@ async fn guardian_review_surfaces_responses_api_errors_in_rejection_reason() -> 
     let rejection_message =
         guardian_rejection_message(session.as_ref(), "review-shell-guardian-error").await;
     assert!(
-        rejection_message.contains("Reason: Automatic approval review failed:")
+        rejection_message
+            .contains("Reason: Automatic approval review failed because the reviewer session")
             && rejection_message.contains(error_message),
         "rejection message should include guardian rationale: {rejection_message}"
     );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn guardian_review_retries_reviewer_availability_failure() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let guardian_assessment = serde_json::json!({
+        "risk_level": "low",
+        "user_authorization": "high",
+        "outcome": "allow",
+        "rationale": "The command only inspects local git state.",
+    })
+    .to_string();
+    let request_log = mount_response_sequence(
+        &server,
+        vec![
+            wiremock::ResponseTemplate::new(503).set_body_json(serde_json::json!({
+                "error": {
+                    "message": "reviewer capacity temporarily unavailable"
+                }
+            })),
+            wiremock::ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(sse(vec![
+                    ev_response_created("resp-guardian"),
+                    ev_assistant_message("msg-guardian", &guardian_assessment),
+                    ev_completed("resp-guardian"),
+                ])),
+        ],
+    )
+    .await;
+
+    let (session, turn) = guardian_test_session_and_turn(&server).await;
+    seed_guardian_parent_history(&session, &turn).await;
+
+    let decision = review_approval_request(
+        &session,
+        &turn,
+        "review-shell-guardian-retry".to_string(),
+        GuardianApprovalRequest::Shell {
+            id: "shell-guardian-retry".to_string(),
+            command: vec!["git".to_string(), "status".to_string()],
+            cwd: test_path_buf("/repo/codex-rs/core").abs(),
+            sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
+            additional_permissions: None,
+            justification: Some("Inspect repo state before proceeding.".to_string()),
+        },
+        /*retry_reason*/ None,
+    )
+    .await;
+
+    assert_eq!(decision, ReviewDecision::ApprovedForSession);
+    assert_eq!(request_log.requests().len(), 2);
 
     Ok(())
 }
@@ -2168,7 +2306,7 @@ async fn guardian_parallel_reviews_fork_from_last_committed_trunk_history() -> a
                 /*retry_reason*/ None
             )
             .await,
-            ReviewDecision::Approved
+            ReviewDecision::ApprovedForSession
         );
         session
             .record_conversation_items(
@@ -2269,7 +2407,7 @@ async fn guardian_parallel_reviews_fork_from_last_committed_trunk_history() -> a
             Some("parallel follow-up".to_string()),
         )
         .await;
-        assert_eq!(third_decision, ReviewDecision::Approved);
+        assert_eq!(third_decision, ReviewDecision::ApprovedForSession);
         let requests = server.requests().await;
         assert_eq!(requests.len(), 3);
         let second_request_body = serde_json::from_slice::<serde_json::Value>(&requests[1])?;
@@ -2305,7 +2443,7 @@ async fn guardian_parallel_reviews_fork_from_last_committed_trunk_history() -> a
         gate_tx
             .send(())
             .expect("second guardian review gate should still be open");
-        assert_eq!(second_review.await?, ReviewDecision::Approved);
+        assert_eq!(second_review.await?, ReviewDecision::ApprovedForSession);
         server.shutdown().await;
 
         Ok(())

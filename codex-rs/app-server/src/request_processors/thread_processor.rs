@@ -1756,8 +1756,14 @@ impl ThreadRequestProcessor {
         params: ThreadApproveGuardianDeniedActionParams,
     ) -> Result<ThreadApproveGuardianDeniedActionResponse, JSONRPCErrorError> {
         let ThreadApproveGuardianDeniedActionParams { thread_id, event } = params;
-        let event = serde_json::from_value(event)
-            .map_err(|err| invalid_request(format!("invalid Guardian denial event: {err}")))?;
+        let event: codex_protocol::protocol::GuardianAssessmentEvent =
+            serde_json::from_value(event)
+                .map_err(|err| invalid_request(format!("invalid Guardian denial event: {err}")))?;
+        if !event.is_explicit_retry_eligible() {
+            return Err(invalid_request(
+                "Guardian denial is not eligible for an explicit retry",
+            ));
+        }
         let (_, thread) = self.load_thread(&thread_id).await?;
 
         self.submit_core_op(

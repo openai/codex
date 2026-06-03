@@ -33,7 +33,6 @@ use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::GuardianAssessmentEvent;
-use codex_protocol::protocol::GuardianAssessmentStatus;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::McpServerRefreshConfig;
 use codex_protocol::protocol::Op;
@@ -887,10 +886,18 @@ pub(super) async fn submission_loop(
 }
 
 async fn approve_guardian_denied_action(sess: &Arc<Session>, event: GuardianAssessmentEvent) {
-    if event.status != GuardianAssessmentStatus::Denied {
+    if !sess
+        .services
+        .guardian_denied_actions
+        .lock()
+        .await
+        .claim_explicit_retry(&event)
+    {
         warn!(
             review_id = event.id.as_str(),
-            "ignoring approval for non-denied Guardian assessment"
+            status = ?event.status,
+            denial_kind = ?event.denial_kind,
+            "ignoring Guardian assessment without a matching one-use soft denial"
         );
         return;
     }

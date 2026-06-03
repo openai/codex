@@ -17,10 +17,14 @@ mod prompt;
 mod review;
 mod review_session;
 
+use std::collections::HashMap;
 use std::time::Duration;
 
+use codex_protocol::protocol::GuardianAssessmentAction;
 use codex_protocol::protocol::GuardianAssessmentDecisionSource;
+use codex_protocol::protocol::GuardianAssessmentEvent;
 use codex_protocol::protocol::GuardianAssessmentOutcome;
+use codex_protocol::protocol::GuardianDenialKind;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -66,12 +70,62 @@ pub(crate) struct GuardianAssessment {
     pub(crate) user_authorization: codex_protocol::protocol::GuardianUserAuthorization,
     pub(crate) outcome: GuardianAssessmentOutcome,
     pub(crate) rationale: String,
+    pub(crate) denial_kind: Option<GuardianDenialKind>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct GuardianRejection {
     pub(crate) rationale: String,
     pub(crate) source: GuardianAssessmentDecisionSource,
+    pub(crate) denial_kind: Option<GuardianDenialKind>,
+}
+
+#[derive(Debug)]
+struct GuardianDeniedAction {
+    action: GuardianAssessmentAction,
+    denial_kind: GuardianDenialKind,
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct GuardianDeniedActionRegistry {
+    actions: HashMap<String, GuardianDeniedAction>,
+}
+
+impl GuardianDeniedActionRegistry {
+    pub(crate) fn record(
+        &mut self,
+        review_id: String,
+        action: GuardianAssessmentAction,
+        denial_kind: GuardianDenialKind,
+    ) {
+        self.actions.insert(
+            review_id,
+            GuardianDeniedAction {
+                action,
+                denial_kind,
+            },
+        );
+    }
+
+    pub(crate) fn remove(&mut self, review_id: &str) {
+        self.actions.remove(review_id);
+    }
+
+    pub(crate) fn claim_explicit_retry(&mut self, event: &GuardianAssessmentEvent) -> bool {
+        if !event.is_explicit_retry_eligible() {
+            return false;
+        }
+        let Some(denied_action) = self.actions.get(&event.id) else {
+            return false;
+        };
+        if denied_action.denial_kind != GuardianDenialKind::Soft
+            || denied_action.action != event.action
+        {
+            return false;
+        }
+        self.actions.remove(&event.id);
+        true
+    }
 }
 
 #[derive(Debug, Default)]

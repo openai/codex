@@ -11,6 +11,7 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::GuardianAssessmentDecisionSource;
 use codex_protocol::protocol::GuardianAssessmentEvent;
 use codex_protocol::protocol::GuardianAssessmentStatus;
+use codex_protocol::protocol::GuardianDenialKind;
 use codex_protocol::protocol::GuardianRiskLevel;
 use codex_protocol::protocol::GuardianUserAuthorization;
 use codex_protocol::protocol::ReviewDecision;
@@ -52,10 +53,21 @@ const GUARDIAN_REJECTION_INSTRUCTIONS: &str = concat!(
     "Otherwise, stop and request user input.",
 );
 
+const GUARDIAN_HARD_DENIAL_INSTRUCTIONS: &str = concat!(
+    "This is a hard denial and cannot be approved by the user. ",
+    "Do not attempt the same outcome via workaround, indirect execution, or policy circumvention. ",
+    "Proceed only with a materially safer alternative, or stop and request user input."
+);
+
 const GUARDIAN_TIMEOUT_INSTRUCTIONS: &str = concat!(
     "The automatic permission approval review did not finish before its deadline. ",
     "Do not assume the action is unsafe based on the timeout alone. ",
     "You may retry once, or ask the user for guidance or explicit approval.",
+);
+
+const GUARDIAN_RETRY_WARNING: &str = concat!(
+    "Automatic approval review hit a retryable reviewer availability failure. ",
+    "Retrying once before failing closed."
 );
 
 pub(crate) fn new_guardian_review_id() -> String {
@@ -73,13 +85,27 @@ pub(crate) async fn guardian_rejection_message(session: &Session, review_id: &st
         .unwrap_or_else(|| GuardianRejection {
             rationale: "Auto-reviewer denied the action without a specific rationale.".to_string(),
             source: GuardianAssessmentDecisionSource::Agent,
+            denial_kind: None,
         });
     match rejection.source {
-        GuardianAssessmentDecisionSource::Agent => format!(
-            "This action was rejected due to unacceptable risk.\nReason: {}\n{}",
-            rejection.rationale.trim(),
-            GUARDIAN_REJECTION_INSTRUCTIONS
-        ),
+        GuardianAssessmentDecisionSource::Agent => {
+            let rationale = rejection.rationale.trim();
+            if rejection.denial_kind == Some(GuardianDenialKind::Hard) {
+                format!(
+                    "This action was hard-denied due to unacceptable risk.\nReason: {rationale}\n{GUARDIAN_HARD_DENIAL_INSTRUCTIONS}",
+                )
+            } else if rationale.starts_with("Automatic approval review failed")
+                || rationale.starts_with("Automatic approval review could not")
+            {
+                format!(
+                    "This action was blocked because automatic approval review could not complete safely.\nReason: {rationale}\n{GUARDIAN_REJECTION_INSTRUCTIONS}",
+                )
+            } else {
+                format!(
+                    "This action was rejected due to unacceptable risk.\nReason: {rationale}\n{GUARDIAN_REJECTION_INSTRUCTIONS}",
+                )
+            }
+        }
     }
 }
 
@@ -130,6 +156,54 @@ impl GuardianReviewError {
             Self::Cancelled => GuardianReviewFailureReason::Cancelled,
         }
     }
+
+    fn is_retryable(&self) -> bool {
+        match self {
+            Self::Timeout => true,
+            Self::Session { message } => session_error_is_retryable(message),
+            Self::PromptBuild { .. } | Self::Parse { .. } | Self::Cancelled => false,
+        }
+    }
+
+    fn retry_reason(&self) -> String {
+        match self {
+            Self::Session { message } => format!(
+                "Previous automatic approval review failed due to reviewer capacity, transport, or session error: {message}. Retry once before treating this as a failed-closed review."
+            ),
+            Self::Timeout => concat!(
+                "Previous automatic approval review timed out. ",
+                "Retry once before treating this as a failed-closed review."
+            )
+            .to_string(),
+            Self::PromptBuild { .. } | Self::Parse { .. } | Self::Cancelled => {
+                "Automatic approval review is not retryable.".to_string()
+            }
+        }
+    }
+}
+
+fn session_error_is_retryable(message: &str) -> bool {
+    let message = message.to_ascii_lowercase();
+    [
+        "429",
+        "500",
+        "502",
+        "503",
+        "504",
+        "capacity",
+        "connection",
+        "internal server error",
+        "overload",
+        "rate limit",
+        "service unavailable",
+        "temporarily unavailable",
+        "timed out",
+        "timeout",
+        "too many requests",
+        "transport",
+    ]
+    .iter()
+    .any(|needle| message.contains(needle))
 }
 
 fn guardian_risk_level_str(level: GuardianRiskLevel) -> &'static str {
@@ -139,6 +213,17 @@ fn guardian_risk_level_str(level: GuardianRiskLevel) -> &'static str {
         GuardianRiskLevel::High => "high",
         GuardianRiskLevel::Critical => "critical",
     }
+}
+
+fn guardian_assessment_allows_session_reuse(assessment: &GuardianAssessment) -> bool {
+    matches!(assessment.outcome, GuardianAssessmentOutcome::Allow)
+        && assessment.risk_level == GuardianRiskLevel::Low
+        && matches!(
+            assessment.user_authorization,
+            GuardianUserAuthorization::Low
+                | GuardianUserAuthorization::Medium
+                | GuardianUserAuthorization::High
+        )
 }
 
 /// Whether this turn should route allowed approval prompts through the guardian
@@ -223,7 +308,7 @@ async fn record_guardian_denial(session: &Arc<Session>, turn: &Arc<TurnContext>,
             turn.as_ref(),
             EventMsg::GuardianWarning(WarningEvent {
                 message: format!(
-                    "Automatic approval review rejected too many approval requests for this turn ({consecutive_denials} consecutive, {recent_denials} in the last {AUTO_REVIEW_DENIAL_WINDOW_SIZE} reviews); interrupting the turn."
+                    "Automatic approval review rejected too many approval requests for this turn ({consecutive_denials} consecutive, {recent_denials} in the last {AUTO_REVIEW_DENIAL_WINDOW_SIZE} reviews); interrupting the turn. Run /approve to review eligible soft denials, or add context and retry with a safer action."
                 ),
             }),
         )
@@ -287,6 +372,7 @@ async fn run_guardian_review(
                 risk_level: None,
                 user_authorization: None,
                 rationale: None,
+                denial_kind: None,
                 decision_source: None,
                 action: action_summary.clone(),
             }),
@@ -324,6 +410,7 @@ async fn run_guardian_review(
                     risk_level: None,
                     user_authorization: None,
                     rationale: None,
+                    denial_kind: None,
                     decision_source: Some(GuardianAssessmentDecisionSource::Agent),
                     action: action_summary,
                 }),
@@ -335,7 +422,7 @@ async fn run_guardian_review(
 
     let schema = guardian_output_schema();
     let terminal_action = action_summary.clone();
-    let (outcome, analytics_result) = Box::pin(run_guardian_review_session(
+    let (outcome, analytics_result) = Box::pin(run_guardian_review_session_with_retry(
         session.clone(),
         turn.clone(),
         request,
@@ -416,6 +503,7 @@ async fn run_guardian_review(
                             risk_level: None,
                             user_authorization: None,
                             rationale: Some(rationale),
+                            denial_kind: None,
                             decision_source: Some(GuardianAssessmentDecisionSource::Agent),
                             action: terminal_action,
                         }),
@@ -451,6 +539,7 @@ async fn run_guardian_review(
                             risk_level: None,
                             user_authorization: None,
                             rationale: None,
+                            denial_kind: None,
                             decision_source: Some(GuardianAssessmentDecisionSource::Agent),
                             action: action_summary,
                         }),
@@ -462,15 +551,26 @@ async fn run_guardian_review(
             GuardianReviewError::PromptBuild { .. }
             | GuardianReviewError::Session { .. }
             | GuardianReviewError::Parse { .. } => {
-                let message = match &error {
-                    GuardianReviewError::PromptBuild { message }
-                    | GuardianReviewError::Session { message }
-                    | GuardianReviewError::Parse { message } => message,
+                let rationale = match &error {
+                    GuardianReviewError::PromptBuild { message } => {
+                        format!(
+                            "Automatic approval review could not build the review prompt: {message}"
+                        )
+                    }
+                    GuardianReviewError::Session { message } => {
+                        format!(
+                            "Automatic approval review failed because the reviewer session returned an error: {message}"
+                        )
+                    }
+                    GuardianReviewError::Parse { message } => {
+                        format!(
+                            "Automatic approval review returned an unreadable assessment: {message}"
+                        )
+                    }
                     GuardianReviewError::Timeout | GuardianReviewError::Cancelled => {
-                        "guardian review failed"
+                        "Automatic approval review failed.".to_string()
                     }
                 };
-                let rationale = format!("Automatic approval review failed: {message}");
                 track_guardian_review(
                     session.as_ref(),
                     &review_tracking,
@@ -490,6 +590,7 @@ async fn run_guardian_review(
                         user_authorization: GuardianUserAuthorization::Unknown,
                         outcome: GuardianAssessmentOutcome::Deny,
                         rationale,
+                        denial_kind: None,
                     },
                     false,
                 )
@@ -508,8 +609,15 @@ async fn run_guardian_review(
         GuardianUserAuthorization::Medium => "medium",
         GuardianUserAuthorization::High => "high",
     };
+    let denial_kind = assessment
+        .denial_kind
+        .map(|kind| match kind {
+            GuardianDenialKind::Soft => ", denial: soft",
+            GuardianDenialKind::Hard => ", denial: hard",
+        })
+        .unwrap_or_default();
     let warning = format!(
-        "Automatic approval review {verdict} (risk: {}, authorization: {user_authorization}): {}",
+        "Automatic approval review {verdict} (risk: {}, authorization: {user_authorization}{denial_kind}): {}",
         guardian_risk_level_str(assessment.risk_level),
         assessment.rationale
     );
@@ -532,8 +640,21 @@ async fn run_guardian_review(
             let rejection = GuardianRejection {
                 rationale: assessment.rationale.clone(),
                 source: GuardianAssessmentDecisionSource::Agent,
+                denial_kind: assessment.denial_kind,
             };
             rationales.insert(review_id.clone(), rejection);
+        }
+    }
+    {
+        let mut denied_actions = session.services.guardian_denied_actions.lock().await;
+        if !approved && assessment.denial_kind == Some(GuardianDenialKind::Soft) {
+            denied_actions.record(
+                review_id.clone(),
+                terminal_action.clone(),
+                GuardianDenialKind::Soft,
+            );
+        } else {
+            denied_actions.remove(&review_id);
         }
     }
     session
@@ -549,6 +670,7 @@ async fn run_guardian_review(
                 risk_level: Some(assessment.risk_level),
                 user_authorization: Some(assessment.user_authorization),
                 rationale: Some(assessment.rationale.clone()),
+                denial_kind: assessment.denial_kind,
                 decision_source: Some(GuardianAssessmentDecisionSource::Agent),
                 action: terminal_action,
             }),
@@ -561,11 +683,62 @@ async fn run_guardian_review(
         record_guardian_non_denial(&session, &assessment_turn_id).await;
     }
 
-    if approved {
+    if guardian_assessment_allows_session_reuse(&assessment) {
+        ReviewDecision::ApprovedForSession
+    } else if approved {
         ReviewDecision::Approved
     } else {
         ReviewDecision::Denied
     }
+}
+
+async fn run_guardian_review_session_with_retry(
+    session: Arc<Session>,
+    turn: Arc<TurnContext>,
+    request: GuardianApprovalRequest,
+    retry_reason: Option<String>,
+    schema: serde_json::Value,
+    external_cancel: Option<CancellationToken>,
+) -> (GuardianReviewOutcome, GuardianReviewAnalyticsResult) {
+    let (first_outcome, first_analytics_result) = Box::pin(run_guardian_review_session(
+        Arc::clone(&session),
+        Arc::clone(&turn),
+        request.clone(),
+        retry_reason.clone(),
+        schema.clone(),
+        external_cancel.clone(),
+    ))
+    .await;
+
+    let GuardianReviewOutcome::Error(error) = &first_outcome else {
+        return (first_outcome, first_analytics_result);
+    };
+    if !error.is_retryable()
+        || external_cancel
+            .as_ref()
+            .is_some_and(CancellationToken::is_cancelled)
+    {
+        return (first_outcome, first_analytics_result);
+    }
+
+    session
+        .send_event(
+            turn.as_ref(),
+            EventMsg::GuardianWarning(WarningEvent {
+                message: GUARDIAN_RETRY_WARNING.to_string(),
+            }),
+        )
+        .await;
+
+    run_guardian_review_session(
+        session,
+        turn,
+        request,
+        Some(error.retry_reason()),
+        schema,
+        external_cancel,
+    )
+    .await
 }
 
 /// Public entrypoint for approval requests that should be reviewed by guardian.
@@ -824,5 +997,47 @@ mod review_tests {
             session_error.failure_reason(),
             GuardianReviewFailureReason::SessionError
         ));
+    }
+
+    #[test]
+    fn guardian_review_retries_only_availability_failures() {
+        assert!(GuardianReviewError::Timeout.is_retryable());
+        assert!(
+            GuardianReviewError::session(anyhow::anyhow!(
+                "503 service unavailable: reviewer capacity exhausted"
+            ))
+            .is_retryable()
+        );
+        assert!(
+            !GuardianReviewError::session(anyhow::anyhow!(
+                "invalid_request_error: malformed review prompt"
+            ))
+            .is_retryable()
+        );
+        assert!(!GuardianReviewError::parse(anyhow::anyhow!("bad JSON")).is_retryable());
+    }
+
+    #[test]
+    fn guardian_reuses_only_low_risk_authorized_allows() {
+        let low_authorized = GuardianAssessment {
+            risk_level: GuardianRiskLevel::Low,
+            user_authorization: GuardianUserAuthorization::High,
+            outcome: GuardianAssessmentOutcome::Allow,
+            rationale: "Routine local inspection.".to_string(),
+            denial_kind: None,
+        };
+        assert!(guardian_assessment_allows_session_reuse(&low_authorized));
+
+        let low_unknown = GuardianAssessment {
+            user_authorization: GuardianUserAuthorization::Unknown,
+            ..low_authorized.clone()
+        };
+        assert!(!guardian_assessment_allows_session_reuse(&low_unknown));
+
+        let medium = GuardianAssessment {
+            risk_level: GuardianRiskLevel::Medium,
+            ..low_authorized
+        };
+        assert!(!guardian_assessment_allows_session_reuse(&medium));
     }
 }
