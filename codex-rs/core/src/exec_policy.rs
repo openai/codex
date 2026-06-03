@@ -579,9 +579,14 @@ pub async fn load_exec_policy(config_stack: &ConfigLayerStack) -> Result<Policy,
         if config_stack.ignore_user_and_project_exec_policy_rules()
             && matches!(
                 layer.name,
-                ConfigLayerSource::User { .. } | ConfigLayerSource::Project { .. }
+                ConfigLayerSource::User { .. }
+                    | ConfigLayerSource::Project { .. }
+                    | ConfigLayerSource::ProjectOverride { .. }
             )
         {
+            continue;
+        }
+        if matches!(layer.name, ConfigLayerSource::ProjectOverride { .. }) {
             continue;
         }
         if let Some(config_folder) = layer.config_folder() {

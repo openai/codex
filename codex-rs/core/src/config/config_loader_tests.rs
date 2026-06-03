@@ -2,6 +2,7 @@ use crate::config::ConfigBuilder;
 use crate::config::ConfigOverrides;
 use crate::config::ConstraintError;
 use codex_app_server_protocol::ConfigLayerSource;
+use codex_config::CONFIG_OVERRIDE_TOML_FILE;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::CloudConfigBundleLoadError;
 use codex_config::CloudConfigBundleLoader;
@@ -107,12 +108,21 @@ async fn write_project_hook_config(
     foo: Option<&str>,
     command: &str,
 ) -> std::io::Result<()> {
+    write_project_hook_config_file(dot_codex_folder, CONFIG_TOML_FILE, foo, command).await
+}
+
+async fn write_project_hook_config_file(
+    dot_codex_folder: &Path,
+    config_file: &str,
+    foo: Option<&str>,
+    command: &str,
+) -> std::io::Result<()> {
     tokio::fs::create_dir_all(dot_codex_folder).await?;
     let foo = foo
         .map(|value| format!("foo = \"{value}\"\n\n"))
         .unwrap_or_default();
     tokio::fs::write(
-        dot_codex_folder.join(CONFIG_TOML_FILE),
+        dot_codex_folder.join(config_file),
         format!(
             r#"{foo}[hooks]
 
@@ -126,6 +136,181 @@ command = "{command}"
         ),
     )
     .await
+}
+
+#[tokio::test]
+async fn sibling_override_layers_load_after_their_base_scope() -> std::io::Result<()> {
+    let tmp = tempdir()?;
+    let project_root = tmp.path().join("project");
+    let dot_codex = project_root.join(".codex");
+    let codex_home = tmp.path().join("home");
+    tokio::fs::create_dir_all(&dot_codex).await?;
+    tokio::fs::create_dir_all(&codex_home).await?;
+    tokio::fs::write(project_root.join(".git"), "gitdir: here").await?;
+    tokio::fs::write(dot_codex.join(CONFIG_TOML_FILE), "foo = \"project\"\n").await?;
+    tokio::fs::write(
+        dot_codex.join(CONFIG_OVERRIDE_TOML_FILE),
+        "foo = \"project-override\"\n",
+    )
+    .await?;
+    make_config_for_test(
+        &codex_home,
+        &project_root,
+        TrustLevel::Trusted,
+        /*project_root_markers*/ None,
+    )
+    .await?;
+
+    let layers = load_config_layers_state(
+        LOCAL_FS.as_ref(),
+        &codex_home,
+        Some(AbsolutePathBuf::from_absolute_path(&project_root)?),
+        &[] as &[(String, TomlValue)],
+        LoaderOverrides::default(),
+        &codex_config::NoopThreadConfigLoader,
+    )
+    .await?;
+    let sources = layers
+        .get_layers(
+            ConfigLayerStackOrdering::LowestPrecedenceFirst,
+            /*include_disabled*/ false,
+        )
+        .into_iter()
+        .filter_map(|layer| match &layer.name {
+            ConfigLayerSource::Project { .. } | ConfigLayerSource::ProjectOverride { .. } => {
+                Some(layer.name.clone())
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    assert!(matches!(
+        sources.as_slice(),
+        [
+            ConfigLayerSource::Project { .. },
+            ConfigLayerSource::ProjectOverride { .. },
+        ]
+    ));
+    assert_eq!(
+        layers
+            .effective_config()
+            .get("foo")
+            .and_then(TomlValue::as_str),
+        Some("project-override")
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn project_override_partially_merges_nested_mcp_server_config() -> std::io::Result<()> {
+    let tmp = tempdir()?;
+    let project_root = tmp.path().join("project");
+    let dot_codex = project_root.join(".codex");
+    let codex_home = tmp.path().join("home");
+    tokio::fs::create_dir_all(&dot_codex).await?;
+    tokio::fs::create_dir_all(&codex_home).await?;
+    tokio::fs::write(project_root.join(".git"), "gitdir: here").await?;
+    tokio::fs::write(
+        dot_codex.join(CONFIG_TOML_FILE),
+        "[mcp_servers.sentry]\nurl = \"https://mcp.sentry.dev/mcp\"\nenabled = true\n",
+    )
+    .await?;
+    tokio::fs::write(
+        dot_codex.join(CONFIG_OVERRIDE_TOML_FILE),
+        "[mcp_servers.sentry]\nenabled = false\n",
+    )
+    .await?;
+    make_config_for_test(
+        &codex_home,
+        &project_root,
+        TrustLevel::Trusted,
+        /*project_root_markers*/ None,
+    )
+    .await?;
+
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home)
+        .fallback_cwd(Some(project_root))
+        .build()
+        .await?;
+    let server = config
+        .mcp_servers
+        .get()
+        .get("sentry")
+        .expect("project MCP server should load");
+
+    assert!(!server.enabled);
+    assert_eq!(
+        server.transport,
+        codex_config::types::McpServerTransportConfig::StreamableHttp {
+            url: "https://mcp.sentry.dev/mcp".to_string(),
+            bearer_token_env_var: None,
+            http_headers: None,
+            env_http_headers: None,
+        }
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn linked_worktree_override_layer_keeps_worktree_config_but_uses_root_repo_hooks()
+-> std::io::Result<()> {
+    let tmp = tempdir()?;
+    let repo_root = tmp.path().join("repo");
+    let worktree_root = tmp.path().join("worktree");
+    tokio::fs::create_dir_all(worktree_root.join(".codex")).await?;
+    write_linked_worktree_pointer(&repo_root, &worktree_root).await?;
+    write_project_hook_config_file(
+        &repo_root.join(".codex"),
+        CONFIG_OVERRIDE_TOML_FILE,
+        Some("repo-override"),
+        "echo repo override hook",
+    )
+    .await?;
+    write_project_hook_config_file(
+        &worktree_root.join(".codex"),
+        CONFIG_OVERRIDE_TOML_FILE,
+        Some("worktree-override"),
+        "echo worktree override hook",
+    )
+    .await?;
+    let codex_home = tmp.path().join("home");
+    tokio::fs::create_dir_all(&codex_home).await?;
+    make_config_for_test(
+        &codex_home,
+        &repo_root,
+        TrustLevel::Trusted,
+        /*project_root_markers*/ None,
+    )
+    .await?;
+
+    let layers = load_config_layers_state(
+        LOCAL_FS.as_ref(),
+        &codex_home,
+        Some(AbsolutePathBuf::from_absolute_path(&worktree_root)?),
+        &[] as &[(String, TomlValue)],
+        LoaderOverrides::default(),
+        &codex_config::NoopThreadConfigLoader,
+    )
+    .await?;
+    let layer = layers
+        .layers_high_to_low()
+        .into_iter()
+        .find(|layer| matches!(layer.name, ConfigLayerSource::ProjectOverride { .. }))
+        .expect("project override layer");
+
+    assert_eq!(
+        layer.hooks_config_folder(),
+        Some(AbsolutePathBuf::from_absolute_path(
+            repo_root.join(".codex")
+        )?)
+    );
+    assert_eq!(
+        layer.config.get("foo").and_then(TomlValue::as_str),
+        Some("worktree-override")
+    );
+    assert_eq!(project_hook_command(layer), Some("echo repo override hook"));
+    Ok(())
 }
 
 #[tokio::test]

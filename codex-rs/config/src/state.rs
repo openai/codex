@@ -210,7 +210,10 @@ impl ConfigLayerEntry {
             ConfigLayerSource::System { file } => file.parent(),
             ConfigLayerSource::EnterpriseManaged { .. } => None,
             ConfigLayerSource::User { file, .. } => file.parent(),
-            ConfigLayerSource::Project { dot_codex_folder } => Some(dot_codex_folder.clone()),
+            ConfigLayerSource::Project { dot_codex_folder }
+            | ConfigLayerSource::ProjectOverride { dot_codex_folder } => {
+                Some(dot_codex_folder.clone())
+            }
             ConfigLayerSource::SessionFlags => None,
             ConfigLayerSource::LegacyManagedConfigTomlFromFile { .. } => None,
             ConfigLayerSource::LegacyManagedConfigTomlFromMdm => None,
@@ -560,30 +563,51 @@ fn verify_layer_ordering(layers: &[ConfigLayerEntry]) -> std::io::Result<Option<
             user_layer_index = Some(index);
         }
 
-        if let ConfigLayerSource::Project {
-            dot_codex_folder: current_project_dot_codex_folder,
-        } = &layer.name
-        {
-            if let Some(previous) = previous_project_dot_codex_folder {
-                let Some(parent) = previous.as_path().parent() else {
+        match &layer.name {
+            ConfigLayerSource::Project {
+                dot_codex_folder: current_project_dot_codex_folder,
+            } => {
+                if let Some(previous) = previous_project_dot_codex_folder {
+                    let Some(parent) = previous.as_path().parent() else {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            "project layer has no parent directory",
+                        ));
+                    };
+                    if previous == current_project_dot_codex_folder
+                        || !current_project_dot_codex_folder
+                            .as_path()
+                            .ancestors()
+                            .any(|ancestor| ancestor == parent)
+                    {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            "project layers are not ordered from root to cwd",
+                        ));
+                    }
+                }
+                previous_project_dot_codex_folder = Some(current_project_dot_codex_folder);
+            }
+            ConfigLayerSource::ProjectOverride { dot_codex_folder } => {
+                let follows_project_layer = index
+                    .checked_sub(1)
+                    .and_then(|index| layers.get(index))
+                    .is_some_and(|previous| {
+                        matches!(
+                            &previous.name,
+                            ConfigLayerSource::Project {
+                                dot_codex_folder: previous_dot_codex_folder,
+                            } if previous_dot_codex_folder == dot_codex_folder
+                        )
+                    });
+                if !follows_project_layer {
                     return Err(std::io::Error::new(
                         std::io::ErrorKind::InvalidData,
-                        "project layer has no parent directory",
-                    ));
-                };
-                if previous == current_project_dot_codex_folder
-                    || !current_project_dot_codex_folder
-                        .as_path()
-                        .ancestors()
-                        .any(|ancestor| ancestor == parent)
-                {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
-                        "project layers are not ordered from root to cwd",
+                        "project override layer must follow its project layer",
                     ));
                 }
             }
-            previous_project_dot_codex_folder = Some(current_project_dot_codex_folder);
+            _ => {}
         }
     }
 

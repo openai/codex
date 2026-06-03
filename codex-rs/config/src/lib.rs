@@ -31,6 +31,7 @@ mod tui_keymap;
 pub mod types;
 
 pub const CONFIG_TOML_FILE: &str = "config.toml";
+pub const CONFIG_OVERRIDE_TOML_FILE: &str = "config.override.toml";
 
 pub use cloud_config_bundle::CloudConfigBundle;
 pub use cloud_config_bundle::CloudConfigBundleLayers;

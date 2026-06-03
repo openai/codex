@@ -8,6 +8,7 @@ use crate::exec_policy::load_exec_policy;
 use anyhow::Context;
 use anyhow::Result;
 use codex_app_server_protocol::ConfigLayerSource;
+use codex_config::CONFIG_OVERRIDE_TOML_FILE;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::ConfigLayerStack;
 use codex_config::ConfigLayerStackOrdering;
@@ -99,6 +100,9 @@ fn collect_layer_mtimes(stack: &ConfigLayerStack) -> Vec<LayerMtime> {
                 ConfigLayerSource::User { file, .. } => Some(file.clone()),
                 ConfigLayerSource::Project { dot_codex_folder } => {
                     Some(dot_codex_folder.join(CONFIG_TOML_FILE))
+                }
+                ConfigLayerSource::ProjectOverride { dot_codex_folder } => {
+                    Some(dot_codex_folder.join(CONFIG_OVERRIDE_TOML_FILE))
                 }
                 ConfigLayerSource::LegacyManagedConfigTomlFromFile { file } => Some(file.clone()),
                 _ => None,
@@ -321,6 +325,7 @@ fn is_user_controlled_layer(layer: &ConfigLayerSource) -> bool {
         layer,
         ConfigLayerSource::User { .. }
             | ConfigLayerSource::Project { .. }
+            | ConfigLayerSource::ProjectOverride { .. }
             | ConfigLayerSource::SessionFlags
     )
 }

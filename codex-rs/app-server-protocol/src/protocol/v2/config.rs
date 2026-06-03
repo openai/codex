@@ -80,6 +80,13 @@ pub enum ConfigLayerSource {
         dot_codex_folder: AbsolutePathBuf,
     },
 
+    /// Project override layer from a sibling `.codex/config.override.toml`.
+    #[serde(rename_all = "camelCase")]
+    #[ts(rename_all = "camelCase")]
+    ProjectOverride {
+        dot_codex_folder: AbsolutePathBuf,
+    },
+
     /// Session-layer overrides supplied via `-c`/`--config`.
     SessionFlags,
 
@@ -111,7 +118,7 @@ impl ConfigLayerSource {
                     20
                 }
             }
-            ConfigLayerSource::Project { .. } => 25,
+            ConfigLayerSource::Project { .. } | ConfigLayerSource::ProjectOverride { .. } => 25,
             ConfigLayerSource::SessionFlags => 30,
             ConfigLayerSource::LegacyManagedConfigTomlFromFile { .. } => 40,
             ConfigLayerSource::LegacyManagedConfigTomlFromMdm => 50,

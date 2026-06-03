@@ -372,6 +372,10 @@ fn config_toml_source_path(layer: &ConfigLayerEntry) -> AbsolutePathBuf {
             .hooks_config_folder()
             .unwrap_or_else(|| dot_codex_folder.clone())
             .join(CONFIG_TOML_FILE),
+        ConfigLayerSource::ProjectOverride { dot_codex_folder } => layer
+            .hooks_config_folder()
+            .unwrap_or_else(|| dot_codex_folder.clone())
+            .join(codex_config::CONFIG_OVERRIDE_TOML_FILE),
         ConfigLayerSource::Mdm { domain, key } => {
             synthetic_layer_path(&format!("<mdm:{domain}:{key}>/{CONFIG_TOML_FILE}"))
         }
@@ -616,7 +620,9 @@ fn hook_metadata_for_config_layer_source(source: &ConfigLayerSource) -> (HookSou
     match source {
         ConfigLayerSource::System { .. } => (HookSource::System, true),
         ConfigLayerSource::User { .. } => (HookSource::User, false),
-        ConfigLayerSource::Project { .. } => (HookSource::Project, false),
+        ConfigLayerSource::Project { .. } | ConfigLayerSource::ProjectOverride { .. } => {
+            (HookSource::Project, false)
+        }
         ConfigLayerSource::Mdm { .. } => (HookSource::Mdm, true),
         ConfigLayerSource::EnterpriseManaged { .. } => (HookSource::CloudManagedConfig, true),
         ConfigLayerSource::SessionFlags => (HookSource::SessionFlags, false),

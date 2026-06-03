@@ -4409,6 +4409,27 @@
           "type": "object"
         },
         {
+          "description": "Project override layer from a sibling `.codex/config.override.toml`.",
+          "properties": {
+            "dotCodexFolder": {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            },
+            "type": {
+              "enum": [
+                "projectOverride"
+              ],
+              "title": "ProjectOverrideConfigLayerSourceType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "dotCodexFolder",
+            "type"
+          ],
+          "title": "ProjectOverrideConfigLayerSource",
+          "type": "object"
+        },
+        {
           "description": "Session-layer overrides supplied via `-c`/`--config`.",
           "properties": {
             "type": {
