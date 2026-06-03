@@ -2,8 +2,6 @@
 
 """Run target-discovery Bazel queries with CI cache and server settings."""
 
-from __future__ import annotations
-
 import os
 import subprocess
 import sys

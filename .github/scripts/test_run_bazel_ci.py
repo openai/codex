@@ -6,8 +6,11 @@ import stat
 import subprocess
 import sys
 import unittest
+from contextlib import redirect_stdout
+from io import StringIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 import run_bazel_ci
 
@@ -153,6 +156,28 @@ class RunBazelCiTest(unittest.TestCase):
             ),
             Path("C:/tmp/core-tests/test.log"),
         )
+
+    def test_print_test_log_tails_only_reads_last_200_lines(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            test_log = temp / "test.log"
+            test_log.write_text("".join(f"line-{index}\n" for index in range(250)))
+            console_log = temp / "console.log"
+            console_log.write_text(
+                f"FAIL: //codex-rs/core:core-tests (see {test_log})\n"
+            )
+            invocation = run_bazel_ci.Invocation([], {}, "ci-linux", [], False)
+            output = StringIO()
+
+            with (
+                patch.object(run_bazel_ci, "bazel_testlogs_dir", return_value=temp),
+                redirect_stdout(output),
+            ):
+                run_bazel_ci.print_test_log_tails(console_log, invocation)
+
+            self.assertNotIn("line-49\n", output.getvalue())
+            self.assertIn("line-50\n", output.getvalue())
+            self.assertIn("line-249\n", output.getvalue())
 
     def test_main_runs_bazel_and_preserves_exit_status(self) -> None:
         with TemporaryDirectory() as temp_dir:

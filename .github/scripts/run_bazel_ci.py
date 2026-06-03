@@ -2,16 +2,18 @@
 
 """Run Bazel in CI with platform configuration and useful failure output."""
 
-from __future__ import annotations
-
 import os
 import re
 import subprocess
 import sys
+from collections import deque
 from collections.abc import Mapping
 from collections.abc import Sequence
 from dataclasses import dataclass
+from io import StringIO
 from pathlib import Path
+from tempfile import NamedTemporaryFile
+from typing import TextIO
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from run_bazel_with_buildbuddy import bazel_command
@@ -229,11 +231,15 @@ def is_diagnostic(line: str) -> bool:
     )
 
 
-def action_failure_summary(console_output: str) -> str | None:
+def action_failure_summary_from_lines(lines: TextIO) -> str | None:
     summary: list[str] = []
+    fallback_summary: deque[str] = deque(maxlen=50)
     in_failure = False
     seen_diagnostic = False
-    for raw_line in console_output.splitlines():
+    for raw_line in lines:
+        raw_line = raw_line.rstrip("\r\n")
+        if raw_line.startswith(("ERROR: ", "FAILED: ")):
+            fallback_summary.append(raw_line)
         line = clean_log_line(raw_line)
         if line.startswith("ERROR: ") and " failed:" in line:
             if summary:
@@ -251,18 +257,18 @@ def action_failure_summary(console_output: str) -> str | None:
             seen_diagnostic = False
 
     if not summary:
-        summary = [
-            line
-            for line in console_output.splitlines()
-            if line.startswith(("ERROR: ", "FAILED: "))
-        ][-50:]
+        summary = list(fallback_summary)
     result = "\n".join(summary).rstrip()
     return result or None
 
 
-def failed_test_targets(console_output: str) -> list[str]:
+def action_failure_summary(console_output: str) -> str | None:
+    return action_failure_summary_from_lines(StringIO(console_output))
+
+
+def failed_test_targets_from_lines(lines: TextIO) -> list[str]:
     targets = set()
-    for line in console_output.splitlines():
+    for line in lines:
         for pattern in FAILED_TARGET_RES:
             if match := pattern.match(line):
                 targets.add(match.group(1))
@@ -270,12 +276,20 @@ def failed_test_targets(console_output: str) -> list[str]:
     return sorted(targets)
 
 
-def reported_test_log(console_output: str, target: str) -> Path | None:
+def failed_test_targets(console_output: str) -> list[str]:
+    return failed_test_targets_from_lines(StringIO(console_output))
+
+
+def reported_test_log_from_lines(lines: TextIO, target: str) -> Path | None:
     prefix = f"FAIL: {target} "
-    for line in console_output.splitlines():
+    for line in lines:
         if line.startswith(prefix) and (match := REPORTED_TEST_LOG_RE.search(line)):
             return Path(match.group(1).replace("\\", "/"))
     return None
+
+
+def reported_test_log(console_output: str, target: str) -> Path | None:
+    return reported_test_log_from_lines(StringIO(console_output), target)
 
 
 def test_log_path(console_output: str, testlogs_dir: Path, target: str) -> Path:
@@ -313,8 +327,9 @@ def bazel_testlogs_dir(invocation: Invocation) -> Path:
     return Path(result.stdout.strip()) if result.returncode == 0 else Path("bazel-testlogs")
 
 
-def print_action_failure_summary(console_output: str) -> None:
-    summary = action_failure_summary(console_output)
+def print_action_failure_summary(console_log: Path) -> None:
+    with console_log.open(encoding="utf-8", errors="replace") as lines:
+        summary = action_failure_summary_from_lines(lines)
     if summary is None:
         print("No Bazel action failures were found in the captured console output.")
         return
@@ -327,36 +342,48 @@ def print_action_failure_summary(console_output: str) -> None:
     print("--------------------------------")
 
 
-def print_test_log_tails(console_output: str, invocation: Invocation) -> None:
-    targets = failed_test_targets(console_output)
+def print_test_log_tails(console_log: Path, invocation: Invocation) -> None:
+    with console_log.open(encoding="utf-8", errors="replace") as lines:
+        targets = failed_test_targets_from_lines(lines)
     if not targets:
         print("No failed Bazel test targets were found in console output.")
         return
     testlogs_dir = bazel_testlogs_dir(invocation)
     for target in targets:
-        path = test_log_path(console_output, testlogs_dir, target)
+        with console_log.open(encoding="utf-8", errors="replace") as lines:
+            path = reported_test_log_from_lines(lines, target)
+        if path is None:
+            relative = target.removeprefix("//").replace(":", "/", 1)
+            path = testlogs_dir / relative / "test.log"
         print(f"::group::Bazel test log tail for {target}")
         if path.is_file():
-            print("".join(path.read_text(errors="replace").splitlines(keepends=True)[-200:]), end="")
+            with path.open(encoding="utf-8", errors="replace") as lines:
+                print("".join(deque(lines, maxlen=200)), end="")
         else:
             print(f"Missing test log: {path}")
         print("::endgroup::")
 
 
-def run_and_tee(invocation: Invocation) -> tuple[int, str]:
-    process = subprocess.Popen(
-        invocation.command,
-        env=invocation.child_env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-    )
-    output = []
-    assert process.stdout is not None
-    for line in process.stdout:
-        print(line, end="")
-        output.append(line)
-    return process.wait(), "".join(output)
+def run_and_tee(invocation: Invocation) -> tuple[int, Path]:
+    with NamedTemporaryFile(
+        mode="w",
+        encoding="utf-8",
+        prefix="bazel-console-",
+        suffix=".log",
+        delete=False,
+    ) as console_log:
+        process = subprocess.Popen(
+            invocation.command,
+            env=invocation.child_env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        assert process.stdout is not None
+        for line in process.stdout:
+            print(line, end="")
+            console_log.write(line)
+        return process.wait(), Path(console_log.name)
 
 
 def main(argv: Sequence[str] | None = None, env: Mapping[str, str] | None = None) -> int:
@@ -373,13 +400,16 @@ def main(argv: Sequence[str] | None = None, env: Mapping[str, str] | None = None
         print("BuildBuddy API key is available; using remote Bazel configuration.")
     else:
         print("BuildBuddy API key is not available; using local Bazel configuration.")
-    status, console_output = run_and_tee(invocation)
-    if status != 0:
-        if options.print_failed_action_summary:
-            print_action_failure_summary(console_output)
-        if options.print_failed_test_logs:
-            print_test_log_tails(console_output, invocation)
-    return status
+    status, console_log = run_and_tee(invocation)
+    try:
+        if status != 0:
+            if options.print_failed_action_summary:
+                print_action_failure_summary(console_log)
+            if options.print_failed_test_logs:
+                print_test_log_tails(console_log, invocation)
+        return status
+    finally:
+        console_log.unlink(missing_ok=True)
 
 
 if __name__ == "__main__":
