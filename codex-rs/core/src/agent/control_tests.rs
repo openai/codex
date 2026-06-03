@@ -11,6 +11,7 @@ use crate::context::SubagentNotification;
 use crate::init_state_db;
 use assert_matches::assert_matches;
 use codex_features::Feature;
+use codex_http_state::HttpStateSurface;
 use codex_login::CodexAuth;
 use codex_protocol::AgentPath;
 use codex_protocol::config_types::ModeKind;
@@ -1582,6 +1583,51 @@ async fn spawn_child_completion_notifies_parent_history() {
         .expect("child shutdown should submit");
 
     assert_eq!(wait_for_subagent_notification(&parent_thread).await, true);
+}
+
+#[tokio::test]
+async fn spawn_thread_subagent_inherits_parent_http_state_surface() {
+    let harness = AgentControlHarness::new().await;
+    let (parent_thread_id, parent_thread) = harness.start_thread().await;
+    parent_thread
+        .set_app_server_client_info(
+            Some("codex_desktop".to_string()),
+            /*app_server_client_version*/ None,
+            /*mcp_elicitations_auto_deny*/ false,
+        )
+        .await
+        .expect("parent client info should update");
+
+    let child_thread_id = harness
+        .control
+        .spawn_agent(
+            harness.config.clone(),
+            text_input("hello child"),
+            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id,
+                depth: 1,
+                agent_path: None,
+                agent_nickname: None,
+                agent_role: Some("explorer".to_string()),
+            })),
+        )
+        .await
+        .expect("child spawn should succeed");
+    let child_thread = harness
+        .manager
+        .get_thread(child_thread_id)
+        .await
+        .expect("child thread should exist");
+
+    assert_eq!(
+        child_thread
+            .codex
+            .session
+            .services
+            .model_client
+            .http_state_surface(),
+        Some(HttpStateSurface::CodexDesktop)
+    );
 }
 
 #[tokio::test]

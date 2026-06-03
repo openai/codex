@@ -1,3 +1,4 @@
+use super::responses_websocket_auth::WebsocketAuthContext;
 use crate::auth::SharedAuthProvider;
 use crate::common::ResponseEvent;
 use crate::common::ResponseProcessedWsRequest;
@@ -167,6 +168,7 @@ pub struct ResponsesWebsocketConnection {
     server_reasoning_included: bool,
     models_etag: Option<String>,
     server_model: Option<String>,
+    auth_context: WebsocketAuthContext,
     telemetry: Option<Arc<dyn WebsocketTelemetry>>,
 }
 
@@ -178,6 +180,7 @@ impl std::fmt::Debug for ResponsesWebsocketConnection {
             .field("server_reasoning_included", &self.server_reasoning_included)
             .field("models_etag", &self.models_etag)
             .field("server_model", &self.server_model)
+            .field("auth_context", &"<auth-context>")
             .field("telemetry", &self.telemetry.as_ref().map(|_| "<telemetry>"))
             .finish()
     }
@@ -190,6 +193,7 @@ impl ResponsesWebsocketConnection {
         server_reasoning_included: bool,
         models_etag: Option<String>,
         server_model: Option<String>,
+        auth_context: WebsocketAuthContext,
         telemetry: Option<Arc<dyn WebsocketTelemetry>>,
     ) -> Self {
         Self {
@@ -198,6 +202,7 @@ impl ResponsesWebsocketConnection {
             server_reasoning_included,
             models_etag,
             server_model,
+            auth_context,
             telemetry,
         }
     }
@@ -258,6 +263,7 @@ impl ResponsesWebsocketConnection {
         let server_reasoning_included = self.server_reasoning_included;
         let models_etag = self.models_etag.clone();
         let server_model = self.server_model.clone();
+        let auth_context = self.auth_context.clone();
         let telemetry = self.telemetry.clone();
         let request_body = serde_json::to_value(&request).map_err(|err| {
             ApiError::Stream(format!("failed to encode websocket request: {err}"))
@@ -297,6 +303,7 @@ impl ResponsesWebsocketConnection {
                         tx_event.clone(),
                         request_body,
                         idle_timeout,
+                        &auth_context,
                         telemetry,
                         connection_reused,
                     )
@@ -377,19 +384,35 @@ impl ResponsesWebsocketClient {
             .provider
             .websocket_url_for_path("responses")
             .map_err(|err| ApiError::Stream(format!("failed to build websocket URL: {err}")))?;
+        let request_url = ws_url.to_string();
 
         let mut headers =
             merge_request_headers(&self.provider.headers, extra_headers, default_headers);
-        self.auth.add_auth_headers(&mut headers);
+        self.auth
+            .add_auth_headers_for_url(&request_url, &mut headers);
+        let auth_context =
+            WebsocketAuthContext::new(self.auth.clone(), request_url, headers.clone());
 
-        let (stream, _status, server_reasoning_included, models_etag, server_model) =
-            connect_websocket(ws_url, headers, turn_state.clone()).await?;
+        let (
+            stream,
+            _status,
+            server_reasoning_included,
+            models_etag,
+            server_model,
+            response_headers,
+        ) = connect_websocket(ws_url, headers, turn_state.clone())
+            .await
+            .inspect_err(|error| {
+                auth_context.observe_error_headers(error);
+            })?;
+        auth_context.observe_response_headers(&response_headers);
         Ok(ResponsesWebsocketConnection::new(
             stream,
             self.provider.stream_idle_timeout,
             server_reasoning_included,
             models_etag,
             server_model,
+            auth_context,
             telemetry,
         ))
     }
@@ -411,13 +434,22 @@ impl ResponsesWebsocketClient {
             .provider
             .websocket_url_for_path("responses")
             .map_err(|err| ApiError::Stream(format!("failed to build websocket URL: {err}")))?;
+        let request_url = ws_url.to_string();
 
         let mut headers =
             merge_request_headers(&self.provider.headers, extra_headers, default_headers);
-        self.auth.add_auth_headers(&mut headers);
+        self.auth
+            .add_auth_headers_for_url(&request_url, &mut headers);
+        let auth_context =
+            WebsocketAuthContext::new(self.auth.clone(), request_url, headers.clone());
 
-        let (mut stream, status, reasoning_included, models_etag, server_model) =
-            connect_websocket(ws_url.clone(), headers, /*turn_state*/ None).await?;
+        let (mut stream, status, reasoning_included, models_etag, server_model, response_headers) =
+            connect_websocket(ws_url.clone(), headers, /*turn_state*/ None)
+                .await
+                .inspect_err(|error| {
+                    auth_context.observe_error_headers(error);
+                })?;
+        auth_context.observe_response_headers(&response_headers);
         let immediate_close = tokio::time::timeout(immediate_close_timeout, stream.next())
             .await
             .ok()
@@ -472,7 +504,17 @@ async fn connect_websocket(
     url: Url,
     headers: HeaderMap,
     turn_state: Option<Arc<OnceLock<String>>>,
-) -> Result<(WsStream, StatusCode, bool, Option<String>, Option<String>), ApiError> {
+) -> Result<
+    (
+        WsStream,
+        StatusCode,
+        bool,
+        Option<String>,
+        Option<String>,
+        HeaderMap,
+    ),
+    ApiError,
+> {
     ensure_rustls_crypto_provider();
     info!("connecting to websocket: {url}");
 
@@ -499,10 +541,7 @@ async fn connect_websocket(
 
     let (stream, response) = match response {
         Ok((stream, response)) => {
-            info!(
-                "successfully connected to websocket: {url}, headers: {:?}",
-                response.headers()
-            );
+            info!("successfully connected to websocket: {url}");
             (stream, response)
         }
         Err(err) => {
@@ -536,6 +575,7 @@ async fn connect_websocket(
         reasoning_included,
         models_etag,
         server_model,
+        response.headers().clone(),
     ))
 }
 
@@ -630,12 +670,12 @@ fn map_wrapped_websocket_error_event(
     Some(ApiError::Transport(TransportError::Http {
         status,
         url: None,
-        headers: headers.map(json_headers_to_http_headers),
+        headers: headers.as_ref().map(json_headers_to_http_headers),
         body: Some(original_payload),
     }))
 }
 
-fn json_headers_to_http_headers(headers: JsonMap<String, Value>) -> HeaderMap {
+fn json_headers_to_http_headers(headers: &JsonMap<String, Value>) -> HeaderMap {
     let mut mapped = HeaderMap::new();
     for (name, value) in headers {
         let Ok(header_name) = HeaderName::from_bytes(name.as_bytes()) else {
@@ -649,9 +689,9 @@ fn json_headers_to_http_headers(headers: JsonMap<String, Value>) -> HeaderMap {
     mapped
 }
 
-fn json_header_value(value: Value) -> Option<HeaderValue> {
+fn json_header_value(value: &Value) -> Option<HeaderValue> {
     let value = match value {
-        Value::String(value) => value,
+        Value::String(value) => value.clone(),
         Value::Number(value) => value.to_string(),
         Value::Bool(value) => value.to_string(),
         _ => return None,
@@ -664,6 +704,7 @@ async fn run_websocket_response_stream(
     tx_event: mpsc::Sender<std::result::Result<ResponseEvent, ApiError>>,
     request_body: Value,
     idle_timeout: Duration,
+    auth_context: &WebsocketAuthContext,
     telemetry: Option<Arc<dyn WebsocketTelemetry>>,
     connection_reused: bool,
 ) -> Result<(), ApiError> {
@@ -702,12 +743,25 @@ async fn run_websocket_response_stream(
 
         match message {
             Message::Text(text) => {
-                trace!("websocket event: {text}");
-                if let Some(wrapped_error) = parse_wrapped_websocket_error_event(&text)
-                    && let Some(error) =
+                let wrapped_error = parse_wrapped_websocket_error_event(&text);
+                if wrapped_error.is_some() {
+                    trace!("websocket error event");
+                } else {
+                    trace!("websocket event: {text}");
+                }
+                if let Some(wrapped_error) = wrapped_error {
+                    if let Some(response_headers) = wrapped_error.headers.as_ref() {
+                        auth_context.observe_response_headers(&json_headers_to_http_headers(
+                            response_headers,
+                        ));
+                    }
+                    if let Some(error) =
                         map_wrapped_websocket_error_event(wrapped_error, text.to_string())
-                {
-                    return Err(error);
+                    {
+                        return Err(error);
+                    }
+                    debug!("ignoring unmapped websocket error event");
+                    continue;
                 }
 
                 let event = match serde_json::from_str::<ResponsesStreamEvent>(&text) {

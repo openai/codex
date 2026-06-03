@@ -62,6 +62,8 @@ use codex_api::build_session_headers;
 use codex_api::create_text_param_for_request;
 use codex_api::response_create_client_metadata;
 use codex_app_server_protocol::AuthMode;
+use codex_http_state::HttpStateContext;
+use codex_http_state::HttpStateSurface;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_login::RefreshTokenError;
@@ -120,6 +122,7 @@ use codex_login::auth_env_telemetry::AuthEnvTelemetry;
 use codex_login::auth_env_telemetry::collect_auth_env_telemetry;
 use codex_model_provider::SharedModelProvider;
 use codex_model_provider::create_model_provider;
+use codex_model_provider::with_native_integrity_state;
 #[cfg(test)]
 use codex_model_provider_info::DEFAULT_WEBSOCKET_CONNECT_TIMEOUT_MS;
 use codex_model_provider_info::ModelProviderInfo;
@@ -180,7 +183,9 @@ struct ModelClientState {
     beta_features_header: Option<String>,
     include_attestation: bool,
     attestation_provider: Option<Arc<dyn AttestationProvider>>,
+    http_state: Option<HttpStateContext>,
     disable_websockets: AtomicBool,
+    websocket_session_generation: AtomicU64,
     cached_websocket_session: StdMutex<WebsocketSession>,
 }
 
@@ -237,6 +242,7 @@ pub struct ModelClient {
 /// contract and can cause routing bugs.
 pub struct ModelClientSession {
     client: ModelClient,
+    websocket_session_generation: u64,
     websocket_session: WebsocketSession,
     /// Turn state for sticky routing.
     ///
@@ -296,17 +302,7 @@ pub(crate) struct RealtimeWebrtcCallStart {
     pub(crate) sdp: String,
     pub(crate) call_id: String,
     pub(crate) sideband_headers: ApiHeaderMap,
-}
-
-/// Reuses the API-auth material that created the WebRTC call for the sideband WebSocket join.
-///
-/// API-key sessions send that API bearer. ChatGPT-auth sessions send their bearer plus account id;
-/// transceiver is responsible for accepting that same call-create identity on the direct
-/// `api.openai.com` sideband path.
-fn sideband_websocket_auth_headers(api_auth: &dyn AuthProvider) -> ApiHeaderMap {
-    let mut headers = ApiHeaderMap::new();
-    api_auth.add_auth_headers(&mut headers);
-    headers
+    pub(crate) sideband_auth: SharedAuthProvider,
 }
 
 impl ModelClient {
@@ -329,6 +325,12 @@ impl ModelClient {
         beta_features_header: Option<String>,
         attestation_provider: Option<Arc<dyn AttestationProvider>>,
     ) -> Self {
+        let http_state = auth_manager.as_ref().map(|auth_manager| {
+            HttpStateContext::new(
+                auth_manager.codex_home().to_path_buf(),
+                http_state_surface_for_session_source(&session_source),
+            )
+        });
         let model_provider = create_model_provider(provider_info, auth_manager);
         let codex_api_key_env_enabled = model_provider
             .auth_manager()
@@ -353,7 +355,9 @@ impl ModelClient {
                 beta_features_header,
                 include_attestation,
                 attestation_provider,
+                http_state,
                 disable_websockets: AtomicBool::new(false),
+                websocket_session_generation: AtomicU64::new(0),
                 cached_websocket_session: StdMutex::new(WebsocketSession::default()),
             }),
             prompt_cache_key_override: None,
@@ -379,9 +383,12 @@ impl ModelClient {
     /// This constructor does not perform network I/O itself; the session opens a websocket lazily
     /// when the first stream request is issued.
     pub fn new_session(&self) -> ModelClientSession {
+        let (websocket_session_generation, websocket_session) =
+            self.take_cached_websocket_session();
         ModelClientSession {
             client: self.clone(),
-            websocket_session: self.take_cached_websocket_session(),
+            websocket_session_generation,
+            websocket_session,
             turn_state: Arc::new(OnceLock::new()),
         }
     }
@@ -390,16 +397,45 @@ impl ModelClient {
         self.state.provider.auth_manager()
     }
 
+    pub(crate) fn set_app_server_client_name(&self, client_name: Option<&str>) {
+        let surface = client_name
+            .map(HttpStateSurface::from_app_server_client_name)
+            .unwrap_or(HttpStateSurface::CodexCli);
+        self.set_http_state_surface(surface);
+    }
+
+    pub(crate) fn http_state_surface(&self) -> Option<HttpStateSurface> {
+        self.state
+            .http_state
+            .as_ref()
+            .map(HttpStateContext::surface)
+    }
+
+    pub(crate) fn http_state_context(&self) -> Option<HttpStateContext> {
+        self.state.http_state.clone()
+    }
+
+    pub(crate) fn set_http_state_surface(&self, surface: HttpStateSurface) {
+        if self
+            .state
+            .http_state
+            .as_ref()
+            .is_some_and(|state| state.set_surface(surface))
+        {
+            self.invalidate_cached_websocket_session();
+        }
+    }
+
     pub(crate) fn set_window_generation(&self, window_generation: u64) {
         self.state
             .window_generation
             .store(window_generation, Ordering::Relaxed);
-        self.store_cached_websocket_session(WebsocketSession::default());
+        self.invalidate_cached_websocket_session();
     }
 
     pub(crate) fn advance_window_generation(&self) {
         self.state.window_generation.fetch_add(1, Ordering::Relaxed);
-        self.store_cached_websocket_session(WebsocketSession::default());
+        self.invalidate_cached_websocket_session();
     }
 
     pub(crate) fn current_window_id(&self) -> String {
@@ -408,21 +444,45 @@ impl ModelClient {
         format!("{thread_id}:{window_generation}")
     }
 
-    fn take_cached_websocket_session(&self) -> WebsocketSession {
+    fn take_cached_websocket_session(&self) -> (u64, WebsocketSession) {
         let mut cached_websocket_session = self
             .state
             .cached_websocket_session
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        std::mem::take(&mut *cached_websocket_session)
+        let generation = self
+            .state
+            .websocket_session_generation
+            .load(Ordering::Relaxed);
+        (generation, std::mem::take(&mut *cached_websocket_session))
     }
 
-    fn store_cached_websocket_session(&self, websocket_session: WebsocketSession) {
-        *self
+    fn invalidate_cached_websocket_session(&self) {
+        let mut cached_websocket_session = self
             .state
             .cached_websocket_session
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = websocket_session;
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.state
+            .websocket_session_generation
+            .fetch_add(1, Ordering::Relaxed);
+        *cached_websocket_session = WebsocketSession::default();
+    }
+
+    fn store_cached_websocket_session(&self, generation: u64, websocket_session: WebsocketSession) {
+        let mut cached_websocket_session = self
+            .state
+            .cached_websocket_session
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if self
+            .state
+            .websocket_session_generation
+            .load(Ordering::Relaxed)
+            == generation
+        {
+            *cached_websocket_session = websocket_session;
+        }
     }
 
     pub(crate) fn force_http_fallback(
@@ -442,7 +502,7 @@ impl ModelClient {
             );
         }
 
-        self.store_cached_websocket_session(WebsocketSession::default());
+        self.invalidate_cached_websocket_session();
         activated
     }
 
@@ -554,10 +614,8 @@ impl ModelClient {
         if let Some(header_value) = self.generate_attestation_header_for().await {
             extra_headers.insert(X_OAI_ATTESTATION_HEADER, header_value);
         }
-        let mut sideband_headers = extra_headers.clone();
-        sideband_headers.extend(sideband_websocket_auth_headers(
-            client_setup.api_auth.as_ref(),
-        ));
+        let sideband_headers = extra_headers.clone();
+        let sideband_auth = Arc::clone(&client_setup.api_auth);
         let transport = ReqwestTransport::new(build_reqwest_client());
         let response =
             ApiRealtimeCallClient::new(transport, client_setup.api_provider, client_setup.api_auth)
@@ -568,6 +626,7 @@ impl ModelClient {
             sdp: response.sdp,
             call_id: response.call_id,
             sideband_headers,
+            sideband_auth,
         })
     }
 
@@ -812,7 +871,11 @@ impl ModelClient {
     async fn current_client_setup(&self) -> Result<CurrentClientSetup> {
         let auth = self.state.provider.auth().await;
         let api_provider = self.state.provider.api_provider().await?;
-        let api_auth = self.state.provider.api_auth().await?;
+        let api_auth = with_native_integrity_state(
+            self.state.provider.api_auth().await?,
+            auth.as_ref(),
+            self.state.http_state.clone(),
+        );
         Ok(CurrentClientSetup {
             auth,
             api_provider,
@@ -953,7 +1016,7 @@ impl Drop for ModelClientSession {
     fn drop(&mut self) {
         let websocket_session = std::mem::take(&mut self.websocket_session);
         self.client
-            .store_cached_websocket_session(websocket_session);
+            .store_cached_websocket_session(self.websocket_session_generation, websocket_session);
     }
 }
 
@@ -1733,6 +1796,19 @@ fn subagent_header_value(session_source: &SessionSource) -> Option<String> {
         | SessionSource::Mcp
         | SessionSource::Custom(_)
         | SessionSource::Unknown => None,
+    }
+}
+
+fn http_state_surface_for_session_source(session_source: &SessionSource) -> HttpStateSurface {
+    match session_source {
+        SessionSource::Cli => HttpStateSurface::CodexTui,
+        SessionSource::Exec => HttpStateSurface::CodexExec,
+        SessionSource::VSCode => HttpStateSurface::CodexVscode,
+        SessionSource::SubAgent(_)
+        | SessionSource::Internal(_)
+        | SessionSource::Mcp
+        | SessionSource::Custom(_)
+        | SessionSource::Unknown => HttpStateSurface::CodexCli,
     }
 }
 

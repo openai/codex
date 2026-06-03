@@ -129,7 +129,9 @@ pub async fn upload_local_file(
         .unwrap_or("file")
         .to_string();
     let create_url = format!("{}/files", base_url.trim_end_matches('/'));
-    let create_response = authorized_request(auth, reqwest::Method::POST, &create_url)
+    let (create_request, create_request_headers) =
+        authorized_request(auth, reqwest::Method::POST, &create_url);
+    let create_response = create_request
         .json(&serde_json::json!({
             "file_name": file_name,
             "file_size": metadata.len(),
@@ -141,6 +143,11 @@ pub async fn upload_local_file(
             url: create_url.clone(),
             source,
         })?;
+    auth.observe_response_headers(
+        &create_url,
+        &create_request_headers,
+        create_response.headers(),
+    );
     let create_status = create_response.status();
     let create_body = create_response.text().await.unwrap_or_default();
     if !create_status.is_success() {
@@ -191,7 +198,9 @@ pub async fn upload_local_file(
     );
     let finalize_started_at = Instant::now();
     loop {
-        let finalize_response = authorized_request(auth, reqwest::Method::POST, &finalize_url)
+        let (finalize_request, finalize_request_headers) =
+            authorized_request(auth, reqwest::Method::POST, &finalize_url);
+        let finalize_response = finalize_request
             .json(&serde_json::json!({}))
             .send()
             .await
@@ -199,6 +208,11 @@ pub async fn upload_local_file(
                 url: finalize_url.clone(),
                 source,
             })?;
+        auth.observe_response_headers(
+            &finalize_url,
+            &finalize_request_headers,
+            finalize_response.headers(),
+        );
         let finalize_status = finalize_response.status();
         let finalize_body = finalize_response.text().await.unwrap_or_default();
         if !finalize_status.is_success() {
@@ -255,15 +269,18 @@ fn authorized_request(
     auth: &dyn AuthProvider,
     method: reqwest::Method,
     url: &str,
-) -> reqwest::RequestBuilder {
+) -> (reqwest::RequestBuilder, http::HeaderMap) {
     let mut headers = http::HeaderMap::new();
-    auth.add_auth_headers(&mut headers);
+    auth.add_auth_headers_for_url(url, &mut headers);
 
     let client = build_reqwest_client();
-    client
-        .request(method, url)
-        .timeout(OPENAI_FILE_REQUEST_TIMEOUT)
-        .headers(headers)
+    (
+        client
+            .request(method, url)
+            .timeout(OPENAI_FILE_REQUEST_TIMEOUT)
+            .headers(headers.clone()),
+        headers,
+    )
 }
 
 fn build_reqwest_client() -> reqwest::Client {
@@ -279,6 +296,7 @@ mod tests {
     use pretty_assertions::assert_eq;
     use reqwest::header::HeaderValue;
     use std::sync::Arc;
+    use std::sync::Mutex;
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering;
     use tempfile::TempDir;
@@ -291,8 +309,16 @@ mod tests {
     use wiremock::matchers::method;
     use wiremock::matchers::path;
 
-    #[derive(Clone, Copy)]
-    struct ChatGptTestAuth;
+    const SENT_STATE: &str = "sent-state";
+    const CREATED_STATE: &str = "created-state";
+    const RETRY_STATE: &str = "retry-state";
+    const FINALIZED_STATE: &str = "finalized-state";
+    type ObservedUpdate = (String, Option<String>);
+
+    #[derive(Clone, Default)]
+    struct ChatGptTestAuth {
+        observed_updates: Arc<Mutex<Vec<ObservedUpdate>>>,
+    }
 
     impl AuthProvider for ChatGptTestAuth {
         fn add_auth_headers(&self, headers: &mut reqwest::header::HeaderMap) {
@@ -302,10 +328,33 @@ mod tests {
             );
             headers.insert("ChatGPT-Account-ID", HeaderValue::from_static("account_id"));
         }
+
+        fn add_auth_headers_for_url(&self, _request_url: &str, headers: &mut http::HeaderMap) {
+            self.add_auth_headers(headers);
+            headers.insert("x-test-state", HeaderValue::from_static(SENT_STATE));
+        }
+
+        fn observe_response_headers(
+            &self,
+            request_url: &str,
+            _request_headers: &http::HeaderMap,
+            response_headers: &http::HeaderMap,
+        ) {
+            self.observed_updates
+                .lock()
+                .expect("observed updates lock should not be poisoned")
+                .push((
+                    request_url.to_string(),
+                    response_headers
+                        .get("x-test-state-update")
+                        .and_then(|value| value.to_str().ok())
+                        .map(ToString::to_string),
+                ));
+        }
     }
 
     fn chatgpt_auth() -> ChatGptTestAuth {
-        ChatGptTestAuth
+        ChatGptTestAuth::default()
     }
 
     fn base_url_for(server: &MockServer) -> String {
@@ -318,6 +367,7 @@ mod tests {
         Mock::given(method("POST"))
             .and(path("/backend-api/files"))
             .and(header("chatgpt-account-id", "account_id"))
+            .and(header("x-test-state", SENT_STATE))
             .and(body_json(serde_json::json!({
                 "file_name": "hello.txt",
                 "file_size": 5,
@@ -325,6 +375,7 @@ mod tests {
             })))
             .respond_with(
                 ResponseTemplate::new(200)
+                    .insert_header("x-test-state-update", CREATED_STATE)
                     .set_body_json(serde_json::json!({"file_id": "file_123", "upload_url": format!("{}/upload/file_123", server.uri())})),
             )
             .mount(&server)
@@ -340,20 +391,25 @@ mod tests {
         let download_url = format!("{}/download/file_123", server.uri());
         Mock::given(method("POST"))
             .and(path("/backend-api/files/file_123/uploaded"))
+            .and(header("x-test-state", SENT_STATE))
             .respond_with(move |_request: &Request| {
                 if finalize_attempts_responder.fetch_add(1, Ordering::SeqCst) == 0 {
-                    return ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                        "status": "retry"
-                    }));
+                    return ResponseTemplate::new(200)
+                        .insert_header("x-test-state-update", RETRY_STATE)
+                        .set_body_json(serde_json::json!({
+                            "status": "retry"
+                        }));
                 }
 
-                ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                    "status": "success",
-                    "download_url": download_url,
-                    "file_name": "hello.txt",
-                    "mime_type": "text/plain",
-                    "file_size_bytes": 5
-                }))
+                ResponseTemplate::new(200)
+                    .insert_header("x-test-state-update", FINALIZED_STATE)
+                    .set_body_json(serde_json::json!({
+                        "status": "success",
+                        "download_url": download_url,
+                        "file_name": "hello.txt",
+                        "mime_type": "text/plain",
+                        "file_size_bytes": 5
+                    }))
             })
             .mount(&server)
             .await;
@@ -363,7 +419,8 @@ mod tests {
         let path = dir.path().join("hello.txt");
         tokio::fs::write(&path, b"hello").await.expect("write file");
 
-        let uploaded = upload_local_file(&base_url, &chatgpt_auth(), &path)
+        let auth = chatgpt_auth();
+        let uploaded = upload_local_file(&base_url, &auth, &path)
             .await
             .expect("upload succeeds");
 
@@ -376,5 +433,25 @@ mod tests {
         assert_eq!(uploaded.file_name, "hello.txt");
         assert_eq!(uploaded.mime_type, Some("text/plain".to_string()));
         assert_eq!(finalize_attempts.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            *auth
+                .observed_updates
+                .lock()
+                .expect("observed updates lock should not be poisoned"),
+            vec![
+                (
+                    format!("{}/files", base_url.trim_end_matches('/')),
+                    Some(CREATED_STATE.to_string()),
+                ),
+                (
+                    format!("{}/files/file_123/uploaded", base_url.trim_end_matches('/')),
+                    Some(RETRY_STATE.to_string()),
+                ),
+                (
+                    format!("{}/files/file_123/uploaded", base_url.trim_end_matches('/')),
+                    Some(FINALIZED_STATE.to_string()),
+                ),
+            ]
+        );
     }
 }

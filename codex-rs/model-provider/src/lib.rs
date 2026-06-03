@@ -6,6 +6,7 @@ mod provider;
 
 pub use auth::auth_provider_from_auth;
 pub use auth::unauthenticated_auth_provider;
+pub use auth::with_native_integrity_state;
 pub use bearer_auth_provider::BearerAuthProvider;
 pub use bearer_auth_provider::BearerAuthProvider as CoreAuthProvider;
 pub use codex_protocol::account::ProviderAccount;

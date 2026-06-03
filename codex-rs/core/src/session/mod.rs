@@ -783,6 +783,10 @@ impl Codex {
         mcp_elicitations_auto_deny: bool,
     ) -> ConstraintResult<()> {
         self.session
+            .services
+            .model_client
+            .set_app_server_client_name(app_server_client_name.as_deref());
+        self.session
             .update_settings(SessionSettingsUpdate {
                 app_server_client_name,
                 app_server_client_version,

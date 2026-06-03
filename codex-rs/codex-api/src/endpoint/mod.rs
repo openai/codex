@@ -6,6 +6,7 @@ pub(crate) mod realtime_call;
 pub(crate) mod realtime_websocket;
 pub(crate) mod responses;
 pub(crate) mod responses_websocket;
+mod responses_websocket_auth;
 pub(crate) mod search;
 mod session;
 
