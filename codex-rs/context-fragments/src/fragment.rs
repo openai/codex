@@ -1,24 +1,23 @@
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
-use std::marker::PhantomData;
 
 /// Type-erased registration for a contextual user fragment.
 ///
 /// Implementations are used by context filtering code to recognize injected
 /// fragments without constructing the concrete context payload.
-pub(crate) trait FragmentRegistration: Sync {
+pub trait FragmentRegistration: Sync {
     fn matches_text(&self, text: &str) -> bool;
 }
 
-pub(crate) struct FragmentRegistrationProxy<T> {
-    _marker: PhantomData<fn() -> T>,
+pub struct FragmentRegistrationProxy<T> {
+    _marker: std::marker::PhantomData<fn() -> T>,
 }
 
 impl<T> FragmentRegistrationProxy<T> {
-    pub(crate) const fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
-            _marker: PhantomData,
+            _marker: std::marker::PhantomData,
         }
     }
 }
@@ -97,7 +96,7 @@ pub trait ContextualUserFragment {
     }
 }
 
-fn matches_marked_text(start_marker: &str, end_marker: &str, text: &str) -> bool {
+pub(crate) fn matches_marked_text(start_marker: &str, end_marker: &str, text: &str) -> bool {
     if start_marker.is_empty() || end_marker.is_empty() {
         return false;
     }
