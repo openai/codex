@@ -43,8 +43,11 @@ pub(crate) enum JsonRpcConnectionEvent {
 }
 
 #[derive(Clone)]
+/// Describes resources owned by a JSON-RPC connection, not the protection of
+/// its byte stream. `External` covers websocket, relay, and Noise connections
+/// whose transport task owns no child process for Codex to terminate.
 pub(crate) enum JsonRpcTransport {
-    Plain,
+    External,
     Stdio { transport: StdioTransport },
 }
 
@@ -57,7 +60,7 @@ impl JsonRpcTransport {
 
     pub(crate) fn terminate(&self) {
         match self {
-            Self::Plain => {}
+            Self::External => {}
             Self::Stdio { transport } => transport.terminate(),
         }
     }
@@ -315,7 +318,7 @@ impl JsonRpcConnection {
             incoming_rx,
             disconnected_rx,
             task_handles: vec![reader_task, writer_task],
-            transport: JsonRpcTransport::Plain,
+            transport: JsonRpcTransport::External,
         }
     }
 
@@ -452,7 +455,7 @@ impl JsonRpcConnection {
             incoming_rx,
             disconnected_rx,
             task_handles: vec![websocket_task],
-            transport: JsonRpcTransport::Plain,
+            transport: JsonRpcTransport::External,
         }
     }
 
