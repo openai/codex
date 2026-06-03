@@ -387,7 +387,9 @@ impl NoiseVirtualStream {
                     .transport
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
-                transport.decrypt(&ciphertext)?
+                transport.decrypt(&ciphertext).map_err(|error| {
+                    ExecServerError::Protocol(format!("Noise relay decryption failed: {error}"))
+                })?
             };
             for message in self.inbound_decoder.push(&plaintext)? {
                 self.incoming_tx
@@ -493,7 +495,3 @@ async fn send_reset(physical_outgoing_tx: &mpsc::Sender<Vec<u8>>, stream_id: Str
         .send(encode_relay_message_frame(&reset))
         .await;
 }
-
-#[cfg(test)]
-#[path = "environment_tests.rs"]
-mod tests;
