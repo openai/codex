@@ -10,6 +10,8 @@ use crate::sandboxing::SandboxPermissions;
 use crate::shell::Shell;
 use crate::shell::ShellType;
 use crate::tools::sandboxing::ToolError;
+#[cfg(unix)]
+use codex_install_context::InstallContext;
 #[cfg(target_os = "macos")]
 use codex_network_proxy::CODEX_PROXY_GIT_SSH_COMMAND_MARKER;
 use codex_network_proxy::CUSTOM_CA_ENV_KEYS;
@@ -100,6 +102,35 @@ fn prepend_path_entry(env: &mut HashMap<String, String>, path_entry: &str) -> St
 }
 
 #[cfg(unix)]
+pub(crate) fn apply_package_path_prepend(
+    env: &mut HashMap<String, String>,
+    explicit_env_overrides: &mut HashMap<String, String>,
+) {
+    let Some(path_dir) = InstallContext::current()
+        .package_layout
+        .as_ref()
+        .and_then(|package_layout| package_layout.path_dir.as_ref())
+    else {
+        return;
+    };
+
+    apply_path_prepend(env, explicit_env_overrides, path_dir.as_path());
+}
+
+#[cfg(unix)]
+pub(crate) fn apply_path_prepend(
+    env: &mut HashMap<String, String>,
+    explicit_env_overrides: &mut HashMap<String, String>,
+    path_entry: &Path,
+) {
+    let path_entry = path_entry.to_string_lossy();
+    let updated_path = prepend_path_entry(env, path_entry.as_ref());
+    // Snapshot wrapping restores explicit overrides after sourcing the shell
+    // snapshot, so capture this PATH override there as well.
+    explicit_env_overrides.insert("PATH".to_string(), updated_path);
+}
+
+#[cfg(unix)]
 pub(crate) fn prepend_zsh_fork_bin_to_path(
     env: &mut HashMap<String, String>,
     shell_zsh_path: &Path,
@@ -116,12 +147,10 @@ pub(crate) fn apply_zsh_fork_path_prepend(
     explicit_env_overrides: &mut HashMap<String, String>,
     shell_zsh_path: &Path,
 ) {
-    let Some(updated_path) = prepend_zsh_fork_bin_to_path(env, shell_zsh_path) else {
+    let Some(zsh_bin_dir) = shell_zsh_path.parent() else {
         return;
     };
-    // Snapshot wrapping restores explicit overrides after sourcing the shell
-    // snapshot, so capture this PATH override there as well.
-    explicit_env_overrides.insert("PATH".to_string(), updated_path);
+    apply_path_prepend(env, explicit_env_overrides, zsh_bin_dir);
 }
 
 pub(crate) fn disable_powershell_profile_for_elevated_windows_sandbox(
