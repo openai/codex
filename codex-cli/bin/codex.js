@@ -83,21 +83,14 @@ const legacyBinaryPath = (vendorRoot) =>
   path.join(vendorRoot, targetTriple, "codex", codexBinaryName);
 
 function resolveNativePackage(vendorRoot) {
-  const packageRoot = path.join(vendorRoot, targetTriple);
   const binaryPath = packageBinaryPath(vendorRoot);
   if (existsSync(binaryPath)) {
-    return {
-      binaryPath,
-      pathDir: path.join(packageRoot, "codex-path"),
-    };
+    return binaryPath;
   }
 
   const legacyPath = legacyBinaryPath(vendorRoot);
   if (existsSync(legacyPath)) {
-    return {
-      binaryPath: legacyPath,
-      pathDir: path.join(packageRoot, "path"),
-    };
+    return legacyPath;
   }
 
   return null;
@@ -124,23 +117,13 @@ if (!nativePackage) {
   );
 }
 
-const { binaryPath, pathDir } = nativePackage;
+const binaryPath = nativePackage;
 
 // Use an asynchronous spawn instead of spawnSync so that Node is able to
 // respond to signals (e.g. Ctrl-C / SIGINT) while the native binary is
 // executing. This allows us to forward those signals to the child process
 // and guarantees that when either the child terminates or the parent
 // receives a fatal signal, both processes exit in a predictable manner.
-
-function getUpdatedPath(newDirs) {
-  const pathSep = process.platform === "win32" ? ";" : ":";
-  const existingPath = process.env.PATH || "";
-  const updatedPath = [
-    ...newDirs,
-    ...existingPath.split(pathSep).filter(Boolean),
-  ].join(pathSep);
-  return updatedPath;
-}
 
 /**
  * Use heuristics to detect the package manager that was used to install Codex
@@ -167,13 +150,7 @@ function detectPackageManager() {
   return userAgent ? "npm" : null;
 }
 
-const additionalDirs = [];
-if (existsSync(pathDir)) {
-  additionalDirs.push(pathDir);
-}
-const updatedPath = getUpdatedPath(additionalDirs);
-
-const env = { ...process.env, PATH: updatedPath };
+const env = { ...process.env };
 const packageManagerEnvVar =
   detectPackageManager() === "bun"
     ? "CODEX_MANAGED_BY_BUN"
