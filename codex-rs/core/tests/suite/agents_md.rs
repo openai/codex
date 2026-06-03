@@ -174,8 +174,7 @@ async fn selected_environment_sources_match_model_visible_instructions() -> Resu
             /*sandbox*/ None,
         )
         .await?;
-    let global_agents =
-        AbsolutePathBuf::try_from(std::fs::canonicalize(global_agents)?).expect("absolute path");
+    let global_agents = AbsolutePathBuf::try_from(global_agents).expect("absolute path");
 
     assert_eq!(
         test.codex.instruction_sources().await,
