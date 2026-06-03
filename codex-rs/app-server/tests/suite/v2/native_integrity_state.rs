@@ -25,7 +25,7 @@ async fn native_integrity_state_bridge_reads_writes_rotates_and_clears_surface_s
     let codex_home = TempDir::new()?;
     let mut mcp = TestAppServer::new(codex_home.path()).await?;
     let initialized = mcp
-        .initialize_with_client_info(client_info("codex_desktop_ssh"))
+        .initialize_with_capabilities(client_info("codex_desktop_ssh"), /*capabilities*/ None)
         .await?;
     let JSONRPCMessage::Response(_) = initialized else {
         anyhow::bail!("expected initialize response, got {initialized:?}");
