@@ -2,20 +2,7 @@ mod harness;
 mod message_framing;
 mod ordered_ciphertext;
 
-use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
-
 use crate::ExecServerError;
-
-// This bounds allocation in tungstenite before protobuf and Noise record
-// validation run. It comfortably fits one maximum Noise record plus metadata.
-const MAX_NOISE_RELAY_WEBSOCKET_MESSAGE_SIZE: usize = 256 * 1024;
-
-/// Return the websocket limits required by every Noise relay endpoint.
-pub(crate) fn noise_relay_websocket_config() -> WebSocketConfig {
-    WebSocketConfig::default()
-        .max_frame_size(Some(MAX_NOISE_RELAY_WEBSOCKET_MESSAGE_SIZE))
-        .max_message_size(Some(MAX_NOISE_RELAY_WEBSOCKET_MESSAGE_SIZE))
-}
 
 fn take_next_sequence(next_seq: &mut u32) -> Result<u32, ExecServerError> {
     // Never wrap: relay sequence is the explicit ordering key for an implicit

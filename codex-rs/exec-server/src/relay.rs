@@ -22,6 +22,7 @@ use crate::connection::JsonRpcConnection;
 use crate::connection::JsonRpcConnectionEvent;
 use crate::connection::JsonRpcTransport;
 use crate::relay_proto::RelayData;
+use crate::relay_proto::RelayHandshake;
 use crate::relay_proto::RelayMessageFrame;
 use crate::relay_proto::RelayResume;
 use crate::relay_proto::relay_message_frame;
@@ -65,6 +66,18 @@ impl RelayMessageFrame {
             ack_bits: 0,
             body: Some(relay_message_frame::Body::Resume(RelayResume {
                 next_seq: 0,
+            })),
+        }
+    }
+
+    pub(crate) fn handshake(stream_id: String, payload: Vec<u8>) -> Self {
+        Self {
+            version: RELAY_MESSAGE_FRAME_VERSION,
+            stream_id,
+            ack: 0,
+            ack_bits: 0,
+            body: Some(relay_message_frame::Body::Handshake(RelayHandshake {
+                payload,
             })),
         }
     }
@@ -148,6 +161,21 @@ impl RelayMessageFrame {
     fn into_jsonrpc_message(self) -> Result<JSONRPCMessage, ExecServerError> {
         let payload = self.into_data()?.payload;
         serde_json::from_slice(&payload).map_err(ExecServerError::Json)
+    }
+
+    pub(crate) fn into_handshake_payload(self) -> Result<Vec<u8>, ExecServerError> {
+        let kind = self.validate()?;
+        if kind != RelayFrameBodyKind::Handshake {
+            return Err(ExecServerError::Protocol(
+                "expected relay handshake message frame".to_string(),
+            ));
+        }
+        match self.body {
+            Some(relay_message_frame::Body::Handshake(handshake)) => Ok(handshake.payload),
+            _ => Err(ExecServerError::Protocol(
+                "expected relay handshake message frame".to_string(),
+            )),
+        }
     }
 
     pub(crate) fn into_reset_reason(self) -> Option<String> {
