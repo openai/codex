@@ -197,10 +197,7 @@ impl ToolExecutor<ToolInvocation> for WorkspaceMutationHandler {
                             permissions: requested_permissions.clone(),
                         },
                         current.cwd.clone(),
-                        self.approval_request(
-                            requested.clone(),
-                            provisional_workspace_roots,
-                        ),
+                        self.approval_request(requested.clone(), provisional_workspace_roots),
                         cancellation_token.clone(),
                     )
                     .await;
@@ -228,12 +225,11 @@ impl ToolExecutor<ToolInvocation> for WorkspaceMutationHandler {
                     );
                 }
                 let additional_permissions = response.permissions.clone().into();
-                let inspection_sandbox = turn
-                    .file_system_sandbox_context_for_permission_profile(
-                        &current.permission_profile,
-                        Some(additional_permissions),
-                        &current.cwd,
-                    );
+                let inspection_sandbox = turn.file_system_sandbox_context_for_permission_profile(
+                    &current.permission_profile,
+                    Some(additional_permissions),
+                    &current.cwd,
+                );
                 inspection_permissions = Some(response.permissions);
                 match resolve_workspace_directory(fs.as_ref(), &requested, &inspection_sandbox)
                     .await
@@ -386,7 +382,10 @@ impl WorkspaceMutationHandler {
                 target.as_path().display()
             ),
             WorkspaceMutation::AddWorkspaceRoot => {
-                format!("add `{}` to this session's workspace", target.as_path().display())
+                format!(
+                    "add `{}` to this session's workspace",
+                    target.as_path().display()
+                )
             }
         }
     }
@@ -645,7 +644,10 @@ mod tests {
     #[test]
     fn invalid_workspace_target_maps_to_not_a_directory() {
         assert_eq!(
-            io_error_code(&io::Error::new(io::ErrorKind::InvalidInput, "not a directory")),
+            io_error_code(&io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "not a directory"
+            )),
             "not_a_directory"
         );
     }
