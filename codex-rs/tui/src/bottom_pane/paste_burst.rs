@@ -39,7 +39,9 @@
 //!   previous burst.
 //! - If the caller inserted every char immediately and is using `PasteBurst` only as an Enter
 //!   suppression detector, it can skip buffering and simply call [`PasteBurst::extend_window`] when
-//!   [`PasteBurst::on_plain_char_no_hold`] returns [`CharDecision::BeginBuffer`].
+//!   [`PasteBurst::on_plain_char_no_hold`] returns [`CharDecision::BeginBuffer`]. Its Enter handler
+//!   can also use [`PasteBurst::recent_plain_char_was_within_burst_interval`] so very short pasted
+//!   first lines still keep the following Enter as a newline.
 //!
 //! # State Variables
 //!
@@ -339,6 +341,12 @@ impl PasteBurst {
     pub fn newline_should_insert_instead_of_submit(&self, now: Instant) -> bool {
         let in_burst_window = self.burst_window_until.is_some_and(|until| now <= until);
         self.is_active() || in_burst_window
+    }
+
+    /// Returns true when Enter arrives too soon after a plain char to be confident it was typed.
+    pub fn recent_plain_char_was_within_burst_interval(&self, now: Instant) -> bool {
+        self.last_plain_char_time
+            .is_some_and(|t| now.duration_since(t) <= PASTE_BURST_CHAR_INTERVAL)
     }
 
     /// Keep the burst window alive.

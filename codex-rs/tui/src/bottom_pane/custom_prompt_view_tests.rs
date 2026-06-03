@@ -4,24 +4,34 @@ use std::sync::mpsc::Receiver;
 
 #[test]
 fn paste_burst_newline_does_not_submit_short_first_line() {
-    let (mut view, submitted_rx) = custom_prompt_view("");
     let now = Instant::now();
 
-    for (idx, ch) in "foo".chars().enumerate() {
-        view.handle_key_event_at(KeyEvent::from(KeyCode::Char(ch)), now + elapsed(idx));
+    for (first_line, second_line) in [("x", "rest"), ("id", "body"), ("foo", "bar")] {
+        let (mut view, submitted_rx) = custom_prompt_view("");
+        let mut ms = 0;
+
+        for ch in first_line.chars() {
+            view.handle_key_event_at(KeyEvent::from(KeyCode::Char(ch)), now + elapsed(ms));
+            ms += 1;
+        }
+        view.handle_key_event_at(KeyEvent::from(KeyCode::Enter), now + elapsed(ms));
+        ms += 1;
+        for ch in second_line.chars() {
+            view.handle_key_event_at(KeyEvent::from(KeyCode::Char(ch)), now + elapsed(ms));
+            ms += 1;
+        }
+
+        assert!(submitted_rx.try_recv().is_err());
+        assert!(!view.is_complete());
+
+        view.handle_key_event_at(KeyEvent::from(KeyCode::Enter), now + elapsed(200));
+
+        assert_eq!(
+            submitted_rx.try_recv(),
+            Ok(format!("{first_line}\n{second_line}"))
+        );
+        assert!(view.is_complete());
     }
-    view.handle_key_event_at(KeyEvent::from(KeyCode::Enter), now + elapsed(3));
-    for (idx, ch) in "bar".chars().enumerate() {
-        view.handle_key_event_at(KeyEvent::from(KeyCode::Char(ch)), now + elapsed(4 + idx));
-    }
-
-    assert!(submitted_rx.try_recv().is_err());
-    assert!(!view.is_complete());
-
-    view.handle_key_event_at(KeyEvent::from(KeyCode::Enter), now + elapsed(200));
-
-    assert_eq!(submitted_rx.try_recv(), Ok("foo\nbar".to_string()));
-    assert!(view.is_complete());
 }
 
 #[test]

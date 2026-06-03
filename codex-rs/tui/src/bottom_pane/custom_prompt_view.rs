@@ -86,6 +86,9 @@ impl CustomPromptView {
                 if self
                     .paste_burst
                     .newline_should_insert_instead_of_submit(now)
+                    || self
+                        .paste_burst
+                        .recent_plain_char_was_within_burst_interval(now)
                 {
                     self.paste_burst.extend_window(now);
                     self.textarea.insert_str("\n");
