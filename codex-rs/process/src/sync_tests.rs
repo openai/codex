@@ -1,33 +1,26 @@
 use super::Child;
 use super::CommandExt as _;
-use crate::UNJOINED_CHILD_MESSAGE;
 use crate::test_support;
 use crate::test_support::STDERR_TEXT;
 use crate::test_support::STDOUT_TEXT;
-#[cfg(debug_assertions)]
-use crate::test_support::panic_message;
+#[cfg(not(debug_assertions))]
+use crate::test_support::UNJOINED_CHILD_MESSAGE;
+use either::Either;
 use std::io::Read;
 use std::ops::DerefMut;
-#[cfg(debug_assertions)]
-use std::panic::AssertUnwindSafe;
-#[cfg(debug_assertions)]
-use std::panic::catch_unwind;
 use std::process::Stdio;
 use std::time::Duration;
 use std::time::Instant;
 
 #[test]
-fn wait_disarms_bomb_and_can_be_repeated() {
-    let mut child = test_support::command("exit-success")
+fn wait_disarms_bomb() {
+    let child = test_support::command("exit-success")
         .spawn_managed()
         .expect("spawn helper");
     assert!(child.bomb.is_armed());
 
     let status = child.wait().expect("wait for helper");
     assert!(status.success());
-    assert!(!child.bomb.is_armed());
-
-    assert_eq!(child.wait().expect("repeat wait for helper"), status);
 }
 
 #[test]
@@ -46,17 +39,19 @@ fn stdio_is_available_through_deref_mut() {
 
 #[test]
 fn try_wait_keeps_bomb_armed_until_status_is_available() {
-    let mut child = test_support::command("sleep")
+    let child = test_support::command("sleep")
         .spawn_managed()
         .expect("spawn helper");
 
-    assert_eq!(child.try_wait().expect("poll sleeping helper"), None);
+    let mut child = match child.try_wait().expect("poll sleeping helper") {
+        Either::Left(status) => panic!("sleeping helper exited unexpectedly: {status}"),
+        Either::Right(child) => child,
+    };
     assert!(child.bomb.is_armed());
 
     child.kill().expect("kill sleeping helper");
     assert!(child.bomb.is_armed());
     assert!(!child.wait().expect("wait for killed helper").success());
-    assert!(!child.bomb.is_armed());
 }
 
 #[test]
@@ -67,11 +62,14 @@ fn try_wait_disarms_bomb_when_status_is_available() {
     let deadline = Instant::now() + Duration::from_secs(5);
 
     loop {
-        if let Some(status) = child.try_wait().expect("poll helper") {
-            assert!(status.success());
-            assert!(!child.bomb.is_armed());
-            return;
-        }
+        child = match child.try_wait().expect("poll helper") {
+            Either::Left(status) => {
+                assert!(status.success());
+                return;
+            }
+            Either::Right(child) => child,
+        };
+        assert!(child.bomb.is_armed());
         assert!(Instant::now() < deadline, "helper did not exit");
         std::thread::sleep(Duration::from_millis(10));
     }
@@ -94,16 +92,14 @@ fn wait_with_output_collects_output() {
 
 #[cfg(debug_assertions)]
 #[test]
+#[should_panic(expected = "managed child process dropped without being joined")]
 fn dropping_unjoined_child_panics() {
     let mut child = test_support::command("sleep")
         .spawn_managed()
         .expect("spawn helper");
     clean_up_without_disarming(&mut child);
 
-    let panic = catch_unwind(AssertUnwindSafe(|| drop(child)))
-        .expect_err("dropping unjoined child should panic");
-
-    assert_eq!(panic_message(panic.as_ref()), UNJOINED_CHILD_MESSAGE);
+    drop(child);
 }
 
 #[cfg(not(debug_assertions))]

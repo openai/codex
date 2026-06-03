@@ -1,6 +1,8 @@
 //! Managed wrappers for [`std::process`].
 
-use crate::DropBomb;
+pub use crate::command_ext::CommandExt;
+use crate::drop_bomb::DropBomb;
+use either::Either;
 use std::io;
 use std::ops::Deref;
 use std::ops::DerefMut;
@@ -9,17 +11,10 @@ use std::process::Command;
 use std::process::ExitStatus;
 use std::process::Output;
 
-/// Extends [`std::process::Command`] with Codex-specific process spawning.
-///
-/// Callers should use [`CommandExt::spawn_managed`] when the returned child
-/// must be joined before its handle is dropped.
-pub trait CommandExt {
-    /// Spawns this command and returns a child handle that must be joined.
-    fn spawn_managed(&mut self) -> io::Result<Child>;
-}
-
 impl CommandExt for Command {
-    fn spawn_managed(&mut self) -> io::Result<Child> {
+    type Child = Child;
+
+    fn spawn_managed(&mut self) -> io::Result<Self::Child> {
         self.spawn().map(Child::new)
     }
 }
@@ -27,6 +22,8 @@ impl CommandExt for Command {
 /// A synchronous child process handle that must be explicitly joined.
 #[derive(Debug)]
 pub struct Child {
+    // This is an Option only so DropBomb still runs after wait_with_output()
+    // moves the native child into its consuming join.
     child: Option<StdChild>,
     bomb: DropBomb,
 }
@@ -40,7 +37,7 @@ impl Child {
     }
 
     /// Waits for the child to exit and disarms the drop bomb on success.
-    pub fn wait(&mut self) -> io::Result<ExitStatus> {
+    pub fn wait(mut self) -> io::Result<ExitStatus> {
         let result = self.child_mut().wait();
         if result.is_ok() {
             self.bomb.disarm();
@@ -50,13 +47,16 @@ impl Child {
 
     /// Returns the child's exit status without blocking.
     ///
-    /// The drop bomb is disarmed only when an exit status is available.
-    pub fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
-        let result = self.child_mut().try_wait();
-        if matches!(result, Ok(Some(_))) {
-            self.bomb.disarm();
+    /// Returns the still-armed child handle when an exit status is not yet
+    /// available.
+    pub fn try_wait(mut self) -> io::Result<Either<ExitStatus, Self>> {
+        match self.child_mut().try_wait()? {
+            Some(status) => {
+                self.bomb.disarm();
+                Ok(Either::Left(status))
+            }
+            None => Ok(Either::Right(self)),
         }
-        result
     }
 
     /// Waits for the child to exit and collects its output.
@@ -72,21 +72,21 @@ impl Child {
     fn child(&self) -> &StdChild {
         match self.child.as_ref() {
             Some(child) => child,
-            None => panic!("managed child is unavailable while joining"),
+            None => panic!("managed child was made None before its wrapper was dropped"),
         }
     }
 
     fn child_mut(&mut self) -> &mut StdChild {
         match self.child.as_mut() {
             Some(child) => child,
-            None => panic!("managed child is unavailable while joining"),
+            None => panic!("managed child was made None before its wrapper was dropped"),
         }
     }
 
     fn take_child(&mut self) -> StdChild {
         match self.child.take() {
             Some(child) => child,
-            None => panic!("managed child is unavailable while joining"),
+            None => panic!("managed child was made None before its wrapper was dropped"),
         }
     }
 }

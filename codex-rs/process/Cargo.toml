@@ -13,6 +13,7 @@ doctest = false
 workspace = true
 
 [dependencies]
+either = { workspace = true }
 tokio = { workspace = true, features = ["process"] }
 tracing = { workspace = true }
 

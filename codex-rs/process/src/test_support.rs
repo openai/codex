@@ -6,6 +6,8 @@ const SUBPROCESS_MODE_ENV: &str = "CODEX_PROCESS_TEST_SUBPROCESS_MODE";
 
 pub(crate) const STDOUT_TEXT: &str = "managed stdout";
 pub(crate) const STDERR_TEXT: &str = "managed stderr";
+pub(crate) const UNJOINED_CHILD_MESSAGE: &str =
+    "managed child process dropped without being joined";
 
 pub(crate) fn command(mode: &str) -> Command {
     let mut command = Command::new(std::env::current_exe().expect("current test binary"));

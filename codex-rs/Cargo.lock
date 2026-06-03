@@ -3460,6 +3460,7 @@ dependencies = [
 name = "codex-process"
 version = "0.0.0"
 dependencies = [
+ "either",
  "tokio",
  "tracing",
  "tracing-test",

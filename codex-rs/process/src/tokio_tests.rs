@@ -1,17 +1,13 @@
 use super::Child;
 use super::CommandExt as _;
-use crate::UNJOINED_CHILD_MESSAGE;
 use crate::test_support;
 use crate::test_support::STDERR_TEXT;
 use crate::test_support::STDOUT_TEXT;
-#[cfg(debug_assertions)]
-use crate::test_support::panic_message;
+#[cfg(not(debug_assertions))]
+use crate::test_support::UNJOINED_CHILD_MESSAGE;
 use ::tokio as tokio_crate;
+use either::Either;
 use std::ops::DerefMut;
-#[cfg(debug_assertions)]
-use std::panic::AssertUnwindSafe;
-#[cfg(debug_assertions)]
-use std::panic::catch_unwind;
 use std::process::Stdio;
 use std::time::Duration;
 use tokio_crate::io::AsyncReadExt;
@@ -21,17 +17,14 @@ use tokio_crate::time::sleep;
 use tokio_crate::time::timeout;
 
 #[tokio_crate::test]
-async fn wait_disarms_bomb_and_can_be_repeated() {
-    let mut child = command("exit-success")
+async fn wait_disarms_bomb() {
+    let child = command("exit-success")
         .spawn_managed()
         .expect("spawn helper");
     assert!(child.bomb.is_armed());
 
     let status = child.wait().await.expect("wait for helper");
     assert!(status.success());
-    assert!(!child.bomb.is_armed());
-
-    assert_eq!(child.wait().await.expect("repeat wait for helper"), status);
 }
 
 #[tokio_crate::test]
@@ -53,9 +46,12 @@ async fn stdio_is_available_through_deref_mut() {
 
 #[tokio_crate::test]
 async fn try_wait_keeps_bomb_armed_until_status_is_available() {
-    let mut child = command("sleep").spawn_managed().expect("spawn helper");
+    let child = command("sleep").spawn_managed().expect("spawn helper");
 
-    assert_eq!(child.try_wait().expect("poll sleeping helper"), None);
+    let mut child = match child.try_wait().expect("poll sleeping helper") {
+        Either::Left(status) => panic!("sleeping helper exited unexpectedly: {status}"),
+        Either::Right(child) => child,
+    };
     assert!(child.bomb.is_armed());
 
     child.start_kill().expect("kill sleeping helper");
@@ -67,7 +63,6 @@ async fn try_wait_keeps_bomb_armed_until_status_is_available() {
             .expect("wait for killed helper")
             .success()
     );
-    assert!(!child.bomb.is_armed());
 }
 
 #[tokio_crate::test]
@@ -78,11 +73,14 @@ async fn try_wait_disarms_bomb_when_status_is_available() {
     let deadline = Instant::now() + Duration::from_secs(5);
 
     loop {
-        if let Some(status) = child.try_wait().expect("poll helper") {
-            assert!(status.success());
-            assert!(!child.bomb.is_armed());
-            return;
-        }
+        child = match child.try_wait().expect("poll helper") {
+            Either::Left(status) => {
+                assert!(status.success());
+                return;
+            }
+            Either::Right(child) => child,
+        };
+        assert!(child.bomb.is_armed());
         assert!(Instant::now() < deadline, "helper did not exit");
         sleep(Duration::from_millis(10)).await;
     }
@@ -118,33 +116,47 @@ async fn kill_keeps_bomb_armed_until_explicit_wait() {
             .expect("wait for killed helper")
             .success()
     );
-    assert!(!child.bomb.is_armed());
-}
-
-#[tokio_crate::test]
-async fn cancelled_wait_keeps_bomb_armed() {
-    let mut child = command("sleep").spawn_managed().expect("spawn helper");
-
-    assert!(
-        timeout(Duration::from_millis(10), child.wait())
-            .await
-            .is_err()
-    );
-    assert!(child.bomb.is_armed());
-
-    child.start_kill().expect("kill sleeping helper");
-    assert!(
-        !child
-            .wait()
-            .await
-            .expect("wait for killed helper")
-            .success()
-    );
-    assert!(!child.bomb.is_armed());
 }
 
 #[cfg(debug_assertions)]
 #[tokio_crate::test]
+#[should_panic(expected = "managed child process dropped without being joined")]
+async fn cancelled_wait_panics_when_dropped() {
+    let mut command = command("sleep");
+    command.kill_on_drop(true);
+    let child = command.spawn_managed().expect("spawn helper");
+    let mut wait = Box::pin(child.wait());
+
+    assert!(
+        timeout(Duration::from_millis(10), wait.as_mut())
+            .await
+            .is_err()
+    );
+    drop(wait);
+}
+
+#[cfg(not(debug_assertions))]
+#[tokio_crate::test]
+#[tracing_test::traced_test]
+async fn cancelled_wait_logs_an_error_when_dropped() {
+    let mut command = command("sleep");
+    command.kill_on_drop(true);
+    let child = command.spawn_managed().expect("spawn helper");
+    let mut wait = Box::pin(child.wait());
+
+    assert!(
+        timeout(Duration::from_millis(10), wait.as_mut())
+            .await
+            .is_err()
+    );
+    drop(wait);
+
+    assert!(logs_contain(UNJOINED_CHILD_MESSAGE));
+}
+
+#[cfg(debug_assertions)]
+#[tokio_crate::test]
+#[should_panic(expected = "managed child process dropped without being joined")]
 async fn cancelled_wait_with_output_panics_when_dropped() {
     let mut command = command("sleep");
     command.kill_on_drop(true);
@@ -156,10 +168,7 @@ async fn cancelled_wait_with_output_panics_when_dropped() {
             .await
             .is_err()
     );
-    let panic = catch_unwind(AssertUnwindSafe(|| drop(wait)))
-        .expect_err("dropping cancelled wait_with_output should panic");
-
-    assert_eq!(panic_message(panic.as_ref()), UNJOINED_CHILD_MESSAGE);
+    drop(wait);
 }
 
 #[cfg(not(debug_assertions))]
@@ -183,14 +192,12 @@ async fn cancelled_wait_with_output_logs_an_error_when_dropped() {
 
 #[cfg(debug_assertions)]
 #[tokio_crate::test]
+#[should_panic(expected = "managed child process dropped without being joined")]
 async fn dropping_unjoined_child_panics() {
     let mut child = command("sleep").spawn_managed().expect("spawn helper");
     clean_up_without_disarming(&mut child).await;
 
-    let panic = catch_unwind(AssertUnwindSafe(|| drop(child)))
-        .expect_err("dropping unjoined child should panic");
-
-    assert_eq!(panic_message(panic.as_ref()), UNJOINED_CHILD_MESSAGE);
+    drop(child);
 }
 
 #[cfg(not(debug_assertions))]

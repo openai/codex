@@ -1,5 +1,5 @@
 use super::DropBomb;
-use super::UNJOINED_CHILD_MESSAGE;
+use crate::test_support::UNJOINED_CHILD_MESSAGE;
 use crate::test_support::panic_message;
 use std::panic::AssertUnwindSafe;
 use std::panic::catch_unwind;
@@ -13,11 +13,9 @@ fn disarmed_drop_bomb_does_not_report_an_error() {
 
 #[cfg(debug_assertions)]
 #[test]
+#[should_panic(expected = "managed child process dropped without being joined")]
 fn armed_drop_bomb_panics() {
-    let panic = catch_unwind(AssertUnwindSafe(|| drop(DropBomb::new())))
-        .expect_err("armed drop bomb should panic");
-
-    assert_eq!(panic_message(panic.as_ref()), UNJOINED_CHILD_MESSAGE);
+    drop(DropBomb::new());
 }
 
 #[cfg(not(debug_assertions))]
