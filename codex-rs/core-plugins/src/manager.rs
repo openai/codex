@@ -173,9 +173,7 @@ struct ConfiguredMarketplaceUpgradeState {
 }
 
 fn remote_plugin_service_config(config: &PluginsConfigInput) -> RemotePluginServiceConfig {
-    RemotePluginServiceConfig {
-        chatgpt_base_url: config.chatgpt_base_url.clone(),
-    }
+    RemotePluginServiceConfig::new(config.chatgpt_base_url.clone())
 }
 
 fn featured_plugin_ids_cache_key(

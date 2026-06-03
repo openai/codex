@@ -1,4 +1,5 @@
 use crate::remote::RemotePluginServiceConfig;
+use crate::remote::http_state;
 use codex_login::CodexAuth;
 use codex_login::default_client::build_reqwest_client;
 use codex_protocol::protocol::Product;
@@ -130,10 +131,11 @@ pub async fn fetch_remote_plugin_status(
     let base_url = config.chatgpt_base_url.trim_end_matches('/');
     let url = format!("{base_url}/plugins/list");
     let client = build_reqwest_client();
+    let (auth_provider, request_headers) = http_state::request_headers(config, auth, &url);
     let request = client
         .get(&url)
         .timeout(REMOTE_PLUGIN_FETCH_TIMEOUT)
-        .headers(codex_model_provider::auth_provider_from_auth(auth).to_auth_headers());
+        .headers(request_headers.clone());
 
     let response = request
         .send()
@@ -142,6 +144,12 @@ pub async fn fetch_remote_plugin_status(
             url: url.clone(),
             source,
         })?;
+    http_state::observe_response_headers(
+        &auth_provider,
+        &url,
+        &request_headers,
+        response.headers(),
+    );
     let status = response.status();
     let body = response.text().await.unwrap_or_default();
     if !status.is_success() {
@@ -170,9 +178,11 @@ pub async fn fetch_remote_featured_plugin_ids(
         )])
         .timeout(REMOTE_FEATURED_PLUGIN_FETCH_TIMEOUT);
 
-    if let Some(auth) = auth.filter(|auth| auth.uses_codex_backend()) {
-        request =
-            request.headers(codex_model_provider::auth_provider_from_auth(auth).to_auth_headers());
+    let auth_context = auth
+        .filter(|auth| auth.uses_codex_backend())
+        .map(|auth| http_state::request_headers(config, auth, &url));
+    if let Some((_, request_headers)) = &auth_context {
+        request = request.headers(request_headers.clone());
     }
 
     let response = request
@@ -182,6 +192,14 @@ pub async fn fetch_remote_featured_plugin_ids(
             url: url.clone(),
             source,
         })?;
+    if let Some((auth_provider, request_headers)) = &auth_context {
+        http_state::observe_response_headers(
+            auth_provider,
+            &url,
+            request_headers,
+            response.headers(),
+        );
+    }
     let status = response.status();
     let body = response.text().await.unwrap_or_default();
     if !status.is_success() {
@@ -237,10 +255,11 @@ async fn post_remote_plugin_mutation(
     let auth = ensure_codex_backend_auth(auth)?;
     let url = remote_plugin_mutation_url(config, plugin_id, action)?;
     let client = build_reqwest_client();
+    let (auth_provider, request_headers) = http_state::request_headers(config, auth, &url);
     let request = client
         .post(url.clone())
         .timeout(REMOTE_PLUGIN_MUTATION_TIMEOUT)
-        .headers(codex_model_provider::auth_provider_from_auth(auth).to_auth_headers());
+        .headers(request_headers.clone());
 
     let response = request
         .send()
@@ -249,6 +268,12 @@ async fn post_remote_plugin_mutation(
             url: url.clone(),
             source,
         })?;
+    http_state::observe_response_headers(
+        &auth_provider,
+        &url,
+        &request_headers,
+        response.headers(),
+    );
     let status = response.status();
     let body = response.text().await.unwrap_or_default();
     if !status.is_success() {
