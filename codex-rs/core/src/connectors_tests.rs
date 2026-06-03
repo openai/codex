@@ -553,7 +553,7 @@ approvals_reviewer = "{global}"
         let config = ConfigBuilder::default()
             .codex_home(codex_home.path().to_path_buf())
             .cloud_config_bundle(
-                CloudConfigBundleFixture::loader_with_enterprise_requirement(&format!(
+                CloudConfigBundleFixture::loader_with_enterprise_requirement(format!(
                     r#"
 [apps.calendar.allowed_approvals_reviewers]
 user = {user}
