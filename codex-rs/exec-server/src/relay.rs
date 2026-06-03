@@ -24,6 +24,7 @@ use crate::connection::JsonRpcTransport;
 use crate::relay_proto::RelayData;
 use crate::relay_proto::RelayHandshake;
 use crate::relay_proto::RelayMessageFrame;
+use crate::relay_proto::RelayReset;
 use crate::relay_proto::RelayResume;
 use crate::relay_proto::relay_message_frame;
 use crate::server::ConnectionProcessor;
@@ -79,6 +80,16 @@ impl RelayMessageFrame {
             body: Some(relay_message_frame::Body::Handshake(RelayHandshake {
                 payload,
             })),
+        }
+    }
+
+    pub(crate) fn reset(stream_id: String, reason: String) -> Self {
+        Self {
+            version: RELAY_MESSAGE_FRAME_VERSION,
+            stream_id,
+            ack: 0,
+            ack_bits: 0,
+            body: Some(relay_message_frame::Body::Reset(RelayReset { reason })),
         }
     }
 

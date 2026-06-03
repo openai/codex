@@ -78,6 +78,14 @@ impl NoiseChannelPublicKey {
         }
     }
 
+    fn from_raw(dh: &<X25519 as Dh>::PubKey, kem: &<AwsLcMlKem768 as Kem>::PubKey) -> Self {
+        Self {
+            suite: NOISE_CHANNEL_SUITE.to_string(),
+            x25519_public_key: STANDARD.encode(dh),
+            mlkem768_public_key: STANDARD.encode(kem.as_slice()),
+        }
+    }
+
     fn decode(
         &self,
     ) -> Result<(<X25519 as Dh>::PubKey, <AwsLcMlKem768 as Kem>::PubKey), NoiseChannelError> {
@@ -190,6 +198,70 @@ impl InitiatorHandshake {
         Ok(NoiseTransport {
             transport: self.handshake.finalize()?,
         })
+    }
+}
+
+pub(crate) struct PendingResponderHandshake {
+    handshake: Handshake,
+    initiator_public_key: NoiseChannelPublicKey,
+    payload: Vec<u8>,
+}
+
+impl PendingResponderHandshake {
+    /// Authenticate and parse the first IK message without completing it.
+    ///
+    /// This split is intentional: callers must authorize `initiator_public_key`
+    /// with the registry before calling [`Self::complete`].
+    pub(crate) fn read_request(
+        identity: &NoiseChannelIdentity,
+        prologue: &[u8],
+        request: &[u8],
+    ) -> Result<Self, NoiseChannelError> {
+        ensure_noise_frame_len(request.len(), "handshake request is too large")?;
+        let params = HybridHandshakeParams::new(noise_hybrid_ik(), false)
+            .with_prologue(prologue)
+            .with_s(identity.dh.clone())
+            .with_s_kem(identity.kem.clone());
+        let mut handshake = Handshake::new(params)?;
+        let mut payload = [0u8; MAX_MESSAGE_LEN];
+        let payload_len = handshake.read_message(request, &mut payload)?;
+        // Clatter exposes the initiator static key only after the first IK
+        // message authenticates and decrypts successfully.
+        let remote = handshake
+            .get_remote_static()
+            .ok_or(NoiseChannelError::InvalidMessage(
+                "handshake request is missing initiator static key",
+            ))?;
+        Ok(Self {
+            handshake,
+            initiator_public_key: NoiseChannelPublicKey::from_raw(remote.dh(), remote.kem()),
+            payload: payload[..payload_len].to_vec(),
+        })
+    }
+
+    pub(crate) fn initiator_public_key(&self) -> &NoiseChannelPublicKey {
+        &self.initiator_public_key
+    }
+
+    /// Move the authenticated first-message payload out of pending state.
+    ///
+    /// The v1 payload is a short-lived registry authorization and is not
+    /// needed to complete the handshake. Moving it avoids retaining a second
+    /// copy while external authorization is in flight.
+    pub(crate) fn take_payload(&mut self) -> Vec<u8> {
+        std::mem::take(&mut self.payload)
+    }
+
+    /// Finish the responder handshake after external harness authorization.
+    pub(crate) fn complete(mut self) -> Result<(NoiseTransport, Vec<u8>), NoiseChannelError> {
+        let mut response = [0u8; MAX_MESSAGE_LEN];
+        let response_len = self.handshake.write_message(&[], &mut response)?;
+        Ok((
+            NoiseTransport {
+                transport: self.handshake.finalize()?,
+            },
+            response[..response_len].to_vec(),
+        ))
     }
 }
 
