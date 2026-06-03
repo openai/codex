@@ -107,6 +107,7 @@ pub use protocol::WriteParams;
 pub use protocol::WriteResponse;
 pub use protocol::WriteStatus;
 pub use remote::RemoteEnvironmentConfig;
+pub use remote::RemoteRelaySecurity;
 pub use remote::run_remote_environment;
 pub use runtime_paths::ExecServerRuntimePaths;
 pub use secure_channel::SecureChannelError;

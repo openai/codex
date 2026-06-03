@@ -16,6 +16,7 @@ use crate::ExecServerError;
 use crate::ExecServerRuntimePaths;
 use crate::SecureChannelIdentity;
 use crate::SecureChannelPublicKey;
+use crate::relay::run_multiplexed_environment;
 use crate::secure_relay::HarnessKeyValidator;
 use crate::secure_relay::run_secure_multiplexed_environment;
 use crate::secure_relay::secure_relay_websocket_config;
@@ -55,11 +56,36 @@ impl EnvironmentRegistryClient {
         })
     }
 
-    async fn register_environment(
+    /// Register using the original body-less registry contract.
+    ///
+    /// This remains the default so a new exec-server can still connect through
+    /// registries and harnesses that have not rolled out secure relay support.
+    async fn register_legacy_environment(
+        &self,
+        environment_id: &str,
+    ) -> Result<EnvironmentRegistryRegistrationResponse, ExecServerError> {
+        let response = self
+            .http
+            .post(endpoint_url(
+                &self.base_url,
+                &format!("/cloud/environment/{environment_id}/register"),
+            ))
+            .headers(self.auth_provider.to_auth_headers())
+            .send()
+            .await?;
+        self.parse_json_response(response).await
+    }
+
+    /// Register the exec-server's static Noise identity with a secure-aware registry.
+    ///
+    /// Supplying this request body is the protocol-level opt in. Registries can
+    /// therefore distinguish secure registrations from the legacy body-less
+    /// contract without guessing based on binary version or rollout state.
+    async fn register_noise_environment(
         &self,
         environment_id: &str,
         executor_public_key: &SecureChannelPublicKey,
-    ) -> Result<EnvironmentRegistryRegistrationResponse, ExecServerError> {
+    ) -> Result<EnvironmentRegistryNoiseRegistrationResponse, ExecServerError> {
         let response = self
             .http
             .post(endpoint_url(
@@ -135,6 +161,12 @@ struct EnvironmentRegistryRegistrationRequest<'a> {
 struct EnvironmentRegistryRegistrationResponse {
     environment_id: String,
     url: String,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Deserialize)]
+struct EnvironmentRegistryNoiseRegistrationResponse {
+    environment_id: String,
+    url: String,
     security_profile: String,
     executor_registration_id: String,
 }
@@ -173,12 +205,54 @@ impl HarnessKeyValidator for RegistryHarnessKeyValidator {
     }
 }
 
+/// Security mode used for an exec-server's registered remote relay.
+///
+/// Legacy is intentionally the default during rollout. Noise must be selected
+/// explicitly so mixed-version deployments keep the original registry and relay
+/// contract until both endpoints are ready for the secure protocol.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum RemoteRelaySecurity {
+    #[default]
+    Legacy,
+    Noise,
+}
+
+enum RemoteRelaySecurityState {
+    Legacy,
+    Noise(SecureChannelIdentity),
+}
+
+enum RegisteredRemoteEnvironment {
+    Legacy(EnvironmentRegistryRegistrationResponse),
+    Noise {
+        response: EnvironmentRegistryNoiseRegistrationResponse,
+        identity: SecureChannelIdentity,
+    },
+}
+
+impl RegisteredRemoteEnvironment {
+    fn environment_id(&self) -> &str {
+        match self {
+            Self::Legacy(response) => &response.environment_id,
+            Self::Noise { response, .. } => &response.environment_id,
+        }
+    }
+
+    fn websocket_url(&self) -> &str {
+        match self {
+            Self::Legacy(response) => &response.url,
+            Self::Noise { response, .. } => &response.url,
+        }
+    }
+}
+
 /// Configuration for registering an exec-server for remote use.
 #[derive(Clone)]
 pub struct RemoteEnvironmentConfig {
     pub base_url: String,
     pub environment_id: String,
     pub name: String,
+    pub relay_security: RemoteRelaySecurity,
     auth_provider: SharedAuthProvider,
 }
 
@@ -188,6 +262,7 @@ impl std::fmt::Debug for RemoteEnvironmentConfig {
             .field("base_url", &self.base_url)
             .field("environment_id", &self.environment_id)
             .field("name", &self.name)
+            .field("relay_security", &self.relay_security)
             .field("auth_provider", &"<redacted>")
             .finish()
     }
@@ -204,6 +279,7 @@ impl RemoteEnvironmentConfig {
             base_url,
             environment_id,
             name: "codex-exec-server".to_string(),
+            relay_security: RemoteRelaySecurity::Legacy,
             auth_provider,
         })
     }
@@ -219,35 +295,56 @@ pub async fn run_remote_environment(
     let client =
         EnvironmentRegistryClient::new(config.base_url.clone(), config.auth_provider.clone())?;
     let processor = ConnectionProcessor::new(runtime_paths);
-    let identity = SecureChannelIdentity::generate()?;
-    let executor_public_key = identity.public_key();
+    let security_state = match config.relay_security {
+        RemoteRelaySecurity::Legacy => RemoteRelaySecurityState::Legacy,
+        RemoteRelaySecurity::Noise => {
+            RemoteRelaySecurityState::Noise(SecureChannelIdentity::generate()?)
+        }
+    };
     let mut backoff = Duration::from_secs(1);
 
     loop {
-        let response = client
-            .register_environment(&config.environment_id, &executor_public_key)
-            .await?;
-        if response.security_profile != SECURE_RELAY_SECURITY_PROFILE {
-            return Err(ExecServerError::Protocol(format!(
-                "environment registry returned unsupported security profile `{}`",
-                response.security_profile
-            )));
-        }
-        if response.environment_id != config.environment_id {
+        let registration = match &security_state {
+            RemoteRelaySecurityState::Legacy => RegisteredRemoteEnvironment::Legacy(
+                client
+                    .register_legacy_environment(&config.environment_id)
+                    .await?,
+            ),
+            RemoteRelaySecurityState::Noise(identity) => {
+                let response = client
+                    .register_noise_environment(&config.environment_id, &identity.public_key())
+                    .await?;
+                if response.security_profile != SECURE_RELAY_SECURITY_PROFILE {
+                    return Err(ExecServerError::Protocol(format!(
+                        "environment registry returned unsupported security profile `{}`",
+                        response.security_profile
+                    )));
+                }
+                RegisteredRemoteEnvironment::Noise {
+                    response,
+                    identity: identity.clone(),
+                }
+            }
+        };
+        if registration.environment_id() != config.environment_id {
             return Err(ExecServerError::Protocol(
                 "environment registry returned a different environment id".to_string(),
             ));
         }
-        let environment_id = &response.environment_id;
+        let environment_id = registration.environment_id();
         info!(
             "codex exec-server remote environment registered with environment_id {environment_id}"
         );
+        let websocket_config = match &registration {
+            RegisteredRemoteEnvironment::Legacy(_) => None,
+            RegisteredRemoteEnvironment::Noise { .. } => Some(secure_relay_websocket_config()),
+        };
 
         match timeout(
             REMOTE_RENDEZVOUS_CONNECT_TIMEOUT,
             connect_async_with_config(
-                response.url.as_str(),
-                Some(secure_relay_websocket_config()),
+                registration.websocket_url(),
+                websocket_config,
                 /*disable_nagle*/ false,
             ),
         )
@@ -255,19 +352,26 @@ pub async fn run_remote_environment(
         {
             Ok(Ok((websocket, _))) => {
                 backoff = Duration::from_secs(1);
-                run_secure_multiplexed_environment(
-                    websocket,
-                    processor.clone(),
-                    response.environment_id,
-                    response.executor_registration_id.clone(),
-                    identity.clone(),
-                    RegistryHarnessKeyValidator {
-                        client: client.clone(),
-                        environment_id: config.environment_id.clone(),
-                        executor_registration_id: response.executor_registration_id,
-                    },
-                )
-                .await;
+                match registration {
+                    RegisteredRemoteEnvironment::Legacy(_) => {
+                        run_multiplexed_environment(websocket, processor.clone()).await;
+                    }
+                    RegisteredRemoteEnvironment::Noise { response, identity } => {
+                        run_secure_multiplexed_environment(
+                            websocket,
+                            processor.clone(),
+                            response.environment_id,
+                            response.executor_registration_id.clone(),
+                            identity,
+                            RegistryHarnessKeyValidator {
+                                client: client.clone(),
+                                environment_id: config.environment_id.clone(),
+                                executor_registration_id: response.executor_registration_id,
+                            },
+                        )
+                        .await;
+                    }
+                }
             }
             Ok(Err(err)) => {
                 warn!("failed to connect remote exec-server websocket: {err}");

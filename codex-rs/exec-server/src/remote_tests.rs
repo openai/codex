@@ -8,6 +8,8 @@ use reqwest::StatusCode;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::ResponseTemplate;
+use wiremock::matchers::body_bytes;
+use wiremock::matchers::body_partial_json;
 use wiremock::matchers::header;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
@@ -47,9 +49,45 @@ async fn register_environment_posts_with_auth_provider_headers() {
         .and(path("/cloud/environment/environment-requested/register"))
         .and(header("authorization", "Bearer registry-token"))
         .and(header("chatgpt-account-id", "workspace-123"))
+        .and(body_bytes(Vec::<u8>::new()))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "environment_id": "env-1",
             "url": "wss://rendezvous.test/cloud-agent/default/ws/environment/env-1?role=environment&sig=abc",
+        })))
+        .mount(&server)
+        .await;
+    let client = EnvironmentRegistryClient::new(server.uri(), static_registry_auth_provider())
+        .expect("client");
+    let response = client
+        .register_legacy_environment(&config.environment_id)
+        .await
+        .expect("register environment");
+
+    assert_eq!(
+        response,
+            EnvironmentRegistryRegistrationResponse {
+                environment_id: "env-1".to_string(),
+                url: "wss://rendezvous.test/cloud-agent/default/ws/environment/env-1?role=environment&sig=abc".to_string(),
+            }
+        );
+}
+
+#[tokio::test]
+async fn register_noise_environment_posts_security_profile_and_public_key() {
+    let server = MockServer::start().await;
+    let executor_public_key = SecureChannelIdentity::generate()
+        .expect("identity")
+        .public_key();
+    Mock::given(method("POST"))
+        .and(path("/cloud/environment/environment-requested/register"))
+        .and(header("authorization", "Bearer registry-token"))
+        .and(body_partial_json(serde_json::json!({
+            "security_profile": SECURE_RELAY_SECURITY_PROFILE,
+            "executor_public_key": executor_public_key.clone(),
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "environment_id": "environment-requested",
+            "url": "wss://rendezvous.test/secure",
             "security_profile": SECURE_RELAY_SECURITY_PROFILE,
             "executor_registration_id": "registration-1",
         })))
@@ -57,20 +95,17 @@ async fn register_environment_posts_with_auth_provider_headers() {
         .await;
     let client = EnvironmentRegistryClient::new(server.uri(), static_registry_auth_provider())
         .expect("client");
-    let executor_public_key = SecureChannelIdentity::generate()
-        .expect("identity")
-        .public_key();
 
     let response = client
-        .register_environment(&config.environment_id, &executor_public_key)
+        .register_noise_environment("environment-requested", &executor_public_key)
         .await
-        .expect("register environment");
+        .expect("register secure environment");
 
     assert_eq!(
         response,
-        EnvironmentRegistryRegistrationResponse {
-            environment_id: "env-1".to_string(),
-            url: "wss://rendezvous.test/cloud-agent/default/ws/environment/env-1?role=environment&sig=abc".to_string(),
+        EnvironmentRegistryNoiseRegistrationResponse {
+            environment_id: "environment-requested".to_string(),
+            url: "wss://rendezvous.test/secure".to_string(),
             security_profile: SECURE_RELAY_SECURITY_PROFILE.to_string(),
             executor_registration_id: "registration-1".to_string(),
         }
@@ -78,7 +113,7 @@ async fn register_environment_posts_with_auth_provider_headers() {
 }
 
 #[tokio::test]
-async fn register_environment_does_not_follow_redirects_with_auth_headers() {
+async fn register_legacy_environment_does_not_follow_redirects_with_auth_headers() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/cloud/environment/environment-requested/register"))
@@ -97,12 +132,8 @@ async fn register_environment_does_not_follow_redirects_with_auth_headers() {
         .await;
     let client = EnvironmentRegistryClient::new(server.uri(), static_registry_auth_provider())
         .expect("client");
-    let executor_public_key = SecureChannelIdentity::generate()
-        .expect("identity")
-        .public_key();
-
     let error = client
-        .register_environment("environment-requested", &executor_public_key)
+        .register_legacy_environment("environment-requested")
         .await
         .expect_err("redirect response should not be followed");
 
@@ -128,6 +159,7 @@ fn debug_output_redacts_auth_provider() {
 
     assert!(debug.contains("<redacted>"));
     assert!(!debug.contains("workspace-123"));
+    assert!(debug.contains("Legacy"));
 }
 
 #[test]
@@ -142,6 +174,7 @@ fn remote_environment_config_accepts_cloud_environment_id() {
     .expect("config");
 
     assert_eq!(config.environment_id, environment_id);
+    assert_eq!(config.relay_security, RemoteRelaySecurity::Legacy);
 }
 
 #[test]

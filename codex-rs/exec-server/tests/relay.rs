@@ -24,6 +24,7 @@ use codex_exec_server::ExecServerRuntimePaths;
 use codex_exec_server::FsReadFileParams;
 use codex_exec_server::ProcessId;
 use codex_exec_server::RemoteEnvironmentConfig;
+use codex_exec_server::RemoteRelaySecurity;
 use codex_exec_server::SecureChannelIdentity;
 use codex_exec_server::SecureChannelPublicKey;
 use codex_exec_server::SecureRendezvousConnectArgs;
@@ -38,6 +39,7 @@ use http::HeaderMap;
 use http::HeaderValue;
 use pretty_assertions::assert_eq;
 use prost::Message as ProstMessage;
+use relay_proto::RelayData;
 use relay_proto::RelayMessageFrame;
 use relay_proto::relay_message_frame;
 use tempfile::TempDir;
@@ -122,6 +124,84 @@ impl SecureRendezvousConnectProvider for WrongEnvironmentSecureConnectProvider {
 
 fn static_registry_auth_provider() -> codex_api::SharedAuthProvider {
     Arc::new(StaticRegistryAuthProvider)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_environment_uses_legacy_relay_by_default() -> Result<()> {
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let rendezvous_url = format!("ws://{}", listener.local_addr()?);
+    let registry = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path(format!(
+            "/cloud/environment/{ENVIRONMENT_ID}/register"
+        )))
+        .and(header("authorization", format!("Bearer {REGISTRY_TOKEN}")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "environment_id": ENVIRONMENT_ID,
+            "url": rendezvous_url,
+        })))
+        .mount(&registry)
+        .await;
+
+    let (codex_exe, codex_linux_sandbox_exe) = common::current_test_binary_helper_paths()?;
+    let runtime_paths = ExecServerRuntimePaths::new(codex_exe, codex_linux_sandbox_exe)?;
+    let config = RemoteEnvironmentConfig::new(
+        registry.uri(),
+        ENVIRONMENT_ID.to_string(),
+        static_registry_auth_provider(),
+    )?;
+    assert_eq!(config.relay_security, RemoteRelaySecurity::Legacy);
+    let remote_environment = tokio::spawn(codex_exec_server::run_remote_environment(
+        config,
+        runtime_paths,
+    ));
+
+    let mut websocket = accept_websocket(&listener, "legacy environment").await?;
+    let initialize = serde_json::json!({
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "clientName": "legacy-default-test",
+            "resumeSessionId": null,
+        },
+    });
+    websocket
+        .send(Message::Binary(
+            RelayMessageFrame {
+                version: 1,
+                stream_id: "legacy-stream".to_string(),
+                ack: 0,
+                ack_bits: 0,
+                body: Some(relay_message_frame::Body::Data(RelayData {
+                    seq: 0,
+                    segment_index: 0,
+                    segment_count: 1,
+                    payload: serde_json::to_vec(&initialize)?,
+                })),
+            }
+            .encode_to_vec()
+            .into(),
+        ))
+        .await?;
+
+    let response = timeout(TEST_TIMEOUT, websocket.next())
+        .await
+        .context("legacy relay should return initialize response")?
+        .context("legacy relay websocket should remain open")??;
+    let Message::Binary(response) = response else {
+        anyhow::bail!("legacy relay should return a binary protobuf frame");
+    };
+    let response = RelayMessageFrame::decode(response.as_ref())?;
+    let Some(relay_message_frame::Body::Data(response)) = response.body else {
+        anyhow::bail!("legacy relay should return a data frame");
+    };
+    let response: serde_json::Value = serde_json::from_slice(&response.payload)?;
+    assert_eq!(response["id"], 1);
+    assert!(response["result"].is_object());
+
+    remote_environment.abort();
+    let _ = remote_environment.await;
+    Ok(())
 }
 
 #[tokio::test]
@@ -228,11 +308,12 @@ async fn remote_environment_routes_encrypted_exec_server_rpc() -> Result<()> {
 
     let (codex_exe, codex_linux_sandbox_exe) = common::current_test_binary_helper_paths()?;
     let runtime_paths = ExecServerRuntimePaths::new(codex_exe, codex_linux_sandbox_exe)?;
-    let config = RemoteEnvironmentConfig::new(
+    let mut config = RemoteEnvironmentConfig::new(
         registry.uri(),
         ENVIRONMENT_ID.to_string(),
         static_registry_auth_provider(),
     )?;
+    config.relay_security = RemoteRelaySecurity::Noise;
     let remote_environment = tokio::spawn(codex_exec_server::run_remote_environment(
         config,
         runtime_paths,
