@@ -94,6 +94,8 @@ impl ServerOptions {
             forced_chatgpt_workspace_id,
             codex_streamlined_login: false,
             cli_auth_credentials_store_mode,
+            // Direct `codex login` is a CLI request. App-server callers override
+            // this with the initiating native surface.
             http_state_surface: HttpStateSurface::CodexCli,
         }
     }

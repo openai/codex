@@ -9,6 +9,7 @@ use codex_http_state::HttpStateSurface;
 use codex_login::ServerOptions;
 use codex_login::auth::load_auth_dot_json;
 use codex_login::run_device_code_login;
+use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
