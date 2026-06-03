@@ -1,5 +1,7 @@
 use crate::SkillsManager;
 use crate::agent::AgentControl;
+use crate::artifact_store::ArtifactStore;
+use crate::artifact_store::LocalArtifactStore;
 use crate::attestation::AttestationProvider;
 use crate::codex_thread::CodexThread;
 use crate::config::Config;
@@ -208,6 +210,7 @@ pub(crate) struct ThreadManagerState {
     mcp_manager: Arc<McpManager>,
     extensions: Arc<ExtensionRegistry<Config>>,
     thread_store: Arc<dyn ThreadStore>,
+    artifact_store: Arc<dyn ArtifactStore>,
     attestation_provider: Option<Arc<dyn AttestationProvider>>,
     session_source: SessionSource,
     installation_id: String,
@@ -263,6 +266,36 @@ impl ThreadManager {
         installation_id: String,
         attestation_provider: Option<Arc<dyn AttestationProvider>>,
     ) -> Self {
+        Self::new_with_artifact_store(
+            config,
+            auth_manager,
+            session_source,
+            environment_manager,
+            extensions,
+            analytics_events_client,
+            thread_store,
+            Arc::new(LocalArtifactStore::from_codex_home(&config.codex_home)),
+            state_db,
+            installation_id,
+            attestation_provider,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    /// Constructs a thread manager with an explicit generated artifact backend.
+    pub fn new_with_artifact_store(
+        config: &Config,
+        auth_manager: Arc<AuthManager>,
+        session_source: SessionSource,
+        environment_manager: Arc<EnvironmentManager>,
+        extensions: Arc<ExtensionRegistry<Config>>,
+        analytics_events_client: Option<AnalyticsEventsClient>,
+        thread_store: Arc<dyn ThreadStore>,
+        artifact_store: Arc<dyn ArtifactStore>,
+        state_db: Option<StateDbHandle>,
+        installation_id: String,
+        attestation_provider: Option<Arc<dyn AttestationProvider>>,
+    ) -> Self {
         let codex_home = config.codex_home.clone();
         let restriction_product = session_source.restriction_product();
         let (thread_created_tx, _) = broadcast::channel(THREAD_CREATED_CHANNEL_CAPACITY);
@@ -287,6 +320,7 @@ impl ThreadManager {
                 mcp_manager,
                 extensions,
                 thread_store,
+                artifact_store,
                 attestation_provider,
                 auth_manager,
                 session_source,
@@ -362,7 +396,7 @@ impl ThreadManager {
         ));
         let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));
         let skills_manager = Arc::new(SkillsManager::new_with_restriction_product(
-            skills_codex_home,
+            skills_codex_home.clone(),
             /*bundled_skills_enabled*/ true,
             restriction_product,
         ));
@@ -376,6 +410,8 @@ impl ThreadManager {
             },
             state_db.clone(),
         ));
+        let artifact_store: Arc<dyn ArtifactStore> =
+            Arc::new(LocalArtifactStore::from_codex_home(&skills_codex_home));
         Self {
             state: Arc::new(ThreadManagerState {
                 threads: Arc::new(RwLock::new(HashMap::new())),
@@ -388,6 +424,7 @@ impl ThreadManager {
                 mcp_manager,
                 extensions: empty_extension_registry(),
                 thread_store,
+                artifact_store,
                 attestation_provider: None,
                 auth_manager,
                 session_source: SessionSource::Exec,
@@ -1334,6 +1371,7 @@ impl ThreadManagerState {
             environment_selections,
             analytics_events_client: self.analytics_events_client.clone(),
             thread_store: Arc::clone(&self.thread_store),
+            artifact_store: Arc::clone(&self.artifact_store),
             attestation_provider: self.attestation_provider.clone(),
             inherited_multi_agent_version: multi_agent_version,
         }))

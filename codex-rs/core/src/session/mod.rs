@@ -13,6 +13,7 @@ use crate::agent::AgentControl;
 use crate::agent::AgentStatus;
 use crate::agent::agent_status_from_event;
 use crate::agent::status::is_final;
+use crate::artifact_store::ArtifactStore;
 use crate::attestation::AttestationProvider;
 use crate::build_available_skills;
 use crate::compact;
@@ -419,6 +420,7 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) environment_selections: ResolvedTurnEnvironments,
     pub(crate) analytics_events_client: Option<AnalyticsEventsClient>,
     pub(crate) thread_store: Arc<dyn ThreadStore>,
+    pub(crate) artifact_store: Arc<dyn ArtifactStore>,
     pub(crate) attestation_provider: Option<Arc<dyn AttestationProvider>>,
     pub(crate) inherited_multi_agent_version: Option<MultiAgentVersion>,
 }
@@ -499,6 +501,7 @@ impl Codex {
             environment_selections,
             analytics_events_client,
             thread_store,
+            artifact_store,
             attestation_provider,
             inherited_multi_agent_version,
         } = args;
@@ -645,6 +648,7 @@ impl Codex {
             environment_manager,
             analytics_events_client,
             thread_store,
+            artifact_store,
             parent_rollout_thread_trace,
             attestation_provider,
             multi_agent_version,

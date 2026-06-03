@@ -24,6 +24,7 @@ pub use codex_thread::CodexThreadSettingsOverrides;
 pub use codex_thread::ThreadConfigSnapshot;
 pub use session::turn_context::TurnContext;
 mod agent;
+pub mod artifact_store;
 mod attestation;
 mod codex_delegate;
 mod command_canonicalization;

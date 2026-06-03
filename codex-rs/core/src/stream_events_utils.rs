@@ -36,34 +36,17 @@ use tracing::debug;
 use tracing::instrument;
 use tracing::warn;
 
-const GENERATED_IMAGE_ARTIFACTS_DIR: &str = "generated_images";
+use crate::artifact_store::ArtifactStore;
+#[cfg(test)]
+use crate::artifact_store::LocalArtifactStore;
 
+#[cfg(test)]
 pub(crate) fn image_generation_artifact_path(
     codex_home: &AbsolutePathBuf,
     session_id: &str,
     call_id: &str,
 ) -> AbsolutePathBuf {
-    let sanitize = |value: &str| {
-        let mut sanitized: String = value
-            .chars()
-            .map(|ch| {
-                if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
-                    ch
-                } else {
-                    '_'
-                }
-            })
-            .collect();
-        if sanitized.is_empty() {
-            sanitized = "generated_image".to_string();
-        }
-        sanitized
-    };
-
-    codex_home
-        .join(GENERATED_IMAGE_ARTIFACTS_DIR)
-        .join(sanitize(session_id))
-        .join(format!("{}.png", sanitize(call_id)))
+    LocalArtifactStore::from_codex_home(codex_home).generated_image_path(session_id, call_id)
 }
 
 fn strip_hidden_assistant_markup(text: &str, plan_mode: bool) -> String {
@@ -108,7 +91,7 @@ pub(crate) fn raw_assistant_output_text_from_item(item: &ResponseItem) -> Option
 }
 
 async fn save_image_generation_result(
-    codex_home: &AbsolutePathBuf,
+    artifact_store: &dyn ArtifactStore,
     session_id: &str,
     call_id: &str,
     result: &str,
@@ -118,12 +101,9 @@ async fn save_image_generation_result(
         .map_err(|err| {
             CodexErr::InvalidRequest(format!("invalid image generation payload: {err}"))
         })?;
-    let path = image_generation_artifact_path(codex_home, session_id, call_id);
-    if let Some(parent) = path.parent() {
-        tokio::fs::create_dir_all(parent).await?;
-    }
-    tokio::fs::write(&path, bytes).await?;
-    Ok(path)
+    artifact_store
+        .write_generated_image(session_id, call_id, bytes)
+        .await
 }
 
 pub(crate) async fn persist_image_generation_item(
@@ -134,7 +114,7 @@ pub(crate) async fn persist_image_generation_item(
     image_item.saved_path = None;
     let session_id = sess.conversation_id.to_string();
     match save_image_generation_result(
-        &turn_context.config.codex_home,
+        sess.services.artifact_store.as_ref(),
         &session_id,
         &image_item.id,
         &image_item.result,
@@ -146,11 +126,10 @@ pub(crate) async fn persist_image_generation_item(
             Some(path)
         }
         Err(err) => {
-            let output_path = image_generation_artifact_path(
-                &turn_context.config.codex_home,
-                &session_id,
-                &image_item.id,
-            );
+            let output_path = sess
+                .services
+                .artifact_store
+                .generated_image_path(&session_id, &image_item.id);
             let output_dir = output_path
                 .parent()
                 .unwrap_or_else(|| turn_context.config.codex_home.clone());
@@ -173,8 +152,10 @@ async fn record_image_generation_instructions(
         return;
     }
     let session_id = sess.conversation_id.to_string();
-    let image_output_path =
-        image_generation_artifact_path(&turn_context.config.codex_home, &session_id, "<image_id>");
+    let image_output_path = sess
+        .services
+        .artifact_store
+        .generated_image_path(&session_id, "<image_id>");
     let image_output_dir = image_output_path
         .parent()
         .unwrap_or_else(|| turn_context.config.codex_home.clone());
