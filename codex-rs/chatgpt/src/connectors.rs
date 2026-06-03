@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::time::Duration;
 
-use crate::chatgpt_client::chatgpt_get_request_with_timeout;
+use crate::chatgpt_client::chatgpt_get_request_with_timeout_and_http_state;
 
 use codex_app_server_protocol::AppInfo;
 use codex_connectors::ConnectorDirectoryCacheContext;
@@ -19,6 +19,7 @@ pub use codex_core::connectors::list_accessible_connectors_from_mcp_tools_with_o
 pub use codex_core::connectors::list_cached_accessible_connectors_from_mcp_tools;
 pub use codex_core::connectors::with_app_enabled_state;
 use codex_core_plugins::PluginsManager;
+use codex_http_state::HttpStateContext;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_login::default_client::originator;
@@ -96,6 +97,15 @@ pub async fn list_all_connectors_with_options(
     config: &Config,
     force_refetch: bool,
 ) -> anyhow::Result<Vec<AppInfo>> {
+    list_all_connectors_with_options_and_http_state(config, force_refetch, /*http_state*/ None)
+        .await
+}
+
+pub async fn list_all_connectors_with_options_and_http_state(
+    config: &Config,
+    force_refetch: bool,
+    http_state: Option<HttpStateContext>,
+) -> anyhow::Result<Vec<AppInfo>> {
     if !apps_enabled(config).await {
         return Ok(Vec::new());
     }
@@ -105,13 +115,17 @@ pub async fn list_all_connectors_with_options(
         cache_context,
         auth.is_workspace_account(),
         force_refetch,
-        |path| async move {
-            chatgpt_get_request_with_timeout::<DirectoryListResponse>(
-                config,
-                path,
-                Some(DIRECTORY_CONNECTORS_TIMEOUT),
-            )
-            .await
+        |path| {
+            let http_state = http_state.clone();
+            async move {
+                chatgpt_get_request_with_timeout_and_http_state::<DirectoryListResponse>(
+                    config,
+                    path,
+                    Some(DIRECTORY_CONNECTORS_TIMEOUT),
+                    http_state,
+                )
+                .await
+            }
         },
     )
     .await?;

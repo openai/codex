@@ -2230,6 +2230,7 @@ dependencies = [
  "codex-core",
  "codex-core-plugins",
  "codex-git-utils",
+ "codex-http-state",
  "codex-login",
  "codex-model-provider",
  "codex-plugin",
