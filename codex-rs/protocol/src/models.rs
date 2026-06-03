@@ -1021,13 +1021,7 @@ pub fn local_image_label_text(label_number: usize) -> String {
 
 pub fn local_image_open_tag_text_with_path(label_number: usize, path: &std::path::Path) -> String {
     let label = local_image_label_text(label_number);
-    let path = path
-        .display()
-        .to_string()
-        .replace('&', "&amp;")
-        .replace('"', "&quot;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;");
+    let path = path.display();
     format!("{LOCAL_IMAGE_OPEN_TAG_PREFIX}{label} path=\"{path}\"{LOCAL_IMAGE_OPEN_TAG_SUFFIX}")
 }
 
@@ -2914,13 +2908,13 @@ mod tests {
     }
 
     #[test]
-    fn local_image_open_tag_escapes_path() {
+    fn local_image_open_tag_preserves_path() {
         assert_eq!(
             local_image_open_tag_text_with_path(
                 /*label_number*/ 1,
                 std::path::Path::new(r#"/tmp/a&"<b>.png"#),
             ),
-            r#"<image name=[Image #1] path="/tmp/a&amp;&quot;&lt;b&gt;.png">"#
+            r#"<image name=[Image #1] path="/tmp/a&"<b>.png">"#
         );
     }
 
