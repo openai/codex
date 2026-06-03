@@ -1269,7 +1269,6 @@ impl Debug for AuthManager {
         f.debug_struct("AuthManager")
             .field("inner", &self.inner)
             .field("enable_codex_api_key_env", &self.enable_codex_api_key_env)
-            .field("stores", &self.stores)
             .field(
                 "forced_chatgpt_workspace_id",
                 &self.forced_chatgpt_workspace_id,
