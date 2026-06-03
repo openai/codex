@@ -176,6 +176,10 @@ impl HttpStateContext {
         self.store.get(surface)
     }
 
+    pub fn set_for_surface(&self, surface: HttpStateSurface, state: String) -> io::Result<()> {
+        self.store.set(surface, state)
+    }
+
     pub fn compare_and_set_for_surface(
         &self,
         surface: HttpStateSurface,
