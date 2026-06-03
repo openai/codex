@@ -4,6 +4,9 @@ license.workspace = true
 name = "codex-http-state"
 version.workspace = true
 
+[lib]
+doctest = false
+
 [dependencies]
 codex-utils-path = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
