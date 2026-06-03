@@ -22,6 +22,36 @@ REMOTE_EXECUTION_CONFIGS = {
     "--config=ci-v8",
     "--config=ci-windows-cross",
 }
+REMOTE_REPO_CONTENTS_CACHE_STARTUP_OPTIONS = {
+    "--experimental_remote_repo_contents_cache",
+    "--noexperimental_remote_repo_contents_cache",
+}
+
+
+def startup_args(args: Sequence[str], env: Mapping[str, str]) -> list[str]:
+    # Keep every Bazel launch in a GitHub Actions job on the same server.
+    command_idx = next(
+        (idx for idx, arg in enumerate(args) if not arg.startswith("-")),
+        len(args),
+    )
+    configured_startup_args = args[:command_idx]
+    injected_args = []
+
+    output_user_root = env.get("BAZEL_OUTPUT_USER_ROOT")
+    if output_user_root and not any(
+        arg.startswith("--output_user_root=") for arg in configured_startup_args
+    ):
+        injected_args.append(f"--output_user_root={output_user_root}")
+
+    if env.get("GITHUB_ACTIONS") == "true" and not any(
+        arg in REMOTE_REPO_CONTENTS_CACHE_STARTUP_OPTIONS
+        for arg in configured_startup_args
+    ):
+        injected_args.append("--noexperimental_remote_repo_contents_cache")
+
+    return injected_args
+
+
 # Only authenticated workflow runs executing trusted upstream code may use the
 # OpenAI BuildBuddy host. A pull request event without proof that its head is
 # in the upstream repository fails closed to the generic host.
@@ -114,7 +144,7 @@ def bazel_args_with_remote_config(
 def bazel_command(*args: str, env: Mapping[str, str] | None = None) -> list[str]:
     env = os.environ if env is None else env
     bazel = env.get("CODEX_BAZEL_BIN", "bazel")
-    return [bazel, *bazel_args_with_remote_config(args, env)]
+    return [bazel, *startup_args(args, env), *bazel_args_with_remote_config(args, env)]
 
 
 def main() -> None:
