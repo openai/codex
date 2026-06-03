@@ -4,6 +4,7 @@ use tokio::io::BufReader;
 use tokio::process::Command;
 use tokio::time::timeout;
 use tokio_tungstenite::connect_async;
+use tokio_tungstenite::connect_async_with_config;
 use tracing::debug;
 use tracing::warn;
 
@@ -11,10 +12,15 @@ use codex_utils_rustls_provider::ensure_rustls_crypto_provider;
 
 use crate::ExecServerClient;
 use crate::ExecServerError;
+use crate::client_api::NoiseRendezvousConnectArgs;
+use crate::client_api::NoiseRendezvousConnectBundle;
 use crate::client_api::RemoteExecServerConnectArgs;
 use crate::client_api::StdioExecServerCommand;
 use crate::client_api::StdioExecServerConnectArgs;
+use crate::client_api::redacted_websocket_url;
 use crate::connection::JsonRpcConnection;
+use crate::noise_relay::noise_harness_connection_from_websocket;
+use crate::noise_relay::noise_relay_websocket_config;
 use crate::relay::harness_connection_from_websocket;
 
 const ENVIRONMENT_CLIENT_NAME: &str = "codex-environment";
@@ -37,6 +43,15 @@ impl ExecServerClient {
                     resume_session_id: None,
                 })
                 .await
+            }
+            crate::client_api::ExecServerTransportParams::NoiseRendezvous { provider } => {
+                let args = provider.connect_args().await?;
+                if args.bundle.environment_id != provider.environment_id() {
+                    return Err(ExecServerError::Protocol(
+                        "Noise rendezvous provider returned a different environment id".to_string(),
+                    ));
+                }
+                Self::connect_noise_rendezvous(args).await
             }
             crate::client_api::ExecServerTransportParams::StdioCommand {
                 command,
@@ -77,6 +92,69 @@ impl ExecServerClient {
             JsonRpcConnection::from_websocket(stream, connection_label)
         };
         Self::connect(connection, args.into()).await
+    }
+
+    pub async fn connect_noise_rendezvous(
+        args: NoiseRendezvousConnectArgs,
+    ) -> Result<Self, ExecServerError> {
+        ensure_rustls_crypto_provider();
+        // This connect call owns the complete registry-issued bundle. Move each
+        // sensitive value into the transport task exactly once rather than
+        // leaving extra copies of the harness authorization or endpoint identity
+        // alive in `args` after the handshake starts.
+        let NoiseRendezvousConnectArgs {
+            bundle,
+            harness_identity,
+            client_name,
+            connect_timeout,
+            initialize_timeout,
+            resume_session_id,
+        } = args;
+        let NoiseRendezvousConnectBundle {
+            websocket_url,
+            environment_id,
+            executor_registration_id,
+            executor_public_key,
+            harness_key_authorization,
+        } = bundle;
+        let diagnostic_url = redacted_websocket_url(&websocket_url);
+        let (stream, _) = timeout(
+            connect_timeout,
+            connect_async_with_config(
+                websocket_url.as_str(),
+                Some(noise_relay_websocket_config()),
+                /*disable_nagle*/ false,
+            ),
+        )
+        .await
+        .map_err(|_| ExecServerError::WebSocketConnectTimeout {
+            url: diagnostic_url.clone(),
+            timeout: connect_timeout,
+        })?
+        .map_err(|source| ExecServerError::WebSocketConnect {
+            url: diagnostic_url.clone(),
+            source,
+        })?;
+
+        let connection_label = format!("Noise exec-server rendezvous websocket {diagnostic_url}");
+        let connection = noise_harness_connection_from_websocket(
+            stream,
+            connection_label,
+            environment_id,
+            executor_registration_id,
+            harness_identity,
+            executor_public_key,
+            harness_key_authorization,
+        );
+        Self::connect(
+            connection,
+            crate::client_api::ExecServerClientConnectOptions {
+                client_name,
+                initialize_timeout,
+                resume_session_id,
+            },
+        )
+        .await
     }
 
     pub(crate) async fn connect_stdio_command(
