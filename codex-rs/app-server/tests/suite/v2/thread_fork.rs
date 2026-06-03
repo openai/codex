@@ -420,6 +420,7 @@ async fn thread_fork_tracks_thread_initialized_analytics() -> Result<()> {
         "mock-model",
         "forked",
         "user",
+        thread.forked_from_id.as_deref(),
     );
     Ok(())
 }

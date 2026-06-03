@@ -437,6 +437,7 @@ async fn thread_resume_tracks_thread_initialized_analytics() -> Result<()> {
         "gpt-5.3-codex",
         "resumed",
         "user",
+        None,
     );
     assert_eq!(event["event_params"]["thread_source"], "user");
     Ok(())
