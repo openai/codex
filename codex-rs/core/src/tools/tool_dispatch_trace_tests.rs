@@ -284,7 +284,7 @@ fn test_invocation_with_payload(
 }
 
 fn attach_test_trace(session: &mut Session, turn: &TurnContext, root: &Path) -> anyhow::Result<()> {
-    let thread_id = session.conversation_id;
+    let thread_id = session.thread_id;
     let rollout_thread_trace =
         codex_rollout_trace::ThreadTraceContext::start_root_in_root_for_test(
             root,
