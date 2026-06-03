@@ -193,10 +193,14 @@ async fn mock_device_code_token_failure(server: &MockServer, status: u16) {
 async fn mock_device_code_oauth_token(server: &MockServer, id_token: &str) {
     Mock::given(method("POST"))
         .and(path("/oauth/token"))
+        .and(wiremock::matchers::body_string_contains(
+            "surface=codex_desktop_ssh",
+        ))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "id_token": id_token,
             "access_token": "access-token-123",
             "refresh_token": "refresh-token-123",
+            "state": INTEGRITY_STATE,
         })))
         .mount(server)
         .await;
@@ -1142,7 +1146,11 @@ async fn login_account_chatgpt_device_code_succeeds_and_notifies() -> Result<()>
         ],
     )
     .await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.initialize_with_client_info(client_info("codex_desktop_ssh")),
+    )
+    .await??;
 
     let request_id = mcp.send_login_account_chatgpt_device_code_request().await?;
     let resp: JSONRPCResponse = timeout(
@@ -1189,6 +1197,11 @@ async fn login_account_chatgpt_device_code_succeeds_and_notifies() -> Result<()>
     assert!(
         codex_home.path().join("auth.json").exists(),
         "auth.json should be created when device code login succeeds"
+    );
+    assert_eq!(
+        HttpStateStore::new(codex_home.path().to_path_buf())
+            .get(HttpStateSurface::CodexDesktopSsh)?,
+        Some(INTEGRITY_STATE.to_string()),
     );
     Ok(())
 }
