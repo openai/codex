@@ -3291,6 +3291,7 @@ name = "codex-message-history"
 version = "0.0.0"
 dependencies = [
  "codex-config",
+ "memchr",
  "pretty_assertions",
  "serde",
  "serde_json",
