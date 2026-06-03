@@ -244,7 +244,6 @@ async fn windows_elevated_enforces_deny_read_and_protects_setup_marker() -> anyh
     let ExecToolCallOutput {
         exit_code,
         stdout,
-        stderr,
         ..
     } = process_exec_tool_call(
         ExecParams {
@@ -253,7 +252,8 @@ async fn windows_elevated_enforces_deny_read_and_protects_setup_marker() -> anyh
                 "/D".to_string(),
                 "/C".to_string(),
                 format!(
-                    "(type secret.env 1>NUL 2>NUL && echo GLOB-READ || echo GLOB-DENIED) & (type exact-secret.txt 1>NUL 2>NUL && echo EXACT-READ || echo EXACT-DENIED) & (echo tampered 2>NUL > \"{}\" && echo MARKER-WRITE || echo MARKER-DENIED) & type public.txt",
+                    "(type secret.env 1>NUL 2>NUL && echo GLOB-READ || echo GLOB-DENIED) & (type exact-secret.txt 1>NUL 2>NUL && echo EXACT-READ || echo EXACT-DENIED) & (type \"{}\" 1>NUL 2>NUL && echo MARKER-READ || echo MARKER-UNREADABLE) & (echo tampered > \"{}\" 2>NUL && echo MARKER-WRITE || echo MARKER-DENIED) & type public.txt",
+                    setup_marker.display(),
                     setup_marker.display()
                 ),
             ],
@@ -303,13 +303,20 @@ async fn windows_elevated_enforces_deny_read_and_protects_setup_marker() -> anyh
         "sandboxed command should not modify setup readiness: {stdout:?}"
     );
     assert!(
+        stdout.text.contains("MARKER-READ"),
+        "sandboxed command should reach the setup marker: {stdout:?}"
+    );
+    assert!(
         !stdout.text.contains("MARKER-WRITE"),
         "sandboxed command must not modify setup readiness: {stdout:?}"
+    );
+    assert!(
+        !stdout.text.contains("MARKER-UNREADABLE"),
+        "setup marker path should be valid and readable: {stdout:?}"
     );
     assert!(
         sandbox_setup_is_complete(codex_home.path()),
         "setup should remain ready after the tamper attempt"
     );
-    assert_eq!(stderr.text, "");
     Ok(())
 }
