@@ -22,6 +22,12 @@ impl<T> FragmentRegistrationProxy<T> {
     }
 }
 
+impl<T> Default for FragmentRegistrationProxy<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<T: ContextualUserFragment> FragmentRegistration for FragmentRegistrationProxy<T> {
     fn matches_text(&self, text: &str) -> bool {
         T::matches_text(text)
