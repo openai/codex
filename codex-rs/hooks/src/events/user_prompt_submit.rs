@@ -15,6 +15,7 @@ use crate::engine::ConfiguredHandler;
 use crate::engine::command_runner::CommandRunResult;
 use crate::engine::dispatcher;
 use crate::engine::output_parser;
+use crate::engine::prompt_runner::PromptHookRunner;
 use crate::schema::NullableString;
 use crate::schema::SubagentCommandInputFields;
 use crate::schema::UserPromptSubmitCommandInput;
@@ -63,6 +64,7 @@ pub(crate) fn preview(
 pub(crate) async fn run(
     handlers: &[ConfiguredHandler],
     shell: &CommandShell,
+    prompt_runner: Option<&PromptHookRunner>,
     request: UserPromptSubmitRequest,
 ) -> UserPromptSubmitOutcome {
     let matched = dispatcher::select_handlers(
@@ -103,11 +105,15 @@ pub(crate) async fn run(
     };
 
     let results = dispatcher::execute_handlers(
-        shell,
         matched,
         input_json,
-        request.cwd.as_path(),
-        Some(request.turn_id),
+        dispatcher::HandlerExecutionContext {
+            shell,
+            prompt_runner,
+            cwd: request.cwd.as_path(),
+            default_model: request.model.clone(),
+            turn_id: Some(request.turn_id.clone()),
+        },
         parse_completed,
     )
     .await;
@@ -286,6 +292,7 @@ mod tests {
     use super::UserPromptSubmitHandlerData;
     use super::parse_completed;
     use crate::engine::ConfiguredHandler;
+    use crate::engine::ConfiguredHandlerKind;
     use crate::engine::command_runner::CommandRunResult;
 
     #[test]
@@ -421,8 +428,10 @@ mod tests {
         ConfiguredHandler {
             event_name: HookEventName::UserPromptSubmit,
             matcher: None,
-            command: "echo hook".to_string(),
-            timeout_sec: 5,
+            kind: ConfiguredHandlerKind::Command {
+                command: "echo hook".to_string(),
+                timeout_sec: 5,
+            },
             status_message: None,
             source_path: test_path_buf("/tmp/hooks.json").abs(),
             source: codex_protocol::protocol::HookSource::User,

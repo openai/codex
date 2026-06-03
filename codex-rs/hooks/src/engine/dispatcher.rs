@@ -6,15 +6,17 @@ use futures::stream::FuturesUnordered;
 use codex_protocol::protocol::HookCompletedEvent;
 use codex_protocol::protocol::HookEventName;
 use codex_protocol::protocol::HookExecutionMode;
-use codex_protocol::protocol::HookHandlerType;
 use codex_protocol::protocol::HookRunStatus;
 use codex_protocol::protocol::HookRunSummary;
 use codex_protocol::protocol::HookScope;
 
 use super::CommandShell;
 use super::ConfiguredHandler;
+use super::ConfiguredHandlerKind;
 use super::command_runner::CommandRunResult;
 use super::command_runner::run_command;
+use super::prompt_runner::PromptHookRunner;
+use super::prompt_runner::run_prompt;
 use crate::events::common::matches_matcher;
 
 #[derive(Debug)]
@@ -71,7 +73,7 @@ pub(crate) fn running_summary(handler: &ConfiguredHandler) -> HookRunSummary {
     HookRunSummary {
         id: handler.run_id(),
         event_name: handler.event_name,
-        handler_type: HookHandlerType::Command,
+        handler_type: handler.handler_type(),
         execution_mode: HookExecutionMode::Sync,
         scope: scope_for_event(handler.event_name),
         source_path: handler.source_path.clone(),
@@ -86,20 +88,41 @@ pub(crate) fn running_summary(handler: &ConfiguredHandler) -> HookRunSummary {
     }
 }
 
+pub(crate) struct HandlerExecutionContext<'a> {
+    pub shell: &'a CommandShell,
+    pub prompt_runner: Option<&'a PromptHookRunner>,
+    pub cwd: &'a Path,
+    pub default_model: String,
+    pub turn_id: Option<String>,
+}
+
 pub(crate) async fn execute_handlers<T>(
-    shell: &CommandShell,
     handlers: Vec<ConfiguredHandler>,
     input_json: String,
-    cwd: &Path,
-    turn_id: Option<String>,
+    context: HandlerExecutionContext<'_>,
     parse: fn(&ConfiguredHandler, CommandRunResult, Option<String>) -> ParsedHandler<T>,
 ) -> Vec<ParsedHandler<T>> {
+    let HandlerExecutionContext {
+        shell,
+        prompt_runner,
+        cwd,
+        default_model,
+        turn_id,
+    } = context;
     let mut pending = FuturesUnordered::new();
     for (configured_order, handler) in handlers.into_iter().enumerate() {
         let input_json = input_json.clone();
+        let default_model = default_model.clone();
         let turn_id = turn_id.clone();
         pending.push(async move {
-            let result = run_command(shell, &handler, &input_json, cwd).await;
+            let result = match &handler.kind {
+                ConfiguredHandlerKind::Command { .. } => {
+                    run_command(shell, &handler, &input_json, cwd).await
+                }
+                ConfiguredHandlerKind::Prompt { .. } => {
+                    run_prompt(prompt_runner, &handler, &input_json, default_model).await
+                }
+            };
             (configured_order, parse(&handler, result, turn_id))
         });
     }
@@ -124,7 +147,7 @@ pub(crate) fn completed_summary(
     HookRunSummary {
         id: handler.run_id(),
         event_name: handler.event_name,
-        handler_type: HookHandlerType::Command,
+        handler_type: handler.handler_type(),
         execution_mode: HookExecutionMode::Sync,
         scope: scope_for_event(handler.event_name),
         source_path: handler.source_path.clone(),
@@ -161,6 +184,7 @@ mod tests {
     use codex_utils_absolute_path::test_support::test_path_buf;
 
     use super::ConfiguredHandler;
+    use super::ConfiguredHandlerKind;
     use super::select_handlers;
     use super::select_handlers_for_matcher_inputs;
 
@@ -173,8 +197,10 @@ mod tests {
         ConfiguredHandler {
             event_name,
             matcher: matcher.map(str::to_owned),
-            command: command.to_string(),
-            timeout_sec: 5,
+            kind: ConfiguredHandlerKind::Command {
+                command: command.to_string(),
+                timeout_sec: 5,
+            },
             status_message: None,
             source_path: test_path_buf("/tmp/hooks.json").abs(),
             source: HookSource::User,
@@ -440,8 +466,8 @@ mod tests {
         let selected = select_handlers(&handlers, HookEventName::Stop, /*matcher_input*/ None);
 
         assert_eq!(selected.len(), 3);
-        assert_eq!(selected[0].command, "first");
-        assert_eq!(selected[1].command, "second");
-        assert_eq!(selected[2].command, "third");
+        assert_eq!(selected[0].command().expect("command handler"), "first");
+        assert_eq!(selected[1].command().expect("command handler"), "second");
+        assert_eq!(selected[2].command().expect("command handler"), "third");
     }
 }

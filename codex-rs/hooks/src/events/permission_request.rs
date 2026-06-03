@@ -21,6 +21,7 @@ use crate::engine::ConfiguredHandler;
 use crate::engine::command_runner::CommandRunResult;
 use crate::engine::dispatcher;
 use crate::engine::output_parser;
+use crate::engine::prompt_runner::PromptHookRunner;
 use crate::schema::PermissionRequestCommandInput;
 use crate::schema::SubagentCommandInputFields;
 use codex_protocol::ThreadId;
@@ -87,6 +88,7 @@ pub(crate) fn preview(
 pub(crate) async fn run(
     handlers: &[ConfiguredHandler],
     shell: &CommandShell,
+    prompt_runner: Option<&PromptHookRunner>,
     request: PermissionRequestRequest,
 ) -> PermissionRequestOutcome {
     let matcher_inputs = common::matcher_inputs(&request.tool_name, &request.matcher_aliases);
@@ -119,11 +121,15 @@ pub(crate) async fn run(
     };
 
     let results = dispatcher::execute_handlers(
-        shell,
         matched,
         input_json,
-        request.cwd.as_path(),
-        Some(request.turn_id.clone()),
+        dispatcher::HandlerExecutionContext {
+            shell,
+            prompt_runner,
+            cwd: request.cwd.as_path(),
+            default_model: request.model.clone(),
+            turn_id: Some(request.turn_id.clone()),
+        },
         parse_completed,
     )
     .await;

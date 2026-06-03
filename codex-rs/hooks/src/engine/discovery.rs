@@ -22,10 +22,12 @@ use serde::Deserialize;
 use serde::Serialize;
 
 use super::ConfiguredHandler;
+use super::ConfiguredHandlerKind;
 use super::HookListEntry;
 use crate::config_rules::hook_states_from_stack;
 use crate::events::common::matcher_pattern_for_event;
 use crate::events::common::validate_matcher_pattern;
+use codex_protocol::protocol::HookEventName;
 use codex_protocol::protocol::HookHandlerType;
 use codex_protocol::protocol::HookSource;
 use codex_protocol::protocol::HookTrustStatus;
@@ -437,7 +439,7 @@ fn append_matcher_groups(
     warnings: &mut Vec<String>,
     display_order: &mut i64,
     source: &HookHandlerSource<'_>,
-    event_name: codex_protocol::protocol::HookEventName,
+    event_name: HookEventName,
     groups: Vec<MatcherGroup>,
 ) {
     for (group_index, group) in groups.into_iter().enumerate() {
@@ -487,12 +489,10 @@ fn append_matcher_groups(
                         r#async,
                         status_message: status_message.clone(),
                     };
-                    let current_hash =
-                        command_hook_hash(event_name, matcher, &group, normalized_handler);
+                    let current_hash = hook_hash(event_name, matcher, &group, normalized_handler);
                     let command = source.env.iter().fold(command, |command, (key, value)| {
                         command.replace(&format!("${{{key}}}"), value)
                     });
-                    // TODO(abhinav): replace this positional suffix with a durable hook id.
                     let key =
                         crate::hook_key(&source.key_source, event_name, group_index, handler_index);
                     let state = source.hook_states.get(&key);
@@ -527,8 +527,10 @@ fn append_matcher_groups(
                         handlers.push(ConfiguredHandler {
                             event_name,
                             matcher: matcher.map(ToOwned::to_owned),
-                            command,
-                            timeout_sec,
+                            kind: ConfiguredHandlerKind::Command {
+                                command,
+                                timeout_sec,
+                            },
                             status_message,
                             source_path: source.path.clone(),
                             source: source.source,
@@ -560,8 +562,8 @@ struct NormalizedHookIdentity {
     group: MatcherGroup,
 }
 
-fn command_hook_hash(
-    event_name: codex_protocol::protocol::HookEventName,
+fn hook_hash(
+    event_name: HookEventName,
     matcher: Option<&str>,
     group: &MatcherGroup,
     normalized_handler: HookHandlerConfig,
@@ -658,6 +660,7 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use super::ConfiguredHandler;
+    use super::ConfiguredHandlerKind;
     use super::append_matcher_groups;
     use codex_config::HookHandlerConfig;
     use codex_config::HookStateToml;
@@ -778,8 +781,10 @@ mod tests {
             vec![ConfiguredHandler {
                 event_name: HookEventName::UserPromptSubmit,
                 matcher: None,
-                command: "echo hello".to_string(),
-                timeout_sec: 600,
+                kind: ConfiguredHandlerKind::Command {
+                    command: "echo hello".to_string(),
+                    timeout_sec: 600,
+                },
                 status_message: None,
                 source_path: source_path.clone(),
                 source: hook_source(),
@@ -813,8 +818,10 @@ mod tests {
             vec![ConfiguredHandler {
                 event_name: HookEventName::PreToolUse,
                 matcher: Some("^Bash$".to_string()),
-                command: "echo hello".to_string(),
-                timeout_sec: 600,
+                kind: ConfiguredHandlerKind::Command {
+                    command: "echo hello".to_string(),
+                    timeout_sec: 600,
+                },
                 status_message: None,
                 source_path: source_path.clone(),
                 source: hook_source(),
@@ -1000,7 +1007,7 @@ mod tests {
         assert_eq!(warnings, Vec::<String>::new());
         assert_eq!(handlers.len(), 1);
         assert_eq!(
-            handlers[0].command,
+            handlers[0].command().expect("command handler"),
             if cfg!(windows) {
                 "echo windows"
             } else {

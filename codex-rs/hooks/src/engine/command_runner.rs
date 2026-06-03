@@ -9,6 +9,7 @@ use tokio::time::timeout;
 
 use super::CommandShell;
 use super::ConfiguredHandler;
+use super::ConfiguredHandlerKind;
 
 #[derive(Debug)]
 pub(crate) struct CommandRunResult {
@@ -68,7 +69,7 @@ pub(crate) async fn run_command(
         };
     }
 
-    let timeout_duration = Duration::from_secs(handler.timeout_sec);
+    let timeout_duration = Duration::from_secs(handler.timeout_sec());
     match timeout(timeout_duration, child.wait_with_output()).await {
         Ok(Ok(output)) => CommandRunResult {
             started_at,
@@ -95,22 +96,29 @@ pub(crate) async fn run_command(
             exit_code: None,
             stdout: String::new(),
             stderr: String::new(),
-            error: Some(format!("hook timed out after {}s", handler.timeout_sec)),
+            error: Some(format!("hook timed out after {}s", handler.timeout_sec())),
         },
     }
 }
 
 fn build_command(shell: &CommandShell, handler: &ConfiguredHandler) -> Command {
+    let ConfiguredHandlerKind::Command {
+        command: command_text,
+        ..
+    } = &handler.kind
+    else {
+        panic!("prompt handler cannot run as a command hook");
+    };
     let mut command = if shell.program.is_empty() {
         default_shell_command()
     } else {
         Command::new(&shell.program)
     };
     if shell.program.is_empty() {
-        command.arg(&handler.command);
+        command.arg(command_text);
     } else {
         command.args(&shell.args);
-        command.arg(&handler.command);
+        command.arg(command_text);
     }
     command.envs(&handler.env);
     command
