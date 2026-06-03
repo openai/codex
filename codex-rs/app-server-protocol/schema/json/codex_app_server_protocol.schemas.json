@@ -1580,6 +1580,76 @@
             },
             "method": {
               "enum": [
+                "nativeIntegrityState/read"
+              ],
+              "title": "NativeIntegrityState/readRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "type": "null"
+            }
+          },
+          "required": [
+            "id",
+            "method"
+          ],
+          "title": "NativeIntegrityState/readRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "nativeIntegrityState/write"
+              ],
+              "title": "NativeIntegrityState/writeRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/NativeIntegrityStateWriteParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "NativeIntegrityState/writeRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "nativeIntegrityState/clear"
+              ],
+              "title": "NativeIntegrityState/clearRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "type": "null"
+            }
+          },
+          "required": [
+            "id",
+            "method"
+          ],
+          "title": "NativeIntegrityState/clearRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
                 "mcpServer/oauth/login"
               ],
               "title": "McpServer/oauth/loginRequestMethod",
@@ -11781,6 +11851,57 @@
           "verifications"
         ],
         "title": "ModelVerificationNotification",
+        "type": "object"
+      },
+      "NativeIntegrityStateClearResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "NativeIntegrityStateClearResponse",
+        "type": "object"
+      },
+      "NativeIntegrityStateReadResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "state": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "title": "NativeIntegrityStateReadResponse",
+        "type": "object"
+      },
+      "NativeIntegrityStateWriteParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "expectedState": {
+            "description": "When present, write only if the calling surface still stores this state.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "title": "NativeIntegrityStateWriteParams",
+        "type": "object"
+      },
+      "NativeIntegrityStateWriteResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "written": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "written"
+        ],
+        "title": "NativeIntegrityStateWriteResponse",
         "type": "object"
       },
       "NetworkAccess": {

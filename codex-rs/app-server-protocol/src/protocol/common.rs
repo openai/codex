@@ -849,19 +849,16 @@ client_request_definitions! {
         serialization: global("remote-control-pairing"),
         response: v2::RemoteControlPairingStartResponse,
     },
-    #[experimental("nativeIntegrityState/read")]
     NativeIntegrityStateRead => "nativeIntegrityState/read" {
         params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
         serialization: global_shared_read("native-integrity-state"),
         response: v2::NativeIntegrityStateReadResponse,
     },
-    #[experimental("nativeIntegrityState/write")]
     NativeIntegrityStateWrite => "nativeIntegrityState/write" {
         params: v2::NativeIntegrityStateWriteParams,
         serialization: global("native-integrity-state"),
         response: v2::NativeIntegrityStateWriteResponse,
     },
-    #[experimental("nativeIntegrityState/clear")]
     NativeIntegrityStateClear => "nativeIntegrityState/clear" {
         params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
         serialization: global("native-integrity-state"),
