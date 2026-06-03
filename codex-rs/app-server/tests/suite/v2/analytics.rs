@@ -172,7 +172,6 @@ pub(crate) fn assert_basic_thread_initialized_event(
     expected_model: &str,
     initialization_mode: &str,
     expected_thread_source: &str,
-    expected_forked_from_thread_id: Option<&str>,
 ) {
     assert_eq!(event["event_params"]["thread_id"], thread_id);
     assert_eq!(event["event_params"]["session_id"], session_id);
@@ -201,10 +200,6 @@ pub(crate) fn assert_basic_thread_initialized_event(
     assert_eq!(
         event["event_params"]["parent_thread_id"],
         serde_json::Value::Null
-    );
-    assert_eq!(
-        event["event_params"]["forked_from_thread_id"],
-        expected_forked_from_thread_id.map_or(serde_json::Value::Null, Into::into)
     );
     assert_eq!(
         event["event_params"]["initialization_mode"],

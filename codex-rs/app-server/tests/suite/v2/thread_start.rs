@@ -405,7 +405,6 @@ async fn thread_start_tracks_thread_initialized_analytics() -> Result<()> {
         "mock-model",
         "new",
         "user",
-        /*expected_forked_from_thread_id*/ None,
     );
     Ok(())
 }
