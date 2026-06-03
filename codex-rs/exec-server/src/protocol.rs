@@ -20,7 +20,6 @@ pub const EXEC_OUTPUT_DELTA_METHOD: &str = "process/output";
 pub const EXEC_EXITED_METHOD: &str = "process/exited";
 pub const EXEC_CLOSED_METHOD: &str = "process/closed";
 pub const FS_READ_FILE_METHOD: &str = "fs/readFile";
-pub const FS_CANONICALIZE_METHOD: &str = "fs/canonicalize";
 pub const FS_WRITE_FILE_METHOD: &str = "fs/writeFile";
 pub const FS_CREATE_DIRECTORY_METHOD: &str = "fs/createDirectory";
 pub const FS_GET_METADATA_METHOD: &str = "fs/getMetadata";
@@ -172,19 +171,6 @@ pub struct FsReadFileParams {
 #[serde(rename_all = "camelCase")]
 pub struct FsReadFileResponse {
     pub data_base64: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct FsCanonicalizeParams {
-    pub path: AbsolutePathBuf,
-    pub sandbox: Option<FileSystemSandboxContext>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct FsCanonicalizeResponse {
-    pub path: AbsolutePathBuf,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

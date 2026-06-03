@@ -402,13 +402,6 @@ impl ExecServerClient {
         self.call(FS_READ_FILE_METHOD, &params).await
     }
 
-    pub async fn fs_canonicalize(
-        &self,
-        params: FsCanonicalizeParams,
-    ) -> Result<FsCanonicalizeResponse, ExecServerError> {
-        self.call(FS_CANONICALIZE_METHOD, &params).await
-    }
-
     pub async fn fs_write_file(
         &self,
         params: FsWriteFileParams,

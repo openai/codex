@@ -79,12 +79,6 @@ pub(crate) fn build_router() -> RpcRouter<ExecServerHandler> {
         },
     );
     router.request(
-        FS_CANONICALIZE_METHOD,
-        |handler: Arc<ExecServerHandler>, params: FsCanonicalizeParams| async move {
-            handler.fs_canonicalize(params).await
-        },
-    );
-    router.request(
         FS_READ_FILE_METHOD,
         |handler: Arc<ExecServerHandler>, params: FsReadFileParams| async move {
             handler.fs_read_file(params).await
