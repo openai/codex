@@ -10,6 +10,8 @@ use crate::tools::handlers::workspace_mutation_spec::create_add_workspace_root_t
 use crate::tools::handlers::workspace_mutation_spec::create_set_working_directory_tool;
 use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::ToolExecutor;
+use codex_exec_server::ExecutorFileSystem;
+use codex_exec_server::FileSystemSandboxContext;
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
@@ -132,47 +134,124 @@ impl ToolExecutor<ToolInvocation> for WorkspaceMutationHandler {
             }
         };
         let fs = environment.environment.get_filesystem();
-        let canonical = match fs.canonicalize(&requested, /*sandbox*/ None).await {
-            Ok(path) => path,
-            Err(err) => {
-                return workspace_error(
-                    io_error_code(&err),
-                    err.to_string(),
-                    current.cwd,
-                    current.workspace_roots,
-                );
-            }
-        };
-        let metadata = match fs.get_metadata(&canonical, /*sandbox*/ None).await {
-            Ok(metadata) => metadata,
-            Err(err) => {
-                return workspace_error(
-                    io_error_code(&err),
-                    err.to_string(),
-                    current.cwd,
-                    current.workspace_roots,
-                );
-            }
-        };
-        if !metadata.is_directory {
-            return workspace_error(
-                "not_a_directory",
-                format!(
-                    "workspace mutation target is not a directory: {}",
-                    canonical.as_path().display()
-                ),
-                current.cwd,
-                current.workspace_roots,
-            );
-        }
-
-        let mut workspace_roots = current.workspace_roots.clone();
-        if !workspace_roots
-            .iter()
-            .any(|root| canonical.as_path().starts_with(root.as_path()))
+        if !session
+            .runtime_workspace_mutation_environment_matches(&environment.environment_id)
+            .await
         {
-            workspace_roots.push(canonical.clone());
+            return Err(FunctionCallError::RespondToModel(
+                "workspace mutation is unavailable unless the session has exactly one persisted execution environment"
+                    .to_string(),
+            ));
         }
+        let active_sandbox = turn.file_system_sandbox_context_for_permission_profile(
+            &current.permission_profile,
+            /*additional_permissions*/ None,
+            &current.cwd,
+        );
+        let mut inspection_permissions = None;
+        let canonical = match resolve_workspace_directory(fs.as_ref(), &requested, &active_sandbox)
+            .await
+        {
+            Ok(path) => path,
+            Err(_) => {
+                let provisional_workspace_roots =
+                    workspace_roots_with_target(&current.workspace_roots, &requested);
+                let provisional_cwd = match self.mutation {
+                    WorkspaceMutation::SetWorkingDirectory => requested.clone(),
+                    WorkspaceMutation::AddWorkspaceRoot => current.cwd.clone(),
+                };
+                let preview = session
+                    .preview_settings(&SessionSettingsUpdate {
+                        cwd: matches!(self.mutation, WorkspaceMutation::SetWorkingDirectory)
+                            .then(|| provisional_cwd.to_path_buf()),
+                        workspace_roots: Some(provisional_workspace_roots.clone()),
+                        ..Default::default()
+                    })
+                    .await
+                    .map_err(|err| FunctionCallError::RespondToModel(err.to_string()))?;
+                let Some(file_system) = newly_accessible_roots(
+                    &current.permission_profile.file_system_sandbox_policy(),
+                    current.cwd.as_path(),
+                    &preview.permission_profile.file_system_sandbox_policy(),
+                    provisional_cwd.as_path(),
+                ) else {
+                    return workspace_error(
+                        "permission_denied",
+                        "workspace mutation target is unavailable under the active permission profile"
+                            .to_string(),
+                        current.cwd,
+                        current.workspace_roots,
+                    );
+                };
+                let requested_permissions = RequestPermissionProfile {
+                    file_system: Some(file_system),
+                    network: None,
+                };
+                let response = session
+                    .request_workspace_permissions_for_cwd(
+                        &turn,
+                        call_id.clone(),
+                        RequestPermissionsArgs {
+                            environment_id: Some(environment.environment_id.clone()),
+                            reason: Some(self.approval_reason(&requested)),
+                            permissions: requested_permissions.clone(),
+                        },
+                        current.cwd.clone(),
+                        self.approval_request(
+                            requested.clone(),
+                            provisional_workspace_roots,
+                        ),
+                        cancellation_token.clone(),
+                    )
+                    .await;
+                let Some(response) = response else {
+                    return workspace_error(
+                        "approval_denied",
+                        "workspace mutation approval was cancelled".to_string(),
+                        current.cwd,
+                        current.workspace_roots,
+                    );
+                };
+                if !matches!(response.scope, PermissionGrantScope::Session)
+                    || !permissions_are_approved(
+                        requested_permissions,
+                        response.permissions.clone(),
+                        current.cwd.as_path(),
+                    )
+                {
+                    return workspace_error(
+                        "approval_denied",
+                        "workspace mutation requires session-scoped approval with the requested filesystem access"
+                            .to_string(),
+                        current.cwd,
+                        current.workspace_roots,
+                    );
+                }
+                let additional_permissions = response.permissions.clone().into();
+                let inspection_sandbox = turn
+                    .file_system_sandbox_context_for_permission_profile(
+                        &current.permission_profile,
+                        Some(additional_permissions),
+                        &current.cwd,
+                    );
+                inspection_permissions = Some(response.permissions);
+                match resolve_workspace_directory(fs.as_ref(), &requested, &inspection_sandbox)
+                    .await
+                {
+                    Ok(path) => path,
+                    Err(err) => {
+                        return workspace_error(
+                            io_error_code(&err),
+                            err.to_string(),
+                            current.cwd,
+                            current.workspace_roots,
+                        );
+                    }
+                }
+            }
+        };
+
+        let workspace_roots = workspace_roots_with_target(&current.workspace_roots, &canonical);
         let cwd = match self.mutation {
             WorkspaceMutation::SetWorkingDirectory => canonical.clone(),
             WorkspaceMutation::AddWorkspaceRoot => current.cwd.clone(),
@@ -217,37 +296,41 @@ impl ToolExecutor<ToolInvocation> for WorkspaceMutationHandler {
                 file_system: Some(file_system),
                 network: None,
             };
+            if inspection_permissions.as_ref().is_some_and(|granted| {
+                permissions_are_approved(
+                    requested_permissions.clone(),
+                    granted.clone(),
+                    current.cwd.as_path(),
+                )
+            }) {
+                session
+                    .update_runtime_workspace(
+                        turn.as_ref(),
+                        matches!(self.mutation, WorkspaceMutation::SetWorkingDirectory)
+                            .then_some(cwd.clone()),
+                        workspace_roots.clone(),
+                    )
+                    .await
+                    .map_err(|err| FunctionCallError::RespondToModel(err.to_string()))?;
+                session
+                    .send_event(
+                        turn.as_ref(),
+                        thread_settings_applied_event(session.as_ref()).await,
+                    )
+                    .await;
+                return workspace_success(/*changed*/ true, cwd, workspace_roots);
+            }
             let response = session
                 .request_workspace_permissions_for_cwd(
                     &turn,
                     call_id,
                     RequestPermissionsArgs {
-                        environment_id: None,
-                        reason: Some(match self.mutation {
-                            WorkspaceMutation::SetWorkingDirectory => format!(
-                                "switch this session's working directory to `{}`",
-                                canonical.as_path().display()
-                            ),
-                            WorkspaceMutation::AddWorkspaceRoot => format!(
-                                "add `{}` to this session's workspace",
-                                canonical.as_path().display()
-                            ),
-                        }),
+                        environment_id: Some(environment.environment_id.clone()),
+                        reason: Some(self.approval_reason(&canonical)),
                         permissions: requested_permissions.clone(),
                     },
                     current.cwd.clone(),
-                    WorkspaceMutationApprovalRequest {
-                        operation: match self.mutation {
-                            WorkspaceMutation::SetWorkingDirectory => {
-                                WorkspaceMutationOperation::SetWorkingDirectory
-                            }
-                            WorkspaceMutation::AddWorkspaceRoot => {
-                                WorkspaceMutationOperation::AddWorkspaceRoot
-                            }
-                        },
-                        target: canonical.clone(),
-                        resulting_workspace_roots: workspace_roots.clone(),
-                    },
+                    self.approval_request(canonical.clone(), workspace_roots.clone()),
                     cancellation_token,
                 )
                 .await;
@@ -292,6 +375,37 @@ impl ToolExecutor<ToolInvocation> for WorkspaceMutationHandler {
             )
             .await;
         workspace_success(/*changed*/ true, cwd, workspace_roots)
+    }
+}
+
+impl WorkspaceMutationHandler {
+    fn approval_reason(&self, target: &AbsolutePathBuf) -> String {
+        match self.mutation {
+            WorkspaceMutation::SetWorkingDirectory => format!(
+                "switch this session's working directory to `{}`",
+                target.as_path().display()
+            ),
+            WorkspaceMutation::AddWorkspaceRoot => {
+                format!("add `{}` to this session's workspace", target.as_path().display())
+            }
+        }
+    }
+
+    fn approval_request(
+        &self,
+        target: AbsolutePathBuf,
+        resulting_workspace_roots: Vec<AbsolutePathBuf>,
+    ) -> WorkspaceMutationApprovalRequest {
+        WorkspaceMutationApprovalRequest {
+            operation: match self.mutation {
+                WorkspaceMutation::SetWorkingDirectory => {
+                    WorkspaceMutationOperation::SetWorkingDirectory
+                }
+                WorkspaceMutation::AddWorkspaceRoot => WorkspaceMutationOperation::AddWorkspaceRoot,
+            },
+            target,
+            resulting_workspace_roots,
+        }
     }
 }
 
@@ -411,6 +525,40 @@ fn bounded_workspace_roots(workspace_roots: Vec<AbsolutePathBuf>) -> (Vec<Absolu
     )
 }
 
+fn workspace_roots_with_target(
+    workspace_roots: &[AbsolutePathBuf],
+    target: &AbsolutePathBuf,
+) -> Vec<AbsolutePathBuf> {
+    let mut workspace_roots = workspace_roots.to_vec();
+    if !workspace_roots
+        .iter()
+        .any(|root| target.as_path().starts_with(root.as_path()))
+    {
+        workspace_roots.push(target.clone());
+    }
+    workspace_roots
+}
+
+async fn resolve_workspace_directory(
+    fs: &dyn ExecutorFileSystem,
+    requested: &AbsolutePathBuf,
+    sandbox: &FileSystemSandboxContext,
+) -> io::Result<AbsolutePathBuf> {
+    let canonical = fs.canonicalize(requested, Some(sandbox)).await?;
+    let metadata = fs.get_metadata(&canonical, Some(sandbox)).await?;
+    if metadata.is_directory {
+        Ok(canonical)
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "workspace mutation target is not a directory: {}",
+                canonical.as_path().display()
+            ),
+        ))
+    }
+}
+
 // Serde passes `skip_serializing_if` predicates a reference.
 #[allow(clippy::trivially_copy_pass_by_ref)]
 fn is_zero(value: &usize) -> bool {
@@ -421,6 +569,7 @@ fn io_error_code(err: &io::Error) -> &'static str {
     match err.kind() {
         io::ErrorKind::NotFound => "path_not_found",
         io::ErrorKind::PermissionDenied => "permission_denied",
+        io::ErrorKind::InvalidInput => "not_a_directory",
         _ => "resolution_failed",
     }
 }
@@ -476,5 +625,28 @@ mod tests {
 
         assert_eq!(visible_roots.len(), MAX_MODEL_VISIBLE_WORKSPACE_ROOTS);
         assert_eq!(omitted_workspace_roots, 2);
+    }
+
+    #[test]
+    fn workspace_roots_with_target_adds_only_external_targets() {
+        let root = AbsolutePathBuf::from_absolute_path("/workspace").expect("absolute root");
+        let external = AbsolutePathBuf::from_absolute_path("/external").expect("absolute target");
+
+        assert_eq!(
+            workspace_roots_with_target(std::slice::from_ref(&root), &root.join("src")),
+            vec![root.clone()]
+        );
+        assert_eq!(
+            workspace_roots_with_target(std::slice::from_ref(&root), &external),
+            vec![root, external]
+        );
+    }
+
+    #[test]
+    fn invalid_workspace_target_maps_to_not_a_directory() {
+        assert_eq!(
+            io_error_code(&io::Error::new(io::ErrorKind::InvalidInput, "not a directory")),
+            "not_a_directory"
+        );
     }
 }

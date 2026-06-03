@@ -1505,6 +1505,17 @@ impl Session {
         }
     }
 
+    pub(crate) async fn runtime_workspace_mutation_environment_matches(
+        &self,
+        environment_id: &str,
+    ) -> bool {
+        let state = self.state.lock().await;
+        matches!(
+            state.session_configuration.environments.as_slice(),
+            [environment] if environment.environment_id == environment_id
+        )
+    }
+
     // Used by the model workspace-mutation tools introduced in a follow-up layer.
     #[allow(dead_code)]
     pub(crate) async fn update_runtime_workspace(
