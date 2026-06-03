@@ -2,6 +2,7 @@ mod client;
 mod client_api;
 mod client_transport;
 mod connection;
+mod connection_token;
 mod environment;
 mod environment_path;
 mod environment_provider;

@@ -4,6 +4,8 @@ use tokio::io::BufReader;
 use tokio::process::Command;
 use tokio::time::timeout;
 use tokio_tungstenite::connect_async;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tokio_tungstenite::tungstenite::http::header::AUTHORIZATION;
 use tracing::debug;
 use tracing::warn;
 
@@ -15,6 +17,7 @@ use crate::client_api::RemoteExecServerConnectArgs;
 use crate::client_api::StdioExecServerCommand;
 use crate::client_api::StdioExecServerConnectArgs;
 use crate::connection::JsonRpcConnection;
+use crate::connection_token::connection_token_from_env;
 use crate::relay::harness_connection_from_websocket;
 
 const ENVIRONMENT_CLIENT_NAME: &str = "codex-environment";
@@ -59,7 +62,23 @@ impl ExecServerClient {
         ensure_rustls_crypto_provider();
         let websocket_url = args.websocket_url.clone();
         let connect_timeout = args.connect_timeout;
-        let (stream, _) = timeout(connect_timeout, connect_async(websocket_url.as_str()))
+        let mut request = websocket_url
+            .as_str()
+            .into_client_request()
+            .map_err(|err| {
+                ExecServerError::Protocol(format!(
+                    "invalid exec-server websocket URL `{websocket_url}`: {err}"
+                ))
+            })?;
+        if !is_rendezvous_harness_url(&websocket_url)
+            && let Some(connection_token) =
+                connection_token_from_env().map_err(ExecServerError::Protocol)?
+        {
+            request
+                .headers_mut()
+                .insert(AUTHORIZATION, connection_token);
+        }
+        let (stream, _) = timeout(connect_timeout, connect_async(request))
             .await
             .map_err(|_| ExecServerError::WebSocketConnectTimeout {
                 url: websocket_url.clone(),

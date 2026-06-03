@@ -24,6 +24,12 @@ The CLI entrypoint supports:
 - `ws://IP:PORT` (default)
 - `--remote URL --environment-id ID [--name NAME]`
 
+For direct websocket listeners, setting
+`CODEX_EXEC_SERVER_CONNECTION_TOKEN` requires clients to send the same value
+as a bearer `Authorization` header. The printed listen URL and `/readyz`
+remain secret-free. Direct websocket `ExecServerClient` connections use the
+same env var.
+
 Remote mode registers the local exec-server with the environment registry,
 then reconnects to the service-provided rendezvous websocket as the environment.
 It uses the standard Codex ChatGPT sign-in state; run `codex login` first when

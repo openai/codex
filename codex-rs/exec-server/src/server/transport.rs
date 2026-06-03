@@ -3,8 +3,11 @@ use axum::body::Body;
 use axum::extract::ConnectInfo;
 use axum::extract::State;
 use axum::extract::ws::WebSocketUpgrade;
+use axum::http::HeaderMap;
+use axum::http::HeaderValue;
 use axum::http::Request;
 use axum::http::StatusCode;
+use axum::http::header::AUTHORIZATION;
 use axum::http::header::ORIGIN;
 use axum::middleware;
 use axum::middleware::Next;
@@ -23,6 +26,7 @@ use tracing::warn;
 
 use crate::ExecServerRuntimePaths;
 use crate::connection::JsonRpcConnection;
+use crate::connection_token::connection_token_from_env;
 use crate::server::processor::ConnectionProcessor;
 
 pub const DEFAULT_LISTEN_URL: &str = "ws://127.0.0.1:0";
@@ -83,7 +87,12 @@ pub(crate) async fn run_transport(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     match parse_listen_url(listen_url)? {
         ExecServerListenTransport::WebSocket(bind_address) => {
-            run_websocket_listener(bind_address, runtime_paths).await
+            run_websocket_listener(
+                bind_address,
+                connection_token_from_env().map_err(std::io::Error::other)?,
+                runtime_paths,
+            )
+            .await
         }
         ExecServerListenTransport::Stdio => run_stdio_connection(runtime_paths).await,
     }
@@ -118,6 +127,7 @@ where
 
 async fn run_websocket_listener(
     bind_address: SocketAddr,
+    connection_token: Option<HeaderValue>,
     runtime_paths: ExecServerRuntimePaths,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let listener = TcpListener::bind(bind_address).await?;
@@ -131,7 +141,10 @@ async fn run_websocket_listener(
         .route("/", any(websocket_upgrade_handler))
         .route("/readyz", get(readiness_handler))
         .layer(middleware::from_fn(reject_requests_with_origin_header))
-        .with_state(ExecServerWebSocketState { processor });
+        .with_state(ExecServerWebSocketState {
+            processor,
+            connection_token,
+        });
     axum::serve(
         listener,
         router.into_make_service_with_connect_info::<SocketAddr>(),
@@ -143,6 +156,7 @@ async fn run_websocket_listener(
 #[derive(Clone)]
 struct ExecServerWebSocketState {
     processor: ConnectionProcessor,
+    connection_token: Option<HeaderValue>,
 }
 
 async fn readiness_handler() -> StatusCode {
@@ -168,10 +182,19 @@ async fn reject_requests_with_origin_header(
 async fn websocket_upgrade_handler(
     websocket: WebSocketUpgrade,
     ConnectInfo(peer_addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     State(state): State<ExecServerWebSocketState>,
-) -> impl IntoResponse {
+) -> Result<impl IntoResponse, StatusCode> {
+    if state
+        .connection_token
+        .as_ref()
+        .is_some_and(|token| headers.get(AUTHORIZATION) != Some(token))
+    {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+
     info!(%peer_addr, "exec-server websocket client connected");
-    websocket.on_upgrade(move |stream| async move {
+    Ok(websocket.on_upgrade(move |stream| async move {
         state
             .processor
             .run_connection(JsonRpcConnection::from_axum_websocket(
@@ -179,7 +202,7 @@ async fn websocket_upgrade_handler(
                 format!("exec-server websocket {peer_addr}"),
             ))
             .await;
-    })
+    }))
 }
 
 #[cfg(test)]
