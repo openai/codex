@@ -119,6 +119,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use crate::config::permissions::BUILT_IN_READ_ONLY_PROFILE;
 use crate::config::permissions::BUILT_IN_WORKSPACE_PROFILE;
 use crate::config::permissions::apply_network_proxy_feature_config;
 use crate::config::permissions::builtin_permission_profile;
@@ -3849,10 +3850,14 @@ fn resolve_default_permissions<'a>(
     let Some(allowed_permissions) = requirements_toml.allowed_permissions.as_ref() else {
         return Ok(selected_permissions);
     };
-    let Some(fallback_permissions) = requirements_toml.default_permissions.as_deref() else {
+    let Some(fallback_permissions) = requirements_toml
+        .default_permissions
+        .as_deref()
+        .or_else(|| implicit_default_permissions(allowed_permissions))
+    else {
         return Err(std::io::Error::new(
             ErrorKind::InvalidInput,
-            "requirements.toml default_permissions must be set when allowed_permissions is configured",
+            "requirements.toml default_permissions must be set unless allowed_permissions includes both `:workspace` and `:read-only`",
         ));
     };
 
@@ -3912,10 +3917,14 @@ fn validate_required_permission_profile_catalog(
         }
     }
 
-    let Some(default_permissions) = requirements_toml.default_permissions.as_deref() else {
+    let Some(default_permissions) = requirements_toml
+        .default_permissions
+        .as_deref()
+        .or_else(|| implicit_default_permissions(allowed_permissions))
+    else {
         return Err(std::io::Error::new(
             ErrorKind::InvalidInput,
-            "requirements.toml default_permissions must be set when allowed_permissions is configured",
+            "requirements.toml default_permissions must be set unless allowed_permissions includes both `:workspace` and `:read-only`",
         ));
     };
     if !allowed_permissions
@@ -3931,6 +3940,17 @@ fn validate_required_permission_profile_catalog(
     }
 
     Ok(())
+}
+
+fn implicit_default_permissions(allowed_permissions: &[String]) -> Option<&'static str> {
+    let allows_workspace = allowed_permissions
+        .iter()
+        .any(|profile_id| profile_id == BUILT_IN_WORKSPACE_PROFILE);
+    let allows_read_only = allowed_permissions
+        .iter()
+        .any(|profile_id| profile_id == BUILT_IN_READ_ONLY_PROFILE);
+
+    (allows_workspace && allows_read_only).then_some(BUILT_IN_WORKSPACE_PROFILE)
 }
 
 fn normalize_guardian_policy_config(value: Option<&str>) -> Option<String> {

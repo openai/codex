@@ -32,6 +32,7 @@ use codex_exec_server::LOCAL_FS;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS;
+use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -1499,8 +1500,42 @@ extends = ":read-only"
 
     assert!(
         err.to_string()
-            .contains("default_permissions must be set when allowed_permissions is configured"),
+            .contains("default_permissions must be set unless allowed_permissions includes both"),
         "{err}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn system_allowed_permissions_standard_pair_implicitly_defaults_to_workspace()
+-> anyhow::Result<()> {
+    let tmp = tempdir()?;
+    let codex_home = tmp.path().join("home");
+    tokio::fs::create_dir_all(&codex_home).await?;
+    let requirements_path = tmp.path().join("requirements.toml");
+    tokio::fs::write(
+        &requirements_path,
+        r#"
+allowed_permissions = [":read-only", ":workspace"]
+"#,
+    )
+    .await?;
+
+    let mut overrides = LoaderOverrides::without_managed_config_for_tests();
+    overrides.system_requirements_path = Some(requirements_path);
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home)
+        .fallback_cwd(Some(tmp.path().to_path_buf()))
+        .loader_overrides(overrides)
+        .build()
+        .await?;
+
+    assert_eq!(
+        config
+            .permissions
+            .active_permission_profile()
+            .map(|profile| profile.id),
+        Some(BUILT_IN_PERMISSION_PROFILE_WORKSPACE.to_string())
     );
     Ok(())
 }
