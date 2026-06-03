@@ -106,12 +106,6 @@ impl AuthProvider for NativeIntegrityAuthProvider {
             return;
         }
 
-        let Some(expected_state) = request_headers
-            .get(INTEGRITY_STATE_HEADER_NAME)
-            .and_then(|value| value.to_str().ok())
-        else {
-            return;
-        };
         let Some(next_state) = response_headers
             .get(INTEGRITY_STATE_UPDATE_HEADER_NAME)
             .and_then(|value| value.to_str().ok())
@@ -119,11 +113,21 @@ impl AuthProvider for NativeIntegrityAuthProvider {
             return;
         };
 
-        if let Err(error) = self.state.compare_and_set_for_surface(
-            self.surface,
-            expected_state,
-            next_state.to_string(),
-        ) {
+        let expected_state = request_headers
+            .get(INTEGRITY_STATE_HEADER_NAME)
+            .and_then(|value| value.to_str().ok());
+        let result = match expected_state {
+            Some(expected_state) => self.state.compare_and_set_for_surface(
+                self.surface,
+                expected_state,
+                next_state.to_string(),
+            ),
+            None => self
+                .state
+                .set_for_surface(self.surface, next_state.to_string())
+                .map(|()| true),
+        };
+        if let Err(error) = result {
             tracing::warn!("failed to rotate native integrity state: {error}");
         }
     }
@@ -263,5 +267,38 @@ mod tests {
             &mut external_headers,
         );
         assert!(!external_headers.contains_key(INTEGRITY_STATE_HEADER_NAME));
+    }
+
+    #[test]
+    fn native_integrity_provider_seeds_empty_surface_from_response() {
+        let codex_home = TempDir::new().expect("tempdir");
+        let context = HttpStateContext::new(
+            codex_home.path().to_path_buf(),
+            HttpStateSurface::CodexDesktop,
+        );
+        let store = HttpStateStore::new(codex_home.path().to_path_buf());
+        let provider = NativeIntegrityAuthProvider::new(
+            Arc::new(BearerAuthProvider::new("access-token".to_string())),
+            context,
+        );
+        let mut response_headers = HeaderMap::new();
+        response_headers.insert(
+            INTEGRITY_STATE_UPDATE_HEADER_NAME,
+            HeaderValue::from_static("ois1.seeded.nonce.ciphertext"),
+        );
+
+        provider.observe_response_headers(
+            "https://chatgpt.com/backend-api/codex/responses",
+            &HeaderMap::new(),
+            &response_headers,
+        );
+
+        assert_eq!(
+            store
+                .get(HttpStateSurface::CodexDesktop)
+                .expect("state should load")
+                .expect("state should exist"),
+            "ois1.seeded.nonce.ciphertext"
+        );
     }
 }
