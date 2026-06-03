@@ -258,6 +258,7 @@ async-stream = "0.3.6"
 async-trait = "0.1.89"
 aws-config = "1"
 aws-credential-types = "1"
+aws-lc-rs = { version = "1.16.3", default-features = false, features = ["non-fips"] }
 aws-sigv4 = "1"
 aws-types = "1"
 axum = { version = "0.8", default-features = false }
@@ -268,6 +269,13 @@ chardetng = "0.1.17"
 chrono = "0.4.43"
 clap = "4"
 clap_complete = "4"
+clatter = { version = "2.2.0", default-features = false, features = [
+    "alloc",
+    "getrandom",
+    "use-25519",
+    "use-aes-gcm",
+    "use-sha",
+] }
 color-eyre = "0.6.3"
 constant_time_eq = "0.3.1"
 crossbeam-channel = "0.5.15"

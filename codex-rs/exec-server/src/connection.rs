@@ -44,7 +44,7 @@ pub(crate) enum JsonRpcConnectionEvent {
 
 #[derive(Clone)]
 pub(crate) enum JsonRpcTransport {
-    Plain,
+    External,
     Stdio { transport: StdioTransport },
 }
 
@@ -57,7 +57,7 @@ impl JsonRpcTransport {
 
     pub(crate) fn terminate(&self) {
         match self {
-            Self::Plain => {}
+            Self::External => {}
             Self::Stdio { transport } => transport.terminate(),
         }
     }
@@ -315,7 +315,7 @@ impl JsonRpcConnection {
             incoming_rx,
             disconnected_rx,
             task_handles: vec![reader_task, writer_task],
-            transport: JsonRpcTransport::Plain,
+            transport: JsonRpcTransport::External,
         }
     }
 
@@ -452,7 +452,7 @@ impl JsonRpcConnection {
             incoming_rx,
             disconnected_rx,
             task_handles: vec![websocket_task],
-            transport: JsonRpcTransport::Plain,
+            transport: JsonRpcTransport::External,
         }
     }
 

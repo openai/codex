@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 
 use futures::future::BoxFuture;
@@ -8,6 +9,8 @@ use crate::ExecServerError;
 use crate::HttpRequestParams;
 use crate::HttpRequestResponse;
 use crate::HttpResponseBodyStream;
+use crate::SecureChannelIdentity;
+use crate::SecureChannelPublicKey;
 
 pub(crate) const DEFAULT_REMOTE_EXEC_SERVER_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 pub(crate) const DEFAULT_REMOTE_EXEC_SERVER_INITIALIZE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -30,6 +33,69 @@ pub struct RemoteExecServerConnectArgs {
     pub resume_session_id: Option<String>,
 }
 
+/// Registry-authorized material for one secure rendezvous connection attempt.
+#[derive(Clone)]
+pub struct SecureRendezvousConnectBundle {
+    pub websocket_url: String,
+    pub environment_id: String,
+    pub executor_registration_id: String,
+    pub executor_public_key: SecureChannelPublicKey,
+    pub harness_key_authorization: String,
+}
+
+impl std::fmt::Debug for SecureRendezvousConnectBundle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SecureRendezvousConnectBundle")
+            .field(
+                "websocket_url",
+                &redacted_websocket_url(&self.websocket_url),
+            )
+            .field("environment_id", &self.environment_id)
+            .field("executor_registration_id", &self.executor_registration_id)
+            .field("executor_public_key", &self.executor_public_key)
+            .field("harness_key_authorization", &"<redacted>")
+            .finish()
+    }
+}
+
+/// Connection arguments for an authenticated secure rendezvous exec-server.
+#[derive(Clone)]
+pub struct SecureRendezvousConnectArgs {
+    pub bundle: SecureRendezvousConnectBundle,
+    pub harness_identity: SecureChannelIdentity,
+    pub client_name: String,
+    pub connect_timeout: Duration,
+    pub initialize_timeout: Duration,
+    pub resume_session_id: Option<String>,
+}
+
+impl std::fmt::Debug for SecureRendezvousConnectArgs {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SecureRendezvousConnectArgs")
+            .field("bundle", &self.bundle)
+            .field("harness_identity", &"<redacted>")
+            .field("client_name", &self.client_name)
+            .field("connect_timeout", &self.connect_timeout)
+            .field("initialize_timeout", &self.initialize_timeout)
+            .field("resume_session_id", &self.resume_session_id)
+            .finish()
+    }
+}
+
+/// Supplies fresh registry-authorized material for secure rendezvous connections.
+///
+/// Implementations must preserve one endpoint-local harness identity while
+/// refreshing short-lived registry material for every physical connection attempt.
+pub trait SecureRendezvousConnectProvider: Send + Sync {
+    /// Environment ID this provider is authorized to connect to.
+    fn environment_id(&self) -> &str;
+
+    /// Returns a fresh atomic bundle for one physical connection attempt.
+    fn connect_args(&self) -> BoxFuture<'_, Result<SecureRendezvousConnectArgs, ExecServerError>>;
+}
+
+pub type SharedSecureRendezvousConnectProvider = Arc<dyn SecureRendezvousConnectProvider>;
+
 /// Stdio connection arguments for a command-backed exec-server.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct StdioExecServerConnectArgs {
@@ -49,18 +115,50 @@ pub(crate) struct StdioExecServerCommand {
 }
 
 /// Parameters used to connect to a remote exec-server environment.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone)]
 pub(crate) enum ExecServerTransportParams {
     WebSocketUrl {
         websocket_url: String,
         connect_timeout: Duration,
         initialize_timeout: Duration,
     },
+    SecureRendezvous {
+        provider: SharedSecureRendezvousConnectProvider,
+    },
     #[allow(dead_code)]
     StdioCommand {
         command: StdioExecServerCommand,
         initialize_timeout: Duration,
     },
+}
+
+impl std::fmt::Debug for ExecServerTransportParams {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::WebSocketUrl {
+                websocket_url,
+                connect_timeout,
+                initialize_timeout,
+            } => f
+                .debug_struct("WebSocketUrl")
+                .field("websocket_url", websocket_url)
+                .field("connect_timeout", connect_timeout)
+                .field("initialize_timeout", initialize_timeout)
+                .finish(),
+            Self::SecureRendezvous { provider } => f
+                .debug_struct("SecureRendezvous")
+                .field("environment_id", &provider.environment_id())
+                .finish(),
+            Self::StdioCommand {
+                command,
+                initialize_timeout,
+            } => f
+                .debug_struct("StdioCommand")
+                .field("command", command)
+                .field("initialize_timeout", initialize_timeout)
+                .finish(),
+        }
+    }
 }
 
 impl ExecServerTransportParams {
@@ -70,6 +168,17 @@ impl ExecServerTransportParams {
             connect_timeout: DEFAULT_REMOTE_EXEC_SERVER_CONNECT_TIMEOUT,
             initialize_timeout: DEFAULT_REMOTE_EXEC_SERVER_INITIALIZE_TIMEOUT,
         }
+    }
+}
+
+pub(crate) fn redacted_websocket_url(websocket_url: &str) -> String {
+    match url::Url::parse(websocket_url) {
+        Ok(mut url) => {
+            url.set_query(None);
+            url.set_fragment(None);
+            url.to_string()
+        }
+        Err(_) => "<redacted websocket url>".to_string(),
     }
 }
 

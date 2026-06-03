@@ -4,6 +4,7 @@ use tokio::io::BufReader;
 use tokio::process::Command;
 use tokio::time::timeout;
 use tokio_tungstenite::connect_async;
+use tokio_tungstenite::connect_async_with_config;
 use tracing::debug;
 use tracing::warn;
 
@@ -12,10 +13,14 @@ use codex_utils_rustls_provider::ensure_rustls_crypto_provider;
 use crate::ExecServerClient;
 use crate::ExecServerError;
 use crate::client_api::RemoteExecServerConnectArgs;
+use crate::client_api::SecureRendezvousConnectArgs;
 use crate::client_api::StdioExecServerCommand;
 use crate::client_api::StdioExecServerConnectArgs;
+use crate::client_api::redacted_websocket_url;
 use crate::connection::JsonRpcConnection;
 use crate::relay::harness_connection_from_websocket;
+use crate::secure_relay::secure_harness_connection_from_websocket;
+use crate::secure_relay::secure_relay_websocket_config;
 
 const ENVIRONMENT_CLIENT_NAME: &str = "codex-environment";
 
@@ -37,6 +42,16 @@ impl ExecServerClient {
                     resume_session_id: None,
                 })
                 .await
+            }
+            crate::client_api::ExecServerTransportParams::SecureRendezvous { provider } => {
+                let args = provider.connect_args().await?;
+                if args.bundle.environment_id != provider.environment_id() {
+                    return Err(ExecServerError::Protocol(
+                        "secure rendezvous provider returned a different environment id"
+                            .to_string(),
+                    ));
+                }
+                Self::connect_secure_rendezvous(args).await
             }
             crate::client_api::ExecServerTransportParams::StdioCommand {
                 command,
@@ -76,6 +91,44 @@ impl ExecServerClient {
         } else {
             JsonRpcConnection::from_websocket(stream, connection_label)
         };
+        Self::connect(connection, args.into()).await
+    }
+
+    pub async fn connect_secure_rendezvous(
+        args: SecureRendezvousConnectArgs,
+    ) -> Result<Self, ExecServerError> {
+        ensure_rustls_crypto_provider();
+        let websocket_url = args.bundle.websocket_url.clone();
+        let diagnostic_url = redacted_websocket_url(&websocket_url);
+        let connect_timeout = args.connect_timeout;
+        let (stream, _) = timeout(
+            connect_timeout,
+            connect_async_with_config(
+                websocket_url.as_str(),
+                Some(secure_relay_websocket_config()),
+                /*disable_nagle*/ false,
+            ),
+        )
+        .await
+        .map_err(|_| ExecServerError::WebSocketConnectTimeout {
+            url: diagnostic_url.clone(),
+            timeout: connect_timeout,
+        })?
+        .map_err(|source| ExecServerError::WebSocketConnect {
+            url: diagnostic_url.clone(),
+            source,
+        })?;
+
+        let connection_label = format!("secure exec-server rendezvous websocket {diagnostic_url}");
+        let connection = secure_harness_connection_from_websocket(
+            stream,
+            connection_label,
+            args.bundle.environment_id.clone(),
+            args.bundle.executor_registration_id.clone(),
+            args.harness_identity.clone(),
+            args.bundle.executor_public_key.clone(),
+            args.bundle.harness_key_authorization.clone(),
+        );
         Self::connect(connection, args.into()).await
     }
 

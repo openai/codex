@@ -24,6 +24,8 @@ use crate::client_api::ExecServerClientConnectOptions;
 use crate::client_api::ExecServerTransportParams;
 use crate::client_api::HttpClient;
 use crate::client_api::RemoteExecServerConnectArgs;
+use crate::client_api::SecureRendezvousConnectArgs;
+use crate::client_api::SecureRendezvousConnectBundle;
 use crate::client_api::StdioExecServerConnectArgs;
 use crate::connection::JsonRpcConnection;
 use crate::process::ExecProcessEvent;
@@ -115,6 +117,16 @@ impl From<RemoteExecServerConnectArgs> for ExecServerClientConnectOptions {
     }
 }
 
+impl From<SecureRendezvousConnectArgs> for ExecServerClientConnectOptions {
+    fn from(value: SecureRendezvousConnectArgs) -> Self {
+        Self {
+            client_name: value.client_name,
+            initialize_timeout: value.initialize_timeout,
+            resume_session_id: value.resume_session_id,
+        }
+    }
+}
+
 impl From<StdioExecServerConnectArgs> for ExecServerClientConnectOptions {
     fn from(value: StdioExecServerConnectArgs) -> Self {
         Self {
@@ -129,6 +141,23 @@ impl RemoteExecServerConnectArgs {
     pub fn new(websocket_url: String, client_name: String) -> Self {
         Self {
             websocket_url,
+            client_name,
+            connect_timeout: CONNECT_TIMEOUT,
+            initialize_timeout: INITIALIZE_TIMEOUT,
+            resume_session_id: None,
+        }
+    }
+}
+
+impl SecureRendezvousConnectArgs {
+    pub fn new(
+        bundle: SecureRendezvousConnectBundle,
+        harness_identity: crate::SecureChannelIdentity,
+        client_name: String,
+    ) -> Self {
+        Self {
+            bundle,
+            harness_identity,
             client_name,
             connect_timeout: CONNECT_TIMEOUT,
             initialize_timeout: INITIALIZE_TIMEOUT,
@@ -231,6 +260,7 @@ impl LazyRemoteExecServerClient {
                 if matches!(
                     &self.transport_params,
                     ExecServerTransportParams::WebSocketUrl { .. }
+                        | ExecServerTransportParams::SecureRendezvous { .. }
                 ) =>
             {
                 ExecServerClient::connect_for_transport(self.transport_params.clone()).await?
@@ -317,6 +347,8 @@ pub enum ExecServerError {
     EnvironmentRegistryAuth(String),
     #[error("environment registry request failed: {0}")]
     EnvironmentRegistryRequest(#[from] reqwest::Error),
+    #[error(transparent)]
+    SecureChannel(#[from] crate::SecureChannelError),
 }
 
 impl ExecServerClient {
