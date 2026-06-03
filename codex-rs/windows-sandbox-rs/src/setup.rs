@@ -22,7 +22,9 @@ use crate::setup_error::SetupErrorCode;
 use crate::setup_error::SetupFailure;
 use crate::setup_error::clear_setup_error_report;
 use crate::setup_error::failure;
+use crate::setup_error::prepare_setup_completion_report;
 use crate::setup_error::read_setup_error_report;
+use crate::setup_error::setup_completion_matches;
 use crate::ssh_config_dependencies::ssh_config_dependency_paths;
 use anyhow::Context;
 use anyhow::Result;
@@ -31,6 +33,9 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_protocol::models::PermissionProfile;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use rand::Rng;
+use rand::SeedableRng;
+use rand::rngs::SmallRng;
 
 use windows_sys::Win32::Foundation::CloseHandle;
 use windows_sys::Win32::Foundation::GetLastError;
@@ -39,7 +44,7 @@ use windows_sys::Win32::Security::CheckTokenMembership;
 use windows_sys::Win32::Security::FreeSid;
 use windows_sys::Win32::Security::SECURITY_NT_AUTHORITY;
 
-pub const SETUP_VERSION: u32 = 5;
+pub const SETUP_VERSION: u32 = 6;
 pub const OFFLINE_USERNAME: &str = "CodexSandboxOffline";
 pub const ONLINE_USERNAME: &str = "CodexSandboxOnline";
 const ERROR_CANCELLED: u32 = 1223;
@@ -205,6 +210,7 @@ fn run_setup_refresh_inner(
         real_user: std::env::var("USERNAME").unwrap_or_else(|_| "Administrators".to_string()),
         mode: SetupMode::Full,
         refresh_only: true,
+        completion_nonce: None,
     };
     let json = serde_json::to_vec(&payload)?;
     let b64 = BASE64_STANDARD.encode(json);
@@ -500,6 +506,8 @@ struct ElevationPayload {
     mode: SetupMode,
     #[serde(default)]
     refresh_only: bool,
+    #[serde(default)]
+    completion_nonce: Option<String>,
 }
 
 #[derive(Clone, Copy, Serialize)]
@@ -671,6 +679,27 @@ fn report_helper_failure(
     }
 }
 
+fn new_setup_completion_nonce() -> String {
+    let mut rng = SmallRng::from_entropy();
+    format!("{:x}", rng.r#gen::<u128>())
+}
+
+fn verify_setup_completion(codex_home: &Path, expected_nonce: &str) -> Result<()> {
+    match setup_completion_matches(codex_home, expected_nonce) {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(failure(
+            SetupErrorCode::OrchestratorHelperIncomplete,
+            "setup helper exited successfully without a matching completion report",
+        )),
+        Err(err) => Err(failure(
+            SetupErrorCode::OrchestratorHelperIncomplete,
+            format!(
+                "setup helper exited successfully but its completion report was invalid: {err}"
+            ),
+        )),
+    }
+}
+
 fn run_setup_exe(
     payload: &ElevationPayload,
     needs_elevation: bool,
@@ -682,6 +711,12 @@ fn run_setup_exe(
     use windows_sys::Win32::UI::Shell::SEE_MASK_NOCLOSEPROCESS;
     use windows_sys::Win32::UI::Shell::SHELLEXECUTEINFOW;
     use windows_sys::Win32::UI::Shell::ShellExecuteExW;
+    let completion_nonce = payload.completion_nonce.as_deref().ok_or_else(|| {
+        failure(
+            SetupErrorCode::OrchestratorPayloadSerializeFailed,
+            "setup helper payload is missing a completion nonce",
+        )
+    })?;
     let exe = find_setup_exe();
     let payload_json = serde_json::to_string(payload).map_err(|err| {
         failure(
@@ -702,6 +737,12 @@ fn run_setup_exe(
             false
         }
     };
+    prepare_setup_completion_report(codex_home, completion_nonce).map_err(|err| {
+        failure(
+            SetupErrorCode::OrchestratorCompletionReportWriteFailed,
+            format!("failed to prepare the setup completion report before launch: {err}"),
+        )
+    })?;
 
     if !needs_elevation {
         let status = Command::new(&exe)
@@ -724,6 +765,7 @@ fn run_setup_exe(
                 status.code(),
             ));
         }
+        verify_setup_completion(codex_home, completion_nonce)?;
         if let Err(err) = clear_setup_error_report(codex_home) {
             log_note(
                 &format!(
@@ -773,6 +815,7 @@ fn run_setup_exe(
             ));
         }
     }
+    verify_setup_completion(codex_home, completion_nonce)?;
     if let Err(err) = clear_setup_error_report(codex_home) {
         log_note(
             &format!("setup orchestrator: failed to clear setup_error.json after success: {err}"),
@@ -819,6 +862,7 @@ pub fn run_elevated_setup(
         otel: codex_otel::global_statsig_metrics_settings(),
         mode: SetupMode::Full,
         refresh_only: false,
+        completion_nonce: Some(new_setup_completion_nonce()),
     };
     let needs_elevation = !is_elevated().map_err(|err| {
         failure(
@@ -864,6 +908,7 @@ pub fn run_elevated_provisioning_setup(codex_home: &Path, real_user: &str) -> Re
         real_user: real_user.to_string(),
         mode: SetupMode::ProvisionOnly,
         refresh_only: false,
+        completion_nonce: Some(new_setup_completion_nonce()),
     };
     run_setup_exe(&payload, /*needs_elevation*/ false, codex_home)
 }
@@ -1067,10 +1112,14 @@ mod tests {
     use super::offline_proxy_settings_from_env;
     use super::profile_read_roots;
     use super::proxy_ports_from_env;
+    use super::verify_setup_completion;
     use crate::helper_materialization::BIN_DIRNAME;
     use crate::helper_materialization::RESOURCES_DIRNAME;
     use crate::helper_materialization::helper_bin_dir;
     use crate::resolved_permissions::ResolvedWindowsSandboxPermissions;
+    use crate::setup_error::SetupErrorCode;
+    use crate::setup_error::extract_failure;
+    use crate::setup_error::write_setup_completion_report;
     use codex_protocol::models::PermissionProfile;
     use codex_protocol::permissions::NetworkSandboxPolicy;
     use codex_utils_absolute_path::AbsolutePathBuf;
@@ -1152,6 +1201,32 @@ mod tests {
             )
             .expect("unsupported profiles do not need setup refresh");
         }
+    }
+
+    #[test]
+    fn setup_completion_requires_matching_nonce() {
+        let codex_home = TempDir::new().expect("tempdir");
+
+        let missing = verify_setup_completion(codex_home.path(), "expected")
+            .expect_err("missing completion report should fail");
+        assert_eq!(
+            extract_failure(&missing).map(|failure| failure.code),
+            Some(SetupErrorCode::OrchestratorHelperIncomplete)
+        );
+
+        write_setup_completion_report(codex_home.path(), "stale")
+            .expect("write stale completion report");
+        let mismatched = verify_setup_completion(codex_home.path(), "expected")
+            .expect_err("mismatched completion report should fail");
+        assert_eq!(
+            extract_failure(&mismatched).map(|failure| failure.code),
+            Some(SetupErrorCode::OrchestratorHelperIncomplete)
+        );
+
+        write_setup_completion_report(codex_home.path(), "expected")
+            .expect("write matching completion report");
+        verify_setup_completion(codex_home.path(), "expected")
+            .expect("matching completion report should succeed");
     }
 
     #[test]

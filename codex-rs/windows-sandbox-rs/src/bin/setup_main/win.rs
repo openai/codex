@@ -30,6 +30,7 @@ use codex_windows_sandbox::sync_persistent_deny_read_acls;
 use codex_windows_sandbox::to_wide;
 use codex_windows_sandbox::workspace_write_cap_sid_for_root;
 use codex_windows_sandbox::workspace_write_root_overlaps_path;
+use codex_windows_sandbox::write_setup_completion_report;
 use codex_windows_sandbox::write_setup_error_report;
 use serde::Deserialize;
 use serde::Serialize;
@@ -98,6 +99,8 @@ struct Payload {
     mode: SetupMode,
     #[serde(default)]
     refresh_only: bool,
+    #[serde(default)]
+    completion_nonce: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, Default)]
@@ -447,7 +450,19 @@ fn real_main() -> Result<()> {
             format!("open log in {} failed", sbx_dir.display()),
         ))
     })?;
-    let result = run_setup(&payload, &mut log, &sbx_dir);
+    let result = run_setup(&payload, &mut log, &sbx_dir).and_then(|()| {
+        if let Some(completion_nonce) = payload.completion_nonce.as_deref() {
+            write_setup_completion_report(&payload.codex_home, completion_nonce).map_err(
+                |err| {
+                    anyhow::Error::new(SetupFailure::new(
+                        SetupErrorCode::HelperCompletionReportWriteFailed,
+                        format!("failed to write setup completion report: {err}"),
+                    ))
+                },
+            )?;
+        }
+        Ok(())
+    });
     if let Err(err) = &result {
         let _ = log_line(&mut log, &format!("setup error: {err:?}"));
         log_note(&format!("setup error: {err:?}"), Some(sbx_dir.as_path()));

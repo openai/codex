@@ -31,6 +31,10 @@ pub enum SetupErrorCode {
     OrchestratorHelperExitNonzero,
     /// Helper exited non-zero and reading `setup_error.json` failed.
     OrchestratorHelperReportReadFailed,
+    /// Helper exited successfully without proving that setup completed.
+    OrchestratorHelperIncomplete,
+    /// Failed to initialize the setup completion report before launching the helper.
+    OrchestratorCompletionReportWriteFailed,
     // Helper (elevated process) failures.
     /// Helper failed while validating or decoding the request payload.
     HelperRequestArgsFailed,
@@ -50,6 +54,8 @@ pub enum SetupErrorCode {
     HelperUsersFileWriteFailed,
     /// Helper failed to write the setup marker file.
     HelperSetupMarkerWriteFailed,
+    /// Helper failed to write the setup completion report.
+    HelperCompletionReportWriteFailed,
     /// Helper failed to resolve a SID or convert it to a PSID.
     HelperSidResolveFailed,
     /// Helper failed to load or convert capability SIDs.
@@ -83,6 +89,10 @@ impl SetupErrorCode {
             Self::OrchestratorHelperLaunchCanceled => "orchestrator_helper_launch_canceled",
             Self::OrchestratorHelperExitNonzero => "orchestrator_helper_exit_nonzero",
             Self::OrchestratorHelperReportReadFailed => "orchestrator_helper_report_read_failed",
+            Self::OrchestratorHelperIncomplete => "orchestrator_helper_incomplete",
+            Self::OrchestratorCompletionReportWriteFailed => {
+                "orchestrator_completion_report_write_failed"
+            }
             Self::HelperRequestArgsFailed => "helper_request_args_failed",
             Self::HelperSandboxDirCreateFailed => "helper_sandbox_dir_create_failed",
             Self::HelperLogFailed => "helper_log_failed",
@@ -92,6 +102,7 @@ impl SetupErrorCode {
             Self::HelperDpapiProtectFailed => "helper_dpapi_protect_failed",
             Self::HelperUsersFileWriteFailed => "helper_users_file_write_failed",
             Self::HelperSetupMarkerWriteFailed => "helper_setup_marker_write_failed",
+            Self::HelperCompletionReportWriteFailed => "helper_completion_report_write_failed",
             Self::HelperSidResolveFailed => "helper_sid_resolve_failed",
             Self::HelperCapabilitySidFailed => "helper_capability_sid_failed",
             Self::HelperFirewallComInitFailed => "helper_firewall_com_init_failed",
@@ -112,6 +123,19 @@ impl SetupErrorCode {
 pub struct SetupErrorReport {
     pub code: SetupErrorCode,
     pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct SetupCompletionReport {
+    nonce: String,
+    status: SetupCompletionStatus,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum SetupCompletionStatus {
+    Pending,
+    Complete,
 }
 
 #[derive(Debug)]
@@ -157,6 +181,10 @@ pub fn setup_error_path(codex_home: &Path) -> PathBuf {
     codex_home.join(".sandbox").join("setup_error.json")
 }
 
+fn setup_completion_path(codex_home: &Path) -> PathBuf {
+    crate::setup::sandbox_secrets_dir(codex_home).join("setup_completion.json")
+}
+
 pub fn clear_setup_error_report(codex_home: &Path) -> Result<()> {
     let path = setup_error_path(codex_home);
     match fs::remove_file(&path) {
@@ -186,6 +214,64 @@ pub fn read_setup_error_report(codex_home: &Path) -> Result<Option<SetupErrorRep
     let report = serde_json::from_slice::<SetupErrorReport>(&bytes)
         .with_context(|| format!("parse {}", path.display()))?;
     Ok(Some(report))
+}
+
+pub(crate) fn prepare_setup_completion_report(codex_home: &Path, nonce: &str) -> Result<()> {
+    write_setup_completion_report_with_status(codex_home, nonce, SetupCompletionStatus::Pending)
+}
+
+/// Records that the elevated setup helper completed every synchronous setup stage.
+pub fn write_setup_completion_report(codex_home: &Path, nonce: &str) -> Result<()> {
+    write_setup_completion_report_with_status(codex_home, nonce, SetupCompletionStatus::Complete)
+}
+
+fn write_setup_completion_report_with_status(
+    codex_home: &Path,
+    nonce: &str,
+    status: SetupCompletionStatus,
+) -> Result<()> {
+    let secrets_dir = crate::setup::sandbox_secrets_dir(codex_home);
+    fs::create_dir_all(&secrets_dir)
+        .with_context(|| format!("create sandbox secrets dir {}", secrets_dir.display()))?;
+    let path = setup_completion_path(codex_home);
+    let json = serde_json::to_vec_pretty(&SetupCompletionReport {
+        nonce: nonce.to_string(),
+        status,
+    })?;
+    fs::write(&path, json).with_context(|| format!("write {}", path.display()))?;
+    Ok(())
+}
+
+fn read_setup_completion_report(codex_home: &Path) -> Result<Option<SetupCompletionReport>> {
+    let path = setup_completion_path(codex_home);
+    let bytes = match fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(err) if err.kind() == ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(err).with_context(|| format!("read {}", path.display())),
+    };
+    let report = serde_json::from_slice::<SetupCompletionReport>(&bytes)
+        .with_context(|| format!("parse {}", path.display()))?;
+    Ok(Some(report))
+}
+
+pub(crate) fn setup_completion_matches(codex_home: &Path, expected_nonce: &str) -> Result<bool> {
+    Ok(matches!(
+        read_setup_completion_report(codex_home)?,
+        Some(SetupCompletionReport {
+            nonce,
+            status: SetupCompletionStatus::Complete,
+        }) if nonce == expected_nonce
+    ))
+}
+
+pub(crate) fn setup_completion_report_is_complete(codex_home: &Path) -> bool {
+    matches!(
+        read_setup_completion_report(codex_home),
+        Ok(Some(SetupCompletionReport {
+            status: SetupCompletionStatus::Complete,
+            ..
+        }))
+    )
 }
 
 /// Sanitize a setup error message for use as a metric tag.
@@ -254,8 +340,44 @@ fn redact_username_segments(value: &str, usernames: &[String]) -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::prepare_setup_completion_report;
     use super::redact_username_segments;
+    use super::setup_completion_matches;
+    use super::setup_completion_report_is_complete;
+    use super::write_setup_completion_report;
     use pretty_assertions::assert_eq;
+    use tempfile::TempDir;
+
+    #[test]
+    fn setup_completion_report_requires_matching_complete_nonce() {
+        let codex_home = TempDir::new().expect("tempdir");
+
+        assert!(!setup_completion_report_is_complete(codex_home.path()));
+        assert!(
+            !setup_completion_matches(codex_home.path(), "expected-nonce")
+                .expect("read missing completion report")
+        );
+
+        prepare_setup_completion_report(codex_home.path(), "expected-nonce")
+            .expect("prepare completion report");
+        assert!(!setup_completion_report_is_complete(codex_home.path()));
+        assert!(
+            !setup_completion_matches(codex_home.path(), "expected-nonce")
+                .expect("read pending completion report")
+        );
+
+        write_setup_completion_report(codex_home.path(), "expected-nonce")
+            .expect("complete completion report");
+        assert!(setup_completion_report_is_complete(codex_home.path()));
+        assert!(
+            setup_completion_matches(codex_home.path(), "expected-nonce")
+                .expect("read matching completion report")
+        );
+        assert!(
+            !setup_completion_matches(codex_home.path(), "stale-nonce")
+                .expect("read mismatched completion report")
+        );
+    }
 
     #[test]
     fn sanitize_tag_value_redacts_username_segments() {

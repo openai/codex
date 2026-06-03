@@ -12,6 +12,7 @@ use crate::setup::run_elevated_setup;
 use crate::setup::run_setup_refresh_with_overrides;
 use crate::setup::sandbox_users_path;
 use crate::setup::setup_marker_path;
+use crate::setup_error::setup_completion_report_is_complete;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
@@ -40,6 +41,9 @@ pub struct SandboxCreds {
 /// This is a coarse readiness check; `require_logon_sandbox_creds` performs the
 /// additional runtime validation for offline firewall settings.
 pub fn sandbox_setup_is_complete(codex_home: &Path) -> bool {
+    if !setup_completion_report_is_complete(codex_home) {
+        return false;
+    }
     let marker_ok = matches!(load_marker(codex_home), Ok(Some(marker)) if marker.version_matches());
     if !marker_ok {
         return false;
@@ -110,6 +114,9 @@ fn select_identity(
     network_identity: SandboxNetworkIdentity,
     codex_home: &Path,
 ) -> Result<Option<SandboxIdentity>> {
+    if !setup_completion_report_is_complete(codex_home) {
+        return Ok(None);
+    }
     let _marker = match load_marker(codex_home)? {
         Some(m) if m.version_matches() => m,
         _ => return Ok(None),
@@ -156,26 +163,31 @@ pub fn require_logon_sandbox_creds(
     // granting the sandbox group access to this directory without granting the capability SID.
     let mut setup_reason: Option<String> = None;
 
-    let mut identity = match load_marker(codex_home)? {
-        Some(marker) if marker.version_matches() => {
-            if let Some(reason) =
-                marker.request_mismatch_reason(network_identity, &desired_offline_proxy_settings)
-            {
-                setup_reason = Some(reason);
-                None
-            } else {
-                let selected = select_identity(network_identity, codex_home)?;
-                if selected.is_none() {
-                    setup_reason = Some(
-                        "sandbox users missing or incompatible with marker version".to_string(),
-                    );
+    let mut identity = if !setup_completion_report_is_complete(codex_home) {
+        setup_reason = Some("sandbox setup completion report missing or invalid".to_string());
+        None
+    } else {
+        match load_marker(codex_home)? {
+            Some(marker) if marker.version_matches() => {
+                if let Some(reason) = marker
+                    .request_mismatch_reason(network_identity, &desired_offline_proxy_settings)
+                {
+                    setup_reason = Some(reason);
+                    None
+                } else {
+                    let selected = select_identity(network_identity, codex_home)?;
+                    if selected.is_none() {
+                        setup_reason = Some(
+                            "sandbox users missing or incompatible with marker version".to_string(),
+                        );
+                    }
+                    selected
                 }
-                selected
             }
-        }
-        _ => {
-            setup_reason = Some("sandbox setup marker missing or incompatible".to_string());
-            None
+            _ => {
+                setup_reason = Some("sandbox setup marker missing or incompatible".to_string());
+                None
+            }
         }
     };
 
@@ -233,3 +245,7 @@ pub fn require_logon_sandbox_creds(
         password: identity.password,
     })
 }
+
+#[cfg(test)]
+#[path = "identity_tests.rs"]
+mod tests;

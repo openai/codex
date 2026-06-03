@@ -267,6 +267,8 @@ pub use setup_error::sanitize_setup_metric_tag_value;
 #[cfg(target_os = "windows")]
 pub use setup_error::setup_error_path;
 #[cfg(target_os = "windows")]
+pub use setup_error::write_setup_completion_report;
+#[cfg(target_os = "windows")]
 pub use setup_error::write_setup_error_report;
 #[cfg(target_os = "windows")]
 #[doc(hidden)]
