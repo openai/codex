@@ -114,12 +114,18 @@ pub trait AuthCredentialStore: Debug + Send + Sync + 'static {
 /// as API keys and persisted first-party ChatGPT login. `ephemeral` owns
 /// externally supplied ChatGPT auth tokens that should not be persisted to the
 /// configured store.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct AuthStores {
     /// Store for managed auth selected by runtime configuration.
     pub configured: Arc<dyn AuthCredentialStore>,
     /// Store for externally supplied ChatGPT auth tokens.
     pub ephemeral: Arc<dyn AuthCredentialStore>,
+}
+
+impl Debug for AuthStores {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AuthStores").finish_non_exhaustive()
+    }
 }
 
 impl AuthStores {

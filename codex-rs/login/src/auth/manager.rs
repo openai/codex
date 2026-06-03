@@ -1776,10 +1776,10 @@ impl AuthManager {
     /// reloads the in‑memory auth cache so callers immediately observe the
     /// unauthenticated state.
     pub async fn logout(&self) -> std::io::Result<bool> {
-        let removed = logout_all_stores(&self.stores)?;
+        let removed = logout_all_stores(&self.stores);
         // Always reload to clear any cached auth (even if file absent).
         self.reload().await;
-        Ok(removed)
+        removed
     }
 
     pub async fn logout_with_revoke(&self) -> std::io::Result<bool> {
@@ -1789,10 +1789,10 @@ impl AuthManager {
         if let Err(err) = revoke_auth_tokens(auth_dot_json.as_ref()).await {
             tracing::warn!("failed to revoke auth tokens during logout: {err}");
         }
-        let result = logout_all_stores(&self.stores)?;
+        let result = logout_all_stores(&self.stores);
         // Always reload to clear any cached auth (even if file absent).
         self.reload().await;
-        Ok(result)
+        result
     }
 
     pub fn get_api_auth_mode(&self) -> Option<ApiAuthMode> {

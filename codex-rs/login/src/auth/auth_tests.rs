@@ -426,6 +426,7 @@ async fn injected_auth_store_logout_clears_configured_store_after_ephemeral_dele
 
     assert!(manager.logout().await.is_err());
     assert_eq!(configured.load().expect("configured load"), None);
+    assert_eq!(manager.auth_mode(), None);
 }
 
 #[tokio::test]
