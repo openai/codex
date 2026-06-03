@@ -38,7 +38,6 @@ use codex_app_server_protocol::PluginSummary;
 use codex_app_server_protocol::PluginUninstallResponse;
 use codex_core_plugins::OPENAI_CURATED_MARKETPLACE_NAME;
 use codex_features::Feature;
-use codex_utils_absolute_path::AbsolutePathBuf;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
