@@ -6,19 +6,6 @@ on:
       release-lto:
         required: true
         type: string
-    secrets:
-      AZURE_TRUSTED_SIGNING_CLIENT_ID:
-        required: true
-      AZURE_TRUSTED_SIGNING_TENANT_ID:
-        required: true
-      AZURE_TRUSTED_SIGNING_SUBSCRIPTION_ID:
-        required: true
-      AZURE_TRUSTED_SIGNING_ENDPOINT:
-        required: true
-      AZURE_TRUSTED_SIGNING_ACCOUNT_NAME:
-        required: true
-      AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME:
-        required: true
 
 # Cargo's libgit2 transport has been flaky when fetching git dependencies with
 # nested submodules. Prefer the system git CLI across every Cargo invocation.
@@ -34,12 +21,12 @@ jobs:
     permissions:
       contents: read
     env:
-      AZURE_TRUSTED_SIGNING_CLIENT_ID: ${{ secrets.AZURE_TRUSTED_SIGNING_CLIENT_ID }}
-      AZURE_TRUSTED_SIGNING_TENANT_ID: ${{ secrets.AZURE_TRUSTED_SIGNING_TENANT_ID }}
-      AZURE_TRUSTED_SIGNING_SUBSCRIPTION_ID: ${{ secrets.AZURE_TRUSTED_SIGNING_SUBSCRIPTION_ID }}
-      AZURE_TRUSTED_SIGNING_ENDPOINT: ${{ secrets.AZURE_TRUSTED_SIGNING_ENDPOINT }}
-      AZURE_TRUSTED_SIGNING_ACCOUNT_NAME: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
-      AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME: ${{ secrets.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME }}
+      AZURE_TRUSTED_SIGNING_CLIENT_ID_UPDATED: ${{ secrets.AZURE_TRUSTED_SIGNING_CLIENT_ID_UPDATED }}
+      AZURE_TRUSTED_SIGNING_TENANT_ID_UPDATED: ${{ secrets.AZURE_TRUSTED_SIGNING_TENANT_ID_UPDATED }}
+      AZURE_TRUSTED_SIGNING_SUBSCRIPTION_ID_UPDATED: ${{ secrets.AZURE_TRUSTED_SIGNING_SUBSCRIPTION_ID_UPDATED }}
+      AZURE_TRUSTED_SIGNING_ENDPOINT_UPDATED: ${{ secrets.AZURE_TRUSTED_SIGNING_ENDPOINT_UPDATED }}
+      AZURE_TRUSTED_SIGNING_ACCOUNT_NAME_UPDATED: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME_UPDATED }}
+      AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME_UPDATED: ${{ secrets.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME_UPDATED }}
     steps:
       - name: Validate required Azure signing secrets are available
         shell: bash
@@ -47,12 +34,12 @@ jobs:
           set -euo pipefail
 
           required=(
-            AZURE_TRUSTED_SIGNING_CLIENT_ID
-            AZURE_TRUSTED_SIGNING_TENANT_ID
-            AZURE_TRUSTED_SIGNING_SUBSCRIPTION_ID
-            AZURE_TRUSTED_SIGNING_ENDPOINT
-            AZURE_TRUSTED_SIGNING_ACCOUNT_NAME
-            AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME
+            AZURE_TRUSTED_SIGNING_CLIENT_ID_UPDATED
+            AZURE_TRUSTED_SIGNING_TENANT_ID_UPDATED
+            AZURE_TRUSTED_SIGNING_SUBSCRIPTION_ID_UPDATED
+            AZURE_TRUSTED_SIGNING_ENDPOINT_UPDATED
+            AZURE_TRUSTED_SIGNING_ACCOUNT_NAME_UPDATED
+            AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME_UPDATED
           )
 
           missing=()
@@ -260,12 +247,12 @@ jobs:
         with:
           target: ${{ matrix.target }}
           binaries: ${{ env.WINDOWS_BINARIES }}
-          client-id: ${{ secrets.AZURE_TRUSTED_SIGNING_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TRUSTED_SIGNING_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_TRUSTED_SIGNING_SUBSCRIPTION_ID }}
-          endpoint: ${{ secrets.AZURE_TRUSTED_SIGNING_ENDPOINT }}
-          account-name: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
-          certificate-profile-name: ${{ secrets.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME }}
+          client-id: ${{ secrets.AZURE_TRUSTED_SIGNING_CLIENT_ID_UPDATED }}
+          tenant-id: ${{ secrets.AZURE_TRUSTED_SIGNING_TENANT_ID_UPDATED }}
+          subscription-id: ${{ secrets.AZURE_TRUSTED_SIGNING_SUBSCRIPTION_ID_UPDATED }}
+          endpoint: ${{ secrets.AZURE_TRUSTED_SIGNING_ENDPOINT_UPDATED }}
+          account-name: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME_UPDATED }}
+          certificate-profile-name: ${{ secrets.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME_UPDATED }}
 
       - name: Stage artifacts
         shell: bash
