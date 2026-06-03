@@ -127,7 +127,7 @@ pub enum CodeModeToolKind {
     Freeform,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct ToolDefinition {
     pub name: String,
     pub tool_name: ToolName,

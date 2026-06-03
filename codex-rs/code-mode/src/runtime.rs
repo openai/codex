@@ -1,4 +1,5 @@
 use codex_protocol::ToolName;
+use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
 
@@ -11,7 +12,7 @@ pub const DEFAULT_EXEC_YIELD_TIME_MS: u64 = 10_000;
 pub const DEFAULT_WAIT_YIELD_TIME_MS: u64 = 10_000;
 pub const DEFAULT_MAX_OUTPUT_TOKENS_PER_EXEC_CALL: usize = 10_000;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct ExecuteRequest {
     pub tool_call_id: String,
     pub enabled_tools: Vec<ToolDefinition>,

@@ -2145,6 +2145,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "codex-apply-patch",
+ "codex-code-mode-runtime",
  "codex-exec-server",
  "codex-linux-sandbox",
  "codex-sandboxing",
@@ -2444,6 +2445,7 @@ dependencies = [
  "codex-protocol",
  "deno_core_icudata",
  "pretty_assertions",
+ "serde",
  "serde_json",
  "tokio",
  "tokio-util",

@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
@@ -36,6 +37,8 @@ use crate::runtime::RuntimeCommand;
 use crate::runtime::RuntimeControlCommand;
 use crate::runtime::RuntimeEvent;
 use crate::runtime::spawn_runtime;
+use crate::worker::SubprocessRuntimeHandle;
+use crate::worker::spawn_subprocess_runtime;
 
 #[derive(Default)]
 pub struct InProcessCodeModeSessionProvider;
@@ -53,6 +56,47 @@ impl CodeModeSessionProvider for InProcessCodeModeSessionProvider {
     }
 }
 
+/// Runs each code-mode cell in a dedicated subprocess.
+///
+/// A fatal V8 failure terminates only the active cell process. Session state,
+/// nested-tool dispatch, and subsequent code-mode calls remain in the host.
+#[derive(Clone, Default)]
+pub struct SubprocessCodeModeSessionProvider {
+    executable: Option<PathBuf>,
+}
+
+impl SubprocessCodeModeSessionProvider {
+    pub fn new(executable: Option<PathBuf>) -> Self {
+        Self { executable }
+    }
+}
+
+impl CodeModeSessionProvider for SubprocessCodeModeSessionProvider {
+    fn create_session<'a>(
+        &'a self,
+        delegate: Arc<dyn CodeModeSessionDelegate>,
+    ) -> CodeModeSessionProviderFuture<'a> {
+        Box::pin(async move {
+            let executable = match self.executable.clone() {
+                Some(executable) => executable,
+                None => std::env::current_exe().map_err(|err| {
+                    format!("failed to resolve code mode worker executable: {err}")
+                })?,
+            };
+            let session: Arc<dyn CodeModeSession> = Arc::new(
+                CodeModeService::with_subprocess_delegate(delegate, executable),
+            );
+            Ok(session)
+        })
+    }
+}
+
+#[derive(Clone)]
+enum RuntimeBackend {
+    InProcess,
+    Subprocess { executable: PathBuf },
+}
+
 #[derive(Clone)]
 struct CellHandle {
     control_tx: mpsc::UnboundedSender<CellControlCommand>,
@@ -64,6 +108,7 @@ struct Inner {
     stored_values: Mutex<HashMap<String, JsonValue>>,
     cells: Mutex<HashMap<CellId, CellHandle>>,
     delegate: Arc<dyn CodeModeSessionDelegate>,
+    runtime_backend: RuntimeBackend,
     shutting_down: AtomicBool,
     next_cell_id: AtomicU64,
 }
@@ -78,11 +123,26 @@ impl CodeModeService {
     }
 
     pub fn with_delegate(delegate: Arc<dyn CodeModeSessionDelegate>) -> Self {
+        Self::with_runtime_backend(delegate, RuntimeBackend::InProcess)
+    }
+
+    fn with_subprocess_delegate(
+        delegate: Arc<dyn CodeModeSessionDelegate>,
+        executable: PathBuf,
+    ) -> Self {
+        Self::with_runtime_backend(delegate, RuntimeBackend::Subprocess { executable })
+    }
+
+    fn with_runtime_backend(
+        delegate: Arc<dyn CodeModeSessionDelegate>,
+        runtime_backend: RuntimeBackend,
+    ) -> Self {
         Self {
             inner: Arc::new(Inner {
                 stored_values: Mutex::new(HashMap::new()),
                 cells: Mutex::new(HashMap::new()),
                 delegate,
+                runtime_backend,
                 shutting_down: AtomicBool::new(false),
                 next_cell_id: AtomicU64::new(1),
             }),
@@ -159,7 +219,32 @@ impl CodeModeService {
             }
 
             let (runtime_tx, runtime_control_tx, runtime_terminate_handle) =
-                spawn_runtime(stored_values, request, event_tx, pending_mode)?;
+                match &self.inner.runtime_backend {
+                    RuntimeBackend::InProcess => {
+                        let (runtime_tx, runtime_control_tx, runtime_terminate_handle) =
+                            spawn_runtime(stored_values, request, event_tx, pending_mode)?;
+                        (
+                            runtime_tx,
+                            runtime_control_tx,
+                            RuntimeTerminateHandle::InProcess(runtime_terminate_handle),
+                        )
+                    }
+                    RuntimeBackend::Subprocess { executable } => {
+                        let (runtime_tx, runtime_control_tx, runtime_terminate_handle) =
+                            spawn_subprocess_runtime(
+                                executable,
+                                stored_values,
+                                request,
+                                event_tx,
+                                pending_mode,
+                            )?;
+                        (
+                            runtime_tx,
+                            runtime_control_tx,
+                            RuntimeTerminateHandle::Subprocess(runtime_terminate_handle),
+                        )
+                    }
+                };
 
             cells.insert(
                 cell_id.clone(),
@@ -358,8 +443,22 @@ struct CellControlContext {
     runtime_tx: std::sync::mpsc::Sender<RuntimeCommand>,
     runtime_control_tx: std::sync::mpsc::Sender<RuntimeControlCommand>,
     pending_mode: PendingRuntimeMode,
-    runtime_terminate_handle: v8::IsolateHandle,
+    runtime_terminate_handle: RuntimeTerminateHandle,
     cancellation_token: CancellationToken,
+}
+
+enum RuntimeTerminateHandle {
+    InProcess(v8::IsolateHandle),
+    Subprocess(SubprocessRuntimeHandle),
+}
+
+impl RuntimeTerminateHandle {
+    fn terminate_execution(&self) -> bool {
+        match self {
+            Self::InProcess(handle) => handle.terminate_execution(),
+            Self::Subprocess(handle) => handle.terminate_execution(),
+        }
+    }
 }
 
 fn missing_cell_response(cell_id: CellId) -> RuntimeResponse {
@@ -475,7 +574,10 @@ async fn run_cell_control(
                     if pending_result.is_none() {
                         let result = PendingResult {
                             content_items: std::mem::take(&mut content_items),
-                            error_text: Some("exec runtime ended unexpectedly".to_string()),
+                            error_text: Some(
+                                "Code mode runtime crashed. No stored values from this cell were committed."
+                                    .to_string(),
+                            ),
                         };
                         if send_or_buffer_result(
                             &cell_id,
@@ -746,8 +848,10 @@ mod tests {
     use super::Inner;
     use super::NoopCodeModeSessionDelegate;
     use super::PendingRuntimeMode;
+    use super::RuntimeBackend;
     use super::RuntimeCommand;
     use super::RuntimeResponse;
+    use super::RuntimeTerminateHandle;
     use super::WaitOutcome;
     use super::WaitRequest;
     use super::WaitToPendingOutcome;
@@ -790,6 +894,7 @@ mod tests {
             stored_values: Mutex::new(HashMap::new()),
             cells: Mutex::new(HashMap::new()),
             delegate: Arc::new(NoopCodeModeSessionDelegate),
+            runtime_backend: RuntimeBackend::InProcess,
             shutting_down: std::sync::atomic::AtomicBool::new(false),
             next_cell_id: AtomicU64::new(1),
         })
@@ -1667,7 +1772,9 @@ image({
                 runtime_tx: runtime_tx.clone(),
                 runtime_control_tx,
                 pending_mode: PendingRuntimeMode::Continue,
-                runtime_terminate_handle,
+                runtime_terminate_handle: RuntimeTerminateHandle::InProcess(
+                    runtime_terminate_handle,
+                ),
                 cancellation_token: tokio_util::sync::CancellationToken::new(),
             },
             event_rx,

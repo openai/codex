@@ -10,6 +10,8 @@ use std::sync::mpsc as std_mpsc;
 use std::thread;
 
 use codex_protocol::ToolName;
+use serde::Deserialize;
+use serde::Serialize;
 use serde_json::Value as JsonValue;
 use tokio::sync::mpsc;
 
@@ -20,7 +22,7 @@ pub(crate) use codex_code_mode::ExecuteRequest;
 pub(crate) use codex_code_mode::FunctionCallOutputContentItem;
 const EXIT_SENTINEL: &str = "__codex_code_mode_exit__";
 
-#[derive(Debug)]
+#[derive(Debug, Deserialize, Serialize)]
 pub(crate) enum RuntimeCommand {
     ToolResponse { id: String, result: JsonValue },
     ToolError { id: String, error_text: String },
@@ -28,19 +30,19 @@ pub(crate) enum RuntimeCommand {
     Terminate,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
 pub(crate) enum PendingRuntimeMode {
     Continue,
     PauseUntilResumed,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Deserialize, Serialize)]
 pub(crate) enum RuntimeControlCommand {
     Resume,
     Terminate,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Deserialize, Serialize)]
 pub(crate) enum RuntimeEvent {
     Started,
     Pending,
@@ -75,6 +77,34 @@ pub(crate) fn spawn_runtime(
     ),
     String,
 > {
+    spawn_runtime_with_options(
+        stored_values,
+        request,
+        event_tx,
+        pending_mode,
+        RuntimeOptions::default(),
+    )
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize)]
+pub(crate) struct RuntimeOptions {
+    pub max_heap_size_bytes: Option<usize>,
+}
+
+pub(crate) fn spawn_runtime_with_options(
+    stored_values: HashMap<String, JsonValue>,
+    request: ExecuteRequest,
+    event_tx: mpsc::UnboundedSender<RuntimeEvent>,
+    pending_mode: PendingRuntimeMode,
+    options: RuntimeOptions,
+) -> Result<
+    (
+        std_mpsc::Sender<RuntimeCommand>,
+        std_mpsc::Sender<RuntimeControlCommand>,
+        v8::IsolateHandle,
+    ),
+    String,
+> {
     initialize_v8()?;
 
     let (command_tx, command_rx) = std_mpsc::channel();
@@ -100,6 +130,7 @@ pub(crate) fn spawn_runtime(
             command_rx,
             control_rx,
             pending_mode,
+            options,
             isolate_handle_tx,
             runtime_command_tx,
         );
@@ -163,10 +194,15 @@ fn run_runtime(
     command_rx: std_mpsc::Receiver<RuntimeCommand>,
     control_rx: std_mpsc::Receiver<RuntimeControlCommand>,
     pending_mode: PendingRuntimeMode,
+    options: RuntimeOptions,
     isolate_handle_tx: std_mpsc::SyncSender<v8::IsolateHandle>,
     runtime_command_tx: std_mpsc::Sender<RuntimeCommand>,
 ) {
-    let isolate = &mut v8::Isolate::new(v8::CreateParams::default());
+    let mut create_params = v8::CreateParams::default();
+    if let Some(max_heap_size_bytes) = options.max_heap_size_bytes {
+        create_params = create_params.heap_limits(0, max_heap_size_bytes);
+    }
+    let isolate = &mut v8::Isolate::new(create_params);
     let isolate_handle = isolate.thread_safe_handle();
     if isolate_handle_tx.send(isolate_handle).is_err() {
         return;

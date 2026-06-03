@@ -305,13 +305,18 @@ impl MessageProcessor {
         // resumed, or forked threads to a different persistence backend/root.
         let thread_store = codex_core::thread_store_from_config(config.as_ref(), state_db.clone());
         let environment_manager_for_requests = Arc::clone(&environment_manager);
+        let code_mode_session_provider = Arc::new(
+            codex_code_mode_runtime::SubprocessCodeModeSessionProvider::new(
+                arg0_paths.codex_self_exe.clone(),
+            ),
+        );
         let thread_manager = Arc::new_cyclic(|thread_manager| {
             ThreadManager::new(
                 config.as_ref(),
                 auth_manager.clone(),
                 session_source,
                 environment_manager,
-                Arc::new(codex_code_mode_runtime::InProcessCodeModeSessionProvider),
+                code_mode_session_provider.clone(),
                 thread_extensions(
                     guardian_agent_spawner(thread_manager.clone()),
                     app_server_extension_event_sink(outgoing.clone()),
