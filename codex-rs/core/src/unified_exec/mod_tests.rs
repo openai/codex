@@ -1,5 +1,6 @@
 use super::head_tail_buffer::HeadTailBuffer;
 use super::*;
+use crate::codex_thread::BackgroundTerminalInfo;
 use crate::exec::ExecCapturePolicy;
 use crate::exec::ExecExpiration;
 use crate::sandboxing::ExecRequest;
@@ -49,6 +50,16 @@ fn shell_env() -> HashMap<String, String> {
     std::env::vars().collect()
 }
 
+fn background_terminal(process_id: i32, cwd: AbsolutePathBuf) -> BackgroundTerminalInfo {
+    BackgroundTerminalInfo {
+        item_id: "call".to_string(),
+        process_id: process_id.to_string(),
+        command: "bash -i".to_string(),
+        cwd,
+        started_at: 1,
+    }
+}
+
 fn test_exec_request(
     turn: &TurnContext,
     command: Vec<String>,
@@ -85,10 +96,11 @@ async fn exec_command_with_tty(
 ) -> Result<ExecCommandToolOutput, UnifiedExecError> {
     let manager = &session.services.unified_exec_manager;
     let process_id = manager.allocate_process_id().await;
-    #[allow(deprecated)]
-    let cwd = workdir
-        .as_ref()
-        .map_or_else(|| turn.cwd.clone(), |workdir| turn.cwd.join(workdir));
+    let turn_environment = turn.environments.primary().expect("turn environment");
+    let cwd = workdir.as_ref().map_or_else(
+        || turn_environment.cwd.clone(),
+        |workdir| turn_environment.cwd.join(workdir),
+    );
     let command = vec!["bash".to_string(), "-lc".to_string(), cmd.to_string()];
     let request = test_exec_request(turn, command.clone(), cwd.clone(), shell_env());
 
@@ -99,11 +111,7 @@ async fn exec_command_with_tty(
                 &request,
                 tty,
                 Box::new(NoopSpawnLifecycle),
-                turn.environments
-                    .primary()
-                    .expect("turn environment")
-                    .environment
-                    .as_ref(),
+                turn_environment.environment.as_ref(),
             )
             .await?,
     );
@@ -116,6 +124,8 @@ async fn exec_command_with_tty(
             process: Arc::clone(&process),
             call_id: context.call_id.clone(),
             process_id,
+            cwd: cwd.clone(),
+            started_at_ms: 1_000,
             hook_command: cmd.to_string(),
             tty,
             network_approval: None,
@@ -327,6 +337,71 @@ async fn multi_unified_exec_sessions() -> anyhow::Result<()> {
         "session should preserve state"
     );
 
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn background_terminals_can_be_listed_and_terminated() -> anyhow::Result<()> {
+    skip_if_sandbox!(Ok(()));
+
+    let (session, turn) = test_session_and_turn().await;
+    let cwd = turn
+        .environments
+        .primary()
+        .expect("turn environment")
+        .cwd
+        .clone();
+
+    let first_shell = exec_command(
+        &session, &turn, "bash -i", /*yield_time_ms*/ 2_500, /*workdir*/ None,
+    )
+    .await?;
+    let first_process_id = first_shell.process_id.expect("expected process id");
+
+    let second_shell = exec_command(
+        &session, &turn, "bash -i", /*yield_time_ms*/ 2_500, /*workdir*/ None,
+    )
+    .await?;
+    let second_process_id = second_shell.process_id.expect("expected process id");
+
+    assert_eq!(
+        session.list_background_terminals().await,
+        vec![
+            background_terminal(first_process_id, cwd.clone()),
+            background_terminal(second_process_id, cwd.clone()),
+        ]
+    );
+
+    assert!(
+        session
+            .terminate_background_terminal(first_process_id)
+            .await
+    );
+    assert!(
+        !session
+            .terminate_background_terminal(first_process_id)
+            .await
+    );
+
+    assert_eq!(
+        session.list_background_terminals().await,
+        vec![background_terminal(second_process_id, cwd)]
+    );
+
+    let err = write_stdin(
+        &session,
+        first_process_id,
+        "echo should-not-run\n",
+        /*yield_time_ms*/ 100,
+    )
+    .await
+    .expect_err("terminated process should no longer accept stdin");
+    assert!(matches!(
+        err,
+        UnifiedExecError::UnknownProcessId { process_id } if process_id == first_process_id
+    ));
+
+    session.close_unified_exec_processes().await;
     Ok(())
 }
 

@@ -566,6 +566,24 @@ impl ThreadRequestProcessor {
             .map(|response| Some(response.into()))
     }
 
+    pub(crate) async fn thread_background_terminals_list(
+        &self,
+        params: ThreadBackgroundTerminalsListParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        self.thread_background_terminals_list_inner(params)
+            .await
+            .map(|response| Some(response.into()))
+    }
+
+    pub(crate) async fn thread_background_terminals_terminate(
+        &self,
+        params: ThreadBackgroundTerminalsTerminateParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        self.thread_background_terminals_terminate_inner(params)
+            .await
+            .map(|response| Some(response.into()))
+    }
+
     pub(crate) async fn thread_rollback(
         &self,
         request_id: &ConnectionRequestId,
@@ -1716,6 +1734,66 @@ impl ThreadRequestProcessor {
                 internal_error(format!("failed to clean background terminals: {err}"))
             })?;
         Ok(ThreadBackgroundTerminalsCleanResponse {})
+    }
+
+    async fn thread_background_terminals_list_inner(
+        &self,
+        params: ThreadBackgroundTerminalsListParams,
+    ) -> Result<ThreadBackgroundTerminalsListResponse, JSONRPCErrorError> {
+        let ThreadBackgroundTerminalsListParams {
+            thread_id,
+            cursor,
+            limit,
+        } = params;
+
+        let (_, thread) = self.load_thread(&thread_id).await?;
+        let terminals = thread.list_background_terminals().await;
+        let total = terminals.len();
+        let start = match cursor {
+            Some(cursor) => cursor
+                .parse::<usize>()
+                .map_err(|_| invalid_request(format!("invalid cursor: {cursor}")))?
+                .min(total),
+            None => 0,
+        };
+        let limit = limit.unwrap_or(total as u32).max(1) as usize;
+        let end = start.saturating_add(limit).min(total);
+        let next_cursor = (end < total).then_some(end.to_string());
+        let data = terminals
+            .into_iter()
+            .skip(start)
+            .take(end - start)
+            .map(|terminal| ThreadBackgroundTerminal {
+                item_id: terminal.item_id,
+                process_id: terminal.process_id,
+                command: terminal.command,
+                cwd: terminal.cwd,
+                started_at: terminal.started_at,
+                status: ThreadBackgroundTerminalStatus::Running,
+                os_pid: None,
+                cpu_percent: None,
+                rss_kb: None,
+            })
+            .collect();
+
+        Ok(ThreadBackgroundTerminalsListResponse { data, next_cursor })
+    }
+
+    async fn thread_background_terminals_terminate_inner(
+        &self,
+        params: ThreadBackgroundTerminalsTerminateParams,
+    ) -> Result<ThreadBackgroundTerminalsTerminateResponse, JSONRPCErrorError> {
+        let ThreadBackgroundTerminalsTerminateParams {
+            thread_id,
+            process_id,
+        } = params;
+        let process_id = process_id.parse::<i32>().map_err(|err| {
+            invalid_request(format!("invalid background terminal process id: {err}"))
+        })?;
+
+        let (_, thread) = self.load_thread(&thread_id).await?;
+        let terminated = thread.terminate_background_terminal(process_id).await;
+        Ok(ThreadBackgroundTerminalsTerminateResponse { terminated })
     }
 
     async fn thread_shell_command_inner(

@@ -21,6 +21,7 @@ use tracing::info_span;
 use tracing::trace;
 use tracing::warn;
 
+use crate::codex_thread::BackgroundTerminalInfo;
 use crate::config::Config;
 use crate::context::ContextualUserFragment;
 use crate::goals::GoalRuntimeEvent;
@@ -810,6 +811,29 @@ impl Session {
             .unified_exec_manager
             .terminate_all_processes()
             .await;
+    }
+
+    pub(crate) async fn list_background_terminals(&self) -> Vec<BackgroundTerminalInfo> {
+        self.services
+            .unified_exec_manager
+            .list_processes()
+            .await
+            .into_iter()
+            .map(|process| BackgroundTerminalInfo {
+                item_id: process.item_id,
+                process_id: process.process_id.to_string(),
+                command: process.command,
+                cwd: process.cwd,
+                started_at: process.started_at_ms / 1000,
+            })
+            .collect()
+    }
+
+    pub(crate) async fn terminate_background_terminal(&self, process_id: i32) -> bool {
+        self.services
+            .unified_exec_manager
+            .terminate_process(process_id)
+            .await
     }
 
     async fn handle_task_abort(self: &Arc<Self>, task: RunningTask, reason: TurnAbortReason) {
