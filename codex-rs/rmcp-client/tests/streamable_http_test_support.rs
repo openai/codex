@@ -86,10 +86,23 @@ pub(crate) async fn create_client(base_url: &str) -> anyhow::Result<RmcpClient> 
     )
     .await?;
 
+    initialize_client(&client).await?;
+
+    Ok(client)
+}
+
+pub(crate) async fn initialize_client(client: &RmcpClient) -> anyhow::Result<()> {
+    initialize_client_with_timeout(client, Some(Duration::from_secs(5))).await
+}
+
+pub(crate) async fn initialize_client_with_timeout(
+    client: &RmcpClient,
+    timeout: Option<Duration>,
+) -> anyhow::Result<()> {
     client
         .initialize(
             init_params(),
-            Some(Duration::from_secs(5)),
+            timeout,
             Box::new(|_, _| {
                 async {
                     Ok(ElicitationResponse {
@@ -102,8 +115,7 @@ pub(crate) async fn create_client(base_url: &str) -> anyhow::Result<RmcpClient> 
             }),
         )
         .await?;
-
-    Ok(client)
+    Ok(())
 }
 
 /// Creates a Streamable HTTP RMCP client that sends traffic through the remote
@@ -124,22 +136,7 @@ pub(crate) async fn create_remote_client(
     )
     .await?;
 
-    client
-        .initialize(
-            init_params(),
-            Some(Duration::from_secs(5)),
-            Box::new(|_, _| {
-                async {
-                    Ok(ElicitationResponse {
-                        action: ElicitationAction::Accept,
-                        content: Some(json!({})),
-                        meta: None,
-                    })
-                }
-                .boxed()
-            }),
-        )
-        .await?;
+    initialize_client(&client).await?;
 
     Ok(client)
 }
@@ -179,16 +176,24 @@ pub(crate) async fn arm_session_post_failure(
 }
 
 pub(crate) async fn spawn_streamable_http_server() -> anyhow::Result<(Child, String)> {
+    spawn_streamable_http_server_with_env(&[]).await
+}
+
+pub(crate) async fn spawn_streamable_http_server_with_env(
+    env: &[(&str, &str)],
+) -> anyhow::Result<(Child, String)> {
     let listener = TcpListener::bind("127.0.0.1:0")?;
     let port = listener.local_addr()?.port();
     drop(listener);
 
     let bind_addr = format!("127.0.0.1:{port}");
     let base_url = format!("http://{bind_addr}");
-    let mut child = Command::new(streamable_http_server_bin()?)
+    let mut command = Command::new(streamable_http_server_bin()?);
+    command
         .kill_on_drop(true)
         .env("MCP_STREAMABLE_HTTP_BIND_ADDR", &bind_addr)
-        .spawn()?;
+        .envs(env.iter().copied());
+    let mut child = command.spawn()?;
 
     wait_for_streamable_http_server(&mut child, &bind_addr, Duration::from_secs(5)).await?;
     Ok((child, base_url))

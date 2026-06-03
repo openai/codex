@@ -823,6 +823,8 @@ impl RmcpClient {
         Arc<RunningService<RoleClient, ElicitationClientService>>,
         Option<OAuthPersistor>,
     )> {
+        let connect_started_at = Instant::now();
+        let mut remaining_timeout = timeout;
         let (transport, oauth_persistor) = match pending_transport {
             PendingTransport::InProcess { transport } => (
                 service::serve_client(client_service, transport).boxed(),
@@ -839,17 +841,33 @@ impl RmcpClient {
             PendingTransport::StreamableHttpWithOAuth {
                 transport,
                 oauth_persistor,
-            } => (
-                service::serve_client(client_service, transport).boxed(),
-                Some(oauth_persistor),
-            ),
+            } => {
+                match timeout {
+                    Some(duration) => time::timeout(duration, oauth_persistor.refresh_if_needed())
+                        .await
+                        .map_err(|_| {
+                            anyhow!("timed out handshaking with MCP server after {duration:?}")
+                        })??,
+                    None => oauth_persistor.refresh_if_needed().await?,
+                }
+                remaining_timeout =
+                    timeout.map(|duration| duration.saturating_sub(connect_started_at.elapsed()));
+                (
+                    service::serve_client(client_service, transport).boxed(),
+                    Some(oauth_persistor),
+                )
+            }
         };
 
         let service = match timeout {
-            Some(duration) => time::timeout(duration, transport)
-                .await
-                .map_err(|_| anyhow!("timed out handshaking with MCP server after {duration:?}"))?
-                .map_err(|err| anyhow!("handshaking with MCP server failed: {err}"))?,
+            Some(total_duration) => {
+                time::timeout(remaining_timeout.unwrap_or(total_duration), transport)
+                    .await
+                    .map_err(|_| {
+                        anyhow!("timed out handshaking with MCP server after {total_duration:?}")
+                    })?
+                    .map_err(|err| anyhow!("handshaking with MCP server failed: {err}"))?
+            }
             None => transport
                 .await
                 .map_err(|err| anyhow!("handshaking with MCP server failed: {err}"))?,
