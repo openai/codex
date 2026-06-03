@@ -1,3 +1,4 @@
+use super::responses_websocket_auth::WebsocketAuthContext;
 use crate::auth::SharedAuthProvider;
 use crate::common::ResponseEvent;
 use crate::common::ResponseProcessedWsRequest;
@@ -22,7 +23,6 @@ use serde::Deserialize;
 use serde_json::Value;
 use serde_json::map::Map as JsonMap;
 use std::sync::Arc;
-use std::sync::Mutex as SyncMutex;
 use std::sync::OnceLock;
 use std::time::Duration;
 use tokio::net::TcpStream;
@@ -160,50 +160,6 @@ const X_REASONING_INCLUDED_HEADER: &str = "x-reasoning-included";
 const OPENAI_MODEL_HEADER: &str = "openai-model";
 const WEBSOCKET_CONNECTION_LIMIT_REACHED_CODE: &str = "websocket_connection_limit_reached";
 const WEBSOCKET_CONNECTION_LIMIT_REACHED_MESSAGE: &str = "Responses websocket connection limit reached (60 minutes). Create a new websocket connection to continue.";
-
-#[derive(Clone)]
-struct WebsocketAuthContext {
-    auth: SharedAuthProvider,
-    request_url: String,
-    request_headers: Arc<SyncMutex<HeaderMap>>,
-}
-
-impl WebsocketAuthContext {
-    fn new(auth: SharedAuthProvider, request_url: String, request_headers: HeaderMap) -> Self {
-        Self {
-            auth,
-            request_url,
-            request_headers: Arc::new(SyncMutex::new(request_headers)),
-        }
-    }
-
-    fn observe_response_headers(&self, response_headers: &HeaderMap) {
-        let mut request_headers = self
-            .request_headers
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        self.auth
-            .observe_response_headers(&self.request_url, &request_headers, response_headers);
-        self.auth
-            .add_auth_headers_for_url(&self.request_url, &mut request_headers);
-    }
-
-    fn observe_error_headers(&self, error: &ApiError) {
-        if let ApiError::Transport(TransportError::Http {
-            headers: Some(response_headers),
-            ..
-        }) = error
-        {
-            self.observe_response_headers(response_headers);
-        }
-    }
-
-    fn observe_wrapped_error_headers(&self, error: &WrappedWebsocketErrorEvent) {
-        if let Some(response_headers) = error.headers.as_ref() {
-            self.observe_response_headers(&json_headers_to_http_headers(response_headers));
-        }
-    }
-}
 
 pub struct ResponsesWebsocketConnection {
     stream: Arc<Mutex<Option<WsStream>>>,
@@ -794,12 +750,18 @@ async fn run_websocket_response_stream(
                     trace!("websocket event: {text}");
                 }
                 if let Some(wrapped_error) = wrapped_error {
-                    auth_context.observe_wrapped_error_headers(&wrapped_error);
+                    if let Some(response_headers) = wrapped_error.headers.as_ref() {
+                        auth_context.observe_response_headers(&json_headers_to_http_headers(
+                            response_headers,
+                        ));
+                    }
                     if let Some(error) =
                         map_wrapped_websocket_error_event(wrapped_error, text.to_string())
                     {
                         return Err(error);
                     }
+                    debug!("ignoring unmapped websocket error event");
+                    continue;
                 }
 
                 let event = match serde_json::from_str::<ResponsesStreamEvent>(&text) {
