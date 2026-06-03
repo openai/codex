@@ -3915,11 +3915,11 @@ async fn plugins_for_layer_stack_uses_injected_plugin_data_store() {
         /*remote_plugin_enabled*/ false,
         "https://chatgpt.com/backend-api/".to_string(),
     );
-    let outcome = PluginsManager::new_with_data_store(
+    let outcome = PluginsManager::new_with_deps(
         codex_home.path().to_path_buf(),
-        Arc::new(FakePluginDataStore {
+        PluginsManagerDeps::new(Arc::new(FakePluginDataStore {
             root: data_root.clone(),
-        }),
+        })),
     )
     .plugins_for_layer_stack(&stack, &config)
     .await;

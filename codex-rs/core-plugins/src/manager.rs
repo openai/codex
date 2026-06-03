@@ -412,6 +412,26 @@ pub struct PluginsManager {
     analytics_events_client: RwLock<Option<AnalyticsEventsClient>>,
 }
 
+/// Dependencies owned by one plugins manager.
+#[derive(Clone)]
+pub struct PluginsManagerDeps {
+    data_store: Arc<dyn PluginDataStore>,
+}
+
+impl PluginsManagerDeps {
+    /// Creates dependencies backed by the local Codex Home layout.
+    pub fn from_codex_home(codex_home: PathBuf) -> Result<Self, PluginStoreError> {
+        Ok(Self::new(Arc::new(LocalPluginDataStore::from_codex_home(
+            codex_home,
+        )?)))
+    }
+
+    /// Creates dependencies with an alternative mutable plugin data backend.
+    pub fn new(data_store: Arc<dyn PluginDataStore>) -> Self {
+        Self { data_store }
+    }
+}
+
 #[derive(Clone)]
 struct CachedPluginLoadOutcome {
     config_version: String,
@@ -423,34 +443,24 @@ impl PluginsManager {
         Self::new_with_restriction_product(codex_home, Some(Product::Codex))
     }
 
-    /// Creates a plugins manager with an alternative mutable plugin data backend.
-    pub fn new_with_data_store(codex_home: PathBuf, data_store: Arc<dyn PluginDataStore>) -> Self {
-        Self::new_with_restriction_product_and_data_store(
-            codex_home,
-            Some(Product::Codex),
-            data_store,
-        )
+    /// Creates a plugins manager with injected dependencies.
+    pub fn new_with_deps(codex_home: PathBuf, deps: PluginsManagerDeps) -> Self {
+        Self::new_with_restriction_product_and_deps(codex_home, Some(Product::Codex), deps)
     }
 
     pub fn new_with_restriction_product(
         codex_home: PathBuf,
         restriction_product: Option<Product>,
     ) -> Self {
-        let data_store = Arc::new(
-            LocalPluginDataStore::from_codex_home(codex_home.clone())
-                .unwrap_or_else(|err| panic!("plugin data root should be absolute: {err}")),
-        );
-        Self::new_with_restriction_product_and_data_store(
-            codex_home,
-            restriction_product,
-            data_store,
-        )
+        let deps = PluginsManagerDeps::from_codex_home(codex_home.clone())
+            .unwrap_or_else(|err| panic!("plugin data root should be absolute: {err}"));
+        Self::new_with_restriction_product_and_deps(codex_home, restriction_product, deps)
     }
 
-    fn new_with_restriction_product_and_data_store(
+    fn new_with_restriction_product_and_deps(
         codex_home: PathBuf,
         restriction_product: Option<Product>,
-        data_store: Arc<dyn PluginDataStore>,
+        deps: PluginsManagerDeps,
     ) -> Self {
         // Product restrictions are enforced at marketplace admission time for a given CODEX_HOME:
         // listing, install, and curated refresh all consult this restriction context before new
@@ -462,7 +472,7 @@ impl PluginsManager {
         Self {
             codex_home: codex_home.clone(),
             store: PluginStore::new(codex_home),
-            data_store,
+            data_store: deps.data_store,
             featured_plugin_ids_cache: RwLock::new(None),
             configured_marketplace_upgrade_state: RwLock::new(
                 ConfiguredMarketplaceUpgradeState::default(),
