@@ -171,7 +171,7 @@ async fn get_auth_status_with_personal_access_token_omits_token() -> Result<()> 
         .and(path("/v1/user-auth-credential/whoami"))
         .and(header("Authorization", "Bearer at-test-token"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "email": null,
+            "email": "user@example.com",
             "chatgpt_user_id": "user-123",
             "chatgpt_account_id": "account-123",
             "chatgpt_plan_type": "pro",
