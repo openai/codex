@@ -210,13 +210,12 @@ pub async fn complete_device_code_login(
         return Err(io::Error::new(io::ErrorKind::PermissionDenied, message));
     }
 
-    crate::server::persist_tokens_async(
-        &opts.codex_home,
+    crate::server::persist_tokens_to_store_async(
+        opts.configured_auth_store(),
         /*api_key*/ None,
         tokens.id_token,
         tokens.access_token,
         tokens.refresh_token,
-        opts.cli_auth_credentials_store_mode,
     )
     .await
 }

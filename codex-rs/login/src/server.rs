@@ -11,6 +11,7 @@
 //! This module therefore keeps the user-facing error path and the structured-log path separate.
 //! Returned `io::Error` values still carry the detail needed by CLI/browser callers, while
 //! structured logs only emit explicitly reviewed fields plus redacted URL/error values.
+use std::fmt::Debug;
 use std::io::Cursor;
 use std::io::Read;
 use std::io::Write;
@@ -24,10 +25,10 @@ use std::sync::LazyLock;
 use std::thread;
 use std::time::Duration;
 
+use crate::auth::AuthCredentialStore;
 use crate::auth::AuthDotJson;
-use crate::auth::load_auth_dot_json;
+use crate::auth::AuthStores;
 use crate::auth::revoke_auth_tokens;
-use crate::auth::save_auth;
 use crate::auth::should_revoke_auth_tokens;
 use crate::default_client::originator;
 use crate::pkce::PkceCodes;
@@ -61,7 +62,7 @@ static LOGIN_ERROR_PAGE_TEMPLATE: LazyLock<Template> = LazyLock::new(|| {
 });
 
 /// Options for launching the local login callback server.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ServerOptions {
     pub codex_home: PathBuf,
     pub client_id: String,
@@ -72,6 +73,7 @@ pub struct ServerOptions {
     pub forced_chatgpt_workspace_id: Option<Vec<String>>,
     pub codex_streamlined_login: bool,
     pub cli_auth_credentials_store_mode: AuthCredentialsStoreMode,
+    configured_auth_store: Option<Arc<dyn AuthCredentialStore>>,
 }
 
 impl ServerOptions {
@@ -92,7 +94,53 @@ impl ServerOptions {
             forced_chatgpt_workspace_id,
             codex_streamlined_login: false,
             cli_auth_credentials_store_mode,
+            configured_auth_store: None,
         }
+    }
+
+    /// Overrides first-party ChatGPT credential persistence for this login flow.
+    pub fn with_configured_auth_store(
+        mut self,
+        configured_auth_store: Arc<dyn AuthCredentialStore>,
+    ) -> Self {
+        self.configured_auth_store = Some(configured_auth_store);
+        self
+    }
+
+    pub(crate) fn configured_auth_store(&self) -> Arc<dyn AuthCredentialStore> {
+        self.configured_auth_store.clone().unwrap_or_else(|| {
+            AuthStores::local(
+                self.codex_home.clone(),
+                self.cli_auth_credentials_store_mode,
+            )
+            .configured
+        })
+    }
+}
+
+impl Debug for ServerOptions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ServerOptions")
+            .field("codex_home", &self.codex_home)
+            .field("client_id", &self.client_id)
+            .field("issuer", &self.issuer)
+            .field("port", &self.port)
+            .field("open_browser", &self.open_browser)
+            .field("force_state", &self.force_state)
+            .field(
+                "forced_chatgpt_workspace_id",
+                &self.forced_chatgpt_workspace_id,
+            )
+            .field("codex_streamlined_login", &self.codex_streamlined_login)
+            .field(
+                "cli_auth_credentials_store_mode",
+                &self.cli_auth_credentials_store_mode,
+            )
+            .field(
+                "has_configured_auth_store",
+                &self.configured_auth_store.is_some(),
+            )
+            .finish()
     }
 }
 
@@ -355,13 +403,12 @@ async fn process_request(
                     let api_key = obtain_api_key(&opts.issuer, &opts.client_id, &tokens.id_token)
                         .await
                         .ok();
-                    if let Err(err) = persist_tokens_async(
-                        &opts.codex_home,
+                    if let Err(err) = persist_tokens_to_store_async(
+                        opts.configured_auth_store(),
                         api_key.clone(),
                         tokens.id_token.clone(),
                         tokens.access_token.clone(),
                         tokens.refresh_token.clone(),
-                        opts.cli_auth_credentials_store_mode,
                     )
                     .await
                     {
@@ -784,7 +831,7 @@ pub(crate) async fn exchange_code_for_tokens(
     })
 }
 
-/// Persists exchanged credentials using the configured local auth store, then
+/// Persists exchanged credentials using the configured auth store, then
 /// best-effort revokes any superseded managed ChatGPT tokens.
 pub(crate) async fn persist_tokens_async(
     codex_home: &Path,
@@ -794,10 +841,26 @@ pub(crate) async fn persist_tokens_async(
     refresh_token: String,
     auth_credentials_store_mode: AuthCredentialsStoreMode,
 ) -> io::Result<()> {
+    persist_tokens_to_store_async(
+        AuthStores::local(codex_home.to_path_buf(), auth_credentials_store_mode).configured,
+        api_key,
+        id_token,
+        access_token,
+        refresh_token,
+    )
+    .await
+}
+
+pub(crate) async fn persist_tokens_to_store_async(
+    configured_auth_store: Arc<dyn AuthCredentialStore>,
+    api_key: Option<String>,
+    id_token: String,
+    access_token: String,
+    refresh_token: String,
+) -> io::Result<()> {
     // Reuse existing synchronous logic but run it off the async runtime.
-    let codex_home = codex_home.to_path_buf();
     let (previous_auth, auth) = tokio::task::spawn_blocking(move || {
-        let previous_auth = match load_auth_dot_json(&codex_home, auth_credentials_store_mode) {
+        let previous_auth = match configured_auth_store.load() {
             Ok(auth) => auth,
             Err(err) => {
                 warn!("failed to load previous auth before saving new login: {err}");
@@ -823,7 +886,7 @@ pub(crate) async fn persist_tokens_async(
             last_refresh: Some(Utc::now()),
             agent_identity: None,
         };
-        save_auth(&codex_home, &auth, auth_credentials_store_mode)?;
+        configured_auth_store.save(&auth)?;
         Ok::<_, io::Error>((previous_auth, auth))
     })
     .await
@@ -1156,6 +1219,8 @@ pub(crate) async fn obtain_api_key(
 #[cfg(test)]
 mod tests {
     use std::ffi::OsString;
+    use std::sync::Arc;
+    use std::sync::Mutex;
 
     use anyhow::Context;
     use base64::Engine;
@@ -1170,6 +1235,7 @@ mod tests {
     use wiremock::matchers::method;
     use wiremock::matchers::path;
 
+    use crate::auth::AuthCredentialStore;
     use crate::auth::AuthDotJson;
     use crate::auth::REVOKE_TOKEN_URL_OVERRIDE_ENV_VAR;
     use crate::auth::load_auth_dot_json;
@@ -1186,10 +1252,73 @@ mod tests {
     use super::is_missing_codex_entitlement_error;
     use super::parse_token_endpoint_error;
     use super::persist_tokens_async;
+    use super::persist_tokens_to_store_async;
     use super::redact_sensitive_query_value;
     use super::redact_sensitive_url_parts;
     use super::render_login_error_page;
     use super::sanitize_url_for_logging;
+
+    #[derive(Debug, Default)]
+    struct FakeAuthCredentialStore {
+        auth: Mutex<Option<AuthDotJson>>,
+    }
+
+    impl AuthCredentialStore for FakeAuthCredentialStore {
+        fn load(&self) -> std::io::Result<Option<AuthDotJson>> {
+            Ok(self.auth.lock().expect("fake store lock").clone())
+        }
+
+        fn save(&self, auth: &AuthDotJson) -> std::io::Result<()> {
+            *self.auth.lock().expect("fake store lock") = Some(auth.clone());
+            Ok(())
+        }
+
+        fn delete(&self) -> std::io::Result<bool> {
+            Ok(self.auth.lock().expect("fake store lock").take().is_some())
+        }
+    }
+
+    #[tokio::test]
+    async fn configured_auth_store_overrides_local_login_persistence() -> anyhow::Result<()> {
+        let codex_home = tempdir()?;
+        let configured = Arc::new(FakeAuthCredentialStore::default());
+        let opts = super::ServerOptions::new(
+            codex_home.path().to_path_buf(),
+            "client-id".to_string(),
+            /*forced_chatgpt_workspace_id*/ None,
+            AuthCredentialsStoreMode::File,
+        )
+        .with_configured_auth_store(configured.clone());
+
+        persist_tokens_to_store_async(
+            opts.configured_auth_store(),
+            /*api_key*/ None,
+            jwt_for_account("new-account"),
+            "new-access".to_string(),
+            "new-refresh".to_string(),
+        )
+        .await?;
+
+        assert_eq!(
+            load_auth_dot_json(codex_home.path(), AuthCredentialsStoreMode::File)?,
+            None
+        );
+        assert_eq!(
+            configured
+                .load()?
+                .context("configured auth should exist after login")?
+                .tokens
+                .context("configured tokens should be persisted")?,
+            TokenData {
+                id_token: parse_chatgpt_jwt_claims(&jwt_for_account("new-account"))
+                    .expect("new JWT should parse"),
+                access_token: "new-access".to_string(),
+                refresh_token: "new-refresh".to_string(),
+                account_id: Some("new-account".to_string()),
+            }
+        );
+        Ok(())
+    }
 
     #[serial_test::serial(logout_revoke)]
     #[tokio::test]

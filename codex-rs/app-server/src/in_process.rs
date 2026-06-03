@@ -85,6 +85,7 @@ use codex_core::resolve_installation_id;
 use codex_exec_server::EnvironmentManager;
 use codex_feedback::CodexFeedback;
 use codex_login::AuthManager;
+use codex_login::AuthStores;
 use codex_protocol::protocol::SessionSource;
 pub use codex_rollout::StateDbHandle;
 pub use codex_state::log_db::LogDbLayer;
@@ -348,8 +349,23 @@ impl InProcessClientHandle {
 /// the handle, so callers receive a ready-to-use runtime. If initialize fails,
 /// the runtime is shut down and an `InvalidData` error is returned.
 pub async fn start(args: InProcessStartArgs) -> IoResult<InProcessClientHandle> {
+    start_with_optional_auth_stores(args, /*auth_stores*/ None).await
+}
+
+/// Starts an in-process runtime backed by caller-provided auth stores.
+pub async fn start_with_auth_stores(
+    args: InProcessStartArgs,
+    auth_stores: AuthStores,
+) -> IoResult<InProcessClientHandle> {
+    start_with_optional_auth_stores(args, Some(auth_stores)).await
+}
+
+async fn start_with_optional_auth_stores(
+    args: InProcessStartArgs,
+    auth_stores: Option<AuthStores>,
+) -> IoResult<InProcessClientHandle> {
     let initialize = args.initialize.clone();
-    let client = start_uninitialized(args).await?;
+    let client = start_uninitialized(args, auth_stores).await?;
 
     let initialize_response = client
         .request(ClientRequest::Initialize {
@@ -369,7 +385,10 @@ pub async fn start(args: InProcessStartArgs) -> IoResult<InProcessClientHandle> 
     Ok(client)
 }
 
-async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClientHandle> {
+async fn start_uninitialized(
+    args: InProcessStartArgs,
+    auth_stores: Option<AuthStores>,
+) -> IoResult<InProcessClientHandle> {
     let channel_capacity = args.channel_capacity.max(1);
     let installation_id = resolve_installation_id(&args.config.codex_home).await?;
     let (client_tx, mut client_rx) = mpsc::channel::<InProcessClientMessage>(channel_capacity);
@@ -377,9 +396,22 @@ async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClie
 
     let runtime_handle = tokio::spawn(async move {
         let (outgoing_tx, mut outgoing_rx) = mpsc::channel::<OutgoingEnvelope>(channel_capacity);
-        let auth_manager =
-            AuthManager::shared_from_config(args.config.as_ref(), args.enable_codex_api_key_env)
-                .await;
+        let auth_manager = match auth_stores {
+            Some(auth_stores) => {
+                AuthManager::shared_with_stores(
+                    auth_stores,
+                    args.enable_codex_api_key_env,
+                    Some(args.config.chatgpt_base_url.clone()),
+                )
+                .await
+            }
+            None => {
+                AuthManager::shared_from_config(args.config.as_ref(), args.enable_codex_api_key_env)
+                    .await
+            }
+        };
+        auth_manager
+            .set_forced_chatgpt_workspace_id(args.config.forced_chatgpt_workspace_id.clone());
         let analytics_events_client =
             analytics_events_client_from_config(Arc::clone(&auth_manager), args.config.as_ref());
         let outgoing_message_sender = Arc::new(OutgoingMessageSender::new(

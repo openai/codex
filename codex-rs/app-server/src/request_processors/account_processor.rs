@@ -273,11 +273,7 @@ impl AccountRequestProcessor {
             }
         }
 
-        match login_with_api_key(
-            &self.config.codex_home,
-            &params.api_key,
-            self.config.cli_auth_credentials_store_mode,
-        ) {
+        match self.auth_manager.login_with_api_key(&params.api_key) {
             Ok(()) => {
                 self.auth_manager.reload().await;
                 Ok(())
@@ -326,6 +322,7 @@ impl AccountRequestProcessor {
                 config.forced_chatgpt_workspace_id.clone(),
                 config.cli_auth_credentials_store_mode,
             )
+            .with_configured_auth_store(self.auth_manager.configured_auth_store())
         };
         #[cfg(debug_assertions)]
         let opts = {
@@ -578,13 +575,13 @@ impl AccountRequestProcessor {
             )));
         }
 
-        login_with_chatgpt_auth_tokens(
-            &self.config.codex_home,
-            &access_token,
-            &chatgpt_account_id,
-            chatgpt_plan_type.as_deref(),
-        )
-        .map_err(|err| internal_error(format!("failed to set external auth: {err}")))?;
+        self.auth_manager
+            .login_with_chatgpt_auth_tokens(
+                &access_token,
+                &chatgpt_account_id,
+                chatgpt_plan_type.as_deref(),
+            )
+            .map_err(|err| internal_error(format!("failed to set external auth: {err}")))?;
         self.auth_manager.reload().await;
         self.config_manager.replace_cloud_config_bundle_loader(
             self.auth_manager.clone(),
