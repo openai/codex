@@ -1,7 +1,6 @@
 use super::*;
 use crate::agent::control::SpawnAgentForkMode;
 use crate::agent::control::SpawnAgentOptions;
-use crate::agent::control::render_input_preview;
 use crate::agent::next_thread_spawn_depth;
 use crate::agent::role::DEFAULT_ROLE_NAME;
 use crate::agent::role::apply_role_to_config;
@@ -9,7 +8,6 @@ use crate::tools::handlers::multi_agents_spec::SpawnAgentToolOptions;
 use crate::tools::handlers::multi_agents_spec::create_spawn_agent_tool_v2;
 use crate::turn_timing::now_unix_timestamp_ms;
 use codex_protocol::AgentPath;
-use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::Op;
 use codex_tools::ToolSpec;
 
@@ -61,8 +59,9 @@ async fn handle_spawn_agent(
         .map(str::trim)
         .filter(|role| !role.is_empty());
 
+    let message = args.message.clone();
     let initial_operation = parse_collab_input(Some(args.message), /*items*/ None)?;
-    let prompt = render_input_preview(&initial_operation);
+    let prompt = String::new();
 
     let session_source = turn.session_source.clone();
     let child_depth = next_thread_spawn_depth(&session_source);
@@ -125,17 +124,12 @@ async fn handle_spawn_agent(
                         .iter()
                         .all(|item| matches!(item, UserInput::Text { .. })) =>
                 {
-                    Op::InterAgentCommunication {
-                        communication: InterAgentCommunication::new(
-                            turn.session_source
-                                .get_agent_path()
-                                .unwrap_or_else(AgentPath::root),
-                            recipient,
-                            Vec::new(),
-                            prompt.clone(),
-                            /*trigger_turn*/ true,
-                        ),
-                    }
+                    let author = turn
+                        .session_source
+                        .get_agent_path()
+                        .unwrap_or_else(AgentPath::root);
+                    let communication = communication_from_tool_message(author, recipient, message);
+                    Op::InterAgentCommunication { communication }
                 }
                 (_, initial_operation) => initial_operation,
             },

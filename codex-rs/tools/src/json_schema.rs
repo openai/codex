@@ -43,6 +43,9 @@ pub struct JsonSchema {
     pub schema_type: Option<JsonSchemaType>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// Responses-only marker for reviewed encrypted tool parameters.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub encrypted: Option<bool>,
     #[serde(rename = "enum", skip_serializing_if = "Option::is_none")]
     pub enum_values: Option<Vec<JsonValue>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -88,6 +91,11 @@ impl JsonSchema {
 
     pub fn string(description: Option<String>) -> Self {
         Self::typed(JsonSchemaPrimitiveType::String, description)
+    }
+
+    pub fn with_encrypted(mut self) -> Self {
+        self.encrypted = Some(true);
+        self
     }
 
     pub fn number(description: Option<String>) -> Self {

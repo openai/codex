@@ -177,6 +177,7 @@ fn response_item_records_turn_ttft(item: &ResponseItem) -> bool {
                 })
             })
         }
+        ResponseItem::AgentMessage { .. } => false,
         ResponseItem::LocalShellCall { .. }
         | ResponseItem::FunctionCall { .. }
         | ResponseItem::CustomToolCall { .. }

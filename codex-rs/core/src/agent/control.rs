@@ -109,7 +109,8 @@ fn keep_forked_rollout_item(item: &RolloutItem, preserve_reference_context_item:
             _ => false,
         },
         RolloutItem::ResponseItem(
-            ResponseItem::Reasoning { .. }
+            ResponseItem::AgentMessage { .. }
+            | ResponseItem::Reasoning { .. }
             | ResponseItem::LocalShellCall { .. }
             | ResponseItem::FunctionCall { .. }
             | ResponseItem::ToolSearchCall { .. }
@@ -751,7 +752,7 @@ impl AgentControl {
                     .await,
             )
             .await;
-        if result.is_ok() {
+        if result.is_ok() && !last_task_message.is_empty() {
             self.state
                 .update_last_task_message(agent_id, last_task_message);
         }
