@@ -46,3 +46,34 @@ fn pairing_start_maps_backend_failures_to_internal_error() {
         }
     );
 }
+
+#[test]
+fn client_management_maps_user_actionable_errors_to_invalid_request() {
+    for kind in [
+        io::ErrorKind::InvalidInput,
+        io::ErrorKind::NotFound,
+        io::ErrorKind::PermissionDenied,
+        io::ErrorKind::WouldBlock,
+    ] {
+        assert_eq!(
+            map_client_management_error(io::Error::new(kind, "client management unavailable")),
+            JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                data: None,
+                message: "client management unavailable".to_string(),
+            }
+        );
+    }
+}
+
+#[test]
+fn client_management_maps_backend_failures_to_internal_error() {
+    assert_eq!(
+        map_client_management_error(io::Error::other("client management failed")),
+        JSONRPCErrorError {
+            code: INTERNAL_ERROR_CODE,
+            data: None,
+            message: "client management failed".to_string(),
+        }
+    );
+}

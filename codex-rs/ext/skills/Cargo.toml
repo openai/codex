@@ -1,0 +1,19 @@
+[package]
+edition.workspace = true
+license.workspace = true
+name = "codex-skills-extension"
+version.workspace = true
+
+[lib]
+name = "codex_skills_extension"
+path = "src/lib.rs"
+test = false
+doctest = false
+
+[lints]
+workspace = true
+
+[dependencies]
+async-trait = { workspace = true }
+codex-core = { workspace = true }
+codex-extension-api = { workspace = true }
