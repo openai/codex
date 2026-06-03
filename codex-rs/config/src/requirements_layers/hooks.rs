@@ -214,6 +214,7 @@ fn append_hook_events(existing: &mut HookEventsToml, incoming: HookEventsToml) -
         subagent_start,
         subagent_stop,
         stop,
+        interrupt,
     } = incoming;
 
     let mut changed = false;
@@ -227,6 +228,7 @@ fn append_hook_events(existing: &mut HookEventsToml, incoming: HookEventsToml) -
     changed |= append_vec(&mut existing.subagent_start, subagent_start);
     changed |= append_vec(&mut existing.subagent_stop, subagent_stop);
     changed |= append_vec(&mut existing.stop, stop);
+    changed |= append_vec(&mut existing.interrupt, interrupt);
     changed
 }
 
@@ -234,4 +236,53 @@ fn append_vec<T>(existing: &mut Vec<T>, mut incoming: Vec<T>) -> bool {
     let changed = !incoming.is_empty();
     existing.append(&mut incoming);
     changed
+}
+
+#[cfg(test)]
+mod tests {
+    use pretty_assertions::assert_eq;
+
+    use super::append_hook_events;
+    use crate::HookEventsToml;
+    use crate::HookHandlerConfig;
+    use crate::MatcherGroup;
+
+    #[test]
+    fn append_hook_events_appends_interrupt_handlers() {
+        let mut existing = HookEventsToml::default();
+        let changed = append_hook_events(
+            &mut existing,
+            HookEventsToml {
+                interrupt: vec![MatcherGroup {
+                    matcher: None,
+                    hooks: vec![HookHandlerConfig::Command {
+                        command: "python3 /tmp/interrupt.py".to_string(),
+                        command_windows: None,
+                        timeout_sec: None,
+                        r#async: false,
+                        status_message: None,
+                    }],
+                }],
+                ..Default::default()
+            },
+        );
+
+        assert!(changed);
+        assert_eq!(
+            existing,
+            HookEventsToml {
+                interrupt: vec![MatcherGroup {
+                    matcher: None,
+                    hooks: vec![HookHandlerConfig::Command {
+                        command: "python3 /tmp/interrupt.py".to_string(),
+                        command_windows: None,
+                        timeout_sec: None,
+                        r#async: false,
+                        status_message: None,
+                    }],
+                }],
+                ..Default::default()
+            }
+        );
+    }
 }
