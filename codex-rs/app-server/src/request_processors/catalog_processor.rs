@@ -1,5 +1,6 @@
 use super::*;
 use codex_config::config_toml::ConfigToml;
+use codex_http_state::HttpStateContext;
 use codex_http_state::HttpStateSurface;
 use futures::StreamExt;
 
@@ -121,8 +122,9 @@ impl CatalogRequestProcessor {
     pub(crate) async fn skills_list(
         &self,
         params: SkillsListParams,
+        app_server_client_name: Option<&str>,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.skills_list_response(params)
+        self.skills_list_response(params, app_server_client_name)
             .await
             .map(|response| Some(response.into()))
     }
@@ -130,8 +132,9 @@ impl CatalogRequestProcessor {
     pub(crate) async fn hooks_list(
         &self,
         params: HooksListParams,
+        app_server_client_name: Option<&str>,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.hooks_list_response(params)
+        self.hooks_list_response(params, app_server_client_name)
             .await
             .map(|response| Some(response.into()))
     }
@@ -167,8 +170,9 @@ impl CatalogRequestProcessor {
     pub(crate) async fn experimental_feature_list(
         &self,
         params: ExperimentalFeatureListParams,
+        app_server_client_name: Option<&str>,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.experimental_feature_list_response(params)
+        self.experimental_feature_list_response(params, app_server_client_name)
             .await
             .map(|response| Some(response.into()))
     }
@@ -229,11 +233,13 @@ impl CatalogRequestProcessor {
         &self,
         config: &Config,
         auth: Option<&CodexAuth>,
+        http_state: &HttpStateContext,
     ) -> bool {
-        match workspace_settings::codex_plugins_enabled_for_workspace(
+        match workspace_settings::codex_plugins_enabled_for_workspace_with_http_state(
             config,
             auth,
             Some(&self.workspace_settings_cache),
+            Some(http_state.clone()),
         )
         .await
         {
@@ -320,6 +326,7 @@ impl CatalogRequestProcessor {
     async fn experimental_feature_list_response(
         &self,
         params: ExperimentalFeatureListParams,
+        app_server_client_name: Option<&str>,
     ) -> Result<ExperimentalFeatureListResponse, JSONRPCErrorError> {
         let ExperimentalFeatureListParams {
             cursor,
@@ -343,9 +350,10 @@ impl CatalogRequestProcessor {
             }
             None => self.load_latest_config(/*fallback_cwd*/ None).await?,
         };
+        let http_state = http_state_context(&config, app_server_client_name);
         let auth = self.auth_manager.auth().await;
         let workspace_codex_plugins_enabled = self
-            .workspace_codex_plugins_enabled(&config, auth.as_ref())
+            .workspace_codex_plugins_enabled(&config, auth.as_ref(), &http_state)
             .await;
 
         let data = FEATURES
@@ -509,6 +517,7 @@ impl CatalogRequestProcessor {
     async fn skills_list_response(
         &self,
         params: SkillsListParams,
+        app_server_client_name: Option<&str>,
     ) -> Result<SkillsListResponse, JSONRPCErrorError> {
         let SkillsListParams { cwds, force_reload } = params;
         let cwds = if cwds.is_empty() {
@@ -518,9 +527,10 @@ impl CatalogRequestProcessor {
         };
 
         let config = self.load_latest_config(/*fallback_cwd*/ None).await?;
+        let http_state = http_state_context(&config, app_server_client_name);
         let auth = self.auth_manager.auth().await;
         let workspace_codex_plugins_enabled = self
-            .workspace_codex_plugins_enabled(&config, auth.as_ref())
+            .workspace_codex_plugins_enabled(&config, auth.as_ref(), &http_state)
             .await;
         let skills_manager = self.thread_manager.skills_manager();
         let plugins_manager = self.thread_manager.plugins_manager();
@@ -615,6 +625,7 @@ impl CatalogRequestProcessor {
     async fn hooks_list_response(
         &self,
         params: HooksListParams,
+        app_server_client_name: Option<&str>,
     ) -> Result<HooksListResponse, JSONRPCErrorError> {
         let HooksListParams { cwds } = params;
         let cwds = if cwds.is_empty() {
@@ -651,8 +662,9 @@ impl CatalogRequestProcessor {
                     continue;
                 }
             };
+            let http_state = http_state_context(&config, app_server_client_name);
             let workspace_codex_plugins_enabled = self
-                .workspace_codex_plugins_enabled(&config, auth.as_ref())
+                .workspace_codex_plugins_enabled(&config, auth.as_ref(), &http_state)
                 .await;
             let plugins_enabled =
                 config.features.enabled(Feature::Plugins) && workspace_codex_plugins_enabled;

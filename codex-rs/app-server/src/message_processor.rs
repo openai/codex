@@ -910,7 +910,11 @@ impl MessageProcessor {
             }
             ClientRequest::ExperimentalFeatureEnablementSet { params, .. } => {
                 self.config_processor
-                    .experimental_feature_enablement_set(request_id.clone(), params)
+                    .experimental_feature_enablement_set(
+                        request_id.clone(),
+                        params,
+                        app_server_client_name.as_deref(),
+                    )
                     .await
             }
             ClientRequest::RemoteControlEnable { .. } => self
@@ -1133,13 +1137,17 @@ impl MessageProcessor {
                 self.thread_processor.conversation_summary(params).await
             }
             ClientRequest::SkillsList { params, .. } => {
-                self.catalog_processor.skills_list(params).await
+                self.catalog_processor
+                    .skills_list(params, app_server_client_name.as_deref())
+                    .await
             }
             ClientRequest::SkillsExtraRootsSet { params, .. } => {
                 self.catalog_processor.skills_extra_roots_set(params).await
             }
             ClientRequest::HooksList { params, .. } => {
-                self.catalog_processor.hooks_list(params).await
+                self.catalog_processor
+                    .hooks_list(params, app_server_client_name.as_deref())
+                    .await
             }
             ClientRequest::MarketplaceAdd { params, .. } => {
                 self.marketplace_processor.marketplace_add(params).await
@@ -1180,7 +1188,9 @@ impl MessageProcessor {
                 self.plugin_processor.plugin_share_delete(params).await
             }
             ClientRequest::AppsList { params, .. } => {
-                self.apps_processor.apps_list(&request_id, params).await
+                self.apps_processor
+                    .apps_list(&request_id, params, app_server_client_name.as_deref())
+                    .await
             }
             ClientRequest::SkillsConfigWrite { params, .. } => {
                 self.catalog_processor.skills_config_write(params).await
@@ -1198,7 +1208,7 @@ impl MessageProcessor {
             }
             ClientRequest::ExperimentalFeatureList { params, .. } => {
                 self.catalog_processor
-                    .experimental_feature_list(params)
+                    .experimental_feature_list(params, app_server_client_name.as_deref())
                     .await
             }
             ClientRequest::PermissionProfileList { params, .. } => {

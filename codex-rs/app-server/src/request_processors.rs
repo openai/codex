@@ -533,6 +533,18 @@ pub(crate) use self::thread_summary::summary_to_thread;
 pub(crate) use self::thread_summary::thread_settings_from_config_snapshot;
 pub(crate) use self::thread_summary::thread_settings_from_core_snapshot;
 
+fn http_state_context(
+    config: &Config,
+    app_server_client_name: Option<&str>,
+) -> codex_http_state::HttpStateContext {
+    codex_http_state::HttpStateContext::new(
+        config.codex_home.to_path_buf(),
+        codex_http_state::HttpStateSurface::from_app_server_client_name(
+            app_server_client_name.unwrap_or_default(),
+        ),
+    )
+}
+
 pub(crate) fn build_api_turns_from_rollout_items(items: &[RolloutItem]) -> Vec<Turn> {
     let mut builder = ThreadHistoryBuilder::new();
     for item in items {

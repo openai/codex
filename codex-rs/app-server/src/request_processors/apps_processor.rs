@@ -1,4 +1,5 @@
 use super::*;
+use codex_http_state::HttpStateContext;
 
 pub(crate) struct AppsRequestProcessor {
     auth_manager: Arc<AuthManager>,
@@ -35,8 +36,9 @@ impl AppsRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: AppsListParams,
+        app_server_client_name: Option<&str>,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.apps_list_inner(request_id, params)
+        self.apps_list_inner(request_id, params, app_server_client_name)
             .await
             .map(|response| response.map(Into::into))
     }
@@ -45,6 +47,7 @@ impl AppsRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: AppsListParams,
+        app_server_client_name: Option<&str>,
     ) -> Result<Option<AppsListResponse>, JSONRPCErrorError> {
         let thread = if let Some(thread_id) = params.thread_id.as_deref() {
             let (_, loaded_thread) = self.load_thread(thread_id).await?;
@@ -65,6 +68,7 @@ impl AppsRequestProcessor {
         }
 
         let auth = self.auth_manager.auth().await;
+        let http_state = http_state_context(&config, app_server_client_name);
         if !config
             .features
             .apps_enabled_for_auth(auth.as_ref().is_some_and(CodexAuth::uses_codex_backend))
@@ -76,7 +80,7 @@ impl AppsRequestProcessor {
         }
 
         if !self
-            .workspace_codex_plugins_enabled(&config, auth.as_ref())
+            .workspace_codex_plugins_enabled(&config, auth.as_ref(), &http_state)
             .await
         {
             return Ok(Some(AppsListResponse {
@@ -92,7 +96,7 @@ impl AppsRequestProcessor {
         tokio::spawn(async move {
             tokio::select! {
                 _ = shutdown_token.cancelled() => {}
-                _ = Self::apps_list_task(outgoing, request, params, config, environment_manager) => {}
+                _ = Self::apps_list_task(outgoing, request, params, config, environment_manager, http_state) => {}
             }
         });
         Ok(None)
@@ -108,11 +112,15 @@ impl AppsRequestProcessor {
         params: AppsListParams,
         config: Config,
         environment_manager: Arc<EnvironmentManager>,
+        http_state: HttpStateContext,
     ) {
         let retry_params = params.clone();
         let retry_config = config.clone();
         let retry_environment_manager = Arc::clone(&environment_manager);
-        let result = Self::apps_list_response(&outgoing, params, config, environment_manager).await;
+        let retry_http_state = http_state.clone();
+        let result =
+            Self::apps_list_response(&outgoing, params, config, environment_manager, http_state)
+                .await;
         let should_retry = result
             .as_ref()
             .is_ok_and(|(_, codex_apps_ready)| !codex_apps_ready);
@@ -128,6 +136,7 @@ impl AppsRequestProcessor {
                 retry_params,
                 retry_config,
                 retry_environment_manager,
+                retry_http_state,
             )
             .await
             {
@@ -141,6 +150,7 @@ impl AppsRequestProcessor {
         params: AppsListParams,
         config: Config,
         environment_manager: Arc<EnvironmentManager>,
+        http_state: HttpStateContext,
     ) -> Result<(AppsListResponse, bool), JSONRPCErrorError> {
         let AppsListParams {
             cursor,
@@ -180,9 +190,13 @@ impl AppsRequestProcessor {
 
         let all_config = config.clone();
         tokio::spawn(async move {
-            let result = connectors::list_all_connectors_with_options(&all_config, force_refetch)
-                .await
-                .map_err(|err| format!("failed to list apps: {err}"));
+            let result = connectors::list_all_connectors_with_options_and_http_state(
+                &all_config,
+                force_refetch,
+                Some(http_state),
+            )
+            .await
+            .map_err(|err| format!("failed to list apps: {err}"));
             let _ = tx.send(AppListLoadResult::Directory(result));
         });
 
@@ -303,11 +317,13 @@ impl AppsRequestProcessor {
         &self,
         config: &Config,
         auth: Option<&CodexAuth>,
+        http_state: &HttpStateContext,
     ) -> bool {
-        match workspace_settings::codex_plugins_enabled_for_workspace(
+        match workspace_settings::codex_plugins_enabled_for_workspace_with_http_state(
             config,
             auth,
             Some(&self.workspace_settings_cache),
+            Some(http_state.clone()),
         )
         .await
         {
