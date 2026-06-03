@@ -103,7 +103,7 @@ impl<'a> AgentsMdManager<'a> {
         let mut loaded = self.config.user_instructions.clone().unwrap_or_default();
 
         match agents_md_docs {
-            Ok(Some(docs)) => loaded.append_project_docs(docs),
+            Ok(Some(docs)) => loaded.instructions.extend(docs.instructions),
             Ok(None) => {}
             Err(e) => {
                 error!("error trying to find AGENTS.md docs: {e:#}");
@@ -346,10 +346,6 @@ impl LoadedAgentsMd {
                 source: InstructionSource::Internal,
             }],
         }
-    }
-
-    fn append_project_docs(&mut self, project_docs: Self) {
-        self.instructions.extend(project_docs.instructions);
     }
 
     fn is_empty(&self) -> bool {
