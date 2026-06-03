@@ -78,7 +78,7 @@ configurations.
 
 GitHub Actions routes Bazel build and output-resolution commands through
 `.github/scripts/run_bazel_with_buildbuddy.py`. Higher-level helpers such as
-`.github/scripts/run-bazel-ci.sh` and `.github/scripts/rusty_v8_bazel.py`
+`.github/scripts/run_bazel_ci.py` and `.github/scripts/rusty_v8_bazel.py`
 delegate remote configuration selection to that wrapper. The wrapper reads the
 GitHub Actions repository and event payload rather than relying on workflow
 files to duplicate tenant-selection logic. It also normalizes GitHub Actions

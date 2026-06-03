@@ -41,7 +41,7 @@ read_query_labels() {
   query_stdout="$(mktemp)"
   query_stderr="$(mktemp)"
 
-  if ! ./.github/scripts/run-bazel-query-ci.sh \
+  if ! ./.github/scripts/run_bazel_query_ci.py \
     --keep_going \
     --output=label \
     -- "$query" >"$query_stdout" 2>"$query_stderr"; then
@@ -72,7 +72,7 @@ if [[ "${RUNNER_OS:-}" == "Windows" ]]; then
   fi
 fi
 
-./.github/scripts/run-bazel-ci.sh \
+./.github/scripts/run_bazel_ci.py \
   -- \
   build \
   "${bazel_lint_args[@]}" \

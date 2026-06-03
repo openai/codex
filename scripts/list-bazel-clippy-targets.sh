@@ -23,7 +23,7 @@ done
 # continue with a partial list if `bazel query` fails. Target discovery is
 # local on all platforms.
 manual_rust_test_targets="$(
-  ./.github/scripts/run-bazel-query-ci.sh \
+  ./.github/scripts/run_bazel_query_ci.py \
     --output=label \
     -- 'kind("rust_test rule", attr(tags, "manual", //codex-rs/... except //codex-rs/v8-poc/...))'
 )"

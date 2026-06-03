@@ -152,10 +152,15 @@ def bazel_args_with_remote_config(
     return [*args[:insertion_idx], *remote_args, *args[insertion_idx:]]
 
 
-def bazel_command(*args: str, env: Mapping[str, str] | None = None) -> list[str]:
+def bazel_command(
+    *args: str,
+    env: Mapping[str, str] | None = None,
+    enable_remote_config: bool = True,
+) -> list[str]:
     env = os.environ if env is None else env
     bazel = env.get("CODEX_BAZEL_BIN", "bazel")
-    return [bazel, *startup_args(args, env), *bazel_args_with_remote_config(args, env)]
+    bazel_args = bazel_args_with_remote_config(args, env) if enable_remote_config else args
+    return [bazel, *startup_args(args, env), *bazel_args]
 
 
 def main() -> None:
