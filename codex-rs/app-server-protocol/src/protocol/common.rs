@@ -861,6 +861,21 @@ client_request_definitions! {
         serialization: global("remote-control-clients"),
         response: v2::RemoteControlClientsRevokeResponse,
     },
+    HttpStateGet => "httpState/get" {
+        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        serialization: global_shared_read("http-state"),
+        response: v2::HttpStateGetResponse,
+    },
+    HttpStateSet => "httpState/set" {
+        params: v2::HttpStateSetParams,
+        serialization: global("http-state"),
+        response: v2::HttpStateSetResponse,
+    },
+    HttpStateClear => "httpState/clear" {
+        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        serialization: global("http-state"),
+        response: v2::HttpStateClearResponse,
+    },
     #[experimental("collaborationMode/list")]
     /// Lists collaboration mode presets.
     CollaborationModeList => "collaborationMode/list" {

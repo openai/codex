@@ -463,6 +463,7 @@ mod feedback_doctor_report;
 mod feedback_processor;
 mod fs_processor;
 mod git_processor;
+mod http_state_processor;
 mod initialize_processor;
 mod marketplace_processor;
 mod mcp_processor;
@@ -485,6 +486,7 @@ pub(crate) use external_agent_config_processor::ExternalAgentConfigRequestProces
 pub(crate) use feedback_processor::FeedbackRequestProcessor;
 pub(crate) use fs_processor::FsRequestProcessor;
 pub(crate) use git_processor::GitRequestProcessor;
+pub(crate) use http_state_processor::HttpStateRequestProcessor;
 pub(crate) use initialize_processor::InitializeRequestProcessor;
 pub(crate) use marketplace_processor::MarketplaceRequestProcessor;
 pub(crate) use mcp_processor::McpRequestProcessor;

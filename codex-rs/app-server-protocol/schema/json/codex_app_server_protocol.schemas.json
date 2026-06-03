@@ -1580,6 +1580,76 @@
             },
             "method": {
               "enum": [
+                "httpState/get"
+              ],
+              "title": "HttpState/getRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "type": "null"
+            }
+          },
+          "required": [
+            "id",
+            "method"
+          ],
+          "title": "HttpState/getRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "httpState/set"
+              ],
+              "title": "HttpState/setRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/HttpStateSetParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "HttpState/setRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "httpState/clear"
+              ],
+              "title": "HttpState/clearRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "type": "null"
+            }
+          },
+          "required": [
+            "id",
+            "method"
+          ],
+          "title": "HttpState/clearRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
                 "mcpServer/oauth/login"
               ],
               "title": "McpServer/oauth/loginRequestMethod",
@@ -10235,6 +10305,57 @@
           "data"
         ],
         "title": "HooksListResponse",
+        "type": "object"
+      },
+      "HttpStateClearResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "HttpStateClearResponse",
+        "type": "object"
+      },
+      "HttpStateGetResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "state": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "title": "HttpStateGetResponse",
+        "type": "object"
+      },
+      "HttpStateSetParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "expectedState": {
+            "description": "Write only if the calling surface still stores this state. Omit or set to null for an unconditional replacement.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "title": "HttpStateSetParams",
+        "type": "object"
+      },
+      "HttpStateSetResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "written": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "written"
+        ],
+        "title": "HttpStateSetResponse",
         "type": "object"
       },
       "ImageDetail": {

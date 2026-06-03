@@ -1928,6 +1928,7 @@ dependencies = [
  "codex-git-utils",
  "codex-guardian",
  "codex-hooks",
+ "codex-http-state",
  "codex-image-generation-extension",
  "codex-login",
  "codex-mcp",

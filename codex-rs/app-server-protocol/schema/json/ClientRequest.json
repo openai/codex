@@ -1083,6 +1083,24 @@
       },
       "type": "object"
     },
+    "HttpStateSetParams": {
+      "properties": {
+        "expectedState": {
+          "description": "Write only if the calling surface still stores this state. Omit or set to null for an unconditional replacement.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "state": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "state"
+      ],
+      "type": "object"
+    },
     "ImageDetail": {
       "enum": [
         "auto",
@@ -5659,6 +5677,76 @@
         "params"
       ],
       "title": "ExperimentalFeature/enablement/setRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "httpState/get"
+          ],
+          "title": "HttpState/getRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "type": "null"
+        }
+      },
+      "required": [
+        "id",
+        "method"
+      ],
+      "title": "HttpState/getRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "httpState/set"
+          ],
+          "title": "HttpState/setRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/HttpStateSetParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "HttpState/setRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "httpState/clear"
+          ],
+          "title": "HttpState/clearRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "type": "null"
+        }
+      },
+      "required": [
+        "id",
+        "method"
+      ],
+      "title": "HttpState/clearRequest",
       "type": "object"
     },
     {
