@@ -78,7 +78,7 @@ jobs:
       - name: Check MODULE.bazel.lock is up to date
         if: matrix.os == 'ubuntu-24.04' && matrix.target == 'x86_64-unknown-linux-gnu'
         shell: bash
-        run: ./scripts/check-module-bazel-lock.sh --ci
+        run: ./scripts/check-module-bazel-lock.sh
 
       - name: bazel test //...
         env:
@@ -377,7 +377,7 @@ jobs:
             --build_metadata=TAG_job=clippy
           )
           bazel_wrapper_args=()
-          bazel_target_list_args=(--ci)
+          bazel_target_list_args=()
           if [[ "${RUNNER_OS}" == "Windows" ]]; then
             # Keep this aligned with the fast Windows Bazel test job: use
             # Linux RBE for clippy build actions while targeting Windows

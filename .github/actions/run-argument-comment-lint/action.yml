@@ -31,7 +31,7 @@ runs:
         BUILDBUDDY_API_KEY: ${{ inputs.buildbuddy-api-key }}
       shell: bash
       run: |
-        bazel_targets="$(./tools/argument-comment-lint/list-bazel-targets.sh --ci)"
+        bazel_targets="$(./tools/argument-comment-lint/list-bazel-targets.sh)"
         ./.github/scripts/run-bazel-ci.sh \
           -- \
           build \

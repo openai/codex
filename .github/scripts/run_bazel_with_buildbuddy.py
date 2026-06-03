@@ -29,7 +29,13 @@ REMOTE_REPO_CONTENTS_CACHE_STARTUP_OPTIONS = {
 
 
 def startup_args(args: Sequence[str], env: Mapping[str, str]) -> list[str]:
-    # Keep every Bazel launch in a GitHub Actions job on the same server.
+    """Return shared startup options that are missing from a Bazel invocation.
+
+    Bazel startup options must precede the command, and changing them restarts
+    the server and discards its analysis cache. GitHub Actions invokes Bazel
+    through several helpers, so normalize their startup options here while
+    preserving any explicit choice made by the caller.
+    """
     command_idx = next(
         (idx for idx, arg in enumerate(args) if not arg.startswith("-")),
         len(args),
@@ -47,6 +53,9 @@ def startup_args(args: Sequence[str], env: Mapping[str, str]) -> list[str]:
         arg in REMOTE_REPO_CONTENTS_CACHE_STARTUP_OPTIONS
         for arg in configured_startup_args
     ):
+        # Work around Bazel 9 overlay materialization failures seen in CI. This
+        # disables only the startup-level repo contents cache; keyed runs still
+        # use BuildBuddy.
         injected_args.append("--noexperimental_remote_repo_contents_cache")
 
     return injected_args

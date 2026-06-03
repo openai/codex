@@ -1,22 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-use_ci_bazel=0
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --ci)
-      use_ci_bazel=1
-      shift
-      ;;
-    *)
-      echo "Usage: $0 [--ci]" >&2
-      exit 1
-      ;;
-  esac
-done
-
 bazel_status=0
-if [[ $use_ci_bazel -eq 1 ]]; then
+if [[ "${GITHUB_ACTIONS:-}" == "true" ]]; then
   bazel_startup_args=(--noexperimental_remote_repo_contents_cache)
   if [[ -n "${BAZEL_OUTPUT_USER_ROOT:-}" ]]; then
     bazel_startup_args=(
