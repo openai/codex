@@ -381,15 +381,6 @@ pub async fn start_with_runtime_storage_overrides(
     Ok(client)
 }
 
-/// Compatibility wrapper for existing storage-deps callers.
-#[doc(hidden)]
-pub async fn start_with_runtime_storage_deps(
-    args: InProcessStartArgs,
-    runtime_storage_deps: crate::AppServerRuntimeStorageDeps,
-) -> IoResult<InProcessClientHandle> {
-    start_with_runtime_storage_overrides(args, runtime_storage_deps).await
-}
-
 async fn start_uninitialized(
     args: InProcessStartArgs,
     runtime_storage_overrides: AppServerRuntimeStorageOverrides,

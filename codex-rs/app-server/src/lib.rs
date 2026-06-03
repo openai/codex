@@ -431,10 +431,6 @@ pub struct AppServerRuntimeStorageOverrides {
     pub thread_manager: Option<ThreadManagerStorageDeps>,
 }
 
-/// Compatibility alias for existing storage-deps callers.
-#[doc(hidden)]
-pub type AppServerRuntimeStorageDeps = AppServerRuntimeStorageOverrides;
-
 #[allow(clippy::too_many_arguments)]
 pub async fn run_main_with_transport_options(
     arg0_paths: Arg0DispatchPaths,
@@ -1133,36 +1129,6 @@ pub async fn run_main_with_transport_options_and_storage_overrides(
     }
 
     Ok(())
-}
-
-/// Compatibility wrapper for existing storage-deps callers.
-#[allow(clippy::too_many_arguments)]
-#[doc(hidden)]
-pub async fn run_main_with_transport_options_and_storage_deps(
-    arg0_paths: Arg0DispatchPaths,
-    cli_config_overrides: CliConfigOverrides,
-    loader_overrides: LoaderOverrides,
-    strict_config: bool,
-    default_analytics_enabled: bool,
-    transport: AppServerTransport,
-    session_source: SessionSource,
-    auth: AppServerWebsocketAuthSettings,
-    runtime_options: AppServerRuntimeOptions,
-    runtime_storage_deps: AppServerRuntimeStorageDeps,
-) -> IoResult<()> {
-    run_main_with_transport_options_and_storage_overrides(
-        arg0_paths,
-        cli_config_overrides,
-        loader_overrides,
-        strict_config,
-        default_analytics_enabled,
-        transport,
-        session_source,
-        auth,
-        runtime_options,
-        runtime_storage_deps,
-    )
-    .await
 }
 
 fn analytics_rpc_transport(transport: &AppServerTransport) -> AppServerRpcTransport {

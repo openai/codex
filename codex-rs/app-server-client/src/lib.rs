@@ -25,7 +25,6 @@ use std::io::Result as IoResult;
 use std::sync::Arc;
 use std::time::Duration;
 
-pub use codex_app_server::AppServerRuntimeStorageDeps;
 pub use codex_app_server::AppServerRuntimeStorageOverrides;
 pub use codex_app_server::ArtifactStore;
 pub use codex_app_server::LocalArtifactStore;
@@ -627,15 +626,6 @@ impl InProcessAppServerClient {
             event_rx,
             worker_handle,
         })
-    }
-
-    /// Compatibility wrapper for existing storage-deps callers.
-    #[doc(hidden)]
-    pub async fn start_with_runtime_storage_deps(
-        args: InProcessClientStartArgs,
-        runtime_storage_deps: AppServerRuntimeStorageDeps,
-    ) -> IoResult<Self> {
-        Self::start_with_runtime_storage_overrides(args, runtime_storage_deps).await
     }
 
     pub fn request_handle(&self) -> InProcessAppServerRequestHandle {
