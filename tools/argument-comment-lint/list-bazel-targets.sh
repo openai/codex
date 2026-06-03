@@ -10,9 +10,9 @@ cd "${repo_root}"
 # Add only those manual rust_test targets explicitly so inline `#[cfg(test)]`
 # call sites are linted without pulling in unrelated manual release targets.
 manual_rust_test_targets="$(
-  ./.github/scripts/run-bazel-query-ci.sh \
+  bazel query \
     --output=label \
-    -- 'kind("rust_test rule", attr(tags, "manual", //codex-rs/...))'
+    'kind("rust_test rule", attr(tags, "manual", //codex-rs/...))'
 )"
 if [[ "${RUNNER_OS:-}" != "Windows" ]]; then
   manual_rust_test_targets="$(printf '%s\n' "${manual_rust_test_targets}" | grep -v -- '-windows-cross-bin$' || true)"

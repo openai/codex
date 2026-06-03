@@ -5,28 +5,39 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${repo_root}"
 
+use_ci_bazel=0
 windows_cross_compile=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --ci)
+      use_ci_bazel=1
+      shift
+      ;;
     --windows-cross-compile)
       windows_cross_compile=1
       shift
       ;;
     *)
-      echo "Usage: $0 [--windows-cross-compile]" >&2
+      echo "Usage: $0 [--ci] [--windows-cross-compile]" >&2
       exit 1
       ;;
   esac
 done
 
 # Resolve the dynamic targets before printing anything so callers do not
-# continue with a partial list if `bazel query` fails. Target discovery is
-# local on all platforms.
-manual_rust_test_targets="$(
-  ./.github/scripts/run-bazel-query-ci.sh \
-    --output=label \
-    -- 'kind("rust_test rule", attr(tags, "manual", //codex-rs/... except //codex-rs/v8-poc/...))'
-)"
+# continue with a partial list if `bazel query` fails. CI target discovery uses
+# the same startup settings as the later CI build; local discovery inherits the
+# default startup settings used by `just bazel-clippy`.
+query='kind("rust_test rule", attr(tags, "manual", //codex-rs/... except //codex-rs/v8-poc/...))'
+if [[ $use_ci_bazel -eq 1 ]]; then
+  manual_rust_test_targets="$(
+    ./.github/scripts/run-bazel-query-ci.sh \
+      --output=label \
+      -- "${query}"
+  )"
+else
+  manual_rust_test_targets="$(bazel query --output=label "${query}")"
+fi
 if [[ "${RUNNER_OS:-}" != "Windows" ]]; then
   # Non-Windows clippy jobs lint the native test binaries; the
   # Windows-cross binaries exist only for the fast Windows test leg.

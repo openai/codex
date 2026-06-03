@@ -377,7 +377,7 @@ jobs:
             --build_metadata=TAG_job=clippy
           )
           bazel_wrapper_args=()
-          bazel_target_list_args=()
+          bazel_target_list_args=(--ci)
           if [[ "${RUNNER_OS}" == "Windows" ]]; then
             # Keep this aligned with the fast Windows Bazel test job: use
             # Linux RBE for clippy build actions while targeting Windows
