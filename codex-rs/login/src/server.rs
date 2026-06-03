@@ -11,7 +11,6 @@
 //! This module therefore keeps the user-facing error path and the structured-log path separate.
 //! Returned `io::Error` values still carry the detail needed by CLI/browser callers, while
 //! structured logs only emit explicitly reviewed fields plus redacted URL/error values.
-use std::fmt::Debug;
 use std::io::Cursor;
 use std::io::Read;
 use std::io::Write;
@@ -62,7 +61,7 @@ static LOGIN_ERROR_PAGE_TEMPLATE: LazyLock<Template> = LazyLock::new(|| {
 });
 
 /// Options for launching the local login callback server.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct ServerOptions {
     pub codex_home: PathBuf,
     pub client_id: String,
@@ -73,7 +72,6 @@ pub struct ServerOptions {
     pub forced_chatgpt_workspace_id: Option<Vec<String>>,
     pub codex_streamlined_login: bool,
     pub cli_auth_credentials_store_mode: AuthCredentialsStoreMode,
-    configured_auth_store: Option<Arc<dyn AuthCredentialStore>>,
 }
 
 impl ServerOptions {
@@ -94,53 +92,7 @@ impl ServerOptions {
             forced_chatgpt_workspace_id,
             codex_streamlined_login: false,
             cli_auth_credentials_store_mode,
-            configured_auth_store: None,
         }
-    }
-
-    /// Overrides first-party ChatGPT credential persistence for this login flow.
-    pub fn with_configured_auth_store(
-        mut self,
-        configured_auth_store: Arc<dyn AuthCredentialStore>,
-    ) -> Self {
-        self.configured_auth_store = Some(configured_auth_store);
-        self
-    }
-
-    pub(crate) fn configured_auth_store(&self) -> Arc<dyn AuthCredentialStore> {
-        self.configured_auth_store.clone().unwrap_or_else(|| {
-            AuthStores::local(
-                self.codex_home.clone(),
-                self.cli_auth_credentials_store_mode,
-            )
-            .configured
-        })
-    }
-}
-
-impl Debug for ServerOptions {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ServerOptions")
-            .field("codex_home", &self.codex_home)
-            .field("client_id", &self.client_id)
-            .field("issuer", &self.issuer)
-            .field("port", &self.port)
-            .field("open_browser", &self.open_browser)
-            .field("force_state", &self.force_state)
-            .field(
-                "forced_chatgpt_workspace_id",
-                &self.forced_chatgpt_workspace_id,
-            )
-            .field("codex_streamlined_login", &self.codex_streamlined_login)
-            .field(
-                "cli_auth_credentials_store_mode",
-                &self.cli_auth_credentials_store_mode,
-            )
-            .field(
-                "has_configured_auth_store",
-                &self.configured_auth_store.is_some(),
-            )
-            .finish()
     }
 }
 
@@ -186,6 +138,21 @@ impl ShutdownHandle {
 
 /// Starts a local callback server and returns the browser auth URL.
 pub fn run_login_server(opts: ServerOptions) -> io::Result<LoginServer> {
+    run_login_server_with_optional_configured_auth_store(opts, /*configured_auth_store*/ None)
+}
+
+/// Starts a local callback server that persists managed auth into the provided store.
+pub fn run_login_server_with_configured_auth_store(
+    opts: ServerOptions,
+    configured_auth_store: Arc<dyn AuthCredentialStore>,
+) -> io::Result<LoginServer> {
+    run_login_server_with_optional_configured_auth_store(opts, Some(configured_auth_store))
+}
+
+fn run_login_server_with_optional_configured_auth_store(
+    opts: ServerOptions,
+    configured_auth_store: Option<Arc<dyn AuthCredentialStore>>,
+) -> io::Result<LoginServer> {
     let pkce = generate_pkce();
     let state = opts.force_state.clone().unwrap_or_else(generate_state);
 
@@ -249,8 +216,16 @@ pub fn run_login_server(opts: ServerOptions) -> io::Result<LoginServer> {
                         };
 
                         let url_raw = req.url().to_string();
-                        let response =
-                            process_request(&url_raw, &opts, &redirect_uri, &pkce, actual_port, &state).await;
+                        let response = process_request(
+                            &url_raw,
+                            &opts,
+                            configured_auth_store.as_ref().map(Arc::clone),
+                            &redirect_uri,
+                            &pkce,
+                            actual_port,
+                            &state,
+                        )
+                        .await;
 
                         let exit_result = match response {
                             HandledRequest::Response(response) => {
@@ -311,6 +286,7 @@ enum HandledRequest {
 async fn process_request(
     url_raw: &str,
     opts: &ServerOptions,
+    configured_auth_store: Option<Arc<dyn AuthCredentialStore>>,
     redirect_uri: &str,
     pkce: &PkceCodes,
     actual_port: u16,
@@ -404,7 +380,7 @@ async fn process_request(
                         .await
                         .ok();
                     if let Err(err) = persist_tokens_to_store_async(
-                        opts.configured_auth_store(),
+                        configured_auth_store_for_options(opts, configured_auth_store),
                         api_key.clone(),
                         tokens.id_token.clone(),
                         tokens.access_token.clone(),
@@ -851,6 +827,19 @@ pub(crate) async fn persist_tokens_async(
     .await
 }
 
+pub(crate) fn configured_auth_store_for_options(
+    opts: &ServerOptions,
+    configured_auth_store: Option<Arc<dyn AuthCredentialStore>>,
+) -> Arc<dyn AuthCredentialStore> {
+    configured_auth_store.unwrap_or_else(|| {
+        AuthStores::local(
+            opts.codex_home.clone(),
+            opts.cli_auth_credentials_store_mode,
+        )
+        .configured
+    })
+}
+
 pub(crate) async fn persist_tokens_to_store_async(
     configured_auth_store: Arc<dyn AuthCredentialStore>,
     api_key: Option<String>,
@@ -1282,16 +1271,8 @@ mod tests {
     async fn configured_auth_store_overrides_local_login_persistence() -> anyhow::Result<()> {
         let codex_home = tempdir()?;
         let configured = Arc::new(FakeAuthCredentialStore::default());
-        let opts = super::ServerOptions::new(
-            codex_home.path().to_path_buf(),
-            "client-id".to_string(),
-            /*forced_chatgpt_workspace_id*/ None,
-            AuthCredentialsStoreMode::File,
-        )
-        .with_configured_auth_store(configured.clone());
-
         persist_tokens_to_store_async(
-            opts.configured_auth_store(),
+            configured.clone(),
             /*api_key*/ None,
             jwt_for_account("new-account"),
             "new-access".to_string(),

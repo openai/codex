@@ -3,9 +3,11 @@ use serde::Deserialize;
 use serde::Serialize;
 use serde::de::Deserializer;
 use serde::de::{self};
+use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
+use crate::auth::AuthCredentialStore;
 use crate::pkce::PkceCodes;
 use crate::server::ServerOptions;
 use codex_client::build_reqwest_client_with_custom_ca;
@@ -174,6 +176,33 @@ pub async fn complete_device_code_login(
     opts: ServerOptions,
     device_code: DeviceCode,
 ) -> std::io::Result<()> {
+    complete_device_code_login_with_optional_configured_auth_store(
+        opts,
+        device_code,
+        /*configured_auth_store*/ None,
+    )
+    .await
+}
+
+/// Completes device-code login and persists managed auth into the provided store.
+pub async fn complete_device_code_login_with_configured_auth_store(
+    opts: ServerOptions,
+    device_code: DeviceCode,
+    configured_auth_store: Arc<dyn AuthCredentialStore>,
+) -> std::io::Result<()> {
+    complete_device_code_login_with_optional_configured_auth_store(
+        opts,
+        device_code,
+        Some(configured_auth_store),
+    )
+    .await
+}
+
+async fn complete_device_code_login_with_optional_configured_auth_store(
+    opts: ServerOptions,
+    device_code: DeviceCode,
+    configured_auth_store: Option<Arc<dyn AuthCredentialStore>>,
+) -> std::io::Result<()> {
     let client = build_reqwest_client_with_custom_ca(reqwest::Client::builder())?;
     let base_url = opts.issuer.trim_end_matches('/');
     let api_base_url = format!("{base_url}/api/accounts");
@@ -211,7 +240,7 @@ pub async fn complete_device_code_login(
     }
 
     crate::server::persist_tokens_to_store_async(
-        opts.configured_auth_store(),
+        crate::server::configured_auth_store_for_options(&opts, configured_auth_store),
         /*api_key*/ None,
         tokens.id_token,
         tokens.access_token,
