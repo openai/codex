@@ -44,6 +44,17 @@ impl ExecServerClient {
                 })
                 .await
             }
+            crate::client_api::ExecServerTransportParams::NoiseRendezvous { provider } => {
+                let args = provider.connect_args().await?;
+                // Keep the configured environment and the freshly authorized
+                // bundle bound together before opening the websocket.
+                if args.bundle.environment_id != provider.environment_id() {
+                    return Err(ExecServerError::Protocol(
+                        "Noise rendezvous provider returned a different environment id".to_string(),
+                    ));
+                }
+                Self::connect_noise_rendezvous(args).await
+            }
             crate::client_api::ExecServerTransportParams::StdioCommand {
                 command,
                 initialize_timeout,

@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 
 use futures::future::BoxFuture;
@@ -88,6 +89,23 @@ impl std::fmt::Debug for NoiseRendezvousConnectArgs {
     }
 }
 
+/// Supplies fresh registry-authorized material for Noise rendezvous connections.
+///
+/// Implementations preserve one endpoint-local harness identity while fetching
+/// a fresh atomic connect bundle for every physical connection attempt. A
+/// failed secure connection must remain a failure; providers must not fall back
+/// to an unauthenticated transport.
+pub trait NoiseRendezvousConnectProvider: Send + Sync {
+    /// Environment ID this provider is authorized to connect to.
+    fn environment_id(&self) -> &str;
+
+    /// Returns fresh arguments for one physical connection attempt.
+    fn connect_args(&self) -> BoxFuture<'_, Result<NoiseRendezvousConnectArgs, ExecServerError>>;
+}
+
+/// Shared provider used by reconnect-capable remote environments.
+pub type SharedNoiseRendezvousConnectProvider = Arc<dyn NoiseRendezvousConnectProvider>;
+
 /// Stdio connection arguments for a command-backed exec-server.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct StdioExecServerConnectArgs {
@@ -107,18 +125,50 @@ pub(crate) struct StdioExecServerCommand {
 }
 
 /// Parameters used to connect to a remote exec-server environment.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone)]
 pub(crate) enum ExecServerTransportParams {
     WebSocketUrl {
         websocket_url: String,
         connect_timeout: Duration,
         initialize_timeout: Duration,
     },
+    NoiseRendezvous {
+        provider: SharedNoiseRendezvousConnectProvider,
+    },
     #[allow(dead_code)]
     StdioCommand {
         command: StdioExecServerCommand,
         initialize_timeout: Duration,
     },
+}
+
+impl std::fmt::Debug for ExecServerTransportParams {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::WebSocketUrl {
+                websocket_url,
+                connect_timeout,
+                initialize_timeout,
+            } => f
+                .debug_struct("WebSocketUrl")
+                .field("websocket_url", websocket_url)
+                .field("connect_timeout", connect_timeout)
+                .field("initialize_timeout", initialize_timeout)
+                .finish(),
+            Self::NoiseRendezvous { provider } => f
+                .debug_struct("NoiseRendezvous")
+                .field("environment_id", &provider.environment_id())
+                .finish(),
+            Self::StdioCommand {
+                command,
+                initialize_timeout,
+            } => f
+                .debug_struct("StdioCommand")
+                .field("command", command)
+                .field("initialize_timeout", initialize_timeout)
+                .finish(),
+        }
+    }
 }
 
 impl ExecServerTransportParams {
