@@ -74,6 +74,7 @@ use sandbox_users::provision_sandbox_users;
 use sandbox_users::resolve_sandbox_users_group_sid;
 use sandbox_users::resolve_sid;
 use sandbox_users::sid_bytes_to_psid;
+use sandbox_users::write_setup_marker;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 struct Payload {
@@ -447,7 +448,36 @@ fn real_main() -> Result<()> {
             format!("open log in {} failed", sbx_dir.display()),
         ))
     })?;
-    let result = run_setup(&payload, &mut log, &sbx_dir);
+    let writes_setup_marker = !payload.refresh_only && payload.mode != SetupMode::ReadAclsOnly;
+    let result = (|| {
+        if writes_setup_marker {
+            let marker_path = sbx_dir.join("setup_marker.json");
+            match std::fs::remove_file(&marker_path) {
+                Ok(()) => {}
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                Err(err) => {
+                    return Err(anyhow::Error::new(SetupFailure::new(
+                        SetupErrorCode::HelperSetupMarkerWriteFailed,
+                        format!(
+                            "remove setup marker file {} failed: {err}",
+                            marker_path.display()
+                        ),
+                    )));
+                }
+            }
+        }
+        run_setup(&payload, &mut log, &sbx_dir)?;
+        if writes_setup_marker {
+            write_setup_marker(
+                &payload.codex_home,
+                &payload.offline_username,
+                &payload.online_username,
+                &payload.proxy_ports,
+                payload.allow_local_binding,
+            )?;
+        }
+        Ok(())
+    })();
     if let Err(err) = &result {
         let _ = log_line(&mut log, &format!("setup error: {err:?}"));
         log_note(&format!("setup error: {err:?}"), Some(sbx_dir.as_path()));
@@ -554,8 +584,6 @@ fn provision_and_hide_sandbox_users(
         &payload.codex_home,
         &payload.offline_username,
         &payload.online_username,
-        &payload.proxy_ports,
-        payload.allow_local_binding,
         log,
     );
     if let Err(err) = provision_result {

@@ -61,8 +61,6 @@ pub fn provision_sandbox_users(
     codex_home: &Path,
     offline_username: &str,
     online_username: &str,
-    proxy_ports: &[u16],
-    allow_local_binding: bool,
     log: &mut dyn Write,
 ) -> Result<()> {
     ensure_sandbox_users_group(log)?;
@@ -80,8 +78,6 @@ pub fn provision_sandbox_users(
         &offline_password,
         online_username,
         &online_password,
-        proxy_ports,
-        allow_local_binding,
     )?;
     Ok(())
 }
@@ -402,19 +398,7 @@ fn write_secrets(
     offline_pwd: &str,
     online_user: &str,
     online_pwd: &str,
-    proxy_ports: &[u16],
-    allow_local_binding: bool,
 ) -> Result<()> {
-    let sandbox_dir = sandbox_dir(codex_home);
-    std::fs::create_dir_all(&sandbox_dir).map_err(|err| {
-        anyhow::Error::new(SetupFailure::new(
-            SetupErrorCode::HelperUsersFileWriteFailed,
-            format!(
-                "failed to create sandbox dir {}: {err}",
-                sandbox_dir.display()
-            ),
-        ))
-    })?;
     let secrets_dir = sandbox_secrets_dir(codex_home);
     std::fs::create_dir_all(&secrets_dir).map_err(|err| {
         anyhow::Error::new(SetupFailure::new(
@@ -448,18 +432,7 @@ fn write_secrets(
             password: BASE64.encode(online_blob),
         },
     };
-    let marker = SetupMarker {
-        version: SETUP_VERSION,
-        offline_username: offline_user.to_string(),
-        online_username: online_user.to_string(),
-        created_at: chrono::Utc::now().to_rfc3339(),
-        proxy_ports: proxy_ports.to_vec(),
-        allow_local_binding,
-        read_roots: Vec::new(),
-        write_roots: Vec::new(),
-    };
     let users_path = secrets_dir.join("sandbox_users.json");
-    let marker_path = sandbox_dir.join("setup_marker.json");
     let users_json = serde_json::to_vec_pretty(&users).map_err(|err| {
         anyhow::Error::new(SetupFailure::new(
             SetupErrorCode::HelperUsersFileWriteFailed,
@@ -475,6 +448,27 @@ fn write_secrets(
             ),
         ))
     })?;
+    Ok(())
+}
+
+pub(super) fn write_setup_marker(
+    codex_home: &Path,
+    offline_user: &str,
+    online_user: &str,
+    proxy_ports: &[u16],
+    allow_local_binding: bool,
+) -> Result<()> {
+    let marker = SetupMarker {
+        version: SETUP_VERSION,
+        offline_username: offline_user.to_string(),
+        online_username: online_user.to_string(),
+        created_at: chrono::Utc::now().to_rfc3339(),
+        proxy_ports: proxy_ports.to_vec(),
+        allow_local_binding,
+        read_roots: Vec::new(),
+        write_roots: Vec::new(),
+    };
+    let marker_path = sandbox_dir(codex_home).join("setup_marker.json");
     let marker_json = serde_json::to_vec_pretty(&marker).map_err(|err| {
         anyhow::Error::new(SetupFailure::new(
             SetupErrorCode::HelperSetupMarkerWriteFailed,
