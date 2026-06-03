@@ -26,6 +26,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 pub use codex_app_server::AppServerRuntimeStorageDeps;
+pub use codex_app_server::ArtifactStore;
+pub use codex_app_server::LocalArtifactStore;
+pub use codex_app_server::LocalShellSnapshotStore;
+pub use codex_app_server::ShellSnapshotStore;
 pub use codex_app_server::app_server_control_socket_path;
 pub use codex_app_server::in_process::DEFAULT_IN_PROCESS_CHANNEL_CAPACITY;
 pub use codex_app_server::in_process::InProcessServerEvent;
