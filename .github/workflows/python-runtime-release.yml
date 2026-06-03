@@ -19,8 +19,8 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # PyPI project configuration must trust this workflow and job for manual
-  # runtime-only publication. SDK releases call this workflow before building.
+  # PyPI must trust this workflow for manual runtime-only publication and
+  # python-sdk-release.yml when that workflow calls this one before SDK builds.
   publish-python-runtime:
     if: github.repository == 'openai/codex'
     name: publish-python-runtime
