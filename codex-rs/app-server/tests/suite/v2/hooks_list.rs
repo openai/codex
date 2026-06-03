@@ -66,6 +66,34 @@ fn command_hook_hash(
     codex_config::version_for_toml(&value)
 }
 
+fn prompt_hook_hash(
+    event_name: &'static str,
+    matcher: Option<&str>,
+    prompt: &str,
+    model: Option<&str>,
+    timeout_sec: u64,
+    status_message: Option<&str>,
+    continue_on_block: bool,
+) -> String {
+    let identity = NormalizedHookIdentity {
+        event_name,
+        group: codex_config::MatcherGroup {
+            matcher: matcher.map(ToOwned::to_owned),
+            hooks: vec![codex_config::HookHandlerConfig::Prompt {
+                prompt: prompt.to_string(),
+                model: model.map(ToOwned::to_owned),
+                timeout_sec: Some(timeout_sec),
+                status_message: status_message.map(ToOwned::to_owned),
+                continue_on_block,
+            }],
+        },
+    };
+    let Ok(value) = codex_config::TomlValue::try_from(identity) else {
+        unreachable!("normalized hook identity should serialize to TOML");
+    };
+    codex_config::version_for_toml(&value)
+}
+
 fn write_user_hook_config(codex_home: &std::path::Path) -> Result<()> {
     std::fs::write(
         codex_home.join("config.toml"),
@@ -162,6 +190,9 @@ async fn hooks_list_shows_discovered_hook() -> Result<()> {
                 handler_type: HookHandlerType::Command,
                 matcher: Some("Bash".to_string()),
                 command: Some("python3 /tmp/listed-hook.py".to_string()),
+                prompt: None,
+                model: None,
+                continue_on_block: None,
                 timeout_sec: 5,
                 status_message: Some("running listed hook".to_string()),
                 source_path: config_path,
@@ -187,7 +218,7 @@ async fn hooks_list_shows_discovered_hook() -> Result<()> {
 }
 
 #[tokio::test]
-async fn hooks_list_shows_discovered_plugin_hook() -> Result<()> {
+async fn hooks_list_shows_discovered_plugin_hooks() -> Result<()> {
     let codex_home = TempDir::new()?;
     let cwd = TempDir::new()?;
     write_plugin_hook_config(
@@ -203,6 +234,20 @@ async fn hooks_list_shows_discovered_plugin_hook() -> Result<()> {
             "command": "echo plugin hook",
             "timeout": 7,
             "statusMessage": "running plugin hook"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "prompt",
+            "prompt": "Reject prompts that mention secrets: $ARGUMENTS",
+            "model": "gpt-5-mini",
+            "timeout": 30,
+            "statusMessage": "checking prompt",
+            "continueOnBlock": true
           }
         ]
       }
@@ -234,29 +279,62 @@ async fn hooks_list_shows_discovered_plugin_hook() -> Result<()> {
         data,
         vec![HooksListEntry {
             cwd: cwd.path().to_path_buf(),
-            hooks: vec![HookMetadata {
-                key: "demo@test:hooks/hooks.json:pre_tool_use:0:0".to_string(),
-                event_name: HookEventName::PreToolUse,
-                handler_type: HookHandlerType::Command,
-                matcher: Some("Bash".to_string()),
-                command: Some("echo plugin hook".to_string()),
-                timeout_sec: 7,
-                status_message: Some("running plugin hook".to_string()),
-                source_path: plugin_hooks_path,
-                source: HookSource::Plugin,
-                plugin_id: Some("demo@test".to_string()),
-                display_order: 0,
-                enabled: true,
-                is_managed: false,
-                current_hash: command_hook_hash(
-                    "pre_tool_use",
-                    Some("Bash"),
-                    "echo plugin hook",
-                    /*timeout_sec*/ 7,
-                    Some("running plugin hook"),
-                ),
-                trust_status: HookTrustStatus::Untrusted,
-            }],
+            hooks: vec![
+                HookMetadata {
+                    key: "demo@test:hooks/hooks.json:pre_tool_use:0:0".to_string(),
+                    event_name: HookEventName::PreToolUse,
+                    handler_type: HookHandlerType::Command,
+                    matcher: Some("Bash".to_string()),
+                    command: Some("echo plugin hook".to_string()),
+                    prompt: None,
+                    model: None,
+                    continue_on_block: None,
+                    timeout_sec: 7,
+                    status_message: Some("running plugin hook".to_string()),
+                    source_path: plugin_hooks_path.clone(),
+                    source: HookSource::Plugin,
+                    plugin_id: Some("demo@test".to_string()),
+                    display_order: 0,
+                    enabled: true,
+                    is_managed: false,
+                    current_hash: command_hook_hash(
+                        "pre_tool_use",
+                        Some("Bash"),
+                        "echo plugin hook",
+                        /*timeout_sec*/ 7,
+                        Some("running plugin hook"),
+                    ),
+                    trust_status: HookTrustStatus::Untrusted,
+                },
+                HookMetadata {
+                    key: "demo@test:hooks/hooks.json:user_prompt_submit:0:0".to_string(),
+                    event_name: HookEventName::UserPromptSubmit,
+                    handler_type: HookHandlerType::Prompt,
+                    matcher: None,
+                    command: None,
+                    prompt: Some("Reject prompts that mention secrets: $ARGUMENTS".to_string()),
+                    model: Some("gpt-5-mini".to_string()),
+                    continue_on_block: Some(true),
+                    timeout_sec: 30,
+                    status_message: Some("checking prompt".to_string()),
+                    source_path: plugin_hooks_path,
+                    source: HookSource::Plugin,
+                    plugin_id: Some("demo@test".to_string()),
+                    display_order: 1,
+                    enabled: true,
+                    is_managed: false,
+                    current_hash: prompt_hook_hash(
+                        "user_prompt_submit",
+                        /*matcher*/ None,
+                        "Reject prompts that mention secrets: $ARGUMENTS",
+                        Some("gpt-5-mini"),
+                        /*timeout_sec*/ 30,
+                        Some("checking prompt"),
+                        /*continue_on_block*/ true,
+                    ),
+                    trust_status: HookTrustStatus::Untrusted,
+                },
+            ],
             warnings: Vec::new(),
             errors: Vec::new(),
         }]
@@ -365,6 +443,9 @@ timeout = 5
                     handler_type: HookHandlerType::Command,
                     matcher: Some("Bash".to_string()),
                     command: Some("echo project hook".to_string()),
+                    prompt: None,
+                    model: None,
+                    continue_on_block: None,
                     timeout_sec: 5,
                     status_message: None,
                     source_path: project_config_path,

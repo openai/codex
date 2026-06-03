@@ -1,0 +1,20 @@
+---
+source: tui/src/bottom_pane/hooks_browser_view.rs
+expression: "render_lines(&view, 112)"
+---
+                                                                                                                
+  PostToolUse hooks                                                                                             
+  Turn hooks on or off. Your changes are saved automatically.                                                   
+                                                                                                                
+  [x] Hook 1                                                                                                    
+                                                                                                                
+  Event     PostToolUse                                                                                         
+  Matcher   Bash                                                                                                
+  Source    User config - /tmp/hooks.json                                                                       
+  Prompt    Reject prompts that mention secrets: $ARGUMENTS                                                     
+  Model     gpt-5.1                                                                                             
+  On block  continue                                                                                            
+  Timeout   30s                                                                                                 
+  Trust     Trusted                                                                                             
+                                                                                                                
+  Press space or enter to toggle; esc to go back

@@ -1,4 +1,5 @@
 use codex_app_server_protocol::HookEventName;
+use codex_app_server_protocol::HookHandlerType;
 use codex_app_server_protocol::HookMetadata;
 use codex_app_server_protocol::HookSource;
 use codex_app_server_protocol::HookTrustStatus;
@@ -38,7 +39,7 @@ use crate::style::accent_style;
 
 const EVENT_COLUMN_WIDTH: usize = 22;
 const COUNT_COLUMN_WIDTH: usize = 12;
-const MAX_COMMAND_DETAIL_LINES: usize = 3;
+const MAX_HANDLER_DEFINITION_DETAIL_LINES: usize = 3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum HooksBrowserPage {
@@ -485,12 +486,27 @@ impl HooksBrowserView {
             width,
             /*max_lines*/ None,
         ));
+        let (definition_label, definition) = hook_definition(hook);
         lines.extend(detail_wrapped_lines(
-            "Command",
-            hook.command.as_deref().unwrap_or("-"),
+            definition_label,
+            definition,
             width,
-            Some(MAX_COMMAND_DETAIL_LINES),
+            Some(MAX_HANDLER_DEFINITION_DETAIL_LINES),
         ));
+        if hook.handler_type == HookHandlerType::Prompt {
+            lines.push(detail_line(
+                "Model",
+                hook.model.as_deref().unwrap_or("default"),
+            ));
+            lines.push(detail_line(
+                "On block",
+                if hook.continue_on_block.unwrap_or(false) {
+                    "continue"
+                } else {
+                    "stop"
+                },
+            ));
+        }
         lines.push(detail_line("Timeout", &format!("{}s", hook.timeout_sec)));
         lines.push(detail_line("Trust", hook_trust_label(hook.trust_status)));
         lines
@@ -727,6 +743,14 @@ fn hook_trust_label(status: HookTrustStatus) -> &'static str {
     }
 }
 
+fn hook_definition(hook: &HookMetadata) -> (&'static str, &str) {
+    match hook.handler_type {
+        HookHandlerType::Command => ("Command", hook.command.as_deref().unwrap_or("-")),
+        HookHandlerType::Prompt => ("Prompt", hook.prompt.as_deref().unwrap_or("-")),
+        HookHandlerType::Agent => ("Agent", "-"),
+    }
+}
+
 fn event_label(event_name: HookEventName) -> &'static str {
     match event_name {
         HookEventName::PreToolUse => "PreToolUse",
@@ -932,6 +956,9 @@ mod tests {
             is_managed,
             matcher: Some("Bash".to_string()),
             command: Some(command.to_string()),
+            prompt: None,
+            model: None,
+            continue_on_block: None,
             timeout_sec: 30,
             status_message: None,
             source_path: test_path_buf("/tmp/hooks.json").abs(),
@@ -1264,6 +1291,41 @@ mod tests {
         assert_snapshot!(
             "hooks_browser_capped_command_details",
             render_lines(&view, /*width*/ 44)
+        );
+    }
+
+    #[test]
+    fn renders_prompt_hook_definition() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let mut prompt_hook = hook(
+            "path:prompt-hook",
+            HookEventName::PostToolUse,
+            HookSource::User,
+            /*plugin_id*/ None,
+            /*command*/ "",
+            /*enabled*/ true,
+            /*is_managed*/ false,
+            /*display_order*/ 0,
+        );
+        prompt_hook.handler_type = HookHandlerType::Prompt;
+        prompt_hook.command = None;
+        prompt_hook.prompt = Some("Reject prompts that mention secrets: $ARGUMENTS".to_string());
+        prompt_hook.model = Some("gpt-5.1".to_string());
+        prompt_hook.continue_on_block = Some(true);
+        let mut view = HooksBrowserView::new(
+            vec![prompt_hook],
+            Vec::new(),
+            Vec::new(),
+            AppEventSender::new(tx_raw),
+        );
+        view.state.selected_idx = view
+            .event_rows()
+            .iter()
+            .position(|row| row.event_name == HookEventName::PostToolUse);
+        view.handle_key_event(KeyEvent::from(KeyCode::Enter));
+        assert_snapshot!(
+            "hooks_browser_prompt_hook_definition",
+            render_lines(&view, /*width*/ 112)
         );
     }
 
