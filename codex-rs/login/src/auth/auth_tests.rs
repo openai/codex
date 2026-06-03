@@ -3,6 +3,8 @@ use crate::auth::storage::FileAuthStorage;
 use crate::auth::storage::get_auth_file;
 use crate::token_data::IdTokenInfo;
 use codex_app_server_protocol::AuthMode;
+use codex_http_state::HttpStateStore;
+use codex_http_state::HttpStateSurface;
 use codex_protocol::account::PlanType as AccountPlanType;
 use codex_protocol::auth::KnownPlan as InternalKnownPlan;
 use codex_protocol::auth::PlanType as InternalPlanType;
@@ -791,6 +793,10 @@ async fn enforce_login_restrictions_logs_out_for_method_mismatch() {
     let _access_token_guard = remove_access_token_env_var();
     login_with_api_key(codex_home.path(), "sk-test", AuthCredentialsStoreMode::File)
         .expect("seed api key");
+    let http_state = HttpStateStore::new(codex_home.path().to_path_buf());
+    http_state
+        .set(HttpStateSurface::CodexTui, "stale-state".to_string())
+        .expect("seed TUI state");
 
     let config = build_config(
         codex_home.path(),
@@ -806,6 +812,12 @@ async fn enforce_login_restrictions_logs_out_for_method_mismatch() {
     assert!(
         !codex_home.path().join("auth.json").exists(),
         "auth.json should be removed on mismatch"
+    );
+    assert_eq!(
+        http_state
+            .get(HttpStateSurface::CodexTui)
+            .expect("TUI state should load"),
+        None,
     );
 }
 

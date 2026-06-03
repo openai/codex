@@ -1300,7 +1300,7 @@ impl MessageProcessor {
             }
             ClientRequest::LogoutAccount { .. } => {
                 self.account_processor
-                    .logout_account(request_id.clone(), app_server_client_name.as_deref())
+                    .logout_account(request_id.clone())
                     .await
             }
             ClientRequest::CancelLoginAccount { params, .. } => {

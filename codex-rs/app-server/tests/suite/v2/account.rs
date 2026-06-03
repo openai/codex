@@ -217,6 +217,7 @@ async fn logout_account_removes_auth_and_notifies() -> Result<()> {
         HttpStateSurface::CodexDesktopSsh,
         INTEGRITY_STATE.to_string(),
     )?;
+    http_state.set(HttpStateSurface::CodexCli, INTEGRITY_STATE.to_string())?;
     assert!(codex_home.path().join("auth.json").exists());
 
     let mut mcp =
@@ -256,6 +257,7 @@ async fn logout_account_removes_auth_and_notifies() -> Result<()> {
         "auth.json should be deleted"
     );
     assert_eq!(http_state.get(HttpStateSurface::CodexDesktopSsh)?, None);
+    assert_eq!(http_state.get(HttpStateSurface::CodexCli)?, None);
 
     let get_id = mcp
         .send_get_account_request(GetAccountParams {
@@ -942,6 +944,7 @@ async fn login_account_api_key_succeeds_and_notifies() -> Result<()> {
         HttpStateSurface::CodexDesktopSsh,
         INTEGRITY_STATE.to_string(),
     )?;
+    http_state.set(HttpStateSurface::CodexCli, INTEGRITY_STATE.to_string())?;
     let mut mcp = TestAppServer::new(codex_home.path()).await?;
     let initialized = timeout(
         DEFAULT_READ_TIMEOUT,
@@ -988,6 +991,7 @@ async fn login_account_api_key_succeeds_and_notifies() -> Result<()> {
 
     assert!(codex_home.path().join("auth.json").exists());
     assert_eq!(http_state.get(HttpStateSurface::CodexDesktopSsh)?, None);
+    assert_eq!(http_state.get(HttpStateSurface::CodexCli)?, None);
     Ok(())
 }
 

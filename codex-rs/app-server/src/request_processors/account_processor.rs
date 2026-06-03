@@ -100,11 +100,8 @@ impl AccountRequestProcessor {
     pub(crate) async fn logout_account(
         &self,
         request_id: ConnectionRequestId,
-        app_server_client_name: Option<&str>,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.logout_v2(request_id, Self::http_state_surface(app_server_client_name))
-            .await
-            .map(|()| None)
+        self.logout_v2(request_id).await.map(|()| None)
     }
 
     pub(crate) async fn cancel_login_account(
@@ -229,12 +226,8 @@ impl AccountRequestProcessor {
     ) -> Result<(), JSONRPCErrorError> {
         match params {
             LoginAccountParams::ApiKey { api_key } => {
-                self.login_api_key_v2(
-                    request_id,
-                    LoginApiKeyParams { api_key },
-                    http_state_surface,
-                )
-                .await;
+                self.login_api_key_v2(request_id, LoginApiKeyParams { api_key })
+                    .await;
             }
             LoginAccountParams::Chatgpt {
                 codex_streamlined_login,
@@ -256,7 +249,6 @@ impl AccountRequestProcessor {
                     access_token,
                     chatgpt_account_id,
                     chatgpt_plan_type,
-                    http_state_surface,
                 )
                 .await;
             }
@@ -273,7 +265,6 @@ impl AccountRequestProcessor {
     async fn login_api_key_common(
         &self,
         params: &LoginApiKeyParams,
-        http_state_surface: HttpStateSurface,
     ) -> std::result::Result<(), JSONRPCErrorError> {
         if self.auth_manager.is_external_chatgpt_auth_active() {
             return Err(self.external_auth_active_error());
@@ -296,11 +287,10 @@ impl AccountRequestProcessor {
             }
         }
 
-        match login_with_api_key_for_surface(
+        match login_with_api_key(
             &self.config.codex_home,
             &params.api_key,
             self.config.cli_auth_credentials_store_mode,
-            http_state_surface,
         ) {
             Ok(()) => {
                 self.auth_manager.reload().await;
@@ -310,14 +300,9 @@ impl AccountRequestProcessor {
         }
     }
 
-    async fn login_api_key_v2(
-        &self,
-        request_id: ConnectionRequestId,
-        params: LoginApiKeyParams,
-        http_state_surface: HttpStateSurface,
-    ) {
+    async fn login_api_key_v2(&self, request_id: ConnectionRequestId, params: LoginApiKeyParams) {
         let result = self
-            .login_api_key_common(&params, http_state_surface)
+            .login_api_key_common(&params)
             .await
             .map(|()| LoginAccountResponse::ApiKey {});
         let logged_in = result.is_ok();
@@ -578,15 +563,9 @@ impl AccountRequestProcessor {
         access_token: String,
         chatgpt_account_id: String,
         chatgpt_plan_type: Option<String>,
-        http_state_surface: HttpStateSurface,
     ) {
         let result = self
-            .login_chatgpt_auth_tokens_response(
-                access_token,
-                chatgpt_account_id,
-                chatgpt_plan_type,
-                http_state_surface,
-            )
+            .login_chatgpt_auth_tokens_response(access_token, chatgpt_account_id, chatgpt_plan_type)
             .await;
         let logged_in = result.is_ok();
         self.outgoing.send_result(request_id, result).await;
@@ -602,7 +581,6 @@ impl AccountRequestProcessor {
         access_token: String,
         chatgpt_account_id: String,
         chatgpt_plan_type: Option<String>,
-        http_state_surface: HttpStateSurface,
     ) -> Result<LoginAccountResponse, JSONRPCErrorError> {
         if matches!(
             self.config.forced_login_method,
@@ -629,12 +607,11 @@ impl AccountRequestProcessor {
             )));
         }
 
-        login_with_chatgpt_auth_tokens_for_surface(
+        login_with_chatgpt_auth_tokens(
             &self.config.codex_home,
             &access_token,
             &chatgpt_account_id,
             chatgpt_plan_type.as_deref(),
-            http_state_surface,
         )
         .map_err(|err| internal_error(format!("failed to set external auth: {err}")))?;
         self.auth_manager.reload().await;
@@ -719,10 +696,7 @@ impl AccountRequestProcessor {
         }
     }
 
-    async fn logout_common(
-        &self,
-        http_state_surface: HttpStateSurface,
-    ) -> std::result::Result<Option<AuthMode>, JSONRPCErrorError> {
+    async fn logout_common(&self) -> std::result::Result<Option<AuthMode>, JSONRPCErrorError> {
         // Cancel any active login attempt.
         {
             let mut guard = self.active_login.lock().await;
@@ -731,11 +705,7 @@ impl AccountRequestProcessor {
             }
         }
 
-        match self
-            .auth_manager
-            .logout_with_revoke_for_surface(http_state_surface)
-            .await
-        {
+        match self.auth_manager.logout_with_revoke().await {
             Ok(_) => {}
             Err(err) => {
                 return Err(internal_error(format!("logout failed: {err}")));
@@ -757,12 +727,8 @@ impl AccountRequestProcessor {
             .map(CodexAuth::api_auth_mode))
     }
 
-    async fn logout_v2(
-        &self,
-        request_id: ConnectionRequestId,
-        http_state_surface: HttpStateSurface,
-    ) -> Result<(), JSONRPCErrorError> {
-        let result = self.logout_common(http_state_surface).await;
+    async fn logout_v2(&self, request_id: ConnectionRequestId) -> Result<(), JSONRPCErrorError> {
+        let result = self.logout_common().await;
         let account_updated =
             result
                 .as_ref()
