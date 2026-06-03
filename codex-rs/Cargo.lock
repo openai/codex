@@ -3127,6 +3127,7 @@ dependencies = [
  "codex-app-server-protocol",
  "codex-client",
  "codex-config",
+ "codex-http-state",
  "codex-keyring-store",
  "codex-model-provider-info",
  "codex-otel",

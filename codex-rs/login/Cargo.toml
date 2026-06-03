@@ -15,6 +15,7 @@ codex-agent-identity = { workspace = true }
 codex-app-server-protocol = { workspace = true }
 codex-client = { workspace = true }
 codex-config = { workspace = true }
+codex-http-state = { workspace = true }
 codex-keyring-store = { workspace = true }
 codex-model-provider-info = { workspace = true }
 codex-otel = { workspace = true }

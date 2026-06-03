@@ -3,6 +3,7 @@ pub mod auth_env_telemetry;
 pub mod token_data;
 
 mod device_code_auth;
+mod http_state;
 mod pkce;
 mod server;
 
@@ -40,6 +41,7 @@ pub use auth::enforce_login_restrictions;
 pub use auth::load_auth_dot_json;
 pub use auth::login_with_access_token;
 pub use auth::login_with_api_key;
+pub use auth::login_with_api_key_for_surface;
 pub use auth::logout;
 pub use auth::logout_with_revoke;
 pub use auth::read_codex_access_token_from_env;
