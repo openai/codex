@@ -13,52 +13,7 @@ env:
   CARGO_NET_GIT_FETCH_WITH_CLI: "true"
 
 jobs:
-  validate-signing-secrets:
-    name: Validate Azure signing secrets
-    runs-on: ubuntu-latest
-    environment:
-      name: azure-artifact-signing
-    permissions:
-      contents: read
-    env:
-      AZURE_ARTIFACT_SIGNING_CLIENT_ID: ${{ secrets.AZURE_ARTIFACT_SIGNING_CLIENT_ID }}
-      AZURE_ARTIFACT_SIGNING_TENANT_ID: ${{ secrets.AZURE_ARTIFACT_SIGNING_TENANT_ID }}
-      AZURE_ARTIFACT_SIGNING_SUBSCRIPTION_ID: ${{ secrets.AZURE_ARTIFACT_SIGNING_SUBSCRIPTION_ID }}
-      AZURE_ARTIFACT_SIGNING_ENDPOINT: ${{ secrets.AZURE_ARTIFACT_SIGNING_ENDPOINT }}
-      AZURE_ARTIFACT_SIGNING_ACCOUNT_NAME: ${{ secrets.AZURE_ARTIFACT_SIGNING_ACCOUNT_NAME }}
-      AZURE_ARTIFACT_SIGNING_CERTIFICATE_PROFILE_NAME: ${{ secrets.AZURE_ARTIFACT_SIGNING_CERTIFICATE_PROFILE_NAME }}
-    steps:
-      - name: Validate required Azure signing secrets are available
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          required=(
-            AZURE_ARTIFACT_SIGNING_CLIENT_ID
-            AZURE_ARTIFACT_SIGNING_TENANT_ID
-            AZURE_ARTIFACT_SIGNING_SUBSCRIPTION_ID
-            AZURE_ARTIFACT_SIGNING_ENDPOINT
-            AZURE_ARTIFACT_SIGNING_ACCOUNT_NAME
-            AZURE_ARTIFACT_SIGNING_CERTIFICATE_PROFILE_NAME
-          )
-
-          missing=()
-          for name in "${required[@]}"; do
-            if [[ -z "${!name}" ]]; then
-              missing+=("$name")
-            fi
-          done
-
-          if ((${#missing[@]})); then
-            printf 'Missing required secret: %s\n' "${missing[@]}" >&2
-            exit 1
-          fi
-
-          echo "All required Azure Trusted Signing secrets are available."
-
   build-windows-binaries:
-    # Temporarily disabled while this PR smoke-tests secret access.
-    if: ${{ false }}
     name: Build Windows binaries - ${{ matrix.runner }} - ${{ matrix.target }} - ${{ matrix.bundle }}
     runs-on: ${{ matrix.runs_on }}
     # Windows release builds can exceed an hour on fat-LTO mainline releases,
@@ -178,8 +133,6 @@ jobs:
             codex-rs/target/${{ matrix.target }}/release/staged-${{ matrix.bundle }}/*
 
   build-windows:
-    # Temporarily disabled while this PR smoke-tests secret access.
-    if: ${{ false }}
     needs:
       - build-windows-binaries
     name: Build - ${{ matrix.runner }} - ${{ matrix.target }}

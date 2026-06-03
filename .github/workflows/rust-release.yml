@@ -18,17 +18,8 @@
 name: rust-release
 on:
   push:
-    branches:
-      - dev/shijie/drop-windows-signing-deployment
     tags:
       - "rust-v*.*.*"
-  pull_request:
-    branches:
-      - main
-    paths:
-      - ".github/workflows/rust-release.yml"
-      - ".github/workflows/rust-release-windows.yml"
-      - ".github/actions/windows-code-sign/**"
   workflow_dispatch:
     inputs:
       release_mode:
@@ -58,7 +49,7 @@ on:
         type: string
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.event.number || 'release' }}
+  group: ${{ github.workflow }}
   cancel-in-progress: true
 
 jobs:
@@ -79,12 +70,6 @@ jobs:
         run: |
           set -euo pipefail
           echo "::group::Tag validation"
-
-          if [[ "${GITHUB_EVENT_NAME}" == "pull_request" || "${GITHUB_REF_TYPE}" == "branch" ]]; then
-            echo "PR smoke run; skipping release tag validation."
-            echo "::endgroup::"
-            exit 0
-          fi
 
           case "${RELEASE_MODE}" in
             signed)
@@ -150,8 +135,7 @@ jobs:
           echo "::endgroup::"
 
   build:
-    # Temporarily disabled while this PR smoke-tests the Windows signing flow.
-    if: ${{ false && (github.event_name != 'workflow_dispatch' || inputs.release_mode != 'promote_signed') }}
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.release_mode != 'promote_signed' }}
     needs: tag-check
     name: Build - ${{ matrix.runner }} - ${{ matrix.target }} - ${{ matrix.bundle }}
     runs-on: ${{ matrix.runs_on || matrix.runner }}
@@ -1104,8 +1088,7 @@ jobs:
           if-no-files-found: error
 
   stage-signed-macos:
-    # Temporarily disabled while this PR smoke-tests the Windows signing flow.
-    if: ${{ false && github.event_name == 'workflow_dispatch' && inputs.release_mode == 'promote_signed' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.release_mode == 'promote_signed' }}
     needs: tag-check
     name: Stage signed macOS handoff - ${{ matrix.target }} - ${{ matrix.bundle }}
     runs-on: macos-15-xlarge
@@ -1348,12 +1331,11 @@ jobs:
     needs: tag-check
     uses: ./.github/workflows/rust-release-windows.yml
     with:
-      release-lto: ${{ (github.event_name == 'pull_request' || github.ref_type == 'branch') && 'thin' || (contains(github.ref_name, '-alpha') && 'thin' || 'fat') }}
+      release-lto: ${{ contains(github.ref_name, '-alpha') && 'thin' || 'fat' }}
     secrets: inherit
 
   argument-comment-lint-release-assets:
-    # Temporarily disabled while this PR smoke-tests the Windows signing flow.
-    if: ${{ false && (github.event_name != 'workflow_dispatch' || inputs.release_mode != 'promote_signed') }}
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.release_mode != 'promote_signed' }}
     name: argument-comment-lint release assets
     needs: tag-check
     uses: ./.github/workflows/rust-release-argument-comment-lint.yml
@@ -1361,8 +1343,7 @@ jobs:
       publish: true
 
   zsh-release-assets:
-    # Temporarily disabled while this PR smoke-tests the Windows signing flow.
-    if: ${{ false && (github.event_name != 'workflow_dispatch' || inputs.release_mode != 'promote_signed') }}
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.release_mode != 'promote_signed' }}
     name: zsh release assets
     needs: tag-check
     uses: ./.github/workflows/rust-release-zsh.yml
@@ -1379,7 +1360,6 @@ jobs:
     if: >-
       ${{
         always() &&
-        false &&
         needs.tag-check.result == 'success' &&
         (
           (
@@ -1770,7 +1750,6 @@ jobs:
     # success() check to the whole dependency chain before evaluating release outputs.
     if: >-
       ${{
-        false &&
         !cancelled() &&
         needs.release.result == 'success' &&
         needs.release.outputs.should_publish_npm == 'true'
@@ -1926,54 +1905,6 @@ jobs:
             exit "${publish_status}"
           done
 
-  # Publish the platform-specific Python runtime wheels using PyPI trusted publishing.
-  # PyPI project configuration must trust this workflow and job. Keep this
-  # non-blocking while the Python runtime publishing path is new; failures still
-  # need release follow-up, but should not invalidate the Rust release itself.
-  publish-python-runtime:
-    # Publish to PyPI for stable releases and alpha pre-releases with numeric suffixes.
-    if: >-
-      ${{
-        false &&
-        !cancelled() &&
-        needs.release.result == 'success' &&
-        needs.release.outputs.should_publish_python_runtime == 'true'
-      }}
-    name: publish-python-runtime
-    needs: release
-    runs-on: ubuntu-latest
-    continue-on-error: true
-    environment: pypi
-    permissions:
-      id-token: write # Required for PyPI trusted publishing.
-      contents: read
-
-    steps:
-      - name: Download Python runtime wheels from release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RELEASE_TAG: ${{ needs.release.outputs.tag }}
-          RELEASE_VERSION: ${{ needs.release.outputs.version }}
-        run: |
-          set -euo pipefail
-          python_version="$RELEASE_VERSION"
-          python_version="${python_version/-alpha./a}"
-          python_version="${python_version/-beta./b}"
-          python_version="${python_version/-rc./rc}"
-
-          mkdir -p dist/python-runtime
-          gh release download "$RELEASE_TAG" \
-            --repo "${GITHUB_REPOSITORY}" \
-            --pattern "openai_codex_cli_bin-${python_version}-*.whl" \
-            --dir dist/python-runtime
-          ls -lh dist/python-runtime
-
-      - name: Publish Python runtime wheels to PyPI
-        uses: pypa/gh-action-pypi-publish@ed0c53931b1dc9bd32cbe73a98c7f6766f8a527e # v1.13.0
-        with:
-          packages-dir: dist/python-runtime
-          skip-existing: true
-
   deploy-dev-website:
     name: Trigger developers.openai.com deploy
     needs: release
@@ -1981,7 +1912,6 @@ jobs:
     # The deploy updates developers.openai.com with the new config schema json file.
     if: >-
       ${{
-        false &&
         !cancelled() &&
         needs.release.result == 'success' &&
         needs.release.outputs.sign_macos == 'true' &&
@@ -2012,7 +1942,6 @@ jobs:
     # '-' in the semver string (e.g., 1.2.3-alpha.1).
     if: >-
       ${{
-        false &&
         !cancelled() &&
         needs.release.result == 'success' &&
         needs.release.outputs.sign_macos == 'true' &&
@@ -2039,7 +1968,6 @@ jobs:
     name: Update latest-alpha-cli branch
     if: >-
       ${{
-        false &&
         !cancelled() &&
         needs.release.result == 'success' &&
         needs.release.outputs.sign_macos == 'true'
