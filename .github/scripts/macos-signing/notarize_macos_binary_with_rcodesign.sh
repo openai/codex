@@ -119,6 +119,7 @@ notarization_log="$report_dir/${binary_name}-notarization.log"
 rcodesign notarize \
   --api-key-file "$api_key_path" \
   --max-wait-seconds "$max_wait_seconds" \
+  --wait \
   "$archive_path" \
   2>&1 | tee "$notarization_log"
 
