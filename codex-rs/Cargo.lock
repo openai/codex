@@ -3036,6 +3036,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-http-state"
+version = "0.0.0"
+dependencies = [
+ "codex-utils-path",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "uuid",
+]
+
+[[package]]
 name = "codex-image-generation-extension"
 version = "0.0.0"
 dependencies = [

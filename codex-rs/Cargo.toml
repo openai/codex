@@ -38,6 +38,7 @@ members = [
     "core-plugins",
     "core-skills",
     "hooks",
+    "http-state",
     "secrets",
     "exec",
     "file-system",
