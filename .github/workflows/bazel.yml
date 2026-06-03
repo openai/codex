@@ -112,7 +112,7 @@ jobs:
             --test_verbose_timeout_warnings
             --build_metadata=COMMIT_SHA=${GITHUB_SHA}
           )
-          ./.github/scripts/run-bazel-ci.sh \
+          ./.github/scripts/run_bazel_ci.py \
             "${bazel_wrapper_args[@]}" \
             -- \
             "${bazel_test_args[@]}" \
@@ -224,7 +224,7 @@ jobs:
             --build_metadata=TAG_windows_test_shard=${BAZEL_TEST_SHARD}
           )
 
-          ./.github/scripts/run-bazel-ci.sh \
+          ./.github/scripts/run_bazel_ci.py \
             --print-failed-action-summary \
             --print-failed-test-logs \
             --windows-cross-compile \
@@ -313,7 +313,7 @@ jobs:
             --build_metadata=TAG_windows_native_main=true
           )
 
-          ./.github/scripts/run-bazel-ci.sh \
+          ./.github/scripts/run_bazel_ci.py \
             --print-failed-action-summary \
             --print-failed-test-logs \
             -- \
@@ -394,7 +394,7 @@ jobs:
             # Keep this aligned with the fast Windows Bazel test job: use
             # Linux RBE for clippy build actions while targeting Windows
             # gnullvm. Fork/community PRs without the BuildBuddy secret fall
-            # back inside `run-bazel-ci.sh` to the previous local Windows MSVC
+            # back inside `run_bazel_ci.py` to the previous local Windows MSVC
             # host-platform shape.
             bazel_wrapper_args+=(--windows-cross-compile)
             bazel_target_list_args+=(--windows-cross-compile)
@@ -412,7 +412,7 @@ jobs:
             bazel_targets+=("${target}")
           done <<< "${bazel_target_lines}"
 
-          ./.github/scripts/run-bazel-ci.sh \
+          ./.github/scripts/run_bazel_ci.py \
             --print-failed-action-summary \
             "${bazel_wrapper_args[@]}" \
             -- \
@@ -490,7 +490,7 @@ jobs:
             # This is build-only signal, so use the same Linux-RBE
             # cross-compile path as the fast Windows test and clippy jobs.
             # Fork/community PRs without the BuildBuddy secret fall back
-            # inside `run-bazel-ci.sh` to the previous local Windows MSVC
+            # inside `run_bazel_ci.py` to the previous local Windows MSVC
             # host-platform shape.
             bazel_wrapper_args+=(--windows-cross-compile)
           fi
@@ -510,7 +510,7 @@ jobs:
             bazel_targets+=("${target}")
           done <<< "${bazel_target_lines}"
 
-          ./.github/scripts/run-bazel-ci.sh \
+          ./.github/scripts/run_bazel_ci.py \
             "${bazel_wrapper_args[@]}" \
             -- \
             build \
@@ -524,7 +524,7 @@ jobs:
           BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
         shell: bash
         run: |
-          ./.github/scripts/run-bazel-ci.sh \
+          ./.github/scripts/run_bazel_ci.py \
             --remote-download-toplevel \
             --print-failed-action-summary \
             -- \

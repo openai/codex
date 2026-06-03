@@ -32,7 +32,7 @@ runs:
       shell: bash
       run: |
         bazel_targets="$(./tools/argument-comment-lint/list-bazel-targets.sh)"
-        ./.github/scripts/run-bazel-ci.sh \
+        ./.github/scripts/run_bazel_ci.py \
           -- \
           build \
           --config=argument-comment-lint \

@@ -90,7 +90,7 @@ jobs:
           # BuildBuddy credentials are unavailable. This workflow needs the
           # built `codex` binary on disk afterwards, so ask the wrapper to
           # override CI's default remote_download_minimal behavior.
-          ./.github/scripts/run-bazel-ci.sh \
+          ./.github/scripts/run_bazel_ci.py \
             --remote-download-toplevel \
             -- \
             build \
@@ -103,7 +103,7 @@ jobs:
           # the build instead of guessing which Bazel convenience symlink is
           # available on the runner.
           cquery_output="$(
-            ./.github/scripts/run-bazel-ci.sh \
+            ./.github/scripts/run_bazel_ci.py \
               -- \
               cquery \
               --output=files \
