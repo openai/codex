@@ -359,8 +359,6 @@ pub enum ExecServerError {
     EnvironmentRegistryAuth(String),
     #[error("environment registry request failed: {0}")]
     EnvironmentRegistryRequest(#[from] reqwest::Error),
-    #[error(transparent)]
-    NoiseChannel(#[from] crate::NoiseChannelError),
 }
 
 impl ExecServerClient {
