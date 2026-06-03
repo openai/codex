@@ -491,7 +491,7 @@ pub(super) fn commit_setup_marker(
         let sandbox_group_psid = sid_bytes_to_psid(&sandbox_group_sid)?;
         let result = unsafe { add_deny_write_ace(&pending_marker_path, sandbox_group_psid) };
         unsafe {
-            LocalFree(sandbox_group_psid as HLOCAL);
+            LocalFree(sandbox_group_psid as _);
         }
         result?;
         Ok(())
