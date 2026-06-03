@@ -1051,7 +1051,10 @@ impl Session {
                         session_configuration.parent_thread_id,
                     ),
                 ),
-                code_mode_service: crate::tools::code_mode::CodeModeService::new(),
+                code_mode_session_provider: Arc::clone(&code_mode_session_provider),
+                code_mode_service: crate::tools::code_mode::CodeModeService::new(
+                    code_mode_session_provider,
+                ),
                 environment_manager,
             };
             services

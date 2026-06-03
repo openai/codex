@@ -473,6 +473,7 @@ impl TestCodexBuilder {
             codex_core::test_support::auth_manager_from_auth(auth.clone()),
             SessionSource::Exec,
             Arc::clone(&environment_manager),
+            Arc::new(codex_code_mode_runtime::InProcessCodeModeSessionProvider),
             empty_extension_registry(),
             /*analytics_events_client*/ None,
             thread_store,

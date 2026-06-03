@@ -489,7 +489,7 @@ async fn resume_and_fork_do_not_restore_thread_environments_from_rollout() {
 
     let auth_manager =
         AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
-    let manager = ThreadManager::new(
+    let manager = ThreadManager::new_without_code_mode_runtime(
         &config,
         auth_manager.clone(),
         SessionSource::Exec,
@@ -605,7 +605,7 @@ async fn explicit_installation_id_skips_codex_home_file() {
     let installation_id = uuid::Uuid::new_v4().to_string();
     let state_db = init_state_db(&config).await;
     let thread_store = thread_store_from_config(&config, state_db.clone());
-    let manager = ThreadManager::new(
+    let manager = ThreadManager::new_without_code_mode_runtime(
         &config,
         auth_manager,
         SessionSource::Exec,
@@ -644,7 +644,7 @@ async fn resume_active_thread_from_rollout_returns_running_thread() {
 
     let auth_manager =
         AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
-    let manager = ThreadManager::new(
+    let manager = ThreadManager::new_without_code_mode_runtime(
         &config,
         auth_manager.clone(),
         SessionSource::Exec,
@@ -701,7 +701,7 @@ async fn resume_stopped_thread_from_rollout_spawns_new_thread() {
 
     let auth_manager =
         AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
-    let manager = ThreadManager::new(
+    let manager = ThreadManager::new_without_code_mode_runtime(
         &config,
         auth_manager.clone(),
         SessionSource::Exec,
@@ -765,7 +765,7 @@ async fn resume_stopped_thread_from_rollout_preserves_thread_source() {
         AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
     let state_db = init_state_db(&config).await;
     let thread_store = thread_store_from_config(&config, state_db.clone());
-    let manager = ThreadManager::new(
+    let manager = ThreadManager::new_without_code_mode_runtime(
         &config,
         auth_manager.clone(),
         SessionSource::Exec,
@@ -854,7 +854,7 @@ async fn rollout_path_resume_and_fork_read_history_through_thread_store() {
         .as_any()
         .downcast_ref::<InMemoryThreadStore>()
         .expect("configured in-memory store");
-    let manager = ThreadManager::new(
+    let manager = ThreadManager::new_without_code_mode_runtime(
         &config,
         auth_manager.clone(),
         SessionSource::Exec,
@@ -955,7 +955,7 @@ async fn new_uses_active_provider_for_model_refresh() {
 
     let auth_manager =
         AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
-    let manager = ThreadManager::new(
+    let manager = ThreadManager::new_without_code_mode_runtime(
         &config,
         auth_manager,
         SessionSource::Exec,
@@ -1175,7 +1175,7 @@ async fn interrupted_fork_snapshot_does_not_synthesize_turn_id_for_legacy_histor
     let auth_manager =
         AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
     let state_db = init_state_db(&config).await;
-    let manager = ThreadManager::new(
+    let manager = ThreadManager::new_without_code_mode_runtime(
         &config,
         auth_manager.clone(),
         SessionSource::Exec,
@@ -1281,7 +1281,7 @@ async fn interrupted_fork_snapshot_preserves_explicit_turn_id() {
     let auth_manager =
         AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
     let state_db = init_state_db(&config).await;
-    let manager = ThreadManager::new(
+    let manager = ThreadManager::new_without_code_mode_runtime(
         &config,
         auth_manager.clone(),
         SessionSource::Exec,
@@ -1377,7 +1377,7 @@ async fn interrupted_fork_snapshot_uses_persisted_mid_turn_history_without_live_
     let auth_manager =
         AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
     let state_db = init_state_db(&config).await;
-    let manager = ThreadManager::new(
+    let manager = ThreadManager::new_without_code_mode_runtime(
         &config,
         auth_manager.clone(),
         SessionSource::Exec,
@@ -1517,7 +1517,7 @@ async fn resumed_thread_keeps_paused_goal_paused() -> anyhow::Result<()> {
     let auth_manager =
         AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
     let state_db = init_state_db(&config).await;
-    let manager = ThreadManager::new(
+    let manager = ThreadManager::new_without_code_mode_runtime(
         &config,
         auth_manager.clone(),
         SessionSource::Exec,

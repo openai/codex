@@ -24,6 +24,7 @@ pub use codex_config::types::TuiKeymap;
 pub use codex_config::types::TuiNotificationSettings;
 pub use codex_config::types::TuiPetAnchor;
 pub use codex_config::types::UriBasedFileOpener;
+pub use codex_core::CodeModeSessionProvider;
 pub use codex_core::CodexThread;
 pub use codex_core::ForkSnapshot;
 pub use codex_core::McpManager;

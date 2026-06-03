@@ -19,6 +19,8 @@ use crate::tasks::interrupted_turn_history_marker;
 use codex_analytics::AnalyticsEventsClient;
 use codex_app_server_protocol::ThreadHistoryBuilder;
 use codex_app_server_protocol::TurnStatus;
+use codex_code_mode::CodeModeSessionProvider;
+use codex_code_mode::UnavailableCodeModeSessionProvider;
 use codex_core_plugins::PluginsManager;
 use codex_exec_server::EnvironmentManager;
 use codex_extension_api::ExtensionRegistry;
@@ -208,6 +210,7 @@ pub(crate) struct ThreadManagerState {
     mcp_manager: Arc<McpManager>,
     extensions: Arc<ExtensionRegistry<Config>>,
     thread_store: Arc<dyn ThreadStore>,
+    code_mode_session_provider: Arc<dyn CodeModeSessionProvider>,
     attestation_provider: Option<Arc<dyn AttestationProvider>>,
     session_source: SessionSource,
     installation_id: String,
@@ -256,6 +259,7 @@ impl ThreadManager {
         auth_manager: Arc<AuthManager>,
         session_source: SessionSource,
         environment_manager: Arc<EnvironmentManager>,
+        code_mode_session_provider: Arc<dyn CodeModeSessionProvider>,
         extensions: Arc<ExtensionRegistry<Config>>,
         analytics_events_client: Option<AnalyticsEventsClient>,
         thread_store: Arc<dyn ThreadStore>,
@@ -287,6 +291,7 @@ impl ThreadManager {
                 mcp_manager,
                 extensions,
                 thread_store,
+                code_mode_session_provider,
                 attestation_provider,
                 auth_manager,
                 session_source,
@@ -298,6 +303,34 @@ impl ThreadManager {
             }),
             _test_codex_home_guard: None,
         }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_without_code_mode_runtime(
+        config: &Config,
+        auth_manager: Arc<AuthManager>,
+        session_source: SessionSource,
+        environment_manager: Arc<EnvironmentManager>,
+        extensions: Arc<ExtensionRegistry<Config>>,
+        analytics_events_client: Option<AnalyticsEventsClient>,
+        thread_store: Arc<dyn ThreadStore>,
+        state_db: Option<StateDbHandle>,
+        installation_id: String,
+        attestation_provider: Option<Arc<dyn AttestationProvider>>,
+    ) -> Self {
+        Self::new(
+            config,
+            auth_manager,
+            session_source,
+            environment_manager,
+            Arc::new(UnavailableCodeModeSessionProvider),
+            extensions,
+            analytics_events_client,
+            thread_store,
+            state_db,
+            installation_id,
+            attestation_provider,
+        )
     }
 
     /// Construct with a dummy AuthManager containing the provided CodexAuth.
@@ -388,6 +421,7 @@ impl ThreadManager {
                 mcp_manager,
                 extensions: empty_extension_registry(),
                 thread_store,
+                code_mode_session_provider: Arc::new(UnavailableCodeModeSessionProvider),
                 attestation_provider: None,
                 auth_manager,
                 session_source: SessionSource::Exec,
@@ -1318,6 +1352,7 @@ impl ThreadManagerState {
             plugins_manager: Arc::clone(&self.plugins_manager),
             mcp_manager: Arc::clone(&self.mcp_manager),
             extensions: Arc::clone(&self.extensions),
+            code_mode_session_provider: Arc::clone(&self.code_mode_session_provider),
             conversation_history: initial_history,
             session_source,
             forked_from_thread_id,

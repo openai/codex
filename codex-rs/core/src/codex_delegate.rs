@@ -89,6 +89,7 @@ pub(crate) async fn run_codex_thread_interactive(
         plugins_manager: Arc::clone(&parent_session.services.plugins_manager),
         mcp_manager: Arc::clone(&parent_session.services.mcp_manager),
         extensions: Arc::clone(&parent_session.services.extensions),
+        code_mode_session_provider: Arc::clone(&parent_session.services.code_mode_session_provider),
         conversation_history,
         session_source: SessionSource::SubAgent(subagent_source.clone()),
         forked_from_thread_id,

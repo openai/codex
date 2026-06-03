@@ -1,4 +1,4 @@
-use crate::response::FunctionCallOutputContentItem;
+use crate::FunctionCallOutputContentItem;
 
 use super::EXIT_SENTINEL;
 use super::RuntimeEvent;

@@ -11,10 +11,12 @@ use std::time::Duration;
 use codex_code_mode::CellId;
 use codex_code_mode::CodeModeNestedToolCall;
 use codex_code_mode::CodeModeSession;
+use codex_code_mode::CodeModeSessionProvider;
 use codex_code_mode::CodeModeToolKind;
 use codex_code_mode::RuntimeResponse;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use serde_json::Value as JsonValue;
+use tokio::sync::OnceCell;
 use tokio_util::sync::CancellationToken;
 
 use crate::function_tool::FunctionCallError;
@@ -58,17 +60,17 @@ pub(crate) struct ExecContext {
 }
 
 pub(crate) struct CodeModeService {
-    session: Option<Arc<dyn CodeModeSession>>,
+    session: OnceCell<Arc<dyn CodeModeSession>>,
+    session_provider: Arc<dyn CodeModeSessionProvider>,
     dispatch_broker: Arc<CodeModeDispatchBroker>,
 }
 
 impl CodeModeService {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(session_provider: Arc<dyn CodeModeSessionProvider>) -> Self {
         let dispatch_broker = Arc::new(CodeModeDispatchBroker::new());
         Self {
-            session: Some(Arc::new(codex_code_mode::CodeModeService::with_delegate(
-                dispatch_broker.clone(),
-            ))),
+            session: OnceCell::new(),
+            session_provider,
             dispatch_broker,
         }
     }
@@ -77,25 +79,25 @@ impl CodeModeService {
         &self,
         request: codex_code_mode::ExecuteRequest,
     ) -> Result<codex_code_mode::StartedCell, String> {
-        self.session()?.execute(request).await
+        self.session().await?.execute(request).await
     }
 
     pub(crate) async fn wait(
         &self,
         request: codex_code_mode::WaitRequest,
     ) -> Result<codex_code_mode::WaitOutcome, String> {
-        self.session()?.wait(request).await
+        self.session().await?.wait(request).await
     }
 
     pub(crate) async fn terminate(
         &self,
         cell_id: CellId,
     ) -> Result<codex_code_mode::WaitOutcome, String> {
-        self.session()?.terminate(cell_id).await
+        self.session().await?.terminate(cell_id).await
     }
 
     pub(crate) async fn shutdown(&self) -> Result<(), String> {
-        match &self.session {
+        match self.session.get() {
             Some(session) => session.shutdown().await,
             None => Ok(()),
         }
@@ -116,9 +118,7 @@ impl CodeModeService {
         router: Arc<ToolRouter>,
         tracker: SharedTurnDiffTracker,
     ) -> Option<CodeModeDispatchWorker> {
-        if !matches!(turn.tool_mode, ToolMode::CodeMode | ToolMode::CodeModeOnly)
-            || self.session.is_none()
-        {
+        if !matches!(turn.tool_mode, ToolMode::CodeMode | ToolMode::CodeModeOnly) {
             return None;
         }
 
@@ -132,10 +132,13 @@ impl CodeModeService {
         )
     }
 
-    fn session(&self) -> Result<&Arc<dyn CodeModeSession>, String> {
+    async fn session(&self) -> Result<&Arc<dyn CodeModeSession>, String> {
         self.session
-            .as_ref()
-            .ok_or_else(|| "code mode is unavailable".to_string())
+            .get_or_try_init(|| {
+                self.session_provider
+                    .create_session(self.dispatch_broker.clone())
+            })
+            .await
     }
 }
 

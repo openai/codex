@@ -187,6 +187,7 @@ mod tests {
                 auth_manager.clone(),
                 SessionSource::Exec,
                 Arc::new(EnvironmentManager::default_for_tests()),
+                Arc::new(codex_code_mode_runtime::InProcessCodeModeSessionProvider),
                 thread_extensions(
                     guardian_agent_spawner(thread_manager.clone()),
                     Arc::new(NoopExtensionEventSink),
