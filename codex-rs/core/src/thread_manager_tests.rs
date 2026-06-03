@@ -1,4 +1,6 @@
 use super::*;
+use crate::artifact_store::ArtifactStore;
+use crate::artifact_store::ArtifactWriteFuture;
 use crate::config::test_config;
 use crate::init_state_db;
 use crate::installation_id::INSTALLATION_ID_FILENAME;
@@ -33,6 +35,23 @@ use wiremock::MockServer;
 
 const TEST_INSTALLATION_ID: &str = "11111111-1111-4111-8111-111111111111";
 
+struct FakeArtifactStore;
+
+impl ArtifactStore for FakeArtifactStore {
+    fn generated_image_path(&self, _session_id: &str, _call_id: &str) -> AbsolutePathBuf {
+        unreachable!("generated image path should not be requested")
+    }
+
+    fn write_generated_image(
+        &self,
+        _session_id: &str,
+        _call_id: &str,
+        _bytes: Vec<u8>,
+    ) -> ArtifactWriteFuture<'_> {
+        unreachable!("generated image write should not be requested")
+    }
+}
+
 fn user_msg(text: &str) -> ResponseItem {
     ResponseItem::Message {
         id: None,
@@ -62,6 +81,31 @@ fn contextual_user_interrupted_marker() -> ResponseItem {
 fn developer_interrupted_marker() -> ResponseItem {
     interrupted_turn_history_marker(InterruptedTurnHistoryMarker::Developer)
         .expect("developer interrupted marker should be enabled")
+}
+
+#[tokio::test]
+async fn start_thread_uses_injected_artifact_store() {
+    let config = test_config().await;
+    let artifact_store: Arc<dyn ArtifactStore> = Arc::new(FakeArtifactStore);
+    let manager = ThreadManager::new_with_artifact_store(
+        &config,
+        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing()),
+        SessionSource::Exec,
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+        empty_extension_registry(),
+        /*analytics_events_client*/ None,
+        thread_store_from_config(&config, /*state_db*/ None),
+        Arc::clone(&artifact_store),
+        /*state_db*/ None,
+        TEST_INSTALLATION_ID.to_string(),
+        /*attestation_provider*/ None,
+    );
+    let thread = manager.start_thread(config).await.expect("start thread");
+
+    assert!(Arc::ptr_eq(
+        &thread.thread.codex.session.services.artifact_store,
+        &artifact_store
+    ));
 }
 
 #[test]

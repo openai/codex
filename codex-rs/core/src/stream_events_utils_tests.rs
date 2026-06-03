@@ -8,6 +8,7 @@ use super::image_generation_artifact_path;
 use super::last_assistant_message_from_item;
 use super::response_item_may_include_external_context;
 use super::save_image_generation_result;
+use crate::artifact_store::LocalArtifactStore;
 use crate::session::tests::make_session_and_context;
 use crate::tools::ToolRouter;
 use crate::tools::parallel::ToolCallRuntime;
@@ -424,10 +425,14 @@ async fn save_image_generation_result_saves_base64_to_png_in_codex_home() {
     let expected_path = image_generation_artifact_path(&codex_home, "session-1", "ig_save_base64");
     let _ = std::fs::remove_file(&expected_path);
 
-    let saved_path =
-        save_image_generation_result(&codex_home, "session-1", "ig_save_base64", "Zm9v")
-            .await
-            .expect("image should be saved");
+    let saved_path = save_image_generation_result(
+        &LocalArtifactStore::from_codex_home(&codex_home),
+        "session-1",
+        "ig_save_base64",
+        "Zm9v",
+    )
+    .await
+    .expect("image should be saved");
 
     assert_eq!(saved_path, expected_path);
     assert_eq!(std::fs::read(&saved_path).expect("saved file"), b"foo");
@@ -440,9 +445,14 @@ async fn save_image_generation_result_rejects_data_url_payload() {
     let codex_home = tempfile::tempdir().expect("create codex home");
     let codex_home = codex_home.path().abs();
 
-    let err = save_image_generation_result(&codex_home, "session-1", "ig_456", result)
-        .await
-        .expect_err("data url payload should error");
+    let err = save_image_generation_result(
+        &LocalArtifactStore::from_codex_home(&codex_home),
+        "session-1",
+        "ig_456",
+        result,
+    )
+    .await
+    .expect_err("data url payload should error");
     assert!(matches!(err, CodexErr::InvalidRequest(_)));
 }
 
@@ -459,9 +469,14 @@ async fn save_image_generation_result_overwrites_existing_file() {
     .expect("create image output dir");
     std::fs::write(&existing_path, b"existing").expect("seed existing image");
 
-    let saved_path = save_image_generation_result(&codex_home, "session-1", "ig_overwrite", "Zm9v")
-        .await
-        .expect("image should be saved");
+    let saved_path = save_image_generation_result(
+        &LocalArtifactStore::from_codex_home(&codex_home),
+        "session-1",
+        "ig_overwrite",
+        "Zm9v",
+    )
+    .await
+    .expect("image should be saved");
 
     assert_eq!(saved_path, existing_path);
     assert_eq!(std::fs::read(&saved_path).expect("saved file"), b"foo");
@@ -475,9 +490,14 @@ async fn save_image_generation_result_sanitizes_call_id_for_codex_home_output_pa
     let expected_path = image_generation_artifact_path(&codex_home, "session-1", "../ig/..");
     let _ = std::fs::remove_file(&expected_path);
 
-    let saved_path = save_image_generation_result(&codex_home, "session-1", "../ig/..", "Zm9v")
-        .await
-        .expect("image should be saved");
+    let saved_path = save_image_generation_result(
+        &LocalArtifactStore::from_codex_home(&codex_home),
+        "session-1",
+        "../ig/..",
+        "Zm9v",
+    )
+    .await
+    .expect("image should be saved");
 
     assert_eq!(saved_path, expected_path);
     assert_eq!(std::fs::read(&saved_path).expect("saved file"), b"foo");
@@ -488,9 +508,14 @@ async fn save_image_generation_result_sanitizes_call_id_for_codex_home_output_pa
 async fn save_image_generation_result_rejects_non_standard_base64() {
     let codex_home = tempfile::tempdir().expect("create codex home");
     let codex_home = codex_home.path().abs();
-    let err = save_image_generation_result(&codex_home, "session-1", "ig_urlsafe", "_-8")
-        .await
-        .expect_err("non-standard base64 should error");
+    let err = save_image_generation_result(
+        &LocalArtifactStore::from_codex_home(&codex_home),
+        "session-1",
+        "ig_urlsafe",
+        "_-8",
+    )
+    .await
+    .expect_err("non-standard base64 should error");
     assert!(matches!(err, CodexErr::InvalidRequest(_)));
 }
 
@@ -499,7 +524,7 @@ async fn save_image_generation_result_rejects_non_base64_data_urls() {
     let codex_home = tempfile::tempdir().expect("create codex home");
     let codex_home = codex_home.path().abs();
     let err = save_image_generation_result(
-        &codex_home,
+        &LocalArtifactStore::from_codex_home(&codex_home),
         "session-1",
         "ig_svg",
         "data:image/svg+xml,<svg/>",

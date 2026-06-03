@@ -1,5 +1,7 @@
 use super::turn_context::TurnEnvironment;
 use super::*;
+use crate::artifact_store::ArtifactStore;
+use crate::artifact_store::ArtifactWriteFuture;
 use crate::config::ConfigBuilder;
 use crate::config::ConfigOverrides;
 use crate::config::test_config;
@@ -141,6 +143,7 @@ use codex_protocol::protocol::W3cTraceContext;
 use codex_protocol::request_user_input::RequestUserInputAnswer;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_rmcp_client::ElicitationAction;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use core_test_support::PathBufExt;
 use core_test_support::PathExt;
 use core_test_support::context_snapshot;
@@ -188,6 +191,32 @@ mod guardian_tests;
 struct InstructionsTestCase {
     slug: &'static str,
     expects_apply_patch_description: bool,
+}
+
+#[derive(Clone)]
+struct FakeArtifactStore {
+    writes: Arc<std::sync::Mutex<Vec<Vec<u8>>>>,
+}
+
+impl ArtifactStore for FakeArtifactStore {
+    fn generated_image_path(&self, session_id: &str, call_id: &str) -> AbsolutePathBuf {
+        let path = format!("/fake/{session_id}/{call_id}.png");
+        test_path_buf(&path).abs()
+    }
+
+    fn write_generated_image(
+        &self,
+        session_id: &str,
+        call_id: &str,
+        bytes: Vec<u8>,
+    ) -> ArtifactWriteFuture<'_> {
+        let writes = Arc::clone(&self.writes);
+        let path = self.generated_image_path(session_id, call_id);
+        Box::pin(async move {
+            writes.lock().expect("lock writes").push(bytes);
+            Ok(path)
+        })
+    }
 }
 
 fn user_message(text: &str) -> ResponseItem {
@@ -4603,6 +4632,9 @@ async fn session_new_fails_when_zsh_fork_enabled_without_packaged_zsh() {
             codex_thread_store::LocalThreadStoreConfig::from_config(config.as_ref()),
             /*state_db*/ None,
         )),
+        Arc::new(crate::artifact_store::LocalArtifactStore::from_codex_home(
+            &config.codex_home,
+        )),
         codex_rollout_trace::ThreadTraceContext::disabled(),
         /*attestation_provider*/ None,
         Some(config.multi_agent_version_from_features()),
@@ -4762,6 +4794,9 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         thread_store: Arc::new(codex_thread_store::LocalThreadStore::new(
             codex_thread_store::LocalThreadStoreConfig::from_config(config.as_ref()),
             /*state_db*/ None,
+        )),
+        artifact_store: Arc::new(crate::artifact_store::LocalArtifactStore::from_codex_home(
+            &config.codex_home,
         )),
         attestation_provider: None,
         model_client: ModelClient::new(
@@ -4953,6 +4988,9 @@ async fn make_session_with_config_and_rx(
             codex_thread_store::LocalThreadStoreConfig::from_config(config.as_ref()),
             /*state_db*/ None,
         )),
+        Arc::new(crate::artifact_store::LocalArtifactStore::from_codex_home(
+            &config.codex_home,
+        )),
         codex_rollout_trace::ThreadTraceContext::disabled(),
         /*attestation_provider*/ None,
         Some(config.multi_agent_version_from_features()),
@@ -5064,6 +5102,9 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
                 .await
                 .expect("state db should initialize"),
             ),
+        )),
+        Arc::new(crate::artifact_store::LocalArtifactStore::from_codex_home(
+            &config.codex_home,
         )),
         codex_rollout_trace::ThreadTraceContext::disabled(),
         /*attestation_provider*/ None,
@@ -6853,6 +6894,9 @@ where
             codex_thread_store::LocalThreadStoreConfig::from_config(config.as_ref()),
             state_db,
         )),
+        artifact_store: Arc::new(crate::artifact_store::LocalArtifactStore::from_codex_home(
+            &config.codex_home,
+        )),
         attestation_provider: None,
         model_client: ModelClient::new(
             Some(Arc::clone(&auth_manager)),
@@ -7842,6 +7886,69 @@ async fn handle_output_item_done_records_image_save_history_message() {
         b"foo"
     );
     let _ = std::fs::remove_file(&expected_saved_path);
+}
+
+#[tokio::test]
+async fn handle_output_item_done_uses_injected_artifact_store() {
+    let (mut session, turn_context) = make_session_and_context().await;
+    let writes = Arc::new(std::sync::Mutex::new(Vec::new()));
+    session.services.artifact_store = Arc::new(FakeArtifactStore {
+        writes: Arc::clone(&writes),
+    });
+    let session = Arc::new(session);
+    let turn_context = Arc::new(turn_context);
+    let call_id = "ig_injected_store";
+    let expected_saved_path = session
+        .services
+        .artifact_store
+        .generated_image_path(&session.conversation_id.to_string(), call_id);
+    let item = ResponseItem::ImageGenerationCall {
+        id: call_id.to_string(),
+        status: "completed".to_string(),
+        revised_prompt: Some("a tiny blue square".to_string()),
+        result: "Zm9v".to_string(),
+    };
+
+    let mut ctx = HandleOutputCtx {
+        sess: Arc::clone(&session),
+        turn_context: Arc::clone(&turn_context),
+        turn_store: Arc::new(codex_extension_api::ExtensionData::new(
+            turn_context.sub_id.clone(),
+        )),
+        tool_runtime: test_tool_runtime(Arc::clone(&session), Arc::clone(&turn_context)),
+        cancellation_token: CancellationToken::new(),
+    };
+    handle_output_item_done(&mut ctx, item.clone(), /*previously_active_item*/ None)
+        .await
+        .expect("image generation item should succeed");
+
+    assert_eq!(
+        writes.lock().expect("lock writes").as_slice(),
+        &[b"foo".to_vec()]
+    );
+    let image_output_path = session
+        .services
+        .artifact_store
+        .generated_image_path(&session.conversation_id.to_string(), "<image_id>");
+    let image_output_dir = image_output_path
+        .parent()
+        .expect("generated image path should have a parent");
+    let image_message: ResponseItem = crate::context::ContextualUserFragment::into(
+        crate::context::ImageGenerationInstructions::new(
+            image_output_dir.display(),
+            image_output_path.display(),
+        ),
+    );
+    let history = session.clone_history().await;
+    assert_eq!(history.raw_items(), &[image_message, item]);
+    assert_eq!(
+        expected_saved_path,
+        test_path_buf(&format!(
+            "/fake/{}/ig_injected_store.png",
+            session.conversation_id
+        ))
+        .abs()
+    );
 }
 
 #[tokio::test]
