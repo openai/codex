@@ -29,6 +29,7 @@ mod mcp_tool;
 mod memory_reset;
 mod model_list;
 mod model_provider_capabilities_read;
+mod native_integrity_state;
 mod output_schema;
 mod permission_profile_list;
 mod plan_item;
