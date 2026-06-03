@@ -1,9 +1,11 @@
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 
 use codex_core::config::Config;
+use codex_core::config::ConfigBuilder;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::ThreadStartInput;
@@ -21,6 +23,7 @@ use codex_skills_extension::catalog::SkillReadResult;
 use codex_skills_extension::catalog::SkillResourceId;
 use codex_skills_extension::catalog::SkillSearchResult;
 use codex_skills_extension::catalog::SkillSourceKind;
+use codex_skills_extension::install;
 use codex_skills_extension::install_with_providers;
 use codex_skills_extension::provider::SkillListQuery;
 use codex_skills_extension::provider::SkillProvider;
@@ -32,6 +35,68 @@ use pretty_assertions::assert_eq;
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
 static NEXT_CODEX_HOME_ID: AtomicUsize = AtomicUsize::new(0);
+
+#[tokio::test]
+async fn installed_extension_loads_host_skills_from_legacy_roots() -> TestResult {
+    let codex_home = test_codex_home();
+    let skill_path = codex_home.join("skills").join("demo").join("SKILL.md");
+    std::fs::create_dir_all(
+        skill_path
+            .parent()
+            .ok_or("skill path should have a parent")?,
+    )?;
+    std::fs::write(
+        &skill_path,
+        "---\nname: demo\ndescription: Demo skill.\n---\n# Demo\n\nUse the demo skill.\n",
+    )?;
+    let config = config_with_legacy_layers_for_codex_home(codex_home.clone()).await?;
+
+    let mut builder = ExtensionRegistryBuilder::new();
+    install(&mut builder);
+    let registry = builder.build();
+    let session_store = ExtensionData::new("session");
+    let thread_store = ExtensionData::new("thread");
+    let session_source = SessionSource::Cli;
+    registry.thread_lifecycle_contributors()[0]
+        .on_thread_start(ThreadStartInput {
+            config: &config,
+            session_source: &session_source,
+            persistent_thread_state_available: true,
+            session_store: &session_store,
+            thread_store: &thread_store,
+        })
+        .await;
+
+    let fragments = registry.turn_input_contributors()[0]
+        .contribute(
+            TurnInputContext {
+                turn_id: "turn-1".to_string(),
+                user_input: vec![UserInput::Text {
+                    text: "$demo".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                environments: Vec::new(),
+            },
+            &session_store,
+            &thread_store,
+            &ExtensionData::new("turn-1"),
+        )
+        .await;
+
+    let skill_path_string = skill_path.to_string_lossy();
+    let skill_prompt_path = skill_path_string.replace('\\', "/");
+
+    assert_eq!(2, fragments.len());
+    assert!(fragments[0].render().contains("demo"));
+    assert!(fragments[0].render().contains(&skill_prompt_path));
+    assert_eq!("user", fragments[1].role());
+    assert!(fragments[1].render().contains("<name>demo</name>"));
+    assert!(fragments[1].render().contains("# Demo"));
+    assert!(fragments[1].render().contains(skill_path_string.as_ref()));
+
+    std::fs::remove_dir_all(codex_home)?;
+    Ok(())
+}
 
 #[tokio::test]
 async fn installed_extension_injects_available_catalog_and_selected_entrypoint() -> TestResult {
@@ -287,14 +352,29 @@ fn test_entry(
 }
 
 async fn default_config() -> std::io::Result<Config> {
-    let id = NEXT_CODEX_HOME_ID.fetch_add(1, Ordering::Relaxed);
-    let codex_home = std::env::temp_dir().join(format!(
-        "codex-skills-extension-test-{}-{id}",
-        std::process::id(),
-    ));
-    std::fs::create_dir_all(&codex_home)?;
-    let config =
-        Config::load_default_with_cli_overrides_for_codex_home(codex_home.clone(), vec![]).await?;
+    let codex_home = test_codex_home();
+    let config = config_for_codex_home(codex_home.clone()).await?;
     std::fs::remove_dir_all(codex_home)?;
     Ok(config)
+}
+
+async fn config_for_codex_home(codex_home: PathBuf) -> std::io::Result<Config> {
+    std::fs::create_dir_all(&codex_home)?;
+    Config::load_default_with_cli_overrides_for_codex_home(codex_home, vec![]).await
+}
+
+fn test_codex_home() -> PathBuf {
+    let id = NEXT_CODEX_HOME_ID.fetch_add(1, Ordering::Relaxed);
+    std::env::temp_dir().join(format!(
+        "codex-skills-extension-test-{}-{id}",
+        std::process::id(),
+    ))
+}
+
+async fn config_with_legacy_layers_for_codex_home(codex_home: PathBuf) -> std::io::Result<Config> {
+    ConfigBuilder::default()
+        .codex_home(codex_home.clone())
+        .fallback_cwd(Some(codex_home))
+        .build()
+        .await
 }

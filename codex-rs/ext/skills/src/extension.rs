@@ -15,11 +15,13 @@ use codex_extension_api::TurnInputContributor;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::WarningEvent;
+use codex_utils_absolute_path::AbsolutePathBuf;
 
 use crate::catalog::SkillAuthority;
 use crate::catalog::SkillCatalogEntry;
 use crate::catalog::SkillReadResult;
 use crate::catalog::SkillSourceKind;
+use crate::provider::HostSkillProvider;
 use crate::provider::SkillListQuery;
 use crate::provider::SkillReadRequest;
 use crate::render::available_skills_fragment;
@@ -78,6 +80,12 @@ impl TurnInputContributor for SkillsExtension {
         };
 
         let config = thread_state.config();
+        let host_cwd = input
+            .environments
+            .iter()
+            .find(|environment| environment.is_primary)
+            .and_then(|environment| AbsolutePathBuf::from_absolute_path(&environment.cwd).ok())
+            .unwrap_or_else(|| config.host.default_cwd());
         let query = SkillListQuery {
             turn_id: input.turn_id.clone(),
             executor_authorities: input
@@ -90,6 +98,7 @@ impl TurnInputContributor for SkillsExtension {
                     )
                 })
                 .collect(),
+            host: Some(config.host.list_query(host_cwd)),
             include_host_skills: true,
             include_bundled_skills: config.bundled_skills_enabled,
             include_remote_skills: true,
@@ -170,7 +179,10 @@ impl SkillsExtension {
 }
 
 pub fn install(registry: &mut ExtensionRegistryBuilder<Config>) {
-    install_with_providers(registry, SkillProviders::default());
+    install_with_providers(
+        registry,
+        SkillProviders::new().with_host_provider(Arc::new(HostSkillProvider::new())),
+    );
 }
 
 pub fn install_with_providers(

@@ -3736,6 +3736,8 @@ dependencies = [
  "codex-core-skills",
  "codex-extension-api",
  "codex-protocol",
+ "codex-utils-absolute-path",
+ "codex-utils-plugins",
  "pretty_assertions",
  "tokio",
 ]

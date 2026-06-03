@@ -3,11 +3,13 @@ use std::sync::Mutex;
 
 use crate::catalog::SkillCatalog;
 use crate::catalog::SkillCatalogEntry;
+use crate::provider::HostSkillConfig;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub(crate) struct SkillsExtensionConfig {
     pub(crate) include_instructions: bool,
     pub(crate) bundled_skills_enabled: bool,
+    pub(crate) host: HostSkillConfig,
 }
 
 impl SkillsExtensionConfig {
@@ -15,6 +17,7 @@ impl SkillsExtensionConfig {
         Self {
             include_instructions: config.include_skill_instructions,
             bundled_skills_enabled: config.bundled_skills_enabled(),
+            host: HostSkillConfig::from_config(config, Vec::new()),
         }
     }
 }
