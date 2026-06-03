@@ -174,7 +174,8 @@ pub enum Feature {
     RemotePlugin,
     /// Enable remote plugin sharing flows.
     PluginSharing,
-    /// Show the startup prompt for migrating external agent config into Codex.
+    /// Removed compatibility flag retained as a no-op now that external agent
+    /// migration is always offered during onboarding.
     ExternalMigration,
     /// Allow the model to invoke the built-in image generation tool.
     ImageGeneration,
@@ -449,6 +450,9 @@ impl Features {
                     continue;
                 }
                 "plugin_hooks" => {
+                    continue;
+                }
+                "external_migration" => {
                     continue;
                 }
                 "skill_env_var_dependency_prompt" => {
@@ -1062,11 +1066,7 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::ExternalMigration,
         key: "external_migration",
-        stage: Stage::Experimental {
-            name: "External migration",
-            menu_description: "Show a startup prompt when Codex detects migratable external agent config for this machine or project.",
-            announcement: "",
-        },
+        stage: Stage::Removed,
         default_enabled: false,
     },
     FeatureSpec {

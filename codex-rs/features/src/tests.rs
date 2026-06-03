@@ -102,20 +102,13 @@ fn guardian_approval_is_stable_and_enabled_by_default() {
 }
 
 #[test]
-fn external_migration_is_experimental_and_disabled_by_default() {
-    let spec = Feature::ExternalMigration.info();
-    let stage = spec.stage;
-
-    assert!(matches!(stage, Stage::Experimental { .. }));
-    assert_eq!(stage.experimental_menu_name(), Some("External migration"));
-    assert_eq!(
-        stage.experimental_menu_description(),
-        Some(
-            "Show a startup prompt when Codex detects migratable external agent config for this machine or project."
-        )
-    );
-    assert_eq!(stage.experimental_announcement(), None);
+fn external_migration_is_removed_and_disabled_by_default() {
+    assert_eq!(Feature::ExternalMigration.stage(), Stage::Removed);
     assert_eq!(Feature::ExternalMigration.default_enabled(), false);
+    assert_eq!(
+        feature_for_key("external_migration"),
+        Some(Feature::ExternalMigration)
+    );
 }
 
 #[test]
@@ -517,6 +510,23 @@ fn from_sources_ignores_removed_apply_patch_freeform_feature_key() {
 #[test]
 fn from_sources_ignores_removed_plugin_hooks_feature_key() {
     let features_toml = FeaturesToml::from(BTreeMap::from([("plugin_hooks".to_string(), true)]));
+
+    let features = Features::from_sources(
+        FeatureConfigSource {
+            features: Some(&features_toml),
+            ..Default::default()
+        },
+        FeatureConfigSource::default(),
+        FeatureOverrides::default(),
+    );
+
+    assert_eq!(features, Features::with_defaults());
+}
+
+#[test]
+fn from_sources_ignores_removed_external_migration_feature_key() {
+    let features_toml =
+        FeaturesToml::from(BTreeMap::from([("external_migration".to_string(), true)]));
 
     let features = Features::from_sources(
         FeatureConfigSource {

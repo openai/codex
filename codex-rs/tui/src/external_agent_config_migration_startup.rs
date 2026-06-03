@@ -9,7 +9,6 @@ use crate::legacy_core::config::edit::ConfigEditsBuilder;
 use crate::tui;
 use codex_app_server_protocol::ExternalAgentConfigDetectParams;
 use codex_app_server_protocol::ExternalAgentConfigMigrationItem;
-use codex_features::Feature;
 use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
 use std::collections::BTreeSet;
@@ -25,11 +24,8 @@ pub(crate) enum ExternalAgentConfigMigrationStartupOutcome {
     ExitRequested,
 }
 
-fn should_show_external_agent_config_migration_prompt(
-    config: &Config,
-    entered_trust_nux: bool,
-) -> bool {
-    entered_trust_nux && config.features.enabled(Feature::ExternalMigration)
+fn should_show_external_agent_config_migration_prompt(entered_trust_nux: bool) -> bool {
+    entered_trust_nux
 }
 
 fn external_config_migration_project_key(path: &Path) -> String {
@@ -250,7 +246,7 @@ pub(crate) async fn handle_external_agent_config_migration_prompt_if_needed(
     harness_overrides: &ConfigOverrides,
     entered_trust_nux: bool,
 ) -> Result<ExternalAgentConfigMigrationStartupOutcome> {
-    if !should_show_external_agent_config_migration_prompt(config, entered_trust_nux) {
+    if !should_show_external_agent_config_migration_prompt(entered_trust_nux) {
         return Ok(ExternalAgentConfigMigrationStartupOutcome::Continue {
             success_message: None,
         });
@@ -547,21 +543,13 @@ mod tests {
         assert_eq!(message, "External config migration completed successfully.");
     }
 
-    #[tokio::test]
-    async fn external_agent_config_migration_prompt_requires_trust_nux_entry() {
-        let codex_home = tempdir().expect("temp codex home");
-        let mut config = ConfigBuilder::default()
-            .codex_home(codex_home.path().to_path_buf())
-            .build()
-            .await
-            .expect("config");
-        let _ = config.features.enable(Feature::ExternalMigration);
-
+    #[test]
+    fn external_agent_config_migration_prompt_depends_only_on_trust_nux_entry() {
         assert!(!should_show_external_agent_config_migration_prompt(
-            &config, /*entered_trust_nux*/ false,
+            /*entered_trust_nux*/ false,
         ));
         assert!(should_show_external_agent_config_migration_prompt(
-            &config, /*entered_trust_nux*/ true,
+            /*entered_trust_nux*/ true,
         ));
     }
 }
