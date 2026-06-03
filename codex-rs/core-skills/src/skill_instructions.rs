@@ -20,7 +20,7 @@ impl From<&SkillInjection> for SkillInstructions {
 }
 
 impl ContextualUserFragment for SkillInstructions {
-    fn role() -> &'static str {
+    fn role(&self) -> &'static str {
         "user"
     }
 

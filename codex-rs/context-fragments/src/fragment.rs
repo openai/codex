@@ -44,9 +44,7 @@ impl<T: ContextualUserFragment> FragmentRegistration for FragmentRegistrationPro
 /// in which case the default helpers render only the body and never match
 /// arbitrary text.
 pub trait ContextualUserFragment {
-    fn role() -> &'static str
-    where
-        Self: Sized;
+    fn role(&self) -> &'static str;
 
     fn markers(&self) -> (&'static str, &'static str);
 
@@ -80,7 +78,18 @@ pub trait ContextualUserFragment {
     {
         ResponseItem::Message {
             id: None,
-            role: Self::role().to_string(),
+            role: self.role().to_string(),
+            content: vec![ContentItem::InputText {
+                text: self.render(),
+            }],
+            phase: None,
+        }
+    }
+
+    fn into_boxed_response_item(self: Box<Self>) -> ResponseItem {
+        ResponseItem::Message {
+            id: None,
+            role: self.role().to_string(),
             content: vec![ContentItem::InputText {
                 text: self.render(),
             }],
@@ -93,7 +102,7 @@ pub trait ContextualUserFragment {
         Self: Sized,
     {
         ResponseInputItem::Message {
-            role: Self::role().to_string(),
+            role: self.role().to_string(),
             content: vec![ContentItem::InputText {
                 text: self.render(),
             }],

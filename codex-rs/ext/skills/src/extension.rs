@@ -5,14 +5,17 @@ use std::sync::Arc;
 use codex_core::config::Config;
 use codex_extension_api::ConfigContributor;
 use codex_extension_api::ContextContributor;
+use codex_extension_api::ContextualUserFragment;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::PromptFragment;
 use codex_extension_api::ThreadLifecycleContributor;
 use codex_extension_api::ThreadStartInput;
-use codex_extension_api::TurnLifecycleContributor;
-use codex_extension_api::TurnStartInput;
+use codex_extension_api::TurnInputContext;
+use codex_extension_api::TurnInputContributor;
 
+use crate::catalog::SkillAuthority;
+use crate::catalog::SkillSourceKind;
 use crate::provider::SkillListQuery;
 use crate::providers::SkillProviders;
 use crate::state::SkillsExtensionConfig;
@@ -29,8 +32,8 @@ impl ThreadLifecycleContributor<Config> for SkillsExtension {
         // TODO(skills-extension): this is only the thread-level config snapshot.
         // Skills are loaded per turn today because cwd, plugin roots, config
         // layers, and the primary environment filesystem can change between
-        // turns. The real migration needs a turn-preparation hook before model
-        // input construction, not just thread startup.
+        // turns. The TurnInputContributor below owns per-turn catalog
+        // resolution.
         input
             .thread_store
             .insert(SkillsExtensionConfig::from_config(input.config));
@@ -66,42 +69,50 @@ impl ContextContributor for SkillsExtension {
             }
 
             // TODO(skills-extension): render the available-skills developer
-            // block from the merged per-turn SkillCatalog. This should
-            // preserve the existing bounded metadata budget, root aliasing,
-            // warning behavior, and telemetry side effects.
+            // block only if the final model needs thread-level guidance that
+            // does not depend on the per-turn SkillCatalog.
             //
             // TODO(skills-extension): avoid using raw PromptFragment strings
             // for final skills context if the extension API grows typed
             // contextual fragments. Existing skill blocks are typed so resume
             // and history filtering can recognize them reliably.
-            //
-            // TODO(skills-extension): ContextContributor currently cannot see
-            // the turn_store, so it cannot read the per-turn catalog seeded by
-            // the turn provider path below. This is the main extension-api gap
-            // to close before skills can move out of codex-core.
             Vec::new()
         })
     }
 }
 
 #[async_trait::async_trait]
-impl TurnLifecycleContributor for SkillsExtension {
-    async fn on_turn_start(&self, input: TurnStartInput<'_>) {
-        // TODO(skills-extension): replace this lifecycle callback with a real
-        // turn-input contributor in codex-extension-api. This placeholder only
-        // demonstrates where provider aggregation belongs; it cannot resolve
-        // real skills because this hook does not receive cwd, executor
-        // selections, effective plugins/materialized plugin skill roots,
-        // connector slug counts, user input, cancellation, analytics, or a
-        // response-item output channel.
-        let query = SkillListQuery::placeholder_for_turn(input.turn_id);
+impl TurnInputContributor for SkillsExtension {
+    async fn contribute(
+        &self,
+        input: TurnInputContext,
+        _session_store: &ExtensionData,
+        _thread_store: &ExtensionData,
+        turn_store: &ExtensionData,
+    ) -> Vec<Box<dyn ContextualUserFragment + Send>> {
+        let executor_authorities = input
+            .environments
+            .iter()
+            .map(|environment| {
+                SkillAuthority::new(
+                    SkillSourceKind::Executor,
+                    environment.environment_id.clone(),
+                )
+            })
+            .collect();
+        let query = SkillListQuery {
+            turn_id: input.turn_id,
+            executor_authorities,
+            include_host_skills: true,
+            include_remote_skills: true,
+        };
         let catalog = self
             .providers
             .list_for_turn(query)
             .await
             .unwrap_or_default();
 
-        input.turn_store.insert(SkillsTurnState {
+        turn_store.insert(SkillsTurnState {
             catalog,
             entrypoints_injected: false,
         });
@@ -115,7 +126,9 @@ impl TurnLifecycleContributor for SkillsExtension {
         //
         // TODO(skills-extension): move explicit $skill mention resolution,
         // SKILL.md reads, skill body injection, and MCP dependency prompting
-        // out of codex-core's turn assembly once that hook exists.
+        // out of codex-core's turn assembly once provider implementations
+        // are ready to preserve behavior.
+        Vec::new()
     }
 }
 
@@ -136,5 +149,5 @@ pub fn install(registry: &mut ExtensionRegistryBuilder<Config>) {
     registry.thread_lifecycle_contributor(extension.clone());
     registry.config_contributor(extension.clone());
     registry.prompt_contributor(extension.clone());
-    registry.turn_lifecycle_contributor(extension);
+    registry.turn_input_contributor(extension);
 }

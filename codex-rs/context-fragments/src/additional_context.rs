@@ -19,7 +19,7 @@ impl AdditionalContextUserFragment {
 }
 
 impl ContextualUserFragment for AdditionalContextUserFragment {
-    fn role() -> &'static str {
+    fn role(&self) -> &'static str {
         "user"
     }
 
@@ -65,7 +65,7 @@ impl AdditionalContextDeveloperFragment {
 }
 
 impl ContextualUserFragment for AdditionalContextDeveloperFragment {
-    fn role() -> &'static str {
+    fn role(&self) -> &'static str {
         "developer"
     }
 

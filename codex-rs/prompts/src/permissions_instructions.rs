@@ -143,7 +143,7 @@ impl PermissionsInstructions {
 }
 
 impl ContextualUserFragment for PermissionsInstructions {
-    fn role() -> &'static str {
+    fn role(&self) -> &'static str {
         "developer"
     }
 

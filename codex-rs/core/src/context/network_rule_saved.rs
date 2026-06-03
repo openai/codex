@@ -18,7 +18,7 @@ impl NetworkRuleSaved {
 }
 
 impl ContextualUserFragment for NetworkRuleSaved {
-    fn role() -> &'static str {
+    fn role(&self) -> &'static str {
         "developer"
     }
 

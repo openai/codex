@@ -16,17 +16,6 @@ pub struct SkillListQuery {
     pub include_remote_skills: bool,
 }
 
-impl SkillListQuery {
-    pub(crate) fn placeholder_for_turn(turn_id: &str) -> Self {
-        Self {
-            turn_id: turn_id.to_string(),
-            executor_authorities: Vec::new(),
-            include_host_skills: true,
-            include_remote_skills: true,
-        }
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SkillReadRequest {
     pub authority: SkillAuthority,
