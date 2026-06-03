@@ -49,7 +49,7 @@ async fn handle_close_agent(
             "root is not a spawned agent".to_string(),
         ));
     }
-    if agent_id == session.conversation_id {
+    if agent_id == session.thread_id {
         return Err(FunctionCallError::RespondToModel(
             "an agent cannot close itself; return your result and let the parent close you if needed"
                 .to_string(),
