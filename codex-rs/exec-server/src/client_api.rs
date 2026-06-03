@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 
 use futures::future::BoxFuture;
@@ -8,6 +9,8 @@ use crate::ExecServerError;
 use crate::HttpRequestParams;
 use crate::HttpRequestResponse;
 use crate::HttpResponseBodyStream;
+use crate::NoiseChannelIdentity;
+use crate::NoiseChannelPublicKey;
 
 pub(crate) const DEFAULT_REMOTE_EXEC_SERVER_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 pub(crate) const DEFAULT_REMOTE_EXEC_SERVER_INITIALIZE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -30,6 +33,67 @@ pub struct RemoteExecServerConnectArgs {
     pub resume_session_id: Option<String>,
 }
 
+/// Registry-authorized material for one Noise rendezvous connection attempt.
+pub struct NoiseRendezvousConnectBundle {
+    pub websocket_url: String,
+    pub environment_id: String,
+    pub executor_registration_id: String,
+    pub executor_public_key: NoiseChannelPublicKey,
+    pub harness_key_authorization: String,
+}
+
+impl std::fmt::Debug for NoiseRendezvousConnectBundle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NoiseRendezvousConnectBundle")
+            .field(
+                "websocket_url",
+                &redacted_websocket_url(&self.websocket_url),
+            )
+            .field("environment_id", &self.environment_id)
+            .field("executor_registration_id", &self.executor_registration_id)
+            .field("executor_public_key", &self.executor_public_key)
+            .field("harness_key_authorization", &"<redacted>")
+            .finish()
+    }
+}
+
+/// Connection arguments for an authenticated Noise rendezvous exec-server.
+pub struct NoiseRendezvousConnectArgs {
+    pub bundle: NoiseRendezvousConnectBundle,
+    pub harness_identity: NoiseChannelIdentity,
+    pub client_name: String,
+    pub connect_timeout: Duration,
+    pub initialize_timeout: Duration,
+    pub resume_session_id: Option<String>,
+}
+
+impl std::fmt::Debug for NoiseRendezvousConnectArgs {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NoiseRendezvousConnectArgs")
+            .field("bundle", &self.bundle)
+            .field("harness_identity", &"<redacted>")
+            .field("client_name", &self.client_name)
+            .field("connect_timeout", &self.connect_timeout)
+            .field("initialize_timeout", &self.initialize_timeout)
+            .field("resume_session_id", &self.resume_session_id)
+            .finish()
+    }
+}
+
+/// Supplies fresh registry-authorized material for Noise rendezvous connections.
+///
+/// Implementations must preserve one endpoint-local harness identity while
+/// refreshing short-lived registry material for every physical connection attempt.
+pub trait NoiseRendezvousConnectProvider: Send + Sync {
+    /// Environment ID this provider is authorized to connect to.
+    fn environment_id(&self) -> &str;
+
+    /// Returns a fresh atomic bundle for one physical connection attempt.
+    fn connect_args(&self) -> BoxFuture<'_, Result<NoiseRendezvousConnectArgs, ExecServerError>>;
+}
+
+pub type SharedNoiseRendezvousConnectProvider = Arc<dyn NoiseRendezvousConnectProvider>;
+
 /// Stdio connection arguments for a command-backed exec-server.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct StdioExecServerConnectArgs {
@@ -49,18 +113,50 @@ pub(crate) struct StdioExecServerCommand {
 }
 
 /// Parameters used to connect to a remote exec-server environment.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone)]
 pub(crate) enum ExecServerTransportParams {
     WebSocketUrl {
         websocket_url: String,
         connect_timeout: Duration,
         initialize_timeout: Duration,
     },
+    NoiseRendezvous {
+        provider: SharedNoiseRendezvousConnectProvider,
+    },
     #[allow(dead_code)]
     StdioCommand {
         command: StdioExecServerCommand,
         initialize_timeout: Duration,
     },
+}
+
+impl std::fmt::Debug for ExecServerTransportParams {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::WebSocketUrl {
+                websocket_url,
+                connect_timeout,
+                initialize_timeout,
+            } => f
+                .debug_struct("WebSocketUrl")
+                .field("websocket_url", websocket_url)
+                .field("connect_timeout", connect_timeout)
+                .field("initialize_timeout", initialize_timeout)
+                .finish(),
+            Self::NoiseRendezvous { provider } => f
+                .debug_struct("NoiseRendezvous")
+                .field("environment_id", &provider.environment_id())
+                .finish(),
+            Self::StdioCommand {
+                command,
+                initialize_timeout,
+            } => f
+                .debug_struct("StdioCommand")
+                .field("command", command)
+                .field("initialize_timeout", initialize_timeout)
+                .finish(),
+        }
+    }
 }
 
 impl ExecServerTransportParams {
@@ -70,6 +166,17 @@ impl ExecServerTransportParams {
             connect_timeout: DEFAULT_REMOTE_EXEC_SERVER_CONNECT_TIMEOUT,
             initialize_timeout: DEFAULT_REMOTE_EXEC_SERVER_INITIALIZE_TIMEOUT,
         }
+    }
+}
+
+pub(crate) fn redacted_websocket_url(websocket_url: &str) -> String {
+    match url::Url::parse(websocket_url) {
+        Ok(mut url) => {
+            url.set_query(None);
+            url.set_fragment(None);
+            url.to_string()
+        }
+        Err(_) => "<redacted websocket url>".to_string(),
     }
 }
 
