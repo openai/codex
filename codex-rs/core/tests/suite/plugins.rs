@@ -493,6 +493,62 @@ async fn explicitly_selected_non_app_skill_does_not_wait_for_pending_apps_startu
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn linked_non_app_skill_text_does_not_wait_for_pending_apps_startup() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = start_mock_server().await;
+    let apps_server = AppsTestServer::mount_with_connector_name_and_tools_list_delay(
+        &server,
+        "Google Calendar",
+        Some(Duration::from_secs(/*secs*/ 5)),
+    )
+    .await?;
+    let mock = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
+
+    let codex_home = Arc::new(TempDir::new()?);
+    let skill_path = write_plugin_skill_plugin(codex_home.as_ref());
+    let codex =
+        build_apps_enabled_plugin_test_codex(&server, &codex_home, apps_server.chatgpt_base_url)
+            .await?;
+
+    let completed = tokio::time::timeout(Duration::from_secs(/*secs*/ 2), async {
+        codex
+            .submit(Op::UserInput {
+                environments: None,
+                items: vec![codex_protocol::user_input::UserInput::Text {
+                    text: format!("Use [$sample]({}).", skill_path.display()),
+                    text_elements: Vec::new(),
+                }],
+                final_output_json_schema: None,
+                responsesapi_client_metadata: None,
+                additional_context: Default::default(),
+                thread_settings: Default::default(),
+            })
+            .await?;
+        wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+        Ok::<_, anyhow::Error>(())
+    })
+    .await;
+    completed
+        .expect("linked non-app skill should not wait for apps startup")
+        .expect("linked non-app skill turn should complete");
+
+    let request = mock.single_request();
+    assert!(
+        request
+            .message_input_texts("user")
+            .iter()
+            .any(|text| text.contains("<name>sample:sample-search</name>")),
+        "expected linked non-app skill to be injected on the first turn"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn selected_skill_rewaits_for_app_after_installing_mcp_dependency() -> Result<()> {
     skip_if_no_network!(Ok(()));
     let server = start_mock_server().await;

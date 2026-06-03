@@ -149,6 +149,29 @@ impl McpConnectionManager {
         !self.clients.is_empty()
     }
 
+    pub fn is_server_startup_pending(&self, server_name: &str) -> bool {
+        self.clients
+            .get(server_name)
+            .is_some_and(|client| !client.startup_complete.load(Ordering::Acquire))
+    }
+
+    /// Returns an owned future for the Codex Apps tools already available from
+    /// startup cache or a ready client.
+    pub fn codex_apps_tools_if_ready_or_cached(
+        &self,
+    ) -> impl std::future::Future<Output = Vec<ToolInfo>> + Send + 'static + use<> {
+        let client = self.clients.get(CODEX_APPS_MCP_SERVER_NAME).cloned();
+        async move {
+            let Some(client) = client else {
+                return Vec::new();
+            };
+            client
+                .listed_tools_if_ready_or_cached()
+                .await
+                .unwrap_or_default()
+        }
+    }
+
     /// Drain all MCP clients from this manager and return a future that stops
     /// them and terminates their stdio server processes.
     pub fn begin_shutdown(&mut self) -> impl std::future::Future<Output = ()> + Send + 'static {

@@ -74,6 +74,7 @@ impl AppsTestServer {
             CONNECTOR_DESCRIPTION.to_string(),
             /*searchable*/ true,
             /*include_app_only_tool*/ false,
+            /*include_connector_tools*/ true,
             /*tools_list_delay*/ None,
         )
         .await;
@@ -107,6 +108,7 @@ impl AppsTestServer {
             CONNECTOR_DESCRIPTION.to_string(),
             /*searchable*/ false,
             /*include_app_only_tool*/ false,
+            /*include_connector_tools*/ true,
             tools_list_delay,
         )
         .await;
@@ -127,6 +129,25 @@ impl AppsTestServer {
             CONNECTOR_DESCRIPTION.to_string(),
             matches!(tool_loading, AppsTestToolLoading::Searchable),
             /*include_app_only_tool*/ true,
+            /*include_connector_tools*/ true,
+            /*tools_list_delay*/ None,
+        )
+        .await;
+        Ok(Self {
+            chatgpt_base_url: server.uri(),
+        })
+    }
+
+    pub async fn mount_without_tools(server: &MockServer) -> Result<Self> {
+        mount_oauth_metadata(server).await;
+        mount_connectors_directory(server).await;
+        mount_streamable_http_json_rpc(
+            server,
+            CONNECTOR_NAME.to_string(),
+            CONNECTOR_DESCRIPTION.to_string(),
+            /*searchable*/ false,
+            /*include_app_only_tool*/ false,
+            /*include_connector_tools*/ false,
             /*tools_list_delay*/ None,
         )
         .await;
@@ -282,6 +303,7 @@ async fn mount_streamable_http_json_rpc(
     connector_description: String,
     searchable: bool,
     include_app_only_tool: bool,
+    include_connector_tools: bool,
     tools_list_delay: Option<Duration>,
 ) {
     Mock::given(method("POST"))
@@ -291,6 +313,7 @@ async fn mount_streamable_http_json_rpc(
             connector_description,
             searchable,
             include_app_only_tool,
+            include_connector_tools,
             tools_list_delay,
         })
         .mount(server)
@@ -302,6 +325,7 @@ struct CodexAppsJsonRpcResponder {
     connector_description: String,
     searchable: bool,
     include_app_only_tool: bool,
+    include_connector_tools: bool,
     tools_list_delay: Option<Duration>,
 }
 
@@ -446,6 +470,13 @@ impl Respond for CodexAppsJsonRpcResponder {
                         "nextCursor": null
                     }
                 });
+                if !self.include_connector_tools
+                    && let Some(tools) = response
+                        .pointer_mut("/result/tools")
+                        .and_then(Value::as_array_mut)
+                {
+                    tools.clear();
+                }
                 if self.searchable
                     && let Some(tools) = response
                         .pointer_mut("/result/tools")

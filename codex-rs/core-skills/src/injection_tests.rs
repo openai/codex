@@ -294,6 +294,24 @@ fn collect_explicit_skill_mentions_allows_explicit_path_with_connector_conflict(
 }
 
 #[test]
+fn collect_unambiguous_skill_mentions_selects_linked_path_but_not_plain_name() {
+    let alpha = make_skill("alpha-skill", "/tmp/alpha");
+    let beta = make_skill("beta-skill", "/tmp/beta");
+    let skills = vec![alpha, beta.clone()];
+    let inputs = vec![UserInput::Text {
+        text: format!(
+            "use $alpha-skill and {}",
+            linked_skill_mention("beta-skill", "/tmp/beta")
+        ),
+        text_elements: Vec::new(),
+    }];
+
+    let selected = collect_unambiguous_skill_mentions(&inputs, &skills, &HashSet::new());
+
+    assert_eq!(selected, vec![beta]);
+}
+
+#[test]
 fn collect_explicit_skill_mentions_skips_when_linked_path_disabled() {
     let alpha = make_skill("demo-skill", "/tmp/alpha");
     let beta = make_skill("demo-skill", "/tmp/beta");

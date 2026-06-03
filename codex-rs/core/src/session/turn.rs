@@ -9,6 +9,7 @@ use crate::client::ModelClientSession;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::collect_explicit_skill_mentions;
+use crate::collect_unambiguous_skill_mentions;
 use crate::compact::InitialContextInjection;
 use crate::compact::run_inline_auto_compact_task;
 use crate::compact::should_use_remote_compact_task;
@@ -484,32 +485,26 @@ async fn build_skills_and_plugins(
         collect_explicit_plugin_mentions(&user_input, loaded_plugins.capability_summaries());
     let explicitly_mentioned_apps = collect_explicit_app_ids(&user_input);
     let skills_outcome = turn_context.turn_skills.outcome.as_ref();
-    // Structured skill selections are unambiguous without app inventory. Load
-    // them before deciding whether the pending Apps MCP is a dependency of this
-    // turn, then reuse the injections below so loading and telemetry happen once.
-    let structured_skill_input = user_input
-        .iter()
-        .filter(|item| matches!(item, UserInput::Skill { .. }))
-        .cloned()
-        .collect::<Vec<_>>();
-    let structured_mentioned_skills = collect_explicit_skill_mentions(
-        &structured_skill_input,
+    // Structured selections and linked skill paths are unambiguous without app
+    // inventory. Load them before deciding whether the pending Apps MCP is a
+    // dependency of this turn, then reuse the injections below.
+    let unambiguous_mentioned_skills = collect_unambiguous_skill_mentions(
+        &user_input,
         &skills_outcome.skills,
         &skills_outcome.disabled_paths,
-        &HashMap::new(),
     );
     let SkillInjections {
         items: mut skill_injections,
         warnings: mut skill_warnings,
     } = build_skill_injections(
-        &structured_mentioned_skills,
+        &unambiguous_mentioned_skills,
         Some(skills_outcome),
         Some(&turn_context.session_telemetry),
         &sess.services.analytics_events_client,
         tracking.clone(),
     )
     .await;
-    let structured_skill_may_reference_apps =
+    let unambiguous_skill_may_reference_apps =
         skill_injections_may_reference_apps(&skill_injections);
     // Plain text skill mentions can collide with app slugs, so preserve their
     // existing app-inventory resolution behavior.
@@ -518,14 +513,23 @@ async fn build_skills_and_plugins(
         .filter(|item| matches!(item, UserInput::Text { .. }))
         .cloned()
         .collect::<Vec<_>>();
+    let unambiguous_text_skill_paths = collect_unambiguous_skill_mentions(
+        &text_skill_input,
+        &skills_outcome.skills,
+        &skills_outcome.disabled_paths,
+    )
+    .into_iter()
+    .map(|skill| skill.path_to_skills_md)
+    .collect::<HashSet<_>>();
     let text_may_select_skill_requiring_app_resolution = turn_context.apps_enabled()
-        && !collect_explicit_skill_mentions(
+        && collect_explicit_skill_mentions(
             &text_skill_input,
             &skills_outcome.skills,
             &skills_outcome.disabled_paths,
             &HashMap::new(),
         )
-        .is_empty();
+        .iter()
+        .any(|skill| !unambiguous_text_skill_paths.contains(&skill.path_to_skills_md));
     let mut explicitly_requested_mcp_servers = mentioned_plugins
         .iter()
         .flat_map(|plugin| plugin.mcp_server_names.iter().cloned())
@@ -536,7 +540,7 @@ async fn build_skills_and_plugins(
     if turn_context.apps_enabled()
         && (!explicitly_mentioned_apps.is_empty()
             || mentioned_plugin_uses_apps
-            || structured_skill_may_reference_apps
+            || unambiguous_skill_may_reference_apps
             || text_may_select_skill_requiring_app_resolution)
     {
         explicitly_requested_mcp_servers.insert(CODEX_APPS_MCP_SERVER_NAME.to_string());
@@ -639,13 +643,13 @@ async fn build_skills_and_plugins(
         }
     }
 
-    let structured_skill_paths = structured_mentioned_skills
+    let preloaded_skill_paths = unambiguous_mentioned_skills
         .iter()
         .map(|skill| &skill.path_to_skills_md)
         .collect::<HashSet<_>>();
     let remaining_mentioned_skills = mentioned_skills
         .iter()
-        .filter(|skill| !structured_skill_paths.contains(&skill.path_to_skills_md))
+        .filter(|skill| !preloaded_skill_paths.contains(&skill.path_to_skills_md))
         .cloned()
         .collect::<Vec<_>>();
     let SkillInjections {

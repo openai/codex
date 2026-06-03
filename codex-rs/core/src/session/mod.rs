@@ -18,6 +18,7 @@ use crate::build_available_skills;
 use crate::compact;
 use crate::config::ManagedFeatures;
 use crate::config::resolve_tool_suggest_config_from_layer_stack;
+use crate::connectors;
 use crate::context::ApprovedCommandPrefixSaved;
 use crate::context::AppsInstructions;
 use crate::context::AvailablePluginsInstructions;
@@ -61,6 +62,7 @@ use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_login::auth_env_telemetry::collect_auth_env_telemetry;
 use codex_login::default_client::originator;
+use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::McpConnectionManager;
 use codex_mcp::McpRuntimeContext;
 use codex_mcp::codex_apps_tools_cache_key;
@@ -2811,7 +2813,24 @@ impl Session {
                     .push(PersonalitySpecInstructions::new(personality_message).render());
             }
         }
-        if turn_context.config.include_apps_instructions && turn_context.apps_enabled() {
+        let include_apps_instructions =
+            if turn_context.config.include_apps_instructions && turn_context.apps_enabled() {
+                let codex_apps_tools = {
+                    let mcp_connection_manager = self.services.mcp_connection_manager.read().await;
+                    (!mcp_connection_manager.is_server_startup_pending(CODEX_APPS_MCP_SERVER_NAME))
+                        .then(|| mcp_connection_manager.codex_apps_tools_if_ready_or_cached())
+                };
+                match codex_apps_tools {
+                    None => true,
+                    Some(codex_apps_tools) => connectors::should_include_apps_instructions(
+                        &codex_apps_tools.await,
+                        &turn_context.config,
+                    ),
+                }
+            } else {
+                false
+            };
+        if include_apps_instructions {
             developer_sections.push(AppsInstructions.render());
         }
         if turn_context.config.include_skill_instructions {

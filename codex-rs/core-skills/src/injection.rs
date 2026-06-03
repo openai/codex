@@ -118,6 +118,38 @@ pub fn collect_explicit_skill_mentions(
     disabled_paths: &HashSet<AbsolutePathBuf>,
     connector_slug_counts: &HashMap<String, usize>,
 ) -> Vec<SkillMetadata> {
+    collect_skill_mentions(
+        inputs,
+        skills,
+        disabled_paths,
+        connector_slug_counts,
+        /*include_plain_names*/ true,
+    )
+}
+
+/// Collect structured skill selections and linked skill paths that can be
+/// resolved without app inventory.
+pub fn collect_unambiguous_skill_mentions(
+    inputs: &[UserInput],
+    skills: &[SkillMetadata],
+    disabled_paths: &HashSet<AbsolutePathBuf>,
+) -> Vec<SkillMetadata> {
+    collect_skill_mentions(
+        inputs,
+        skills,
+        disabled_paths,
+        &HashMap::new(),
+        /*include_plain_names*/ false,
+    )
+}
+
+fn collect_skill_mentions(
+    inputs: &[UserInput],
+    skills: &[SkillMetadata],
+    disabled_paths: &HashSet<AbsolutePathBuf>,
+    connector_slug_counts: &HashMap<String, usize>,
+    include_plain_names: bool,
+) -> Vec<SkillMetadata> {
     let skill_name_counts = build_skill_name_counts(skills, disabled_paths).0;
 
     let selection_context = SkillSelectionContext {
@@ -164,6 +196,7 @@ pub fn collect_explicit_skill_mentions(
                 &mut seen_names,
                 &mut seen_paths,
                 &mut selected,
+                include_plain_names,
             );
         }
     }
@@ -326,6 +359,7 @@ fn select_skills_from_mentions(
     seen_names: &mut HashSet<String>,
     seen_paths: &mut HashSet<AbsolutePathBuf>,
     selected: &mut Vec<SkillMetadata>,
+    include_plain_names: bool,
 ) {
     if mentions.is_empty() {
         return;
@@ -357,6 +391,10 @@ fn select_skills_from_mentions(
             seen_names.insert(skill.name.clone());
             selected.push(skill.clone());
         }
+    }
+
+    if !include_plain_names {
+        return;
     }
 
     for skill in selection_context.skills {
