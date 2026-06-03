@@ -6,6 +6,7 @@
 
 mod audit;
 mod extract;
+mod generated_memory_store;
 pub mod log_db;
 mod migrations;
 mod model;
@@ -27,6 +28,8 @@ pub use audit::read_thread_state_audit_rows;
 /// Most consumers should prefer [`StateRuntime`].
 pub use extract::apply_rollout_item;
 pub use extract::rollout_item_affects_thread_metadata;
+pub use generated_memory_store::GeneratedMemoryStore;
+pub use generated_memory_store::GeneratedMemoryStoreFuture;
 pub use model::AgentJob;
 pub use model::AgentJobCreateParams;
 pub use model::AgentJobItem;

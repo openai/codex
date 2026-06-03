@@ -18,6 +18,7 @@ use codex_protocol::protocol::TokenUsage;
 use codex_rollout::INTERACTIVE_SESSION_SOURCES;
 use codex_rollout::should_persist_response_item_for_memories;
 use codex_secrets::redact_secrets;
+use codex_state::GeneratedMemoryStore;
 use futures::StreamExt;
 use serde::Deserialize;
 use serde_json::Value;
@@ -67,12 +68,17 @@ struct StageOneOutput {
 /// 2) build one stage-1 request context
 /// 3) run stage-1 extraction jobs in parallel
 /// 4) emit metrics and logs
-pub async fn run(context: Arc<MemoryStartupContext>, config: Arc<Config>) {
+pub async fn run(
+    context: Arc<MemoryStartupContext>,
+    config: Arc<Config>,
+    store: Arc<dyn GeneratedMemoryStore>,
+) {
     let stage_one_context = build_request_context(context.as_ref(), config.as_ref()).await;
     let _phase_one_e2e_timer = stage_one_context.start_timer(MEMORY_PHASE_ONE_E2E_MS);
 
     // 1. Claim startup job.
-    let Some(claimed_candidates) = claim_startup_jobs(context.as_ref(), &config.memories).await
+    let Some(claimed_candidates) =
+        claim_startup_jobs(context.as_ref(), &config.memories, store.as_ref()).await
     else {
         return;
     };
@@ -89,6 +95,7 @@ pub async fn run(context: Arc<MemoryStartupContext>, config: Arc<Config>) {
     let outcomes = run_jobs(
         context,
         config,
+        store,
         claimed_candidates,
         stage_one_context.clone(),
     )
@@ -108,26 +115,23 @@ pub async fn run(context: Arc<MemoryStartupContext>, config: Arc<Config>) {
 }
 
 /// Prune old un-used "dead" raw memories.
-pub async fn prune(context: &MemoryStartupContext, config: &Config) {
-    if let Some(db) = context.state_db() {
-        let max_unused_days = config.memories.max_unused_days;
-        match db
-            .memories()
-            .prune_stage1_outputs_for_retention(max_unused_days, crate::stage_one::PRUNE_BATCH_SIZE)
-            .await
-        {
-            Ok(pruned) => {
-                if pruned > 0 {
-                    info!(
-                        "memory startup pruned {pruned} stale stage-1 output row(s) older than {max_unused_days} days"
-                    );
-                }
-            }
-            Err(err) => {
-                warn!(
-                    "memories db prune_stage1_outputs_for_retention failed during memories startup: {err}"
+pub async fn prune(store: &dyn GeneratedMemoryStore, config: &Config) {
+    let max_unused_days = config.memories.max_unused_days;
+    match store
+        .prune_stage1_outputs_for_retention(max_unused_days, crate::stage_one::PRUNE_BATCH_SIZE)
+        .await
+    {
+        Ok(pruned) => {
+            if pruned > 0 {
+                info!(
+                    "memory startup pruned {pruned} stale stage-1 output row(s) older than {max_unused_days} days"
                 );
             }
+        }
+        Err(err) => {
+            warn!(
+                "memories db prune_stage1_outputs_for_retention failed during memories startup: {err}"
+            );
         }
     }
 }
@@ -149,20 +153,14 @@ pub fn output_schema() -> Value {
 async fn claim_startup_jobs(
     context: &MemoryStartupContext,
     memories_config: &MemoriesConfig,
+    store: &dyn GeneratedMemoryStore,
 ) -> Option<Vec<codex_state::Stage1JobClaim>> {
-    let Some(state_db) = context.state_db() else {
-        // This should not happen.
-        warn!("state db unavailable while claiming phase-1 startup jobs; skipping");
-        return None;
-    };
-
     let allowed_sources = INTERACTIVE_SESSION_SOURCES
         .iter()
         .map(ToString::to_string)
         .collect::<Vec<_>>();
 
-    match state_db
-        .memories()
+    match store
         .claim_stage1_jobs_for_startup(
             context.thread_id(),
             codex_state::Stage1StartupClaimParams {
@@ -203,6 +201,7 @@ async fn build_request_context(
 async fn run_jobs(
     context: Arc<MemoryStartupContext>,
     config: Arc<Config>,
+    store: Arc<dyn GeneratedMemoryStore>,
     claimed_candidates: Vec<codex_state::Stage1JobClaim>,
     stage_one_context: StageOneRequestContext,
 ) -> Vec<JobResult> {
@@ -210,9 +209,17 @@ async fn run_jobs(
         .map(|claim| {
             let context = Arc::clone(&context);
             let config = Arc::clone(&config);
+            let store = Arc::clone(&store);
             let stage_one_context = stage_one_context.clone();
             async move {
-                job::run(context.as_ref(), config.as_ref(), claim, &stage_one_context).await
+                job::run(
+                    context.as_ref(),
+                    config.as_ref(),
+                    store.as_ref(),
+                    claim,
+                    &stage_one_context,
+                )
+                .await
             }
         })
         .buffer_unordered(crate::stage_one::CONCURRENCY_LIMIT)
@@ -226,6 +233,7 @@ mod job {
     pub(crate) async fn run(
         context: &MemoryStartupContext,
         config: &Config,
+        store: &dyn GeneratedMemoryStore,
         claim: codex_state::Stage1JobClaim,
         stage_one_context: &StageOneRequestContext,
     ) -> JobResult {
@@ -242,7 +250,7 @@ mod job {
             Ok(output) => output,
             Err(reason) => {
                 result::failed(
-                    context,
+                    store,
                     claimed_thread.id,
                     &claim.ownership_token,
                     &reason.to_string(),
@@ -257,15 +265,14 @@ mod job {
 
         if stage_one_output.raw_memory.is_empty() || stage_one_output.rollout_summary.is_empty() {
             return JobResult {
-                outcome: result::no_output(context, claimed_thread.id, &claim.ownership_token)
-                    .await,
+                outcome: result::no_output(store, claimed_thread.id, &claim.ownership_token).await,
                 token_usage,
             };
         }
 
         JobResult {
             outcome: result::success(
-                context,
+                store,
                 claimed_thread.id,
                 &claim.ownership_token,
                 claimed_thread.updated_at.timestamp(),
@@ -325,36 +332,28 @@ mod job {
         use super::*;
 
         pub(crate) async fn failed(
-            context: &MemoryStartupContext,
+            store: &dyn GeneratedMemoryStore,
             thread_id: codex_protocol::ThreadId,
             ownership_token: &str,
             reason: &str,
         ) {
             tracing::warn!("Phase 1 job failed for thread {thread_id}: {reason}");
-            if let Some(state_db) = context.state_db() {
-                let _ = state_db
-                    .memories()
-                    .mark_stage1_job_failed(
-                        thread_id,
-                        ownership_token,
-                        reason,
-                        crate::stage_one::JOB_RETRY_DELAY_SECONDS,
-                    )
-                    .await;
-            }
+            let _ = store
+                .mark_stage1_job_failed(
+                    thread_id,
+                    ownership_token,
+                    reason,
+                    crate::stage_one::JOB_RETRY_DELAY_SECONDS,
+                )
+                .await;
         }
 
         pub(crate) async fn no_output(
-            context: &MemoryStartupContext,
+            store: &dyn GeneratedMemoryStore,
             thread_id: codex_protocol::ThreadId,
             ownership_token: &str,
         ) -> JobOutcome {
-            let Some(state_db) = context.state_db() else {
-                return JobOutcome::Failed;
-            };
-
-            if state_db
-                .memories()
+            if store
                 .mark_stage1_job_succeeded_no_output(thread_id, ownership_token)
                 .await
                 .unwrap_or(false)
@@ -366,7 +365,7 @@ mod job {
         }
 
         pub(crate) async fn success(
-            context: &MemoryStartupContext,
+            store: &dyn GeneratedMemoryStore,
             thread_id: codex_protocol::ThreadId,
             ownership_token: &str,
             source_updated_at: i64,
@@ -374,12 +373,7 @@ mod job {
             rollout_summary: &str,
             rollout_slug: Option<&str>,
         ) -> JobOutcome {
-            let Some(state_db) = context.state_db() else {
-                return JobOutcome::Failed;
-            };
-
-            if state_db
-                .memories()
+            if store
                 .mark_stage1_job_succeeded(
                     thread_id,
                     ownership_token,
