@@ -22,18 +22,21 @@ pub(crate) const RESOURCES_DIRNAME: &str = "codex-resources";
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum HelperExecutable {
     CommandRunner,
+    Setup,
 }
 
 impl HelperExecutable {
     fn file_name(self) -> &'static str {
         match self {
             Self::CommandRunner => "codex-command-runner.exe",
+            Self::Setup => "codex-windows-sandbox-setup.exe",
         }
     }
 
     fn label(self) -> &'static str {
         match self {
             Self::CommandRunner => "command-runner",
+            Self::Setup => "setup-helper",
         }
     }
 }
@@ -459,6 +462,30 @@ mod tests {
     }
 
     #[test]
+    fn copy_setup_helper_into_shared_bin_dir() {
+        let tmp = TempDir::new().expect("tempdir");
+        let codex_home = tmp.path().join("codex-home");
+        let source_dir = tmp.path().join("sibling-source");
+        fs::create_dir_all(&source_dir).expect("create source dir");
+        let setup_source = source_dir.join("codex-windows-sandbox-setup.exe");
+        fs::write(&setup_source, b"setup").expect("write setup helper");
+        let setup_suffix = helper_version_suffix(&setup_source).expect("setup suffix");
+        let setup_destination = helper_bin_dir(&codex_home).join(materialized_file_name(
+            HelperExecutable::Setup,
+            &setup_suffix,
+        ));
+
+        let setup_outcome =
+            copy_from_source_if_needed(&setup_source, &setup_destination).expect("setup copy");
+
+        assert_eq!(CopyOutcome::ReCopied, setup_outcome);
+        assert_eq!(
+            b"setup".as_slice(),
+            fs::read(&setup_destination).expect("read setup helper")
+        );
+    }
+
+    #[test]
     fn helper_source_lookup_checks_resource_dir() {
         let tmp = TempDir::new().expect("tempdir");
         let release_dir = tmp.path().join("release");
@@ -558,5 +585,12 @@ mod tests {
         let file_name = materialized_file_name(HelperExecutable::CommandRunner, "test-suffix");
 
         assert_eq!(file_name, "codex-command-runner-test-suffix.exe");
+    }
+
+    #[test]
+    fn setup_materialized_file_name_adds_suffix_before_extension() {
+        let file_name = materialized_file_name(HelperExecutable::Setup, "test-suffix");
+
+        assert_eq!(file_name, "codex-windows-sandbox-setup-test-suffix.exe");
     }
 }
