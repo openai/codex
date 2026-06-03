@@ -253,7 +253,7 @@ async fn windows_elevated_enforces_deny_read_and_protects_setup_marker() -> anyh
                 "/D".to_string(),
                 "/C".to_string(),
                 format!(
-                    "(type secret.env 1>NUL 2>NUL && echo GLOB-READ || echo GLOB-DENIED) & (type exact-secret.txt 1>NUL 2>NUL && echo EXACT-READ || echo EXACT-DENIED) & (echo tampered > \"{}\" 2>NUL && echo MARKER-WRITE || echo MARKER-DENIED) & type public.txt",
+                    "(type secret.env 1>NUL 2>NUL && echo GLOB-READ || echo GLOB-DENIED) & (type exact-secret.txt 1>NUL 2>NUL && echo EXACT-READ || echo EXACT-DENIED) & (echo tampered 2>NUL > \"{}\" && echo MARKER-WRITE || echo MARKER-DENIED) & type public.txt",
                     setup_marker.display()
                 ),
             ],
