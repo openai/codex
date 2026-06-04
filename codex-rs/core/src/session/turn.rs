@@ -74,6 +74,7 @@ use codex_core_skills::injection::InjectedHostSkillPrompts;
 use codex_extension_api::TurnInputContext;
 use codex_extension_api::TurnInputEnvironment;
 use codex_features::Feature;
+use codex_git_utils::get_git_repo_root_with_fs;
 use codex_protocol::config_types::AutoCompactTokenLimitScope;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::ServiceTier;
@@ -196,9 +197,9 @@ pub(crate) async fn run_turn(
     // Although from the perspective of codex.rs, TurnDiffTracker has the lifecycle of a Task which contains
     // many turns, from the perspective of the user, it is a single turn.
     let turn_diff_tracker = Arc::new(tokio::sync::Mutex::new(
-        TurnDiffTracker::with_environment_display_roots(turn_diff_display_roots(
-            turn_context.as_ref(),
-        )),
+        TurnDiffTracker::with_environment_display_roots(
+            turn_diff_display_roots(turn_context.as_ref()).await,
+        ),
     ));
 
     // `ModelClientSession` is turn-scoped and caches WebSocket + sticky routing state, so we reuse
@@ -410,18 +411,19 @@ pub(crate) async fn run_turn(
     last_agent_message
 }
 
-fn turn_diff_display_roots(turn_context: &TurnContext) -> Vec<(String, PathBuf)> {
-    turn_context
-        .environments
-        .turn_environments
-        .iter()
-        .map(|turn_environment| {
-            (
-                turn_environment.environment_id.clone(),
-                turn_environment.cwd.clone().into_path_buf(),
-            )
-        })
-        .collect()
+async fn turn_diff_display_roots(turn_context: &TurnContext) -> Vec<(String, PathBuf)> {
+    let mut display_roots = Vec::new();
+    for turn_environment in &turn_context.environments.turn_environments {
+        let root = get_git_repo_root_with_fs(
+            turn_environment.environment.get_filesystem().as_ref(),
+            &turn_environment.cwd,
+        )
+        .await
+        .unwrap_or_else(|| turn_environment.cwd.clone())
+        .into_path_buf();
+        display_roots.push((turn_environment.environment_id.clone(), root));
+    }
+    display_roots
 }
 
 async fn run_hooks_and_record_inputs(
