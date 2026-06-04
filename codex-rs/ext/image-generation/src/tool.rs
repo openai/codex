@@ -1,5 +1,3 @@
-use std::path::Path;
-
 use codex_api::ImageBackground;
 use codex_api::ImageEditRequest;
 use codex_api::ImageGenerationRequest;
@@ -69,7 +67,7 @@ impl ImageGenerationTool {
 #[serde(deny_unknown_fields)]
 struct ImagegenArgs {
     prompt: String,
-    referenced_image_paths: Option<Vec<String>>,
+    referenced_image_paths: Option<Vec<AbsolutePathBuf>>,
 }
 
 #[async_trait::async_trait]
@@ -156,10 +154,7 @@ fn request_for_args(args: &ImagegenArgs) -> Result<ImageRequest, FunctionCallErr
         }));
     }
 
-    let images = paths
-        .iter()
-        .map(|path| image_url(Path::new(path)))
-        .collect::<Result<Vec<_>, _>>()?;
+    let images = paths.iter().map(image_url).collect::<Result<Vec<_>, _>>()?;
     Ok(ImageRequest::Edit(ImageEditRequest {
         images,
         prompt: args.prompt.clone(),
@@ -171,19 +166,21 @@ fn request_for_args(args: &ImagegenArgs) -> Result<ImageRequest, FunctionCallErr
     }))
 }
 
-fn image_url(path: &Path) -> Result<ImageUrl, FunctionCallError> {
+fn image_url(path: &AbsolutePathBuf) -> Result<ImageUrl, FunctionCallError> {
     let bytes = std::fs::read(path).map_err(|error| {
         FunctionCallError::RespondToModel(format!(
             "unable to read referenced image at `{}`: {error}",
             path.display()
         ))
     })?;
-    let image = load_for_prompt_bytes(path, bytes, PromptImageMode::Original).map_err(|error| {
-        FunctionCallError::RespondToModel(format!(
-            "unable to process referenced image at `{}`: {error}",
-            path.display()
-        ))
-    })?;
+    let image = load_for_prompt_bytes(path.as_path(), bytes, PromptImageMode::Original).map_err(
+        |error| {
+            FunctionCallError::RespondToModel(format!(
+                "unable to process referenced image at `{}`: {error}",
+                path.display()
+            ))
+        },
+    )?;
     Ok(ImageUrl {
         image_url: image.into_data_url(),
     })
