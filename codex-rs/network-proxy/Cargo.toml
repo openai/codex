@@ -52,4 +52,4 @@ security-framework = "3"
 
 [target.'cfg(windows)'.dependencies]
 schannel = "0.1"
-windows-sys = { version = "0.52", features = ["Win32_Storage_FileSystem"] }
+windows-sys = { version = "0.52", features = ["Win32_Foundation", "Win32_Storage_FileSystem"] }
