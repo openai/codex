@@ -1370,6 +1370,27 @@ async fn plugin_cache_ignores_unrelated_session_overrides() {
     assert_eq!(second.plugins()[0].mcp_servers.len(), 1);
 }
 
+#[test]
+fn plugin_cache_invalidation_rejects_stale_load_completion() {
+    let codex_home = TempDir::new().unwrap();
+    let manager = PluginsManager::new(codex_home.path().to_path_buf());
+    let cache_key = PluginLoadCacheKey {
+        configured_plugins: HashMap::new(),
+        skill_config_rules: SkillConfigRules::default(),
+        remote_plugin_enabled: false,
+    };
+    let stale_generation = manager.enabled_outcome_cache_generation();
+
+    manager.clear_enabled_outcome_cache();
+    manager.cache_enabled_outcome_if_current(
+        stale_generation,
+        cache_key.clone(),
+        PluginLoadOutcome::default(),
+    );
+
+    assert_eq!(manager.cached_enabled_outcome(&cache_key), None);
+}
+
 #[tokio::test]
 async fn load_plugins_rejects_invalid_plugin_keys() {
     let codex_home = TempDir::new().unwrap();
