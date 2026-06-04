@@ -14,7 +14,6 @@ pub(super) struct RolloutReconstruction {
 #[derive(Debug)]
 pub(super) struct RolloutReconstructionPlan {
     base_replacement_history_index: Option<usize>,
-    rollout_suffix_start_index: usize,
     previous_turn_settings: Option<PreviousTurnSettings>,
     reference_context_item: Option<TurnContextItem>,
     window_generation: u64,
@@ -94,7 +93,6 @@ fn finalize_active_segment(
     reference_context_item: &mut TurnReferenceContextItem,
     window_generation: &mut u64,
     pending_rollback_turns: &mut usize,
-    reconstruction_complete: bool,
 ) {
     // Thread rollback drops the newest surviving real user-message boundaries. In replay, that
     // means skipping the next finalized segments that contain a non-contextual
@@ -109,10 +107,6 @@ fn finalize_active_segment(
     }
 
     *window_generation = window_generation.saturating_add(active_segment.compaction_count);
-
-    if reconstruction_complete {
-        return;
-    }
 
     // A surviving replacement-history checkpoint is a complete history base. Once we
     // know the newest surviving one, older rollout items do not affect rebuilt history.
@@ -147,13 +141,9 @@ impl Session {
         // while history materialization still uses an eager bridge. Scan newest-to-oldest once to
         // derive the surviving history base, hydration metadata, and window lineage together.
         let mut base_replacement_history_index = None;
-        let mut rollout_suffix_start_index = 0;
         let mut previous_turn_settings = None;
         let mut reference_context_item = TurnReferenceContextItem::NeverSet;
         let mut window_generation = 0u64;
-        // Preserve the existing history and hydration result once the original reconstruction
-        // stopping condition is met, while the same loop continues only to derive window lineage.
-        let mut reconstruction_complete = false;
         // Rollback is "drop the newest N user turns". While scanning in reverse, that becomes
         // "skip the next N user-turn segments we finalize".
         let mut pending_rollback_turns = 0usize;
@@ -176,7 +166,7 @@ impl Session {
                     }
                     // Looking backward, compaction clears any older baseline unless a newer
                     // `TurnContextItem` in this same segment has already re-established it.
-                    if !reconstruction_complete
+                    if matches!(reference_context_item, TurnReferenceContextItem::NeverSet)
                         && matches!(
                             active_segment.reference_context_item,
                             TurnReferenceContextItem::NeverSet
@@ -184,12 +174,11 @@ impl Session {
                     {
                         active_segment.reference_context_item = TurnReferenceContextItem::Cleared;
                     }
-                    if !reconstruction_complete
+                    if base_replacement_history_index.is_none()
                         && active_segment.base_replacement_history_index.is_none()
                         && compacted.replacement_history.is_some()
                     {
                         active_segment.base_replacement_history_index = Some(index);
-                        rollout_suffix_start_index = index + 1;
                     }
                 }
                 RolloutItem::EventMsg(EventMsg::ThreadRolledBack(rollback)) => {
@@ -232,20 +221,25 @@ impl Session {
                     if active_segment.turn_id.is_none() {
                         active_segment.turn_id = ctx.turn_id.clone();
                     }
-                    if !reconstruction_complete
+                    if (previous_turn_settings.is_none()
+                        || matches!(reference_context_item, TurnReferenceContextItem::NeverSet))
                         && turn_ids_are_compatible(
                             active_segment.turn_id.as_deref(),
                             ctx.turn_id.as_deref(),
                         )
                     {
-                        active_segment.previous_turn_settings = Some(PreviousTurnSettings {
-                            model: ctx.model.clone(),
-                            realtime_active: ctx.realtime_active,
-                        });
-                        if matches!(
-                            active_segment.reference_context_item,
-                            TurnReferenceContextItem::NeverSet
-                        ) {
+                        if previous_turn_settings.is_none() {
+                            active_segment.previous_turn_settings = Some(PreviousTurnSettings {
+                                model: ctx.model.clone(),
+                                realtime_active: ctx.realtime_active,
+                            });
+                        }
+                        if matches!(reference_context_item, TurnReferenceContextItem::NeverSet)
+                            && matches!(
+                                active_segment.reference_context_item,
+                                TurnReferenceContextItem::NeverSet
+                            )
+                        {
                             active_segment.reference_context_item =
                                 TurnReferenceContextItem::Latest(Box::new(ctx.clone()));
                         }
@@ -267,7 +261,6 @@ impl Session {
                             &mut reference_context_item,
                             &mut window_generation,
                             &mut pending_rollback_turns,
-                            reconstruction_complete,
                         );
                     }
                 }
@@ -277,14 +270,6 @@ impl Session {
                     active_segment.counts_as_user_turn |= is_user_turn_boundary(response_item);
                 }
                 RolloutItem::EventMsg(_) | RolloutItem::SessionMeta(_) => {}
-            }
-
-            if !reconstruction_complete
-                && base_replacement_history_index.is_some()
-                && previous_turn_settings.is_some()
-                && !matches!(reference_context_item, TurnReferenceContextItem::NeverSet)
-            {
-                reconstruction_complete = true;
             }
         }
 
@@ -296,7 +281,6 @@ impl Session {
                 &mut reference_context_item,
                 &mut window_generation,
                 &mut pending_rollback_turns,
-                reconstruction_complete,
             );
         }
 
@@ -309,7 +293,6 @@ impl Session {
 
         RolloutReconstructionPlan {
             base_replacement_history_index,
-            rollout_suffix_start_index,
             previous_turn_settings,
             reference_context_item,
             window_generation,
@@ -323,7 +306,6 @@ impl Session {
     ) -> RolloutReconstruction {
         let RolloutReconstructionPlan {
             base_replacement_history_index,
-            rollout_suffix_start_index,
             previous_turn_settings,
             reference_context_item,
             window_generation,
@@ -338,6 +320,8 @@ impl Session {
             };
             history.replace(replacement_history.clone());
         }
+        let rollout_suffix_start_index =
+            base_replacement_history_index.map_or(0, |index| index + 1);
         let rollout_suffix = &rollout_items[rollout_suffix_start_index..];
 
         let mut saw_legacy_compaction_without_replacement_history = false;
