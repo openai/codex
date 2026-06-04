@@ -190,7 +190,8 @@ where
     fn on_event(&self, event: &Event<'_>, ctx: tracing_subscriber::layer::Context<'_, S>) {
         let metadata = event.metadata();
         // The SDK emits DEBUG timer meta-events every second per process; these
-        // were about 42% of retained logs in one high-fanout Codex environment.
+        // were roughly one third or more of retained logs in measured high-fanout
+        // Codex environments.
         if metadata.target() == "opentelemetry_sdk"
             && matches!(
                 *metadata.level(),
