@@ -566,8 +566,11 @@ mod imp {
     use windows_sys::Win32::Foundation::WAIT_TIMEOUT;
     use windows_sys::Win32::Storage::FileSystem::ReadFile;
     use windows_sys::Win32::Storage::FileSystem::WriteFile;
+    use windows_sys::Win32::System::Console::COMMON_LVB_REVERSE_VIDEO;
+    use windows_sys::Win32::System::Console::CONSOLE_SCREEN_BUFFER_INFOEX;
     use windows_sys::Win32::System::Console::ENABLE_VIRTUAL_TERMINAL_INPUT;
     use windows_sys::Win32::System::Console::GetConsoleMode;
+    use windows_sys::Win32::System::Console::GetConsoleScreenBufferInfoEx;
     use windows_sys::Win32::System::Console::GetStdHandle;
     use windows_sys::Win32::System::Console::STD_INPUT_HANDLE;
     use windows_sys::Win32::System::Console::STD_OUTPUT_HANDLE;
@@ -580,11 +583,60 @@ mod imp {
     /// currently Unix-only. Failures and missing responses are reported as `Ok(None)` by callers so
     /// terminals without OSC 10/11 support keep the existing conservative palette fallback.
     pub(crate) fn default_colors(timeout: Duration) -> io::Result<Option<DefaultColors>> {
-        let input = std_handle(STD_INPUT_HANDLE)?;
-        let output = std_handle(STD_OUTPUT_HANDLE)?;
+        let Ok(output) = std_handle(STD_OUTPUT_HANDLE) else {
+            return Ok(None);
+        };
+
+        if let Ok(input) = std_handle(STD_INPUT_HANDLE)
+            && let Ok(Some(colors)) = query_osc_default_colors(input, output, timeout)
+        {
+            return Ok(Some(colors));
+        }
+
+        Ok(query_console_default_colors(output).ok().flatten())
+    }
+
+    fn query_osc_default_colors(
+        input: HANDLE,
+        output: HANDLE,
+        timeout: Duration,
+    ) -> io::Result<Option<DefaultColors>> {
         let _vt_input = VirtualTerminalInputMode::enable(input)?;
         write_all(output, b"\x1B]10;?\x1B\\\x1B]11;?\x1B\\")?;
         read_until(input, timeout, parse_default_colors)
+    }
+
+    fn query_console_default_colors(output: HANDLE) -> io::Result<Option<DefaultColors>> {
+        let mut info = unsafe { std::mem::zeroed::<CONSOLE_SCREEN_BUFFER_INFOEX>() };
+        info.cbSize = std::mem::size_of::<CONSOLE_SCREEN_BUFFER_INFOEX>() as u32;
+        if unsafe { GetConsoleScreenBufferInfoEx(output, &mut info) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(Some(decode_console_default_colors(
+            info.wAttributes,
+            &info.ColorTable,
+        )))
+    }
+
+    fn decode_console_default_colors(attributes: u16, color_table: &[u32; 16]) -> DefaultColors {
+        let fg_index = (attributes & 0x0f) as usize;
+        let bg_index = ((attributes >> 4) & 0x0f) as usize;
+        let mut fg = decode_color_ref(color_table[fg_index]);
+        let mut bg = decode_color_ref(color_table[bg_index]);
+
+        if attributes & COMMON_LVB_REVERSE_VIDEO != 0 {
+            std::mem::swap(&mut fg, &mut bg);
+        }
+
+        DefaultColors { fg, bg }
+    }
+
+    fn decode_color_ref(color_ref: u32) -> (u8, u8, u8) {
+        (
+            (color_ref & 0xff) as u8,
+            ((color_ref >> 8) & 0xff) as u8,
+            ((color_ref >> 16) & 0xff) as u8,
+        )
     }
 
     fn std_handle(kind: u32) -> io::Result<HANDLE> {
@@ -695,6 +747,71 @@ mod imp {
         }
         buffer.extend_from_slice(&chunk[..read as usize]);
         Ok(())
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use pretty_assertions::assert_eq;
+
+        fn color_table() -> [u32; 16] {
+            [
+                0x00000000, 0x00000080, 0x00008000, 0x00008080, 0x00800000, 0x00800080, 0x00808000,
+                0x00c0c0c0, 0x00808080, 0x000000ff, 0x0000ff00, 0x0000ffff, 0x00ff0000, 0x00ff00ff,
+                0x00ffff00, 0x00ffffff,
+            ]
+        }
+
+        #[test]
+        fn decodes_console_color_attribute_indices() {
+            assert_eq!(
+                decode_console_default_colors(/*attributes*/ 0x21, &color_table()),
+                DefaultColors {
+                    fg: (128, 0, 0),
+                    bg: (0, 128, 0),
+                }
+            );
+        }
+
+        #[test]
+        fn decodes_console_color_intensity_indices() {
+            assert_eq!(
+                decode_console_default_colors(/*attributes*/ 0xe9, &color_table()),
+                DefaultColors {
+                    fg: (255, 0, 0),
+                    bg: (0, 255, 255),
+                }
+            );
+        }
+
+        #[test]
+        fn decodes_console_color_ref_byte_order() {
+            let mut colors = color_table();
+            colors[3] = 0x00112233;
+            colors[4] = 0x00aabbcc;
+
+            assert_eq!(
+                decode_console_default_colors(/*attributes*/ 0x43, &colors),
+                DefaultColors {
+                    fg: (0x33, 0x22, 0x11),
+                    bg: (0xcc, 0xbb, 0xaa),
+                }
+            );
+        }
+
+        #[test]
+        fn swaps_console_colors_when_reverse_video_is_set() {
+            assert_eq!(
+                decode_console_default_colors(
+                    /*attributes*/ COMMON_LVB_REVERSE_VIDEO | 0x21,
+                    &color_table(),
+                ),
+                DefaultColors {
+                    fg: (0, 128, 0),
+                    bg: (128, 0, 0),
+                }
+            );
+        }
     }
 }
 
