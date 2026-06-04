@@ -151,15 +151,6 @@ impl ToolEmitter {
         }
     }
 
-    #[cfg(test)]
-    pub fn apply_patch(changes: HashMap<PathBuf, FileChange>, auto_approved: bool) -> Self {
-        Self::ApplyPatch {
-            changes,
-            auto_approved,
-            environment_id: None,
-        }
-    }
-
     pub fn apply_patch_for_environment(
         changes: HashMap<PathBuf, FileChange>,
         auto_approved: bool,
@@ -664,14 +655,18 @@ mod tests {
         .await
         .expect("apply patch");
 
-        ToolEmitter::apply_patch(HashMap::new(), /*auto_approved*/ false)
-            .finish(
-                ToolEventCtx::new(session.as_ref(), turn.as_ref(), "call-id", Some(&tracker)),
-                out,
-                Some(&delta),
-            )
-            .await
-            .expect_err("failed patch");
+        ToolEmitter::ApplyPatch {
+            changes: HashMap::new(),
+            auto_approved: false,
+            environment_id: None,
+        }
+        .finish(
+            ToolEventCtx::new(session.as_ref(), turn.as_ref(), "call-id", Some(&tracker)),
+            out,
+            Some(&delta),
+        )
+        .await
+        .expect_err("failed patch");
 
         let completed = rx_event.recv().await.expect("item completed event");
         assert!(matches!(
