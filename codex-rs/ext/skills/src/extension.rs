@@ -1,39 +1,49 @@
-use std::future::Future;
-use std::pin::Pin;
 use std::sync::Arc;
 
 use codex_core::config::Config;
+use codex_core_skills::SkillInstructions;
+use codex_core_skills::injection::SkillInjection;
 use codex_extension_api::ConfigContributor;
-use codex_extension_api::ContextContributor;
+use codex_extension_api::ContextualUserFragment;
 use codex_extension_api::ExtensionData;
+use codex_extension_api::ExtensionEventSink;
 use codex_extension_api::ExtensionRegistryBuilder;
-use codex_extension_api::PromptFragment;
 use codex_extension_api::ThreadLifecycleContributor;
 use codex_extension_api::ThreadStartInput;
-use codex_extension_api::TurnLifecycleContributor;
-use codex_extension_api::TurnStartInput;
+use codex_extension_api::TurnInputContext;
+use codex_extension_api::TurnInputContributor;
+use codex_protocol::protocol::Event;
+use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::WarningEvent;
 
+use crate::catalog::SkillAuthority;
+use crate::catalog::SkillCatalogEntry;
+use crate::catalog::SkillReadResult;
+use crate::catalog::SkillSourceKind;
 use crate::provider::SkillListQuery;
-use crate::providers::SkillProviders;
+use crate::provider::SkillReadRequest;
+use crate::render::available_skills_fragment;
+use crate::render::truncate_main_prompt_contents;
+use crate::selection::collect_explicit_skill_mentions;
+use crate::sources::SkillProviders;
 use crate::state::SkillsExtensionConfig;
+use crate::state::SkillsThreadState;
 use crate::state::SkillsTurnState;
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone)]
 struct SkillsExtension {
     providers: SkillProviders,
+    event_sink: Arc<dyn ExtensionEventSink>,
 }
 
 #[async_trait::async_trait]
 impl ThreadLifecycleContributor<Config> for SkillsExtension {
     async fn on_thread_start(&self, input: ThreadStartInput<'_, Config>) {
-        // TODO(skills-extension): this is only the thread-level config snapshot.
-        // Skills are loaded per turn today because cwd, plugin roots, config
-        // layers, and the primary environment filesystem can change between
-        // turns. The real migration needs a turn-preparation hook before model
-        // input construction, not just thread startup.
         input
             .thread_store
-            .insert(SkillsExtensionConfig::from_config(input.config));
+            .insert(SkillsThreadState::new(SkillsExtensionConfig::from_config(
+                input.config,
+            )));
     }
 }
 
@@ -45,96 +55,133 @@ impl ConfigContributor<Config> for SkillsExtension {
         _previous_config: &Config,
         new_config: &Config,
     ) {
-        // TODO(skills-extension): update any cached/listing state that depends
-        // on skill config overrides, bundled skills, or include_instructions.
-        thread_store.insert(SkillsExtensionConfig::from_config(new_config));
-    }
-}
-
-impl ContextContributor for SkillsExtension {
-    fn contribute<'a>(
-        &'a self,
-        _session_store: &'a ExtensionData,
-        thread_store: &'a ExtensionData,
-    ) -> Pin<Box<dyn Future<Output = Vec<PromptFragment>> + Send + 'a>> {
-        Box::pin(async move {
-            let Some(config) = thread_store.get::<SkillsExtensionConfig>() else {
-                return Vec::new();
-            };
-            if !config.include_instructions {
-                return Vec::new();
-            }
-
-            // TODO(skills-extension): render the available-skills developer
-            // block from the merged per-turn SkillCatalog. This should
-            // preserve the existing bounded metadata budget, root aliasing,
-            // warning behavior, and telemetry side effects.
-            //
-            // TODO(skills-extension): avoid using raw PromptFragment strings
-            // for final skills context if the extension API grows typed
-            // contextual fragments. Existing skill blocks are typed so resume
-            // and history filtering can recognize them reliably.
-            //
-            // TODO(skills-extension): ContextContributor currently cannot see
-            // the turn_store, so it cannot read the per-turn catalog seeded by
-            // the turn provider path below. This is the main extension-api gap
-            // to close before skills can move out of codex-core.
-            Vec::new()
-        })
+        let next_config = SkillsExtensionConfig::from_config(new_config);
+        if let Some(state) = thread_store.get::<SkillsThreadState>() {
+            state.set_config(next_config);
+        } else {
+            thread_store.insert(SkillsThreadState::new(next_config));
+        }
     }
 }
 
 #[async_trait::async_trait]
-impl TurnLifecycleContributor for SkillsExtension {
-    async fn on_turn_start(&self, input: TurnStartInput<'_>) {
-        // TODO(skills-extension): replace this lifecycle callback with a real
-        // turn-input contributor in codex-extension-api. This placeholder only
-        // demonstrates where provider aggregation belongs; it cannot resolve
-        // real skills because this hook does not receive cwd, executor
-        // selections, effective plugins/materialized plugin skill roots,
-        // connector slug counts, user input, cancellation, analytics, or a
-        // response-item output channel.
-        let query = SkillListQuery::placeholder_for_turn(input.turn_id);
-        let catalog = self
-            .providers
-            .list_for_turn(query)
-            .await
-            .unwrap_or_default();
+impl TurnInputContributor for SkillsExtension {
+    async fn contribute(
+        &self,
+        input: TurnInputContext,
+        _session_store: &ExtensionData,
+        thread_store: &ExtensionData,
+        turn_store: &ExtensionData,
+    ) -> Vec<Box<dyn ContextualUserFragment + Send>> {
+        let Some(thread_state) = thread_store.get::<SkillsThreadState>() else {
+            return Vec::new();
+        };
 
-        input.turn_store.insert(SkillsTurnState {
+        let config = thread_state.config();
+        let query = SkillListQuery {
+            turn_id: input.turn_id.clone(),
+            executor_authorities: input
+                .environments
+                .iter()
+                .map(|environment| {
+                    SkillAuthority::new(
+                        SkillSourceKind::Executor,
+                        environment.environment_id.clone(),
+                    )
+                })
+                .collect(),
+            include_host_skills: true,
+            include_bundled_skills: config.bundled_skills_enabled,
+            include_remote_skills: true,
+        };
+        let catalog = self.providers.list_for_turn(query).await;
+        for warning in &catalog.warnings {
+            self.emit_warning(&input.turn_id, warning.clone());
+        }
+
+        let selected_entries = collect_explicit_skill_mentions(&input.user_input, &catalog);
+        let mut fragments: Vec<Box<dyn ContextualUserFragment + Send>> = Vec::new();
+        if config.include_instructions
+            && let Some(fragment) = available_skills_fragment(&catalog)
+        {
+            fragments.push(Box::new(fragment));
+        }
+
+        let mut warnings = catalog.warnings.clone();
+        let mut main_prompts_injected = false;
+        for entry in &selected_entries {
+            match self.read_main_prompt(entry).await {
+                Ok(read_result) => {
+                    let (contents, truncated) =
+                        truncate_main_prompt_contents(read_result.contents.as_str());
+                    if truncated {
+                        let warning = format!(
+                            "Skill `{}` exceeded the main prompt context limit and was truncated.",
+                            entry.name
+                        );
+                        self.emit_warning(&input.turn_id, warning.clone());
+                        warnings.push(warning);
+                    }
+                    let injection = SkillInjection {
+                        name: entry.name.clone(),
+                        path: entry.rendered_path().to_string(),
+                        contents,
+                    };
+                    fragments.push(Box::new(SkillInstructions::from(&injection)));
+                    main_prompts_injected = true;
+                }
+                Err(message) => {
+                    let warning = format!("Failed to load skill `{}`: {message}", entry.name);
+                    self.emit_warning(&input.turn_id, warning.clone());
+                    warnings.push(warning);
+                }
+            }
+        }
+
+        turn_store.insert(SkillsTurnState {
             catalog,
-            entrypoints_injected: false,
+            selected_entries,
+            warnings,
+            main_prompts_injected,
         });
 
-        // TODO(skills-extension): after catalog resolution, collect explicit
-        // skill mentions from structured UserInput and text mentions.
-        //
-        // TODO(skills-extension): inject selected entrypoints as typed
-        // contextual user fragments, preserving <skill>...</skill> history
-        // recognition and bounded body size limits.
-        //
-        // TODO(skills-extension): move explicit $skill mention resolution,
-        // SKILL.md reads, skill body injection, and MCP dependency prompting
-        // out of codex-core's turn assembly once that hook exists.
+        fragments
     }
 }
 
-/// Installs the skills extension contributor sketch.
-///
-/// TODO(skills-extension): pass host capabilities here rather than letting the
-/// extension depend on Session. The final extension needs capability objects for
-/// loading skill roots, emitting warnings, tracking analytics, prompting for MCP
-/// dependency install, refreshing MCP servers, and serving app-server catalog
-/// requests.
-///
-/// TODO(skills-extension): plugin handling should stay outside the runtime
-/// skills model. Plugins are bundle/install units; once installed or refreshed,
-/// their skill descriptors/roots should be handed to this extension just like
-/// any other host-owned skill source.
+impl SkillsExtension {
+    async fn read_main_prompt(&self, entry: &SkillCatalogEntry) -> Result<SkillReadResult, String> {
+        self.providers
+            .read(SkillReadRequest {
+                authority: entry.authority.clone(),
+                package: entry.id.clone(),
+                resource: entry.main_prompt.clone(),
+            })
+            .await
+            .map_err(|err| err.message)
+    }
+
+    fn emit_warning(&self, turn_id: &str, message: String) {
+        self.event_sink.emit(Event {
+            id: turn_id.to_string(),
+            msg: EventMsg::Warning(WarningEvent { message }),
+        });
+    }
+}
+
 pub fn install(registry: &mut ExtensionRegistryBuilder<Config>) {
-    let extension = Arc::new(SkillsExtension::default());
+    install_with_providers(registry, SkillProviders::default());
+}
+
+pub fn install_with_providers(
+    registry: &mut ExtensionRegistryBuilder<Config>,
+    providers: SkillProviders,
+) {
+    let extension = Arc::new(SkillsExtension {
+        providers,
+        event_sink: registry.event_sink(),
+    });
     registry.thread_lifecycle_contributor(extension.clone());
     registry.config_contributor(extension.clone());
-    registry.prompt_contributor(extension.clone());
-    registry.turn_lifecycle_contributor(extension);
+    registry.turn_input_contributor(extension);
 }

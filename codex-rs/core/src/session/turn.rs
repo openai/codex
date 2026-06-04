@@ -469,7 +469,7 @@ async fn build_skills_and_plugins(
         .collect::<Vec<_>>();
     let tracking = build_track_events_context(
         turn_context.model_info.slug.clone(),
-        sess.conversation_id.to_string(),
+        sess.thread_id.to_string(),
         turn_context.sub_id.clone(),
     );
     let loaded_plugins = sess
@@ -628,7 +628,7 @@ async fn build_extension_turn_input_items(
 
     let mut items = Vec::new();
     for contributor in contributors {
-        let contributed_items = contributor
+        let contributed_fragments = contributor
             .contribute(
                 input.clone(),
                 &sess.services.session_extension_data,
@@ -638,7 +638,11 @@ async fn build_extension_turn_input_items(
             .or_cancel(cancellation_token)
             .await
             .ok()?;
-        items.extend(contributed_items);
+        items.extend(
+            contributed_fragments
+                .into_iter()
+                .map(ContextualUserFragment::into_boxed_response_item),
+        );
     }
 
     Some(items)
@@ -661,7 +665,7 @@ async fn track_turn_resolved_config_analytics(
         .analytics_events_client
         .track_turn_resolved_config(TurnResolvedConfigFact {
             turn_id: turn_context.sub_id.clone(),
-            thread_id: sess.conversation_id.to_string(),
+            thread_id: sess.thread_id.to_string(),
             num_input_images: input
                 .iter()
                 .filter_map(|item| match item {
@@ -1302,7 +1306,7 @@ impl ProposedPlanItemState {
             return;
         }
         let event = PlanDeltaEvent {
-            thread_id: sess.conversation_id.to_string(),
+            thread_id: sess.thread_id.to_string(),
             turn_id: turn_context.sub_id.clone(),
             item_id: self.item_id.clone(),
             delta: delta.to_string(),
@@ -1478,7 +1482,7 @@ async fn handle_plan_segments(
                 maybe_emit_pending_agent_message_start(sess, turn_context, state, item_id).await;
 
                 let event = AgentMessageContentDeltaEvent {
-                    thread_id: sess.conversation_id.to_string(),
+                    thread_id: sess.thread_id.to_string(),
                     turn_id: turn_context.sub_id.clone(),
                     item_id: item_id.to_string(),
                     delta,
@@ -1532,7 +1536,7 @@ async fn emit_streamed_assistant_text_delta(
         return;
     }
     let event = AgentMessageContentDeltaEvent {
-        thread_id: sess.conversation_id.to_string(),
+        thread_id: sess.thread_id.to_string(),
         turn_id: turn_context.sub_id.clone(),
         item_id: item_id.to_string(),
         delta: parsed.visible_text,
@@ -2098,7 +2102,7 @@ async fn try_run_sampling_request(
                         .await;
                     } else {
                         let event = AgentMessageContentDeltaEvent {
-                            thread_id: sess.conversation_id.to_string(),
+                            thread_id: sess.thread_id.to_string(),
                             turn_id: turn_context.sub_id.clone(),
                             item_id,
                             delta,
@@ -2137,7 +2141,7 @@ async fn try_run_sampling_request(
                         continue;
                     }
                     let event = ReasoningContentDeltaEvent {
-                        thread_id: sess.conversation_id.to_string(),
+                        thread_id: sess.thread_id.to_string(),
                         turn_id: turn_context.sub_id.clone(),
                         item_id: active.id(),
                         delta,
@@ -2173,7 +2177,7 @@ async fn try_run_sampling_request(
                         continue;
                     }
                     let event = ReasoningRawContentDeltaEvent {
-                        thread_id: sess.conversation_id.to_string(),
+                        thread_id: sess.thread_id.to_string(),
                         turn_id: turn_context.sub_id.clone(),
                         item_id: active.id(),
                         delta,

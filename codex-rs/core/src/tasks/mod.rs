@@ -384,7 +384,7 @@ impl Session {
         let task_span = info_span!(
             "turn",
             otel.name = span_name,
-            thread.id = %self.conversation_id,
+            thread.id = %self.thread_id,
             turn.id = %turn_context.sub_id,
             model = %turn_context.model_info.slug,
             codex.turn.reasoning_effort = %reasoning_effort,
@@ -709,7 +709,7 @@ impl Session {
                 .analytics_events_client
                 .track_turn_token_usage(TurnTokenUsageFact {
                     turn_id: turn_context.sub_id.clone(),
-                    thread_id: self.conversation_id.to_string(),
+                    thread_id: self.thread_id.to_string(),
                     token_usage: turn_token_usage.clone(),
                 });
             self.services.session_telemetry.histogram(

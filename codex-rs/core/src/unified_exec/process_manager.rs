@@ -1006,7 +1006,7 @@ impl UnifiedExecProcessManager {
         let mut env = local_policy_env.clone();
         env.insert(
             CODEX_THREAD_ID_ENV_VAR.to_string(),
-            context.session.conversation_id.to_string(),
+            context.session.thread_id.to_string(),
         );
         let env = apply_unified_exec_env(env);
         let exec_server_env_config = ExecServerEnvConfig {

@@ -662,7 +662,7 @@ async fn run_review_on_session(
         None
     };
     let mut analytics_result = GuardianReviewAnalyticsResult::from_session(
-        review_session.codex.session.conversation_id.to_string(),
+        review_session.codex.session.thread_id.to_string(),
         guardian_session_kind,
         params.model.clone(),
         guardian_reasoning_effort.map(|effort| effort.to_string()),

@@ -261,13 +261,13 @@ def test_schema_normalization_only_flattens_string_literal_oneofs(
     assert flattened == [
         "MessagePhase",
         "TurnItemsView",
-        "PluginAvailability",
         "AuthMode",
+        "PluginAvailability",
         "InputModality",
         "ExperimentalFeatureStage",
-        "AutoCompactTokenLimitScope",
-        "CommandExecOutputStream",
         "ProcessOutputStream",
+        "CommandExecOutputStream",
+        "AutoCompactTokenLimitScope",
     ]
 
 
@@ -358,10 +358,10 @@ def test_source_sdk_template_pins_published_runtime() -> None:
         "dependencies": pyproject["project"]["dependencies"],
     } == {
         "sdk_template_version": "0.0.0-dev",
-        "runtime_pin": "0.136.0",
+        "runtime_pin": "0.137.0a4",
         "dependencies": [
             "pydantic>=2.12",
-            "openai-codex-cli-bin==0.136.0",
+            "openai-codex-cli-bin==0.137.0a4",
         ],
     }
 
@@ -436,7 +436,7 @@ def test_runtime_setup_reads_independent_runtime_pin_and_release_tags() -> None:
     } == {
         "package_name": "openai-codex-cli-bin",
         "sdk_template_version": "0.0.0-dev",
-        "runtime_pin": "0.136.0",
+        "runtime_pin": "0.137.0a4",
         "normalized_release_version": "0.116.0a1",
         "release_tag": "rust-v0.116.0-alpha.1",
     }
@@ -651,7 +651,7 @@ def test_stage_sdk_release_preserves_reviewed_runtime_pin(tmp_path: Path) -> Non
         "version": "0.1.0b1",
         "dependencies": [
             "pydantic>=2.12",
-            "openai-codex-cli-bin==0.136.0",
+            "openai-codex-cli-bin==0.137.0a4",
         ],
     }
     assert (
@@ -688,7 +688,7 @@ def test_sdk_beta_release_can_pin_stable_runtime(tmp_path: Path) -> None:
     )
     runtime_stage = script.stage_python_runtime_package(
         tmp_path / "runtime-stage",
-        "0.136.0",
+        "0.137.0a4",
         package_archive,
     )
 
@@ -701,10 +701,10 @@ def test_sdk_beta_release_can_pin_stable_runtime(tmp_path: Path) -> None:
         "sdk_dependencies": sdk_pyproject["project"]["dependencies"],
     } == {
         "sdk_version": "0.1.0b1",
-        "runtime_version": "0.136.0",
+        "runtime_version": "0.137.0a4",
         "sdk_dependencies": [
             "pydantic>=2.12",
-            "openai-codex-cli-bin==0.136.0",
+            "openai-codex-cli-bin==0.137.0a4",
         ],
     }
 

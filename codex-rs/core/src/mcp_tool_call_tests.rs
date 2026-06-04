@@ -138,7 +138,7 @@ async fn execute_mcp_tool_call_records_replayable_correlation() -> anyhow::Resul
         .rollout_thread_trace
         .start_tool_dispatch_trace(|| {
             Some(ToolDispatchInvocation {
-                thread_id: session.conversation_id.to_string(),
+                thread_id: session.thread_id.to_string(),
                 codex_turn_id: turn_context.sub_id.clone(),
                 tool_call_id: "mcp-call".to_string(),
                 tool_name: "search".to_string(),
@@ -280,7 +280,7 @@ fn attach_trace_bundle(
         codex_rollout_trace::ThreadTraceContext::start_root_in_root_for_test(
             root,
             ThreadStartedTraceMetadata {
-                thread_id: session.conversation_id.to_string(),
+                thread_id: session.thread_id.to_string(),
                 agent_path: "/root".to_string(),
                 task_name: None,
                 nickname: None,
@@ -646,7 +646,7 @@ async fn approval_elicitation_request_uses_message_override_and_preserves_tool_p
     assert_eq!(
         request,
         McpServerElicitationRequestParams {
-            thread_id: session.conversation_id.to_string(),
+            thread_id: session.thread_id.to_string(),
             turn_id: Some(turn_context.sub_id),
             server_name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
             request: McpServerElicitationRequest::Form {

@@ -76,11 +76,8 @@ pub struct ThreadConfigSnapshot {
 
 impl ThreadConfigSnapshot {
     pub fn sandbox_policy(&self) -> SandboxPolicy {
-        let file_system_sandbox_policy = self.permission_profile.file_system_sandbox_policy();
         codex_sandboxing::compatibility_sandbox_policy_for_permission_profile(
             &self.permission_profile,
-            &file_system_sandbox_policy,
-            self.permission_profile.network_sandbox_policy(),
             self.cwd.as_path(),
         )
     }

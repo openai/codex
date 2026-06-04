@@ -5,7 +5,7 @@ use super::ContextualUserFragment;
 pub(crate) struct LegacyUnifiedExecProcessLimitWarning;
 
 impl ContextualUserFragment for LegacyUnifiedExecProcessLimitWarning {
-    fn role() -> &'static str {
+    fn role(&self) -> &'static str {
         "user"
     }
 
