@@ -126,21 +126,11 @@ impl ChatWidget {
 }
 
 fn reasoning_choices(preset: &ModelPreset) -> Vec<ReasoningEffortConfig> {
-    let mut choices: Vec<ReasoningEffortConfig> = ReasoningEffortConfig::known_values()
-        .filter(|effort| {
-            preset
-                .supported_reasoning_efforts
-                .iter()
-                .any(|option| option.effort == *effort)
-        })
+    let mut choices: Vec<ReasoningEffortConfig> = preset
+        .supported_reasoning_efforts
+        .iter()
+        .map(|option| option.effort.clone())
         .collect();
-    choices.extend(
-        preset
-            .supported_reasoning_efforts
-            .iter()
-            .filter(|option| option.effort.known_rank().is_none())
-            .map(|option| option.effort.clone()),
-    );
     if choices.is_empty() {
         choices.push(preset.default_reasoning_effort.clone());
     }
