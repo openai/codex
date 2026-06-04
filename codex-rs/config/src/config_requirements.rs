@@ -822,7 +822,7 @@ pub struct ConfigRequirementsToml {
     pub allowed_approval_policies: Option<Vec<AskForApproval>>,
     pub allowed_approvals_reviewers: Option<Vec<ApprovalsReviewer>>,
     pub allowed_sandbox_modes: Option<Vec<SandboxModeRequirement>>,
-    pub allowed_permissions: Option<Vec<String>>,
+    pub allowed_permissions: Option<BTreeMap<String, bool>>,
     pub default_permissions: Option<String>,
     pub remote_sandbox_config: Option<Vec<RemoteSandboxConfigToml>>,
     pub allowed_web_search_modes: Option<Vec<WebSearchModeRequirement>>,
@@ -877,7 +877,7 @@ pub struct ConfigRequirementsWithSources {
     pub allowed_approval_policies: Option<Sourced<Vec<AskForApproval>>>,
     pub allowed_approvals_reviewers: Option<Sourced<Vec<ApprovalsReviewer>>>,
     pub allowed_sandbox_modes: Option<Sourced<Vec<SandboxModeRequirement>>>,
-    pub allowed_permissions: Option<Sourced<Vec<String>>>,
+    pub allowed_permissions: Option<Sourced<BTreeMap<String, bool>>>,
     pub default_permissions: Option<Sourced<String>>,
     pub allowed_web_search_modes: Option<Sourced<Vec<WebSearchModeRequirement>>>,
     pub allow_managed_hooks_only: Option<Sourced<bool>>,
@@ -1603,8 +1603,11 @@ mod tests {
     fn deserialize_managed_permission_profiles() -> Result<()> {
         let requirements: ConfigRequirementsToml = from_str(
             r#"
-                allowed_permissions = ["managed-standard", "managed-build"]
                 default_permissions = "managed-standard"
+
+                [allowed_permissions]
+                managed-standard = true
+                managed-build = true
 
                 [permissions.managed-standard]
                 extends = ":workspace"
@@ -1616,10 +1619,10 @@ mod tests {
 
         assert_eq!(
             requirements.allowed_permissions,
-            Some(vec![
-                "managed-standard".to_string(),
-                "managed-build".to_string(),
-            ])
+            Some(BTreeMap::from([
+                ("managed-build".to_string(), true),
+                ("managed-standard".to_string(), true),
+            ]))
         );
         assert_eq!(
             requirements.default_permissions,
@@ -1736,7 +1739,7 @@ mod tests {
             allowed_approval_policies: Some(allowed_approval_policies.clone()),
             allowed_approvals_reviewers: Some(allowed_approvals_reviewers.clone()),
             allowed_sandbox_modes: Some(allowed_sandbox_modes.clone()),
-            allowed_permissions: Some(vec!["managed".to_string()]),
+            allowed_permissions: Some(BTreeMap::from([("managed".to_string(), true)])),
             default_permissions: Some("managed".to_string()),
             remote_sandbox_config: None,
             allowed_web_search_modes: Some(allowed_web_search_modes.clone()),
@@ -1771,7 +1774,7 @@ mod tests {
                 )),
                 allowed_sandbox_modes: Some(Sourced::new(allowed_sandbox_modes, source.clone(),)),
                 allowed_permissions: Some(Sourced::new(
-                    vec!["managed".to_string()],
+                    BTreeMap::from([("managed".to_string(), true)]),
                     source.clone(),
                 )),
                 default_permissions: Some(Sourced::new("managed".to_string(), source.clone(),)),

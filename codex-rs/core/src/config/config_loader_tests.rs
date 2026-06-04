@@ -1375,8 +1375,10 @@ default_permissions = "managed-standard"
     tokio::fs::write(
         &requirements_path,
         r#"
-allowed_permissions = ["managed-standard"]
 default_permissions = "managed-standard"
+
+[allowed_permissions]
+managed-standard = true
 
 [permissions.managed-standard]
 extends = ":workspace"
@@ -1399,7 +1401,7 @@ extends = ":workspace"
             .config_layer_stack
             .requirements_toml()
             .allowed_permissions,
-        Some(vec!["managed-standard".to_string()])
+        Some(BTreeMap::from([("managed-standard".to_string(), true)]))
     );
     assert_eq!(
         config
@@ -1431,8 +1433,11 @@ async fn system_allowed_permissions_select_managed_default_without_explicit_loca
         tokio::fs::write(
             &requirements_path,
             r#"
-allowed_permissions = ["managed-build", "managed-standard"]
 default_permissions = "managed-standard"
+
+[allowed_permissions]
+managed-build = true
+managed-standard = true
 
 [permissions.managed-standard.filesystem]
 ":workspace_roots" = "read"
@@ -1480,10 +1485,13 @@ async fn system_allowed_permissions_require_managed_default() -> anyhow::Result<
     tokio::fs::write(
         &requirements_path,
         r#"
-allowed_permissions = ["managed-standard"]
-
 [permissions.managed-standard]
 extends = ":read-only"
+
+[allowed_permissions]
+":read-only" = false
+":workspace" = false
+managed-standard = true
 "#,
     )
     .await?;
@@ -1500,15 +1508,14 @@ extends = ":read-only"
 
     assert!(
         err.to_string()
-            .contains("default_permissions must be set unless allowed_permissions includes both"),
+            .contains("default_permissions must be set unless allowed_permissions allows both"),
         "{err}"
     );
     Ok(())
 }
 
 #[tokio::test]
-async fn system_allowed_permissions_standard_pair_implicitly_defaults_to_workspace()
--> anyhow::Result<()> {
+async fn system_allowed_permissions_default_standard_pair_to_allowed() -> anyhow::Result<()> {
     let tmp = tempdir()?;
     let codex_home = tmp.path().join("home");
     tokio::fs::create_dir_all(&codex_home).await?;
@@ -1516,7 +1523,11 @@ async fn system_allowed_permissions_standard_pair_implicitly_defaults_to_workspa
     tokio::fs::write(
         &requirements_path,
         r#"
-allowed_permissions = [":read-only", ":workspace"]
+[allowed_permissions]
+review-only = true
+
+[permissions.review-only]
+extends = ":read-only"
 "#,
     )
     .await?;
@@ -1549,8 +1560,10 @@ async fn system_managed_default_must_be_allowed() -> anyhow::Result<()> {
     tokio::fs::write(
         &requirements_path,
         r#"
-allowed_permissions = ["managed-standard"]
 default_permissions = "managed-build"
+
+[allowed_permissions]
+managed-standard = true
 
 [permissions.managed-standard]
 extends = ":read-only"
@@ -1572,9 +1585,8 @@ extends = ":workspace"
         .expect_err("managed default outside allowed_permissions should fail");
 
     assert!(
-        err.to_string().contains(
-            "default_permissions `managed-build` must be included in allowed_permissions"
-        ),
+        err.to_string()
+            .contains("default_permissions `managed-build` must be allowed by allowed_permissions"),
         "{err}"
     );
     Ok(())
@@ -1631,8 +1643,10 @@ default_permissions = "{BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS}"
     tokio::fs::write(
         &requirements_path,
         r#"
-allowed_permissions = ["managed-standard"]
 default_permissions = "managed-standard"
+
+[allowed_permissions]
+managed-standard = true
 
 [permissions.managed-standard.filesystem]
 ":workspace_roots" = "read"
@@ -1682,8 +1696,11 @@ default_permissions = ":workspace"
     tokio::fs::write(
         &requirements_path,
         r#"
-allowed_permissions = ["managed-standard"]
 default_permissions = "managed-standard"
+
+[allowed_permissions]
+":workspace" = false
+managed-standard = true
 
 [permissions.managed-standard.filesystem]
 ":workspace_roots" = "read"
@@ -1734,8 +1751,11 @@ default_permissions = "managed-build"
     tokio::fs::write(
         &requirements_path,
         r#"
-allowed_permissions = ["managed-standard", "managed-build"]
 default_permissions = "managed-standard"
+
+[allowed_permissions]
+managed-build = true
+managed-standard = true
 
 [permissions.managed-standard]
 extends = ":read-only"
@@ -1776,8 +1796,10 @@ async fn system_requirements_warn_for_disallowed_explicit_permission_override() 
     tokio::fs::write(
         &requirements_path,
         r#"
-allowed_permissions = ["managed-standard"]
 default_permissions = "managed-standard"
+
+[allowed_permissions]
+managed-standard = true
 
 [permissions.managed-standard]
 extends = ":workspace"

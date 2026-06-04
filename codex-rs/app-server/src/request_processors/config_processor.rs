@@ -570,6 +570,7 @@ mod tests {
     use codex_config::ConfigRequirementsToml;
     use codex_config::WindowsRequirementsToml;
     use pretty_assertions::assert_eq;
+    use std::collections::BTreeMap;
 
     #[test]
     fn requirements_api_includes_allow_managed_hooks_only() {
@@ -585,20 +586,20 @@ mod tests {
     #[test]
     fn requirements_api_includes_permission_default_and_allowlist() {
         let mapped = map_requirements_toml_to_api(ConfigRequirementsToml {
-            allowed_permissions: Some(vec![
-                "managed-standard".to_string(),
-                "managed-build".to_string(),
-            ]),
+            allowed_permissions: Some(BTreeMap::from([
+                ("managed-build".to_string(), false),
+                ("managed-standard".to_string(), true),
+            ])),
             default_permissions: Some("managed-standard".to_string()),
             ..ConfigRequirementsToml::default()
         });
 
         assert_eq!(
             mapped.allowed_permissions,
-            Some(vec![
-                "managed-standard".to_string(),
-                "managed-build".to_string(),
-            ])
+            Some(BTreeMap::from([
+                ("managed-build".to_string(), false),
+                ("managed-standard".to_string(), true),
+            ]))
         );
         assert_eq!(
             mapped.default_permissions,

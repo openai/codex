@@ -3857,16 +3857,14 @@ fn resolve_default_permissions<'a>(
     else {
         return Err(std::io::Error::new(
             ErrorKind::InvalidInput,
-            "requirements.toml default_permissions must be set unless allowed_permissions includes both `:workspace` and `:read-only`",
+            "requirements.toml default_permissions must be set unless allowed_permissions allows both `:workspace` and `:read-only`",
         ));
     };
 
     match selected_permissions {
         None => Ok(Some(fallback_permissions)),
         Some(selected_permissions)
-            if allowed_permissions
-                .iter()
-                .any(|allowed_permission| allowed_permission == selected_permissions) =>
+            if is_permission_effectively_allowed(allowed_permissions, selected_permissions) =>
         {
             Ok(Some(selected_permissions))
         }
@@ -3899,14 +3897,7 @@ fn validate_required_permission_profile_catalog(
         }
         return Ok(());
     };
-    if allowed_permissions.is_empty() {
-        return Err(std::io::Error::new(
-            ErrorKind::InvalidInput,
-            "requirements.toml allowed_permissions must include at least one profile",
-        ));
-    }
-
-    for profile_id in allowed_permissions {
+    for profile_id in allowed_permissions.keys() {
         if !is_known_profile(profile_id) {
             return Err(std::io::Error::new(
                 ErrorKind::InvalidInput,
@@ -3924,17 +3915,14 @@ fn validate_required_permission_profile_catalog(
     else {
         return Err(std::io::Error::new(
             ErrorKind::InvalidInput,
-            "requirements.toml default_permissions must be set unless allowed_permissions includes both `:workspace` and `:read-only`",
+            "requirements.toml default_permissions must be set unless allowed_permissions allows both `:workspace` and `:read-only`",
         ));
     };
-    if !allowed_permissions
-        .iter()
-        .any(|allowed_permission| allowed_permission == default_permissions)
-    {
+    if !is_permission_effectively_allowed(allowed_permissions, default_permissions) {
         return Err(std::io::Error::new(
             ErrorKind::InvalidInput,
             format!(
-                "requirements.toml default_permissions `{default_permissions}` must be included in allowed_permissions"
+                "requirements.toml default_permissions `{default_permissions}` must be allowed by allowed_permissions"
             ),
         ));
     }
@@ -3942,15 +3930,26 @@ fn validate_required_permission_profile_catalog(
     Ok(())
 }
 
-fn implicit_default_permissions(allowed_permissions: &[String]) -> Option<&'static str> {
-    let allows_workspace = allowed_permissions
-        .iter()
-        .any(|profile_id| profile_id == BUILT_IN_WORKSPACE_PROFILE);
-    let allows_read_only = allowed_permissions
-        .iter()
-        .any(|profile_id| profile_id == BUILT_IN_READ_ONLY_PROFILE);
+fn implicit_default_permissions(
+    allowed_permissions: &BTreeMap<String, bool>,
+) -> Option<&'static str> {
+    (is_permission_effectively_allowed(allowed_permissions, BUILT_IN_WORKSPACE_PROFILE)
+        && is_permission_effectively_allowed(allowed_permissions, BUILT_IN_READ_ONLY_PROFILE))
+    .then_some(BUILT_IN_WORKSPACE_PROFILE)
+}
 
-    (allows_workspace && allows_read_only).then_some(BUILT_IN_WORKSPACE_PROFILE)
+/// Applies the managed allow map, including the default-allowed standard profiles.
+fn is_permission_effectively_allowed(
+    allowed_permissions: &BTreeMap<String, bool>,
+    profile_id: &str,
+) -> bool {
+    allowed_permissions
+        .get(profile_id)
+        .copied()
+        .unwrap_or(matches!(
+            profile_id,
+            BUILT_IN_WORKSPACE_PROFILE | BUILT_IN_READ_ONLY_PROFILE
+        ))
 }
 
 fn normalize_guardian_policy_config(value: Option<&str>) -> Option<String> {

@@ -4356,11 +4356,11 @@
           ]
         },
         "allowedPermissions": {
-          "items": {
-            "type": "string"
+          "additionalProperties": {
+            "type": "boolean"
           },
           "type": [
-            "array",
+            "object",
             "null"
           ]
         },
