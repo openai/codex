@@ -564,15 +564,6 @@ impl Session {
         }
     }
 
-    pub(crate) async fn abort_turn_if_active(
-        self: &Arc<Self>,
-        turn_id: &str,
-        reason: TurnAbortReason,
-    ) -> bool {
-        self.abort_turn_if_active_with(turn_id, TaskAbort::from_turn_abort_reason(reason))
-            .await
-    }
-
     pub(crate) async fn abort_turn_if_active_interrupted(
         self: &Arc<Self>,
         turn_id: &str,
