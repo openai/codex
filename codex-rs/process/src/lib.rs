@@ -7,6 +7,8 @@
 mod command_ext;
 mod drop_bomb;
 
+pub use command_ext::CommandExt;
+
 pub mod sync;
 pub mod tokio;
 
