@@ -35,11 +35,9 @@ use sha2::Digest;
 use sha2::Sha256;
 use std::collections::BTreeMap;
 use std::fs;
-use std::fs::OpenOptions;
 use std::io::ErrorKind;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::OnceLock;
 use std::time::Duration;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
@@ -47,6 +45,7 @@ use tracing::warn;
 
 use codex_keyring_store::DefaultKeyringStore;
 use codex_keyring_store::KeyringStore;
+use codex_utils_home_dir::find_codex_home;
 use codex_utils_path::write_atomically;
 use rmcp::transport::auth::AuthError;
 use rmcp::transport::auth::AuthorizationManager;
@@ -54,9 +53,10 @@ use rmcp::transport::auth::CredentialStore;
 use rmcp::transport::auth::InMemoryCredentialStore;
 use rmcp::transport::auth::StoredCredentials;
 use tokio::sync::Mutex;
-use tokio::sync::OwnedMutexGuard;
 
-use codex_utils_home_dir::find_codex_home;
+use crate::oauth_lock::acquire_fallback_store_lock;
+use crate::oauth_lock::acquire_oauth_server_lock;
+use crate::oauth_lock::acquire_oauth_server_lock_async;
 
 const KEYRING_SERVICE: &str = "Codex MCP Credentials";
 const REFRESH_SKEW_MILLIS: u64 = 30_000;
@@ -407,16 +407,11 @@ impl OAuthPersistor {
                 }
 
                 let new_token_response = WrappedOAuthTokenResponse(credentials.clone());
-                let same_token = current_credentials
-                    .as_ref()
-                    .map(|prev| prev.token_response == new_token_response)
-                    .unwrap_or(false);
-                let expires_at = if same_token {
-                    current_credentials
-                        .as_ref()
-                        .and_then(|prev| prev.expires_at)
-                } else {
-                    compute_expires_at_millis(&credentials)
+                let expires_at = match current_credentials.as_ref() {
+                    Some(previous) if previous.token_response == new_token_response => {
+                        previous.expires_at
+                    }
+                    _ => compute_expires_at_millis(&credentials),
                 };
                 let stored = StoredOAuthTokens {
                     server_name: self.inner.server_name.clone(),
@@ -470,12 +465,7 @@ impl OAuthPersistor {
         reason = "AuthorizationManager async access must be serialized through its mutex"
     )]
     pub(crate) async fn refresh_if_needed(&self) -> Result<()> {
-        let expires_at = {
-            let guard = self.inner.current_credentials.lock().await;
-            guard.as_ref().and_then(|tokens| tokens.expires_at)
-        };
-
-        if !token_needs_refresh(expires_at) {
+        if !self.current_token_needs_refresh().await {
             return Ok(());
         }
 
@@ -489,20 +479,11 @@ impl OAuthPersistor {
             return Err(anyhow::anyhow!("Auth required for server"));
         }
 
-        let expires_at = {
-            let guard = self.inner.current_credentials.lock().await;
-            guard.as_ref().and_then(|tokens| tokens.expires_at)
-        };
-
-        if !token_needs_refresh(expires_at) {
+        if !self.current_token_needs_refresh().await {
             return Ok(());
         }
 
         let previous_credentials = self.inner.current_credentials.lock().await.clone();
-        let previous_refresh_token = previous_credentials
-            .as_ref()
-            .and_then(|tokens| tokens.token_response.0.refresh_token())
-            .map(|token| token.secret().clone());
         let mut refreshed_credentials = {
             let manager = self.inner.authorization_manager.clone();
             let guard = manager.lock().await;
@@ -526,10 +507,11 @@ impl OAuthPersistor {
         };
 
         if refreshed_credentials.refresh_token().is_none()
-            && let Some(refresh_token) = previous_refresh_token
             && let Some(previous_credentials) = previous_credentials.as_ref()
+            && let Some(refresh_token) = previous_credentials.token_response.0.refresh_token()
         {
-            refreshed_credentials.set_refresh_token(Some(RefreshToken::new(refresh_token)));
+            refreshed_credentials
+                .set_refresh_token(Some(RefreshToken::new(refresh_token.secret().clone())));
             self.replace_manager_credentials(
                 &previous_credentials.client_id,
                 refreshed_credentials.clone(),
@@ -540,6 +522,11 @@ impl OAuthPersistor {
         self.persist_refreshed_credentials_with_retry().await;
 
         Ok(())
+    }
+
+    async fn current_token_needs_refresh(&self) -> bool {
+        let guard = self.inner.current_credentials.lock().await;
+        token_needs_refresh(guard.as_ref().and_then(|tokens| tokens.expires_at))
     }
 
     async fn persist_refreshed_credentials_with_retry(&self) {
@@ -596,7 +583,11 @@ impl OAuthPersistor {
                 Ok(CredentialReload::Replaced)
             }
             None => {
-                self.clear_manager_credentials().await;
+                {
+                    let manager = self.inner.authorization_manager.clone();
+                    let mut guard = manager.lock().await;
+                    guard.set_credential_store(InMemoryCredentialStore::new());
+                }
                 {
                     let mut current_credentials = self.inner.current_credentials.lock().await;
                     *current_credentials = None;
@@ -613,15 +604,16 @@ impl OAuthPersistor {
         client_id: &str,
         token_response: OAuthTokenResponse,
     ) -> Result<()> {
+        let scopes = token_response
+            .scopes()
+            .map(|scopes| scopes.iter().map(|scope| scope.to_string()).collect())
+            .unwrap_or_default();
         let store = InMemoryCredentialStore::new();
         store
             .save(StoredCredentials::new(
                 client_id.to_string(),
-                Some(token_response.clone()),
-                token_response
-                    .scopes()
-                    .map(|scopes| scopes.iter().map(|scope| scope.to_string()).collect())
-                    .unwrap_or_default(),
+                Some(token_response),
+                scopes,
                 Some(
                     SystemTime::now()
                         .duration_since(UNIX_EPOCH)
@@ -637,97 +629,6 @@ impl OAuthPersistor {
         guard.set_credential_store(store);
         Ok(())
     }
-
-    async fn clear_manager_credentials(&self) {
-        let manager = self.inner.authorization_manager.clone();
-        let mut guard = manager.lock().await;
-        guard.set_credential_store(InMemoryCredentialStore::new());
-    }
-}
-
-fn oauth_server_lock_for(server_name: &str, url: &str) -> Arc<Mutex<()>> {
-    static OAUTH_SERVER_LOCKS: OnceLock<std::sync::Mutex<BTreeMap<String, Arc<Mutex<()>>>>> =
-        OnceLock::new();
-
-    let mut locks = OAUTH_SERVER_LOCKS
-        .get_or_init(std::sync::Mutex::default)
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    locks
-        .entry(format!("{server_name}\n{url}"))
-        .or_insert_with(|| Arc::new(Mutex::new(())))
-        .clone()
-}
-
-struct OAuthFileLock {
-    _file: fs::File,
-    _in_process_guard: Option<OwnedMutexGuard<()>>,
-}
-
-fn open_oauth_lock_file(path: PathBuf) -> Result<fs::File> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    Ok(OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(path)?)
-}
-
-fn acquire_oauth_server_lock(server_name: &str, url: &str) -> Result<OAuthFileLock> {
-    let file = open_oauth_lock_file(oauth_server_lock_path(server_name, url)?)?;
-    file.lock()?;
-    Ok(OAuthFileLock {
-        _file: file,
-        _in_process_guard: None,
-    })
-}
-
-async fn acquire_oauth_server_lock_async(server_name: &str, url: &str) -> Result<OAuthFileLock> {
-    let in_process_lock = oauth_server_lock_for(server_name, url);
-    let in_process_guard = in_process_lock.lock_owned().await;
-    let path = oauth_server_lock_path(server_name, url)?;
-    let file_lock = tokio::task::spawn_blocking(move || {
-        let file = open_oauth_lock_file(path)?;
-        file.lock()?;
-        Ok::<_, anyhow::Error>(file)
-    })
-    .await
-    .context("OAuth credential lock task failed")??;
-    Ok(OAuthFileLock {
-        _file: file_lock,
-        _in_process_guard: Some(in_process_guard),
-    })
-}
-
-struct FallbackStoreLock {
-    _in_process_guard: std::sync::MutexGuard<'static, ()>,
-    _file: fs::File,
-}
-
-fn acquire_fallback_store_lock() -> Result<FallbackStoreLock> {
-    static FALLBACK_STORE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-    let in_process_guard = FALLBACK_STORE_LOCK
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let file = open_oauth_lock_file(oauth_lock_dir()?.join("fallback-store.lock"))?;
-    file.lock()?;
-    Ok(FallbackStoreLock {
-        _in_process_guard: in_process_guard,
-        _file: file,
-    })
-}
-
-fn oauth_server_lock_path(server_name: &str, url: &str) -> Result<PathBuf> {
-    let digest = sha_256_prefix(&Value::String(format!("{server_name}\n{url}")))?;
-    Ok(oauth_lock_dir()?.join(format!("server-{digest}.lock")))
-}
-
-fn oauth_lock_dir() -> Result<PathBuf> {
-    Ok(find_codex_home()?.join(".mcp-oauth-locks").to_path_buf())
 }
 
 fn refresh_failure_requires_reauth(message: &str) -> bool {
@@ -947,7 +848,7 @@ fn write_fallback_file(store: &FallbackFile) -> Result<()> {
     Ok(())
 }
 
-fn sha_256_prefix(value: &Value) -> Result<String> {
+pub(super) fn sha_256_prefix(value: &Value) -> Result<String> {
     let serialized =
         serde_json::to_string(&value).context("failed to serialize MCP OAuth key payload")?;
     let mut hasher = Sha256::new();

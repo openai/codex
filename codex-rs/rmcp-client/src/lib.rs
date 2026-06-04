@@ -5,6 +5,7 @@ mod http_client_adapter;
 mod in_process_transport;
 mod logging_client_handler;
 mod oauth;
+mod oauth_lock;
 mod perform_oauth_login;
 mod program_resolver;
 mod rmcp_client;

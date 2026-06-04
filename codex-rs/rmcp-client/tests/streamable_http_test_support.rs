@@ -92,17 +92,17 @@ pub(crate) async fn create_client(base_url: &str) -> anyhow::Result<RmcpClient> 
 }
 
 pub(crate) async fn initialize_client(client: &RmcpClient) -> anyhow::Result<()> {
-    initialize_client_with_timeout(client, Some(Duration::from_secs(5))).await
+    initialize_client_with_timeout(client, Duration::from_secs(5)).await
 }
 
 pub(crate) async fn initialize_client_with_timeout(
     client: &RmcpClient,
-    timeout: Option<Duration>,
+    timeout: Duration,
 ) -> anyhow::Result<()> {
     client
         .initialize(
             init_params(),
-            timeout,
+            Some(timeout),
             Box::new(|_, _| {
                 async {
                     Ok(ElicitationResponse {

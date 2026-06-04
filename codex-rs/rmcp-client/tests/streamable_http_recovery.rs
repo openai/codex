@@ -193,17 +193,7 @@ async fn streamable_http_oauth_refreshes_expired_token_before_initialize() -> an
     let server_url = format!("{base_url}/mcp");
     save_expired_oauth_tokens(&server_url).await?;
 
-    let client = RmcpClient::new_streamable_http_client(
-        OAUTH_TEST_SERVER_NAME,
-        &server_url,
-        /*bearer_token*/ None,
-        /*http_headers*/ None,
-        /*env_http_headers*/ None,
-        OAuthCredentialsStoreMode::File,
-        Environment::default_for_tests().get_http_client(),
-        /*auth_provider*/ None,
-    )
-    .await?;
+    let client = create_oauth_file_client(&server_url).await?;
     initialize_client(&client).await?;
 
     let result = call_echo_tool(&client, "after-refresh").await?;
@@ -233,17 +223,7 @@ async fn streamable_http_oauth_preserves_refresh_token_when_refresh_response_omi
     let server_url = format!("{base_url}/mcp");
     save_expired_oauth_tokens(&server_url).await?;
 
-    let client = RmcpClient::new_streamable_http_client(
-        OAUTH_TEST_SERVER_NAME,
-        &server_url,
-        /*bearer_token*/ None,
-        /*http_headers*/ None,
-        /*env_http_headers*/ None,
-        OAuthCredentialsStoreMode::File,
-        Environment::default_for_tests().get_http_client(),
-        /*auth_provider*/ None,
-    )
-    .await?;
+    let client = create_oauth_file_client(&server_url).await?;
     initialize_client(&client).await?;
 
     let credentials = std::fs::read_to_string(codex_home.dir.path().join(".credentials.json"))?;
@@ -272,28 +252,8 @@ async fn streamable_http_oauth_concurrent_initializes_share_refreshed_credential
     let server_url = format!("{base_url}/mcp");
     save_expired_oauth_tokens(&server_url).await?;
 
-    let client_a = RmcpClient::new_streamable_http_client(
-        OAUTH_TEST_SERVER_NAME,
-        &server_url,
-        /*bearer_token*/ None,
-        /*http_headers*/ None,
-        /*env_http_headers*/ None,
-        OAuthCredentialsStoreMode::File,
-        Environment::default_for_tests().get_http_client(),
-        /*auth_provider*/ None,
-    )
-    .await?;
-    let client_b = RmcpClient::new_streamable_http_client(
-        OAUTH_TEST_SERVER_NAME,
-        &server_url,
-        /*bearer_token*/ None,
-        /*http_headers*/ None,
-        /*env_http_headers*/ None,
-        OAuthCredentialsStoreMode::File,
-        Environment::default_for_tests().get_http_client(),
-        /*auth_provider*/ None,
-    )
-    .await?;
+    let client_a = create_oauth_file_client(&server_url).await?;
+    let client_b = create_oauth_file_client(&server_url).await?;
 
     let (initialized_a, initialized_b) =
         tokio::join!(initialize_client(&client_a), initialize_client(&client_b));
@@ -411,17 +371,7 @@ async fn streamable_http_oauth_unexpired_token_does_not_require_writable_codex_h
     )?;
 
     let result = async {
-        let client = RmcpClient::new_streamable_http_client(
-            OAUTH_TEST_SERVER_NAME,
-            &server_url,
-            /*bearer_token*/ None,
-            /*http_headers*/ None,
-            /*env_http_headers*/ None,
-            OAuthCredentialsStoreMode::File,
-            Environment::default_for_tests().get_http_client(),
-            /*auth_provider*/ None,
-        )
-        .await?;
+        let client = create_oauth_file_client(&server_url).await?;
         initialize_client(&client).await
     }
     .await;
@@ -447,19 +397,9 @@ async fn streamable_http_oauth_refresh_timeout_keeps_refresh_running() -> anyhow
     let server_url = format!("{base_url}/mcp");
     save_expired_oauth_tokens(&server_url).await?;
 
-    let client = RmcpClient::new_streamable_http_client(
-        OAUTH_TEST_SERVER_NAME,
-        &server_url,
-        /*bearer_token*/ None,
-        /*http_headers*/ None,
-        /*env_http_headers*/ None,
-        OAuthCredentialsStoreMode::File,
-        Environment::default_for_tests().get_http_client(),
-        /*auth_provider*/ None,
-    )
-    .await?;
+    let client = create_oauth_file_client(&server_url).await?;
 
-    let error = initialize_client_with_timeout(&client, Some(Duration::from_millis(50)))
+    let error = initialize_client_with_timeout(&client, Duration::from_millis(50))
         .await
         .unwrap_err();
     assert!(
@@ -511,18 +451,8 @@ async fn streamable_http_oauth_logout_wins_against_detached_refresh() -> anyhow:
     let server_url = format!("{base_url}/mcp");
     save_expired_oauth_tokens(&server_url).await?;
 
-    let client = RmcpClient::new_streamable_http_client(
-        OAUTH_TEST_SERVER_NAME,
-        &server_url,
-        /*bearer_token*/ None,
-        /*http_headers*/ None,
-        /*env_http_headers*/ None,
-        OAuthCredentialsStoreMode::File,
-        Environment::default_for_tests().get_http_client(),
-        /*auth_provider*/ None,
-    )
-    .await?;
-    initialize_client_with_timeout(&client, Some(Duration::from_millis(50)))
+    let client = create_oauth_file_client(&server_url).await?;
+    initialize_client_with_timeout(&client, Duration::from_millis(50))
         .await
         .unwrap_err();
 
@@ -556,19 +486,9 @@ async fn streamable_http_oauth_refresh_and_initialize_share_timeout_budget() -> 
     let server_url = format!("{base_url}/mcp");
     save_expired_oauth_tokens(&server_url).await?;
 
-    let client = RmcpClient::new_streamable_http_client(
-        OAUTH_TEST_SERVER_NAME,
-        &server_url,
-        /*bearer_token*/ None,
-        /*http_headers*/ None,
-        /*env_http_headers*/ None,
-        OAuthCredentialsStoreMode::File,
-        Environment::default_for_tests().get_http_client(),
-        /*auth_provider*/ None,
-    )
-    .await?;
+    let client = create_oauth_file_client(&server_url).await?;
 
-    let error = initialize_client_with_timeout(&client, Some(Duration::from_millis(250)))
+    let error = initialize_client_with_timeout(&client, Duration::from_millis(250))
         .await
         .unwrap_err();
     assert!(
@@ -597,17 +517,7 @@ async fn streamable_http_oauth_transient_refresh_failure_does_not_require_login(
     let server_url = format!("{base_url}/mcp");
     save_expired_oauth_tokens(&server_url).await?;
 
-    let client = RmcpClient::new_streamable_http_client(
-        OAUTH_TEST_SERVER_NAME,
-        &server_url,
-        /*bearer_token*/ None,
-        /*http_headers*/ None,
-        /*env_http_headers*/ None,
-        OAuthCredentialsStoreMode::File,
-        Environment::default_for_tests().get_http_client(),
-        /*auth_provider*/ None,
-    )
-    .await?;
+    let client = create_oauth_file_client(&server_url).await?;
 
     let error = initialize_client(&client).await.unwrap_err();
     assert!(!error.to_string().contains("Auth required"));
@@ -630,17 +540,7 @@ async fn streamable_http_oauth_refresh_failure_reports_auth_required() -> anyhow
     let server_url = format!("{base_url}/mcp");
     save_expired_oauth_tokens(&server_url).await?;
 
-    let client = RmcpClient::new_streamable_http_client(
-        OAUTH_TEST_SERVER_NAME,
-        &server_url,
-        /*bearer_token*/ None,
-        /*http_headers*/ None,
-        /*env_http_headers*/ None,
-        OAuthCredentialsStoreMode::File,
-        Environment::default_for_tests().get_http_client(),
-        /*auth_provider*/ None,
-    )
-    .await?;
+    let client = create_oauth_file_client(&server_url).await?;
 
     let error = initialize_client(&client).await.unwrap_err();
     assert!(
@@ -714,6 +614,20 @@ async fn save_expired_oauth_tokens(server_url: &str) -> anyhow::Result<()> {
         EXPIRED_ACCESS_TOKEN,
         VALID_REFRESH_TOKEN,
         /*expires_at*/ 0,
+    )
+    .await
+}
+
+async fn create_oauth_file_client(server_url: &str) -> anyhow::Result<RmcpClient> {
+    RmcpClient::new_streamable_http_client(
+        OAUTH_TEST_SERVER_NAME,
+        server_url,
+        /*bearer_token*/ None,
+        /*http_headers*/ None,
+        /*env_http_headers*/ None,
+        OAuthCredentialsStoreMode::File,
+        Environment::default_for_tests().get_http_client(),
+        /*auth_provider*/ None,
     )
     .await
 }
