@@ -24,7 +24,6 @@ use crate::tools::registry::ToolArgumentDiffConsumer;
 use crate::tools::router::ToolCall;
 use crate::tools::router::ToolCallSource;
 use crate::tools::router::ToolRouter;
-use crate::turn_timing::ToolTimingGuard;
 use codex_protocol::error::CodexErr;
 use codex_protocol::models::ResponseInputItem;
 
@@ -65,15 +64,10 @@ impl ToolCallRuntime {
         self,
         call: ToolCall,
         cancellation_token: CancellationToken,
-        tool_timing_guard: ToolTimingGuard,
     ) -> impl std::future::Future<Output = Result<ResponseInputItem, CodexErr>> {
         let error_call = call.clone();
-        let future = self.handle_tool_call_with_source(
-            call,
-            ToolCallSource::Direct,
-            cancellation_token,
-            tool_timing_guard,
-        );
+        let future =
+            self.handle_tool_call_with_source(call, ToolCallSource::Direct, cancellation_token);
         async move {
             match future.await {
                 Ok(response) => Ok(response.into_response()),
@@ -90,7 +84,6 @@ impl ToolCallRuntime {
         call: ToolCall,
         source: ToolCallSource,
         cancellation_token: CancellationToken,
-        tool_timing_guard: ToolTimingGuard,
     ) -> impl std::future::Future<Output = Result<AnyToolResult, FunctionCallError>> {
         let supports_parallel = self.router.tool_supports_parallel(&call);
         let router = Arc::clone(&self.router);
@@ -119,7 +112,6 @@ impl ToolCallRuntime {
 
         let mut handle: AbortOnDropHandle<Result<AnyToolResult, FunctionCallError>> =
             AbortOnDropHandle::new(tokio::spawn(async move {
-                let _tool_timing_guard = tool_timing_guard;
                 let _guard = if supports_parallel {
                     Either::Left(lock.read().await)
                 } else {
@@ -433,7 +425,6 @@ mod tests {
             Vec::new(),
         ));
         let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
-        let tool_timing_guard = turn_context.turn_timing_state.begin_tool();
         let runtime = ToolCallRuntime::new(router, session, turn_context, tracker);
         let cancellation_token = CancellationToken::new();
         let call = ToolCall {
@@ -444,11 +435,8 @@ mod tests {
             },
         };
 
-        let response_task = tokio::spawn(runtime.handle_tool_call(
-            call,
-            cancellation_token.clone(),
-            tool_timing_guard,
-        ));
+        let response_task =
+            tokio::spawn(runtime.handle_tool_call(call, cancellation_token.clone()));
         tokio::time::timeout(Duration::from_secs(1), finish_started_rx)
             .await
             .expect("timed out waiting for lifecycle notification to start")
@@ -509,7 +497,6 @@ mod tests {
             Vec::new(),
         ));
         let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
-        let tool_timing_guard = turn_context.turn_timing_state.begin_tool();
         let runtime = ToolCallRuntime::new(router, session, turn_context, tracker);
         let cancellation_token = CancellationToken::new();
         let call = ToolCall {
@@ -520,11 +507,8 @@ mod tests {
             },
         };
 
-        let response_task = tokio::spawn(runtime.handle_tool_call(
-            call,
-            cancellation_token.clone(),
-            tool_timing_guard,
-        ));
+        let response_task =
+            tokio::spawn(runtime.handle_tool_call(call, cancellation_token.clone()));
         started_rx.await.expect("handler should start");
         cancellation_token.cancel();
         cleanup_started_rx

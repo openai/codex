@@ -413,7 +413,6 @@ pub(crate) async fn handle_output_item_done(
     match ToolRouter::build_tool_call(item.clone()) {
         // The model emitted a tool call; log it, persist the item immediately, and queue the tool execution.
         Ok(Some(call)) => {
-            let tool_timing_guard = ctx.turn_context.turn_timing_state.begin_tool();
             ctx.sess
                 .input_queue
                 .accept_mailbox_delivery_for_current_turn(
@@ -434,12 +433,15 @@ pub(crate) async fn handle_output_item_done(
                 .await;
 
             let cancellation_token = ctx.cancellation_token.child_token();
-            let tool_future: InFlightFuture<'static> =
-                Box::pin(ctx.tool_runtime.clone().handle_tool_call(
-                    call,
-                    cancellation_token,
-                    tool_timing_guard,
-                ));
+            let tool_timing_guard = ctx.turn_context.turn_timing_state.begin_tool();
+            let tool_future = ctx
+                .tool_runtime
+                .clone()
+                .handle_tool_call(call, cancellation_token);
+            let tool_future: InFlightFuture<'static> = Box::pin(async move {
+                let _tool_timing_guard = tool_timing_guard;
+                tool_future.await
+            });
 
             output.needs_follow_up = true;
             output.tool_future = Some(tool_future);

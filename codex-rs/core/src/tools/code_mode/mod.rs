@@ -234,7 +234,7 @@ fn truncate_code_mode_result(
 }
 
 async fn call_nested_tool(
-    exec: ExecContext,
+    _exec: ExecContext,
     tool_runtime: ToolCallRuntime,
     invocation: CodeModeNestedToolCall,
     cancellation_token: CancellationToken,
@@ -262,7 +262,6 @@ async fn call_nested_tool(
         call_id: format!("{PUBLIC_TOOL_NAME}-{}", uuid::Uuid::new_v4()),
         payload,
     };
-    let tool_timing_guard = exec.turn.turn_timing_state.begin_tool();
     let result = tool_runtime
         .handle_tool_call_with_source(
             call,
@@ -271,7 +270,6 @@ async fn call_nested_tool(
                 runtime_tool_call_id,
             },
             cancellation_token,
-            tool_timing_guard,
         )
         .await?;
     Ok(result.code_mode_result())
