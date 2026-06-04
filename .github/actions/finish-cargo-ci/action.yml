@@ -1,0 +1,109 @@
+name: finish-cargo-ci
+description: Save shared Cargo CI caches and report sccache statistics.
+inputs:
+  target:
+    description: Rust target triple used for cache namespacing.
+    required: true
+  profile:
+    description: Cargo profile used for cache namespacing.
+    required: true
+  cache-runner:
+    description: Runner name used for cache namespacing.
+    required: true
+  cargo-home-cache-hit:
+    description: Whether the exact Cargo home cache key was restored.
+    required: true
+  lockfile-hash:
+    description: SHA-256 hash of codex-rs/Cargo.lock.
+    required: true
+  toolchain-hash:
+    description: SHA-256 hash of codex-rs/rust-toolchain.toml.
+    required: true
+  summary-label:
+    description: Label shown beside the target in the sccache summary.
+    required: true
+  use-hermetic-cargo-home:
+    description: Save the workspace-local Cargo home used by musl builds.
+    required: false
+    default: "false"
+  use-sccache:
+    description: Save and report sccache state.
+    required: false
+    default: "true"
+  supplemental-cache-path:
+    description: Optional workload-specific cache path to save.
+    required: false
+    default: ""
+  supplemental-cache-key:
+    description: Cache key for the optional workload-specific cache.
+    required: false
+    default: ""
+  supplemental-cache-hit:
+    description: Whether the optional workload-specific cache was restored exactly.
+    required: false
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    - name: Save cargo home cache
+      if: ${{ !cancelled() && inputs.cargo-home-cache-hit != 'true' && inputs.use-hermetic-cargo-home != 'true' }}
+      continue-on-error: true
+      uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+      with:
+        path: |
+          ~/.cargo/bin/
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+          ~/.cargo/git/db/
+        key: cargo-home-${{ inputs.cache-runner }}-${{ inputs.target }}-${{ inputs.profile }}-${{ inputs.lockfile-hash }}-${{ inputs.toolchain-hash }}
+
+    - name: Save cargo home cache
+      if: ${{ !cancelled() && inputs.cargo-home-cache-hit != 'true' && inputs.use-hermetic-cargo-home == 'true' }}
+      continue-on-error: true
+      uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+      with:
+        path: |
+          ~/.cargo/bin/
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+          ~/.cargo/git/db/
+          ${{ github.workspace }}/.cargo-home/bin/
+          ${{ github.workspace }}/.cargo-home/registry/index/
+          ${{ github.workspace }}/.cargo-home/registry/cache/
+          ${{ github.workspace }}/.cargo-home/git/db/
+        key: cargo-home-${{ inputs.cache-runner }}-${{ inputs.target }}-${{ inputs.profile }}-${{ inputs.lockfile-hash }}-${{ inputs.toolchain-hash }}
+
+    - name: Save sccache cache (fallback)
+      if: ${{ !cancelled() && inputs.use-sccache == 'true' && env.SCCACHE_GHA_ENABLED != 'true' }}
+      continue-on-error: true
+      uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+      with:
+        path: ${{ env.SCCACHE_DIR }}
+        key: sccache-${{ inputs.cache-runner }}-${{ inputs.target }}-${{ inputs.profile }}-${{ inputs.lockfile-hash }}-${{ github.run_id }}
+
+    - name: sccache stats
+      if: ${{ inputs.use-sccache == 'true' }}
+      continue-on-error: true
+      shell: bash
+      run: sccache --show-stats || true
+
+    - name: sccache summary
+      if: ${{ inputs.use-sccache == 'true' }}
+      shell: bash
+      run: |
+        {
+          echo "### sccache stats — ${{ inputs.target }} (${{ inputs.summary-label }})";
+          echo;
+          echo '```';
+          sccache --show-stats || true;
+          echo '```';
+        } >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Save supplemental cache
+      if: ${{ !cancelled() && inputs.supplemental-cache-path != '' && inputs.supplemental-cache-hit != 'true' }}
+      continue-on-error: true
+      uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+      with:
+        path: ${{ inputs.supplemental-cache-path }}
+        key: ${{ inputs.supplemental-cache-key }}

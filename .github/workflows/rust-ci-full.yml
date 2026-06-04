@@ -337,57 +337,22 @@ jobs:
           path: codex-rs/target/**/cargo-timings/cargo-timing.html
           if-no-files-found: warn
 
-      # Save caches explicitly; make non-fatal so cache packaging
-      # never fails the overall job. Only save when key wasn't hit.
-      - name: Save cargo home cache
-        if: always() && !cancelled() && steps.cargo_setup.outputs.cargo-home-cache-hit != 'true'
-        continue-on-error: true
-        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+      - name: Finish Cargo CI
+        if: always()
+        uses: ./.github/actions/finish-cargo-ci
         with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            ${{ github.workspace }}/.cargo-home/bin/
-            ${{ github.workspace }}/.cargo-home/registry/index/
-            ${{ github.workspace }}/.cargo-home/registry/cache/
-            ${{ github.workspace }}/.cargo-home/git/db/
-          key: cargo-home-${{ matrix.runner }}-${{ matrix.target }}-${{ matrix.profile }}-${{ steps.cargo_setup.outputs.lockfile-hash }}-${{ steps.cargo_setup.outputs.toolchain-hash }}
-
-      - name: Save sccache cache (fallback)
-        if: always() && !cancelled() && env.USE_SCCACHE == 'true' && env.SCCACHE_GHA_ENABLED != 'true'
-        continue-on-error: true
-        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
-        with:
-          path: ${{ env.SCCACHE_DIR }}
-          key: sccache-${{ matrix.runner }}-${{ matrix.target }}-${{ matrix.profile }}-${{ steps.cargo_setup.outputs.lockfile-hash }}-${{ github.run_id }}
-
-      - name: sccache stats
-        if: always() && env.USE_SCCACHE == 'true'
-        continue-on-error: true
-        run: sccache --show-stats || true
-
-      - name: sccache summary
-        if: always() && env.USE_SCCACHE == 'true'
-        shell: bash
-        run: |
-          {
-            echo "### sccache stats — ${{ matrix.target }} (${{ matrix.profile }})";
-            echo;
-            echo '```';
-            sccache --show-stats || true;
-            echo '```';
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Save APT cache (musl)
-        if: always() && !cancelled() && (matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl') && steps.cache_apt_restore.outputs.cache-hit != 'true'
-        continue-on-error: true
-        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
-        with:
-          path: |
-            /var/cache/apt
-          key: apt-${{ matrix.runner }}-${{ matrix.target }}-v1
+          target: ${{ matrix.target }}
+          profile: ${{ matrix.profile }}
+          cache-runner: ${{ matrix.runner }}
+          cargo-home-cache-hit: ${{ steps.cargo_setup.outputs.cargo-home-cache-hit }}
+          lockfile-hash: ${{ steps.cargo_setup.outputs.lockfile-hash }}
+          toolchain-hash: ${{ steps.cargo_setup.outputs.toolchain-hash }}
+          summary-label: ${{ matrix.profile }}
+          use-hermetic-cargo-home: ${{ contains(matrix.target, 'musl') && 'true' || 'false' }}
+          use-sccache: ${{ env.USE_SCCACHE }}
+          supplemental-cache-path: ${{ contains(matrix.target, 'musl') && '/var/cache/apt' || '' }}
+          supplemental-cache-key: apt-${{ matrix.runner }}-${{ matrix.target }}-v1
+          supplemental-cache-hit: ${{ steps.cache_apt_restore.outputs.cache-hit }}
 
   tests_macos_aarch64:
     name: Tests — macos-15-xlarge - aarch64-apple-darwin

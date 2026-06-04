@@ -185,42 +185,18 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-      - name: Save cargo home cache
-        if: always() && !cancelled() && steps.cargo_setup.outputs.cargo-home-cache-hit != 'true'
-        continue-on-error: true
-        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+      - name: Finish Cargo CI
+        if: always()
+        uses: ./.github/actions/finish-cargo-ci
         with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-          key: cargo-home-${{ env.ARCHIVE_CACHE_RUNNER }}-${{ inputs.target }}-${{ inputs.profile }}-${{ steps.cargo_setup.outputs.lockfile-hash }}-${{ steps.cargo_setup.outputs.toolchain-hash }}
-
-      - name: Save sccache cache (fallback)
-        if: always() && !cancelled() && env.USE_SCCACHE == 'true' && env.SCCACHE_GHA_ENABLED != 'true'
-        continue-on-error: true
-        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
-        with:
-          path: ${{ env.SCCACHE_DIR }}
-          key: sccache-${{ env.ARCHIVE_CACHE_RUNNER }}-${{ inputs.target }}-${{ inputs.profile }}-${{ steps.cargo_setup.outputs.lockfile-hash }}-${{ github.run_id }}
-
-      - name: sccache stats
-        if: always() && env.USE_SCCACHE == 'true'
-        continue-on-error: true
-        run: sccache --show-stats || true
-
-      - name: sccache summary
-        if: always() && env.USE_SCCACHE == 'true'
-        shell: bash
-        run: |
-          {
-            echo "### sccache stats — ${{ inputs.target }} (tests)";
-            echo;
-            echo '```';
-            sccache --show-stats || true;
-            echo '```';
-          } >> "$GITHUB_STEP_SUMMARY"
+          target: ${{ inputs.target }}
+          profile: ${{ inputs.profile }}
+          cache-runner: ${{ env.ARCHIVE_CACHE_RUNNER }}
+          cargo-home-cache-hit: ${{ steps.cargo_setup.outputs.cargo-home-cache-hit }}
+          lockfile-hash: ${{ steps.cargo_setup.outputs.lockfile-hash }}
+          toolchain-hash: ${{ steps.cargo_setup.outputs.toolchain-hash }}
+          summary-label: tests
+          use-sccache: ${{ env.USE_SCCACHE }}
 
   shard:
     name: Tests shard ${{ matrix.shard }}/4
