@@ -28,7 +28,9 @@ use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::Renderable;
 use crate::tui::Tui;
 use crate::tui::TuiEvent;
+use codex_app_server_client::AppServerRequestHandle;
 use codex_app_server_protocol::HooksListEntry;
+use std::path::PathBuf;
 
 pub(crate) enum StartupHooksReviewOutcome {
     Continue,
@@ -42,21 +44,32 @@ enum StartupHooksReviewSelection {
     ContinueWithoutTrusting,
 }
 
+pub(crate) async fn load_startup_hooks_review_entry(
+    request_handle: AppServerRequestHandle,
+    cwd: PathBuf,
+) -> HooksListEntry {
+    let response = match fetch_hooks_list(request_handle, cwd.clone()).await {
+        Ok(response) => response,
+        Err(err) => {
+            tracing::warn!("failed to load startup hook review state: {err:#}");
+            return HooksListEntry {
+                cwd,
+                hooks: Vec::new(),
+                warnings: Vec::new(),
+                errors: Vec::new(),
+            };
+        }
+    };
+    hooks_list_entry_for_cwd(response, &cwd)
+}
+
 pub(crate) async fn maybe_run_startup_hooks_review(
     app_server: &mut AppServerSession,
     tui: &mut Tui,
     config: &Config,
     bypass_hook_trust: bool,
+    entry: HooksListEntry,
 ) -> Result<StartupHooksReviewOutcome> {
-    let cwd = config.cwd.to_path_buf();
-    let response = match fetch_hooks_list(app_server.request_handle(), cwd.clone()).await {
-        Ok(response) => response,
-        Err(err) => {
-            tracing::warn!("failed to load startup hook review state: {err:#}");
-            return Ok(StartupHooksReviewOutcome::Continue);
-        }
-    };
-    let entry = hooks_list_entry_for_cwd(response, &cwd);
     if !review_is_needed(bypass_hook_trust, &entry) {
         return Ok(StartupHooksReviewOutcome::Continue);
     }

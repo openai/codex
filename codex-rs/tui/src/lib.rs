@@ -71,6 +71,7 @@ use std::fs::OpenOptions;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Instant;
 pub use token_usage::TokenUsage;
 use tracing::Level;
 use tracing::error;
@@ -276,6 +277,7 @@ pub(crate) mod test_support;
 use crate::onboarding::onboarding_screen::OnboardingScreenArgs;
 use crate::onboarding::onboarding_screen::run_onboarding_app;
 use crate::startup_hooks_review::StartupHooksReviewOutcome;
+use crate::startup_hooks_review::load_startup_hooks_review_entry;
 use crate::startup_hooks_review::maybe_run_startup_hooks_review;
 use crate::tui::Tui;
 pub use cli::Cli;
@@ -1781,11 +1783,33 @@ async fn run_ratatui_app(
             resume_picker::SessionSelection::Resume(_)
         );
     let bypass_hook_trust_for_startup_review = config.bypass_hook_trust && !is_persistent_resume;
+    let hooks_request_handle = app_server.request_handle();
+    let hooks_cwd = config.cwd.to_path_buf();
+    let startup_prefetch_started_at = Instant::now();
+    let should_defer_bootstrap =
+        external_agent_config_migration_startup::should_show_external_agent_config_migration_prompt(
+            &config,
+            should_show_trust_screen_flag,
+        );
+    let (startup_bootstrap, startup_hooks_entry) = if should_defer_bootstrap {
+        (
+            None,
+            load_startup_hooks_review_entry(hooks_request_handle, hooks_cwd).await,
+        )
+    } else {
+        let (bootstrap, entry) = tokio::join!(
+            app_server.bootstrap(&config),
+            load_startup_hooks_review_entry(hooks_request_handle, hooks_cwd),
+        );
+        (Some(bootstrap?), entry)
+    };
+    let startup_elapsed_before_app = startup_prefetch_started_at.elapsed();
     let startup_hooks_browser = match maybe_run_startup_hooks_review(
         &mut app_server,
         &mut tui,
         &config,
         bypass_hook_trust_for_startup_review,
+        startup_hooks_entry,
     )
     .await?
     {
@@ -1810,6 +1834,8 @@ async fn run_ratatui_app(
         app_server_target,
         state_db,
         environment_manager,
+        startup_elapsed_before_app,
+        startup_bootstrap,
         startup_hooks_browser,
     )
     .await;
