@@ -166,6 +166,7 @@ struct ProcessEntry {
     process_id: i32,
     cwd: AbsolutePathBuf,
     started_at_ms: i64,
+    initial_exec_command_returned: bool,
     hook_command: String,
     tty: bool,
     network_approval: Option<DeferredNetworkApproval>,

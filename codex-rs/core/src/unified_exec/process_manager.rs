@@ -740,29 +740,28 @@ impl UnifiedExecProcessManager {
     }
 
     async fn refresh_process_state(&self, process_id: i32) -> ProcessStatus {
-        {
-            let mut store = self.process_store.lock().await;
-            let Some(entry) = store.processes.get(&process_id) else {
+        let mut store = self.process_store.lock().await;
+        let Some(entry) = store.processes.get_mut(&process_id) else {
+            return ProcessStatus::Unknown;
+        };
+
+        let exit_code = entry.process.exit_code();
+        let process_id = entry.process_id;
+
+        if entry.process.has_exited() {
+            let Some(entry) = store.remove(process_id) else {
                 return ProcessStatus::Unknown;
             };
-
-            let exit_code = entry.process.exit_code();
-            let process_id = entry.process_id;
-
-            if entry.process.has_exited() {
-                let Some(entry) = store.remove(process_id) else {
-                    return ProcessStatus::Unknown;
-                };
-                ProcessStatus::Exited {
-                    exit_code,
-                    entry: Box::new(entry),
-                }
-            } else {
-                ProcessStatus::Alive {
-                    exit_code,
-                    call_id: entry.call_id.clone(),
-                    process_id,
-                }
+            ProcessStatus::Exited {
+                exit_code,
+                entry: Box::new(entry),
+            }
+        } else {
+            entry.initial_exec_command_returned = true;
+            ProcessStatus::Alive {
+                exit_code,
+                call_id: entry.call_id.clone(),
+                process_id,
             }
         }
     }
@@ -826,6 +825,7 @@ impl UnifiedExecProcessManager {
             process_id,
             cwd: cwd.clone(),
             started_at_ms: now_unix_timestamp_ms(),
+            initial_exec_command_returned: false,
             hook_command,
             tty,
             network_approval,
@@ -1298,6 +1298,15 @@ impl UnifiedExecProcessManager {
     pub(crate) async fn terminate_process(&self, process_id: i32) -> bool {
         let entry = {
             let mut store = self.process_store.lock().await;
+            let Some(entry) = store.processes.get(&process_id) else {
+                return false;
+            };
+            if !entry.initial_exec_command_returned {
+                if !entry.process.has_exited() {
+                    entry.process.terminate();
+                }
+                return true;
+            }
             store.remove(process_id)
         };
         let Some(entry) = entry else {

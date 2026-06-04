@@ -129,6 +129,7 @@ async fn exec_command_with_tty(
             process_id,
             cwd: cwd.clone(),
             started_at_ms: 0,
+            initial_exec_command_returned: false,
             hook_command: cmd.to_string(),
             tty,
             network_approval: None,
@@ -617,6 +618,77 @@ async fn reusing_completed_process_returns_unknown_process() -> anyhow::Result<(
             .processes
             .is_empty()
     );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn terminating_initial_exec_command_does_not_return_unknown_process() -> anyhow::Result<()> {
+    skip_if_sandbox!(Ok(()));
+
+    let (session, turn) = test_session_and_turn().await;
+    let manager = &session.services.unified_exec_manager;
+    let process_id = manager.allocate_process_id().await;
+    let command = "printf started; sleep 60";
+    #[allow(deprecated)]
+    let cwd = turn.cwd.clone();
+    let request = ExecCommandRequest {
+        command: vec!["bash".to_string(), "-lc".to_string(), command.to_string()],
+        shell_type: crate::shell::ShellType::Bash,
+        hook_command: command.to_string(),
+        process_id,
+        yield_time_ms: 30_000,
+        max_output_tokens: None,
+        cwd: cwd.clone(),
+        sandbox_cwd: cwd,
+        environment: turn
+            .environments
+            .primary_environment()
+            .expect("primary environment"),
+        shell_mode: codex_tools::UnifiedExecShellMode::Direct,
+        network: None,
+        tty: true,
+        sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
+        additional_permissions: None,
+        additional_permissions_preapproved: false,
+        justification: None,
+        prefix_rule: None,
+    };
+    let context =
+        UnifiedExecContext::new(Arc::clone(&session), Arc::clone(&turn), "call".to_string());
+    let exec_task = tokio::spawn({
+        let session = Arc::clone(&session);
+        async move {
+            session
+                .services
+                .unified_exec_manager
+                .exec_command(request, &context)
+                .await
+        }
+    });
+
+    let mut listed = false;
+    for _ in 0..100 {
+        if session
+            .list_background_terminals()
+            .await
+            .iter()
+            .any(|terminal| terminal.process_id == process_id.to_string())
+        {
+            listed = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(listed, "expected process to be listed before termination");
+
+    assert!(session.terminate_background_terminal(process_id).await);
+
+    let result = tokio::time::timeout(Duration::from_secs(5), exec_task)
+        .await
+        .expect("timed out waiting for exec command")?;
+    let output = result.expect("terminating initial exec command should return tool output");
+    assert!(output.process_id.is_none());
 
     Ok(())
 }
