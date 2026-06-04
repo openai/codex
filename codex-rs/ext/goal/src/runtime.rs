@@ -4,7 +4,6 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 
 use codex_core::ThreadManager;
-use codex_core::TryStartTurnIfIdleRejectionReason;
 use codex_protocol::ThreadId;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::ThreadGoal;
@@ -314,9 +313,6 @@ impl GoalRuntimeHandle {
                 ?reason,
                 "skipping goal continuation because automatic idle work was rejected"
             );
-            if reason == TryStartTurnIfIdleRejectionReason::PlanMode {
-                return Ok(());
-            }
         }
 
         let current_turn_is_goal_active = self
