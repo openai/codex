@@ -108,6 +108,7 @@ use super::analytics::wait_for_analytics_payload;
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(25);
 #[cfg(not(windows))]
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+const APPROVAL_COMPLETION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(25);
 const CODEX_5_2_INSTRUCTIONS_TEMPLATE_DEFAULT: &str = "You are Codex, a coding agent based on GPT-5. You and the user share the same workspace and collaborate to achieve the user's goals.";
 
 fn normalized_existing_path(path: impl AsRef<Path>) -> Result<PathBuf> {
@@ -2917,7 +2918,7 @@ async fn thread_resume_replays_pending_command_execution_request_approval() -> R
         .await?;
 
     timeout(
-        DEFAULT_READ_TIMEOUT,
+        APPROVAL_COMPLETION_TIMEOUT,
         primary.read_stream_until_notification_message("turn/completed"),
     )
     .await??;
@@ -3085,7 +3086,7 @@ async fn thread_resume_replays_pending_file_change_request_approval() -> Result<
         .await?;
 
     timeout(
-        DEFAULT_READ_TIMEOUT,
+        APPROVAL_COMPLETION_TIMEOUT,
         primary.read_stream_until_notification_message("turn/completed"),
     )
     .await??;
