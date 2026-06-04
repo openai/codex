@@ -31,6 +31,38 @@ fn requests_ca_bundle_contents(env: &HashMap<String, String>) -> String {
     .unwrap()
 }
 
+fn ssl_cert_dir_env(
+    dir: &tempfile::TempDir,
+    contents: [String; 2],
+) -> (HashMap<String, String>, ManagedMitmCaTrustBundle) {
+    let ssl_cert_dir_paths = [dir.path().join("certs-a"), dir.path().join("certs-b")];
+    for (path, contents) in ssl_cert_dir_paths.iter().zip(contents) {
+        fs::create_dir(path).unwrap();
+        fs::write(path.join("ordinary-ca.pem"), contents).unwrap();
+    }
+    let mitm_ca_trust_bundle_path = dir.path().join("ca-bundle.pem");
+    fs::write(&mitm_ca_trust_bundle_path, "managed ca\n").unwrap();
+    let ssl_cert_dir = std::env::join_paths(["certs-a", "certs-b"]).unwrap();
+    let ssl_cert_dir = ssl_cert_dir.to_string_lossy().into_owned();
+    (
+        HashMap::from([
+            (
+                "SSL_CERT_FILE".to_string(),
+                mitm_ca_trust_bundle_path.display().to_string(),
+            ),
+            (
+                crate::certs::SSL_CERT_DIR_ENV_KEY.to_string(),
+                ssl_cert_dir.clone(),
+            ),
+        ]),
+        ManagedMitmCaTrustBundle {
+            path: mitm_ca_trust_bundle_path,
+            startup_env_values: HashMap::from([(crate::certs::SSL_CERT_DIR_ENV_KEY, ssl_cert_dir)]),
+            startup_cwd: dir.path().to_path_buf(),
+        },
+    )
+}
+
 #[test]
 fn materializes_readable_startup_ca_override() {
     let dir = tempdir().unwrap();
@@ -99,32 +131,8 @@ fn materializes_readable_command_scoped_override() {
 #[test]
 fn materializes_readable_ssl_cert_dir() {
     let dir = tempdir().unwrap();
-    let ssl_cert_dir_paths = [dir.path().join("certs-a"), dir.path().join("certs-b")];
-    for (path, contents) in ssl_cert_dir_paths.iter().zip(["dir ca a\n", "dir ca b\n"]) {
-        fs::create_dir(path).unwrap();
-        fs::write(path.join("ordinary-ca.pem"), contents).unwrap();
-    }
-    let mitm_ca_trust_bundle_path = dir.path().join("ca-bundle.pem");
-    fs::write(&mitm_ca_trust_bundle_path, "managed ca\n").unwrap();
-    let ssl_cert_dir = std::env::join_paths(["certs-a", "certs-b"]).unwrap();
-    let mut env = HashMap::from([
-        (
-            "SSL_CERT_FILE".to_string(),
-            mitm_ca_trust_bundle_path.display().to_string(),
-        ),
-        (
-            crate::certs::SSL_CERT_DIR_ENV_KEY.to_string(),
-            ssl_cert_dir.to_string_lossy().into_owned(),
-        ),
-    ]);
-    let mitm_ca_trust_bundle = ManagedMitmCaTrustBundle {
-        path: mitm_ca_trust_bundle_path,
-        startup_env_values: HashMap::from([(
-            crate::certs::SSL_CERT_DIR_ENV_KEY,
-            ssl_cert_dir.to_string_lossy().into_owned(),
-        )]),
-        startup_cwd: dir.path().to_path_buf(),
-    };
+    let (mut env, mitm_ca_trust_bundle) =
+        ssl_cert_dir_env(&dir, ["dir ca a\n".to_string(), "dir ca b\n".to_string()]);
 
     prepare_mitm_ca_trust_bundle_env(
         &mitm_ca_trust_bundle,
@@ -148,32 +156,11 @@ fn materializes_readable_ssl_cert_dir() {
 #[test]
 fn bounds_aggregate_ssl_cert_dir_contents() {
     let dir = tempdir().unwrap();
-    let ssl_cert_dir_paths = [dir.path().join("certs-a"), dir.path().join("certs-b")];
-    for path in &ssl_cert_dir_paths {
-        fs::create_dir(path).unwrap();
-        fs::write(path.join("ordinary-ca.pem"), "a".repeat(2_200_000)).unwrap();
-    }
-    let mitm_ca_trust_bundle_path = dir.path().join("ca-bundle.pem");
-    fs::write(&mitm_ca_trust_bundle_path, "managed ca\n").unwrap();
-    let ssl_cert_dir = std::env::join_paths(["certs-a", "certs-b"]).unwrap();
-    let mut env = HashMap::from([
-        (
-            "SSL_CERT_FILE".to_string(),
-            mitm_ca_trust_bundle_path.display().to_string(),
-        ),
-        (
-            crate::certs::SSL_CERT_DIR_ENV_KEY.to_string(),
-            ssl_cert_dir.to_string_lossy().into_owned(),
-        ),
-    ]);
-    let mitm_ca_trust_bundle = ManagedMitmCaTrustBundle {
-        path: mitm_ca_trust_bundle_path,
-        startup_env_values: HashMap::from([(
-            crate::certs::SSL_CERT_DIR_ENV_KEY,
-            ssl_cert_dir.to_string_lossy().into_owned(),
-        )]),
-        startup_cwd: dir.path().to_path_buf(),
-    };
+    let oversized_dir_contents = "a".repeat(2_200_000);
+    let (mut env, mitm_ca_trust_bundle) = ssl_cert_dir_env(
+        &dir,
+        [oversized_dir_contents.clone(), oversized_dir_contents],
+    );
 
     prepare_mitm_ca_trust_bundle_env(
         &mitm_ca_trust_bundle,
