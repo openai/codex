@@ -1,6 +1,4 @@
 use std::collections::HashMap;
-use std::sync::Arc;
-use std::sync::Mutex;
 use std::time::Duration;
 
 use futures::SinkExt;
@@ -8,7 +6,6 @@ use futures::StreamExt;
 use tokio::io::AsyncRead;
 use tokio::io::AsyncWrite;
 use tokio::sync::mpsc;
-use tokio::sync::watch;
 use tokio::task::JoinSet;
 use tokio::time::timeout;
 use tokio_tungstenite::WebSocketStream;
@@ -18,29 +15,20 @@ use tracing::warn;
 
 use crate::ExecServerError;
 use crate::connection::CHANNEL_CAPACITY;
-use crate::connection::JsonRpcConnection;
-use crate::connection::JsonRpcConnectionEvent;
-use crate::connection::JsonRpcTransport;
 use crate::noise_channel::NoiseChannelIdentity;
 use crate::noise_channel::NoiseChannelPublicKey;
-use crate::noise_channel::NoiseTransport;
 use crate::noise_channel::PendingResponderHandshake;
 use crate::noise_channel::noise_channel_prologue;
-use crate::noise_relay::message_framing::JsonRpcMessageDecoder;
-use crate::noise_relay::message_framing::NOISE_RECORD_PLAINTEXT_LEN;
-use crate::noise_relay::message_framing::frame_jsonrpc_message;
-use crate::noise_relay::ordered_ciphertext::OrderedCiphertextFrames;
-use crate::noise_relay::take_next_sequence;
+use crate::noise_relay::NOISE_RELAY_RESET_REASON;
+use crate::noise_relay::executor_stream::ClosedNoiseVirtualStream;
+use crate::noise_relay::executor_stream::NoiseVirtualStream;
+use crate::noise_relay::executor_stream::spawn_noise_virtual_stream;
 use crate::relay::RelayFrameBodyKind;
 use crate::relay::decode_relay_message_frame;
 use crate::relay::encode_relay_message_frame;
-use crate::relay_proto::RelayData;
 use crate::relay_proto::RelayMessageFrame;
 use crate::server::ConnectionProcessor;
 
-// This value is already part of the relay wire contract. Keep it stable even
-// though the source module now uses the more precise Noise terminology.
-const NOISE_RELAY_RESET_REASON: &str = "secure_relay_protocol_error";
 const MAX_ACTIVE_NOISE_RELAY_STREAMS: usize = 128;
 const MAX_HARNESS_KEY_AUTHORIZATION_BYTES: usize = 4096;
 const MAX_PENDING_HANDSHAKE_VALIDATIONS: usize = 32;
@@ -76,9 +64,23 @@ pub(crate) async fn run_noise_multiplexed_environment<S, V>(
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     V: HarnessKeyValidator + Clone + 'static,
 {
-    let mut websocket = stream;
+    let (mut websocket_sink, mut websocket_stream) = stream.split();
     let (physical_outgoing_tx, mut physical_outgoing_rx) =
         mpsc::channel::<Vec<u8>>(CHANNEL_CAPACITY);
+    let (closed_stream_tx, mut closed_stream_rx) =
+        mpsc::channel::<ClosedNoiseVirtualStream>(MAX_ACTIVE_NOISE_RELAY_STREAMS);
+    // A separate writer task is required because this state machine also
+    // produces resets and handshake responses. If the same task both sent into
+    // and drained the bounded outgoing channel, backpressure could make it wait
+    // on itself and stop servicing the physical websocket.
+    let mut physical_writer_task = tokio::spawn(async move {
+        while let Some(encoded) = physical_outgoing_rx.recv().await {
+            if let Err(error) = websocket_sink.send(Message::Binary(encoded.into())).await {
+                debug!("Noise multiplexed environment websocket write failed: {error}");
+                break;
+            }
+        }
+    });
     let mut streams: HashMap<String, NoiseVirtualStream> = HashMap::new();
     let mut pending_handshakes: HashMap<String, PendingHandshake> = HashMap::new();
     let mut validation_tasks: JoinSet<HarnessKeyValidationResult> = JoinSet::new();
@@ -89,12 +91,21 @@ pub(crate) async fn run_noise_multiplexed_environment<S, V>(
         // malicious authorization request must not block existing streams or
         // prevent other handshakes from being received and bounded.
         let frame = tokio::select! {
-            maybe_encoded = physical_outgoing_rx.recv() => {
-                let Some(encoded) = maybe_encoded else {
-                    break;
-                };
-                if websocket.send(Message::Binary(encoded.into())).await.is_err() {
-                    break;
+            writer_result = &mut physical_writer_task => {
+                if let Err(error) = writer_result {
+                    warn!("Noise multiplexed environment websocket writer failed: {error}");
+                }
+                break;
+            }
+            Some(closed_stream) = closed_stream_rx.recv() => {
+                // A writer can finish after its peer resets and reuses the same
+                // routing ID. Remove only the exact authenticated stream
+                // instance that produced this close notification.
+                let is_current = streams
+                    .get(&closed_stream.stream_id)
+                    .is_some_and(|stream| stream.is_instance(closed_stream.instance_id));
+                if is_current {
+                    streams.remove(&closed_stream.stream_id);
                 }
                 continue;
             }
@@ -117,14 +128,18 @@ pub(crate) async fn run_noise_multiplexed_environment<S, V>(
                         else {
                             continue;
                         };
-                        if let Err(error) = validation_result.result {
-                            warn!("Noise relay harness key validation failed: {error}");
-                            send_reset(&physical_outgoing_tx, validation_result.stream_id).await;
+                        if validation_result.result.is_err() {
+                            // Validators receive the short-lived authorization.
+                            // Keep their error text out of logs even though the
+                            // registry implementation below also sanitizes
+                            // response bodies.
+                            warn!("Noise relay harness key validation failed");
+                            send_reset(&physical_outgoing_tx, validation_result.stream_id);
                             continue;
                         }
                         if streams.len() >= MAX_ACTIVE_NOISE_RELAY_STREAMS {
                             warn!("Noise relay has too many active streams");
-                            send_reset(&physical_outgoing_tx, validation_result.stream_id).await;
+                            send_reset(&physical_outgoing_tx, validation_result.stream_id);
                             continue;
                         }
 
@@ -135,7 +150,7 @@ pub(crate) async fn run_noise_multiplexed_environment<S, V>(
                             Ok(completed) => completed,
                             Err(error) => {
                                 warn!("failed to complete Noise relay handshake: {error}");
-                                send_reset(&physical_outgoing_tx, validation_result.stream_id).await;
+                                send_reset(&physical_outgoing_tx, validation_result.stream_id);
                                 continue;
                             }
                         };
@@ -143,9 +158,13 @@ pub(crate) async fn run_noise_multiplexed_environment<S, V>(
                             validation_result.stream_id.clone(),
                             response,
                         );
+                        // The shared state machine must never wait behind an
+                        // overloaded writer queue. If a successful handshake
+                        // response cannot be queued immediately, close this
+                        // physical connection rather than expose a half-open
+                        // virtual stream.
                         if physical_outgoing_tx
-                            .send(encode_relay_message_frame(&response))
-                            .await
+                            .try_send(encode_relay_message_frame(&response))
                             .is_err()
                         {
                             break;
@@ -154,8 +173,10 @@ pub(crate) async fn run_noise_multiplexed_environment<S, V>(
                             validation_result.stream_id.clone(),
                             spawn_noise_virtual_stream(
                                 validation_result.stream_id,
+                                validation_result.validation_id,
                                 processor.clone(),
                                 physical_outgoing_tx.clone(),
+                                closed_stream_tx.clone(),
                                 transport,
                             ),
                         );
@@ -165,14 +186,14 @@ pub(crate) async fn run_noise_multiplexed_environment<S, V>(
                         let stream_ids = pending_handshakes.keys().cloned().collect::<Vec<_>>();
                         pending_handshakes.clear();
                         for stream_id in stream_ids {
-                            send_reset(&physical_outgoing_tx, stream_id).await;
+                            send_reset(&physical_outgoing_tx, stream_id);
                         }
                     }
                     None => {}
                 }
                 continue;
             }
-            incoming_message = websocket.next() => match incoming_message {
+            incoming_message = websocket_stream.next() => match incoming_message {
                 Some(Ok(Message::Binary(payload))) => match decode_relay_message_frame(payload.as_ref()) {
                     Ok(frame) => frame,
                     Err(error) => {
@@ -206,17 +227,17 @@ pub(crate) async fn run_noise_multiplexed_environment<S, V>(
                 // Bound all pre-authentication state before doing expensive
                 // hybrid cryptography or starting an external validation.
                 if streams.contains_key(&stream_id) || pending_handshakes.contains_key(&stream_id) {
-                    send_reset(&physical_outgoing_tx, stream_id).await;
+                    send_reset(&physical_outgoing_tx, stream_id);
                     continue;
                 }
                 if streams.len() >= MAX_ACTIVE_NOISE_RELAY_STREAMS {
                     warn!("Noise relay has too many active streams");
-                    send_reset(&physical_outgoing_tx, stream_id).await;
+                    send_reset(&physical_outgoing_tx, stream_id);
                     continue;
                 }
                 if validation_tasks.len() >= MAX_PENDING_HANDSHAKE_VALIDATIONS {
                     warn!("Noise relay has too many pending harness key validations");
-                    send_reset(&physical_outgoing_tx, stream_id).await;
+                    send_reset(&physical_outgoing_tx, stream_id);
                     continue;
                 }
                 let prologue = match noise_channel_prologue(
@@ -227,7 +248,7 @@ pub(crate) async fn run_noise_multiplexed_environment<S, V>(
                     Ok(prologue) => prologue,
                     Err(error) => {
                         warn!("failed to build Noise relay prologue: {error}");
-                        send_reset(&physical_outgoing_tx, stream_id).await;
+                        send_reset(&physical_outgoing_tx, stream_id);
                         continue;
                     }
                 };
@@ -235,7 +256,7 @@ pub(crate) async fn run_noise_multiplexed_environment<S, V>(
                     Ok(request) => request,
                     Err(error) => {
                         warn!("failed to read Noise relay handshake frame: {error}");
-                        send_reset(&physical_outgoing_tx, stream_id).await;
+                        send_reset(&physical_outgoing_tx, stream_id);
                         continue;
                     }
                 };
@@ -244,7 +265,7 @@ pub(crate) async fn run_noise_multiplexed_environment<S, V>(
                         Ok(pending) => pending,
                         Err(error) => {
                             warn!("failed to read Noise relay handshake request: {error}");
-                            send_reset(&physical_outgoing_tx, stream_id).await;
+                            send_reset(&physical_outgoing_tx, stream_id);
                             continue;
                         }
                     };
@@ -260,12 +281,12 @@ pub(crate) async fn run_noise_multiplexed_environment<S, V>(
                     }
                     Ok(_) => {
                         warn!("Noise relay handshake authorization is too long");
-                        send_reset(&physical_outgoing_tx, stream_id).await;
+                        send_reset(&physical_outgoing_tx, stream_id);
                         continue;
                     }
                     Err(_) => {
                         warn!("Noise relay handshake authorization is not UTF-8");
-                        send_reset(&physical_outgoing_tx, stream_id).await;
+                        send_reset(&physical_outgoing_tx, stream_id);
                         continue;
                     }
                 };
@@ -273,7 +294,7 @@ pub(crate) async fn run_noise_multiplexed_environment<S, V>(
                 let validation_id = next_validation_id;
                 let Some(next_id) = next_validation_id.checked_add(1) else {
                     warn!("Noise relay harness key validation id exhausted");
-                    send_reset(&physical_outgoing_tx, stream_id).await;
+                    send_reset(&physical_outgoing_tx, stream_id);
                     continue;
                 };
                 next_validation_id = next_id;
@@ -310,11 +331,11 @@ pub(crate) async fn run_noise_multiplexed_environment<S, V>(
             }
             RelayFrameBodyKind::Data => {
                 // Data before handshake completion is always invalid. Removing
-                // a pending handshake also ensures a peer cannot keep its
-                // authorization task alive while sending application records.
+                // pending state makes the time-bounded validation result stale,
+                // so it can never complete a stream after this protocol error.
                 let Some(stream) = streams.get_mut(&stream_id) else {
                     pending_handshakes.remove(&stream_id);
-                    send_reset(&physical_outgoing_tx, stream_id).await;
+                    send_reset(&physical_outgoing_tx, stream_id);
                     continue;
                 };
                 let data = match frame.into_data() {
@@ -322,20 +343,23 @@ pub(crate) async fn run_noise_multiplexed_environment<S, V>(
                     Err(error) => {
                         warn!("dropping malformed Noise relay data frame: {error}");
                         streams.remove(&stream_id);
-                        send_reset(&physical_outgoing_tx, stream_id).await;
+                        send_reset(&physical_outgoing_tx, stream_id);
                         continue;
                     }
                 };
-                if let Err(error) = stream.receive_data(data).await {
+                if let Err(error) = stream.receive_data(data) {
                     warn!("failed to process Noise relay payload: {error}");
                     streams.remove(&stream_id);
-                    send_reset(&physical_outgoing_tx, stream_id).await;
+                    send_reset(&physical_outgoing_tx, stream_id);
                 }
             }
             RelayFrameBodyKind::Reset => {
                 pending_handshakes.remove(&stream_id);
                 if let Some(stream) = streams.remove(&stream_id) {
-                    stream.disconnect(frame.into_reset_reason()).await;
+                    // Reset is cleartext relay control and is not authenticated
+                    // by Noise. Honor its availability effect, but never
+                    // forward attacker-controlled reason text into logs.
+                    stream.disconnect(/*reason*/ None);
                 }
             }
             RelayFrameBodyKind::Ack
@@ -345,7 +369,14 @@ pub(crate) async fn run_noise_multiplexed_environment<S, V>(
     }
 
     for (_stream_id, stream) in streams {
-        stream.disconnect(/*reason*/ None).await;
+        stream.disconnect(/*reason*/ None);
+    }
+    // Dropping the JoinSet below aborts any still-running registry validations.
+    // Await an abort only when the select loop did not already consume the
+    // writer result.
+    if !physical_writer_task.is_finished() {
+        physical_writer_task.abort();
+        let _ = physical_writer_task.await;
     }
 }
 
@@ -360,138 +391,10 @@ struct HarnessKeyValidationResult {
     result: Result<(), ExecServerError>,
 }
 
-struct NoiseVirtualStream {
-    incoming_tx: mpsc::Sender<JsonRpcConnectionEvent>,
-    disconnected_tx: watch::Sender<bool>,
-    transport: Arc<Mutex<NoiseTransport>>,
-    inbound_ciphertexts: OrderedCiphertextFrames,
-    inbound_decoder: JsonRpcMessageDecoder,
-}
-
-impl NoiseVirtualStream {
-    async fn disconnect(self, reason: Option<String>) {
-        let _ = self.disconnected_tx.send(true);
-        let _ = self
-            .incoming_tx
-            .send(JsonRpcConnectionEvent::Disconnected { reason })
-            .await;
-    }
-
-    async fn receive_data(&mut self, data: RelayData) -> Result<(), ExecServerError> {
-        // Relay sequence ordering is enforced before taking the transport lock
-        // and decrypting. Each virtual stream owns one ordered Noise nonce
-        // space shared by its reader and writer transport halves.
-        for ciphertext in self.inbound_ciphertexts.push(data.seq, data.payload)? {
-            let plaintext = {
-                let mut transport = self
-                    .transport
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                transport.decrypt(&ciphertext).map_err(|error| {
-                    ExecServerError::Protocol(format!("Noise relay decryption failed: {error}"))
-                })?
-            };
-            for message in self.inbound_decoder.push(&plaintext)? {
-                self.incoming_tx
-                    .send(JsonRpcConnectionEvent::Message(message))
-                    .await
-                    .map_err(|_| ExecServerError::Closed)?;
-            }
-        }
-        Ok(())
-    }
-}
-
-fn spawn_noise_virtual_stream(
-    stream_id: String,
-    processor: ConnectionProcessor,
-    physical_outgoing_tx: mpsc::Sender<Vec<u8>>,
-    transport: NoiseTransport,
-) -> NoiseVirtualStream {
-    let (json_outgoing_tx, mut json_outgoing_rx) = mpsc::channel(CHANNEL_CAPACITY);
-    let (incoming_tx, incoming_rx) = mpsc::channel(CHANNEL_CAPACITY);
-    let (disconnected_tx, disconnected_rx) = watch::channel(false);
-    let transport = Arc::new(Mutex::new(transport));
-    let writer_transport = Arc::clone(&transport);
-    let writer_stream_id = stream_id;
-    let writer_task = tokio::spawn(async move {
-        let mut next_seq = 0u32;
-        'writer: while let Some(message) = json_outgoing_rx.recv().await {
-            // Frame first, then split into bounded Noise records. Each record
-            // receives one checked relay sequence and is encrypted exactly
-            // once, preserving the implicit Noise sending nonce.
-            let framed = match frame_jsonrpc_message(&message) {
-                Ok(framed) => framed,
-                Err(error) => {
-                    warn!("failed to frame Noise virtual stream JSON-RPC payload: {error}");
-                    break;
-                }
-            };
-            for plaintext_record in framed.chunks(NOISE_RECORD_PLAINTEXT_LEN) {
-                let seq = match take_next_sequence(&mut next_seq) {
-                    Ok(seq) => seq,
-                    Err(error) => {
-                        warn!("Noise virtual stream sequence exhausted: {error}");
-                        break 'writer;
-                    }
-                };
-                let ciphertext = {
-                    let mut transport = writer_transport
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner);
-                    transport.encrypt(plaintext_record)
-                };
-                let ciphertext = match ciphertext {
-                    Ok(ciphertext) => ciphertext,
-                    Err(error) => {
-                        warn!("failed to encrypt Noise virtual stream payload: {error}");
-                        break 'writer;
-                    }
-                };
-                let frame = RelayMessageFrame::data(writer_stream_id.clone(), seq, ciphertext);
-                if physical_outgoing_tx
-                    .send(encode_relay_message_frame(&frame))
-                    .await
-                    .is_err()
-                {
-                    break 'writer;
-                }
-            }
-        }
-
-        // Tell the harness to discard this virtual stream whenever its writer
-        // exits, including processor shutdown or a cryptographic/send failure.
-        // Otherwise the peer could wait indefinitely on a dead stream.
-        let reset =
-            RelayMessageFrame::reset(writer_stream_id, NOISE_RELAY_RESET_REASON.to_string());
-        let _ = physical_outgoing_tx
-            .send(encode_relay_message_frame(&reset))
-            .await;
-    });
-
-    let connection = JsonRpcConnection {
-        outgoing_tx: json_outgoing_tx,
-        incoming_rx,
-        disconnected_rx,
-        task_handles: vec![writer_task],
-        transport: JsonRpcTransport::External,
-    };
-    tokio::spawn(async move {
-        processor.run_connection(connection).await;
-    });
-
-    NoiseVirtualStream {
-        incoming_tx,
-        disconnected_tx,
-        transport,
-        inbound_ciphertexts: OrderedCiphertextFrames::default(),
-        inbound_decoder: JsonRpcMessageDecoder::default(),
-    }
-}
-
-async fn send_reset(physical_outgoing_tx: &mpsc::Sender<Vec<u8>>, stream_id: String) {
+fn send_reset(physical_outgoing_tx: &mpsc::Sender<Vec<u8>>, stream_id: String) {
     let reset = RelayMessageFrame::reset(stream_id, NOISE_RELAY_RESET_REASON.to_string());
+    // Resets are best effort. Untrusted relay input must never block the shared
+    // state machine behind an overloaded physical writer queue.
     let _ = physical_outgoing_tx
-        .send(encode_relay_message_frame(&reset))
-        .await;
+        .try_send(encode_relay_message_frame(&reset));
 }

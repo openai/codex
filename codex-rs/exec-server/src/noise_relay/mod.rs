@@ -1,3 +1,4 @@
+mod executor_stream;
 mod environment;
 mod harness;
 mod message_framing;
@@ -10,6 +11,10 @@ use crate::ExecServerError;
 pub(crate) use environment::HarnessKeyValidator;
 pub(crate) use environment::run_noise_multiplexed_environment;
 pub(crate) use harness::noise_harness_connection_from_websocket;
+
+// This value is already part of the relay wire contract. Keep it stable even
+// though the source module now uses the more precise Noise terminology.
+const NOISE_RELAY_RESET_REASON: &str = "secure_relay_protocol_error";
 
 // This bounds allocation in tungstenite before protobuf and Noise record
 // validation run. It comfortably fits one maximum Noise record plus metadata.
