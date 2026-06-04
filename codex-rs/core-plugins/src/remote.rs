@@ -167,6 +167,7 @@ pub struct RemotePluginDetail {
     pub app_manifest: Option<JsonValue>,
     pub skills: Vec<RemotePluginSkill>,
     pub app_ids: Vec<String>,
+    pub mcp_server_names: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -417,6 +418,13 @@ struct RemotePluginReleaseResponse {
     interface: RemotePluginReleaseInterfaceResponse,
     #[serde(default)]
     skills: Vec<RemotePluginSkillResponse>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    mcp_servers: Vec<RemotePluginMcpServerResponse>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+struct RemotePluginMcpServerResponse {
+    key: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -948,6 +956,14 @@ async fn build_remote_plugin_detail(
             enabled: !disabled_skill_names.contains(&skill.name),
         })
         .collect();
+    let mut mcp_server_names = plugin
+        .release
+        .mcp_servers
+        .iter()
+        .map(|server| server.key.clone())
+        .collect::<Vec<_>>();
+    mcp_server_names.sort_unstable();
+    mcp_server_names.dedup();
 
     Ok(RemotePluginDetail {
         marketplace_name,
@@ -959,6 +975,7 @@ async fn build_remote_plugin_detail(
         app_manifest: plugin.release.app_manifest,
         skills,
         app_ids: plugin.release.app_ids,
+        mcp_server_names,
     })
 }
 

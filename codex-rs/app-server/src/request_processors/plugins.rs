@@ -1,5 +1,3 @@
-mod remote_plugin_detail;
-
 use super::*;
 use crate::error_code::internal_error;
 use crate::error_code::invalid_request;
@@ -1101,13 +1099,7 @@ impl PluginRequestProcessor {
                     Arc::clone(&environment_manager),
                 )
                 .await;
-                let mcp_server_names = remote_plugin_detail::local_curated_mcp_server_names(
-                    plugins_manager.as_ref(),
-                    &plugins_input,
-                    &remote_detail,
-                )
-                .await;
-                remote_plugin_detail_to_info(remote_detail, app_summaries, mcp_server_names)
+                remote_plugin_detail_to_info(remote_detail, app_summaries)
             }
         };
 
@@ -2014,7 +2006,6 @@ fn remote_plugin_share_discoverability_to_info(
 fn remote_plugin_detail_to_info(
     detail: RemoteCatalogPluginDetail,
     apps: Vec<AppSummary>,
-    mcp_servers: Vec<String>,
 ) -> PluginDetail {
     PluginDetail {
         marketplace_name: detail.marketplace_name,
@@ -2035,7 +2026,7 @@ fn remote_plugin_detail_to_info(
             .collect(),
         hooks: Vec::new(),
         apps,
-        mcp_servers,
+        mcp_servers: detail.mcp_server_names,
     }
 }
 

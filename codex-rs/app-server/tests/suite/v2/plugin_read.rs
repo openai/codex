@@ -122,37 +122,9 @@ async fn plugin_read_rejects_multiple_read_sources() -> Result<()> {
 }
 
 #[tokio::test]
-async fn plugin_read_hydrates_remote_curated_mcp_servers_when_remote_plugin_is_disabled()
--> Result<()> {
+async fn plugin_read_returns_remote_mcp_server_names_when_uninstalled() -> Result<()> {
     let codex_home = TempDir::new()?;
     let server = MockServer::start().await;
-    let curated_root = codex_home.path().join(".tmp/plugins");
-    write_plugin_marketplace(
-        &curated_root,
-        "openai-curated",
-        "example-plugin",
-        "./example-plugin",
-    )?;
-    let plugin_root = curated_root.join("example-plugin");
-    std::fs::create_dir_all(plugin_root.join(".codex-plugin"))?;
-    std::fs::write(
-        plugin_root.join(".codex-plugin/plugin.json"),
-        r#"{
-  "name": "example-plugin",
-  "version": "1.2.1",
-  "mcpServers": "./.mcp.json"
-}"#,
-    )?;
-    std::fs::write(
-        plugin_root.join(".mcp.json"),
-        r#"{
-  "mcpServers": {
-    "example-server": {
-      "command": "example-mcp"
-    }
-  }
-}"#,
-    )?;
     std::fs::write(
         codex_home.path().join("config.toml"),
         format!(
@@ -192,7 +164,15 @@ plugins = true
       "default_prompt": "Use the legacy example prompt",
       "default_prompts": []
     },
-    "skills": []
+    "skills": [],
+    "mcp_servers": [
+      {
+        "key": "example-server",
+        "metadata": {
+          "command": "example-mcp"
+        }
+      }
+    ]
   }
 }"#;
     let installed_body = r#"{
