@@ -182,15 +182,18 @@ mod tests {
     #[test]
     fn shutdown_bounded_policy_caps_timeout() {
         assert_eq!(
-            CommandExecutionPolicy::Standard.effective_timeout_sec(600),
+            CommandExecutionPolicy::Standard
+                .effective_timeout_sec(/*configured_timeout_sec*/ 600),
             600
         );
         assert_eq!(
-            CommandExecutionPolicy::shutdown_bounded().effective_timeout_sec(600),
+            CommandExecutionPolicy::shutdown_bounded()
+                .effective_timeout_sec(/*configured_timeout_sec*/ 600),
             8
         );
         assert_eq!(
-            CommandExecutionPolicy::ShutdownBounded { timeout_cap_sec: 3 }.effective_timeout_sec(2),
+            CommandExecutionPolicy::ShutdownBounded { timeout_cap_sec: 3 }
+                .effective_timeout_sec(/*configured_timeout_sec*/ 2),
             2
         );
     }
@@ -201,7 +204,7 @@ mod tests {
         let started = Instant::now();
         let result = run_command(
             &test_shell(),
-            &handler(sleep_command(), 10),
+            &handler(sleep_command(), /*timeout_sec*/ 10),
             "{}",
             temp_dir.path(),
             CommandExecutionPolicy::ShutdownBounded { timeout_cap_sec: 1 },
