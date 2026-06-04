@@ -12,8 +12,10 @@ use std::process::Stdio;
 
 use crate::allow::AllowDenyPaths;
 use crate::allow::compute_allow_paths_for_permissions;
+use crate::helper_materialization::HelperExecutable;
 use crate::helper_materialization::bundled_executable_path_for_exe;
 use crate::helper_materialization::helper_bin_dir;
+use crate::helper_materialization::resolve_helper_for_launch;
 use crate::identity::sandbox_setup_is_complete;
 use crate::logging::log_note;
 use crate::path_normalization::canonical_path_key;
@@ -209,7 +211,8 @@ fn run_setup_refresh_inner(
     };
     let json = serde_json::to_vec(&payload)?;
     let b64 = BASE64_STANDARD.encode(json);
-    let exe = find_setup_exe();
+    let log_dir = sandbox_dir(request.codex_home);
+    let exe = find_setup_exe(request.codex_home, Some(&log_dir));
     // Refresh should never request elevation; ensure verb isn't set and we don't trigger UAC.
     let mut cmd = Command::new(&exe);
     cmd.arg(&b64).stdout(Stdio::null()).stderr(Stdio::null());
@@ -221,14 +224,14 @@ fn run_setup_refresh_inner(
             cwd.display(),
             b64.len()
         ),
-        Some(&sandbox_dir(request.codex_home)),
+        Some(&log_dir),
     );
     let status = cmd
         .status()
         .map_err(|e| {
             log_note(
                 &format!("setup refresh: failed to spawn {}: {e}", exe.display()),
-                Some(&sandbox_dir(request.codex_home)),
+                Some(&log_dir),
             );
             e
         })
@@ -236,7 +239,7 @@ fn run_setup_refresh_inner(
     if !status.success() {
         log_note(
             &format!("setup refresh: exited with status {status:?}"),
-            Some(&sandbox_dir(request.codex_home)),
+            Some(&log_dir),
         );
         return Err(anyhow!("setup refresh failed with status {status}"));
     }
@@ -640,13 +643,8 @@ fn quote_arg(arg: &str) -> String {
     out
 }
 
-fn find_setup_exe() -> PathBuf {
-    if let Ok(exe) = std::env::current_exe()
-        && let Some(setup_exe) = find_setup_exe_for_current_exe(&exe)
-    {
-        return setup_exe;
-    }
-    PathBuf::from(SETUP_EXE_FILENAME)
+fn find_setup_exe(codex_home: &Path, log_dir: Option<&Path>) -> PathBuf {
+    resolve_helper_for_launch(HelperExecutable::Setup, codex_home, log_dir)
 }
 
 fn find_setup_exe_for_current_exe(exe: &Path) -> Option<PathBuf> {
@@ -694,7 +692,8 @@ fn run_setup_exe(
     use windows_sys::Win32::UI::Shell::SEE_MASK_NOCLOSEPROCESS;
     use windows_sys::Win32::UI::Shell::SHELLEXECUTEINFOW;
     use windows_sys::Win32::UI::Shell::ShellExecuteExW;
-    let exe = find_setup_exe();
+    let sandbox_log_dir = sandbox_dir(codex_home);
+    let exe = find_setup_exe(codex_home, Some(&sandbox_log_dir));
     let payload_json = serde_json::to_string(payload).map_err(|err| {
         failure(
             SetupErrorCode::OrchestratorPayloadSerializeFailed,
@@ -709,7 +708,7 @@ fn run_setup_exe(
                 &format!(
                     "setup orchestrator: failed to clear setup_error.json before launch: {err}"
                 ),
-                Some(&sandbox_dir(codex_home)),
+                Some(&sandbox_log_dir),
             );
             false
         }
@@ -742,7 +741,7 @@ fn run_setup_exe(
                 &format!(
                     "setup orchestrator: failed to clear setup_error.json after success: {err}"
                 ),
-                Some(&sandbox_dir(codex_home)),
+                Some(&sandbox_log_dir),
             );
         }
         return Ok(());
@@ -790,7 +789,7 @@ fn run_setup_exe(
     if let Err(err) = clear_setup_error_report(codex_home) {
         log_note(
             &format!("setup orchestrator: failed to clear setup_error.json after success: {err}"),
-            Some(&sandbox_dir(codex_home)),
+            Some(&sandbox_log_dir),
         );
     }
     Ok(())
