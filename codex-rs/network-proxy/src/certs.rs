@@ -116,6 +116,7 @@ const MANAGED_MITM_CA_CERT: &str = "ca.pem";
 const MANAGED_MITM_CA_KEY: &str = "ca.key";
 const MANAGED_MITM_CA_TRUST_BUNDLE_PREFIX: &str = "ca-bundle";
 const MAX_CUSTOM_CA_BUNDLE_BYTES: u64 = 4 * 1024 * 1024;
+const MAX_CUSTOM_CA_DIR_ENTRIES: usize = 256;
 const SSL_CERT_FILE_ENV_KEY: &str = "SSL_CERT_FILE";
 pub const SSL_CERT_DIR_ENV_KEY: &str = "SSL_CERT_DIR";
 
@@ -348,9 +349,14 @@ where
     );
 
     let mut trust_bundle = String::new();
-    for entry in fs::read_dir(&dir)
+    for (entry_index, entry) in fs::read_dir(&dir)
         .with_context(|| format!("failed to read CA directory {}", dir.display()))?
+        .enumerate()
     {
+        anyhow::ensure!(
+            entry_index < MAX_CUSTOM_CA_DIR_ENTRIES,
+            "CA directory exceeds {MAX_CUSTOM_CA_DIR_ENTRIES} entries"
+        );
         let entry = entry
             .with_context(|| format!("failed to read CA directory entry in {}", dir.display()))?;
         let path = entry.path();
@@ -936,6 +942,22 @@ mod tests {
         assert_eq!(
             opened_file_path(&checked_path, &file).unwrap(),
             opened_path.canonicalize().unwrap()
+        );
+    }
+
+    #[test]
+    fn read_custom_ca_dir_rejects_too_many_entries() {
+        let dir = tempdir().unwrap();
+        for entry_index in 0..=MAX_CUSTOM_CA_DIR_ENTRIES {
+            fs::write(dir.path().join(format!("ca-{entry_index}.pem")), "ca\n").unwrap();
+        }
+
+        let err = read_custom_ca_dir(dir.path(), |_| true).unwrap_err();
+        assert!(
+            err.to_string().contains(&format!(
+                "CA directory exceeds {MAX_CUSTOM_CA_DIR_ENTRIES} entries"
+            )),
+            "unexpected error: {err:#}"
         );
     }
 
