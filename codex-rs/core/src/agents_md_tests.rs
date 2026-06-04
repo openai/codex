@@ -5,6 +5,7 @@ use codex_features::Feature;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use core_test_support::PathBufExt;
 use core_test_support::TempDirExt;
+use core_test_support::create_directory_symlink;
 use pretty_assertions::assert_eq;
 use std::fs;
 use std::path::Path;
@@ -223,8 +224,7 @@ async fn project_doc_invalid_utf8_warns_and_uses_lossy_text() {
         .text();
 
     assert_eq!(res, "project\u{FFFD} doc");
-    let canonical_path = dunce::canonicalize(&path).expect("canonical doc path");
-    assert_invalid_utf8_warning(&warnings, "Project", &canonical_path);
+    assert_invalid_utf8_warning(&warnings, "Project", config.cwd.join("AGENTS.md").as_path());
 }
 
 /// Oversize file is truncated to `project_doc_max_bytes`.
@@ -330,10 +330,7 @@ async fn sourceless_user_instructions_preserve_separator_without_reporting_a_sou
         .user_instructions_with_fs(LOCAL_FS.as_ref(), &mut warnings)
         .await
         .expect("instructions expected");
-    let project_agents = AbsolutePathBuf::try_from(
-        dunce::canonicalize(cfg.cwd.join("AGENTS.md")).expect("canonical project doc path"),
-    )
-    .expect("absolute project doc path");
+    let project_agents = cfg.cwd.join("AGENTS.md");
 
     assert_eq!(
         loaded.text(),
@@ -385,14 +382,8 @@ async fn concatenates_root_and_cwd_docs() {
         .user_instructions_with_fs(LOCAL_FS.as_ref(), &mut warnings)
         .await
         .expect("doc expected");
-    let root_agents = AbsolutePathBuf::try_from(
-        dunce::canonicalize(repo.path().join("AGENTS.md")).expect("canonical root doc path"),
-    )
-    .expect("absolute root doc path");
-    let crate_agents = AbsolutePathBuf::try_from(
-        dunce::canonicalize(cfg.cwd.join("AGENTS.md")).expect("canonical crate doc path"),
-    )
-    .expect("absolute crate doc path");
+    let root_agents = repo.path().join("AGENTS.md").abs();
+    let crate_agents = cfg.cwd.join("AGENTS.md");
     let expected = LoadedAgentsMd {
         entries: vec![
             InstructionEntry {
@@ -434,20 +425,34 @@ async fn project_root_markers_are_honored_for_agents_discovery() {
     cfg.cwd = nested.abs();
 
     let discovery = agents_md_paths(&cfg).await.expect("discover paths");
-    let expected_parent = AbsolutePathBuf::try_from(
-        dunce::canonicalize(root.path().join("AGENTS.md")).expect("canonical parent doc path"),
-    )
-    .expect("absolute parent doc path");
-    let expected_child = AbsolutePathBuf::try_from(
-        dunce::canonicalize(cfg.cwd.join("AGENTS.md")).expect("canonical child doc path"),
-    )
-    .expect("absolute child doc path");
+    let expected_parent = root.path().join("AGENTS.md").abs();
+    let expected_child = cfg.cwd.join("AGENTS.md");
     assert_eq!(discovery.len(), 2);
     assert_eq!(discovery[0], expected_parent);
     assert_eq!(discovery[1], expected_child);
 
     let res = get_user_instructions(&cfg).await.expect("doc expected");
     assert_eq!(res, "parent doc\n\nchild doc");
+}
+
+#[tokio::test]
+async fn agents_md_paths_preserve_symlinked_cwd() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let target = tmp.path().join("target");
+    fs::create_dir(&target).unwrap();
+    fs::write(target.join("AGENTS.md"), "project doc").unwrap();
+
+    let linked_cwd = tmp.path().join("linked");
+    create_directory_symlink(&target, &linked_cwd);
+
+    let mut cfg = make_config(&tmp, /*limit*/ 4096, /*instructions*/ None).await;
+    cfg.cwd = linked_cwd.abs();
+
+    let discovery = agents_md_paths(&cfg).await.expect("discover paths");
+    assert_eq!(discovery, vec![cfg.cwd.join("AGENTS.md")]);
+
+    let res = get_user_instructions(&cfg).await.expect("doc expected");
+    assert_eq!(res, "project doc");
 }
 
 #[tokio::test]
@@ -497,10 +502,7 @@ async fn instruction_sources_include_global_before_agents_md_docs() {
         .user_instructions_with_fs(LOCAL_FS.as_ref(), &mut warnings)
         .await
         .expect("instructions expected");
-    let project_agents = AbsolutePathBuf::try_from(
-        dunce::canonicalize(cfg.cwd.join("AGENTS.md")).expect("canonical project doc path"),
-    )
-    .expect("absolute project doc path");
+    let project_agents = cfg.cwd.join("AGENTS.md");
 
     let expected = LoadedAgentsMd {
         entries: vec![
@@ -541,10 +543,7 @@ async fn child_agents_message_after_project_docs_is_not_an_instruction_source() 
         .user_instructions_with_fs(LOCAL_FS.as_ref(), &mut warnings)
         .await
         .expect("instructions expected");
-    let project_agents = AbsolutePathBuf::try_from(
-        dunce::canonicalize(cfg.cwd.join("AGENTS.md")).expect("canonical project doc path"),
-    )
-    .expect("absolute project doc path");
+    let project_agents = cfg.cwd.join("AGENTS.md");
 
     let expected = LoadedAgentsMd {
         entries: vec![

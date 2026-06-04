@@ -206,10 +206,7 @@ impl<'a> AgentsMdManager<'a> {
             return Ok(Vec::new());
         }
 
-        let mut dir = self.config.cwd.clone();
-        if let Ok(canonical_dir) = fs.canonicalize(&dir, /*sandbox*/ None).await {
-            dir = canonical_dir;
-        }
+        let dir = self.config.cwd.clone();
 
         let mut merged = TomlValue::Table(toml::map::Map::new());
         for layer in self.config.config_layer_stack.get_layers(

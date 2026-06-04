@@ -1,6 +1,7 @@
 use anyhow::Result;
 use codex_exec_server::CreateDirectoryOptions;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use core_test_support::create_directory_symlink;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once;
@@ -8,6 +9,7 @@ use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::test_codex::TestCodexBuilder;
 use core_test_support::test_codex::test_codex;
+use pretty_assertions::assert_eq;
 use std::sync::Arc;
 use tempfile::TempDir;
 
@@ -144,6 +146,86 @@ async fn agents_docs_are_concatenated_from_project_root_to_cwd() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn symlinked_cwd_uses_logical_parent_for_agents_discovery() -> Result<()> {
+    let server = start_mock_server().await;
+    let resp_mock = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
+    )
+    .await;
+
+    let mut builder = test_codex()
+        .with_config(|config| {
+            config.cwd = config.cwd.join("logical-repo/workspace");
+        })
+        .with_workspace_setup(|cwd, _fs| async move {
+            // Construct two sibling repositories with the configured cwd as a
+            // directory symlink from the logical repository into the physical
+            // repository:
+            //
+            // test-root/
+            // |-- logical-repo/
+            // |   |-- .git
+            // |   |-- AGENTS.md              ("logical parent doc")
+            // |   `-- workspace ------------> physical-repo/workspace/
+            // `-- physical-repo/
+            //     |-- .git
+            //     |-- AGENTS.md              ("physical parent doc")
+            //     `-- workspace/
+            //         `-- AGENTS.md          ("workspace doc")
+            //
+            // Discovery should walk the lexical path through logical-repo,
+            // while opening logical-repo/workspace/AGENTS.md still follows the
+            // symlink into physical-repo/workspace.
+            let logical_root = cwd.parent().expect("symlink should have a parent");
+            let test_root = logical_root
+                .parent()
+                .expect("logical repository should have a parent");
+            let physical_root = test_root.join("physical-repo");
+            let physical_workspace = physical_root.join("workspace");
+
+            std::fs::create_dir_all(logical_root.as_path())?;
+            std::fs::write(logical_root.join(".git"), "")?;
+            std::fs::write(logical_root.join("AGENTS.md"), "logical parent doc")?;
+
+            std::fs::create_dir_all(physical_workspace.as_path())?;
+            std::fs::write(physical_root.join(".git"), "")?;
+            std::fs::write(physical_root.join("AGENTS.md"), "physical parent doc")?;
+            std::fs::write(physical_workspace.join("AGENTS.md"), "workspace doc")?;
+
+            create_directory_symlink(physical_workspace.as_path(), cwd.as_path());
+            Ok(())
+        });
+    let test = builder.build(&server).await?;
+    let logical_root = test
+        .config
+        .cwd
+        .parent()
+        .expect("symlink should have a parent");
+
+    assert_eq!(
+        test.codex.instruction_sources().await,
+        vec![
+            logical_root.join("AGENTS.md"),
+            test.config.cwd.join("AGENTS.md")
+        ]
+    );
+
+    test.submit_turn("hello").await?;
+    let instructions = resp_mock
+        .single_request()
+        .message_input_texts("user")
+        .into_iter()
+        .find(|text| text.starts_with("# AGENTS.md instructions for "))
+        .expect("instructions message");
+    assert!(instructions.contains("logical parent doc"));
+    assert!(instructions.contains("workspace doc"));
+    assert!(!instructions.contains("physical parent doc"));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn selected_environment_sources_match_model_visible_instructions() -> Result<()> {
     let server = start_mock_server().await;
     let resp_mock = mount_sse_once(
@@ -167,13 +249,7 @@ async fn selected_environment_sources_match_model_visible_instructions() -> Resu
             Ok::<(), anyhow::Error>(())
         });
     let test = builder.build_with_remote_env(&server).await?;
-    let project_agents = test
-        .fs()
-        .canonicalize(
-            &test.executor_environment().cwd().join("AGENTS.md"),
-            /*sandbox*/ None,
-        )
-        .await?;
+    let project_agents = test.config.cwd.join("AGENTS.md");
     let global_agents = AbsolutePathBuf::try_from(global_agents).expect("absolute path");
 
     assert_eq!(

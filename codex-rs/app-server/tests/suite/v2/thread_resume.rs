@@ -284,7 +284,7 @@ async fn thread_resume_running_thread_uses_cached_instruction_sources() -> Resul
         instruction_sources,
         ..
     } = to_response::<ThreadStartResponse>(start_resp)?;
-    let project_agents = AbsolutePathBuf::try_from(std::fs::canonicalize(project_agents)?)?;
+    let project_agents = AbsolutePathBuf::try_from(project_agents)?;
     assert_eq!(instruction_sources, vec![project_agents.clone()]);
 
     let turn_id = mcp

@@ -348,7 +348,7 @@ async fn thread_start_response_includes_loaded_instruction_sources() -> Result<(
         .collect::<Vec<_>>();
     let expected_instruction_sources = vec![
         std::fs::canonicalize(global_agents_path)?,
-        std::fs::canonicalize(project_agents_path)?,
+        project_agents_path,
     ]
     .into_iter()
     .map(normalize_path_for_comparison)
