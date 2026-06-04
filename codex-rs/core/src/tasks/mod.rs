@@ -65,7 +65,7 @@ pub(crate) use user_shell::execute_user_shell_command;
 const GRACEFULL_INTERRUPTION_TIMEOUT_MS: u64 = 100;
 const TASK_COMPACT_METRIC: &str = "codex.task.compact";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 enum TaskAbort {
     Standard(TurnAbortReason),
     Interrupted(InterruptReason),
@@ -79,16 +79,16 @@ impl TaskAbort {
         }
     }
 
-    fn turn_abort_reason(self) -> TurnAbortReason {
+    fn turn_abort_reason(&self) -> TurnAbortReason {
         match self {
-            Self::Standard(reason) => reason,
+            Self::Standard(reason) => reason.clone(),
             Self::Interrupted(_) => TurnAbortReason::Interrupted,
         }
     }
 
-    fn interrupt_reason(self) -> Option<InterruptReason> {
+    fn interrupt_reason(&self) -> Option<InterruptReason> {
         match self {
-            Self::Interrupted(reason) => Some(reason),
+            Self::Interrupted(reason) => Some(*reason),
             Self::Standard(_) => None,
         }
     }
