@@ -83,13 +83,13 @@ runs:
         key: sccache-${{ inputs.cache-runner }}-${{ inputs.target }}-${{ inputs.profile }}-${{ inputs.lockfile-hash }}-${{ github.run_id }}
 
     - name: sccache stats
-      if: ${{ inputs.use-sccache == 'true' }}
+      if: ${{ !cancelled() && inputs.use-sccache == 'true' }}
       continue-on-error: true
       shell: bash
       run: sccache --show-stats || true
 
     - name: sccache summary
-      if: ${{ inputs.use-sccache == 'true' }}
+      if: ${{ !cancelled() && inputs.use-sccache == 'true' }}
       shell: bash
       run: |
         {
