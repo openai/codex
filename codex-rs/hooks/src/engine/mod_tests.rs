@@ -1134,6 +1134,64 @@ fn discovers_hooks_from_json_and_toml_in_the_same_layer() {
     assert_eq!(preview[1].source_path, config_path);
 }
 
+#[test]
+fn malformed_hooks_json_is_reported_as_startup_warning() {
+    let temp = tempdir().expect("create temp dir");
+    let config_path =
+        AbsolutePathBuf::try_from(temp.path().join("config.toml")).expect("absolute config path");
+    let hooks_json_path =
+        AbsolutePathBuf::try_from(temp.path().join("hooks.json")).expect("absolute hooks path");
+    fs::write(
+        hooks_json_path.as_path(),
+        r#"{
+          "SessionStart": [
+            {
+              "hooks": [
+                {
+                  "type": "command",
+                  "command": "python3 /tmp/session-start.py"
+                }
+              ]
+            }
+          ]
+        }"#,
+    )
+    .expect("write hooks.json");
+    let config_layer_stack = ConfigLayerStack::new(
+        vec![ConfigLayerEntry::new(
+            ConfigLayerSource::System {
+                file: config_path,
+            },
+            TomlValue::Table(Default::default()),
+        )],
+        ConfigRequirements::default(),
+        ConfigRequirementsToml::default(),
+    )
+    .expect("config layer stack");
+
+    let engine = ClaudeHooksEngine::new(
+        /*enabled*/ true,
+        /*bypass_hook_trust*/ false,
+        Some(&config_layer_stack),
+        Vec::new(),
+        Vec::new(),
+        CommandShell {
+            program: String::new(),
+            args: Vec::new(),
+        },
+    );
+
+    assert!(engine.handlers.is_empty());
+    assert_eq!(engine.warnings().len(), 1);
+    assert!(engine.warnings()[0].contains("failed to parse hooks config"));
+    assert!(
+        engine.warnings()[0].contains(&hooks_json_path.display().to_string()),
+        "warning should identify the malformed file: {}",
+        engine.warnings()[0]
+    );
+    assert!(engine.warnings()[0].contains("unknown field `SessionStart`"));
+}
+
 #[tokio::test]
 async fn plugin_hook_sources_run_with_plugin_env_and_plugin_source() {
     let temp = tempdir().expect("create temp dir");

@@ -457,6 +457,10 @@ impl EventProcessorWithJsonOutput {
                 }));
                 CodexStatus::Running
             }
+            ServerNotification::Warning(notification) => {
+                events.extend(self.collect_warning(notification.message).events);
+                CodexStatus::Running
+            }
             ServerNotification::HookStarted(_) | ServerNotification::HookCompleted(_) => {
                 CodexStatus::Running
             }

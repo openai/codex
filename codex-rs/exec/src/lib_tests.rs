@@ -391,6 +391,26 @@ fn should_backfill_turn_completed_items_skips_ephemeral_threads() {
 }
 
 #[test]
+fn should_process_warning_for_current_thread() {
+    let notification =
+        ServerNotification::Warning(codex_app_server_protocol::WarningNotification {
+            thread_id: Some("thread-1".to_string()),
+            message: "failed to parse hooks config".to_string(),
+        });
+
+    assert!(should_process_notification(
+        &notification,
+        "thread-1",
+        "turn-1"
+    ));
+    assert!(!should_process_notification(
+        &notification,
+        "thread-2",
+        "turn-1"
+    ));
+}
+
+#[test]
 fn canceled_mcp_server_elicitation_response_uses_cancel_action() {
     let value = canceled_mcp_server_elicitation_response()
         .expect("mcp elicitation cancel response should serialize");

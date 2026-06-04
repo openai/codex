@@ -258,6 +258,14 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 }
                 CodexStatus::Running
             }
+            ServerNotification::Warning(notification) => {
+                eprintln!(
+                    "{} {}",
+                    "warning:".style(self.yellow).style(self.bold),
+                    notification.message
+                );
+                CodexStatus::Running
+            }
             ServerNotification::HookStarted(notification) => {
                 eprintln!(
                     "{} {}",

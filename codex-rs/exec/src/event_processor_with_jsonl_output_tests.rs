@@ -109,3 +109,28 @@ fn mcp_tool_call_result_preserves_meta_in_jsonl_event() {
     );
     assert!(serialized["item"]["result"].get("meta").is_none());
 }
+
+#[test]
+fn thread_warning_is_emitted_as_jsonl_error_item() {
+    let mut processor = EventProcessorWithJsonOutput::new(/*last_message_path*/ None);
+
+    let collected = processor.collect_thread_events(ServerNotification::Warning(
+        codex_app_server_protocol::WarningNotification {
+            thread_id: Some("thread-1".to_string()),
+            message: "failed to parse hooks config".to_string(),
+        },
+    ));
+
+    assert_eq!(collected.status, CodexStatus::Running);
+    assert_eq!(
+        collected.events,
+        vec![ThreadEvent::ItemCompleted(ItemCompletedEvent {
+            item: ExecThreadItem {
+                id: "item_0".to_string(),
+                details: ThreadItemDetails::Error(ErrorItem {
+                    message: "failed to parse hooks config".to_string(),
+                }),
+            },
+        })]
+    );
+}
