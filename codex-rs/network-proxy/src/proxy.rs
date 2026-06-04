@@ -13,6 +13,7 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::net::TcpListener as StdTcpListener;
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::RwLock;
@@ -685,6 +686,43 @@ impl NetworkProxy {
             runtime_settings.allow_local_binding,
             runtime_settings.mitm_ca_trust_bundle.as_ref(),
         );
+    }
+
+    /// Rewrites readable child-selected CA bundles into immutable managed MITM bundles.
+    pub fn prepare_child_env<F>(
+        &self,
+        env: &mut HashMap<String, String>,
+        cwd: &Path,
+        can_read_path: F,
+    ) -> Vec<AbsolutePathBuf>
+    where
+        F: Fn(&Path) -> bool,
+    {
+        let runtime_settings = self.runtime_settings();
+        apply_proxy_env_overrides(
+            env,
+            self.http_addr,
+            self.socks_addr,
+            self.socks_enabled,
+            runtime_settings.allow_local_binding,
+            runtime_settings.mitm_ca_trust_bundle.as_ref(),
+        );
+        let startup_ca_env_keys_present_in_child = ca_env_keys()
+            .filter(|&key| is_tracked_startup_ca_env_key(env, key))
+            .collect::<Vec<_>>();
+        env.remove(STARTUP_CA_ENV_KEYS_PRESENT_ENV_KEY);
+        runtime_settings.mitm_ca_trust_bundle.as_ref().map_or_else(
+            Vec::new,
+            |mitm_ca_trust_bundle| {
+                crate::child_ca::prepare_mitm_ca_trust_bundle_env(
+                    mitm_ca_trust_bundle,
+                    env,
+                    cwd,
+                    &startup_ca_env_keys_present_in_child,
+                    can_read_path,
+                )
+            },
+        )
     }
 
     pub async fn replace_config_state(&self, new_state: ConfigState) -> Result<()> {
