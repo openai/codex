@@ -13,6 +13,7 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use super::common;
 use crate::engine::CommandShell;
 use crate::engine::ConfiguredHandler;
+use crate::engine::agent_runner::AgentHookRunner;
 use crate::engine::command_runner::CommandRunResult;
 use crate::engine::dispatcher;
 use crate::engine::output_parser;
@@ -97,6 +98,7 @@ pub(crate) async fn run(
     handlers: &[ConfiguredHandler],
     shell: &CommandShell,
     prompt_runner: Option<&PromptHookRunner>,
+    agent_runner: Option<&AgentHookRunner>,
     request: StopRequest,
 ) -> StopOutcome {
     let matched = dispatcher::select_handlers(
@@ -185,6 +187,7 @@ pub(crate) async fn run(
         dispatcher::HandlerExecutionContext {
             shell,
             prompt_runner,
+            agent_runner,
             cwd: request.cwd.as_path(),
             default_model: request.model.clone(),
             turn_id: Some(request.turn_id.clone()),

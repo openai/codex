@@ -93,7 +93,7 @@ async fn run_prompt_hook(
             text: PROMPT_HOOK_BASE_INSTRUCTIONS.to_string(),
         },
         personality: None,
-        output_schema: Some(prompt_hook_output_schema()),
+        output_schema: Some(hook_output_schema()),
         output_schema_strict: false,
     };
 
@@ -143,7 +143,7 @@ async fn run_prompt_hook(
     }
 }
 
-fn prompt_hook_output_schema() -> serde_json::Value {
+pub(crate) fn hook_output_schema() -> serde_json::Value {
     json!({
         "type": "object",
         "properties": {

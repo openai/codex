@@ -243,19 +243,22 @@ with Path(r"{log_path}").open("a", encoding="utf-8") as handle:
     assert_eq!(preview[0].source_path, managed_dir);
 
     let outcome = engine
-        .run_pre_tool_use(PreToolUseRequest {
-            session_id: ThreadId::new(),
-            turn_id: "turn-1".to_string(),
-            subagent: None,
-            cwd,
-            transcript_path: None,
-            model: "gpt-test".to_string(),
-            permission_mode: "default".to_string(),
-            tool_name: "Bash".to_string(),
-            matcher_aliases: Vec::new(),
-            tool_use_id: "tool-1".to_string(),
-            tool_input: serde_json::json!({ "command": "echo hello" }),
-        })
+        .run_pre_tool_use(
+            PreToolUseRequest {
+                session_id: ThreadId::new(),
+                turn_id: "turn-1".to_string(),
+                subagent: None,
+                cwd,
+                transcript_path: None,
+                model: "gpt-test".to_string(),
+                permission_mode: "default".to_string(),
+                tool_name: "Bash".to_string(),
+                matcher_aliases: Vec::new(),
+                tool_use_id: "tool-1".to_string(),
+                tool_input: serde_json::json!({ "command": "echo hello" }),
+            },
+            /*agent_runner*/ None,
+        )
         .await;
 
     assert!(!outcome.should_block);
@@ -316,19 +319,22 @@ async fn requirements_managed_hooks_execute_windows_command_override() {
     );
 
     let outcome = engine
-        .run_pre_tool_use(PreToolUseRequest {
-            session_id: ThreadId::new(),
-            turn_id: "turn-1".to_string(),
-            subagent: None,
-            cwd: cwd(),
-            transcript_path: None,
-            model: "gpt-test".to_string(),
-            permission_mode: "default".to_string(),
-            tool_name: "Bash".to_string(),
-            matcher_aliases: Vec::new(),
-            tool_use_id: "tool-1".to_string(),
-            tool_input: serde_json::json!({ "command": "echo hello" }),
-        })
+        .run_pre_tool_use(
+            PreToolUseRequest {
+                session_id: ThreadId::new(),
+                turn_id: "turn-1".to_string(),
+                subagent: None,
+                cwd: cwd(),
+                transcript_path: None,
+                model: "gpt-test".to_string(),
+                permission_mode: "default".to_string(),
+                tool_name: "Bash".to_string(),
+                matcher_aliases: Vec::new(),
+                tool_use_id: "tool-1".to_string(),
+                tool_input: serde_json::json!({ "command": "echo hello" }),
+            },
+            /*agent_runner*/ None,
+        )
         .await;
 
     assert!(!outcome.should_block);
@@ -1244,19 +1250,22 @@ print(json.dumps({
     );
 
     let outcome = engine
-        .run_pre_tool_use(PreToolUseRequest {
-            session_id: ThreadId::new(),
-            turn_id: "turn-1".to_string(),
-            subagent: None,
-            cwd: cwd(),
-            transcript_path: None,
-            model: "gpt-test".to_string(),
-            permission_mode: "default".to_string(),
-            tool_name: "Bash".to_string(),
-            matcher_aliases: Vec::new(),
-            tool_use_id: "tool-1".to_string(),
-            tool_input: serde_json::json!({ "command": "echo hello" }),
-        })
+        .run_pre_tool_use(
+            PreToolUseRequest {
+                session_id: ThreadId::new(),
+                turn_id: "turn-1".to_string(),
+                subagent: None,
+                cwd: cwd(),
+                transcript_path: None,
+                model: "gpt-test".to_string(),
+                permission_mode: "default".to_string(),
+                tool_name: "Bash".to_string(),
+                matcher_aliases: Vec::new(),
+                tool_use_id: "tool-1".to_string(),
+                tool_input: serde_json::json!({ "command": "echo hello" }),
+            },
+            /*agent_runner*/ None,
+        )
         .await;
 
     assert_eq!(outcome.hook_events.len(), 1);

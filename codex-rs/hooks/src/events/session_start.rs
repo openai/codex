@@ -186,6 +186,7 @@ pub(crate) async fn run(
         dispatcher::HandlerExecutionContext {
             shell,
             prompt_runner: None,
+            agent_runner: None,
             cwd: request.cwd.as_path(),
             default_model: request.model.clone(),
             turn_id,

@@ -477,7 +477,19 @@ pub enum ConfiguredHookHandler {
     },
     #[serde(rename = "agent")]
     #[ts(rename = "agent")]
-    Agent {},
+    Agent {
+        prompt: String,
+        model: Option<String>,
+        #[serde(rename = "timeoutSec")]
+        #[ts(rename = "timeoutSec")]
+        timeout_sec: Option<u64>,
+        #[serde(rename = "statusMessage")]
+        #[ts(rename = "statusMessage")]
+        status_message: Option<String>,
+        #[serde(rename = "continueOnBlock")]
+        #[ts(rename = "continueOnBlock")]
+        continue_on_block: bool,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

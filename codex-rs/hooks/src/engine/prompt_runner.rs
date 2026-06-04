@@ -48,14 +48,14 @@ impl PromptHookRunner {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum PromptHookBehavior {
+pub(crate) enum ModelHookBehavior {
     Unsupported,
     Block,
     Noop,
     FeedbackOrStop,
 }
 
-pub(crate) fn prompt_hook_behavior(event_name: HookEventName) -> PromptHookBehavior {
+pub(crate) fn model_hook_behavior(event_name: HookEventName) -> ModelHookBehavior {
     match event_name {
         // These events already use decision:block as the user-visible "try
         // again with this feedback" path: pre-action hooks block before the
@@ -64,20 +64,20 @@ pub(crate) fn prompt_hook_behavior(event_name: HookEventName) -> PromptHookBehav
         HookEventName::PreToolUse
         | HookEventName::UserPromptSubmit
         | HookEventName::Stop
-        | HookEventName::SubagentStop => PromptHookBehavior::Block,
+        | HookEventName::SubagentStop => ModelHookBehavior::Block,
         // Claude treats PermissionRequest ok:false as advisory only. Preserve
         // that parity: record the reason, but let normal approval flow continue.
-        HookEventName::PermissionRequest => PromptHookBehavior::Noop,
+        HookEventName::PermissionRequest => ModelHookBehavior::Noop,
         // PostToolUse runs after the tool succeeded, so ok:false is conditional:
         // continueOnBlock feeds the reason back to the model, otherwise it stops
         // the current turn.
-        HookEventName::PostToolUse => PromptHookBehavior::FeedbackOrStop,
+        HookEventName::PostToolUse => ModelHookBehavior::FeedbackOrStop,
         // Claude does not support prompt hooks for these lifecycle events.
         // Keeping them explicit makes new events choose semantics deliberately.
         HookEventName::SessionStart
         | HookEventName::SubagentStart
         | HookEventName::PreCompact
-        | HookEventName::PostCompact => PromptHookBehavior::Unsupported,
+        | HookEventName::PostCompact => ModelHookBehavior::Unsupported,
     }
 }
 
@@ -110,7 +110,7 @@ pub(crate) async fn run_prompt(
         continue_on_block,
     } = &handler.kind
     else {
-        return prompt_run_result(
+        return model_hook_run_result(
             started_at,
             started,
             /*exit_code*/ None,
@@ -119,7 +119,7 @@ pub(crate) async fn run_prompt(
         );
     };
     let Some(runner) = runner else {
-        return prompt_run_result(
+        return model_hook_run_result(
             started_at,
             started,
             /*exit_code*/ None,
@@ -129,19 +129,24 @@ pub(crate) async fn run_prompt(
     };
 
     let request = PromptHookRequest {
-        prompt: render_prompt(prompt, input_json),
+        prompt: render_model_hook_prompt(prompt, input_json),
         model: model.clone().unwrap_or(default_model),
     };
 
     let run = timeout(Duration::from_secs(*timeout_sec), runner.run(request)).await;
     match run {
         Ok(Ok(output)) => {
-            match prompt_output_to_command_stdout(handler.event_name, *continue_on_block, &output) {
+            match model_hook_output_to_command_stdout(
+                "prompt",
+                handler.event_name,
+                *continue_on_block,
+                &output,
+            ) {
                 Ok(stdout) => {
-                    prompt_run_result(started_at, started, Some(0), stdout, /*error*/ None)
+                    model_hook_run_result(started_at, started, Some(0), stdout, /*error*/ None)
                 }
                 Err(error) => {
-                    prompt_run_result(
+                    model_hook_run_result(
                         started_at,
                         started,
                         /*exit_code*/ None,
@@ -151,14 +156,14 @@ pub(crate) async fn run_prompt(
                 }
             }
         }
-        Ok(Err(error)) => prompt_run_result(
+        Ok(Err(error)) => model_hook_run_result(
             started_at,
             started,
             /*exit_code*/ None,
             String::new(),
             Some(error.to_string()),
         ),
-        Err(_) => prompt_run_result(
+        Err(_) => model_hook_run_result(
             started_at,
             started,
             /*exit_code*/ None,
@@ -168,7 +173,7 @@ pub(crate) async fn run_prompt(
     }
 }
 
-fn render_prompt(prompt: &str, input_json: &str) -> String {
+pub(crate) fn render_model_hook_prompt(prompt: &str, input_json: &str) -> String {
     let rendered = if prompt.contains(PROMPT_ARGUMENTS_PLACEHOLDER) {
         prompt.replace(PROMPT_ARGUMENTS_PLACEHOLDER, input_json)
     } else {
@@ -189,13 +194,14 @@ fn render_prompt(prompt: &str, input_json: &str) -> String {
     }
 }
 
-fn prompt_output_to_command_stdout(
+pub(crate) fn model_hook_output_to_command_stdout(
+    hook_type: &str,
     event_name: HookEventName,
     continue_on_block: bool,
     output: &str,
 ) -> Result<String, String> {
     let output: PromptHookOutput = serde_json::from_str(output.trim())
-        .map_err(|err| format!("prompt hook returned invalid JSON output: {err}"))?;
+        .map_err(|err| format!("{hook_type} hook returned invalid JSON output: {err}"))?;
     if output.ok {
         return Ok("{}".to_string());
     }
@@ -206,26 +212,29 @@ fn prompt_output_to_command_stdout(
         .map(str::trim)
         .filter(|reason| !reason.is_empty())
     else {
-        return Err("prompt hook returned ok:false without a non-empty reason".to_string());
+        return Err(format!(
+            "{hook_type} hook returned ok:false without a non-empty reason"
+        ));
     };
 
-    prompt_block_output(event_name, continue_on_block, reason.to_string())
+    model_hook_block_output(hook_type, event_name, continue_on_block, reason.to_string())
 }
 
-fn prompt_block_output(
+fn model_hook_block_output(
+    hook_type: &str,
     event_name: HookEventName,
     continue_on_block: bool,
     reason: String,
 ) -> Result<String, String> {
-    let value = match prompt_hook_behavior(event_name) {
-        PromptHookBehavior::Block => json!({
+    let value = match model_hook_behavior(event_name) {
+        ModelHookBehavior::Block => json!({
             "decision": "block",
             "reason": reason,
         }),
-        PromptHookBehavior::Noop => json!({
+        ModelHookBehavior::Noop => json!({
             "systemMessage": reason,
         }),
-        PromptHookBehavior::FeedbackOrStop => {
+        ModelHookBehavior::FeedbackOrStop => {
             if continue_on_block {
                 json!({
                     "decision": "block",
@@ -240,9 +249,9 @@ fn prompt_block_output(
                 })
             }
         }
-        PromptHookBehavior::Unsupported => {
+        ModelHookBehavior::Unsupported => {
             return Err(format!(
-                "prompt hooks are not supported for {}",
+                "{hook_type} hooks are not supported for {}",
                 hook_event_wire_name(event_name)
             ));
         }
@@ -250,7 +259,7 @@ fn prompt_block_output(
     serde_json::to_string(&value).map_err(|err| err.to_string())
 }
 
-fn prompt_run_result(
+pub(crate) fn model_hook_run_result(
     started_at: i64,
     started: Instant,
     exit_code: Option<i32>,

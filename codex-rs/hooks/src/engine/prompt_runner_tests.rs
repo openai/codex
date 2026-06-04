@@ -22,7 +22,7 @@ async fn prompt_hook_without_runner_returns_error() {
 #[test]
 fn render_prompt_replaces_arguments_placeholder() {
     assert_eq!(
-        render_prompt("Check: $ARGUMENTS", r#"{"event":"Stop"}"#),
+        render_model_hook_prompt("Check: $ARGUMENTS", r#"{"event":"Stop"}"#),
         r#"Check: {"event":"Stop"}"#
     );
 }
@@ -30,14 +30,14 @@ fn render_prompt_replaces_arguments_placeholder() {
 #[test]
 fn render_prompt_appends_arguments_without_placeholder() {
     assert_eq!(
-        render_prompt("Check the turn.", r#"{"event":"Stop"}"#),
+        render_model_hook_prompt("Check the turn.", r#"{"event":"Stop"}"#),
         "Check the turn.\n\n{\"event\":\"Stop\"}"
     );
 }
 
 #[test]
 fn render_prompt_caps_model_input() {
-    let rendered = render_prompt("$ARGUMENTS", &"word ".repeat(20_000));
+    let rendered = render_model_hook_prompt("$ARGUMENTS", &"word ".repeat(20_000));
 
     assert!(codex_utils_output_truncation::approx_token_count(&rendered) <= 10_000);
     assert!(rendered.contains("tokens truncated"));
@@ -46,7 +46,8 @@ fn render_prompt_caps_model_input() {
 #[test]
 fn stop_ok_false_becomes_block_decision() {
     assert_json_eq(
-        prompt_output_to_command_stdout(
+        model_hook_output_to_command_stdout(
+            "prompt",
             HookEventName::Stop,
             /*continue_on_block*/ false,
             r#"{"ok":false,"reason":"mention tests"}"#,
@@ -62,7 +63,8 @@ fn stop_ok_false_becomes_block_decision() {
 #[test]
 fn permission_request_ok_false_records_reason_without_decision() {
     assert_json_eq(
-        prompt_output_to_command_stdout(
+        model_hook_output_to_command_stdout(
+            "prompt",
             HookEventName::PermissionRequest,
             /*continue_on_block*/ false,
             r#"{"ok":false,"reason":"looks suspicious"}"#,
@@ -77,7 +79,8 @@ fn permission_request_ok_false_records_reason_without_decision() {
 #[test]
 fn post_tool_use_ok_false_honors_continue_on_block() {
     assert_json_eq(
-        prompt_output_to_command_stdout(
+        model_hook_output_to_command_stdout(
+            "prompt",
             HookEventName::PostToolUse,
             /*continue_on_block*/ true,
             r#"{"ok":false,"reason":"summarize the command output"}"#,
@@ -89,7 +92,8 @@ fn post_tool_use_ok_false_honors_continue_on_block() {
         }),
     );
     assert_json_eq(
-        prompt_output_to_command_stdout(
+        model_hook_output_to_command_stdout(
+            "prompt",
             HookEventName::PostToolUse,
             /*continue_on_block*/ false,
             r#"{"ok":false,"reason":"stop here"}"#,

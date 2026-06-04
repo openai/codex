@@ -79,6 +79,17 @@ pub(crate) async fn run_codex_thread_interactive(
     let (tx_ops, rx_ops) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
     let conversation_history = initial_history.unwrap_or(InitialHistory::New);
     let forked_from_thread_id = conversation_history.forked_from_id();
+    let is_agent_hook = crate::hook_agent::is_agent_hook_subagent_source(&subagent_source);
+    let extensions = if is_agent_hook {
+        codex_extension_api::empty_extension_registry()
+    } else {
+        Arc::clone(&parent_session.services.extensions)
+    };
+    let environment_selections = if is_agent_hook {
+        Default::default()
+    } else {
+        parent_ctx.environments.clone()
+    };
     let CodexSpawnOk { codex, .. } = Box::pin(Codex::spawn(CodexSpawnArgs {
         config,
         installation_id: parent_session.installation_id.clone(),
@@ -88,7 +99,7 @@ pub(crate) async fn run_codex_thread_interactive(
         skills_manager: Arc::clone(&parent_session.services.skills_manager),
         plugins_manager: Arc::clone(&parent_session.services.plugins_manager),
         mcp_manager: Arc::clone(&parent_session.services.mcp_manager),
-        extensions: Arc::clone(&parent_session.services.extensions),
+        extensions,
         conversation_history,
         session_source: SessionSource::SubAgent(subagent_source.clone()),
         forked_from_thread_id,
@@ -102,7 +113,7 @@ pub(crate) async fn run_codex_thread_interactive(
         inherited_exec_policy: Some(Arc::clone(&parent_session.services.exec_policy)),
         parent_rollout_thread_trace: codex_rollout_trace::ThreadTraceContext::disabled(),
         parent_trace: None,
-        environment_selections: parent_ctx.environments.clone(),
+        environment_selections,
         analytics_events_client: Some(parent_session.services.analytics_events_client.clone()),
         thread_store: Arc::clone(&parent_session.services.thread_store),
         attestation_provider: parent_session.services.attestation_provider.clone(),

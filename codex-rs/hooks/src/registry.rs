@@ -2,6 +2,7 @@ use codex_config::ConfigLayerStack;
 use codex_plugin::PluginHookSource;
 use tokio::process::Command;
 
+use crate::engine::AgentHookRunner;
 use crate::engine::ClaudeHooksEngine;
 use crate::engine::CommandShell;
 use crate::engine::HookListEntry;
@@ -145,19 +146,30 @@ impl Hooks {
         self.engine.run_session_start(request, turn_id).await
     }
 
-    pub async fn run_pre_tool_use(&self, request: PreToolUseRequest) -> PreToolUseOutcome {
-        self.engine.run_pre_tool_use(request).await
+    pub async fn run_pre_tool_use(
+        &self,
+        request: PreToolUseRequest,
+        agent_runner: Option<&AgentHookRunner>,
+    ) -> PreToolUseOutcome {
+        self.engine.run_pre_tool_use(request, agent_runner).await
     }
 
     pub async fn run_permission_request(
         &self,
         request: PermissionRequestRequest,
+        agent_runner: Option<&AgentHookRunner>,
     ) -> PermissionRequestOutcome {
-        self.engine.run_permission_request(request).await
+        self.engine
+            .run_permission_request(request, agent_runner)
+            .await
     }
 
-    pub async fn run_post_tool_use(&self, request: PostToolUseRequest) -> PostToolUseOutcome {
-        self.engine.run_post_tool_use(request).await
+    pub async fn run_post_tool_use(
+        &self,
+        request: PostToolUseRequest,
+        agent_runner: Option<&AgentHookRunner>,
+    ) -> PostToolUseOutcome {
+        self.engine.run_post_tool_use(request, agent_runner).await
     }
 
     pub fn preview_pre_compact(
@@ -192,8 +204,11 @@ impl Hooks {
     pub async fn run_user_prompt_submit(
         &self,
         request: UserPromptSubmitRequest,
+        agent_runner: Option<&AgentHookRunner>,
     ) -> UserPromptSubmitOutcome {
-        self.engine.run_user_prompt_submit(request).await
+        self.engine
+            .run_user_prompt_submit(request, agent_runner)
+            .await
     }
 
     pub fn preview_stop(
@@ -203,8 +218,12 @@ impl Hooks {
         self.engine.preview_stop(request)
     }
 
-    pub async fn run_stop(&self, request: StopRequest) -> StopOutcome {
-        self.engine.run_stop(request).await
+    pub async fn run_stop(
+        &self,
+        request: StopRequest,
+        agent_runner: Option<&AgentHookRunner>,
+    ) -> StopOutcome {
+        self.engine.run_stop(request, agent_runner).await
     }
 }
 

@@ -505,15 +505,20 @@ impl Codex {
         } = args;
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
+        let is_agent_hook = crate::hook_agent::is_agent_hook_source(&session_source);
 
         let primary_environment = environment_selections.primary_environment();
         let mut user_instruction_warnings = Vec::new();
-        let user_instructions = AgentsMdManager::new(&config)
-            .user_instructions(
-                primary_environment.as_deref(),
-                &mut user_instruction_warnings,
-            )
-            .await;
+        let user_instructions = if is_agent_hook {
+            None
+        } else {
+            AgentsMdManager::new(&config)
+                .user_instructions(
+                    primary_environment.as_deref(),
+                    &mut user_instruction_warnings,
+                )
+                .await
+        };
         config.startup_warnings.extend(user_instruction_warnings);
 
         let exec_policy = if crate::guardian::is_guardian_reviewer_source(&session_source) {
@@ -591,6 +596,8 @@ impl Codex {
             config.features.enabled(Feature::FastMode),
             &model_info,
         );
+        let max_model_requests_per_turn =
+            is_agent_hook.then_some(crate::hook_agent::AGENT_HOOK_MAX_MODEL_REQUESTS);
         let session_configuration = SessionConfiguration {
             provider: config.model_provider.clone(),
             collaboration_mode,
@@ -621,6 +628,7 @@ impl Codex {
             dynamic_tools,
             inherited_shell_snapshot,
             user_shell_override,
+            max_model_requests_per_turn,
         };
 
         // Generate a unique ID for the lifetime of this Codex session.
@@ -1483,7 +1491,7 @@ impl Session {
         // layers such as request/session overrides that were present when this session
         // was created.
         let notify_config_contributors = !self.services.extensions.config_contributors().is_empty();
-        let (previous_config, new_config, config, service_tier) = {
+        let (previous_config, new_config, config, service_tier, session_source) = {
             let mut state = self.state.lock().await;
             let previous_config = notify_config_contributors
                 .then(|| Self::build_effective_session_config(&state.session_configuration));
@@ -1498,7 +1506,14 @@ impl Session {
             state.session_configuration.original_config_do_not_use = Arc::clone(&config);
             let new_config = notify_config_contributors
                 .then(|| Self::build_effective_session_config(&state.session_configuration));
-            (previous_config, new_config, config, service_tier)
+            let session_source = state.session_configuration.session_source.clone();
+            (
+                previous_config,
+                new_config,
+                config,
+                service_tier,
+                session_source,
+            )
         };
         self.emit_config_changed_contributors(previous_config.as_ref(), new_config.as_ref());
         self.services.skills_manager.clear_cache();
@@ -1515,6 +1530,7 @@ impl Session {
             self.services.plugins_manager.as_ref(),
             self.services.user_shell.as_ref(),
             Some(prompt_hook_runner),
+            &session_source,
         )
         .await;
 
@@ -2863,15 +2879,17 @@ impl Session {
                 developer_sections.push(skills_instructions.render());
             }
         }
-        let loaded_plugins = self
-            .services
-            .plugins_manager
-            .plugins_for_config(&turn_context.config.plugins_config_input())
-            .await;
-        if let Some(plugin_instructions) =
-            AvailablePluginsInstructions::from_plugins(loaded_plugins.capability_summaries())
-        {
-            developer_sections.push(plugin_instructions.render());
+        if !crate::hook_agent::is_agent_hook_source(&turn_context.session_source) {
+            let loaded_plugins = self
+                .services
+                .plugins_manager
+                .plugins_for_config(&turn_context.config.plugins_config_input())
+                .await;
+            if let Some(plugin_instructions) =
+                AvailablePluginsInstructions::from_plugins(loaded_plugins.capability_summaries())
+            {
+                developer_sections.push(plugin_instructions.render());
+            }
         }
         let context_contributors = self.services.extensions.context_contributors().to_vec();
         for contributor in context_contributors {
@@ -3393,7 +3411,11 @@ async fn build_hooks_for_config(
     plugins_manager: &PluginsManager,
     user_shell: &crate::shell::Shell,
     prompt_hook_runner: Option<PromptHookRunner>,
+    session_source: &SessionSource,
 ) -> Hooks {
+    if crate::hook_agent::is_agent_hook_source(session_source) {
+        return Hooks::default();
+    }
     let mut hook_shell_argv = user_shell.derive_exec_args("", /*use_login_shell*/ false);
     let hook_shell_program = hook_shell_argv.remove(0);
     let _ = hook_shell_argv.pop();

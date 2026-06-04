@@ -1093,6 +1093,27 @@
         },
         {
           "properties": {
+            "continueOnBlock": {
+              "default": false,
+              "type": "boolean"
+            },
+            "model": {
+              "default": null,
+              "type": "string"
+            },
+            "prompt": {
+              "type": "string"
+            },
+            "statusMessage": {
+              "default": null,
+              "type": "string"
+            },
+            "timeout": {
+              "default": null,
+              "format": "uint64",
+              "minimum": 0.0,
+              "type": "integer"
+            },
             "type": {
               "enum": [
                 "agent"
@@ -1101,6 +1122,7 @@
             }
           },
           "required": [
+            "prompt",
             "type"
           ],
           "type": "object"

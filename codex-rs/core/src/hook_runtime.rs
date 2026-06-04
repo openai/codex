@@ -182,13 +182,15 @@ pub(crate) async fn run_pre_tool_use_hooks(
     let preview_runs = hooks.preview_pre_tool_use(&request);
     emit_hook_started_events(sess, turn_context, preview_runs).await;
 
+    let agent_runner =
+        crate::hook_agent::build_agent_hook_runner(Arc::clone(sess), Arc::clone(turn_context));
     let PreToolUseOutcome {
         hook_events,
         should_block,
         block_reason,
         additional_contexts,
         updated_input,
-    } = hooks.run_pre_tool_use(request).await;
+    } = hooks.run_pre_tool_use(request, Some(&agent_runner)).await;
     emit_hook_completed_events(sess, turn_context, hook_events).await;
     record_additional_contexts(sess, turn_context, additional_contexts).await;
 
@@ -243,10 +245,14 @@ pub(crate) async fn run_permission_request_hooks(
     let preview_runs = hooks.preview_permission_request(&request);
     emit_hook_started_events(sess, turn_context, preview_runs).await;
 
+    let agent_runner =
+        crate::hook_agent::build_agent_hook_runner(Arc::clone(sess), Arc::clone(turn_context));
     let PermissionRequestOutcome {
         hook_events,
         decision,
-    } = hooks.run_permission_request(request).await;
+    } = hooks
+        .run_permission_request(request, Some(&agent_runner))
+        .await;
     emit_hook_completed_events(sess, turn_context, hook_events).await;
 
     decision
@@ -286,7 +292,9 @@ pub(crate) async fn run_post_tool_use_hooks(
     let preview_runs = hooks.preview_post_tool_use(&request);
     emit_hook_started_events(sess, turn_context, preview_runs).await;
 
-    let outcome = hooks.run_post_tool_use(request).await;
+    let agent_runner =
+        crate::hook_agent::build_agent_hook_runner(Arc::clone(sess), Arc::clone(turn_context));
+    let outcome = hooks.run_post_tool_use(request, Some(&agent_runner)).await;
     emit_hook_completed_events(sess, turn_context, outcome.hook_events.clone()).await;
     outcome
 }
@@ -356,7 +364,9 @@ pub(crate) async fn run_turn_stop_hooks(
     let hooks = sess.hooks();
     emit_hook_started_events(sess, turn_context, hooks.preview_stop(&request)).await;
 
-    let mut outcome = hooks.run_stop(request).await;
+    let agent_runner =
+        crate::hook_agent::build_agent_hook_runner(Arc::clone(sess), Arc::clone(turn_context));
+    let mut outcome = hooks.run_stop(request, Some(&agent_runner)).await;
     emit_hook_completed_events(sess, turn_context, std::mem::take(&mut outcome.hook_events)).await;
     outcome
 }
@@ -514,11 +524,15 @@ pub(crate) async fn inspect_pending_input(
             };
             let hooks = sess.hooks();
             let preview_runs = hooks.preview_user_prompt_submit(&request);
+            let agent_runner = crate::hook_agent::build_agent_hook_runner(
+                Arc::clone(sess),
+                Arc::clone(turn_context),
+            );
             run_context_injecting_hook(
                 sess,
                 turn_context,
                 preview_runs,
-                hooks.run_user_prompt_submit(request),
+                hooks.run_user_prompt_submit(request, Some(&agent_runner)),
             )
             .await
         }

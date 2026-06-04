@@ -80,7 +80,13 @@ mod tests {
                 }],
                 session_start: vec![MatcherGroup {
                     matcher: None,
-                    hooks: vec![HookHandlerConfig::Agent {}],
+                    hooks: vec![HookHandlerConfig::Agent {
+                        prompt: "inspect the repository".to_string(),
+                        model: None,
+                        timeout_sec: None,
+                        status_message: None,
+                        continue_on_block: false,
+                    }],
                 }],
                 ..Default::default()
             },

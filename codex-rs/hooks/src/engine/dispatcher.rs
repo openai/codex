@@ -13,6 +13,8 @@ use codex_protocol::protocol::HookScope;
 use super::CommandShell;
 use super::ConfiguredHandler;
 use super::ConfiguredHandlerKind;
+use super::agent_runner::AgentHookRunner;
+use super::agent_runner::run_agent;
 use super::command_runner::CommandRunResult;
 use super::command_runner::run_command;
 use super::prompt_runner::PromptHookRunner;
@@ -91,6 +93,7 @@ pub(crate) fn running_summary(handler: &ConfiguredHandler) -> HookRunSummary {
 pub(crate) struct HandlerExecutionContext<'a> {
     pub shell: &'a CommandShell,
     pub prompt_runner: Option<&'a PromptHookRunner>,
+    pub agent_runner: Option<&'a AgentHookRunner>,
     pub cwd: &'a Path,
     pub default_model: String,
     pub turn_id: Option<String>,
@@ -105,6 +108,7 @@ pub(crate) async fn execute_handlers<T>(
     let HandlerExecutionContext {
         shell,
         prompt_runner,
+        agent_runner,
         cwd,
         default_model,
         turn_id,
@@ -121,6 +125,9 @@ pub(crate) async fn execute_handlers<T>(
                 }
                 ConfiguredHandlerKind::Prompt { .. } => {
                     run_prompt(prompt_runner, &handler, &input_json, default_model).await
+                }
+                ConfiguredHandlerKind::Agent { .. } => {
+                    run_agent(agent_runner, &handler, &input_json, default_model).await
                 }
             };
             (configured_order, parse(&handler, result, turn_id))

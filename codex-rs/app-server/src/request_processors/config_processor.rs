@@ -556,7 +556,19 @@ fn map_hook_handler_to_api(handler: CoreHookHandlerConfig) -> ConfiguredHookHand
             status_message,
             continue_on_block,
         },
-        CoreHookHandlerConfig::Agent {} => ConfiguredHookHandler::Agent {},
+        CoreHookHandlerConfig::Agent {
+            prompt,
+            model,
+            timeout_sec,
+            status_message,
+            continue_on_block,
+        } => ConfiguredHookHandler::Agent {
+            prompt,
+            model,
+            timeout_sec,
+            status_message,
+            continue_on_block,
+        },
     }
 }
 

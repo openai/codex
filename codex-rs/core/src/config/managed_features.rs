@@ -123,6 +123,25 @@ impl ManagedFeatures {
     pub fn disable(&mut self, feature: Feature) -> ConstraintResult<()> {
         self.set_enabled(feature, /*enabled*/ false)
     }
+
+    /// Clone the effective feature set while allowing an internal session to
+    /// narrow capabilities independently of externally pinned requirements.
+    pub(crate) fn clone_with_features_disabled_for_internal_session(
+        &self,
+        disabled_features: impl IntoIterator<Item = Feature>,
+    ) -> Self {
+        let mut features = self.get().clone();
+        for feature in disabled_features {
+            features.disable(feature);
+        }
+        Self {
+            value: ConstrainedWithSource::new(
+                Constrained::allow_any(features),
+                /*source*/ None,
+            ),
+            pinned_features: BTreeMap::new(),
+        }
+    }
 }
 
 /// Only available for tests to ensure `ManagedFeatures` is constructed with

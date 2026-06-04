@@ -35,6 +35,19 @@ fn assistant_output_text(text: &str) -> ResponseItem {
     }
 }
 
+#[test]
+fn model_request_limit_allows_exactly_the_configured_number_of_requests() {
+    let limit = crate::hook_agent::AGENT_HOOK_MAX_MODEL_REQUESTS;
+    assert_eq!(model_request_limit_error(None, 100), None);
+    assert_eq!(model_request_limit_error(Some(limit), limit - 1), None);
+    assert_eq!(
+        model_request_limit_error(Some(limit), limit),
+        Some(format!(
+            "agent hook exceeded its {limit} model request limit"
+        ))
+    );
+}
+
 #[tokio::test]
 async fn plan_mode_uses_contributed_turn_item_for_last_agent_message() {
     let (mut session, turn_context) = crate::session::tests::make_session_and_context().await;

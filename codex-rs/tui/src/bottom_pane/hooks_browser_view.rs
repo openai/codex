@@ -493,7 +493,10 @@ impl HooksBrowserView {
             width,
             Some(MAX_HANDLER_DEFINITION_DETAIL_LINES),
         ));
-        if hook.handler_type == HookHandlerType::Prompt {
+        if matches!(
+            hook.handler_type,
+            HookHandlerType::Prompt | HookHandlerType::Agent
+        ) {
             lines.push(detail_line(
                 "Model",
                 hook.model.as_deref().unwrap_or("default"),
@@ -747,7 +750,7 @@ fn hook_definition(hook: &HookMetadata) -> (&'static str, &str) {
     match hook.handler_type {
         HookHandlerType::Command => ("Command", hook.command.as_deref().unwrap_or("-")),
         HookHandlerType::Prompt => ("Prompt", hook.prompt.as_deref().unwrap_or("-")),
-        HookHandlerType::Agent => ("Agent", "-"),
+        HookHandlerType::Agent => ("Agent", hook.prompt.as_deref().unwrap_or("-")),
     }
 }
 
@@ -1325,6 +1328,42 @@ mod tests {
         view.handle_key_event(KeyEvent::from(KeyCode::Enter));
         assert_snapshot!(
             "hooks_browser_prompt_hook_definition",
+            render_lines(&view, /*width*/ 112)
+        );
+    }
+
+    #[test]
+    fn renders_agent_hook_definition() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let mut agent_hook = hook(
+            "path:agent-hook",
+            HookEventName::PostToolUse,
+            HookSource::User,
+            /*plugin_id*/ None,
+            /*command*/ "",
+            /*enabled*/ true,
+            /*is_managed*/ false,
+            /*display_order*/ 0,
+        );
+        agent_hook.handler_type = HookHandlerType::Agent;
+        agent_hook.command = None;
+        agent_hook.prompt = Some("Run the relevant tests: $ARGUMENTS".to_string());
+        agent_hook.model = Some("gpt-5.1".to_string());
+        agent_hook.continue_on_block = Some(false);
+        agent_hook.timeout_sec = 60;
+        let mut view = HooksBrowserView::new(
+            vec![agent_hook],
+            Vec::new(),
+            Vec::new(),
+            AppEventSender::new(tx_raw),
+        );
+        view.state.selected_idx = view
+            .event_rows()
+            .iter()
+            .position(|row| row.event_name == HookEventName::PostToolUse);
+        view.handle_key_event(KeyEvent::from(KeyCode::Enter));
+        assert_snapshot!(
+            "hooks_browser_agent_hook_definition",
             render_lines(&view, /*width*/ 112)
         );
     }

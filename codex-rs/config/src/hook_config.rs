@@ -162,7 +162,17 @@ pub enum HookHandlerConfig {
         continue_on_block: bool,
     },
     #[serde(rename = "agent")]
-    Agent {},
+    Agent {
+        prompt: String,
+        #[serde(default)]
+        model: Option<String>,
+        #[serde(default, rename = "timeout", alias = "timeoutSec")]
+        timeout_sec: Option<u64>,
+        #[serde(default, rename = "statusMessage")]
+        status_message: Option<String>,
+        #[serde(default, rename = "continueOnBlock")]
+        continue_on_block: bool,
+    },
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]

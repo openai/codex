@@ -193,6 +193,7 @@ pub(crate) async fn run_turn(
 
     let mut last_agent_message: Option<String> = None;
     let mut stop_hook_active = false;
+    let mut model_request_count = 0usize;
     // Although from the perspective of codex.rs, TurnDiffTracker has the lifecycle of a Task which contains
     // many turns, from the perspective of the user, it is a single turn.
     #[allow(deprecated)]
@@ -243,6 +244,21 @@ pub(crate) async fn run_turn(
         let turn_metadata_header = turn_context
             .turn_metadata_state
             .current_header_value_for_model_request(&window_id);
+        if let Some(message) =
+            model_request_limit_error(turn_context.max_model_requests, model_request_count)
+        {
+            sess.send_event(
+                &turn_context,
+                EventMsg::Error(ErrorEvent {
+                    message,
+                    codex_error_info: None,
+                }),
+            )
+            .await;
+            break;
+        }
+        model_request_count = model_request_count.saturating_add(1);
+
         match run_sampling_request(
             Arc::clone(&sess),
             Arc::clone(&turn_context),
@@ -2231,6 +2247,15 @@ async fn try_run_sampling_request(
     }
 
     outcome
+}
+
+fn model_request_limit_error(
+    max_model_requests: Option<usize>,
+    model_request_count: usize,
+) -> Option<String> {
+    let limit = max_model_requests?;
+    (model_request_count >= limit)
+        .then(|| format!("agent hook exceeded its {limit} model request limit"))
 }
 
 pub(crate) fn get_last_assistant_message_from_turn(responses: &[ResponseItem]) -> Option<String> {

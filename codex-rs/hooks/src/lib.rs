@@ -13,6 +13,8 @@ use codex_protocol::protocol::HookEventName;
 pub use config_rules::hook_states_from_stack;
 pub use declarations::PluginHookDeclaration;
 pub use declarations::plugin_hook_declarations;
+pub use engine::AgentHookRequest;
+pub use engine::AgentHookRunner;
 pub use engine::HookListEntry;
 pub use engine::PromptHookRequest;
 pub use engine::PromptHookRunner;

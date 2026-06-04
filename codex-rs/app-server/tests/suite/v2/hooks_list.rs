@@ -94,6 +94,34 @@ fn prompt_hook_hash(
     codex_config::version_for_toml(&value)
 }
 
+fn agent_hook_hash(
+    event_name: &'static str,
+    matcher: Option<&str>,
+    prompt: &str,
+    model: Option<&str>,
+    timeout_sec: u64,
+    status_message: Option<&str>,
+    continue_on_block: bool,
+) -> String {
+    let identity = NormalizedHookIdentity {
+        event_name,
+        group: codex_config::MatcherGroup {
+            matcher: matcher.map(ToOwned::to_owned),
+            hooks: vec![codex_config::HookHandlerConfig::Agent {
+                prompt: prompt.to_string(),
+                model: model.map(ToOwned::to_owned),
+                timeout_sec: Some(timeout_sec),
+                status_message: status_message.map(ToOwned::to_owned),
+                continue_on_block,
+            }],
+        },
+    };
+    let Ok(value) = codex_config::TomlValue::try_from(identity) else {
+        unreachable!("normalized hook identity should serialize to TOML");
+    };
+    codex_config::version_for_toml(&value)
+}
+
 fn write_user_hook_config(codex_home: &std::path::Path) -> Result<()> {
     std::fs::write(
         codex_home.join("config.toml"),
@@ -251,6 +279,19 @@ async fn hooks_list_shows_discovered_plugin_hooks() -> Result<()> {
           }
         ]
       }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "agent",
+            "prompt": "Run the relevant tests before stopping: $ARGUMENTS",
+            "model": "gpt-5-mini",
+            "timeout": 60,
+            "statusMessage": "checking agent"
+          }
+        ]
+      }
     ]
   }
 }"#,
@@ -317,7 +358,7 @@ async fn hooks_list_shows_discovered_plugin_hooks() -> Result<()> {
                     continue_on_block: Some(true),
                     timeout_sec: 30,
                     status_message: Some("checking prompt".to_string()),
-                    source_path: plugin_hooks_path,
+                    source_path: plugin_hooks_path.clone(),
                     source: HookSource::Plugin,
                     plugin_id: Some("demo@test".to_string()),
                     display_order: 1,
@@ -331,6 +372,34 @@ async fn hooks_list_shows_discovered_plugin_hooks() -> Result<()> {
                         /*timeout_sec*/ 30,
                         Some("checking prompt"),
                         /*continue_on_block*/ true,
+                    ),
+                    trust_status: HookTrustStatus::Untrusted,
+                },
+                HookMetadata {
+                    key: "demo@test:hooks/hooks.json:stop:0:0".to_string(),
+                    event_name: HookEventName::Stop,
+                    handler_type: HookHandlerType::Agent,
+                    matcher: None,
+                    command: None,
+                    prompt: Some("Run the relevant tests before stopping: $ARGUMENTS".to_string(),),
+                    model: Some("gpt-5-mini".to_string()),
+                    continue_on_block: Some(false),
+                    timeout_sec: 60,
+                    status_message: Some("checking agent".to_string()),
+                    source_path: plugin_hooks_path,
+                    source: HookSource::Plugin,
+                    plugin_id: Some("demo@test".to_string()),
+                    display_order: 2,
+                    enabled: true,
+                    is_managed: false,
+                    current_hash: agent_hook_hash(
+                        "stop",
+                        /*matcher*/ None,
+                        "Run the relevant tests before stopping: $ARGUMENTS",
+                        Some("gpt-5-mini"),
+                        /*timeout_sec*/ 60,
+                        Some("checking agent"),
+                        /*continue_on_block*/ false,
                     ),
                     trust_status: HookTrustStatus::Untrusted,
                 },

@@ -108,6 +108,7 @@ pub(crate) async fn run_pre(
         dispatcher::HandlerExecutionContext {
             shell,
             prompt_runner: None,
+            agent_runner: None,
             cwd: request.cwd.as_path(),
             default_model: request.model.clone(),
             turn_id: Some(request.turn_id.clone()),
@@ -194,6 +195,7 @@ pub(crate) async fn run_post(
         dispatcher::HandlerExecutionContext {
             shell,
             prompt_runner: None,
+            agent_runner: None,
             cwd: request.cwd.as_path(),
             default_model: request.model.clone(),
             turn_id: Some(request.turn_id.clone()),

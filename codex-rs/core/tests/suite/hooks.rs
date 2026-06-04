@@ -260,6 +260,23 @@ fn write_user_prompt_submit_prompt_hook(home: &Path) -> Result<()> {
     Ok(())
 }
 
+fn write_user_prompt_submit_agent_hook(home: &Path) -> Result<()> {
+    let hooks = serde_json::json!({
+        "hooks": {
+            "UserPromptSubmit": [{
+                "hooks": [{
+                    "type": "agent",
+                    "prompt": "Inspect the codebase before allowing this prompt: $ARGUMENTS",
+                    "statusMessage": "checking agent",
+                }]
+            }]
+        }
+    });
+
+    fs::write(home.join("hooks.json"), hooks.to_string()).context("write hooks.json")?;
+    Ok(())
+}
+
 fn write_session_start_and_user_prompt_submit_order_hooks(home: &Path) -> Result<()> {
     let session_start_script_path = home.join("session_start_order_hook.py");
     let user_prompt_submit_script_path = home.join("user_prompt_submit_order_hook.py");
@@ -1789,6 +1806,78 @@ async fn user_prompt_submit_prompt_hook_runs_isolated_request() -> Result<()> {
         hook_input.contains(prompt),
         "prompt hook request should include the submitted prompt",
     );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn user_prompt_submit_agent_hook_runs_isolated_subagent_request() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let response = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("agent-hook-resp"),
+            ev_assistant_message(
+                "agent-hook-msg",
+                r#"{"ok":false,"reason":"repository check failed"}"#,
+            ),
+            ev_completed("agent-hook-resp"),
+        ]),
+    )
+    .await;
+
+    let mut builder = test_codex()
+        .with_model("gpt-5.4")
+        .with_pre_build_hook(|home| {
+            if let Err(error) = write_user_prompt_submit_agent_hook(home) {
+                panic!("failed to write user prompt submit agent hook fixture: {error}");
+            }
+        })
+        .with_config(trust_discovered_hooks);
+    let test = builder.build(&server).await?;
+    let prompt = "ship the change";
+
+    test.submit_turn(prompt).await?;
+
+    let request = response.single_request();
+    let body = request.body_json();
+    assert_eq!(body["model"], json!("gpt-5.4"));
+    let tool_names = body["tools"]
+        .as_array()
+        .context("agent hook tools")?
+        .iter()
+        .filter_map(|tool| {
+            tool.get("name")
+                .or_else(|| tool.get("type"))
+                .and_then(Value::as_str)
+        })
+        .collect::<Vec<_>>();
+    assert!(!tool_names.is_empty(), "agent hook should have tool access");
+    assert!(!tool_names.contains(&"spawn_agent"));
+    assert!(!tool_names.contains(&"request_user_input"));
+    assert!(!tool_names.contains(&"web_search"));
+    assert!(
+        request
+            .instructions_text()
+            .starts_with("You evaluate a Codex agent hook."),
+        "agent hook request should use isolated hook instructions",
+    );
+    assert_eq!(
+        request.message_input_texts("developer"),
+        Vec::<String>::new(),
+        "agent hook request should not inherit developer context",
+    );
+    let user_inputs = request.message_input_texts("user");
+    assert_eq!(
+        user_inputs.len(),
+        1,
+        "agent hook request should contain exactly one user message",
+    );
+    let hook_input = user_inputs.first().context("agent hook user input")?;
+    assert!(hook_input.contains("Inspect the codebase before allowing this prompt:"));
+    assert!(hook_input.contains(prompt));
 
     Ok(())
 }

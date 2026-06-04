@@ -1595,7 +1595,7 @@ Hooks are returned even when disabled so clients can render and re-enable them. 
 
 For unmanaged hooks, `currentHash` and `trustStatus` describe whether the current definition is first-seen, approved, or changed since approval. Only trusted unmanaged hooks become runnable. Hook keys combine the source identity with a trailing event/group/handler selector that is currently positional.
 
-Command hooks expose their definition in `command`, while prompt hooks expose it in `prompt`. The unused field is `null`.
+Command hooks expose their definition in `command`, while prompt and agent hooks expose it in `prompt`. The unused field is `null`.
 
 ```json
 {
