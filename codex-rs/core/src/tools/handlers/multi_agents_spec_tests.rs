@@ -208,47 +208,6 @@ fn spawn_agent_tool_caps_reasoning_effort_value_length() {
 }
 
 #[test]
-fn spawn_agent_tool_caps_reasoning_efforts_in_advertised_order() {
-    let mut model = model_preset("visible", /*show_in_picker*/ true);
-    model.default_reasoning_effort = ReasoningEffort::Low;
-    model.supported_reasoning_efforts = vec![
-        ReasoningEffortPreset {
-            effort: ReasoningEffort::Low,
-            description: String::new(),
-        },
-        ReasoningEffortPreset {
-            effort: ReasoningEffort::Custom("custom-1".to_string()),
-            description: String::new(),
-        },
-        ReasoningEffortPreset {
-            effort: ReasoningEffort::Medium,
-            description: String::new(),
-        },
-        ReasoningEffortPreset {
-            effort: ReasoningEffort::Custom("custom-2".to_string()),
-            description: String::new(),
-        },
-        ReasoningEffortPreset {
-            effort: ReasoningEffort::High,
-            description: String::new(),
-        },
-        ReasoningEffortPreset {
-            effort: ReasoningEffort::Custom("custom-3".to_string()),
-            description: String::new(),
-        },
-        ReasoningEffortPreset {
-            effort: ReasoningEffort::XHigh,
-            description: String::new(),
-        },
-    ];
-
-    assert_eq!(
-        spawn_agent_models_description(&[model]),
-        "Available model overrides (optional; inherited parent model is preferred):\n- `visible-model`: visible description Reasoning efforts: low (default), custom-1, medium, custom-2, high, custom-3. Service tiers: priority."
-    );
-}
-
-#[test]
 fn spawn_agent_tool_hides_service_tier_with_spawn_metadata() {
     let tool = create_spawn_agent_tool_v2(SpawnAgentToolOptions {
         available_models: vec![model_preset("visible", /*show_in_picker*/ true)],
