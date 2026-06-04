@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import gzip
 import hashlib
-import os
 import re
 import shutil
 import subprocess
@@ -13,6 +12,7 @@ import sys
 import tomllib
 from pathlib import Path
 
+from run_bazel_with_buildbuddy import bazel_command
 from rusty_v8_module_bazel import (
     RustyV8ChecksumError,
     check_module_bazel,
@@ -29,33 +29,22 @@ SANDBOX_ARTIFACT_PROFILE = "ptrcomp_sandbox_release"
 ARTIFACT_BAZEL_CONFIGS = ["rusty-v8-upstream-libcxx"]
 
 
-def bazel_remote_args() -> list[str]:
-    buildbuddy_api_key = os.environ.get("BUILDBUDDY_API_KEY")
-    if not buildbuddy_api_key:
-        return []
-    return [f"--remote_header=x-buildbuddy-api-key={buildbuddy_api_key}"]
-
-
 def bazel_execroot() -> Path:
-    result = subprocess.run(
-        ["bazel", "info", "execution_root"],
+    output = subprocess.check_output(
+        bazel_command("info", "execution_root"),
         cwd=ROOT,
-        check=True,
-        capture_output=True,
         text=True,
     )
-    return Path(result.stdout.strip())
+    return Path(output.strip())
 
 
 def bazel_output_base() -> Path:
-    result = subprocess.run(
-        ["bazel", "info", "output_base"],
+    output = subprocess.check_output(
+        bazel_command("info", "output_base"),
         cwd=ROOT,
-        check=True,
-        capture_output=True,
         text=True,
     )
-    return Path(result.stdout.strip())
+    return Path(output.strip())
 
 
 def bazel_output_path(path: str) -> Path:
@@ -72,24 +61,22 @@ def bazel_output_files(
 ) -> list[Path]:
     expression = "set(" + " ".join(labels) + ")"
     bazel_configs = bazel_configs or []
-    result = subprocess.run(
-        [
-            "bazel",
+    output = subprocess.check_output(
+        bazel_command(
             "cquery",
             "-c",
             compilation_mode,
             f"--platforms=@llvm//platforms:{platform}",
             *[f"--config={config}" for config in bazel_configs],
-            *bazel_remote_args(),
             "--output=files",
             expression,
-        ],
+        ),
         cwd=ROOT,
-        check=True,
-        capture_output=True,
         text=True,
     )
-    return [bazel_output_path(line.strip()) for line in result.stdout.splitlines() if line.strip()]
+    return [
+        bazel_output_path(line.strip()) for line in output.splitlines() if line.strip()
+    ]
 
 
 def bazel_build(
@@ -102,17 +89,15 @@ def bazel_build(
     bazel_configs = bazel_configs or []
     download_args = ["--remote_download_toplevel"] if download_toplevel else []
     subprocess.run(
-        [
-            "bazel",
+        bazel_command(
             "build",
             "-c",
             compilation_mode,
             f"--platforms=@llvm//platforms:{platform}",
             *[f"--config={config}" for config in bazel_configs],
-            *bazel_remote_args(),
             *download_args,
             *labels,
-        ],
+        ),
         cwd=ROOT,
         check=True,
     )
@@ -172,7 +157,7 @@ def resolved_v8_crate_version() -> str:
     matches = sorted(
         set(
             re.findall(
-                r'https://static\.crates\.io/crates/v8/v8-([0-9]+\.[0-9]+\.[0-9]+)\.crate',
+                r"https://static\.crates\.io/crates/v8/v8-([0-9]+\.[0-9]+\.[0-9]+)\.crate",
                 module_bazel,
             )
         )
@@ -234,13 +219,17 @@ def stage_artifacts(
     output_dir: Path,
     sandbox: bool,
 ) -> None:
-    missing_paths = [str(path) for path in [lib_path, binding_path] if not path.exists()]
+    missing_paths = [
+        str(path) for path in [lib_path, binding_path] if not path.exists()
+    ]
     if missing_paths:
         raise SystemExit(f"missing release outputs for {target}: {missing_paths}")
 
     output_dir.mkdir(parents=True, exist_ok=True)
     artifact_profile = SANDBOX_ARTIFACT_PROFILE if sandbox else RELEASE_ARTIFACT_PROFILE
-    staged_library = output_dir / staged_archive_name(target, lib_path, artifact_profile)
+    staged_library = output_dir / staged_archive_name(
+        target, lib_path, artifact_profile
+    )
     staged_binding = output_dir / staged_binding_name(target, artifact_profile)
 
     with lib_path.open("rb") as src, staged_library.open("wb") as dst:
@@ -270,7 +259,9 @@ def stage_artifacts(
 
 
 def upstream_release_pair_paths(source_root: Path, target: str) -> tuple[Path, Path]:
-    lib_name = "rusty_v8.lib" if target.endswith("-pc-windows-msvc") else "librusty_v8.a"
+    lib_name = (
+        "rusty_v8.lib" if target.endswith("-pc-windows-msvc") else "librusty_v8.a"
+    )
     gn_out = source_root / "target" / target / "release" / "gn_out"
     return gn_out / "obj" / lib_name, gn_out / "src_binding.rs"
 
@@ -338,7 +329,9 @@ def parse_args() -> argparse.Namespace:
     stage_upstream_release_pair_parser = subparsers.add_parser(
         "stage-upstream-release-pair"
     )
-    stage_upstream_release_pair_parser.add_argument("--source-root", type=Path, required=True)
+    stage_upstream_release_pair_parser.add_argument(
+        "--source-root", type=Path, required=True
+    )
     stage_upstream_release_pair_parser.add_argument("--target", required=True)
     stage_upstream_release_pair_parser.add_argument("--output-dir", required=True)
     stage_upstream_release_pair_parser.add_argument("--sandbox", action="store_true")

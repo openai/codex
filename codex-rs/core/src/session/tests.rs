@@ -344,7 +344,7 @@ async fn request_mcp_server_elicitation_auto_accepts_when_auto_deny_is_enabled()
             turn_context.as_ref(),
             RequestId::String("request-1".into()),
             McpServerElicitationRequestParams {
-                thread_id: session.conversation_id.to_string(),
+                thread_id: session.thread_id.to_string(),
                 turn_id: Some(turn_context.sub_id.clone()),
                 server_name: "codex_apps".to_string(),
                 request: McpServerElicitationRequest::Form {
@@ -1333,7 +1333,7 @@ async fn reload_user_config_layer_refreshes_hooks() -> anyhow::Result<()> {
     }))?;
 
     let request = codex_hooks::SessionStartRequest {
-        session_id: session.conversation_id,
+        session_id: session.thread_id,
         cwd: session.get_config().await.cwd.clone(),
         transcript_path: None,
         model: "gpt-5.2".to_string(),
@@ -1440,7 +1440,7 @@ async fn refresh_runtime_config_refreshes_hooks() -> anyhow::Result<()> {
     std::fs::write(&config_toml_path, toml::to_string(&trusted_user_config)?)?;
 
     let request = codex_hooks::SessionStartRequest {
-        session_id: session.conversation_id,
+        session_id: session.thread_id,
         cwd: session.get_config().await.cwd.clone(),
         transcript_path: None,
         model: "gpt-5.2".to_string(),
@@ -1999,7 +1999,7 @@ async fn record_token_usage_info_notifies_extension_contributors() {
     let expected = vec![
         RecordedTokenUsage {
             session_level_id: session.session_id().to_string(),
-            thread_level_id: session.conversation_id.to_string(),
+            thread_level_id: session.thread_id.to_string(),
             turn_level_id: turn_context.sub_id.clone(),
             token_usage: TokenUsageInfo {
                 total_token_usage: first_usage.clone(),
@@ -2011,7 +2011,7 @@ async fn record_token_usage_info_notifies_extension_contributors() {
         },
         RecordedTokenUsage {
             session_level_id: session.session_id().to_string(),
-            thread_level_id: session.conversation_id.to_string(),
+            thread_level_id: session.thread_id.to_string(),
             turn_level_id: turn_context.sub_id.clone(),
             token_usage: TokenUsageInfo {
                 total_token_usage: expected_total_usage,
@@ -2100,7 +2100,7 @@ async fn turn_start_lifecycle_exposes_turn_metadata_and_token_baseline() {
 
     let expected = RecordedTurnStart {
         session_level_id: session.session_id().to_string(),
-        thread_level_id: session.conversation_id.to_string(),
+        thread_level_id: session.thread_id.to_string(),
         turn_level_id: turn_context.sub_id.clone(),
         turn_id: turn_context.sub_id.clone(),
         collaboration_mode: turn_context.collaboration_mode.clone(),
@@ -2188,7 +2188,7 @@ async fn turn_error_lifecycle_exposes_error_and_stores() {
 
     let expected = RecordedTurnError {
         session_level_id: session.session_id().to_string(),
-        thread_level_id: session.conversation_id.to_string(),
+        thread_level_id: session.thread_id.to_string(),
         turn_level_id: turn_context.sub_id.clone(),
         turn_id: turn_context.sub_id.clone(),
         error: CodexErrorInfo::UsageLimitExceeded,
@@ -3539,7 +3539,7 @@ async fn attach_thread_persistence(session: &mut Session) -> PathBuf {
     let live_thread = LiveThread::create(
         Arc::clone(&session.services.thread_store),
         CreateThreadParams {
-            thread_id: session.conversation_id,
+            thread_id: session.thread_id,
             forked_from_id: None,
             parent_thread_id: None,
             source: SessionSource::Exec,
@@ -4820,7 +4820,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
     );
 
     let session = Session {
-        conversation_id: thread_id,
+        thread_id,
         installation_id: "11111111-1111-4111-8111-111111111111".to_string(),
         tx_event,
         agent_status: agent_status_tx,
@@ -6282,7 +6282,7 @@ async fn shutdown_complete_does_not_append_to_thread_store_after_shutdown() {
     let live_thread = LiveThread::create(
         Arc::clone(&thread_store),
         CreateThreadParams {
-            thread_id: session.conversation_id,
+            thread_id: session.thread_id,
             forked_from_id: None,
             parent_thread_id: None,
             source: SessionSource::Exec,
@@ -6347,7 +6347,7 @@ async fn submission_loop_channel_close_emits_thread_stop_lifecycle() {
     let mut builder = codex_extension_api::ExtensionRegistryBuilder::<crate::config::Config>::new();
     builder.thread_lifecycle_contributor(Arc::new(ThreadStopRecorder {
         calls: Arc::clone(&calls),
-        expected_thread_id: session.conversation_id,
+        expected_thread_id: session.thread_id,
     }));
     session.services.extensions = Arc::new(builder.build());
     session
@@ -6409,7 +6409,7 @@ async fn submission_loop_channel_close_aborts_active_turn_before_thread_stop_lif
     let calls = Arc::new(std::sync::Mutex::new(Vec::new()));
     let recorder = Arc::new(LifecycleRecorder {
         calls: Arc::clone(&calls),
-        expected_thread_id: session.conversation_id,
+        expected_thread_id: session.thread_id,
         expected_turn_id: turn_context.sub_id.clone(),
     });
     let mut builder = codex_extension_api::ExtensionRegistryBuilder::<crate::config::Config>::new();
@@ -6910,7 +6910,7 @@ where
     ));
 
     let session = Arc::new(Session {
-        conversation_id: thread_id,
+        thread_id,
         installation_id: "11111111-1111-4111-8111-111111111111".to_string(),
         tx_event,
         agent_status: agent_status_tx,
@@ -6976,7 +6976,7 @@ async fn upsert_goal_test_thread(session: &Session) {
         .state_db()
         .expect("goal test session should have a state db");
     let mut builder = codex_state::ThreadMetadataBuilder::new(
-        session.conversation_id,
+        session.thread_id,
         config
             .codex_home
             .join("goal-test-rollout.jsonl")
@@ -7797,7 +7797,7 @@ async fn handle_output_item_done_records_image_save_history_message() {
     let call_id = "ig_history_records_message";
     let expected_saved_path = crate::stream_events_utils::image_generation_artifact_path(
         &turn_context.config.codex_home,
-        &session.conversation_id.to_string(),
+        &session.thread_id.to_string(),
         call_id,
     );
     let _ = std::fs::remove_file(&expected_saved_path);
@@ -7824,7 +7824,7 @@ async fn handle_output_item_done_records_image_save_history_message() {
     let history = session.clone_history().await;
     let image_output_path = crate::stream_events_utils::image_generation_artifact_path(
         &turn_context.config.codex_home,
-        &session.conversation_id.to_string(),
+        &session.thread_id.to_string(),
         "<image_id>",
     );
     let image_output_dir = image_output_path
@@ -7852,7 +7852,7 @@ async fn handle_output_item_done_skips_image_save_message_when_save_fails() {
     let call_id = "ig_history_no_message";
     let expected_saved_path = crate::stream_events_utils::image_generation_artifact_path(
         &turn_context.config.codex_home,
-        &session.conversation_id.to_string(),
+        &session.thread_id.to_string(),
         call_id,
     );
     let _ = std::fs::remove_file(&expected_saved_path);
@@ -8698,7 +8698,7 @@ async fn task_finish_emits_thread_idle_lifecycle_after_active_turn_clears() {
     builder.thread_lifecycle_contributor(Arc::new(ThreadIdleRecorder {
         calls: Arc::clone(&calls),
         idle_tx,
-        expected_thread_id: session.conversation_id,
+        expected_thread_id: session.thread_id,
     }));
     session.services.extensions = Arc::new(builder.build());
 
@@ -9321,7 +9321,7 @@ async fn create_thread_goal_fills_empty_thread_preview() -> anyhow::Result<()> {
         .iter()
         .map(|thread| thread.id)
         .collect::<Vec<_>>();
-    assert_eq!(vec![sess.conversation_id], ids);
+    assert_eq!(vec![sess.thread_id], ids);
     assert_eq!(
         Some("Keep improving the benchmark"),
         page.items[0].preview.as_deref()
@@ -9401,7 +9401,7 @@ async fn budget_limited_accounting_steers_active_turn_without_aborting() -> anyh
     let state_db = goal_test_state_db(sess.as_ref()).await?;
     let goal = state_db
         .thread_goals()
-        .get_thread_goal(sess.conversation_id)
+        .get_thread_goal(sess.thread_id)
         .await?
         .expect("goal should remain persisted after accounting");
     assert_eq!(codex_state::ThreadGoalStatus::BudgetLimited, goal.status);
@@ -9425,7 +9425,7 @@ async fn budget_limited_accounting_steers_active_turn_without_aborting() -> anyh
 
     let goal = state_db
         .thread_goals()
-        .get_thread_goal(sess.conversation_id)
+        .get_thread_goal(sess.thread_id)
         .await?
         .expect("goal should remain persisted after follow-up accounting");
     assert_eq!(codex_state::ThreadGoalStatus::BudgetLimited, goal.status);
@@ -9473,7 +9473,7 @@ async fn usage_limit_runtime_stops_active_goal_and_prevents_idle_continuation() 
     let state_db = goal_test_state_db(sess.as_ref()).await?;
     let goal = state_db
         .thread_goals()
-        .get_thread_goal(sess.conversation_id)
+        .get_thread_goal(sess.thread_id)
         .await?
         .expect("goal should remain persisted after usage limiting");
     assert_eq!(codex_state::ThreadGoalStatus::UsageLimited, goal.status);
@@ -9516,7 +9516,7 @@ async fn external_goal_mutation_accounts_active_turn_before_status_change() -> a
     let state_db = goal_test_state_db(sess.as_ref()).await?;
     let goal = state_db
         .thread_goals()
-        .get_thread_goal(sess.conversation_id)
+        .get_thread_goal(sess.thread_id)
         .await?
         .expect("goal should remain persisted");
     assert_eq!(70, goal.tokens_used);
@@ -9526,7 +9526,7 @@ async fn external_goal_mutation_accounts_active_turn_before_status_change() -> a
     let updated_goal = state_db
         .thread_goals()
         .update_thread_goal(
-            sess.conversation_id,
+            sess.thread_id,
             codex_state::GoalUpdate {
                 objective: None,
                 status: Some(codex_state::ThreadGoalStatus::Complete),
@@ -9547,7 +9547,7 @@ async fn external_goal_mutation_accounts_active_turn_before_status_change() -> a
     assert!(sess.active_turn.lock().await.is_some());
     let goal = state_db
         .thread_goals()
-        .get_thread_goal(sess.conversation_id)
+        .get_thread_goal(sess.thread_id)
         .await?
         .expect("goal should remain persisted");
     assert_eq!(codex_state::ThreadGoalStatus::Complete, goal.status);
@@ -9575,7 +9575,7 @@ async fn external_objective_change_steers_active_turn() -> anyhow::Result<()> {
     let old_goal = state_db
         .thread_goals()
         .replace_thread_goal(
-            sess.conversation_id,
+            sess.thread_id,
             "Keep improving the benchmark",
             codex_state::ThreadGoalStatus::Active,
             /*token_budget*/ Some(10_000),
@@ -9584,7 +9584,7 @@ async fn external_objective_change_steers_active_turn() -> anyhow::Result<()> {
     let new_goal = state_db
         .thread_goals()
         .replace_thread_goal(
-            sess.conversation_id,
+            sess.thread_id,
             "Write a concise benchmark summary",
             codex_state::ThreadGoalStatus::Active,
             /*token_budget*/ Some(10_000),
@@ -9642,7 +9642,7 @@ async fn external_active_goal_set_marks_current_turn_for_accounting() -> anyhow:
     let goal = state_db
         .thread_goals()
         .replace_thread_goal(
-            sess.conversation_id,
+            sess.thread_id,
             "Keep improving the benchmark",
             codex_state::ThreadGoalStatus::Active,
             /*token_budget*/ None,
@@ -9675,7 +9675,7 @@ async fn external_active_goal_set_marks_current_turn_for_accounting() -> anyhow:
 
     let goal = state_db
         .thread_goals()
-        .get_thread_goal(sess.conversation_id)
+        .get_thread_goal(sess.thread_id)
         .await?
         .expect("goal should remain persisted");
     assert_eq!(codex_state::ThreadGoalStatus::Active, goal.status);

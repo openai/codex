@@ -351,7 +351,7 @@ async fn get_bundle_skips_non_chatgpt_auth() {
 }
 
 #[tokio::test]
-async fn get_bundle_skips_non_business_or_enterprise_plan() {
+async fn get_bundle_skips_individual_plan() {
     let fetcher = Arc::new(StaticBundleClient::new(test_bundle()));
     let codex_home = tempdir().expect("tempdir");
     let service = CloudConfigBundleService::new(
@@ -363,6 +363,46 @@ async fn get_bundle_skips_non_business_or_enterprise_plan() {
 
     assert_eq!(service.load_startup_bundle().await, Ok(None));
     assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn get_bundle_allows_eligible_workspace_plans_and_writes_cache() {
+    for plan_type in [
+        "business",
+        "enterprise_cbp_usage_based",
+        "enterprise",
+        "hc",
+        "edu",
+        "education",
+    ] {
+        let bundle = test_bundle();
+        let fetcher = Arc::new(StaticBundleClient::new(bundle.clone()));
+        let codex_home = tempdir().expect("tempdir");
+        let service = CloudConfigBundleService::new(
+            auth_manager_with_plan(plan_type).await,
+            fetcher.clone(),
+            codex_home.path().to_path_buf(),
+            CLOUD_CONFIG_BUNDLE_TIMEOUT,
+        );
+
+        assert_eq!(
+            service.load_startup_bundle().await,
+            Ok(Some(bundle)),
+            "plan_type: {plan_type}"
+        );
+        assert_eq!(
+            fetcher.request_count.load(Ordering::SeqCst),
+            1,
+            "plan_type: {plan_type}"
+        );
+        assert!(
+            codex_home
+                .path()
+                .join(CLOUD_CONFIG_BUNDLE_CACHE_FILENAME)
+                .exists(),
+            "plan_type: {plan_type}"
+        );
+    }
 }
 
 #[tokio::test]
@@ -378,31 +418,6 @@ async fn get_bundle_skips_team_like_usage_based_plan() {
 
     assert_eq!(service.load_startup_bundle().await, Ok(None));
     assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 0);
-}
-
-#[tokio::test]
-async fn get_bundle_allows_business_plan_and_writes_cache() {
-    let bundle = test_bundle();
-    let codex_home = tempdir().expect("tempdir");
-    let fetcher = Arc::new(StaticBundleClient::new(bundle.clone()));
-    let service = CloudConfigBundleService::new(
-        auth_manager_with_plan("business").await,
-        fetcher.clone(),
-        codex_home.path().to_path_buf(),
-        CLOUD_CONFIG_BUNDLE_TIMEOUT,
-    );
-
-    assert_eq!(
-        service.load_startup_bundle().await,
-        Ok(Some(bundle.clone()))
-    );
-    assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 1);
-    assert!(
-        codex_home
-            .path()
-            .join(CLOUD_CONFIG_BUNDLE_CACHE_FILENAME)
-            .exists()
-    );
 }
 
 #[tokio::test]
@@ -466,36 +481,6 @@ async fn get_bundle_ignores_invalid_cache_and_refetches() {
             .bundle,
         replacement_bundle
     );
-}
-
-#[tokio::test]
-async fn get_bundle_allows_business_like_usage_based_plan() {
-    let fetcher = Arc::new(StaticBundleClient::new(test_bundle()));
-    let codex_home = tempdir().expect("tempdir");
-    let service = CloudConfigBundleService::new(
-        auth_manager_with_plan("enterprise_cbp_usage_based").await,
-        fetcher.clone(),
-        codex_home.path().to_path_buf(),
-        CLOUD_CONFIG_BUNDLE_TIMEOUT,
-    );
-
-    assert_eq!(service.load_startup_bundle().await, Ok(Some(test_bundle())));
-    assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 1);
-}
-
-#[tokio::test]
-async fn get_bundle_allows_hc_plan_as_enterprise() {
-    let fetcher = Arc::new(StaticBundleClient::new(test_bundle()));
-    let codex_home = tempdir().expect("tempdir");
-    let service = CloudConfigBundleService::new(
-        auth_manager_with_plan("hc").await,
-        fetcher.clone(),
-        codex_home.path().to_path_buf(),
-        CLOUD_CONFIG_BUNDLE_TIMEOUT,
-    );
-
-    assert_eq!(service.load_startup_bundle().await, Ok(Some(test_bundle())));
-    assert_eq!(fetcher.request_count.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test]

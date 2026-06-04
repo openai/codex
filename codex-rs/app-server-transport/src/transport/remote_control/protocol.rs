@@ -177,6 +177,48 @@ fn is_localhost(host: &Option<Host<&str>>) -> bool {
 pub(super) fn normalize_remote_control_url(
     remote_control_url: &str,
 ) -> io::Result<RemoteControlTarget> {
+    let remote_control_url = normalize_remote_control_base_url(remote_control_url)?;
+    let map_url_parse_error = |err: url::ParseError| -> io::Error {
+        io::Error::new(
+            ErrorKind::InvalidInput,
+            format!("invalid remote control URL `{remote_control_url}`: {err}"),
+        )
+    };
+
+    let enroll_url = remote_control_url
+        .join("wham/remote/control/server/enroll")
+        .map_err(map_url_parse_error)?;
+    let refresh_url = remote_control_url
+        .join("wham/remote/control/server/refresh")
+        .map_err(map_url_parse_error)?;
+    let pair_url = remote_control_url
+        .join("wham/remote/control/server/pair")
+        .map_err(map_url_parse_error)?;
+    let mut websocket_url = remote_control_url
+        .join("wham/remote/control/server")
+        .map_err(map_url_parse_error)?;
+    websocket_url
+        .set_scheme(if enroll_url.scheme() == "https" {
+            "wss"
+        } else {
+            "ws"
+        })
+        .map_err(|()| {
+            io::Error::new(
+                ErrorKind::InvalidInput,
+                format!("invalid remote control URL `{remote_control_url}`"),
+            )
+        })?;
+
+    Ok(RemoteControlTarget {
+        websocket_url: websocket_url.to_string(),
+        enroll_url: enroll_url.to_string(),
+        refresh_url: refresh_url.to_string(),
+        pair_url: pair_url.to_string(),
+    })
+}
+
+pub(super) fn normalize_remote_control_base_url(remote_control_url: &str) -> io::Result<Url> {
     let map_url_parse_error = |err: url::ParseError| -> io::Error {
         io::Error::new(
             ErrorKind::InvalidInput,
@@ -198,35 +240,14 @@ pub(super) fn normalize_remote_control_url(
         remote_control_url.set_path(&normalized_path);
     }
 
-    let enroll_url = remote_control_url
-        .join("wham/remote/control/server/enroll")
-        .map_err(map_url_parse_error)?;
-    let refresh_url = remote_control_url
-        .join("wham/remote/control/server/refresh")
-        .map_err(map_url_parse_error)?;
-    let pair_url = remote_control_url
-        .join("wham/remote/control/server/pair")
-        .map_err(map_url_parse_error)?;
-    let mut websocket_url = remote_control_url
-        .join("wham/remote/control/server")
-        .map_err(map_url_parse_error)?;
-    let host = enroll_url.host();
-    match enroll_url.scheme() {
-        "https" if is_localhost(&host) || is_allowed_remote_control_chatgpt_host(&host) => {
-            websocket_url.set_scheme("wss").map_err(map_scheme_error)?;
-        }
-        "http" if is_localhost(&host) => {
-            websocket_url.set_scheme("ws").map_err(map_scheme_error)?;
-        }
+    let host = remote_control_url.host();
+    match remote_control_url.scheme() {
+        "https" if is_localhost(&host) || is_allowed_remote_control_chatgpt_host(&host) => {}
+        "http" if is_localhost(&host) => {}
         _ => return Err(map_scheme_error(())),
     }
 
-    Ok(RemoteControlTarget {
-        websocket_url: websocket_url.to_string(),
-        enroll_url: enroll_url.to_string(),
-        refresh_url: refresh_url.to_string(),
-        pair_url: pair_url.to_string(),
-    })
+    Ok(remote_control_url)
 }
 
 #[cfg(test)]

@@ -22,7 +22,7 @@ impl AvailablePluginsInstructions {
 }
 
 impl ContextualUserFragment for AvailablePluginsInstructions {
-    fn role() -> &'static str {
+    fn role(&self) -> &'static str {
         "developer"
     }
 

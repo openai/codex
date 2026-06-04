@@ -159,7 +159,9 @@ plugins = true
     "keywords": [],
     "interface": {
       "short_description": "Plan and track work",
-      "capabilities": []
+      "capabilities": [],
+      "default_prompt": "Use the legacy Linear prompt",
+      "default_prompts": []
     },
     "skills": []
   }
@@ -217,6 +219,15 @@ plugins = true
     assert_eq!(response.plugin.summary.name, "linear");
     assert_eq!(response.plugin.summary.source, PluginSource::Remote);
     assert_eq!(response.plugin.summary.share_context, None);
+    assert_eq!(
+        response
+            .plugin
+            .summary
+            .interface
+            .as_ref()
+            .and_then(|interface| interface.default_prompt.clone()),
+        Some(vec!["Use the legacy Linear prompt".to_string()])
+    );
     Ok(())
 }
 
@@ -404,6 +415,8 @@ async fn plugin_read_reads_remote_plugin_details_when_remote_plugin_enabled() ->
     "interface": {
       "short_description": "Plan and track work",
       "capabilities": ["Read", "Write"],
+      "default_prompt": "Use the legacy Linear prompt",
+      "default_prompts": ["Create a Linear issue", "Review my Linear projects"],
       "logo_url": "https://example.com/linear.png",
       "screenshot_urls": ["https://example.com/linear-shot.png"]
     },
@@ -517,6 +530,18 @@ async fn plugin_read_reads_remote_plugin_details_when_remote_plugin_enabled() ->
             "issue-tracking".to_string(),
             "project management".to_string()
         ]
+    );
+    assert_eq!(
+        response
+            .plugin
+            .summary
+            .interface
+            .as_ref()
+            .and_then(|interface| interface.default_prompt.clone()),
+        Some(vec![
+            "Create a Linear issue".to_string(),
+            "Review my Linear projects".to_string(),
+        ])
     );
     assert_eq!(response.plugin.skills.len(), 1);
     assert_eq!(response.plugin.skills[0].name, "plan-work");

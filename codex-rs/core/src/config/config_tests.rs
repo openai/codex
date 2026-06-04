@@ -32,7 +32,6 @@ use codex_config::permissions_toml::NetworkToml;
 use codex_config::permissions_toml::PermissionProfileToml;
 use codex_config::permissions_toml::PermissionsToml;
 use codex_config::permissions_toml::WorkspaceRootsToml;
-use codex_config::profile_toml::ConfigProfile;
 use codex_config::types::AppToolApproval;
 use codex_config::types::ApprovalsReviewer;
 use codex_config::types::BundledSkillsConfig;
@@ -165,7 +164,6 @@ fn http_mcp(url: &str) -> McpServerConfig {
 async fn derive_legacy_sandbox_policy_for_test(
     cfg: &ConfigToml,
     sandbox_mode_override: Option<SandboxMode>,
-    profile_sandbox_mode: Option<SandboxMode>,
     windows_sandbox_level: WindowsSandboxLevel,
     active_project: Option<&ProjectConfig>,
     permission_profile_constraint: Option<&Constrained<PermissionProfile>>,
@@ -173,7 +171,6 @@ async fn derive_legacy_sandbox_policy_for_test(
     let permission_profile = cfg
         .derive_permission_profile(
             sandbox_mode_override,
-            profile_sandbox_mode,
             windows_sandbox_level,
             active_project,
             permission_profile_constraint,
@@ -2552,6 +2549,65 @@ async fn empty_config_defaults_to_builtin_profile_for_trusted_project() -> std::
 }
 
 #[tokio::test]
+async fn empty_config_defaults_to_builtin_profile_for_untrusted_project() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+    let project_key = cwd.path().to_string_lossy().to_string();
+
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            projects: Some(HashMap::from([(
+                project_key,
+                ProjectConfig {
+                    trust_level: Some(TrustLevel::Untrusted),
+                },
+            )])),
+            ..Default::default()
+        },
+        ConfigOverrides {
+            cwd: Some(cwd.path().to_path_buf()),
+            ..Default::default()
+        },
+        codex_home.abs(),
+    )
+    .await?;
+
+    let policy = config.permissions.file_system_sandbox_policy();
+    assert_eq!(
+        config
+            .permissions
+            .active_permission_profile()
+            .as_ref()
+            .map(|active| active.id.as_str()),
+        Some(if cfg!(target_os = "windows") {
+            BUILT_IN_PERMISSION_PROFILE_READ_ONLY
+        } else {
+            BUILT_IN_PERMISSION_PROFILE_WORKSPACE
+        })
+    );
+    assert!(
+        policy.can_read_path_with_cwd(cwd.path(), cwd.path()),
+        "expected untrusted project fallback to allow reads, policy: {policy:?}"
+    );
+    if cfg!(target_os = "windows") {
+        assert!(
+            !policy.can_write_path_with_cwd(cwd.path(), cwd.path()),
+            "expected untrusted project fallback to stay read-only without Windows sandbox support, policy: {policy:?}"
+        );
+    } else {
+        assert!(
+            policy.can_write_path_with_cwd(cwd.path(), cwd.path()),
+            "expected untrusted project fallback to use :workspace, policy: {policy:?}"
+        );
+        assert!(
+            !policy.can_write_path_with_cwd(&cwd.path().join(".codex"), cwd.path()),
+            "expected :workspace metadata carveouts, policy: {policy:?}"
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn implicit_builtin_workspace_profile_preserves_sandbox_workspace_write_settings()
 -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
@@ -3530,7 +3586,6 @@ network_access = false  # This should be ignored.
     let resolution = derive_legacy_sandbox_policy_for_test(
         &sandbox_full_access_cfg,
         sandbox_mode_override,
-        /*profile_sandbox_mode*/ None,
         WindowsSandboxLevel::Disabled,
         /*active_project*/ None,
         /*permission_profile_constraint*/ None,
@@ -3551,7 +3606,6 @@ network_access = true  # This should be ignored.
     let resolution = derive_legacy_sandbox_policy_for_test(
         &sandbox_read_only_cfg,
         sandbox_mode_override,
-        /*profile_sandbox_mode*/ None,
         WindowsSandboxLevel::Disabled,
         /*active_project*/ None,
         /*permission_profile_constraint*/ None,
@@ -3583,7 +3637,6 @@ trust_level = "trusted"
     let resolution = derive_legacy_sandbox_policy_for_test(
         &sandbox_workspace_write_cfg,
         sandbox_mode_override,
-        /*profile_sandbox_mode*/ None,
         WindowsSandboxLevel::Disabled,
         /*active_project*/ None,
         /*permission_profile_constraint*/ None,
@@ -3623,7 +3676,6 @@ exclude_slash_tmp = true
     let resolution = derive_legacy_sandbox_policy_for_test(
         &sandbox_workspace_write_cfg,
         sandbox_mode_override,
-        /*profile_sandbox_mode*/ None,
         WindowsSandboxLevel::Disabled,
         /*active_project*/ None,
         /*permission_profile_constraint*/ None,
@@ -4993,38 +5045,6 @@ model = "gpt-project-local"
         }),
         "expected warning for ignored project-local profile keys: {:?}",
         config.startup_warnings
-    );
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn unselected_profile_sandbox_mode_is_ignored() -> std::io::Result<()> {
-    let codex_home = TempDir::new()?;
-    let mut profiles = HashMap::new();
-    profiles.insert(
-        "work".to_string(),
-        ConfigProfile {
-            sandbox_mode: Some(SandboxMode::DangerFullAccess),
-            ..Default::default()
-        },
-    );
-    let cfg = ConfigToml {
-        profiles,
-        sandbox_mode: Some(SandboxMode::ReadOnly),
-        ..Default::default()
-    };
-
-    let config = Config::load_from_base_config_with_overrides(
-        cfg,
-        ConfigOverrides::default(),
-        codex_home.abs(),
-    )
-    .await?;
-
-    assert_eq!(
-        config.legacy_sandbox_policy(),
-        SandboxPolicy::new_read_only_policy()
     );
 
     Ok(())
@@ -8587,7 +8607,6 @@ trust_level = "untrusted"
     let resolution = derive_legacy_sandbox_policy_for_test(
         &cfg,
         /*sandbox_mode_override*/ None,
-        /*profile_sandbox_mode*/ None,
         WindowsSandboxLevel::Disabled,
         Some(&active_project),
         /*permission_profile_constraint*/ None,
@@ -8644,7 +8663,6 @@ async fn derive_sandbox_policy_falls_back_to_read_only_for_implicit_defaults() -
     let resolution = derive_legacy_sandbox_policy_for_test(
         &cfg,
         /*sandbox_mode_override*/ None,
-        /*profile_sandbox_mode*/ None,
         WindowsSandboxLevel::Disabled,
         Some(&active_project),
         Some(&constrained),
@@ -8697,7 +8715,6 @@ async fn derive_sandbox_policy_preserves_windows_downgrade_for_unsupported_fallb
     let resolution = derive_legacy_sandbox_policy_for_test(
         &cfg,
         /*sandbox_mode_override*/ None,
-        /*profile_sandbox_mode*/ None,
         WindowsSandboxLevel::Disabled,
         Some(&active_project),
         Some(&constrained),
@@ -9819,7 +9836,7 @@ non_code_mode_only = true
     assert_eq!(
         (
             config.agent_max_threads,
-            config.effective_agent_max_threads(MultiAgentVersion::V2)?
+            config.effective_agent_max_threads(MultiAgentVersion::V2)
         ),
         (None, Some(4))
     );
@@ -9869,7 +9886,7 @@ enabled = true
     assert_eq!(
         (
             config.agent_max_threads,
-            config.effective_agent_max_threads(MultiAgentVersion::V2)?
+            config.effective_agent_max_threads(MultiAgentVersion::V2)
         ),
         (None, Some(3))
     );
@@ -9897,6 +9914,7 @@ enabled = true
             .unwrap_or_default()
             .contains("maximum concurrency"),
     );
+    assert!(config.multi_agent_v2.hide_spawn_agent_metadata);
     assert!(config.multi_agent_v2.non_code_mode_only);
 
     Ok(())
@@ -9927,7 +9945,7 @@ subagent_usage_hint_text = ""
 }
 
 #[tokio::test]
-async fn multi_agent_v2_rejects_agents_max_threads() -> std::io::Result<()> {
+async fn multi_agent_v2_feature_rejects_agents_max_threads() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     std::fs::write(
         codex_home.path().join(CONFIG_TOML_FILE),
@@ -9945,13 +9963,45 @@ max_threads = 3
         .build()
         .await?;
     let err = config
-        .effective_agent_max_threads(MultiAgentVersion::V2)
+        .validate_multi_agent_v2_config()
         .expect_err("agents.max_threads should conflict with multi_agent_v2");
 
     assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
     assert_eq!(
         err.to_string(),
-        "agents.max_threads cannot be set when the multi-agent runtime is v2"
+        "agents.max_threads cannot be set when features.multi_agent_v2 is enabled"
+    );
+    assert_eq!(
+        config.effective_agent_max_threads(MultiAgentVersion::V2),
+        Some(3)
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn catalog_v2_allows_agents_max_threads_when_feature_disabled() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"[features.multi_agent_v2]
+enabled = false
+
+[agents]
+max_threads = 3
+"#,
+    )?;
+
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .build()
+        .await?;
+
+    config.validate_multi_agent_v2_config()?;
+    assert_eq!(
+        config.effective_agent_max_threads(MultiAgentVersion::V2),
+        Some(3)
     );
 
     Ok(())
@@ -10213,7 +10263,7 @@ max_concurrent_threads_per_session = 1
     assert_eq!(
         (
             config.agent_max_threads,
-            config.effective_agent_max_threads(MultiAgentVersion::V2)?
+            config.effective_agent_max_threads(MultiAgentVersion::V2)
         ),
         (None, Some(0))
     );

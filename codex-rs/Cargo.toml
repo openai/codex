@@ -29,6 +29,7 @@ members = [
     "collaboration-mode-templates",
     "connectors",
     "config",
+    "context-fragments",
     "shell-command",
     "shell-escalation",
     "skills",
@@ -48,6 +49,7 @@ members = [
     "ext/guardian",
     "ext/image-generation",
     "ext/memories",
+    "ext/skills",
     "ext/web-search",
     "external-agent-migration",
     "external-agent-sessions",
@@ -155,6 +157,7 @@ codex-cloud-tasks-mock-client = { path = "cloud-tasks-mock-client" }
 codex-code-mode = { path = "code-mode" }
 codex-config = { path = "config" }
 codex-connectors = { path = "connectors" }
+codex-context-fragments = { path = "context-fragments" }
 codex-core = { path = "core" }
 codex-core-api = { path = "core-api" }
 codex-core-plugins = { path = "core-plugins" }

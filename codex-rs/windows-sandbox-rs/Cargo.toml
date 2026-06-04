@@ -1,4 +1,5 @@
 [package]
+build = "build.rs"
 edition.workspace = true
 license.workspace = true
 name = "codex-windows-sandbox"
