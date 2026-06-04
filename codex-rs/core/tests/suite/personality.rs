@@ -79,7 +79,7 @@ fn read_only_text_turn_with_personality(
                 mode: codex_protocol::config_types::ModeKind::Default,
                 settings: codex_protocol::config_types::Settings {
                     model,
-                    reasoning_effort: test.config.model_reasoning_effort,
+                    reasoning_effort: test.config.model_reasoning_effort.clone(),
                     developer_instructions: None,
                 },
             }),

@@ -242,7 +242,7 @@ async fn run_remote_compact_task_inner_impl(
             &prompt,
             &turn_context.model_info,
             CompactConversationRequestSettings {
-                effort: turn_context.reasoning_effort,
+                effort: turn_context.reasoning_effort.clone(),
                 summary: turn_context.reasoning_summary,
                 service_tier: if sess.services.auth_manager.auth_mode() == Some(AuthMode::ApiKey) {
                     None

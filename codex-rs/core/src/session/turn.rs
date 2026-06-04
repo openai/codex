@@ -698,7 +698,7 @@ async fn track_turn_resolved_config_analytics(
             permission_profile: turn_context.permission_profile(),
             #[allow(deprecated)]
             permission_profile_cwd: turn_context.cwd.to_path_buf(),
-            reasoning_effort: turn_context.reasoning_effort,
+            reasoning_effort: turn_context.reasoning_effort.clone(),
             reasoning_summary: Some(turn_context.reasoning_summary),
             service_tier: turn_context
                 .config
@@ -1799,7 +1799,7 @@ async fn try_run_sampling_request(
             prompt,
             &turn_context.model_info,
             &turn_context.session_telemetry,
-            turn_context.reasoning_effort,
+            turn_context.reasoning_effort.clone(),
             turn_context.reasoning_summary,
             turn_context.config.service_tier.clone(),
             turn_metadata_header,

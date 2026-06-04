@@ -48,11 +48,11 @@ fn model_from_preset(preset: &ModelPreset) -> Model {
             .supported_reasoning_efforts
             .iter()
             .map(|preset| ReasoningEffortOption {
-                reasoning_effort: preset.effort,
+                reasoning_effort: preset.effort.clone(),
                 description: preset.description.clone(),
             })
             .collect(),
-        default_reasoning_effort: preset.default_reasoning_effort,
+        default_reasoning_effort: preset.default_reasoning_effort.clone(),
         input_modalities: preset.input_modalities.clone(),
         // `write_models_cache()` round-trips through a simplified ModelInfo fixture that does not
         // preserve personality placeholders in base instructions, so app-server list results from
@@ -164,10 +164,10 @@ async fn list_models_uses_chatgpt_remote_catalog_as_source_of_truth() -> Result<
         "slug": "chatgpt-remote-only",
         "display_name": "ChatGPT Remote Only",
         "description": "Remote-only model for app-server model/list coverage",
-        "default_reasoning_level": "medium",
+        "default_reasoning_level": "max",
         "supported_reasoning_levels": [
             {"effort": "low", "description": "low"},
-            {"effort": "medium", "description": "medium"}
+            {"effort": "max", "description": "Maximum"}
         ],
         "shell_type": "shell_command",
         "visibility": "list",

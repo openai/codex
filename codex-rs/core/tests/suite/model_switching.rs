@@ -58,7 +58,7 @@ fn read_only_user_turn(test: &TestCodex, items: Vec<UserInput>, model: String) -
                 mode: codex_protocol::config_types::ModeKind::Default,
                 settings: codex_protocol::config_types::Settings {
                     model,
-                    reasoning_effort: test.config.model_reasoning_effort,
+                    reasoning_effort: test.config.model_reasoning_effort.clone(),
                     developer_instructions: None,
                 },
             }),

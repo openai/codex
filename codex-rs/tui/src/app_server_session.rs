@@ -1273,7 +1273,8 @@ fn config_request_overrides_from_config(
         "model_reasoning_effort",
         config
             .model_reasoning_effort
-            .map(|effort| effort.to_string()),
+            .as_ref()
+            .map(std::string::ToString::to_string),
     );
     insert(
         "model_reasoning_summary",
@@ -1586,7 +1587,7 @@ async fn thread_session_state_from_thread_start_response(
         response.cwd.clone(),
         response.runtime_workspace_roots.clone(),
         response.instruction_sources.clone(),
-        response.reasoning_effort,
+        response.reasoning_effort.clone(),
         config,
     )
     .await
@@ -1627,7 +1628,7 @@ async fn thread_session_state_from_thread_resume_response(
         response.cwd.clone(),
         response.runtime_workspace_roots.clone(),
         response.instruction_sources.clone(),
-        response.reasoning_effort,
+        response.reasoning_effort.clone(),
         config,
     )
     .await
@@ -1659,7 +1660,7 @@ async fn thread_session_state_from_thread_fork_response(
         response.cwd.clone(),
         response.runtime_workspace_roots.clone(),
         response.instruction_sources.clone(),
-        response.reasoning_effort,
+        response.reasoning_effort.clone(),
         config,
     )
     .await

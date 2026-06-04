@@ -722,7 +722,7 @@ impl ModelClient {
     ) -> Option<Reasoning> {
         if model_info.supports_reasoning_summaries {
             Some(Reasoning {
-                effort: effort.or(model_info.default_reasoning_level),
+                effort: effort.or_else(|| model_info.default_reasoning_level.clone()),
                 summary: if summary == ReasoningSummaryConfig::None {
                     None
                 } else {
@@ -1280,7 +1280,7 @@ impl ModelClientSession {
                 &client_setup.api_provider,
                 prompt,
                 model_info,
-                effort,
+                effort.clone(),
                 summary,
                 service_tier.clone(),
             )?;
@@ -1389,7 +1389,7 @@ impl ModelClientSession {
                 &client_setup.api_provider,
                 prompt,
                 model_info,
-                effort,
+                effort.clone(),
                 summary,
                 service_tier.clone(),
             )?;
@@ -1608,7 +1608,7 @@ impl ModelClientSession {
                             prompt,
                             model_info,
                             session_telemetry,
-                            effort,
+                            effort.clone(),
                             summary,
                             service_tier.clone(),
                             turn_metadata_header,

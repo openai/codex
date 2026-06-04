@@ -2559,7 +2559,7 @@ async fn record_initial_history_forked_hydrates_previous_turn_settings() {
         collaboration_mode: Some(turn_context.collaboration_mode.clone()),
         multi_agent_version: None,
         realtime_active: Some(turn_context.realtime_active),
-        effort: turn_context.reasoning_effort,
+        effort: turn_context.reasoning_effort.clone(),
         summary: codex_protocol::config_types::ReasoningSummary::Auto,
     };
     let turn_id = previous_context_item
@@ -3146,7 +3146,7 @@ async fn set_rate_limits_retains_previous_credits() {
     let model = get_model_offline_for_tests(config.model.as_deref());
     let model_info =
         construct_model_info_offline_for_tests(model.as_str(), &config.to_models_manager_config());
-    let reasoning_effort = config.model_reasoning_effort;
+    let reasoning_effort = config.model_reasoning_effort.clone();
     let collaboration_mode = CollaborationMode {
         mode: ModeKind::Default,
         settings: Settings {
@@ -3254,7 +3254,7 @@ async fn set_rate_limits_updates_plan_type_when_present() {
     let model = get_model_offline_for_tests(config.model.as_deref());
     let model_info =
         construct_model_info_offline_for_tests(model.as_str(), &config.to_models_manager_config());
-    let reasoning_effort = config.model_reasoning_effort;
+    let reasoning_effort = config.model_reasoning_effort.clone();
     let collaboration_mode = CollaborationMode {
         mode: ModeKind::Default,
         settings: Settings {
@@ -3785,7 +3785,7 @@ pub(crate) async fn make_session_configuration_for_tests() -> SessionConfigurati
     let model = get_model_offline_for_tests(config.model.as_deref());
     let model_info =
         construct_model_info_offline_for_tests(model.as_str(), &config.to_models_manager_config());
-    let reasoning_effort = config.model_reasoning_effort;
+    let reasoning_effort = config.model_reasoning_effort.clone();
     let collaboration_mode = CollaborationMode {
         mode: ModeKind::Default,
         settings: Settings {
@@ -4614,7 +4614,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_packaged_zsh() {
         mode: ModeKind::Default,
         settings: Settings {
             model,
-            reasoning_effort: config.model_reasoning_effort,
+            reasoning_effort: config.model_reasoning_effort.clone(),
             developer_instructions: None,
         },
     };
@@ -4716,7 +4716,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
     let model = get_model_offline_for_tests(config.model.as_deref());
     let model_info =
         construct_model_info_offline_for_tests(model.as_str(), &config.to_models_manager_config());
-    let reasoning_effort = config.model_reasoning_effort;
+    let reasoning_effort = config.model_reasoning_effort.clone();
     let collaboration_mode = CollaborationMode {
         mode: ModeKind::Default,
         settings: Settings {
@@ -4959,7 +4959,7 @@ async fn make_session_with_config_and_rx(
         mode: ModeKind::Default,
         settings: Settings {
             model,
-            reasoning_effort: config.model_reasoning_effort,
+            reasoning_effort: config.model_reasoning_effort.clone(),
             developer_instructions: None,
         },
     };
@@ -5064,7 +5064,7 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
         mode: ModeKind::Default,
         settings: Settings {
             model,
-            reasoning_effort: config.model_reasoning_effort,
+            reasoning_effort: config.model_reasoning_effort.clone(),
             developer_instructions: None,
         },
     };
@@ -5999,7 +5999,7 @@ async fn user_turn_updates_approvals_reviewer() {
                     mode: codex_protocol::config_types::ModeKind::Default,
                     settings: codex_protocol::config_types::Settings {
                         model: turn_context.model_info.slug.clone(),
-                        reasoning_effort: config.model_reasoning_effort,
+                        reasoning_effort: config.model_reasoning_effort.clone(),
                         developer_instructions: None,
                     },
                 }),
@@ -6806,7 +6806,7 @@ where
     let model = get_model_offline_for_tests(config.model.as_deref());
     let model_info =
         construct_model_info_offline_for_tests(model.as_str(), &config.to_models_manager_config());
-    let reasoning_effort = config.model_reasoning_effort;
+    let reasoning_effort = config.model_reasoning_effort.clone();
     let collaboration_mode = CollaborationMode {
         mode: ModeKind::Default,
         settings: Settings {

@@ -2405,11 +2405,52 @@ async fn model_reasoning_selection_popup_snapshot() {
     set_chatgpt_auth(&mut chat);
     chat.set_reasoning_effort(Some(ReasoningEffortConfig::High));
 
-    let preset = get_available_model(&chat, "gpt-5.4");
+    let mut preset = get_available_model(&chat, "gpt-5.4");
+    preset
+        .supported_reasoning_efforts
+        .push(ReasoningEffortPreset {
+            effort: ReasoningEffortConfig::Custom("max".to_string()),
+            description: "Maximum available reasoning".to_string(),
+        });
     chat.open_reasoning_popup(preset);
 
     let popup = render_bottom_popup(&chat, /*width*/ 80);
     assert_chatwidget_snapshot!("model_reasoning_selection_popup", popup);
+}
+
+#[tokio::test]
+async fn model_reasoning_selection_popup_applies_custom_effort() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
+    let custom_effort = ReasoningEffortConfig::Custom("max".to_string());
+    chat.set_reasoning_effort(Some(ReasoningEffortConfig::XHigh));
+
+    let mut preset = get_available_model(&chat, "gpt-5.4");
+    preset
+        .supported_reasoning_efforts
+        .push(ReasoningEffortPreset {
+            effort: custom_effort.clone(),
+            description: "Maximum available reasoning".to_string(),
+        });
+    chat.open_reasoning_popup(preset);
+    while rx.try_recv().is_ok() {}
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let selected_effort_events = std::iter::from_fn(|| rx.try_recv().ok())
+        .filter_map(|event| match event {
+            AppEvent::UpdateReasoningEffort(effort) => Some((None, effort)),
+            AppEvent::PersistModelSelection { model, effort } => Some((Some(model), effort)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        selected_effort_events,
+        vec![
+            (None, Some(custom_effort.clone())),
+            (Some("gpt-5.4".to_string()), Some(custom_effort)),
+        ]
+    );
 }
 
 #[tokio::test]
