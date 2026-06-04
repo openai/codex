@@ -52,6 +52,11 @@ pub(crate) struct NoiseHarnessConnectionArgs {
     pub(crate) harness_key_authorization: String,
 }
 
+// Reset frames are cleartext relay control and are not authenticated by Noise.
+// Preserve the availability signal while replacing attacker-controlled reason
+// text before it reaches disconnect diagnostics.
+const NOISE_RELAY_RESET_DISCONNECT_REASON: &str = "Noise relay stream reset";
+
 /// Adapt one harness rendezvous websocket into an authenticated JSON-RPC connection.
 ///
 /// The returned connection is not usable until the background task completes
@@ -225,9 +230,7 @@ where
                     send_disconnected(
                         &incoming_tx,
                         &disconnected_tx,
-                        frame
-                            .into_reset_reason()
-                            .unwrap_or_else(|| "Noise relay reset during handshake".to_string()),
+                        NOISE_RELAY_RESET_DISCONNECT_REASON.to_string(),
                     )
                     .await;
                     return;
@@ -332,9 +335,12 @@ where
                                     }
                                 }
                                 Ok(RelayFrameBodyKind::Reset) => {
-                                    let reason = frame.into_reset_reason();
                                     let _ = incoming_tx
-                                        .send(JsonRpcConnectionEvent::Disconnected { reason })
+                                        .send(JsonRpcConnectionEvent::Disconnected {
+                                            reason: Some(
+                                                NOISE_RELAY_RESET_DISCONNECT_REASON.to_string(),
+                                            ),
+                                        })
                                         .await;
                                     break;
                                 }
