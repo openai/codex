@@ -141,6 +141,17 @@ fn guardian_risk_level_str(level: GuardianRiskLevel) -> &'static str {
     }
 }
 
+fn guardian_assessment_allows_session_reuse(assessment: &GuardianAssessment) -> bool {
+    matches!(assessment.outcome, GuardianAssessmentOutcome::Allow)
+        && assessment.risk_level == GuardianRiskLevel::Low
+        && matches!(
+            assessment.user_authorization,
+            GuardianUserAuthorization::Low
+                | GuardianUserAuthorization::Medium
+                | GuardianUserAuthorization::High
+        )
+}
+
 /// Whether this turn should route allowed approval prompts through the guardian
 /// reviewer instead of surfacing them to the user. ARC may still block actions
 /// earlier in the flow.
@@ -561,7 +572,9 @@ async fn run_guardian_review(
         record_guardian_non_denial(&session, &assessment_turn_id).await;
     }
 
-    if approved {
+    if guardian_assessment_allows_session_reuse(&assessment) {
+        ReviewDecision::ApprovedForSession
+    } else if approved {
         ReviewDecision::Approved
     } else {
         ReviewDecision::Denied
@@ -824,5 +837,28 @@ mod review_tests {
             session_error.failure_reason(),
             GuardianReviewFailureReason::SessionError
         ));
+    }
+
+    #[test]
+    fn guardian_reuses_only_low_risk_authorized_allows() {
+        let low_authorized = GuardianAssessment {
+            risk_level: GuardianRiskLevel::Low,
+            user_authorization: GuardianUserAuthorization::High,
+            outcome: GuardianAssessmentOutcome::Allow,
+            rationale: "Routine local inspection.".to_string(),
+        };
+        assert!(guardian_assessment_allows_session_reuse(&low_authorized));
+
+        let low_unknown = GuardianAssessment {
+            user_authorization: GuardianUserAuthorization::Unknown,
+            ..low_authorized.clone()
+        };
+        assert!(!guardian_assessment_allows_session_reuse(&low_unknown));
+
+        let medium = GuardianAssessment {
+            risk_level: GuardianRiskLevel::Medium,
+            ..low_authorized
+        };
+        assert!(!guardian_assessment_allows_session_reuse(&medium));
     }
 }

@@ -2168,7 +2168,7 @@ async fn guardian_parallel_reviews_fork_from_last_committed_trunk_history() -> a
                 /*retry_reason*/ None
             )
             .await,
-            ReviewDecision::Approved
+            ReviewDecision::ApprovedForSession
         );
         session
             .record_conversation_items(
@@ -2269,7 +2269,7 @@ async fn guardian_parallel_reviews_fork_from_last_committed_trunk_history() -> a
             Some("parallel follow-up".to_string()),
         )
         .await;
-        assert_eq!(third_decision, ReviewDecision::Approved);
+        assert_eq!(third_decision, ReviewDecision::ApprovedForSession);
         let requests = server.requests().await;
         assert_eq!(requests.len(), 3);
         let second_request_body = serde_json::from_slice::<serde_json::Value>(&requests[1])?;
@@ -2305,7 +2305,7 @@ async fn guardian_parallel_reviews_fork_from_last_committed_trunk_history() -> a
         gate_tx
             .send(())
             .expect("second guardian review gate should still be open");
-        assert_eq!(second_review.await?, ReviewDecision::Approved);
+        assert_eq!(second_review.await?, ReviewDecision::ApprovedForSession);
         server.shutdown().await;
 
         Ok(())
