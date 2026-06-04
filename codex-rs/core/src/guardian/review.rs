@@ -238,7 +238,7 @@ async fn record_guardian_denial(session: &Arc<Session>, turn: &Arc<TurnContext>,
             turn.as_ref(),
             EventMsg::GuardianWarning(WarningEvent {
                 message: format!(
-                    "Automatic approval review rejected too many approval requests for this turn ({consecutive_denials} consecutive, {recent_denials} in the last {AUTO_REVIEW_DENIAL_WINDOW_SIZE} reviews); interrupting the turn."
+                    "Automatic approval review rejected too many approval requests for this turn ({consecutive_denials} consecutive, {recent_denials} in the last {AUTO_REVIEW_DENIAL_WINDOW_SIZE} reviews); interrupting the turn. Run /approve to review eligible soft denials, or add context and retry with a safer action."
                 ),
             }),
         )
