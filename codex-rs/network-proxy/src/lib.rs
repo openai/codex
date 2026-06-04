@@ -6,6 +6,7 @@ mod connect_policy;
 mod http_proxy;
 mod mitm;
 mod mitm_hook;
+mod native_certs;
 mod network_policy;
 mod policy;
 mod proxy;

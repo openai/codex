@@ -166,7 +166,7 @@ fn managed_ca_trust_bundle_for_cert_path(
 fn build_managed_ca_trust_bundle(managed_ca_cert_path: &Path) -> Result<String> {
     let mut trust_bundle = String::new();
     let rustls_native_certs::CertificateResult { certs, errors, .. } =
-        rustls_native_certs::load_native_certs();
+        crate::native_certs::load_platform_native_certs();
     if !errors.is_empty() {
         warn!(
             native_root_error_count = errors.len(),
@@ -519,6 +519,26 @@ mod tests {
             trust_bundle.startup_env_values,
             HashMap::from([("SSL_CERT_FILE", "/tmp/startup-ca.pem".to_string())])
         );
+    }
+
+    #[test]
+    fn managed_ca_trust_bundle_does_not_append_startup_ca_override_to_baseline() {
+        let dir = tempdir().unwrap();
+        let managed_ca_cert_path = dir.path().join("ca.pem");
+        let startup_ca_bundle_path = dir.path().join("startup-ca.pem");
+        fs::write(&managed_ca_cert_path, "managed ca\n").unwrap();
+        fs::write(&startup_ca_bundle_path, "startup ca\n").unwrap();
+        let env = HashMap::from([(
+            "SSL_CERT_FILE",
+            startup_ca_bundle_path.display().to_string(),
+        )]);
+
+        let trust_bundle =
+            managed_ca_trust_bundle_for_cert_path(&managed_ca_cert_path, &env).unwrap();
+        let baseline_bundle = fs::read_to_string(trust_bundle.path).unwrap();
+
+        assert!(!baseline_bundle.contains("startup ca"));
+        assert!(baseline_bundle.contains("managed ca"));
     }
 
     #[cfg(unix)]
