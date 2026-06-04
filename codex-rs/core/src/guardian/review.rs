@@ -58,6 +58,11 @@ const GUARDIAN_TIMEOUT_INSTRUCTIONS: &str = concat!(
     "You may retry once, or ask the user for guidance or explicit approval.",
 );
 
+const GUARDIAN_RETRY_WARNING: &str = concat!(
+    "Automatic approval review hit a retryable reviewer availability failure. ",
+    "Retrying once before failing closed."
+);
+
 pub(crate) fn new_guardian_review_id() -> String {
     uuid::Uuid::new_v4().to_string()
 }
@@ -75,11 +80,20 @@ pub(crate) async fn guardian_rejection_message(session: &Session, review_id: &st
             source: GuardianAssessmentDecisionSource::Agent,
         });
     match rejection.source {
-        GuardianAssessmentDecisionSource::Agent => format!(
-            "This action was rejected due to unacceptable risk.\nReason: {}\n{}",
-            rejection.rationale.trim(),
-            GUARDIAN_REJECTION_INSTRUCTIONS
-        ),
+        GuardianAssessmentDecisionSource::Agent => {
+            let rationale = rejection.rationale.trim();
+            if rationale.starts_with("Automatic approval review failed")
+                || rationale.starts_with("Automatic approval review could not")
+            {
+                format!(
+                    "This action was blocked because automatic approval review could not complete safely.\nReason: {rationale}\n{GUARDIAN_REJECTION_INSTRUCTIONS}",
+                )
+            } else {
+                format!(
+                    "This action was rejected due to unacceptable risk.\nReason: {rationale}\n{GUARDIAN_REJECTION_INSTRUCTIONS}",
+                )
+            }
+        }
     }
 }
 
@@ -130,6 +144,54 @@ impl GuardianReviewError {
             Self::Cancelled => GuardianReviewFailureReason::Cancelled,
         }
     }
+
+    fn is_retryable(&self) -> bool {
+        match self {
+            Self::Timeout => true,
+            Self::Session { message } => session_error_is_retryable(message),
+            Self::PromptBuild { .. } | Self::Parse { .. } | Self::Cancelled => false,
+        }
+    }
+
+    fn retry_reason(&self) -> String {
+        match self {
+            Self::Session { message } => format!(
+                "Previous automatic approval review failed due to reviewer capacity, transport, or session error: {message}. Retry once before treating this as a failed-closed review."
+            ),
+            Self::Timeout => concat!(
+                "Previous automatic approval review timed out. ",
+                "Retry once before treating this as a failed-closed review."
+            )
+            .to_string(),
+            Self::PromptBuild { .. } | Self::Parse { .. } | Self::Cancelled => {
+                "Automatic approval review is not retryable.".to_string()
+            }
+        }
+    }
+}
+
+fn session_error_is_retryable(message: &str) -> bool {
+    let message = message.to_ascii_lowercase();
+    [
+        "429",
+        "500",
+        "502",
+        "503",
+        "504",
+        "capacity",
+        "connection",
+        "internal server error",
+        "overload",
+        "rate limit",
+        "service unavailable",
+        "temporarily unavailable",
+        "timed out",
+        "timeout",
+        "too many requests",
+        "transport",
+    ]
+    .iter()
+    .any(|needle| message.contains(needle))
 }
 
 fn guardian_risk_level_str(level: GuardianRiskLevel) -> &'static str {
@@ -335,7 +397,7 @@ async fn run_guardian_review(
 
     let schema = guardian_output_schema();
     let terminal_action = action_summary.clone();
-    let (outcome, analytics_result) = Box::pin(run_guardian_review_session(
+    let (outcome, analytics_result) = Box::pin(run_guardian_review_session_with_retry(
         session.clone(),
         turn.clone(),
         request,
@@ -462,15 +524,26 @@ async fn run_guardian_review(
             GuardianReviewError::PromptBuild { .. }
             | GuardianReviewError::Session { .. }
             | GuardianReviewError::Parse { .. } => {
-                let message = match &error {
-                    GuardianReviewError::PromptBuild { message }
-                    | GuardianReviewError::Session { message }
-                    | GuardianReviewError::Parse { message } => message,
+                let rationale = match &error {
+                    GuardianReviewError::PromptBuild { message } => {
+                        format!(
+                            "Automatic approval review could not build the review prompt: {message}"
+                        )
+                    }
+                    GuardianReviewError::Session { message } => {
+                        format!(
+                            "Automatic approval review failed because the reviewer session returned an error: {message}"
+                        )
+                    }
+                    GuardianReviewError::Parse { message } => {
+                        format!(
+                            "Automatic approval review returned an unreadable assessment: {message}"
+                        )
+                    }
                     GuardianReviewError::Timeout | GuardianReviewError::Cancelled => {
-                        "guardian review failed"
+                        "Automatic approval review failed.".to_string()
                     }
                 };
-                let rationale = format!("Automatic approval review failed: {message}");
                 track_guardian_review(
                     session.as_ref(),
                     &review_tracking,
@@ -566,6 +639,55 @@ async fn run_guardian_review(
     } else {
         ReviewDecision::Denied
     }
+}
+
+async fn run_guardian_review_session_with_retry(
+    session: Arc<Session>,
+    turn: Arc<TurnContext>,
+    request: GuardianApprovalRequest,
+    retry_reason: Option<String>,
+    schema: serde_json::Value,
+    external_cancel: Option<CancellationToken>,
+) -> (GuardianReviewOutcome, GuardianReviewAnalyticsResult) {
+    let (first_outcome, first_analytics_result) = Box::pin(run_guardian_review_session(
+        Arc::clone(&session),
+        Arc::clone(&turn),
+        request.clone(),
+        retry_reason.clone(),
+        schema.clone(),
+        external_cancel.clone(),
+    ))
+    .await;
+
+    let GuardianReviewOutcome::Error(error) = &first_outcome else {
+        return (first_outcome, first_analytics_result);
+    };
+    if !error.is_retryable()
+        || external_cancel
+            .as_ref()
+            .is_some_and(CancellationToken::is_cancelled)
+    {
+        return (first_outcome, first_analytics_result);
+    }
+
+    session
+        .send_event(
+            turn.as_ref(),
+            EventMsg::GuardianWarning(WarningEvent {
+                message: GUARDIAN_RETRY_WARNING.to_string(),
+            }),
+        )
+        .await;
+
+    run_guardian_review_session(
+        session,
+        turn,
+        request,
+        Some(error.retry_reason()),
+        schema,
+        external_cancel,
+    )
+    .await
 }
 
 /// Public entrypoint for approval requests that should be reviewed by guardian.
@@ -824,5 +946,23 @@ mod review_tests {
             session_error.failure_reason(),
             GuardianReviewFailureReason::SessionError
         ));
+    }
+
+    #[test]
+    fn guardian_review_retries_only_availability_failures() {
+        assert!(GuardianReviewError::Timeout.is_retryable());
+        assert!(
+            GuardianReviewError::session(anyhow::anyhow!(
+                "503 service unavailable: reviewer capacity exhausted"
+            ))
+            .is_retryable()
+        );
+        assert!(
+            !GuardianReviewError::session(anyhow::anyhow!(
+                "invalid_request_error: malformed review prompt"
+            ))
+            .is_retryable()
+        );
+        assert!(!GuardianReviewError::parse(anyhow::anyhow!("bad JSON")).is_retryable());
     }
 }
