@@ -11,6 +11,15 @@ use crate::tools::context::ExecCommandToolOutput;
 use crate::turn_timing::now_unix_timestamp_ms;
 use crate::unified_exec::WriteStdinRequest;
 use crate::unified_exec::process::OutputHandles;
+use async_trait::async_trait;
+use codex_exec_server::ExecProcess;
+use codex_exec_server::ExecProcessEventReceiver;
+use codex_exec_server::ExecServerError;
+use codex_exec_server::ProcessId;
+use codex_exec_server::ReadResponse;
+use codex_exec_server::StartedExecProcess;
+use codex_exec_server::WriteResponse;
+use codex_exec_server::WriteStatus;
 use codex_sandboxing::SandboxType;
 use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::approx_token_count;
@@ -21,6 +30,8 @@ use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use tokio::sync::Notify;
+use tokio::sync::watch;
 use tokio::time::Duration;
 use tokio::time::Instant;
 
@@ -173,6 +184,16 @@ async fn exec_command_with_tty(
         manager.release_process_id(process_id).await;
         None
     };
+    if response_process_id.is_some()
+        && let Some(entry) = manager
+            .process_store
+            .lock()
+            .await
+            .processes
+            .get_mut(&process_id)
+    {
+        entry.initial_exec_command_returned = true;
+    }
 
     Ok(ExecCommandToolOutput {
         event_call_id: context.call_id,
@@ -197,6 +218,76 @@ impl SpawnLifecycle for TestSpawnLifecycle {
     fn inherited_fds(&self) -> Vec<i32> {
         self.inherited_fds.clone()
     }
+}
+
+struct BlockingTerminateExecProcess {
+    process_id: ProcessId,
+    terminate_started: Arc<Notify>,
+    allow_terminate: Arc<Notify>,
+    wake_tx: watch::Sender<u64>,
+}
+
+#[async_trait]
+impl ExecProcess for BlockingTerminateExecProcess {
+    fn process_id(&self) -> &ProcessId {
+        &self.process_id
+    }
+
+    fn subscribe_wake(&self) -> watch::Receiver<u64> {
+        self.wake_tx.subscribe()
+    }
+
+    fn subscribe_events(&self) -> ExecProcessEventReceiver {
+        ExecProcessEventReceiver::empty()
+    }
+
+    async fn read(
+        &self,
+        _after_seq: Option<u64>,
+        _max_bytes: Option<usize>,
+        _wait_ms: Option<u64>,
+    ) -> Result<ReadResponse, ExecServerError> {
+        Ok(ReadResponse {
+            chunks: Vec::new(),
+            next_seq: 1,
+            exited: false,
+            exit_code: None,
+            closed: false,
+            failure: None,
+        })
+    }
+
+    async fn write(&self, _chunk: Vec<u8>) -> Result<WriteResponse, ExecServerError> {
+        Ok(WriteResponse {
+            status: WriteStatus::Accepted,
+        })
+    }
+
+    async fn terminate(&self) -> Result<(), ExecServerError> {
+        self.terminate_started.notify_waiters();
+        self.allow_terminate.notified().await;
+        Ok(())
+    }
+}
+
+async fn blocking_terminate_process(
+    process_id: i32,
+    terminate_started: Arc<Notify>,
+    allow_terminate: Arc<Notify>,
+) -> anyhow::Result<UnifiedExecProcess> {
+    let (wake_tx, _wake_rx) = watch::channel(0);
+    let started = StartedExecProcess {
+        process: Arc::new(BlockingTerminateExecProcess {
+            process_id: process_id.to_string().into(),
+            terminate_started,
+            allow_terminate,
+            wake_tx,
+        }),
+    };
+
+    UnifiedExecProcess::from_exec_server_started(started, SandboxType::None)
+        .await
+        .map_err(Into::into)
 }
 
 async fn write_stdin(
@@ -624,72 +715,70 @@ async fn reusing_completed_process_returns_unknown_process() -> anyhow::Result<(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn terminating_initial_exec_command_does_not_return_unknown_process() -> anyhow::Result<()> {
-    skip_if_sandbox!(Ok(()));
-
+async fn terminating_initial_exec_command_rechecks_initial_response_state() -> anyhow::Result<()> {
     let (session, turn) = test_session_and_turn().await;
     let manager = &session.services.unified_exec_manager;
     let process_id = manager.allocate_process_id().await;
-    let command = "printf started; sleep 60";
+    let terminate_started = Arc::new(Notify::new());
+    let allow_terminate = Arc::new(Notify::new());
+    let process = Arc::new(
+        blocking_terminate_process(
+            process_id,
+            Arc::clone(&terminate_started),
+            Arc::clone(&allow_terminate),
+        )
+        .await?,
+    );
     #[allow(deprecated)]
     let cwd = turn.cwd.clone();
-    let request = ExecCommandRequest {
-        command: vec!["bash".to_string(), "-lc".to_string(), command.to_string()],
-        shell_type: crate::shell::ShellType::Bash,
-        hook_command: command.to_string(),
+    manager.process_store.lock().await.processes.insert(
         process_id,
-        yield_time_ms: 30_000,
-        max_output_tokens: None,
-        cwd: cwd.clone(),
-        sandbox_cwd: cwd,
-        environment: turn
-            .environments
-            .primary_environment()
-            .expect("primary environment"),
-        shell_mode: codex_tools::UnifiedExecShellMode::Direct,
-        network: None,
-        tty: true,
-        sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
-        additional_permissions: None,
-        additional_permissions_preapproved: false,
-        justification: None,
-        prefix_rule: None,
-    };
-    let context =
-        UnifiedExecContext::new(Arc::clone(&session), Arc::clone(&turn), "call".to_string());
-    let exec_task = tokio::spawn({
+        ProcessEntry {
+            process,
+            call_id: "call".to_string(),
+            process_id,
+            cwd,
+            started_at_ms: now_unix_timestamp_ms(),
+            initial_exec_command_returned: false,
+            hook_command: "sleep 60".to_string(),
+            tty: true,
+            network_approval: None,
+            session: Arc::downgrade(&session),
+            last_used: Instant::now(),
+        },
+    );
+
+    let terminate_task = tokio::spawn({
         let session = Arc::clone(&session);
-        async move {
-            session
-                .services
-                .unified_exec_manager
-                .exec_command(request, &context)
-                .await
-        }
+        async move { session.terminate_background_terminal(process_id).await }
     });
-
-    let mut listed = false;
-    for _ in 0..500 {
-        if session
-            .list_background_terminals()
-            .await
-            .iter()
-            .any(|terminal| terminal.process_id == process_id.to_string())
-        {
-            listed = true;
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-    assert!(listed, "expected process to be listed before termination");
-
-    assert!(session.terminate_background_terminal(process_id).await);
-
-    let result = tokio::time::timeout(Duration::from_secs(5), exec_task)
+    tokio::time::timeout(Duration::from_secs(2), terminate_started.notified())
         .await
-        .expect("timed out waiting for exec command")?;
-    let output = result.expect("terminating initial exec command should return tool output");
-    assert!(output.process_id.is_none());
+        .expect("terminate should start");
+
+    {
+        let mut store = manager.process_store.lock().await;
+        let entry = store
+            .processes
+            .get_mut(&process_id)
+            .expect("process should remain stored until initial response returns");
+        entry.initial_exec_command_returned = true;
+    }
+
+    allow_terminate.notify_waiters();
+    let terminated = tokio::time::timeout(Duration::from_secs(2), terminate_task)
+        .await
+        .expect("terminate should finish")
+        .expect("terminate task should not panic");
+    assert!(terminated);
+    assert!(
+        !manager
+            .process_store
+            .lock()
+            .await
+            .processes
+            .contains_key(&process_id)
+    );
 
     Ok(())
 }
