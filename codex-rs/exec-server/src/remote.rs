@@ -14,6 +14,8 @@ use crate::ExecServerRuntimePaths;
 use crate::relay::run_multiplexed_environment;
 use crate::server::ConnectionProcessor;
 
+mod noise;
+
 const ERROR_BODY_PREVIEW_BYTES: usize = 4096;
 
 #[derive(Clone)]
@@ -44,6 +46,11 @@ impl EnvironmentRegistryClient {
         })
     }
 
+    /// Register using the original body-less registry contract.
+    ///
+    /// This method intentionally preserves the legacy request shape and timeout
+    /// behavior. Noise support is opt-in and must not silently alter existing
+    /// remote exec-server registrations.
     async fn register_environment(
         &self,
         environment_id: &str,
@@ -87,12 +94,27 @@ struct EnvironmentRegistryRegistrationResponse {
     url: String,
 }
 
+/// Protocol used for an exec-server's registered remote relay.
+///
+/// Legacy is intentionally the default during rollout. Noise must be selected
+/// explicitly so mixed-version deployments keep the original registry and relay
+/// contract until both endpoints are ready for Noise.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum RemoteRelayProtocol {
+    /// Original cleartext JSON-RPC relay protocol.
+    #[default]
+    Legacy,
+    /// Authenticated, end-to-end encrypted Noise relay protocol.
+    Noise,
+}
+
 /// Configuration for registering an exec-server for remote use.
 #[derive(Clone)]
 pub struct RemoteEnvironmentConfig {
     pub base_url: String,
     pub environment_id: String,
     pub name: String,
+    pub relay_protocol: RemoteRelayProtocol,
     auth_provider: SharedAuthProvider,
 }
 
@@ -102,6 +124,7 @@ impl std::fmt::Debug for RemoteEnvironmentConfig {
             .field("base_url", &self.base_url)
             .field("environment_id", &self.environment_id)
             .field("name", &self.name)
+            .field("relay_protocol", &self.relay_protocol)
             .field("auth_provider", &"<redacted>")
             .finish()
     }
@@ -118,6 +141,7 @@ impl RemoteEnvironmentConfig {
             base_url,
             environment_id,
             name: "codex-exec-server".to_string(),
+            relay_protocol: RemoteRelayProtocol::Legacy,
             auth_provider,
         })
     }
@@ -133,6 +157,10 @@ pub async fn run_remote_environment(
     let client =
         EnvironmentRegistryClient::new(config.base_url.clone(), config.auth_provider.clone())?;
     let processor = ConnectionProcessor::new(runtime_paths);
+    if config.relay_protocol == RemoteRelayProtocol::Noise {
+        return noise::run_remote_environment(&config, &client, processor).await;
+    }
+
     let mut backoff = Duration::from_secs(1);
 
     loop {
