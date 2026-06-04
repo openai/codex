@@ -8,7 +8,10 @@
     },
     "stopReason": {
       "default": null,
-      "type": "string"
+      "type": [
+        "string",
+        "null"
+      ]
     },
     "suppressOutput": {
       "default": false,
@@ -16,7 +19,10 @@
     },
     "systemMessage": {
       "default": null,
-      "type": "string"
+      "type": [
+        "string",
+        "null"
+      ]
     }
   },
   "title": "pre-compact.command.output",

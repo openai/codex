@@ -600,83 +600,87 @@ pub fn write_schema_fixtures(schema_root: &Path) -> anyhow::Result<()> {
 
     write_schema(
         &generated_dir.join(POST_TOOL_USE_INPUT_FIXTURE),
-        schema_json::<PostToolUseCommandInput>()?,
+        input_schema_json::<PostToolUseCommandInput>()?,
     )?;
     write_schema(
         &generated_dir.join(POST_TOOL_USE_OUTPUT_FIXTURE),
-        schema_json::<PostToolUseCommandOutputWire>()?,
+        output_schema_json::<PostToolUseCommandOutputWire>(OutputSchemaKind::PostToolUse)?,
     )?;
     write_schema(
         &generated_dir.join(PERMISSION_REQUEST_INPUT_FIXTURE),
-        schema_json::<PermissionRequestCommandInput>()?,
+        input_schema_json::<PermissionRequestCommandInput>()?,
     )?;
     write_schema(
         &generated_dir.join(PERMISSION_REQUEST_OUTPUT_FIXTURE),
-        schema_json::<PermissionRequestCommandOutputWire>()?,
+        output_schema_json::<PermissionRequestCommandOutputWire>(
+            OutputSchemaKind::PermissionRequest,
+        )?,
     )?;
     write_schema(
         &generated_dir.join(POST_COMPACT_INPUT_FIXTURE),
-        schema_json::<PostCompactCommandInput>()?,
+        input_schema_json::<PostCompactCommandInput>()?,
     )?;
     write_schema(
         &generated_dir.join(POST_COMPACT_OUTPUT_FIXTURE),
-        schema_json::<PostCompactCommandOutputWire>()?,
+        output_schema_json::<PostCompactCommandOutputWire>(OutputSchemaKind::PostCompact)?,
     )?;
     write_schema(
         &generated_dir.join(PRE_COMPACT_INPUT_FIXTURE),
-        schema_json::<PreCompactCommandInput>()?,
+        input_schema_json::<PreCompactCommandInput>()?,
     )?;
     write_schema(
         &generated_dir.join(PRE_COMPACT_OUTPUT_FIXTURE),
-        schema_json::<PreCompactCommandOutputWire>()?,
+        output_schema_json::<PreCompactCommandOutputWire>(OutputSchemaKind::PreCompact)?,
     )?;
     write_schema(
         &generated_dir.join(PRE_TOOL_USE_INPUT_FIXTURE),
-        schema_json::<PreToolUseCommandInput>()?,
+        input_schema_json::<PreToolUseCommandInput>()?,
     )?;
     write_schema(
         &generated_dir.join(PRE_TOOL_USE_OUTPUT_FIXTURE),
-        schema_json::<PreToolUseCommandOutputWire>()?,
+        output_schema_json::<PreToolUseCommandOutputWire>(OutputSchemaKind::PreToolUse)?,
     )?;
     write_schema(
         &generated_dir.join(SESSION_START_INPUT_FIXTURE),
-        schema_json::<SessionStartCommandInput>()?,
+        input_schema_json::<SessionStartCommandInput>()?,
     )?;
     write_schema(
         &generated_dir.join(SESSION_START_OUTPUT_FIXTURE),
-        schema_json::<SessionStartCommandOutputWire>()?,
+        output_schema_json::<SessionStartCommandOutputWire>(OutputSchemaKind::SessionStart)?,
     )?;
     write_schema(
         &generated_dir.join(USER_PROMPT_SUBMIT_INPUT_FIXTURE),
-        schema_json::<UserPromptSubmitCommandInput>()?,
+        input_schema_json::<UserPromptSubmitCommandInput>()?,
     )?;
     write_schema(
         &generated_dir.join(USER_PROMPT_SUBMIT_OUTPUT_FIXTURE),
-        schema_json::<UserPromptSubmitCommandOutputWire>()?,
+        output_schema_json::<UserPromptSubmitCommandOutputWire>(
+            OutputSchemaKind::UserPromptSubmit,
+        )?,
     )?;
     write_schema(
         &generated_dir.join(SUBAGENT_START_INPUT_FIXTURE),
-        schema_json::<SubagentStartCommandInput>()?,
+        input_schema_json::<SubagentStartCommandInput>()?,
     )?;
     write_schema(
         &generated_dir.join(SUBAGENT_START_OUTPUT_FIXTURE),
-        schema_json::<SubagentStartCommandOutputWire>()?,
+        output_schema_json::<SubagentStartCommandOutputWire>(OutputSchemaKind::SubagentStart)?,
     )?;
     write_schema(
         &generated_dir.join(SUBAGENT_STOP_INPUT_FIXTURE),
-        schema_json::<SubagentStopCommandInput>()?,
+        input_schema_json::<SubagentStopCommandInput>()?,
     )?;
     write_schema(
         &generated_dir.join(SUBAGENT_STOP_OUTPUT_FIXTURE),
-        schema_json::<SubagentStopCommandOutputWire>()?,
+        output_schema_json::<SubagentStopCommandOutputWire>(OutputSchemaKind::SubagentStop)?,
     )?;
     write_schema(
         &generated_dir.join(STOP_INPUT_FIXTURE),
-        schema_json::<StopCommandInput>()?,
+        input_schema_json::<StopCommandInput>()?,
     )?;
     write_schema(
         &generated_dir.join(STOP_OUTPUT_FIXTURE),
-        schema_json::<StopCommandOutputWire>()?,
+        output_schema_json::<StopCommandOutputWire>(OutputSchemaKind::Stop)?,
     )?;
 
     Ok(())
@@ -695,26 +699,251 @@ fn ensure_empty_dir(dir: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn schema_json<T>() -> anyhow::Result<Vec<u8>>
+// Parser wire types stay broad enough to recognize legacy and reserved output,
+// while generated schemas advertise only output that the runtime supports.
+#[derive(Clone, Copy)]
+enum OutputSchemaKind {
+    PostToolUse,
+    PermissionRequest,
+    PostCompact,
+    PreCompact,
+    PreToolUse,
+    SessionStart,
+    UserPromptSubmit,
+    SubagentStart,
+    SubagentStop,
+    Stop,
+}
+
+fn input_schema_json<T>() -> anyhow::Result<Vec<u8>>
 where
     T: JsonSchema,
 {
-    let schema = schema_for_type::<T>();
+    serialize_schema(schema_value::<T>(/*option_add_null_type*/ false)?)
+}
+
+fn output_schema_json<T>(kind: OutputSchemaKind) -> anyhow::Result<Vec<u8>>
+where
+    T: JsonSchema,
+{
+    serialize_schema(output_schema_value::<T>(kind)?)
+}
+
+fn output_schema_value<T>(kind: OutputSchemaKind) -> anyhow::Result<Value>
+where
+    T: JsonSchema,
+{
+    let mut value = schema_value::<T>(/*option_add_null_type*/ true)?;
+    constrain_output_schema(&mut value, kind)?;
+    Ok(value)
+}
+
+fn schema_value<T>(option_add_null_type: bool) -> anyhow::Result<Value>
+where
+    T: JsonSchema,
+{
+    let schema = schema_for_type::<T>(option_add_null_type);
     let value = serde_json::to_value(schema)?;
+    Ok(value)
+}
+
+fn serialize_schema(value: Value) -> anyhow::Result<Vec<u8>> {
     let value = canonicalize_json(&value);
     Ok(serde_json::to_vec_pretty(&value)?)
 }
 
-fn schema_for_type<T>() -> RootSchema
+fn schema_for_type<T>(option_add_null_type: bool) -> RootSchema
 where
     T: JsonSchema,
 {
     SchemaSettings::draft07()
         .with(|settings| {
-            settings.option_add_null_type = false;
+            settings.option_add_null_type = option_add_null_type;
         })
         .into_generator()
         .into_root_schema_for::<T>()
+}
+
+fn constrain_output_schema(schema: &mut Value, kind: OutputSchemaKind) -> anyhow::Result<()> {
+    match kind {
+        OutputSchemaKind::PreToolUse => {
+            constrain_bool_property(schema, "/properties/continue", /*expected*/ true)?;
+            constrain_null_property(schema, "/properties/stopReason")?;
+            constrain_bool_property(
+                schema,
+                "/properties/suppressOutput",
+                /*expected*/ false,
+            )?;
+            constrain_enum(
+                schema,
+                "/definitions/PreToolUseDecisionWire/enum",
+                &["block"],
+            )?;
+            constrain_enum(
+                schema,
+                "/definitions/PreToolUsePermissionDecisionWire/enum",
+                &["allow", "deny"],
+            )?;
+            require_block_reason(schema)?;
+            constrain_pre_tool_use_hook_specific_output(schema)?;
+        }
+        OutputSchemaKind::PermissionRequest => {
+            constrain_bool_property(schema, "/properties/continue", /*expected*/ true)?;
+            constrain_null_property(schema, "/properties/stopReason")?;
+            constrain_bool_property(
+                schema,
+                "/properties/suppressOutput",
+                /*expected*/ false,
+            )?;
+            constrain_null_property(
+                schema,
+                "/definitions/PermissionRequestDecisionWire/properties/updatedInput",
+            )?;
+            constrain_null_property(
+                schema,
+                "/definitions/PermissionRequestDecisionWire/properties/updatedPermissions",
+            )?;
+            constrain_bool_property(
+                schema,
+                "/definitions/PermissionRequestDecisionWire/properties/interrupt",
+                /*expected*/ false,
+            )?;
+        }
+        OutputSchemaKind::PostToolUse => {
+            constrain_bool_property(
+                schema,
+                "/properties/suppressOutput",
+                /*expected*/ false,
+            )?;
+            constrain_null_property(
+                schema,
+                "/definitions/PostToolUseHookSpecificOutputWire/properties/updatedMCPToolOutput",
+            )?;
+            require_block_reason(schema)?;
+        }
+        OutputSchemaKind::UserPromptSubmit
+        | OutputSchemaKind::SubagentStop
+        | OutputSchemaKind::Stop => require_block_reason(schema)?,
+        OutputSchemaKind::PostCompact
+        | OutputSchemaKind::PreCompact
+        | OutputSchemaKind::SessionStart
+        | OutputSchemaKind::SubagentStart => {}
+    }
+    Ok(())
+}
+
+fn constrain_pre_tool_use_hook_specific_output(schema: &mut Value) -> anyhow::Result<()> {
+    let definition = schema_node_mut(schema, "/definitions/PreToolUseHookSpecificOutputWire")?;
+    definition["allOf"] = serde_json::json!([
+        {
+            "if": {
+                "properties": {
+                    "permissionDecision": {"const": "allow"}
+                },
+                "required": ["permissionDecision"]
+            },
+            "then": {
+                "properties": {
+                    "updatedInput": {"not": {"type": "null"}}
+                },
+                "required": ["updatedInput"]
+            }
+        },
+        {
+            "if": {
+                "properties": {
+                    "permissionDecision": {"const": "deny"}
+                },
+                "required": ["permissionDecision"]
+            },
+            "then": {
+                "properties": {
+                    "permissionDecisionReason": {
+                        "pattern": ".*\\S.*",
+                        "type": "string"
+                    }
+                },
+                "required": ["permissionDecisionReason"]
+            }
+        },
+        {
+            "if": {
+                "properties": {
+                    "updatedInput": {"not": {"type": "null"}}
+                },
+                "required": ["updatedInput"]
+            },
+            "then": {
+                "properties": {
+                    "permissionDecision": {"const": "allow"}
+                },
+                "required": ["permissionDecision"]
+            }
+        },
+        {
+            "if": {
+                "properties": {
+                    "permissionDecisionReason": {"not": {"type": "null"}}
+                },
+                "required": ["permissionDecisionReason"]
+            },
+            "then": {
+                "required": ["permissionDecision"]
+            }
+        }
+    ]);
+    Ok(())
+}
+
+fn require_block_reason(schema: &mut Value) -> anyhow::Result<()> {
+    schema["allOf"] = serde_json::json!([
+        {
+            "if": {
+                "properties": {
+                    "decision": {"const": "block"}
+                },
+                "required": ["decision"]
+            },
+            "then": {
+                "properties": {
+                    "reason": {
+                        "pattern": ".*\\S.*",
+                        "type": "string"
+                    }
+                },
+                "required": ["reason"]
+            }
+        }
+    ]);
+    Ok(())
+}
+
+fn constrain_bool_property(
+    schema: &mut Value,
+    pointer: &str,
+    expected: bool,
+) -> anyhow::Result<()> {
+    schema_node_mut(schema, pointer)?["const"] = Value::Bool(expected);
+    Ok(())
+}
+
+fn constrain_null_property(schema: &mut Value, pointer: &str) -> anyhow::Result<()> {
+    *schema_node_mut(schema, pointer)? = serde_json::json!({
+        "default": null,
+        "type": "null"
+    });
+    Ok(())
+}
+
+fn constrain_enum(schema: &mut Value, pointer: &str, supported: &[&str]) -> anyhow::Result<()> {
+    *schema_node_mut(schema, pointer)? = serde_json::json!(supported);
+    Ok(())
+}
+
+fn schema_node_mut<'a>(schema: &'a mut Value, pointer: &str) -> anyhow::Result<&'a mut Value> {
+    schema
+        .pointer_mut(pointer)
+        .ok_or_else(|| anyhow::anyhow!("generated hook schema is missing {pointer}"))
 }
 
 fn canonicalize_json(value: &Value) -> Value {
@@ -821,6 +1050,7 @@ fn default_continue() -> bool {
 #[cfg(test)]
 mod tests {
     use super::NullableString;
+    use super::OutputSchemaKind;
     use super::PERMISSION_REQUEST_INPUT_FIXTURE;
     use super::PERMISSION_REQUEST_OUTPUT_FIXTURE;
     use super::POST_COMPACT_INPUT_FIXTURE;
@@ -857,7 +1087,8 @@ mod tests {
     use super::USER_PROMPT_SUBMIT_OUTPUT_FIXTURE;
     use super::UserPromptSubmitCommandInput;
     use super::UserPromptSubmitCommandOutputWire;
-    use super::schema_json;
+    use super::input_schema_json;
+    use super::output_schema_value;
     use super::write_schema_fixtures;
     use crate::events::common::SubagentHookContext;
     use pretty_assertions::assert_eq;
@@ -936,10 +1167,12 @@ mod tests {
         value.replace("\r\n", "\n")
     }
 
-    fn assert_output_hook_event_name_const<T: JsonSchema>(definition: &str, expected: &str) {
-        let schema: Value =
-            serde_json::from_slice(&schema_json::<T>().expect("serialize hook output schema"))
-                .expect("parse hook output schema");
+    fn assert_output_hook_event_name_const<T: JsonSchema>(
+        kind: OutputSchemaKind,
+        definition: &str,
+        expected: &str,
+    ) {
+        let schema = output_schema_value::<T>(kind).expect("generate hook output schema");
 
         assert_eq!(
             schema["definitions"][definition]["properties"]["hookEventName"],
@@ -989,28 +1222,95 @@ mod tests {
     #[test]
     fn hook_specific_output_event_names_are_event_specific_in_output_schemas() {
         assert_output_hook_event_name_const::<PermissionRequestCommandOutputWire>(
+            OutputSchemaKind::PermissionRequest,
             "PermissionRequestHookSpecificOutputWire",
             "PermissionRequest",
         );
         assert_output_hook_event_name_const::<PostToolUseCommandOutputWire>(
+            OutputSchemaKind::PostToolUse,
             "PostToolUseHookSpecificOutputWire",
             "PostToolUse",
         );
         assert_output_hook_event_name_const::<PreToolUseCommandOutputWire>(
+            OutputSchemaKind::PreToolUse,
             "PreToolUseHookSpecificOutputWire",
             "PreToolUse",
         );
         assert_output_hook_event_name_const::<SessionStartCommandOutputWire>(
+            OutputSchemaKind::SessionStart,
             "SessionStartHookSpecificOutputWire",
             "SessionStart",
         );
         assert_output_hook_event_name_const::<SubagentStartCommandOutputWire>(
+            OutputSchemaKind::SubagentStart,
             "SubagentStartHookSpecificOutputWire",
             "SubagentStart",
         );
         assert_output_hook_event_name_const::<UserPromptSubmitCommandOutputWire>(
+            OutputSchemaKind::UserPromptSubmit,
             "UserPromptSubmitHookSpecificOutputWire",
             "UserPromptSubmit",
+        );
+    }
+
+    #[test]
+    fn output_schemas_allow_explicit_null_for_optional_fields() {
+        let schema =
+            output_schema_value::<SessionStartCommandOutputWire>(OutputSchemaKind::SessionStart)
+                .expect("generate session start output schema");
+
+        assert_eq!(
+            schema["properties"]["systemMessage"]["type"],
+            json!(["string", "null"])
+        );
+        assert_eq!(
+            schema["properties"]["hookSpecificOutput"]["anyOf"][1]["type"],
+            "null"
+        );
+    }
+
+    #[test]
+    fn pre_tool_use_output_schema_excludes_unsupported_values() {
+        let schema =
+            output_schema_value::<PreToolUseCommandOutputWire>(OutputSchemaKind::PreToolUse)
+                .expect("generate pre tool use output schema");
+
+        assert_eq!(schema["properties"]["continue"]["const"], true);
+        assert_eq!(schema["properties"]["stopReason"]["type"], "null");
+        assert_eq!(schema["properties"]["suppressOutput"]["const"], false);
+        assert_eq!(
+            schema["definitions"]["PreToolUseDecisionWire"]["enum"],
+            json!(["block"])
+        );
+        assert_eq!(
+            schema["definitions"]["PreToolUsePermissionDecisionWire"]["enum"],
+            json!(["allow", "deny"])
+        );
+    }
+
+    #[test]
+    fn reserved_output_fields_only_allow_neutral_values() {
+        let permission = output_schema_value::<PermissionRequestCommandOutputWire>(
+            OutputSchemaKind::PermissionRequest,
+        )
+        .expect("generate permission request output schema");
+        let post_tool =
+            output_schema_value::<PostToolUseCommandOutputWire>(OutputSchemaKind::PostToolUse)
+                .expect("generate post tool use output schema");
+
+        assert_eq!(
+            permission["definitions"]["PermissionRequestDecisionWire"]["properties"]["updatedInput"]
+                ["type"],
+            "null"
+        );
+        assert_eq!(
+            permission["definitions"]["PermissionRequestDecisionWire"]["properties"]["interrupt"]["const"],
+            false
+        );
+        assert_eq!(
+            post_tool["definitions"]["PostToolUseHookSpecificOutputWire"]["properties"]["updatedMCPToolOutput"]
+                ["type"],
+            "null"
         );
     }
 
@@ -1019,44 +1319,47 @@ mod tests {
         // Codex intentionally diverges from Claude's public hook docs here so
         // internal hook consumers can key off the active turn.
         let pre_tool_use: Value = serde_json::from_slice(
-            &schema_json::<PreToolUseCommandInput>().expect("serialize pre tool use input schema"),
+            &input_schema_json::<PreToolUseCommandInput>()
+                .expect("serialize pre tool use input schema"),
         )
         .expect("parse pre tool use input schema");
         let post_tool_use: Value = serde_json::from_slice(
-            &schema_json::<PostToolUseCommandInput>()
+            &input_schema_json::<PostToolUseCommandInput>()
                 .expect("serialize post tool use input schema"),
         )
         .expect("parse post tool use input schema");
         let pre_compact: Value = serde_json::from_slice(
-            &schema_json::<PreCompactCommandInput>().expect("serialize pre compact input schema"),
+            &input_schema_json::<PreCompactCommandInput>()
+                .expect("serialize pre compact input schema"),
         )
         .expect("parse pre compact input schema");
         let post_compact: Value = serde_json::from_slice(
-            &schema_json::<PostCompactCommandInput>().expect("serialize post compact input schema"),
+            &input_schema_json::<PostCompactCommandInput>()
+                .expect("serialize post compact input schema"),
         )
         .expect("parse post compact input schema");
         let permission_request: Value = serde_json::from_slice(
-            &schema_json::<PermissionRequestCommandInput>()
+            &input_schema_json::<PermissionRequestCommandInput>()
                 .expect("serialize permission request input schema"),
         )
         .expect("parse permission request input schema");
         let user_prompt_submit: Value = serde_json::from_slice(
-            &schema_json::<UserPromptSubmitCommandInput>()
+            &input_schema_json::<UserPromptSubmitCommandInput>()
                 .expect("serialize user prompt submit input schema"),
         )
         .expect("parse user prompt submit input schema");
         let subagent_start: Value = serde_json::from_slice(
-            &schema_json::<SubagentStartCommandInput>()
+            &input_schema_json::<SubagentStartCommandInput>()
                 .expect("serialize subagent start input schema"),
         )
         .expect("parse subagent start input schema");
         let subagent_stop: Value = serde_json::from_slice(
-            &schema_json::<SubagentStopCommandInput>()
+            &input_schema_json::<SubagentStopCommandInput>()
                 .expect("serialize subagent stop input schema"),
         )
         .expect("parse subagent stop input schema");
         let stop: Value = serde_json::from_slice(
-            &schema_json::<StopCommandInput>().expect("serialize stop input schema"),
+            &input_schema_json::<StopCommandInput>().expect("serialize stop input schema"),
         )
         .expect("parse stop input schema");
 
@@ -1084,13 +1387,17 @@ mod tests {
     #[test]
     fn subagent_context_fields_are_optional_for_hooks_that_run_inside_subagents() {
         let schemas = [
-            schema_json::<PreToolUseCommandInput>().expect("serialize pre tool use input schema"),
-            schema_json::<PermissionRequestCommandInput>()
+            input_schema_json::<PreToolUseCommandInput>()
+                .expect("serialize pre tool use input schema"),
+            input_schema_json::<PermissionRequestCommandInput>()
                 .expect("serialize permission request input schema"),
-            schema_json::<PostToolUseCommandInput>().expect("serialize post tool use input schema"),
-            schema_json::<PreCompactCommandInput>().expect("serialize pre compact input schema"),
-            schema_json::<PostCompactCommandInput>().expect("serialize post compact input schema"),
-            schema_json::<UserPromptSubmitCommandInput>()
+            input_schema_json::<PostToolUseCommandInput>()
+                .expect("serialize post tool use input schema"),
+            input_schema_json::<PreCompactCommandInput>()
+                .expect("serialize pre compact input schema"),
+            input_schema_json::<PostCompactCommandInput>()
+                .expect("serialize post compact input schema"),
+            input_schema_json::<UserPromptSubmitCommandInput>()
                 .expect("serialize user prompt submit input schema"),
         ];
 

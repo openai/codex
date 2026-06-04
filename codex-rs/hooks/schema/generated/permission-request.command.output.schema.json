@@ -16,21 +16,25 @@
           "$ref": "#/definitions/PermissionRequestBehaviorWire"
         },
         "interrupt": {
+          "const": false,
           "default": false,
           "description": "Reserved for future short-circuiting semantics.\n\nPermissionRequest hooks currently fail closed if this field is `true`.",
           "type": "boolean"
         },
         "message": {
           "default": null,
-          "type": "string"
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "updatedInput": {
           "default": null,
-          "description": "Reserved for a future input-rewrite capability.\n\nPermissionRequest hooks currently fail closed if this field is present."
+          "type": "null"
         },
         "updatedPermissions": {
           "default": null,
-          "description": "Reserved for a future permission-rewrite capability.\n\nPermissionRequest hooks currently fail closed if this field is present."
+          "type": "null"
         }
       },
       "required": [
@@ -42,9 +46,12 @@
       "additionalProperties": false,
       "properties": {
         "decision": {
-          "allOf": [
+          "anyOf": [
             {
               "$ref": "#/definitions/PermissionRequestDecisionWire"
+            },
+            {
+              "type": "null"
             }
           ],
           "default": null
@@ -62,28 +69,36 @@
   },
   "properties": {
     "continue": {
+      "const": true,
       "default": true,
       "type": "boolean"
     },
     "hookSpecificOutput": {
-      "allOf": [
+      "anyOf": [
         {
           "$ref": "#/definitions/PermissionRequestHookSpecificOutputWire"
+        },
+        {
+          "type": "null"
         }
       ],
       "default": null
     },
     "stopReason": {
       "default": null,
-      "type": "string"
+      "type": "null"
     },
     "suppressOutput": {
+      "const": false,
       "default": false,
       "type": "boolean"
     },
     "systemMessage": {
       "default": null,
-      "type": "string"
+      "type": [
+        "string",
+        "null"
+      ]
     }
   },
   "title": "permission-request.command.output",

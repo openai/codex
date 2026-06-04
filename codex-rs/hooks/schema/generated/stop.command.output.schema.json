@@ -1,6 +1,31 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "decision": {
+            "const": "block"
+          }
+        },
+        "required": [
+          "decision"
+        ]
+      },
+      "then": {
+        "properties": {
+          "reason": {
+            "pattern": ".*\\S.*",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason"
+        ]
+      }
+    }
+  ],
   "definitions": {
     "BlockDecisionWire": {
       "enum": [
@@ -15,9 +40,12 @@
       "type": "boolean"
     },
     "decision": {
-      "allOf": [
+      "anyOf": [
         {
           "$ref": "#/definitions/BlockDecisionWire"
+        },
+        {
+          "type": "null"
         }
       ],
       "default": null
@@ -25,11 +53,17 @@
     "reason": {
       "default": null,
       "description": "Claude requires `reason` when `decision` is `block`; we enforce that semantic rule during output parsing rather than in the JSON schema.",
-      "type": "string"
+      "type": [
+        "string",
+        "null"
+      ]
     },
     "stopReason": {
       "default": null,
-      "type": "string"
+      "type": [
+        "string",
+        "null"
+      ]
     },
     "suppressOutput": {
       "default": false,
@@ -37,7 +71,10 @@
     },
     "systemMessage": {
       "default": null,
-      "type": "string"
+      "type": [
+        "string",
+        "null"
+      ]
     }
   },
   "title": "stop.command.output",
