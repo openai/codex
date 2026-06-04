@@ -417,7 +417,7 @@ pub(crate) fn append_pem_contents(bundle: &mut String, pem: &str) {
     }
 }
 
-fn append_bounded_pem_contents(bundle: &mut String, pem: &str) -> Result<()> {
+pub(crate) fn append_bounded_pem_contents(bundle: &mut String, pem: &str) -> Result<()> {
     let separator_len = usize::from(!bundle.is_empty() && !bundle.ends_with('\n'));
     let trailing_newline_len = usize::from(!pem.ends_with('\n'));
     anyhow::ensure!(
