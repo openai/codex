@@ -6,14 +6,18 @@ use codex_core_skills::SkillInstructions;
 use codex_core_skills::injection::InjectedHostSkillPrompts;
 use codex_core_skills::injection::SkillInjection;
 use codex_extension_api::ConfigContributor;
+use codex_extension_api::ContextContributionInput;
+use codex_extension_api::ContextContributor;
 use codex_extension_api::ContextualUserFragment;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionEventSink;
 use codex_extension_api::ExtensionRegistryBuilder;
+use codex_extension_api::PromptFragment;
 use codex_extension_api::ThreadLifecycleContributor;
 use codex_extension_api::ThreadStartInput;
 use codex_extension_api::TurnInputContext;
 use codex_extension_api::TurnInputContributor;
+use codex_extension_api::TurnInputEnvironment;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::WarningEvent;
@@ -67,6 +71,45 @@ impl ConfigContributor<Config> for SkillsExtension {
     }
 }
 
+impl ContextContributor for SkillsExtension {
+    fn contribute<'a>(
+        &'a self,
+        input: ContextContributionInput,
+        _session_store: &'a ExtensionData,
+        thread_store: &'a ExtensionData,
+        turn_store: &'a ExtensionData,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Vec<PromptFragment>> + Send + 'a>> {
+        Box::pin(async move {
+            let Some(thread_state) = thread_store.get::<SkillsThreadState>() else {
+                return Vec::new();
+            };
+
+            let config = thread_state.config();
+            if !config.include_instructions {
+                return Vec::new();
+            }
+
+            let host_loaded_skills = turn_store.get::<HostLoadedSkills>();
+            let catalog = self
+                .list_catalog(
+                    input.turn_id.clone(),
+                    &input.environments,
+                    config.bundled_skills_enabled,
+                    host_loaded_skills,
+                )
+                .await;
+
+            let fragment = available_skills_fragment(&catalog);
+            let catalog_body = fragment.body();
+            if !thread_state.mark_catalog_emitted_if_changed(&catalog_body) {
+                return Vec::new();
+            }
+
+            vec![PromptFragment::developer_capability(fragment.render())]
+        })
+    }
+}
+
 #[async_trait::async_trait]
 impl TurnInputContributor for SkillsExtension {
     async fn contribute(
@@ -82,34 +125,26 @@ impl TurnInputContributor for SkillsExtension {
 
         let config = thread_state.config();
         let host_loaded_skills = turn_store.get::<HostLoadedSkills>();
-        let query = SkillListQuery {
-            turn_id: input.turn_id.clone(),
-            executor_authorities: input
-                .environments
-                .iter()
-                .map(|environment| {
-                    SkillAuthority::new(
-                        SkillSourceKind::Executor,
-                        environment.environment_id.clone(),
-                    )
-                })
-                .collect(),
-            host: host_loaded_skills.clone(),
-            include_host_skills: true,
-            include_bundled_skills: config.bundled_skills_enabled,
-            include_remote_skills: true,
-        };
-        let catalog = self.providers.list_for_turn(query).await;
+        let catalog = self
+            .list_catalog(
+                input.turn_id.clone(),
+                &input.environments,
+                config.bundled_skills_enabled,
+                host_loaded_skills.clone(),
+            )
+            .await;
         for warning in &catalog.warnings {
             self.emit_warning(&input.turn_id, warning.clone());
         }
 
         let selected_entries = collect_explicit_skill_mentions(&input.user_input, &catalog);
         let mut fragments: Vec<Box<dyn ContextualUserFragment + Send>> = Vec::new();
-        if config.include_instructions
-            && let Some(fragment) = available_skills_fragment(&catalog)
-        {
-            fragments.push(Box::new(fragment));
+        if config.include_instructions {
+            let fragment = available_skills_fragment(&catalog);
+            let catalog_body = fragment.body();
+            if thread_state.mark_catalog_emitted_if_changed(&catalog_body) {
+                fragments.push(Box::new(fragment));
+            }
         }
 
         let mut warnings = catalog.warnings.clone();
@@ -165,20 +200,50 @@ impl TurnInputContributor for SkillsExtension {
 }
 
 impl SkillsExtension {
+    async fn list_catalog(
+        &self,
+        turn_id: String,
+        environments: &[TurnInputEnvironment],
+        bundled_skills_enabled: bool,
+        host_loaded_skills: Option<Arc<HostLoadedSkills>>,
+    ) -> crate::catalog::SkillCatalog {
+        let query = SkillListQuery {
+            turn_id,
+            executor_authorities: environments
+                .iter()
+                .map(|environment| {
+                    SkillAuthority::new(
+                        SkillSourceKind::Executor,
+                        environment.environment_id.clone(),
+                    )
+                })
+                .collect(),
+            include_host_skills: true,
+            include_bundled_skills: bundled_skills_enabled,
+            include_remote_skills: true,
+        };
+        self.providers
+            .list_for_turn(query, host_loaded_skills)
+            .await
+    }
+
     async fn read_main_prompt(
         &self,
         entry: &SkillCatalogEntry,
         host_loaded_skills: Option<Arc<HostLoadedSkills>>,
     ) -> Result<SkillReadResult, String> {
-        self.providers
-            .read(SkillReadRequest {
-                authority: entry.authority.clone(),
-                package: entry.id.clone(),
-                resource: entry.main_prompt.clone(),
-                host: host_loaded_skills,
-            })
-            .await
-            .map_err(|err| err.message)
+        let request = SkillReadRequest {
+            authority: entry.authority.clone(),
+            package: entry.id.clone(),
+            resource: entry.main_prompt.clone(),
+        };
+        let result = if entry.authority.kind == SkillSourceKind::Host {
+            self.providers.read_host(request, host_loaded_skills).await
+        } else {
+            self.providers.read(request).await
+        };
+
+        result.map_err(|err| err.message)
     }
 
     fn emit_warning(&self, turn_id: &str, message: String) {
@@ -206,5 +271,6 @@ pub fn install_with_providers(
     });
     registry.thread_lifecycle_contributor(extension.clone());
     registry.config_contributor(extension.clone());
+    registry.prompt_contributor(extension.clone());
     registry.turn_input_contributor(extension);
 }

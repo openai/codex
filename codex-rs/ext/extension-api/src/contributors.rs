@@ -38,9 +38,20 @@ pub use turn_lifecycle::TurnStopInput;
 pub trait ContextContributor: Send + Sync {
     fn contribute<'a>(
         &'a self,
+        input: ContextContributionInput,
         session_store: &'a ExtensionData,
         thread_store: &'a ExtensionData,
+        turn_store: &'a ExtensionData,
     ) -> std::pin::Pin<Box<dyn Future<Output = Vec<PromptFragment>> + Send + 'a>>;
+}
+
+/// Turn facts supplied while assembling the initial model context.
+#[derive(Debug, Clone)]
+pub struct ContextContributionInput {
+    /// Stable host-owned turn identifier for the initial turn.
+    pub turn_id: String,
+    /// Resolved turn environments, in host priority order.
+    pub environments: Vec<TurnInputEnvironment>,
 }
 
 /// Contributor for host-owned thread lifecycle gates.

@@ -1,3 +1,4 @@
+use codex_core_skills::HostLoadedSkills;
 use codex_core_skills::SkillLoadOutcome;
 use codex_core_skills::SkillMetadata;
 
@@ -8,13 +9,8 @@ use crate::catalog::SkillPackageId;
 use crate::catalog::SkillProviderError;
 use crate::catalog::SkillReadResult;
 use crate::catalog::SkillResourceId;
-use crate::catalog::SkillSearchResult;
 use crate::catalog::SkillSourceKind;
-use crate::provider::SkillListQuery;
-use crate::provider::SkillProvider;
-use crate::provider::SkillProviderFuture;
 use crate::provider::SkillReadRequest;
-use crate::provider::SkillSearchRequest;
 
 const HOST_AUTHORITY_ID: &str = "host";
 
@@ -24,65 +20,48 @@ const HOST_AUTHORITY_ID: &str = "host";
 /// skill loading, including plugin roots, runtime extra roots, and the primary
 /// environment filesystem. This adapter only maps that loaded outcome into the
 /// skills-extension catalog/read contract.
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct HostSkillProvider;
 
 impl HostSkillProvider {
     pub fn new() -> Self {
         Self
     }
-}
 
-impl SkillProvider for HostSkillProvider {
-    fn list(&self, query: SkillListQuery) -> SkillProviderFuture<'_, SkillCatalog> {
-        Box::pin(async move {
-            let Some(host_loaded_skills) = query.host else {
-                return Err(SkillProviderError::new(
-                    "host skill provider requires loaded host skills",
-                ));
-            };
-
-            Ok(catalog_from_outcome(host_loaded_skills.outcome()))
-        })
+    pub fn list(&self, host_loaded_skills: &HostLoadedSkills) -> SkillCatalog {
+        catalog_from_outcome(host_loaded_skills.outcome())
     }
 
-    fn read(&self, request: SkillReadRequest) -> SkillProviderFuture<'_, SkillReadResult> {
-        Box::pin(async move {
-            let Some(host_loaded_skills) = request.host else {
-                return Err(SkillProviderError::new(
-                    "host skill provider requires loaded host skills",
-                ));
-            };
-            let Some(skill) = host_loaded_skills.outcome().skills.iter().find(|skill| {
-                let skill_path = skill.path_to_skills_md.to_string_lossy();
-                skill_path == request.resource.0.as_str()
-                    || skill_path.replace('\\', "/") == request.resource.0
-            }) else {
-                return Err(SkillProviderError::new(format!(
-                    "host skill resource is not loaded: {}",
+    pub async fn read(
+        &self,
+        request: SkillReadRequest,
+        host_loaded_skills: &HostLoadedSkills,
+    ) -> Result<SkillReadResult, SkillProviderError> {
+        let Some(skill) = host_loaded_skills.outcome().skills.iter().find(|skill| {
+            let skill_path = skill.path_to_skills_md.to_string_lossy();
+            skill_path == request.resource.0.as_str()
+                || skill_path.replace('\\', "/") == request.resource.0
+        }) else {
+            return Err(SkillProviderError::new(format!(
+                "host skill resource is not loaded: {}",
+                request.resource.0
+            )));
+        };
+
+        let contents = host_loaded_skills
+            .read_skill_text(skill)
+            .await
+            .map_err(|err| {
+                SkillProviderError::new(format!(
+                    "failed to read host skill resource {}: {err}",
                     request.resource.0
-                )));
-            };
+                ))
+            })?;
 
-            let contents = host_loaded_skills
-                .read_skill_text(skill)
-                .await
-                .map_err(|err| {
-                    SkillProviderError::new(format!(
-                        "failed to read host skill resource {}: {err}",
-                        request.resource.0
-                    ))
-                })?;
-
-            Ok(SkillReadResult {
-                resource: request.resource,
-                contents,
-            })
+        Ok(SkillReadResult {
+            resource: request.resource,
+            contents,
         })
-    }
-
-    fn search(&self, _request: SkillSearchRequest) -> SkillProviderFuture<'_, SkillSearchResult> {
-        Box::pin(async { Ok(SkillSearchResult::default()) })
     }
 }
 

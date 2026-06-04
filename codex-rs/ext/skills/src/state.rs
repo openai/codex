@@ -22,12 +22,14 @@ impl SkillsExtensionConfig {
 #[derive(Debug)]
 pub(crate) struct SkillsThreadState {
     config: Mutex<SkillsExtensionConfig>,
+    last_catalog_body: Mutex<Option<String>>,
 }
 
 impl SkillsThreadState {
     pub(crate) fn new(config: SkillsExtensionConfig) -> Self {
         Self {
             config: Mutex::new(config),
+            last_catalog_body: Mutex::new(None),
         }
     }
 
@@ -43,6 +45,19 @@ impl SkillsThreadState {
             .config
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = config;
+    }
+
+    pub(crate) fn mark_catalog_emitted_if_changed(&self, body: &str) -> bool {
+        let mut last_catalog_body = self
+            .last_catalog_body
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if last_catalog_body.as_deref() == Some(body) {
+            return false;
+        }
+
+        *last_catalog_body = Some(body.to_string());
+        true
     }
 }
 

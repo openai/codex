@@ -31,7 +31,7 @@ impl ContextualUserFragment for AvailableSkillsFragment {
     }
 }
 
-pub(crate) fn available_skills_fragment(catalog: &SkillCatalog) -> Option<AvailableSkillsFragment> {
+pub(crate) fn available_skills_fragment(catalog: &SkillCatalog) -> AvailableSkillsFragment {
     let mut total_chars = 0usize;
     let mut omitted = 0usize;
     let mut skill_lines = Vec::new();
@@ -45,7 +45,13 @@ pub(crate) fn available_skills_fragment(catalog: &SkillCatalog) -> Option<Availa
             .short_description
             .as_deref()
             .unwrap_or(entry.description.as_str());
-        let line = render_skill_line(entry.name.as_str(), description, entry.rendered_path());
+        let name = entry.name.as_str();
+        let path = entry.rendered_path();
+        let line = if description.is_empty() {
+            format!("- {name}: (file: {path})")
+        } else {
+            format!("- {name}: {description} (file: {path})")
+        };
         let next_chars = total_chars.saturating_add(line.chars().count());
         if next_chars > MAX_AVAILABLE_SKILLS_CHARS {
             omitted = omitted.saturating_add(1);
@@ -56,7 +62,7 @@ pub(crate) fn available_skills_fragment(catalog: &SkillCatalog) -> Option<Availa
     }
 
     if skill_lines.is_empty() {
-        return None;
+        skill_lines.push("- No prompt-visible skills are currently available.".to_string());
     }
     if omitted > 0 {
         let skill_word = if omitted == 1 { "skill" } else { "skills" };
@@ -65,17 +71,8 @@ pub(crate) fn available_skills_fragment(catalog: &SkillCatalog) -> Option<Availa
         ));
     }
 
-    Some(AvailableSkillsFragment {
-        body: render_available_skills_body(&[], &skill_lines),
-    })
-}
-
-fn render_skill_line(name: &str, description: &str, path: &str) -> String {
-    if description.is_empty() {
-        format!("- {name}: (file: {path})")
-    } else {
-        format!("- {name}: {description} (file: {path})")
-    }
+    let body = render_available_skills_body(&[], &skill_lines);
+    AvailableSkillsFragment { body }
 }
 
 pub(crate) fn truncate_main_prompt_contents(contents: &str) -> (String, bool) {

@@ -30,6 +30,7 @@ pub use codex_tools::parse_tool_input_schema;
 pub use codex_tools::parse_tool_input_schema_without_compaction;
 pub use contributors::ApprovalReviewContributor;
 pub use contributors::ConfigContributor;
+pub use contributors::ContextContributionInput;
 pub use contributors::ContextContributor;
 pub use contributors::PromptFragment;
 pub use contributors::PromptSlot;

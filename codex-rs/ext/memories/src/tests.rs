@@ -1,6 +1,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
+use codex_extension_api::ContextContributionInput;
 use codex_extension_api::ContextContributor;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionRegistryBuilder;
@@ -181,7 +182,15 @@ async fn prompt_contribution_uses_memory_summary_when_enabled() {
     });
 
     let fragments = extension
-        .contribute(&ExtensionData::new("session"), &thread_store)
+        .contribute(
+            ContextContributionInput {
+                turn_id: "turn-1".to_string(),
+                environments: Vec::new(),
+            },
+            &ExtensionData::new("session"),
+            &thread_store,
+            &ExtensionData::new("turn-1"),
+        )
         .await;
 
     assert_eq!(fragments.len(), 1);

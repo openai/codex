@@ -1,10 +1,6 @@
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
-
 mod host;
-
-use codex_core_skills::HostLoadedSkills;
 
 use crate::catalog::SkillAuthority;
 use crate::catalog::SkillCatalog;
@@ -20,7 +16,6 @@ pub use host::HostSkillProvider;
 pub struct SkillListQuery {
     pub turn_id: String,
     pub executor_authorities: Vec<SkillAuthority>,
-    pub host: Option<Arc<HostLoadedSkills>>,
     pub include_host_skills: bool,
     pub include_bundled_skills: bool,
     pub include_remote_skills: bool,
@@ -31,7 +26,6 @@ pub struct SkillReadRequest {
     pub authority: SkillAuthority,
     pub package: SkillPackageId,
     pub resource: SkillResourceId,
-    pub host: Option<Arc<HostLoadedSkills>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -49,6 +43,10 @@ pub type SkillProviderFuture<'a, T> =
 /// Implementations must preserve authority boundaries: a resource listed by a
 /// provider must be read or searched through the same provider/authority rather
 /// than converted into an ambient local path.
+///
+/// Generic provider requests intentionally do not expose host-local skill state.
+/// The built-in host provider is routed separately so remote, executor, and
+/// custom providers cannot enumerate or read host skill files.
 pub trait SkillProvider: Send + Sync {
     fn list(&self, query: SkillListQuery) -> SkillProviderFuture<'_, SkillCatalog>;
 

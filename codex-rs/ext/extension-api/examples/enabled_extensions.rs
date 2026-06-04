@@ -73,8 +73,17 @@ async fn contribute_prompt(
     thread_store: &ExtensionData,
 ) -> Vec<codex_extension_api::PromptFragment> {
     let mut fragments = Vec::new();
+    let input = codex_extension_api::ContextContributionInput {
+        turn_id: "example-turn".to_string(),
+        environments: Vec::new(),
+    };
+    let turn_store = ExtensionData::new("turn");
     for contributor in registry.context_contributors() {
-        fragments.extend(contributor.contribute(session_store, thread_store).await);
+        fragments.extend(
+            contributor
+                .contribute(input.clone(), session_store, thread_store, &turn_store)
+                .await,
+        );
     }
     fragments
 }

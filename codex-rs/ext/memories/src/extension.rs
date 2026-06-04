@@ -49,8 +49,10 @@ impl MemoriesExtensionConfig {
 impl ContextContributor for MemoriesExtension {
     fn contribute<'a>(
         &'a self,
+        _input: codex_extension_api::ContextContributionInput,
         _session_store: &'a ExtensionData,
         thread_store: &'a ExtensionData,
+        _turn_store: &'a ExtensionData,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Vec<PromptFragment>> + Send + 'a>> {
         Box::pin(async move {
             let Some(config) = thread_store.get::<MemoriesExtensionConfig>() else {

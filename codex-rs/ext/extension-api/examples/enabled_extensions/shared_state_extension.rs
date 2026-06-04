@@ -19,8 +19,10 @@ struct StyleContributor;
 impl ContextContributor for StyleContributor {
     fn contribute<'a>(
         &'a self,
+        _input: codex_extension_api::ContextContributionInput,
         session_store: &'a ExtensionData,
         thread_store: &'a ExtensionData,
+        _turn_store: &'a ExtensionData,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Vec<PromptFragment>> + Send + 'a>> {
         Box::pin(async move {
             contribution_counts(session_store).record_style();
@@ -39,8 +41,10 @@ struct UsageContributor;
 impl ContextContributor for UsageContributor {
     fn contribute<'a>(
         &'a self,
+        _input: codex_extension_api::ContextContributionInput,
         session_store: &'a ExtensionData,
         thread_store: &'a ExtensionData,
+        _turn_store: &'a ExtensionData,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Vec<PromptFragment>> + Send + 'a>> {
         Box::pin(async move {
             contribution_counts(session_store).record_usage();

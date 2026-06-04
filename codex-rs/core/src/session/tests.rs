@@ -9,6 +9,7 @@ use crate::context::TurnAborted;
 use crate::function_tool::FunctionCallError;
 use crate::shell::default_user_shell;
 use crate::skills::SkillRenderSideEffects;
+use crate::skills::build_available_skills;
 use crate::skills::render::SkillMetadataBudget;
 use crate::test_support::models_manager_with_provider;
 use crate::tools::format_exec_output_str;
@@ -7373,8 +7374,10 @@ struct PromptExtensionTestState;
 impl codex_extension_api::ContextContributor for PromptExtensionTestContributor {
     fn contribute<'a>(
         &'a self,
+        _input: codex_extension_api::ContextContributionInput,
         _session_store: &'a codex_extension_api::ExtensionData,
         thread_store: &'a codex_extension_api::ExtensionData,
+        _turn_store: &'a codex_extension_api::ExtensionData,
     ) -> std::pin::Pin<
         Box<dyn std::future::Future<Output = Vec<codex_extension_api::PromptFragment>> + Send + 'a>,
     > {
@@ -7586,7 +7589,7 @@ async fn build_initial_context_omits_default_image_save_location_without_image_h
 }
 
 #[tokio::test]
-async fn build_initial_context_trims_skill_metadata_from_context_window_budget() {
+async fn build_initial_context_omits_core_skill_catalog() {
     let (session, mut turn_context) = make_session_and_context().await;
     let mut outcome = SkillLoadOutcome::default();
     outcome.skills = vec![
@@ -7622,14 +7625,8 @@ async fn build_initial_context_trims_skill_metadata_from_context_window_budget()
     assert!(
         developer_texts
             .iter()
-            .all(|text| !text.contains("Exceeded skills context budget")),
-        "expected skill budget warning to stay out of the initial context, got {developer_texts:?}"
-    );
-    assert!(
-        developer_texts
-            .iter()
-            .all(|text| !text.contains("- admin-skill:") && !text.contains("- repo-skill:")),
-        "expected no skill metadata entries to fit the tiny budget, got {developer_texts:?}"
+            .all(|text| !text.contains("<skills_instructions>")),
+        "expected initial context to omit core-owned skill catalog, got {developer_texts:?}"
     );
 }
 
@@ -7736,7 +7733,7 @@ fn emit_thread_start_skill_metrics_records_description_truncated_chars_without_o
 }
 
 #[tokio::test]
-async fn build_initial_context_emits_thread_start_skill_warning_on_repeated_builds() {
+async fn build_initial_context_does_not_emit_core_skill_catalog_warning() {
     let (session, turn_context, rx) = make_session_and_context_with_rx().await;
     let mut turn_context = Arc::into_inner(turn_context).expect("sole thread settings owner");
     let mut outcome = SkillLoadOutcome::default();
@@ -7768,26 +7765,7 @@ async fn build_initial_context_emits_thread_start_skill_warning_on_repeated_buil
     turn_context.turn_skills = TurnSkillsContext::new(Arc::new(outcome));
 
     let _ = session.build_initial_context(&turn_context).await;
-    let warning_event = timeout(Duration::from_secs(1), rx.recv())
-        .await
-        .expect("warning event should arrive")
-        .expect("warning event should be readable");
-    assert!(matches!(
-        warning_event.msg,
-        EventMsg::Warning(WarningEvent { message })
-            if message == "Exceeded skills context budget of 2%. All skill descriptions were removed and 2 additional skills were not included in the model-visible skills list."
-    ));
-
-    let _ = session.build_initial_context(&turn_context).await;
-    let warning_event = timeout(Duration::from_secs(1), rx.recv())
-        .await
-        .expect("warning event should arrive on repeated build")
-        .expect("warning event should be readable");
-    assert!(matches!(
-        warning_event.msg,
-        EventMsg::Warning(WarningEvent { message })
-            if message == "Exceeded skills context budget of 2%. All skill descriptions were removed and 2 additional skills were not included in the model-visible skills list."
-    ));
+    assert!(rx.try_recv().is_err());
 }
 
 #[tokio::test]

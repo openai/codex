@@ -1,11 +1,14 @@
 use std::fmt;
 use std::sync::Arc;
 
+use codex_core_skills::HostLoadedSkills;
+
 use crate::catalog::SkillCatalog;
 use crate::catalog::SkillProviderError;
 use crate::catalog::SkillReadResult;
 use crate::catalog::SkillSearchResult;
 use crate::catalog::SkillSourceKind;
+use crate::provider::HostSkillProvider;
 use crate::provider::SkillListQuery;
 use crate::provider::SkillProvider;
 use crate::provider::SkillReadRequest;
@@ -69,6 +72,7 @@ impl fmt::Debug for SkillProviderSource {
 
 #[derive(Clone, Default, Debug)]
 pub struct SkillProviders {
+    host_provider: Option<Arc<HostSkillProvider>>,
     sources: Vec<SkillProviderSource>,
 }
 
@@ -82,9 +86,8 @@ impl SkillProviders {
         self
     }
 
-    pub fn with_host_provider(mut self, provider: Arc<dyn SkillProvider>) -> Self {
-        self.sources
-            .push(SkillProviderSource::host("host", provider));
+    pub fn with_host_provider(mut self, provider: Arc<HostSkillProvider>) -> Self {
+        self.host_provider = Some(provider);
         self
     }
 
@@ -100,8 +103,24 @@ impl SkillProviders {
         self
     }
 
-    pub(crate) async fn list_for_turn(&self, query: SkillListQuery) -> SkillCatalog {
+    pub(crate) async fn list_for_turn(
+        &self,
+        query: SkillListQuery,
+        host_loaded_skills: Option<Arc<HostLoadedSkills>>,
+    ) -> SkillCatalog {
         let mut catalog = SkillCatalog::default();
+
+        if query.include_host_skills
+            && let Some(provider) = &self.host_provider
+        {
+            let result = match host_loaded_skills.as_deref() {
+                Some(host_loaded_skills) => Ok(provider.list(host_loaded_skills)),
+                None => Err(SkillProviderError::new(
+                    "host skill provider requires loaded host skills",
+                )),
+            };
+            extend_catalog(&mut catalog, result, "host");
+        }
 
         for source in self
             .sources
@@ -116,6 +135,48 @@ impl SkillProviders {
         }
 
         catalog
+    }
+
+    pub(crate) async fn read_host(
+        &self,
+        request: SkillReadRequest,
+        host_loaded_skills: Option<Arc<HostLoadedSkills>>,
+    ) -> Result<SkillReadResult, SkillProviderError> {
+        let mut last_error = None;
+        if let Some(provider) = &self.host_provider {
+            match host_loaded_skills.as_deref() {
+                Some(host_loaded_skills) => {
+                    match provider.read(request.clone(), host_loaded_skills).await {
+                        Ok(result) => return Ok(result),
+                        Err(err) => last_error = Some(err),
+                    }
+                }
+                None => {
+                    last_error = Some(SkillProviderError::new(
+                        "host skill provider requires loaded host skills",
+                    ));
+                }
+            }
+        }
+
+        for source in self
+            .sources
+            .iter()
+            .filter(|source| source.owns_kind(&request.authority.kind))
+        {
+            match source.provider.read(request.clone()).await {
+                Ok(result) => return Ok(result),
+                Err(err) => last_error = Some(err),
+            }
+        }
+
+        match last_error {
+            Some(err) => Err(err),
+            None => Err(SkillProviderError::new(format!(
+                "{} skill provider is not configured",
+                request.authority.kind
+            ))),
+        }
     }
 
     pub(crate) async fn read(

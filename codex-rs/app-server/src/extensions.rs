@@ -3,6 +3,7 @@ use std::sync::Weak;
 
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ThreadGoalUpdatedNotification;
+use codex_app_server_protocol::WarningNotification;
 use codex_core::NewThread;
 use codex_core::StartThreadOptions;
 use codex_core::ThreadManager;
@@ -31,6 +32,7 @@ where
     let mut builder = ExtensionRegistryBuilder::<Config>::with_event_sink(event_sink);
     codex_guardian::install(&mut builder, guardian_agent_spawner);
     codex_memories_extension::install(&mut builder, codex_otel::global());
+    codex_skills_extension::install(&mut builder);
     codex_web_search_extension::install(&mut builder, auth_manager.clone());
     codex_image_generation_extension::install(&mut builder, auth_manager);
     Arc::new(builder.build())
@@ -56,6 +58,15 @@ impl ExtensionEventSink for AppServerExtensionEventSink {
                             thread_id: thread_goal_event.thread_id.to_string(),
                             turn_id: thread_goal_event.turn_id,
                             goal: thread_goal_event.goal.into(),
+                        },
+                    ));
+            }
+            EventMsg::Warning(warning_event) => {
+                self.outgoing
+                    .try_send_server_notification(ServerNotification::Warning(
+                        WarningNotification {
+                            thread_id: None,
+                            message: warning_event.message,
                         },
                     ));
             }

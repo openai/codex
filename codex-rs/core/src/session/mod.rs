@@ -14,7 +14,6 @@ use crate::agent::AgentStatus;
 use crate::agent::agent_status_from_event;
 use crate::agent::status::is_final;
 use crate::attestation::AttestationProvider;
-use crate::build_available_skills;
 use crate::compact;
 use crate::config::ManagedFeatures;
 use crate::config::resolve_tool_suggest_config_from_layer_stack;
@@ -22,20 +21,17 @@ use crate::connectors;
 use crate::context::ApprovedCommandPrefixSaved;
 use crate::context::AppsInstructions;
 use crate::context::AvailablePluginsInstructions;
-use crate::context::AvailableSkillsInstructions;
 use crate::context::CollaborationModeInstructions;
 use crate::context::ContextualUserFragment;
 use crate::context::NetworkRuleSaved;
 use crate::context::PermissionsInstructions;
 use crate::context::PersonalitySpecInstructions;
-use crate::default_skill_metadata_budget;
 use crate::environment_selection::ResolvedTurnEnvironments;
 use crate::exec_policy::ExecPolicyManager;
 use crate::parse_turn_item;
 use crate::path_utils::normalize_for_native_workdir;
 use crate::realtime_conversation::RealtimeConversationManager;
 use crate::session_prefix::format_subagent_notification_message;
-use crate::skills::SkillRenderSideEffects;
 use crate::skills_load_input_from_config;
 use crate::turn_metadata::TurnMetadataState;
 use crate::turn_timing::now_unix_timestamp_ms;
@@ -2827,29 +2823,6 @@ impl Session {
                 developer_sections.push(apps_instructions.render());
             }
         }
-        if turn_context.config.include_skill_instructions {
-            let available_skills = build_available_skills(
-                &turn_context.turn_skills.outcome,
-                default_skill_metadata_budget(turn_context.model_info.context_window),
-                SkillRenderSideEffects::ThreadStart {
-                    session_telemetry: &self.services.session_telemetry,
-                },
-            );
-            if let Some(available_skills) = available_skills {
-                let warning_message = available_skills.warning_message.clone();
-                let skills_instructions = AvailableSkillsInstructions::from(available_skills);
-                if let Some(warning_message) = warning_message {
-                    self.send_event_raw(Event {
-                        id: String::new(),
-                        msg: EventMsg::Warning(WarningEvent {
-                            message: warning_message,
-                        }),
-                    })
-                    .await;
-                }
-                developer_sections.push(skills_instructions.render());
-            }
-        }
         let loaded_plugins = self
             .services
             .plugins_manager
@@ -2861,11 +2834,29 @@ impl Session {
             developer_sections.push(plugin_instructions.render());
         }
         let context_contributors = self.services.extensions.context_contributors().to_vec();
+        let context_contribution_input = codex_extension_api::ContextContributionInput {
+            turn_id: turn_context.sub_id.clone(),
+            environments: turn_context
+                .environments
+                .turn_environments
+                .iter()
+                .enumerate()
+                .map(
+                    |(index, environment)| codex_extension_api::TurnInputEnvironment {
+                        environment_id: environment.environment_id.clone(),
+                        cwd: environment.cwd.as_path().to_path_buf(),
+                        is_primary: index == 0,
+                    },
+                )
+                .collect(),
+        };
         for contributor in context_contributors {
             for fragment in contributor
                 .contribute(
+                    context_contribution_input.clone(),
                     &self.services.session_extension_data,
                     &self.services.thread_extension_data,
+                    turn_context.extension_data.as_ref(),
                 )
                 .await
             {
