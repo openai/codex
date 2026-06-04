@@ -623,6 +623,7 @@ impl EscalationPolicy for CoreShellActionProvider {
                     approval_policy: self.approval_policy,
                     permission_profile: self.permission_profile.clone(),
                     sandbox_cwd: self.sandbox_policy_cwd.as_path(),
+                    windows_sandbox_level: self.windows_sandbox_level,
                     sandbox_permissions: self.approval_sandbox_permissions,
                     enable_shell_wrapper_parsing:
                         ENABLE_INTERCEPTED_EXEC_POLICY_SHELL_WRAPPER_PARSING,
@@ -677,6 +678,7 @@ fn evaluate_intercepted_exec_policy(
         approval_policy,
         permission_profile,
         sandbox_cwd,
+        windows_sandbox_level,
         sandbox_permissions,
         enable_shell_wrapper_parsing,
     } = context;
@@ -704,6 +706,7 @@ fn evaluate_intercepted_exec_policy(
                 approval_policy,
                 permission_profile: &permission_profile,
                 sandbox_cwd,
+                windows_sandbox_level,
                 sandbox_permissions,
                 used_complex_parsing,
                 command_origin: crate::exec_policy::ExecPolicyCommandOrigin::Generic,
@@ -725,6 +728,7 @@ struct InterceptedExecPolicyContext<'a> {
     approval_policy: AskForApproval,
     permission_profile: PermissionProfile,
     sandbox_cwd: &'a Path,
+    windows_sandbox_level: WindowsSandboxLevel,
     sandbox_permissions: SandboxPermissions,
     enable_shell_wrapper_parsing: bool,
 }

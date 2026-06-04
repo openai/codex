@@ -10883,6 +10883,7 @@ async fn rejects_escalated_permissions_when_policy_not_on_request() {
             permission_profile: turn_context.permission_profile(),
             #[allow(deprecated)]
             sandbox_cwd: turn_context.cwd.as_path(),
+            windows_sandbox_level: turn_context.windows_sandbox_level,
             sandbox_permissions: SandboxPermissions::UseDefault,
             prefix_rule: None,
         })

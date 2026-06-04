@@ -1022,6 +1022,7 @@ impl UnifiedExecProcessManager {
                 // The process cwd may be model-controlled. Policy resolution
                 // stays anchored to the selected turn environment cwd instead.
                 sandbox_cwd: request.sandbox_cwd.as_path(),
+                windows_sandbox_level: context.turn.windows_sandbox_level,
                 sandbox_permissions: if request.additional_permissions_preapproved {
                     crate::sandboxing::SandboxPermissions::UseDefault
                 } else {
