@@ -3,7 +3,6 @@
 //! These types are serialized across core, TUI, app-server, and SDK boundaries, so field defaults
 //! are used to preserve compatibility when older payloads omit newly introduced attributes.
 
-use std::collections::HashMap;
 use std::fmt;
 use std::str::FromStr;
 
@@ -61,32 +60,6 @@ impl ReasoningEffort {
             Self::High => "high",
             Self::XHigh => "xhigh",
             Self::Custom(effort) => effort,
-        }
-    }
-
-    /// Returns the built-in effort values in ascending order.
-    pub fn known_values() -> impl DoubleEndedIterator<Item = Self> + ExactSizeIterator {
-        [
-            Self::None,
-            Self::Minimal,
-            Self::Low,
-            Self::Medium,
-            Self::High,
-            Self::XHigh,
-        ]
-        .into_iter()
-    }
-
-    /// Returns the built-in ordering rank, or `None` for model-defined values.
-    pub const fn known_rank(&self) -> Option<usize> {
-        match self {
-            Self::None => Some(0),
-            Self::Minimal => Some(1),
-            Self::Low => Some(2),
-            Self::Medium => Some(3),
-            Self::High => Some(4),
-            Self::XHigh => Some(5),
-            Self::Custom(_) => None,
         }
     }
 }
@@ -200,7 +173,6 @@ pub struct ReasoningEffortPreset {
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq)]
 pub struct ModelUpgrade {
     pub id: String,
-    pub reasoning_effort_mapping: Option<HashMap<ReasoningEffort, ReasoningEffort>>,
     pub migration_config_key: String,
     pub model_link: Option<String>,
     pub upgrade_copy: Option<String>,
@@ -593,9 +565,6 @@ impl From<ModelInfo> for ModelPreset {
             is_default: false, // default is the highest priority available model
             upgrade: info.upgrade.as_ref().map(|upgrade| ModelUpgrade {
                 id: upgrade.model.clone(),
-                reasoning_effort_mapping: reasoning_effort_mapping_from_presets(
-                    &info.supported_reasoning_levels,
-                ),
                 migration_config_key: info.slug.clone(),
                 // todo(aibrahim): add the model link here.
                 model_link: None,
@@ -661,45 +630,6 @@ impl ModelPreset {
             default.is_default = true;
         }
     }
-}
-
-fn reasoning_effort_mapping_from_presets(
-    presets: &[ReasoningEffortPreset],
-) -> Option<HashMap<ReasoningEffort, ReasoningEffort>> {
-    if presets.is_empty() {
-        return None;
-    }
-
-    // Map every canonical effort to the closest supported effort for the new model.
-    let supported: Vec<ReasoningEffort> = presets.iter().map(|p| p.effort.clone()).collect();
-    let mut map = HashMap::new();
-    for effort in ReasoningEffort::known_values() {
-        let nearest = nearest_effort(&effort, &supported);
-        map.insert(effort, nearest);
-    }
-    Some(map)
-}
-
-fn nearest_effort(target: &ReasoningEffort, supported: &[ReasoningEffort]) -> ReasoningEffort {
-    let Some(target_rank) = target.known_rank() else {
-        return supported
-            .iter()
-            .find(|candidate| *candidate == target)
-            .unwrap_or(target)
-            .clone();
-    };
-    supported
-        .iter()
-        .filter_map(|candidate| {
-            candidate
-                .known_rank()
-                .map(|rank| (rank.abs_diff(target_rank), candidate))
-        })
-        .min_by_key(|(distance, _)| *distance)
-        .map(|(_, effort)| effort)
-        .or_else(|| supported.first())
-        .unwrap_or(target)
-        .clone()
 }
 
 #[cfg(test)]

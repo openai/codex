@@ -242,7 +242,6 @@ pub(super) async fn handle_model_migration_prompt_if_needed(
 
     if let Some(ModelUpgrade {
         id: target_model,
-        reasoning_effort_mapping: _,
         migration_config_key,
         model_link,
         upgrade_copy,
