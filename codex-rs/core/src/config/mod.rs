@@ -29,6 +29,7 @@ use codex_config::config_toml::DEFAULT_PROJECT_DOC_MAX_BYTES;
 use codex_config::config_toml::ProjectConfig;
 use codex_config::config_toml::RealtimeAudioConfig;
 use codex_config::config_toml::RealtimeConfig;
+use codex_config::config_toml::SqliteJournalModeToml;
 use codex_config::config_toml::ThreadStoreToml;
 use codex_config::config_toml::validate_model_providers;
 use codex_config::loader::load_config_layers_state;
@@ -249,6 +250,15 @@ fn resolve_sqlite_home_env(resolved_cwd: &Path) -> Option<PathBuf> {
         Some(path)
     } else {
         Some(resolved_cwd.join(path))
+    }
+}
+
+fn resolve_sqlite_journal_mode(
+    mode: SqliteJournalModeToml,
+) -> codex_state::RuntimeSqliteJournalMode {
+    match mode {
+        SqliteJournalModeToml::Wal => codex_state::RuntimeSqliteJournalMode::Wal,
+        SqliteJournalModeToml::Delete => codex_state::RuntimeSqliteJournalMode::Delete,
     }
 }
 
@@ -841,6 +851,9 @@ pub struct Config {
 
     /// Directory where Codex stores the SQLite state DB.
     pub sqlite_home: PathBuf,
+
+    /// Journal mode used when opening Codex runtime SQLite databases.
+    pub sqlite_journal_mode: codex_state::RuntimeSqliteJournalMode,
 
     /// Directory where Codex writes log files (defaults to `$CODEX_HOME/log`).
     pub log_dir: PathBuf,
@@ -3276,6 +3289,12 @@ impl Config {
             .map(AbsolutePathBuf::to_path_buf)
             .or_else(|| resolve_sqlite_home_env(&resolved_cwd))
             .unwrap_or_else(|| codex_home.to_path_buf());
+        let sqlite_journal_mode = cfg
+            .sqlite
+            .as_ref()
+            .and_then(|sqlite| sqlite.journal_mode)
+            .map(resolve_sqlite_journal_mode)
+            .unwrap_or_default();
         let original_permission_profile = permission_profile.clone();
         apply_requirement_constrained_value(
             "approval_policy",
@@ -3477,6 +3496,7 @@ impl Config {
             agent_interrupt_message_enabled,
             codex_home,
             sqlite_home,
+            sqlite_journal_mode,
             log_dir,
             config_lock_export_dir: cfg
                 .debug

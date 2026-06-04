@@ -310,6 +310,9 @@ pub struct ConfigToml {
     /// Defaults to `$CODEX_SQLITE_HOME` when set. Otherwise uses `$CODEX_HOME`.
     pub sqlite_home: Option<AbsolutePathBuf>,
 
+    /// SQLite runtime settings.
+    pub sqlite: Option<SqliteToml>,
+
     /// Directory where Codex writes log files. Setting this value explicitly
     /// also enables the TUI text log in this directory.
     /// Defaults to `$CODEX_HOME/log`.
@@ -536,6 +539,21 @@ pub enum ThreadStoreToml {
     InMemory {
         id: String,
     },
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct SqliteToml {
+    /// Journal mode used when opening Codex runtime SQLite databases.
+    pub journal_mode: Option<SqliteJournalModeToml>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SqliteJournalModeToml {
+    #[default]
+    Wal,
+    Delete,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]

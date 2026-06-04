@@ -45,7 +45,7 @@ use sqlx::SqlitePool;
 use sqlx::migrate::Migrator;
 use sqlx::sqlite::SqliteAutoVacuum;
 use sqlx::sqlite::SqliteConnectOptions;
-use sqlx::sqlite::SqliteJournalMode;
+use sqlx::sqlite::SqliteJournalMode as SqlxSqliteJournalMode;
 use sqlx::sqlite::SqlitePoolOptions;
 use sqlx::sqlite::SqliteSynchronous;
 use std::collections::BTreeSet;
@@ -83,6 +83,24 @@ pub use threads::ThreadFilterOptions;
 // metadata, rather than the exact sum of all persisted SQLite column bytes.
 const LOG_PARTITION_SIZE_LIMIT_BYTES: i64 = 10 * 1024 * 1024;
 const LOG_PARTITION_ROW_LIMIT: i64 = 1_000;
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum RuntimeSqliteJournalMode {
+    /// SQLite write-ahead logging, the default Codex runtime behavior.
+    #[default]
+    Wal,
+    /// SQLite rollback journal mode. Useful when WAL sidecar files are unsafe on the backing FS.
+    Delete,
+}
+
+impl RuntimeSqliteJournalMode {
+    fn to_sqlx(self) -> SqlxSqliteJournalMode {
+        match self {
+            Self::Wal => SqlxSqliteJournalMode::Wal,
+            Self::Delete => SqlxSqliteJournalMode::Delete,
+        }
+    }
+}
 
 #[derive(Clone, Copy)]
 struct RuntimeDbSpec {
@@ -157,9 +175,23 @@ impl StateRuntime {
     /// keeping logs in a dedicated file to reduce lock contention with the
     /// rest of the state store.
     pub async fn init(codex_home: PathBuf, default_provider: String) -> anyhow::Result<Arc<Self>> {
+        Self::init_with_journal_mode(
+            codex_home,
+            default_provider,
+            RuntimeSqliteJournalMode::default(),
+        )
+        .await
+    }
+
+    pub async fn init_with_journal_mode(
+        codex_home: PathBuf,
+        default_provider: String,
+        journal_mode: RuntimeSqliteJournalMode,
+    ) -> anyhow::Result<Arc<Self>> {
         Self::init_inner(
             codex_home,
             default_provider,
+            journal_mode,
             /*telemetry_override*/ None,
         )
         .await
@@ -171,12 +203,19 @@ impl StateRuntime {
         default_provider: String,
         telemetry_override: &dyn DbTelemetry,
     ) -> anyhow::Result<Arc<Self>> {
-        Self::init_inner(codex_home, default_provider, Some(telemetry_override)).await
+        Self::init_inner(
+            codex_home,
+            default_provider,
+            RuntimeSqliteJournalMode::default(),
+            Some(telemetry_override),
+        )
+        .await
     }
 
     async fn init_inner(
         codex_home: PathBuf,
         default_provider: String,
+        journal_mode: RuntimeSqliteJournalMode,
         telemetry_override: Option<&dyn DbTelemetry>,
     ) -> anyhow::Result<Arc<Self>> {
         tokio::fs::create_dir_all(&codex_home).await?;
@@ -188,32 +227,48 @@ impl StateRuntime {
         let logs_path = LOGS_DB.path(codex_home.as_path());
         let goals_path = GOALS_DB.path(codex_home.as_path());
         let memories_path = MEMORIES_DB.path(codex_home.as_path());
-        let pool = match open_state_sqlite(&state_path, &state_migrator, telemetry_override).await {
+        let pool = match open_state_sqlite(
+            &state_path,
+            &state_migrator,
+            journal_mode,
+            telemetry_override,
+        )
+        .await
+        {
             Ok(db) => Arc::new(db),
             Err(err) => {
                 warn!("failed to open state db at {}: {err}", state_path.display());
                 return Err(err);
             }
         };
-        let logs_pool = match open_logs_sqlite(&logs_path, &logs_migrator, telemetry_override).await
-        {
-            Ok(db) => Arc::new(db),
-            Err(err) => {
-                warn!("failed to open logs db at {}: {err}", logs_path.display());
-                return Err(err);
-            }
-        };
-        let goals_pool =
-            match open_goals_sqlite(&goals_path, &goals_migrator, telemetry_override).await {
+        let logs_pool =
+            match open_logs_sqlite(&logs_path, &logs_migrator, journal_mode, telemetry_override)
+                .await
+            {
                 Ok(db) => Arc::new(db),
                 Err(err) => {
-                    warn!("failed to open goals db at {}: {err}", goals_path.display());
+                    warn!("failed to open logs db at {}: {err}", logs_path.display());
                     return Err(err);
                 }
             };
+        let goals_pool = match open_goals_sqlite(
+            &goals_path,
+            &goals_migrator,
+            journal_mode,
+            telemetry_override,
+        )
+        .await
+        {
+            Ok(db) => Arc::new(db),
+            Err(err) => {
+                warn!("failed to open goals db at {}: {err}", goals_path.display());
+                return Err(err);
+            }
+        };
         let memories_pool = match open_memories_sqlite(
             &memories_path,
             &memories_migrator,
+            journal_mode,
             telemetry_override,
         )
         .await
@@ -284,6 +339,17 @@ impl StateRuntime {
     }
 
     pub async fn clear_memory_data_in_sqlite_home(sqlite_home: &Path) -> anyhow::Result<bool> {
+        Self::clear_memory_data_in_sqlite_home_with_journal_mode(
+            sqlite_home,
+            RuntimeSqliteJournalMode::default(),
+        )
+        .await
+    }
+
+    pub async fn clear_memory_data_in_sqlite_home_with_journal_mode(
+        sqlite_home: &Path,
+        journal_mode: RuntimeSqliteJournalMode,
+    ) -> anyhow::Result<bool> {
         let memories_path = MEMORIES_DB.path(sqlite_home);
         if !tokio::fs::try_exists(&memories_path).await? {
             return Ok(false);
@@ -293,6 +359,7 @@ impl StateRuntime {
         let pool = open_memories_sqlite(
             &memories_path,
             &memories_migrator,
+            journal_mode,
             /*telemetry_override*/ None,
         )
         .await?;
@@ -302,11 +369,14 @@ impl StateRuntime {
     }
 }
 
-fn base_sqlite_options(path: &Path) -> SqliteConnectOptions {
+fn base_sqlite_options(
+    path: &Path,
+    journal_mode: RuntimeSqliteJournalMode,
+) -> SqliteConnectOptions {
     SqliteConnectOptions::new()
         .filename(path)
         .create_if_missing(true)
-        .journal_mode(SqliteJournalMode::Wal)
+        .journal_mode(journal_mode.to_sqlx())
         .synchronous(SqliteSynchronous::Normal)
         .busy_timeout(Duration::from_secs(5))
         .log_statements(LevelFilter::Off)
@@ -315,45 +385,58 @@ fn base_sqlite_options(path: &Path) -> SqliteConnectOptions {
 async fn open_state_sqlite(
     path: &Path,
     migrator: &Migrator,
+    journal_mode: RuntimeSqliteJournalMode,
     telemetry_override: Option<&dyn DbTelemetry>,
 ) -> anyhow::Result<SqlitePool> {
     // New state DBs should use incremental auto-vacuum, but retrofitting an
     // existing DB requires a full VACUUM. Do not attempt that during process
     // startup: it is maintenance work that can contend with foreground writers.
-    open_sqlite(path, migrator, STATE_DB, telemetry_override).await
+    open_sqlite(path, migrator, STATE_DB, journal_mode, telemetry_override).await
 }
 
 async fn open_logs_sqlite(
     path: &Path,
     migrator: &Migrator,
+    journal_mode: RuntimeSqliteJournalMode,
     telemetry_override: Option<&dyn DbTelemetry>,
 ) -> anyhow::Result<SqlitePool> {
-    open_sqlite(path, migrator, LOGS_DB, telemetry_override).await
+    open_sqlite(path, migrator, LOGS_DB, journal_mode, telemetry_override).await
 }
 
 async fn open_goals_sqlite(
     path: &Path,
     migrator: &Migrator,
+    journal_mode: RuntimeSqliteJournalMode,
     telemetry_override: Option<&dyn DbTelemetry>,
 ) -> anyhow::Result<SqlitePool> {
-    open_sqlite(path, migrator, GOALS_DB, telemetry_override).await
+    open_sqlite(path, migrator, GOALS_DB, journal_mode, telemetry_override).await
 }
 
 async fn open_memories_sqlite(
     path: &Path,
     migrator: &Migrator,
+    journal_mode: RuntimeSqliteJournalMode,
     telemetry_override: Option<&dyn DbTelemetry>,
 ) -> anyhow::Result<SqlitePool> {
-    open_sqlite(path, migrator, MEMORIES_DB, telemetry_override).await
+    open_sqlite(
+        path,
+        migrator,
+        MEMORIES_DB,
+        journal_mode,
+        telemetry_override,
+    )
+    .await
 }
 
 async fn open_sqlite(
     path: &Path,
     migrator: &Migrator,
     spec: RuntimeDbSpec,
+    journal_mode: RuntimeSqliteJournalMode,
     telemetry_override: Option<&dyn DbTelemetry>,
 ) -> anyhow::Result<SqlitePool> {
-    let options = base_sqlite_options(path).auto_vacuum(SqliteAutoVacuum::Incremental);
+    let options =
+        base_sqlite_options(path, journal_mode).auto_vacuum(SqliteAutoVacuum::Incremental);
     let started = Instant::now();
     let pool_result = SqlitePoolOptions::new()
         .max_connections(5)
@@ -461,6 +544,7 @@ pub async fn sqlite_integrity_check(path: &Path) -> anyhow::Result<Vec<String>> 
 
 #[cfg(test)]
 mod tests {
+    use super::RuntimeSqliteJournalMode;
     use super::StateRuntime;
     use super::open_state_sqlite;
     use super::runtime_state_migrator;
@@ -611,12 +695,41 @@ mod tests {
         let tolerant_pool = open_state_sqlite(
             state_path.as_path(),
             &tolerant_migrator,
+            RuntimeSqliteJournalMode::default(),
             /*telemetry_override*/ None,
         )
         .await
         .expect("runtime migrator should tolerate newer applied migrations");
         tolerant_pool.close().await;
 
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn open_state_sqlite_honors_delete_journal_mode() {
+        let codex_home = unique_temp_dir();
+        tokio::fs::create_dir_all(&codex_home)
+            .await
+            .expect("create codex home");
+        let state_path = state_db_path(codex_home.as_path());
+
+        let migrator = runtime_state_migrator();
+        let pool = open_state_sqlite(
+            state_path.as_path(),
+            &migrator,
+            RuntimeSqliteJournalMode::Delete,
+            /*telemetry_override*/ None,
+        )
+        .await
+        .expect("open state db with delete journal mode");
+        let journal_mode: String = sqlx::query_scalar("PRAGMA journal_mode")
+            .fetch_one(&pool)
+            .await
+            .expect("query journal mode");
+
+        assert_eq!(journal_mode, "delete");
+
+        pool.close().await;
         let _ = tokio::fs::remove_dir_all(codex_home).await;
     }
 

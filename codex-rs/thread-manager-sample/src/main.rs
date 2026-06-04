@@ -230,6 +230,7 @@ fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::R
         agent_roles: BTreeMap::new(),
         memories: MemoriesConfig::default(),
         sqlite_home: codex_home.to_path_buf(),
+        sqlite_journal_mode: Default::default(),
         log_dir: codex_home.join("log").to_path_buf(),
         config_lock_export_dir: None,
         config_lock_allow_codex_version_mismatch: false,

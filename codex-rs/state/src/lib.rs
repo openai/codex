@@ -18,6 +18,7 @@ pub use model::LogQuery;
 pub use model::LogRow;
 pub use model::Phase2JobClaimOutcome;
 /// Preferred entrypoint: owns configuration and metrics.
+pub use runtime::RuntimeSqliteJournalMode;
 pub use runtime::StateRuntime;
 
 pub use audit::ThreadStateAuditRow;

@@ -49,6 +49,7 @@ async fn try_init_waits_for_concurrent_startup_backfill() -> anyhow::Result<()> 
     let initialized = try_init_with_roots_and_backfill_lease(
         home.path().to_path_buf(),
         home.path().to_path_buf(),
+        codex_state::RuntimeSqliteJournalMode::default(),
         "test-provider".to_string(),
         /*backfill_lease_seconds*/ 60,
     )
@@ -74,6 +75,7 @@ async fn try_init_times_out_waiting_for_stuck_startup_backfill() -> anyhow::Resu
     let result = try_init_with_roots_and_backfill_lease(
         home.path().to_path_buf(),
         home.path().to_path_buf(),
+        codex_state::RuntimeSqliteJournalMode::default(),
         "test-provider".to_string(),
         /*backfill_lease_seconds*/ 60,
     )

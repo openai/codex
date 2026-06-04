@@ -5,6 +5,9 @@ use std::sync::Arc;
 pub trait RolloutConfigView {
     fn codex_home(&self) -> &Path;
     fn sqlite_home(&self) -> &Path;
+    fn sqlite_journal_mode(&self) -> codex_state::RuntimeSqliteJournalMode {
+        codex_state::RuntimeSqliteJournalMode::default()
+    }
     fn cwd(&self) -> &Path;
     fn model_provider_id(&self) -> &str;
     fn generate_memories(&self) -> bool;
@@ -64,6 +67,10 @@ impl<T: RolloutConfigView + ?Sized> RolloutConfigView for &T {
         (*self).sqlite_home()
     }
 
+    fn sqlite_journal_mode(&self) -> codex_state::RuntimeSqliteJournalMode {
+        (*self).sqlite_journal_mode()
+    }
+
     fn cwd(&self) -> &Path {
         (*self).cwd()
     }
@@ -84,6 +91,10 @@ impl<T: RolloutConfigView + ?Sized> RolloutConfigView for Arc<T> {
 
     fn sqlite_home(&self) -> &Path {
         self.as_ref().sqlite_home()
+    }
+
+    fn sqlite_journal_mode(&self) -> codex_state::RuntimeSqliteJournalMode {
+        self.as_ref().sqlite_journal_mode()
     }
 
     fn cwd(&self) -> &Path {

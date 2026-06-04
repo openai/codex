@@ -2656,6 +2656,27 @@
       },
       "type": "object"
     },
+    "SqliteJournalModeToml": {
+      "enum": [
+        "wal",
+        "delete"
+      ],
+      "type": "string"
+    },
+    "SqliteToml": {
+      "additionalProperties": false,
+      "properties": {
+        "journal_mode": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/SqliteJournalModeToml"
+            }
+          ],
+          "description": "Journal mode used when opening Codex runtime SQLite databases."
+        }
+      },
+      "type": "object"
+    },
     "ThreadStoreToml": {
       "oneOf": [
         {
@@ -5142,6 +5163,14 @@
         }
       ],
       "description": "User-level skill config entries keyed by SKILL.md path."
+    },
+    "sqlite": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/SqliteToml"
+        }
+      ],
+      "description": "SQLite runtime settings."
     },
     "sqlite_home": {
       "allOf": [

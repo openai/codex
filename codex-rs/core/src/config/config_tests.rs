@@ -19,6 +19,8 @@ use codex_config::config_toml::RealtimeToml;
 use codex_config::config_toml::RealtimeTransport;
 use codex_config::config_toml::RealtimeWsMode;
 use codex_config::config_toml::RealtimeWsVersion;
+use codex_config::config_toml::SqliteJournalModeToml;
+use codex_config::config_toml::SqliteToml;
 use codex_config::config_toml::ToolsToml;
 use codex_config::loader::project_trust_key;
 use codex_config::permissions_toml::FilesystemPermissionToml;
@@ -4661,6 +4663,29 @@ async fn sqlite_home_defaults_to_codex_home_for_workspace_write() -> std::io::Re
     .await?;
 
     assert_eq!(config.sqlite_home, codex_home.path().to_path_buf());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn sqlite_journal_mode_can_disable_wal() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            sqlite: Some(SqliteToml {
+                journal_mode: Some(SqliteJournalModeToml::Delete),
+            }),
+            ..Default::default()
+        },
+        ConfigOverrides::default(),
+        codex_home.abs(),
+    )
+    .await?;
+
+    assert_eq!(
+        config.sqlite_journal_mode,
+        codex_state::RuntimeSqliteJournalMode::Delete
+    );
 
     Ok(())
 }

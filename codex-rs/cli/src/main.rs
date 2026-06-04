@@ -1911,8 +1911,11 @@ async fn run_debug_clear_memories_command(
         .await?;
 
     let memories_path = memories_db_path(config.sqlite_home.as_path());
-    let cleared_memories_db =
-        StateRuntime::clear_memory_data_in_sqlite_home(config.sqlite_home.as_path()).await?;
+    let cleared_memories_db = StateRuntime::clear_memory_data_in_sqlite_home_with_journal_mode(
+        config.sqlite_home.as_path(),
+        config.sqlite_journal_mode,
+    )
+    .await?;
 
     clear_memory_roots_contents(&config.codex_home).await?;
 
