@@ -21,6 +21,7 @@ struct MockExecProcess {
     process_id: ProcessId,
     write_response: WriteResponse,
     read_responses: Mutex<VecDeque<ReadResponse>>,
+    terminate_error: Option<String>,
     wake_tx: watch::Sender<u64>,
 }
 
@@ -64,11 +65,17 @@ impl ExecProcess for MockExecProcess {
     }
 
     async fn terminate(&self) -> Result<(), ExecServerError> {
+        if let Some(message) = &self.terminate_error {
+            return Err(ExecServerError::Protocol(message.clone()));
+        }
         Ok(())
     }
 }
 
-async fn remote_process(write_status: WriteStatus) -> UnifiedExecProcess {
+async fn remote_process(
+    write_status: WriteStatus,
+    terminate_error: Option<String>,
+) -> UnifiedExecProcess {
     let (wake_tx, _wake_rx) = watch::channel(0);
     let started = StartedExecProcess {
         process: Arc::new(MockExecProcess {
@@ -77,6 +84,7 @@ async fn remote_process(write_status: WriteStatus) -> UnifiedExecProcess {
                 status: write_status,
             },
             read_responses: Mutex::new(VecDeque::new()),
+            terminate_error,
             wake_tx,
         }),
     };
@@ -88,7 +96,7 @@ async fn remote_process(write_status: WriteStatus) -> UnifiedExecProcess {
 
 #[tokio::test]
 async fn remote_write_unknown_process_marks_process_exited() {
-    let process = remote_process(WriteStatus::UnknownProcess).await;
+    let process = remote_process(WriteStatus::UnknownProcess, /*terminate_error*/ None).await;
 
     let err = process
         .write(b"hello")
@@ -101,7 +109,7 @@ async fn remote_write_unknown_process_marks_process_exited() {
 
 #[tokio::test]
 async fn remote_write_closed_stdin_marks_process_exited() {
-    let process = remote_process(WriteStatus::StdinClosed).await;
+    let process = remote_process(WriteStatus::StdinClosed, /*terminate_error*/ None).await;
 
     let err = process
         .write(b"hello")
@@ -114,7 +122,7 @@ async fn remote_write_closed_stdin_marks_process_exited() {
 
 #[tokio::test]
 async fn fail_and_terminate_preserves_failure_message() {
-    let process = remote_process(WriteStatus::Accepted).await;
+    let process = remote_process(WriteStatus::Accepted, /*terminate_error*/ None).await;
 
     process.fail_and_terminate("network denied".to_string());
     process.fail_and_terminate("second failure".to_string());
@@ -124,6 +132,23 @@ async fn fail_and_terminate_preserves_failure_message() {
         process.failure_message(),
         Some("network denied".to_string())
     );
+}
+
+#[tokio::test]
+async fn remote_terminate_failure_does_not_mark_process_exited() {
+    let process = remote_process(
+        WriteStatus::Accepted,
+        Some("terminate unavailable".to_string()),
+    )
+    .await;
+
+    let err = process
+        .terminate_confirmed()
+        .await
+        .expect_err("expected terminate failure");
+
+    assert!(matches!(err, UnifiedExecError::ProcessFailed { .. }));
+    assert!(!process.has_exited());
 }
 
 #[tokio::test]
@@ -143,6 +168,7 @@ async fn remote_process_waits_for_early_exit_event() {
                 closed: true,
                 failure: None,
             }])),
+            terminate_error: None,
             wake_tx: wake_tx.clone(),
         }),
     };

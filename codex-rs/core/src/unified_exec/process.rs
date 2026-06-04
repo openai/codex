@@ -194,9 +194,16 @@ impl UnifiedExecProcess {
         }
     }
 
-    pub(super) fn terminate(&self) {
+    fn finish_termination(&self) {
         self.output_closed.store(true, Ordering::Release);
         self.output_closed_notify.notify_waiters();
+        self.cancellation_token.cancel();
+        if let Some(output_task) = &self.output_task {
+            output_task.abort();
+        }
+    }
+
+    pub(super) fn terminate(&self) {
         match &self.process_handle {
             ProcessHandle::Local(process_handle) => process_handle.terminate(),
             ProcessHandle::ExecServer(process_handle) => {
@@ -206,10 +213,21 @@ impl UnifiedExecProcess {
                 });
             }
         }
-        self.cancellation_token.cancel();
-        if let Some(output_task) = &self.output_task {
-            output_task.abort();
+        self.finish_termination();
+    }
+
+    pub(super) async fn terminate_confirmed(&self) -> Result<(), UnifiedExecError> {
+        match &self.process_handle {
+            ProcessHandle::Local(process_handle) => process_handle.terminate(),
+            ProcessHandle::ExecServer(process_handle) => {
+                process_handle
+                    .terminate()
+                    .await
+                    .map_err(|err| UnifiedExecError::process_failed(err.to_string()))?;
+            }
         }
+        self.finish_termination();
+        Ok(())
     }
 
     pub(super) fn fail_and_terminate(&self, message: String) {
