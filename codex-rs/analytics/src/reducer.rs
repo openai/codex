@@ -2539,6 +2539,18 @@ fn codex_turn_event_params(
         workspace_kind,
         is_first_turn,
     } = resolved_config;
+    let TurnProfile {
+        version: profile_version,
+        before_first_sampling_ms,
+        sampling_ms,
+        between_sampling_overhead_ms,
+        tool_blocking_ms,
+        after_last_sampling_ms,
+        sampling_tool_overlap_ms,
+        sampling_request_count,
+        sampling_retry_count,
+        status: profile_status,
+    } = profile;
     let token_usage = turn_state.token_usage.clone();
     let codex_error = turn_state.codex_error.as_ref();
     CodexTurnEventParams {
@@ -2601,7 +2613,16 @@ fn codex_turn_event_params(
         total_tokens: token_usage
             .as_ref()
             .map(|token_usage| token_usage.total_tokens),
-        profile,
+        profile_version,
+        before_first_sampling_ms,
+        sampling_ms,
+        between_sampling_overhead_ms,
+        tool_blocking_ms,
+        after_last_sampling_ms,
+        sampling_tool_overlap_ms,
+        sampling_request_count,
+        sampling_retry_count,
+        profile_status,
         duration_ms: completed.duration_ms,
         started_at,
         completed_at: Some(completed.completed_at),
