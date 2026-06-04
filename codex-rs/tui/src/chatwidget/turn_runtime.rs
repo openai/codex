@@ -18,6 +18,12 @@ impl ChatWidget {
         self.refresh_status_surfaces();
     }
 
+    /// Clears activity before switching to Idle so `last: ...` emits at once.
+    pub(super) fn finalize_turn_tab_status(&mut self) {
+        self.bottom_pane.set_current_activity(/*activity*/ None);
+        self.update_task_running_state();
+    }
+
     pub(super) fn collect_runtime_metrics_delta(&mut self) {
         if let Some(delta) = self.session_telemetry.runtime_metrics_summary() {
             self.apply_runtime_metrics_delta(delta);
@@ -162,7 +168,7 @@ impl ChatWidget {
         self.input_queue.user_turn_pending_start = false;
         self.clear_active_hook_cell();
         self.turn_lifecycle.finish();
-        self.update_task_running_state();
+        self.finalize_turn_tab_status();
         self.running_commands.clear();
         self.suppressed_exec_calls.clear();
         self.last_unified_wait = None;
@@ -305,7 +311,7 @@ impl ChatWidget {
         // Reset running state and clear streaming buffers.
         self.input_queue.user_turn_pending_start = false;
         self.turn_lifecycle.finish();
-        self.update_task_running_state();
+        self.finalize_turn_tab_status();
         self.running_commands.clear();
         self.suppressed_exec_calls.clear();
         self.last_unified_wait = None;

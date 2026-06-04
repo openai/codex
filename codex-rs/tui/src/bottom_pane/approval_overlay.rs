@@ -106,6 +106,39 @@ pub(crate) enum ApprovalRequest {
 }
 
 impl ApprovalRequest {
+    /// One-line summary suitable for the OSC 21337 `detail` field.
+    pub(crate) fn tab_status_summary(&self) -> Option<String> {
+        match self {
+            ApprovalRequest::Exec { command, .. } => {
+                // Parse like the visible history cells so the detail reads
+                // "Run python3 …" / "Read foo.rs", not a raw shell line.
+                let parsed = codex_shell_command::parse_command::parse_command(command);
+                Some(
+                    crate::tab_status::format_parsed_command_for_tab_status(&parsed)
+                        .unwrap_or_else(|| {
+                            crate::tab_status::format_command_for_tab_status(command)
+                        }),
+                )
+            }
+            ApprovalRequest::ApplyPatch { changes, .. } => {
+                let count = changes.len();
+                let suffix = if count == 1 { "" } else { "s" };
+                Some(format!("Apply patch ({count} file{suffix})"))
+            }
+            ApprovalRequest::Permissions { reason, .. } => Some(
+                reason
+                    .as_deref()
+                    .map(|r| format!("Permissions: {r}"))
+                    .unwrap_or_else(|| "Permissions request".to_string()),
+            ),
+            ApprovalRequest::McpElicitation {
+                server_name,
+                message,
+                ..
+            } => Some(format!("Elicitation from {server_name}: {message}")),
+        }
+    }
+
     fn thread_id(&self) -> ThreadId {
         match self {
             ApprovalRequest::Exec { thread_id, .. }
@@ -600,6 +633,15 @@ impl BottomPaneView for ApprovalOverlay {
 
     fn terminal_title_requires_action(&self) -> bool {
         true
+    }
+
+    fn tab_status_detail(&self) -> Option<String> {
+        // Read the live current_request: the overlay advances its queue
+        // internally (no new push_view), so this keeps the detail in lockstep
+        // with what the user sees.
+        self.current_request
+            .as_ref()
+            .and_then(ApprovalRequest::tab_status_summary)
     }
 }
 

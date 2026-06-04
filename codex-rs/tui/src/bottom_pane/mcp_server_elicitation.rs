@@ -1646,6 +1646,10 @@ impl BottomPaneView for McpServerElicitationOverlay {
         true
     }
 
+    fn tab_status_detail(&self) -> Option<String> {
+        Some("MCP server request".to_string())
+    }
+
     fn on_ctrl_c(&mut self) -> CancellationEvent {
         if !self.current_field_is_select() && !self.composer.current_text_with_pending().is_empty()
         {

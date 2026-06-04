@@ -140,12 +140,13 @@ impl StatusIndicatorWidget {
             .filter(|message| !message.is_empty());
     }
 
-    #[cfg(test)]
+    /// The animated header: the dynamic verb (e.g. "Working", "Thinking").
     pub(crate) fn header(&self) -> &str {
         &self.header
     }
 
-    #[cfg(test)]
+    /// The detail text shown under the header, if any (multi-line; the first
+    /// line is the best single-line summary).
     pub(crate) fn details(&self) -> Option<&str> {
         self.details.as_deref()
     }

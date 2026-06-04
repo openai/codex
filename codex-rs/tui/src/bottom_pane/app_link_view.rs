@@ -777,6 +777,11 @@ impl BottomPaneView for AppLinkView {
     fn terminal_title_requires_action(&self) -> bool {
         self.is_tool_suggestion()
     }
+
+    fn tab_status_detail(&self) -> Option<String> {
+        self.is_tool_suggestion()
+            .then(|| "Tool suggestion".to_string())
+    }
 }
 
 impl crate::render::renderable::Renderable for AppLinkView {

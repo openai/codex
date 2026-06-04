@@ -136,6 +136,7 @@ impl ChatWidget {
             clipboard_lease: None,
             copy_last_response_binding,
             running_commands: HashMap::new(),
+            running_command_seq: 0,
             collab_agent_metadata: HashMap::new(),
             pending_collab_spawn_requests: HashMap::new(),
             suppressed_exec_calls: HashSet::new(),

@@ -9,6 +9,8 @@ pub(super) struct RunningCommand {
     pub(super) command: Vec<String>,
     pub(super) parsed_cmd: Vec<ParsedCommand>,
     pub(super) source: ExecCommandSource,
+    /// Monotonic insertion order for deterministic tab-status selection.
+    pub(super) start_order: u64,
 }
 
 pub(super) struct UnifiedExecProcessSummary {

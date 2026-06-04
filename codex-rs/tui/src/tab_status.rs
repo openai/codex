@@ -1,13 +1,9 @@
 //! OSC 21337 tab-status output helpers for the TUI.
 //!
-//! This module owns the low-level write path: callers decide *when* the tab
-//! status changes, this only knows how to write the sequence. The
-//! `IsTerminal` gate matches the terminal-title module so non-TTY stdout
-//! (e.g. piped `codex exec`) doesn't get escape sequences in captured output.
-//!
-//! OSC 21337 is an iTerm2 extension; other terminals ignore it. The payload
-//! is a semicolon-separated list of `key=value` pairs. We emit `status`
-//! (label), `indicator` (dot color), and `status-color` (text color).
+//! Callers decide when the tab status changes; this module formats activity
+//! detail and owns the low-level terminal write path. OSC 21337 values escape
+//! `;` and `\`, and every field is emitted on every transition so iTerm clears
+//! stale values.
 
 use std::fmt;
 use std::io;
@@ -16,13 +12,13 @@ use std::io::stdout;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 
+use codex_protocol::parse_command::ParsedCommand;
 use crossterm::Command;
 use ratatui::crossterm::execute;
 
-/// Whether this process has ever written an OSC 21337 sequence. Gates the
-/// shutdown-time `clear_tab_status` so that, when we never emitted, we don't
-/// clobber a status set by another tool sharing the tab.
 static EMITTED: AtomicBool = AtomicBool::new(/*v*/ false);
+const MAX_TAB_STATUS_DETAIL_CHARS: usize = 200;
+const MAX_UNKNOWN_COMMAND_CHARS: usize = 80;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TabStatus {
@@ -40,8 +36,6 @@ impl TabStatus {
         }
     }
 
-    /// Dot color. Matches the palette other agent CLIs emit so multiple
-    /// tools read consistently in the tab bar.
     fn indicator(self) -> &'static str {
         match self {
             TabStatus::Working => "#ff9500",
@@ -50,8 +44,6 @@ impl TabStatus {
         }
     }
 
-    /// Status-text color. Working/Waiting match the dot; Idle dims so the
-    /// colored dot stays the active affordance once codex is done.
     fn text_color(self) -> &'static str {
         match self {
             TabStatus::Working => "#ff9500",
@@ -61,11 +53,70 @@ impl TabStatus {
     }
 }
 
-pub(crate) fn set_tab_status(status: TabStatus) -> io::Result<()> {
+pub(crate) fn format_command_for_tab_status(argv: &[String]) -> String {
+    crate::exec_command::strip_bash_lc_and_escape(argv)
+}
+
+pub(crate) fn format_parsed_command_for_tab_status(parsed: &[ParsedCommand]) -> Option<String> {
+    if parsed.is_empty() {
+        return None;
+    }
+
+    if parsed
+        .iter()
+        .all(|command| matches!(command, ParsedCommand::Read { .. }))
+    {
+        let names = parsed
+            .iter()
+            .filter_map(|command| match command {
+                ParsedCommand::Read { name, .. } => Some(name.as_str()),
+                ParsedCommand::ListFiles { .. }
+                | ParsedCommand::Search { .. }
+                | ParsedCommand::Unknown { .. } => None,
+            })
+            .collect::<Vec<_>>();
+        let (head, rest) = names.split_at(names.len().min(/*other*/ 3));
+        let mut summary = format!("Read {}", head.join(", "));
+        if !rest.is_empty() {
+            summary.push_str(", …");
+        }
+        return Some(summary);
+    }
+
+    match &parsed[0] {
+        ParsedCommand::Read { name, .. } => Some(format!("Read {name}")),
+        ParsedCommand::ListFiles { path, .. } => {
+            Some(format!("List {}", path.as_deref().unwrap_or(".")))
+        }
+        ParsedCommand::Search { query, path, cmd } => Some(match (query, path) {
+            (Some(query), Some(path)) => format!("Search \"{query}\" in {path}"),
+            (Some(query), None) => format!("Search \"{query}\""),
+            (None, Some(path)) => format!("Search in {path}"),
+            (None, None) => format!("Run {}", oneline_truncated(cmd)),
+        }),
+        ParsedCommand::Unknown { cmd } => Some(format!("Run {}", oneline_truncated(cmd))),
+    }
+}
+
+fn oneline_truncated(value: &str) -> String {
+    let collapsed = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    if collapsed.chars().count() <= MAX_UNKNOWN_COMMAND_CHARS {
+        return collapsed;
+    }
+    format!(
+        "{}…",
+        collapsed
+            .chars()
+            .take(MAX_UNKNOWN_COMMAND_CHARS)
+            .collect::<String>()
+    )
+}
+
+pub(crate) fn set_tab_status(status: TabStatus, detail: Option<&str>) -> io::Result<()> {
     if !stdout().is_terminal() {
         return Ok(());
     }
-    execute!(stdout(), SetTabStatus(status))?;
+    execute!(stdout(), SetTabStatus(status, detail.map(sanitize_detail)))?;
     EMITTED.store(/*val*/ true, Ordering::Relaxed);
     Ok(())
 }
@@ -79,17 +130,58 @@ pub(crate) fn clear_tab_status() -> io::Result<()> {
     Ok(())
 }
 
-#[derive(Debug, Clone, Copy)]
-struct SetTabStatus(TabStatus);
+fn sanitize_detail(detail: &str) -> String {
+    let mut out = String::with_capacity(detail.len());
+    let mut chars_written = 0;
+    let mut pending_space = false;
+    let mut truncated = false;
+
+    for ch in detail.chars() {
+        if ch.is_whitespace() {
+            pending_space = !out.is_empty();
+            continue;
+        }
+        if crate::osc_text::is_disallowed_osc_text_char(ch) {
+            continue;
+        }
+        if pending_space {
+            if chars_written >= MAX_TAB_STATUS_DETAIL_CHARS {
+                truncated = true;
+                break;
+            }
+            out.push(' ');
+            chars_written += 1;
+            pending_space = false;
+        }
+        if chars_written >= MAX_TAB_STATUS_DETAIL_CHARS {
+            truncated = true;
+            break;
+        }
+        if matches!(ch, ';' | '\\') {
+            out.push('\\');
+        }
+        out.push(ch);
+        chars_written += 1;
+    }
+    if truncated {
+        out.push('…');
+    }
+    out
+}
+
+#[derive(Debug, Clone)]
+struct SetTabStatus(TabStatus, Option<String>);
 
 impl Command for SetTabStatus {
     fn write_ansi(&self, f: &mut impl fmt::Write) -> fmt::Result {
+        let detail = self.1.as_deref().unwrap_or("");
         write!(
             f,
-            "\x1b]21337;status={};indicator={};status-color={}\x07",
+            "\x1b]21337;status={};indicator={};status-color={};detail={}\x07",
             self.0.label(),
             self.0.indicator(),
-            self.0.text_color()
+            self.0.text_color(),
+            detail
         )
     }
 
@@ -111,9 +203,7 @@ struct ClearTabStatus;
 
 impl Command for ClearTabStatus {
     fn write_ansi(&self, f: &mut impl fmt::Write) -> fmt::Result {
-        // Explicit empty values for every managed field so iTerm clears
-        // them rather than leaving stale content visible.
-        write!(f, "\x1b]21337;status=;indicator=;status-color=\x07")
+        write!(f, "\x1b]21337;status=;indicator=;status-color=;detail=\x07")
     }
 
     #[cfg(windows)]

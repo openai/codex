@@ -131,6 +131,12 @@ pub(crate) trait BottomPaneView: Renderable {
         false
     }
 
+    /// Optional one-line OSC detail for what this view is waiting on.
+    /// Stateful views should compute it from their current request.
+    fn tab_status_detail(&self) -> Option<String> {
+        None
+    }
+
     /// Return the next time-based redraw this view needs while it is active.
     fn next_frame_delay(&self) -> Option<std::time::Duration> {
         None

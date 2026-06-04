@@ -15,7 +15,7 @@ fn rejects_controls_bidi_and_invisible_format_chars() {
 
 #[test]
 fn allows_ordinary_text() {
-    for ch in ['a', 'Z', '0', ' ', '/', '.', '\u{2026}', '\u{00E9}'] {
+    for ch in ['a', 'Z', '0', ' ', '/', '.', '…', 'é'] {
         assert!(
             !is_disallowed_osc_text_char(ch),
             "expected {ch:?} to be allowed"
