@@ -10,8 +10,16 @@ use serde::Serialize;
 pub struct ProcessId(String);
 
 impl ProcessId {
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+
+    pub fn into_inner(self) -> String {
+        self.0
     }
 }
 
