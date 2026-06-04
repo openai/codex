@@ -2026,7 +2026,7 @@ fn remote_plugin_detail_to_info(
             .collect(),
         hooks: Vec::new(),
         apps,
-        mcp_servers: detail.mcp_server_names,
+        mcp_servers: detail.mcp_servers,
     }
 }
 
