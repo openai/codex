@@ -3,8 +3,6 @@ mod streamable_http_test_support;
 use std::ffi::OsString;
 use std::time::Duration;
 use std::time::Instant;
-use std::time::SystemTime;
-use std::time::UNIX_EPOCH;
 
 use codex_config::types::OAuthCredentialsStoreMode;
 use codex_exec_server::Environment;
@@ -345,6 +343,8 @@ async fn streamable_http_oauth_file_writes_are_serialized_across_servers() -> an
 async fn streamable_http_oauth_unexpired_token_does_not_require_writable_codex_home()
 -> anyhow::Result<()> {
     use std::os::unix::fs::PermissionsExt;
+    use std::time::SystemTime;
+    use std::time::UNIX_EPOCH;
 
     let (_server, base_url) =
         spawn_streamable_http_server_with_env(&[("MCP_EXPECT_BEARER", "unexpired-access-token")])
