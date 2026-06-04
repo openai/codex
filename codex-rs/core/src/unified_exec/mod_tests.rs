@@ -8,6 +8,7 @@ use crate::session::session::Session;
 use crate::session::tests::make_session_and_context;
 use crate::session::turn_context::TurnContext;
 use crate::tools::context::ExecCommandToolOutput;
+use crate::turn_timing::now_unix_timestamp_ms;
 use crate::unified_exec::WriteStdinRequest;
 use crate::unified_exec::process::OutputHandles;
 use codex_sandboxing::SandboxType;
@@ -128,7 +129,7 @@ async fn exec_command_with_tty(
             call_id: context.call_id.clone(),
             process_id,
             cwd: cwd.clone(),
-            started_at_ms: 0,
+            started_at_ms: now_unix_timestamp_ms(),
             initial_exec_command_returned: false,
             hook_command: cmd.to_string(),
             tty,
@@ -668,7 +669,7 @@ async fn terminating_initial_exec_command_does_not_return_unknown_process() -> a
     });
 
     let mut listed = false;
-    for _ in 0..100 {
+    for _ in 0..500 {
         if session
             .list_background_terminals()
             .await

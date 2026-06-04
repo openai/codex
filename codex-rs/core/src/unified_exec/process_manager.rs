@@ -1296,28 +1296,26 @@ impl UnifiedExecProcessManager {
     }
 
     pub(crate) async fn terminate_process(&self, process_id: i32) -> bool {
-        let (process, initial_exec_command_returned, already_exited) = {
+        let (process, already_exited) = {
             let store = self.process_store.lock().await;
             let Some(entry) = store.processes.get(&process_id) else {
                 return false;
             };
-            (
-                Arc::clone(&entry.process),
-                entry.initial_exec_command_returned,
-                entry.process.has_exited(),
-            )
+            (Arc::clone(&entry.process), entry.process.has_exited())
         };
 
         if !already_exited && process.terminate_confirmed().await.is_err() {
             return false;
         }
 
-        if !initial_exec_command_returned {
-            return true;
-        }
-
         let entry = {
             let mut store = self.process_store.lock().await;
+            let Some(entry) = store.processes.get(&process_id) else {
+                return true;
+            };
+            if !entry.initial_exec_command_returned {
+                return true;
+            }
             store.remove(process_id)
         };
         let Some(entry) = entry else {
