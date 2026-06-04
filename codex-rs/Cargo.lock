@@ -3363,6 +3363,7 @@ dependencies = [
  "codex-utils-home-dir",
  "codex-utils-rustls-provider",
  "globset",
+ "libc",
  "pretty_assertions",
  "rama-core",
  "rama-http",
@@ -3384,6 +3385,7 @@ dependencies = [
  "tokio",
  "tracing",
  "url",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
