@@ -839,11 +839,10 @@ fn prepend_code_mode_executors(
     planned_tools: &mut PlannedTools,
 ) {
     let turn_context = context.turn_context;
-    let deferred_tools_available = search_tool_enabled(turn_context)
-        && planned_tools
-            .runtimes()
-            .iter()
-            .any(|executor| executor.exposure() == ToolExposure::Deferred);
+    let deferred_tools_available = planned_tools
+        .runtimes()
+        .iter()
+        .any(|executor| executor.exposure() == ToolExposure::Deferred);
     let code_mode_executors = build_code_mode_executors(
         turn_context,
         planned_tools.runtimes(),

@@ -47,6 +47,14 @@ on:
         required: false
         default: false
         type: boolean
+      retry_archive:
+        required: false
+        default: false
+        type: boolean
+      archive_timeout_minutes:
+        required: false
+        default: 60
+        type: number
 
 # Caller workflow-level env does not flow through workflow_call, so keep the
 # Cargo git transport hardening on the archive and shard jobs directly here.
@@ -57,7 +65,10 @@ jobs:
   archive:
     name: Build nextest archive
     runs-on: ${{ inputs.archive_runner_group != '' && fromJSON(format('{{"group":"{0}","labels":"{1}"}}', inputs.archive_runner_group, inputs.archive_runner_labels)) || inputs.archive_runner != '' && inputs.archive_runner || inputs.runner_group != '' && fromJSON(format('{{"group":"{0}","labels":"{1}"}}', inputs.runner_group, inputs.runner_labels)) || inputs.runner }}
-    timeout-minutes: 60
+    continue-on-error: ${{ inputs.retry_archive }}
+    timeout-minutes: ${{ inputs.archive_timeout_minutes }}
+    outputs:
+      completed: ${{ steps.archive_completed.outputs.completed }}
     defaults:
       run:
         working-directory: codex-rs
@@ -71,7 +82,7 @@ jobs:
       SCCACHE_CACHE_SIZE: 10G
       NEXTEST_ARCHIVE_FILE: nextest-${{ inputs.artifact_id }}.tar.zst
       TEST_HELPERS_ARTIFACT: nextest-test-helpers-${{ inputs.artifact_id }}
-    steps:
+    steps: &archive_steps
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
@@ -249,6 +260,11 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+      - name: Mark archive complete
+        id: archive_completed
+        shell: bash
+        run: echo "completed=true" >> "$GITHUB_OUTPUT"
+
       - name: Save cargo home cache
         if: always() && !cancelled() && steps.cache_cargo_home_restore.outputs.cache-hit != 'true'
         continue-on-error: true
@@ -286,9 +302,51 @@ jobs:
             echo '```';
           } >> "$GITHUB_STEP_SUMMARY"
 
+  archive_retry:
+    name: Retry build nextest archive
+    needs: archive
+    if: inputs.retry_archive && always() && needs.archive.outputs.completed != 'true'
+    runs-on: ${{ inputs.archive_runner_group != '' && fromJSON(format('{{"group":"{0}","labels":"{1}"}}', inputs.archive_runner_group, inputs.archive_runner_labels)) || inputs.archive_runner != '' && inputs.archive_runner || inputs.runner_group != '' && fromJSON(format('{{"group":"{0}","labels":"{1}"}}', inputs.runner_group, inputs.runner_labels)) || inputs.runner }}
+    continue-on-error: true
+    timeout-minutes: ${{ inputs.archive_timeout_minutes }}
+    outputs:
+      completed: ${{ steps.archive_completed.outputs.completed }}
+    defaults:
+      run:
+        working-directory: codex-rs
+    env:
+      ARCHIVE_CACHE_RUNNER: ${{ inputs.archive_runner != '' && inputs.archive_runner || inputs.runner }}
+      USE_SCCACHE: ${{ inputs.use_sccache && 'true' || 'false' }}
+      CARGO_INCREMENTAL: "0"
+      SCCACHE_CACHE_SIZE: 10G
+      NEXTEST_ARCHIVE_FILE: nextest-${{ inputs.artifact_id }}.tar.zst
+      TEST_HELPERS_ARTIFACT: nextest-test-helpers-${{ inputs.artifact_id }}
+    steps: *archive_steps
+
+  archive_retry_2:
+    name: Retry build nextest archive 2
+    needs: [archive, archive_retry]
+    if: inputs.retry_archive && always() && needs.archive.outputs.completed != 'true' && needs.archive_retry.outputs.completed != 'true'
+    runs-on: ${{ inputs.archive_runner_group != '' && fromJSON(format('{{"group":"{0}","labels":"{1}"}}', inputs.archive_runner_group, inputs.archive_runner_labels)) || inputs.archive_runner != '' && inputs.archive_runner || inputs.runner_group != '' && fromJSON(format('{{"group":"{0}","labels":"{1}"}}', inputs.runner_group, inputs.runner_labels)) || inputs.runner }}
+    timeout-minutes: ${{ inputs.archive_timeout_minutes }}
+    outputs:
+      completed: ${{ steps.archive_completed.outputs.completed }}
+    defaults:
+      run:
+        working-directory: codex-rs
+    env:
+      ARCHIVE_CACHE_RUNNER: ${{ inputs.archive_runner != '' && inputs.archive_runner || inputs.runner }}
+      USE_SCCACHE: ${{ inputs.use_sccache && 'true' || 'false' }}
+      CARGO_INCREMENTAL: "0"
+      SCCACHE_CACHE_SIZE: 10G
+      NEXTEST_ARCHIVE_FILE: nextest-${{ inputs.artifact_id }}.tar.zst
+      TEST_HELPERS_ARTIFACT: nextest-test-helpers-${{ inputs.artifact_id }}
+    steps: *archive_steps
+
   shard:
     name: Tests shard ${{ matrix.shard }}/4
-    needs: archive
+    needs: [archive, archive_retry, archive_retry_2]
+    if: always() && (needs.archive.outputs.completed == 'true' || needs.archive_retry.outputs.completed == 'true' || needs.archive_retry_2.outputs.completed == 'true')
     runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":"{0}","labels":"{1}"}}', inputs.runner_group, inputs.runner_labels)) || inputs.runner }}
     timeout-minutes: 60
     defaults:

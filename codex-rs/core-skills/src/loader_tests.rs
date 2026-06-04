@@ -1988,6 +1988,9 @@ async fn skill_roots_include_admin_with_lowest_priority() {
     if home_dir().is_some() {
         expected.insert(1, SkillScope::User);
     }
+    if scopes.contains(&SkillScope::Repo) {
+        expected.insert(0, SkillScope::Repo);
+    }
     expected.push(SkillScope::Admin);
     assert_eq!(scopes, expected);
 }

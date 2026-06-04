@@ -494,10 +494,13 @@ jobs:
       runner: ubuntu-24.04-arm
       runner_group: codex-runners
       runner_labels: codex-linux-arm64
+      archive_runner: ubuntu-24.04-arm
       target: aarch64-unknown-linux-gnu
       profile: ci-test
       artifact_id: linux-arm64
       use_sccache: true
+      retry_archive: true
+      archive_timeout_minutes: 120
     secrets: inherit
 
   tests_windows_x64:
@@ -528,6 +531,7 @@ jobs:
       artifact_id: windows-arm64
       test_threads: 8
       use_sccache: true
+      retry_archive: true
     secrets: inherit
 
   # --- Gatherer job for the full post-merge workflow --------------------------

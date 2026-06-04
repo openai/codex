@@ -188,7 +188,8 @@ mod tests {
 
     #[test]
     fn environment_id_fallback_has_cwd_prefix() {
-        let dir = tempfile::tempdir().expect("tempdir");
+        let home = std::env::var_os("HOME").expect("HOME should be set for tests");
+        let dir = tempfile::tempdir_in(home).expect("tempdir outside repo");
         let env_id = environment_id_from_cwd(dir.path());
         let canonical = dir
             .path()

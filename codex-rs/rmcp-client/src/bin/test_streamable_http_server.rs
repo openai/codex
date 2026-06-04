@@ -158,7 +158,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             StreamableHttpService::new(
                 || Ok(TestToolServer::new()),
                 Arc::new(LocalSessionManager::default()),
-                StreamableHttpServerConfig::default(),
+                // Full CI can run this private test server in a remote container
+                // reached through its dynamic container IP instead of loopback.
+                StreamableHttpServerConfig::default().disable_allowed_hosts(),
             ),
         )
         .layer(middleware::from_fn_with_state(

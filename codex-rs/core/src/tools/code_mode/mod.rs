@@ -219,8 +219,7 @@ fn truncate_code_mode_result(
     items: Vec<FunctionCallOutputContentItem>,
     max_output_tokens: Option<usize>,
 ) -> Vec<FunctionCallOutputContentItem> {
-    let max_output_tokens = resolve_max_tokens(max_output_tokens);
-    let policy = TruncationPolicy::Tokens(max_output_tokens);
+    let policy = code_mode_output_truncation_policy(max_output_tokens);
     if items
         .iter()
         .all(|item| matches!(item, FunctionCallOutputContentItem::InputText { .. }))
@@ -231,6 +230,16 @@ fn truncate_code_mode_result(
     }
 
     truncate_function_output_items_with_policy(&items, policy)
+}
+
+pub(super) fn code_mode_output_truncation_policy(
+    max_output_tokens: Option<usize>,
+) -> TruncationPolicy {
+    TruncationPolicy::Tokens(resolve_max_tokens(max_output_tokens))
+}
+
+pub(super) fn code_mode_history_truncation_policy() -> TruncationPolicy {
+    TruncationPolicy::Bytes(usize::MAX)
 }
 
 async fn call_nested_tool(

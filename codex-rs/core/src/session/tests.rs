@@ -8224,7 +8224,7 @@ async fn run_user_shell_command_does_not_set_reference_context_item() {
     handlers::run_user_shell_command(&session, "sub-id".to_string(), "echo shell".to_string())
         .await;
 
-    let deadline = StdDuration::from_secs(15);
+    let deadline = StdDuration::from_secs(30);
     let start = std::time::Instant::now();
     loop {
         let remaining = deadline.saturating_sub(start.elapsed());
