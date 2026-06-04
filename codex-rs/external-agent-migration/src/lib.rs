@@ -1452,6 +1452,49 @@ mod tests {
     }
 
     #[test]
+    fn mcp_migration_prefers_command_transport_for_mixed_server_config() {
+        let root = tempfile::TempDir::new().expect("tempdir");
+        fs::write(
+            root.path().join(".mcp.json"),
+            r#"{
+              "mcpServers": {
+                "mixedTransport": {
+                  "command": "mcp-remote-proxy",
+                  "args": [
+                    "https://example.com/mixed-transport",
+                    "--transport",
+                    "http"
+                  ],
+                  "url": "https://example.com/mixed-transport"
+                }
+              }
+            }"#,
+        )
+        .expect("write mcp");
+
+        assert_eq!(
+            build_mcp_config_from_external(
+                root.path(),
+                /*external_agent_home*/ None,
+                /*settings*/ None,
+            )
+            .unwrap(),
+            toml::from_str(
+                r#"
+[mcp_servers.mixedTransport]
+command = "mcp-remote-proxy"
+args = [
+  "https://example.com/mixed-transport",
+  "--transport",
+  "http",
+]
+"#
+            )
+            .unwrap()
+        );
+    }
+
+    #[test]
     fn mcp_migration_skips_unsupported_transports() {
         let root = tempfile::TempDir::new().expect("tempdir");
         fs::write(

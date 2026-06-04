@@ -3,6 +3,7 @@ use codex_api::ImageEditRequest;
 use codex_api::ImageGenerationRequest;
 use codex_api::ImageQuality;
 use codex_api::ImageUrl;
+use codex_core::context::extension_image_generation_output_hint;
 use codex_extension_api::ToolOutput;
 use codex_extension_api::ToolPayload;
 use codex_extension_api::ToolSpec;
@@ -54,9 +55,58 @@ fn generate_uses_fixed_request_defaults() {
 }
 
 #[test]
-fn generated_output_returns_image_input() {
+fn generated_output_returns_image_input_and_output_hint() {
+    let output_hint =
+        extension_image_generation_output_hint("/tmp", "/tmp/call-1.png").expect("hint should fit");
     let output = GeneratedImageOutput {
         result: RESULT.to_string(),
+        output_hint: Some(output_hint.clone()),
+    };
+
+    let ResponseInputItem::FunctionCallOutput {
+        output: response_output,
+        ..
+    } = output.to_response_item("call-1", &function_payload())
+    else {
+        panic!("imagegen should return function tool output");
+    };
+    let FunctionCallOutputBody::ContentItems(content_items) = response_output.body else {
+        panic!("imagegen output should contain generated image bytes");
+    };
+    assert_eq!(
+        content_items,
+        vec![
+            FunctionCallOutputContentItem::InputImage {
+                image_url: format!("data:image/png;base64,{RESULT}"),
+                detail: Some(DEFAULT_IMAGE_DETAIL),
+            },
+            FunctionCallOutputContentItem::InputText { text: output_hint },
+        ]
+    );
+}
+
+#[test]
+fn generated_output_returns_generated_image_helper_input_in_code_mode() {
+    let output = GeneratedImageOutput {
+        result: RESULT.to_string(),
+        output_hint: Some("generated image save hint".to_string()),
+    };
+
+    assert_eq!(
+        output.code_mode_result(&function_payload()),
+        serde_json::json!({
+            "image_url": format!("data:image/png;base64,{RESULT}"),
+            "output_hint": "generated image save hint",
+        })
+    );
+}
+
+#[test]
+fn generated_output_omits_oversized_output_hint() {
+    let long_path = "x".repeat(1024);
+    let output = GeneratedImageOutput {
+        result: RESULT.to_string(),
+        output_hint: extension_image_generation_output_hint("/tmp", long_path),
     };
 
     let ResponseInputItem::FunctionCallOutput {
