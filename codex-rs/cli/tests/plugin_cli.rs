@@ -2,6 +2,7 @@ use anyhow::Result;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::MarketplaceConfigUpdate;
 use codex_config::record_user_marketplace;
+use codex_utils_absolute_path::canonicalize_existing_preserving_symlinks;
 use predicates::prelude::PredicateBooleanExt;
 use predicates::str::contains;
 use pretty_assertions::assert_eq;
@@ -554,7 +555,7 @@ async fn plugin_list_json_includes_configured_git_marketplace_source() -> Result
     };
     record_user_marketplace(codex_home.path(), "debug", &update)?;
     let plugin_path = marketplace_root.join("plugins").join("sample");
-    let canonical_plugin_path = plugin_path.canonicalize()?;
+    let normalized_plugin_path = canonicalize_existing_preserving_symlinks(&plugin_path)?;
 
     let assert = codex_command(codex_home.path())?
         .args(["plugin", "list", "--available", "--json"])
@@ -577,7 +578,7 @@ async fn plugin_list_json_includes_configured_git_marketplace_source() -> Result
                     "enabled": false,
                     "source": {
                         "source": "local",
-                        "path": canonical_plugin_path.display().to_string(),
+                        "path": normalized_plugin_path.display().to_string(),
                     },
                     "marketplaceSource": {
                         "sourceType": "git",
