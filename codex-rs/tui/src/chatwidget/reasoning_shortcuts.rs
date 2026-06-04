@@ -92,12 +92,16 @@ impl ChatWidget {
         let configured_effort = self
             .effective_reasoning_effort()
             .unwrap_or_else(|| preset.default_reasoning_effort.clone());
-        let current_effort =
-            if choices.contains(&configured_effort) || configured_effort.known_rank().is_some() {
-                configured_effort
-            } else {
-                preset.default_reasoning_effort
-            };
+        let current_effort = if choices.contains(&configured_effort) {
+            configured_effort
+        } else if choices.contains(&preset.default_reasoning_effort) {
+            preset.default_reasoning_effort.clone()
+        } else {
+            choices
+                .first()
+                .cloned()
+                .unwrap_or(preset.default_reasoning_effort.clone())
+        };
         let Some(next_effort) =
             next_reasoning_effort(&choices, Some(current_effort.clone()), direction)
         else {
