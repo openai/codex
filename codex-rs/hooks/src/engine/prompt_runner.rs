@@ -72,7 +72,7 @@ pub(crate) fn model_hook_behavior(event_name: HookEventName) -> ModelHookBehavio
         // continueOnBlock feeds the reason back to the model, otherwise it stops
         // the current turn.
         HookEventName::PostToolUse => ModelHookBehavior::FeedbackOrStop,
-        // Claude does not support prompt hooks for these lifecycle events.
+        // Claude does not support model-backed hooks for these lifecycle events.
         // Keeping them explicit makes new events choose semantics deliberately.
         HookEventName::SessionStart
         | HookEventName::SubagentStart

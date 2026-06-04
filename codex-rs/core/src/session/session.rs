@@ -107,7 +107,6 @@ pub(crate) struct SessionConfiguration {
     pub(super) dynamic_tools: Vec<DynamicToolSpec>,
     pub(super) inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
     pub(super) user_shell_override: Option<shell::Shell>,
-    pub(super) max_model_requests_per_turn: Option<usize>,
 }
 
 impl SessionConfiguration {
@@ -989,7 +988,6 @@ impl Session {
                 plugins_manager.as_ref(),
                 &default_shell,
                 Some(prompt_hook_runner),
-                &session_configuration.session_source,
             )
             .await;
             for warning in hooks.startup_warnings() {

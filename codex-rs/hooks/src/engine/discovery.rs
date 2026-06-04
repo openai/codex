@@ -1252,6 +1252,36 @@ mod tests {
     }
 
     #[test]
+    fn unsupported_agent_hook_is_skipped_during_discovery() {
+        let mut handlers = Vec::new();
+        let mut hook_entries = Vec::new();
+        let mut warnings = Vec::new();
+        let mut display_order = 0;
+        let source_path = source_path();
+        let hook_states = std::collections::HashMap::new();
+
+        append_matcher_groups(
+            &mut handlers,
+            &mut hook_entries,
+            &mut warnings,
+            &mut display_order,
+            &hook_handler_source(&source_path, &hook_states),
+            HookEventName::SessionStart,
+            vec![agent_group(/*matcher*/ None)],
+        );
+
+        assert_eq!(handlers, Vec::<ConfiguredHandler>::new());
+        assert_eq!(hook_entries.len(), 0);
+        assert_eq!(
+            warnings,
+            vec![format!(
+                "skipping agent hook in {}: agent hooks are not supported for SessionStart",
+                source_path.display()
+            )]
+        );
+    }
+
+    #[test]
     fn toml_hook_discovery_ignores_malformed_state_entries() {
         let layer = ConfigLayerEntry::new(
             ConfigLayerSource::User {

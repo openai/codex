@@ -8,7 +8,6 @@ use codex_hooks::AgentHookRunner;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::user_input::UserInput;
 use tokio_util::sync::CancellationToken;
@@ -19,7 +18,6 @@ use crate::config::Constrained;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 
-pub(crate) const AGENT_HOOK_MAX_MODEL_REQUESTS: usize = 50;
 const AGENT_HOOK_SOURCE_NAME: &str = "agent_hook";
 const AGENT_HOOK_BASE_INSTRUCTIONS: &str = r#"You evaluate a Codex agent hook.
 
@@ -31,14 +29,6 @@ or
 {"ok": false, "reason": "concise actionable reason"}
 
 Use ok:false only when the hook criteria fail. Do not answer the user's task. Do not include Markdown or extra text."#;
-
-pub(crate) fn is_agent_hook_source(session_source: &SessionSource) -> bool {
-    matches!(session_source, SessionSource::SubAgent(source) if is_agent_hook_subagent_source(source))
-}
-
-pub(crate) fn is_agent_hook_subagent_source(source: &SubAgentSource) -> bool {
-    matches!(source, SubAgentSource::Other(name) if name == AGENT_HOOK_SOURCE_NAME)
-}
 
 pub(crate) fn build_agent_hook_runner(
     parent_session: Arc<Session>,

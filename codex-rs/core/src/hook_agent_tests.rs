@@ -1,22 +1,9 @@
 use codex_features::Feature;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::protocol::AskForApproval;
-use codex_protocol::protocol::SessionSource;
-use codex_protocol::protocol::SubAgentSource;
 use pretty_assertions::assert_eq;
 
 use super::*;
-
-#[test]
-fn recognizes_only_agent_hook_subagent_source() {
-    assert!(is_agent_hook_source(&SessionSource::SubAgent(
-        SubAgentSource::Other("agent_hook".to_string())
-    )));
-    assert!(!is_agent_hook_source(&SessionSource::SubAgent(
-        SubAgentSource::Other("other".to_string())
-    )));
-    assert!(!is_agent_hook_source(&SessionSource::Cli));
-}
 
 #[tokio::test]
 async fn agent_hook_config_is_isolated_and_inherits_active_permissions() {
