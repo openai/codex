@@ -1,7 +1,10 @@
 use crate::ExternalAgentSessionMigration;
 use crate::ledger::load_import_ledger;
+use crate::ledger::save_import_ledger;
 use crate::now_unix_seconds;
 use crate::summarize_session;
+use std::cmp::Reverse;
+use std::collections::BinaryHeap;
 use std::fs;
 use std::io;
 use std::path::Path;
@@ -9,12 +12,6 @@ use std::time::Duration;
 
 const SESSION_IMPORT_MAX_COUNT: usize = 50;
 const SESSION_IMPORT_MAX_AGE: Duration = Duration::from_secs(30 * 24 * 60 * 60);
-
-#[derive(Debug)]
-struct SessionCandidate {
-    latest_timestamp: i64,
-    migration: ExternalAgentSessionMigration,
-}
 
 pub fn detect_recent_sessions(
     external_agent_home: &Path,
@@ -26,8 +23,9 @@ pub fn detect_recent_sessions(
     }
 
     let now = now_unix_seconds();
-    let ledger = load_import_ledger(codex_home)?;
-    let mut candidates = Vec::new();
+    let mut ledger = load_import_ledger(codex_home)?;
+    let source_states = ledger.source_states();
+    let mut file_candidates = BinaryHeap::with_capacity(SESSION_IMPORT_MAX_COUNT + 1);
     for project_entry in fs::read_dir(projects_root)? {
         let Ok(project_entry) = project_entry else {
             continue;
@@ -47,44 +45,67 @@ pub fn detect_recent_sessions(
             if path.extension().and_then(|value| value.to_str()) != Some("jsonl") {
                 continue;
             }
-            let Ok(Some(summary)) = summarize_session(&path) else {
+            let Ok(metadata) = entry.metadata() else {
                 continue;
             };
-            let Ok(has_been_imported) = ledger.contains_current_source(&path) else {
+            let Ok(modified_at) = metadata.modified() else {
                 continue;
             };
-            if has_been_imported {
+            let Ok(modified_at) = modified_at.duration_since(std::time::UNIX_EPOCH) else {
+                continue;
+            };
+            if (modified_at.as_secs() as i64)
+                < now.saturating_sub(SESSION_IMPORT_MAX_AGE.as_secs() as i64)
+            {
                 continue;
             }
-            if !is_recent_enough(now, summary.latest_timestamp) {
+            let Ok(modified_at_nanos) = i64::try_from(modified_at.as_nanos()) else {
+                continue;
+            };
+            let Ok(source_path) = fs::canonicalize(&path) else {
+                continue;
+            };
+            if let Some(state) = source_states.get(source_path.as_path())
+                && (state.source_modified_at == Some(modified_at_nanos)
+                    || state.source_modified_at.is_none()
+                        && modified_at.as_secs() as i64 <= state.imported_at)
+            {
                 continue;
             }
-            let migration = summary.migration;
-            if !migration.cwd.is_dir() {
-                continue;
+            file_candidates.push((Reverse(modified_at_nanos), path));
+            if file_candidates.len() > SESSION_IMPORT_MAX_COUNT {
+                file_candidates.pop();
             }
-            candidates.push(SessionCandidate {
-                latest_timestamp: summary.latest_timestamp,
-                migration,
-            });
         }
     }
 
-    candidates.sort_by(|left, right| {
-        right
-            .latest_timestamp
-            .cmp(&left.latest_timestamp)
-            .then_with(|| left.migration.path.cmp(&right.migration.path))
-    });
-    candidates.truncate(SESSION_IMPORT_MAX_COUNT);
-    Ok(candidates
-        .into_iter()
-        .map(|candidate| candidate.migration)
-        .collect())
-}
+    drop(source_states);
+    let file_candidates = file_candidates.into_sorted_vec();
+    let mut migrations = Vec::new();
+    let mut ledger_changed = false;
+    for (modified_at, path) in file_candidates {
+        match ledger.refresh_current_source(&path, modified_at.0) {
+            Ok(false) => {}
+            Ok(true) => {
+                ledger_changed = true;
+                continue;
+            }
+            Err(_) => continue,
+        }
+        let Ok(Some(summary)) = summarize_session(&path) else {
+            continue;
+        };
+        let migration = summary.migration;
+        if !migration.cwd.is_dir() {
+            continue;
+        }
+        migrations.push(migration);
+    }
+    if ledger_changed {
+        save_import_ledger(codex_home, &ledger)?;
+    }
 
-fn is_recent_enough(now: i64, latest_timestamp: i64) -> bool {
-    latest_timestamp >= now.saturating_sub(SESSION_IMPORT_MAX_AGE.as_secs() as i64)
+    Ok(migrations)
 }
 
 #[cfg(test)]
@@ -93,7 +114,10 @@ mod tests {
     use crate::ledger::record_imported_session;
     use codex_protocol::ThreadId;
     use serde_json::Value as JsonValue;
+    use std::fs::FileTimes;
+    use std::fs::OpenOptions;
     use std::path::Path;
+    use std::time::SystemTime;
     use tempfile::TempDir;
 
     #[test]
@@ -207,11 +231,11 @@ mod tests {
     }
 
     #[test]
-    fn ignores_old_sessions() {
+    fn uses_file_modification_time_for_recency() {
         let root = TempDir::new().expect("tempdir");
         let external_agent_home = root.path().join(".external");
         let project_root = root.path().join("repo");
-        write_session(
+        let session_path = write_session(
             &external_agent_home,
             &project_root,
             "session.jsonl",
@@ -223,11 +247,117 @@ mod tests {
             )],
         );
 
+        let sessions = detect_recent_sessions(&external_agent_home, root.path()).expect("detect");
+
+        assert_eq!(
+            sessions,
+            vec![ExternalAgentSessionMigration {
+                path: session_path,
+                cwd: project_root,
+                title: Some("hello".to_string()),
+            }]
+        );
+    }
+
+    #[test]
+    fn ignores_sessions_with_old_file_modification_time() {
+        let root = TempDir::new().expect("tempdir");
+        let external_agent_home = root.path().join(".external");
+        let project_root = root.path().join("repo");
+        let session_path = write_session(
+            &external_agent_home,
+            &project_root,
+            "session.jsonl",
+            &[record("user", "hello", &project_root)],
+        );
+        set_modified_at(
+            &session_path,
+            SystemTime::UNIX_EPOCH + Duration::from_secs(/*secs*/ 1),
+        );
+
         assert!(
             detect_recent_sessions(&external_agent_home, root.path())
                 .expect("detect")
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn detects_sessions_in_batches() {
+        let root = TempDir::new().expect("tempdir");
+        let external_agent_home = root.path().join(".external");
+        let project_root = root.path().join("repo");
+        let timestamp = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let modified_at = SystemTime::now();
+        let mut expected = Vec::new();
+        for index in 0..=SESSION_IMPORT_MAX_COUNT {
+            let file_name = format!("{index:02}-session.jsonl");
+            let title = format!("session {index}");
+            let path = write_session(
+                &external_agent_home,
+                &project_root,
+                &file_name,
+                &[record_at("user", &title, &project_root, &timestamp)],
+            );
+            set_modified_at(
+                &path,
+                modified_at - Duration::from_secs(/*secs*/ index as u64),
+            );
+            expected.push(ExternalAgentSessionMigration {
+                path,
+                cwd: project_root.clone(),
+                title: Some(title),
+            });
+        }
+        let oldest_session = expected.pop().expect("oldest session");
+        let mut all_sessions = expected.clone();
+        all_sessions.push(oldest_session.clone());
+
+        let sessions = detect_recent_sessions(&external_agent_home, root.path()).expect("detect");
+
+        assert_eq!(sessions, expected);
+        for session in sessions {
+            record_imported_session(root.path(), &session.path, ThreadId::new())
+                .expect("record import");
+        }
+
+        let sessions = detect_recent_sessions(&external_agent_home, root.path()).expect("detect");
+
+        assert_eq!(sessions, vec![oldest_session.clone()]);
+        for session in sessions {
+            record_imported_session(root.path(), &session.path, ThreadId::new())
+                .expect("record import");
+        }
+
+        let changed_at = SystemTime::now()
+            + Duration::from_secs(/*secs*/ SESSION_IMPORT_MAX_COUNT as u64 + 1);
+        for (index, session) in all_sessions.iter().enumerate() {
+            let title = session.title.as_deref().expect("session title");
+            std::fs::write(
+                &session.path,
+                jsonl(&[
+                    record("user", title, &project_root),
+                    record("assistant", "updated", &project_root),
+                ]),
+            )
+            .expect("update session");
+            set_modified_at(
+                &session.path,
+                changed_at - Duration::from_secs(/*secs*/ index as u64),
+            );
+        }
+
+        let sessions = detect_recent_sessions(&external_agent_home, root.path()).expect("detect");
+
+        assert_eq!(sessions, expected);
+        for session in sessions {
+            record_imported_session(root.path(), &session.path, ThreadId::new())
+                .expect("record import");
+        }
+
+        let sessions = detect_recent_sessions(&external_agent_home, root.path()).expect("detect");
+
+        assert_eq!(sessions, vec![oldest_session]);
     }
 
     #[test]
@@ -298,6 +428,15 @@ mod tests {
         let session_path = projects_dir.join(file_name);
         std::fs::write(&session_path, jsonl(records)).expect("session");
         session_path
+    }
+
+    fn set_modified_at(path: &Path, modified_at: SystemTime) {
+        OpenOptions::new()
+            .write(true)
+            .open(path)
+            .expect("open session")
+            .set_times(FileTimes::new().set_modified(modified_at))
+            .expect("set session modified time");
     }
 
     fn record(role: &str, text: &str, cwd: &Path) -> JsonValue {
