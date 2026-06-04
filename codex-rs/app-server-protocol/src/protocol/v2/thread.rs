@@ -947,6 +947,7 @@ pub struct ThreadBackgroundTerminal {
     pub process_id: String,
     pub command: String,
     pub cwd: AbsolutePathBuf,
+    /// Milliseconds since Unix epoch, matching existing process-manager runtime state.
     #[ts(type = "number")]
     pub started_at_ms: i64,
     pub os_pid: Option<u32>,
@@ -958,6 +959,7 @@ pub struct ThreadBackgroundTerminal {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ThreadBackgroundTerminalsListResponse {
+    /// Intentionally unpaginated because unified exec caps live processes.
     pub data: Vec<ThreadBackgroundTerminal>,
 }
 

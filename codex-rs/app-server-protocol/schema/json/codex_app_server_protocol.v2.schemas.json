@@ -13521,57 +13521,6 @@
       "title": "ThreadArchivedNotification",
       "type": "object"
     },
-    "ThreadBackgroundTerminal": {
-      "properties": {
-        "command": {
-          "type": "string"
-        },
-        "cpuPercent": {
-          "format": "double",
-          "type": [
-            "number",
-            "null"
-          ]
-        },
-        "cwd": {
-          "$ref": "#/definitions/AbsolutePathBuf"
-        },
-        "itemId": {
-          "type": "string"
-        },
-        "osPid": {
-          "format": "uint32",
-          "minimum": 0.0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "processId": {
-          "type": "string"
-        },
-        "rssKb": {
-          "format": "uint64",
-          "minimum": 0.0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "startedAtMs": {
-          "format": "int64",
-          "type": "integer"
-        }
-      },
-      "required": [
-        "command",
-        "cwd",
-        "itemId",
-        "processId",
-        "startedAtMs"
-      ],
-      "type": "object"
-    },
     "ThreadClosedNotification": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
