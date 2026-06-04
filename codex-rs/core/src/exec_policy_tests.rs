@@ -1089,7 +1089,6 @@ fn unmatched_granular_policy_still_prompts_for_restricted_sandbox_escalation() {
                     mcp_elicitations: true,
                 }),
                 permission_profile: &PermissionProfile::read_only(),
-                sandbox_cwd: Path::new("/tmp"),
                 windows_sandbox_level: WindowsSandboxLevel::Disabled,
                 sandbox_permissions: SandboxPermissions::RequireEscalated,
                 used_complex_parsing: false,
@@ -1110,7 +1109,6 @@ fn unmatched_on_request_uses_permission_profile_file_system_policy_for_escalatio
             UnmatchedCommandContext {
                 approval_policy: AskForApproval::OnRequest,
                 permission_profile: &PermissionProfile::read_only(),
-                sandbox_cwd: Path::new("/tmp"),
                 windows_sandbox_level: WindowsSandboxLevel::Disabled,
                 sandbox_permissions: SandboxPermissions::RequireEscalated,
                 used_complex_parsing: false,
@@ -1131,8 +1129,7 @@ fn known_safe_on_request_still_prompts_for_restricted_sandbox_escalation() {
             UnmatchedCommandContext {
                 approval_policy: AskForApproval::OnRequest,
                 permission_profile: &PermissionProfile::workspace_write(),
-                sandbox_cwd: Path::new("/tmp"),
-                windows_sandbox_level: WindowsSandboxLevel::Disabled,
+                windows_sandbox_level: WindowsSandboxLevel::RestrictedToken,
                 sandbox_permissions: SandboxPermissions::RequireEscalated,
                 used_complex_parsing: false,
                 command_origin: ExecPolicyCommandOrigin::Generic,
@@ -1142,7 +1139,7 @@ fn known_safe_on_request_still_prompts_for_restricted_sandbox_escalation() {
 }
 
 #[test]
-fn managed_cwd_write_profile_is_not_read_only() {
+fn managed_cwd_write_profile_has_filesystem_restrictions() {
     let file_system_sandbox_policy = FileSystemSandboxPolicy::restricted(vec![
         FileSystemSandboxEntry {
             path: FileSystemPath::Special {
@@ -1162,14 +1159,11 @@ fn managed_cwd_write_profile_is_not_read_only() {
         NetworkSandboxPolicy::Restricted,
     );
 
-    assert!(!profile_is_managed_read_only(
-        &permission_profile,
-        Path::new("/tmp/project")
-    ));
+    assert!(profile_has_managed_filesystem_restrictions(&permission_profile));
 }
 
 #[test]
-fn managed_unresolvable_write_profile_is_still_read_only() {
+fn managed_unresolvable_write_profile_has_filesystem_restrictions() {
     let file_system_sandbox_policy = FileSystemSandboxPolicy::restricted(vec![
         FileSystemSandboxEntry {
             path: FileSystemPath::Special {
@@ -1192,9 +1186,25 @@ fn managed_unresolvable_write_profile_is_still_read_only() {
         NetworkSandboxPolicy::Restricted,
     );
 
-    assert!(profile_is_managed_read_only(
-        &permission_profile,
-        Path::new("/tmp/project")
+    assert!(profile_has_managed_filesystem_restrictions(&permission_profile));
+}
+
+#[test]
+fn managed_full_disk_write_profile_has_no_filesystem_restrictions() {
+    let file_system_sandbox_policy =
+        FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+            path: FileSystemPath::Special {
+                value: FileSystemSpecialPath::Root,
+            },
+            access: FileSystemAccessMode::Write,
+        }]);
+    let permission_profile = PermissionProfile::from_runtime_permissions(
+        &file_system_sandbox_policy,
+        NetworkSandboxPolicy::Restricted,
+    );
+
+    assert!(!profile_has_managed_filesystem_restrictions(
+        &permission_profile
     ));
 }
 
@@ -1321,7 +1331,6 @@ async fn mixed_rule_and_sandbox_prompt_prioritizes_rule_for_rejection_decision()
                 mcp_elicitations: true,
             }),
             permission_profile: PermissionProfile::read_only(),
-            sandbox_cwd: Path::new("/tmp"),
             windows_sandbox_level: WindowsSandboxLevel::Disabled,
             sandbox_permissions: SandboxPermissions::RequireEscalated,
             prefix_rule: None,
@@ -1359,7 +1368,6 @@ async fn mixed_rule_and_sandbox_prompt_rejects_when_granular_rules_are_disabled(
                 mcp_elicitations: true,
             }),
             permission_profile: PermissionProfile::read_only(),
-            sandbox_cwd: Path::new("/tmp"),
             windows_sandbox_level: WindowsSandboxLevel::Disabled,
             sandbox_permissions: SandboxPermissions::RequireEscalated,
             prefix_rule: None,
@@ -1384,7 +1392,6 @@ async fn exec_approval_requirement_falls_back_to_heuristics() {
             command: &command,
             approval_policy: AskForApproval::UnlessTrusted,
             permission_profile: PermissionProfile::read_only(),
-            sandbox_cwd: Path::new("/tmp"),
             windows_sandbox_level: WindowsSandboxLevel::Disabled,
             sandbox_permissions: SandboxPermissions::UseDefault,
             prefix_rule: None,
@@ -1410,7 +1417,6 @@ async fn empty_bash_lc_script_falls_back_to_original_command() {
             command: &command,
             approval_policy: AskForApproval::UnlessTrusted,
             permission_profile: PermissionProfile::read_only(),
-            sandbox_cwd: Path::new("/tmp"),
             windows_sandbox_level: WindowsSandboxLevel::Disabled,
             sandbox_permissions: SandboxPermissions::UseDefault,
             prefix_rule: None,
@@ -1440,7 +1446,6 @@ async fn whitespace_bash_lc_script_falls_back_to_original_command() {
             command: &command,
             approval_policy: AskForApproval::UnlessTrusted,
             permission_profile: PermissionProfile::read_only(),
-            sandbox_cwd: Path::new("/tmp"),
             windows_sandbox_level: WindowsSandboxLevel::Disabled,
             sandbox_permissions: SandboxPermissions::UseDefault,
             prefix_rule: None,
@@ -1470,7 +1475,6 @@ async fn request_rule_uses_prefix_rule() {
             command: &command,
             approval_policy: AskForApproval::OnRequest,
             permission_profile: PermissionProfile::read_only(),
-            sandbox_cwd: Path::new("/tmp"),
             windows_sandbox_level: WindowsSandboxLevel::Disabled,
             sandbox_permissions: SandboxPermissions::RequireEscalated,
             prefix_rule: Some(vec!["cargo".to_string(), "install".to_string()]),
@@ -1503,7 +1507,6 @@ async fn request_rule_falls_back_when_prefix_rule_does_not_approve_all_commands(
             command: &command,
             approval_policy: AskForApproval::OnRequest,
             permission_profile: PermissionProfile::Disabled,
-            sandbox_cwd: Path::new("/tmp"),
             windows_sandbox_level: WindowsSandboxLevel::Disabled,
             sandbox_permissions: SandboxPermissions::RequireEscalated,
             prefix_rule: Some(vec!["cargo".to_string(), "install".to_string()]),
@@ -1543,7 +1546,6 @@ async fn heuristics_apply_when_other_commands_match_policy() {
                 command: &command,
                 approval_policy: AskForApproval::UnlessTrusted,
                 permission_profile: PermissionProfile::Disabled,
-                sandbox_cwd: Path::new("/tmp"),
                 windows_sandbox_level: WindowsSandboxLevel::Disabled,
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 prefix_rule: None,
@@ -2025,7 +2027,6 @@ async fn verify_approval_requirement_for_unsafe_powershell_command() {
                 command: &sneaky_command,
                 approval_policy: AskForApproval::OnRequest,
                 permission_profile: PermissionProfile::read_only(),
-                sandbox_cwd: Path::new("/tmp"),
                 windows_sandbox_level: WindowsSandboxLevel::Disabled,
                 sandbox_permissions: permissions,
                 prefix_rule: None,
@@ -2050,7 +2051,6 @@ async fn verify_approval_requirement_for_unsafe_powershell_command() {
                 command: &dangerous_command,
                 approval_policy: AskForApproval::OnRequest,
                 permission_profile: PermissionProfile::read_only(),
-                sandbox_cwd: Path::new("/tmp"),
                 windows_sandbox_level: WindowsSandboxLevel::Disabled,
                 sandbox_permissions: permissions,
                 prefix_rule: None,
@@ -2071,7 +2071,6 @@ async fn verify_approval_requirement_for_unsafe_powershell_command() {
                 command: &dangerous_command,
                 approval_policy: AskForApproval::Never,
                 permission_profile: PermissionProfile::read_only(),
-                sandbox_cwd: Path::new("/tmp"),
                 windows_sandbox_level: WindowsSandboxLevel::Disabled,
                 sandbox_permissions: permissions,
                 prefix_rule: None,
@@ -2167,8 +2166,7 @@ async fn exec_approval_requirement_for_command(
             command: &command,
             approval_policy,
             permission_profile,
-            sandbox_cwd: Path::new("/tmp"),
-            windows_sandbox_level: WindowsSandboxLevel::Disabled,
+            windows_sandbox_level: WindowsSandboxLevel::RestrictedToken,
             sandbox_permissions,
             prefix_rule,
         })
