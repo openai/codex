@@ -2,6 +2,7 @@ mod streamable_http_test_support;
 
 use std::ffi::OsString;
 use std::time::Duration;
+use std::time::Instant;
 
 use codex_config::types::OAuthCredentialsStoreMode;
 use codex_exec_server::Environment;
@@ -17,6 +18,7 @@ use rmcp::transport::auth::OAuthTokenResponse;
 use rmcp::transport::auth::VendorExtraTokenFields;
 use serial_test::serial;
 use tempfile::TempDir;
+use tokio::time::sleep;
 
 use streamable_http_test_support::arm_session_post_failure;
 use streamable_http_test_support::call_echo_tool;
@@ -213,7 +215,97 @@ async fn streamable_http_oauth_refreshes_expired_token_before_initialize() -> an
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 #[serial(oauth_credentials_env)]
-async fn streamable_http_oauth_refresh_respects_initialize_timeout() -> anyhow::Result<()> {
+async fn streamable_http_oauth_preserves_refresh_token_when_refresh_response_omits_rotation()
+-> anyhow::Result<()> {
+    let (_server, base_url) = spawn_streamable_http_server_with_env(&[
+        ("MCP_EXPECT_BEARER", REFRESHED_ACCESS_TOKEN),
+        ("MCP_EXPECT_REFRESH_TOKEN", VALID_REFRESH_TOKEN),
+        ("MCP_REFRESH_ACCESS_TOKEN", REFRESHED_ACCESS_TOKEN),
+        ("MCP_OMIT_ROTATED_REFRESH_TOKEN", "1"),
+    ])
+    .await?;
+    let codex_home = TempCodexHome::new()?;
+    let server_url = format!("{base_url}/mcp");
+    save_expired_oauth_tokens(&server_url)?;
+
+    let client = RmcpClient::new_streamable_http_client(
+        OAUTH_TEST_SERVER_NAME,
+        &server_url,
+        /*bearer_token*/ None,
+        /*http_headers*/ None,
+        /*env_http_headers*/ None,
+        OAuthCredentialsStoreMode::File,
+        Environment::default_for_tests().get_http_client(),
+        /*auth_provider*/ None,
+    )
+    .await?;
+    initialize_client(&client).await?;
+
+    let credentials = std::fs::read_to_string(codex_home.dir.path().join(".credentials.json"))?;
+    assert!(credentials.contains(REFRESHED_ACCESS_TOKEN));
+    assert!(credentials.contains(VALID_REFRESH_TOKEN));
+    assert!(!credentials.contains(EXPIRED_ACCESS_TOKEN));
+    assert!(!credentials.contains(ROTATED_REFRESH_TOKEN));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+#[serial(oauth_credentials_env)]
+async fn streamable_http_oauth_concurrent_initializes_share_refreshed_credentials()
+-> anyhow::Result<()> {
+    let (_server, base_url) = spawn_streamable_http_server_with_env(&[
+        ("MCP_EXPECT_BEARER", REFRESHED_ACCESS_TOKEN),
+        ("MCP_EXPECT_REFRESH_TOKEN", VALID_REFRESH_TOKEN),
+        ("MCP_REFRESH_ACCESS_TOKEN", REFRESHED_ACCESS_TOKEN),
+        ("MCP_ROTATED_REFRESH_TOKEN", ROTATED_REFRESH_TOKEN),
+        ("MCP_REFRESH_TOKEN_MAX_USES", "1"),
+        ("MCP_REFRESH_TOKEN_DELAY_MS", "50"),
+    ])
+    .await?;
+    let _codex_home = TempCodexHome::new()?;
+    let server_url = format!("{base_url}/mcp");
+    save_expired_oauth_tokens(&server_url)?;
+
+    let client_a = RmcpClient::new_streamable_http_client(
+        OAUTH_TEST_SERVER_NAME,
+        &server_url,
+        /*bearer_token*/ None,
+        /*http_headers*/ None,
+        /*env_http_headers*/ None,
+        OAuthCredentialsStoreMode::File,
+        Environment::default_for_tests().get_http_client(),
+        /*auth_provider*/ None,
+    )
+    .await?;
+    let client_b = RmcpClient::new_streamable_http_client(
+        OAUTH_TEST_SERVER_NAME,
+        &server_url,
+        /*bearer_token*/ None,
+        /*http_headers*/ None,
+        /*env_http_headers*/ None,
+        OAuthCredentialsStoreMode::File,
+        Environment::default_for_tests().get_http_client(),
+        /*auth_provider*/ None,
+    )
+    .await?;
+
+    let (initialized_a, initialized_b) =
+        tokio::join!(initialize_client(&client_a), initialize_client(&client_b));
+    initialized_a?;
+    initialized_b?;
+
+    let result_a = call_echo_tool(&client_a, "after-shared-refresh-a").await?;
+    let result_b = call_echo_tool(&client_b, "after-shared-refresh-b").await?;
+    assert_eq!(result_a, expected_echo_result("after-shared-refresh-a"));
+    assert_eq!(result_b, expected_echo_result("after-shared-refresh-b"));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+#[serial(oauth_credentials_env)]
+async fn streamable_http_oauth_refresh_timeout_keeps_refresh_running() -> anyhow::Result<()> {
     let (_server, base_url) = spawn_streamable_http_server_with_env(&[
         ("MCP_EXPECT_BEARER", REFRESHED_ACCESS_TOKEN),
         ("MCP_EXPECT_REFRESH_TOKEN", VALID_REFRESH_TOKEN),
@@ -222,7 +314,7 @@ async fn streamable_http_oauth_refresh_respects_initialize_timeout() -> anyhow::
         ("MCP_REFRESH_TOKEN_DELAY_MS", "200"),
     ])
     .await?;
-    let _codex_home = TempCodexHome::new()?;
+    let codex_home = TempCodexHome::new()?;
     let server_url = format!("{base_url}/mcp");
     save_expired_oauth_tokens(&server_url)?;
 
@@ -246,6 +338,99 @@ async fn streamable_http_oauth_refresh_respects_initialize_timeout() -> anyhow::
             .to_string()
             .contains("timed out handshaking with MCP server after 50ms"),
         "expected initialize timeout, got: {error:#}"
+    );
+
+    let credentials_path = codex_home.dir.path().join(".credentials.json");
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        let credentials = std::fs::read_to_string(&credentials_path)?;
+        if credentials.contains(REFRESHED_ACCESS_TOKEN)
+            && credentials.contains(ROTATED_REFRESH_TOKEN)
+            && !credentials.contains(EXPIRED_ACCESS_TOKEN)
+        {
+            break;
+        }
+
+        if Instant::now() >= deadline {
+            anyhow::bail!("timed out waiting for background refresh to persist credentials");
+        }
+        sleep(Duration::from_millis(25)).await;
+    }
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+#[serial(oauth_credentials_env)]
+async fn streamable_http_oauth_refresh_and_initialize_share_timeout_budget() -> anyhow::Result<()> {
+    let (_server, base_url) = spawn_streamable_http_server_with_env(&[
+        ("MCP_EXPECT_BEARER", REFRESHED_ACCESS_TOKEN),
+        ("MCP_EXPECT_REFRESH_TOKEN", VALID_REFRESH_TOKEN),
+        ("MCP_REFRESH_ACCESS_TOKEN", REFRESHED_ACCESS_TOKEN),
+        ("MCP_ROTATED_REFRESH_TOKEN", ROTATED_REFRESH_TOKEN),
+        ("MCP_REFRESH_TOKEN_DELAY_MS", "100"),
+        ("MCP_INITIALIZE_DELAY_MS", "200"),
+    ])
+    .await?;
+    let _codex_home = TempCodexHome::new()?;
+    let server_url = format!("{base_url}/mcp");
+    save_expired_oauth_tokens(&server_url)?;
+
+    let client = RmcpClient::new_streamable_http_client(
+        OAUTH_TEST_SERVER_NAME,
+        &server_url,
+        /*bearer_token*/ None,
+        /*http_headers*/ None,
+        /*env_http_headers*/ None,
+        OAuthCredentialsStoreMode::File,
+        Environment::default_for_tests().get_http_client(),
+        /*auth_provider*/ None,
+    )
+    .await?;
+
+    let error = initialize_client_with_timeout(&client, Some(Duration::from_millis(250)))
+        .await
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("timed out handshaking with MCP server after 250ms"),
+        "expected initialize timeout, got: {error:#}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+#[serial(oauth_credentials_env)]
+async fn streamable_http_oauth_refresh_failure_reports_auth_required() -> anyhow::Result<()> {
+    let (_server, base_url) = spawn_streamable_http_server_with_env(&[
+        ("MCP_EXPECT_BEARER", REFRESHED_ACCESS_TOKEN),
+        ("MCP_EXPECT_REFRESH_TOKEN", "different-refresh-token"),
+        ("MCP_REFRESH_ACCESS_TOKEN", REFRESHED_ACCESS_TOKEN),
+        ("MCP_ROTATED_REFRESH_TOKEN", ROTATED_REFRESH_TOKEN),
+    ])
+    .await?;
+    let _codex_home = TempCodexHome::new()?;
+    let server_url = format!("{base_url}/mcp");
+    save_expired_oauth_tokens(&server_url)?;
+
+    let client = RmcpClient::new_streamable_http_client(
+        OAUTH_TEST_SERVER_NAME,
+        &server_url,
+        /*bearer_token*/ None,
+        /*http_headers*/ None,
+        /*env_http_headers*/ None,
+        OAuthCredentialsStoreMode::File,
+        Environment::default_for_tests().get_http_client(),
+        /*auth_provider*/ None,
+    )
+    .await?;
+
+    let error = initialize_client(&client).await.unwrap_err();
+    assert!(
+        error.to_string().contains("Auth required"),
+        "expected auth-required error, got: {error:#}"
     );
 
     Ok(())

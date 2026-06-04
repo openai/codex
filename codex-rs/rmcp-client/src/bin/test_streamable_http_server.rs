@@ -4,6 +4,8 @@ use std::fs;
 use std::io::ErrorKind;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use axum::Router;
@@ -54,6 +56,8 @@ use tokio::sync::Mutex;
 use tokio::task;
 use tokio::time::sleep;
 use urlencoding::decode;
+
+static REFRESH_TOKEN_USES: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Clone)]
 struct TestToolServer {
@@ -168,6 +172,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             session_failure_state.clone(),
             fail_session_post_when_armed,
         ))
+        .layer(middleware::from_fn(delay_mcp_initialize_when_configured))
         .with_state(session_failure_state);
 
     let router = if let Ok(token) = std::env::var("MCP_EXPECT_BEARER") {
@@ -413,18 +418,10 @@ async fn exchange_refresh_token(request: Request<Body>) -> Result<Response, Stat
         .map_err(|_| StatusCode::BAD_REQUEST)?;
     let params = parse_form_body(&body)?;
 
-    if let Ok(delay_ms) = std::env::var("MCP_REFRESH_TOKEN_DELAY_MS")
-        && let Ok(delay_ms) = delay_ms.parse::<u64>()
-    {
-        sleep(Duration::from_millis(delay_ms)).await;
-    }
-
     let expected_refresh_token =
         std::env::var("MCP_EXPECT_REFRESH_TOKEN").map_err(|_| StatusCode::BAD_REQUEST)?;
     let access_token =
         std::env::var("MCP_REFRESH_ACCESS_TOKEN").map_err(|_| StatusCode::BAD_REQUEST)?;
-    let refresh_token =
-        std::env::var("MCP_ROTATED_REFRESH_TOKEN").map_err(|_| StatusCode::BAD_REQUEST)?;
 
     if params.get("grant_type").map(String::as_str) != Some("refresh_token")
         || params.get("refresh_token").map(String::as_str) != Some(expected_refresh_token.as_str())
@@ -432,20 +429,53 @@ async fn exchange_refresh_token(request: Request<Body>) -> Result<Response, Stat
         return Err(StatusCode::UNAUTHORIZED);
     }
 
+    if let Ok(max_uses) = std::env::var("MCP_REFRESH_TOKEN_MAX_USES")
+        && let Ok(max_uses) = max_uses.parse::<usize>()
+    {
+        let use_count = REFRESH_TOKEN_USES.fetch_add(1, Ordering::SeqCst) + 1;
+        if use_count > max_uses {
+            return Err(StatusCode::UNAUTHORIZED);
+        }
+    }
+
+    if let Ok(delay_ms) = std::env::var("MCP_REFRESH_TOKEN_DELAY_MS")
+        && let Ok(delay_ms) = delay_ms.parse::<u64>()
+    {
+        sleep(Duration::from_millis(delay_ms)).await;
+    }
+
+    let mut token_response = json!({
+        "access_token": access_token,
+        "token_type": "Bearer",
+        "expires_in": 7200,
+    });
+    if std::env::var("MCP_OMIT_ROTATED_REFRESH_TOKEN").is_err() {
+        let refresh_token =
+            std::env::var("MCP_ROTATED_REFRESH_TOKEN").map_err(|_| StatusCode::BAD_REQUEST)?;
+        token_response["refresh_token"] = json!(refresh_token);
+    }
+
     #[expect(clippy::expect_used)]
     Ok(Response::builder()
         .status(StatusCode::OK)
         .header(CONTENT_TYPE, "application/json")
         .body(Body::from(
-            serde_json::to_vec(&json!({
-                "access_token": access_token,
-                "token_type": "Bearer",
-                "expires_in": 7200,
-                "refresh_token": refresh_token,
-            }))
-            .expect("failed to serialize token response"),
+            serde_json::to_vec(&token_response).expect("failed to serialize token response"),
         ))
         .expect("valid token response"))
+}
+
+async fn delay_mcp_initialize_when_configured(request: Request<Body>, next: Next) -> Response {
+    if request.uri().path() == "/mcp"
+        && request.method() == Method::POST
+        && !request.headers().contains_key(MCP_SESSION_ID_HEADER)
+        && let Ok(delay_ms) = std::env::var("MCP_INITIALIZE_DELAY_MS")
+        && let Ok(delay_ms) = delay_ms.parse::<u64>()
+    {
+        sleep(Duration::from_millis(delay_ms)).await;
+    }
+
+    next.run(request).await
 }
 
 fn parse_form_body(body: &[u8]) -> Result<HashMap<String, String>, StatusCode> {

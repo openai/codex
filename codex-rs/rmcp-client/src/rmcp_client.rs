@@ -843,11 +843,21 @@ impl RmcpClient {
                 oauth_persistor,
             } => {
                 match timeout {
-                    Some(duration) => time::timeout(duration, oauth_persistor.refresh_if_needed())
-                        .await
-                        .map_err(|_| {
-                            anyhow!("timed out handshaking with MCP server after {duration:?}")
-                        })??,
+                    Some(duration) => {
+                        let refresh_persistor = oauth_persistor.clone();
+                        let mut refresh =
+                            tokio::spawn(
+                                async move { refresh_persistor.refresh_if_needed().await },
+                            );
+                        time::timeout(duration, &mut refresh)
+                            .await
+                            .map_err(|_| {
+                                anyhow!("timed out handshaking with MCP server after {duration:?}")
+                            })?
+                            .map_err(|error| {
+                                anyhow!("OAuth refresh task failed for MCP server: {error}")
+                            })??;
+                    }
                     None => oauth_persistor.refresh_if_needed().await?,
                 }
                 remaining_timeout =
