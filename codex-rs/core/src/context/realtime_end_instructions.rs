@@ -17,7 +17,7 @@ impl RealtimeEndInstructions {
 }
 
 impl ContextualUserFragment for RealtimeEndInstructions {
-    fn role() -> &'static str {
+    fn role(&self) -> &'static str {
         "developer"
     }
 

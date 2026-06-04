@@ -728,29 +728,23 @@ impl ConfigToml {
         active_project: Option<&ProjectConfig>,
         permission_profile_constraint: Option<&crate::Constrained<PermissionProfile>>,
     ) -> PermissionProfile {
-        let sandbox_mode_was_explicit =
-            sandbox_mode_override.is_some() || self.sandbox_mode.is_some();
-        let resolved_sandbox_mode = sandbox_mode_override
-            .or(self.sandbox_mode)
-            .or(if sandbox_mode_was_explicit {
-                None
-            } else {
+        let configured_sandbox_mode = sandbox_mode_override.or(self.sandbox_mode);
+        let resolved_sandbox_mode = configured_sandbox_mode
+            .or_else(|| {
                 // If no sandbox_mode is set but this directory has a trust decision,
                 // default to workspace-write except on unsandboxed Windows where we
                 // default to read-only.
-                active_project.and_then(|p| {
-                    if p.is_trusted() || p.is_untrusted() {
+                active_project
+                    .filter(|project| project.is_trusted() || project.is_untrusted())
+                    .map(|_| {
                         if cfg!(target_os = "windows")
                             && windows_sandbox_level == WindowsSandboxLevel::Disabled
                         {
-                            Some(SandboxMode::ReadOnly)
+                            SandboxMode::ReadOnly
                         } else {
-                            Some(SandboxMode::WorkspaceWrite)
+                            SandboxMode::WorkspaceWrite
                         }
-                    } else {
-                        None
-                    }
-                })
+                    })
             })
             .unwrap_or_default();
         let effective_sandbox_mode = if cfg!(target_os = "windows")
@@ -788,7 +782,7 @@ impl ConfigToml {
             },
             SandboxMode::DangerFullAccess => PermissionProfile::Disabled,
         };
-        if !sandbox_mode_was_explicit
+        if configured_sandbox_mode.is_none()
             && let Some(constraint) = permission_profile_constraint
             && let Err(err) = constraint.can_set(&permission_profile)
         {

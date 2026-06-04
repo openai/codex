@@ -330,6 +330,11 @@ pub(crate) enum AppEvent {
         url: String,
     },
 
+    /// Open the current thread in Codex Desktop.
+    OpenDesktopThread {
+        thread_id: ThreadId,
+    },
+
     /// Persist a pet selection and reload the ambient pet.
     PetSelected {
         pet_id: String,

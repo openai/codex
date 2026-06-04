@@ -468,8 +468,8 @@ fn mcp_tool_call_span(
         mcp.connector.name = fields.connector_name.unwrap_or(""),
         tool.name = fields.tool_name,
         tool.call_id = fields.call_id,
-        conversation.id = %session.conversation_id,
-        session.id = %session.conversation_id,
+        conversation.id = %session.thread_id,
+        session.id = %session.thread_id,
         turn.id = turn_context.sub_id.as_str(),
         server.address = Empty,
         server.port = Empty,
@@ -554,8 +554,7 @@ async fn execute_mcp_tool_call(
     metadata: Option<&McpToolApprovalMetadata>,
     request_meta: Option<JsonValue>,
 ) -> Result<CallToolResult, String> {
-    let request_meta =
-        with_mcp_tool_call_thread_id_meta(request_meta, &sess.conversation_id.to_string());
+    let request_meta = with_mcp_tool_call_thread_id_meta(request_meta, &sess.thread_id.to_string());
     let request_meta = augment_mcp_tool_request_meta_with_sandbox_state(
         sess,
         turn_context,
@@ -645,7 +644,7 @@ async fn maybe_request_codex_apps_auth_elicitation(
 
     let request_id = rmcp::model::RequestId::String(plan.elicitation.elicitation_id.clone().into());
     let params = McpServerElicitationRequestParams {
-        thread_id: sess.conversation_id.to_string(),
+        thread_id: sess.thread_id.to_string(),
         turn_id: Some(turn_context.sub_id.clone()),
         server_name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
         request: McpServerElicitationRequest::Url {
@@ -766,7 +765,7 @@ async fn maybe_mark_thread_memory_mode_polluted(
     }
     state_db::mark_thread_memory_mode_polluted(
         sess.services.state_db.as_deref(),
-        sess.conversation_id,
+        sess.thread_id,
         "mcp_tool_call",
     )
     .await;
@@ -945,7 +944,7 @@ async fn maybe_track_codex_app_used(
 
     let tracking = build_track_events_context(
         turn_context.model_info.slug.clone(),
-        sess.conversation_id.to_string(),
+        sess.thread_id.to_string(),
         turn_context.sub_id.clone(),
     );
     sess.services.analytics_events_client.track_app_used(
@@ -1615,7 +1614,7 @@ fn build_mcp_tool_approval_elicitation_request(
         .unwrap_or_else(|| request.question.question.clone());
 
     McpServerElicitationRequestParams {
-        thread_id: sess.conversation_id.to_string(),
+        thread_id: sess.thread_id.to_string(),
         turn_id: Some(turn_context.sub_id.clone()),
         server_name: request.server.to_string(),
         request: McpServerElicitationRequest::Form {

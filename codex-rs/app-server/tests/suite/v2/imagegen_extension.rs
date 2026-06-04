@@ -136,7 +136,50 @@ async fn standalone_image_generation_persists_image_and_returns_it_to_model() ->
     Ok(())
 }
 
-#[cfg_attr(windows, ignore = "covered by Linux and macOS CI")]
+#[tokio::test]
+async fn standalone_image_generation_is_exposed_in_code_mode_only() -> Result<()> {
+    let server = responses::start_mock_server().await;
+    let response_mock = responses::mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_assistant_message("msg-1", "Done"),
+            responses::ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml(
+        codex_home.path(),
+        &server.uri(),
+        ImagegenTestMode::CodeModeOnly,
+    )?;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("access-chatgpt"),
+        AuthCredentialsStoreMode::File,
+    )?;
+
+    let mut mcp =
+        TestAppServer::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+    start_image_generation_turn(&mut mcp).await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    assert!(
+        response_mock
+            .single_request()
+            .body_contains_text("image_gen__imagegen")
+    );
+
+    Ok(())
+}
+
+#[cfg(not(windows))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn standalone_image_generation_is_callable_from_code_mode_only() -> Result<()> {
     let call_id = "code-mode-image-run-1";

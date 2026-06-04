@@ -231,9 +231,7 @@ impl AgentControl {
                 &config,
             )
             .await;
-        let agent_max_threads = config
-            .effective_agent_max_threads(multi_agent_version)
-            .map_err(|err| CodexErr::InvalidRequest(err.to_string()))?;
+        let agent_max_threads = config.effective_agent_max_threads(multi_agent_version);
         let mut reservation = self.state.reserve_spawn_slot(agent_max_threads)?;
         let inheritance = SpawnAgentThreadInheritance {
             shell_snapshot: self
@@ -632,9 +630,7 @@ impl AgentControl {
                 &config,
             )
             .await;
-        let agent_max_threads = config
-            .effective_agent_max_threads(multi_agent_version)
-            .map_err(|err| CodexErr::InvalidRequest(err.to_string()))?;
+        let agent_max_threads = config.effective_agent_max_threads(multi_agent_version);
         let mut reservation = self.state.reserve_spawn_slot(agent_max_threads)?;
         let (session_source, agent_metadata) = match session_source {
             SessionSource::SubAgent(SubAgentSource::ThreadSpawn {

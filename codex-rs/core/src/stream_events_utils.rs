@@ -132,7 +132,7 @@ pub(crate) async fn persist_image_generation_item(
     image_item: &mut ImageGenerationItem,
 ) -> Option<AbsolutePathBuf> {
     image_item.saved_path = None;
-    let session_id = sess.conversation_id.to_string();
+    let session_id = sess.thread_id.to_string();
     match save_image_generation_result(
         &turn_context.config.codex_home,
         &session_id,
@@ -172,7 +172,7 @@ async fn record_image_generation_instructions(
     if image_item.saved_path.is_none() {
         return;
     }
-    let session_id = sess.conversation_id.to_string();
+    let session_id = sess.thread_id.to_string();
     let image_output_path =
         image_generation_artifact_path(&turn_context.config.codex_home, &session_id, "<image_id>");
     let image_output_dir = image_output_path
@@ -263,7 +263,7 @@ pub(crate) async fn mark_thread_memory_mode_polluted_if_external_context(
     }
     state_db::mark_thread_memory_mode_polluted(
         sess.services.state_db.as_deref(),
-        sess.conversation_id,
+        sess.thread_id,
         "record_completed_response_item",
     )
     .await;
@@ -422,7 +422,7 @@ pub(crate) async fn handle_output_item_done(
 
             let payload_preview = call.payload.log_payload().into_owned();
             tracing::info!(
-                thread_id = %ctx.sess.conversation_id,
+                thread_id = %ctx.sess.thread_id,
                 "ToolCall: {} {}",
                 call.tool_name,
                 payload_preview

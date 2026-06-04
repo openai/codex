@@ -523,7 +523,7 @@ fn workspace_roots_from_turn_context_item(
 }
 
 impl ContextualUserFragment for EnvironmentContext {
-    fn role() -> &'static str {
+    fn role(&self) -> &'static str {
         "user"
     }
 

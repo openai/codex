@@ -60,6 +60,7 @@ use tokio_tungstenite::accept_hdr_async;
 use tokio_tungstenite::tungstenite;
 use tokio_util::sync::CancellationToken;
 
+mod clients_tests;
 mod pairing_tests;
 
 const TEST_INSTALLATION_ID: &str = "11111111-1111-4111-8111-111111111111";
@@ -163,6 +164,7 @@ fn remote_control_handle_with_current_enrollment(
         enabled_tx: Arc::new(enabled_tx),
         status_tx: Arc::new(status_tx),
         state_db_available: true,
+        remote_control_url: remote_control_url.to_string(),
         current_enrollment,
         auth_manager,
     }

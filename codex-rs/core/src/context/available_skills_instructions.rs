@@ -21,7 +21,7 @@ impl From<AvailableSkills> for AvailableSkillsInstructions {
 }
 
 impl ContextualUserFragment for AvailableSkillsInstructions {
-    fn role() -> &'static str {
+    fn role(&self) -> &'static str {
         "developer"
     }
 

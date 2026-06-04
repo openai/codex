@@ -66,6 +66,7 @@ pub const REMOTE_WORKSPACE_SHARED_WITH_ME_UNLISTED_MARKETPLACE_DISPLAY_NAME: &st
 const OPENAI_CURATED_REMOTE_COLLECTION_KEY: &str = "vertical";
 const REMOTE_PLUGIN_CATALOG_TIMEOUT: Duration = Duration::from_secs(30);
 const REMOTE_PLUGIN_LIST_PAGE_LIMIT: u32 = 200;
+const MAX_REMOTE_DEFAULT_PROMPT_COUNT: usize = 3;
 const MAX_REMOTE_DEFAULT_PROMPT_LEN: usize = 128;
 const INVALID_REQUEST_ERROR_CODE: i64 = -32600;
 const REMOTE_INSTALLED_MARKETPLACE_DISPLAY_ORDER: [(&str, &str); 5] = [
@@ -392,6 +393,7 @@ struct RemotePluginReleaseInterfaceResponse {
     terms_of_service_url: Option<String>,
     brand_color: Option<String>,
     default_prompt: Option<String>,
+    default_prompts: Option<Vec<String>>,
     composer_icon_url: Option<String>,
     logo_url: Option<String>,
     #[serde(default)]
@@ -1193,9 +1195,16 @@ fn remote_plugin_interface_to_info(plugin: &RemotePluginDirectoryItem) -> Option
     let interface = &plugin.release.interface;
     let display_name = non_empty_string(Some(&plugin.release.display_name));
     let default_prompt = interface
-        .default_prompt
-        .as_ref()
-        .and_then(|prompt| normalize_remote_default_prompt(prompt));
+        .default_prompts
+        .as_deref()
+        .and_then(normalize_remote_default_prompts)
+        .or_else(|| {
+            interface
+                .default_prompt
+                .as_deref()
+                .and_then(normalize_remote_default_prompt)
+                .map(|prompt| vec![prompt])
+        });
     let result = PluginInterface {
         display_name,
         short_description: interface.short_description.clone(),
@@ -1279,12 +1288,21 @@ fn non_empty_string(value: Option<&str>) -> Option<String> {
     })
 }
 
-fn normalize_remote_default_prompt(prompt: &str) -> Option<Vec<String>> {
+fn normalize_remote_default_prompts(prompts: &[String]) -> Option<Vec<String>> {
+    let prompts = prompts
+        .iter()
+        .filter_map(|prompt| normalize_remote_default_prompt(prompt))
+        .take(MAX_REMOTE_DEFAULT_PROMPT_COUNT)
+        .collect::<Vec<_>>();
+    (!prompts.is_empty()).then_some(prompts)
+}
+
+fn normalize_remote_default_prompt(prompt: &str) -> Option<String> {
     let prompt = prompt.trim();
     if prompt.is_empty() || prompt.chars().count() > MAX_REMOTE_DEFAULT_PROMPT_LEN {
         return None;
     }
-    Some(vec![prompt.to_string()])
+    Some(prompt.to_string())
 }
 
 async fn fetch_directory_plugins_for_scope(

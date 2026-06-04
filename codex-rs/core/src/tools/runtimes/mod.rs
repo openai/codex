@@ -10,6 +10,8 @@ use crate::sandboxing::SandboxPermissions;
 use crate::shell::Shell;
 use crate::shell::ShellType;
 use crate::tools::sandboxing::ToolError;
+#[cfg(unix)]
+use codex_install_context::InstallContext;
 #[cfg(target_os = "macos")]
 use codex_network_proxy::CODEX_PROXY_GIT_SSH_COMMAND_MARKER;
 use codex_network_proxy::CUSTOM_CA_ENV_KEYS;
@@ -86,17 +88,87 @@ pub(crate) fn strip_managed_proxy_env(env: &mut HashMap<String, String>) {
     }
 }
 
+/// Prepends `path_entry` to `PATH`, removing duplicate and empty existing
+/// entries.
+///
+/// Returns the updated `PATH` value when `env` was changed. Returns `None` when
+/// `path_entry` is empty, leaving `env` untouched so an empty entry does not add
+/// the current working directory to command lookup.
 #[cfg(unix)]
-fn prepend_path_entry(env: &mut HashMap<String, String>, path_entry: &str) -> String {
-    let updated_path = match env.get("PATH") {
-        Some(path) if !path.is_empty() => std::iter::once(path_entry)
-            .chain(path.split(':').filter(|entry| *entry != path_entry))
+fn prepend_path_entry(env: &mut HashMap<String, String>, path_entry: &str) -> Option<String> {
+    if path_entry.is_empty() {
+        None
+    } else {
+        let updated_path = match env.get("PATH") {
+            Some(path) if !path.is_empty() => std::iter::once(path_entry)
+                .chain(
+                    path.split(':')
+                        .filter(|entry| !entry.is_empty() && *entry != path_entry),
+                )
+                .collect::<Vec<_>>()
+                .join(":"),
+            _ => path_entry.to_string(),
+        };
+        env.insert("PATH".to_string(), updated_path.clone());
+        Some(updated_path)
+    }
+}
+
+/// PATH entries owned by Codex runtime setup.
+///
+/// These are applied to the live exec environment immediately and replayed after
+/// restoring a shell snapshot, unless the user explicitly overrides `PATH`.
+#[derive(Debug, Default, Eq, PartialEq)]
+pub(crate) struct RuntimePathPrepends {
+    entries: Vec<String>,
+}
+
+impl RuntimePathPrepends {
+    #[cfg(unix)]
+    pub(crate) fn prepend(&mut self, env: &mut HashMap<String, String>, path_entry: &Path) {
+        let path_entry = path_entry.to_string_lossy().to_string();
+        if prepend_path_entry(env, &path_entry).is_some() {
+            self.entries.retain(|entry| entry != &path_entry);
+            self.entries.push(path_entry);
+        }
+    }
+
+    fn shell_exports_after_snapshot(
+        &self,
+        explicit_env_overrides: &HashMap<String, String>,
+    ) -> String {
+        if explicit_env_overrides.contains_key("PATH") {
+            return String::new();
+        }
+
+        self.entries
+            .iter()
+            .filter(|entry| !entry.is_empty())
+            .map(|entry| {
+                let entry = shell_single_quote(entry);
+                format!(
+                    "if [ -n \"${{PATH:-}}\" ]; then export PATH='{entry}':\"$PATH\"; else export PATH='{entry}'; fi"
+                )
+            })
             .collect::<Vec<_>>()
-            .join(":"),
-        _ => path_entry.to_string(),
+            .join("\n")
+    }
+}
+
+#[cfg(unix)]
+pub(crate) fn apply_package_path_prepend(
+    env: &mut HashMap<String, String>,
+    runtime_path_prepends: &mut RuntimePathPrepends,
+) {
+    let Some(path_dir) = InstallContext::current()
+        .package_layout
+        .as_ref()
+        .and_then(|package_layout| package_layout.path_dir.as_ref())
+    else {
+        return;
     };
-    env.insert("PATH".to_string(), updated_path.clone());
-    updated_path
+
+    runtime_path_prepends.prepend(env, path_dir.as_path());
 }
 
 #[cfg(unix)]
@@ -107,21 +179,19 @@ pub(crate) fn prepend_zsh_fork_bin_to_path(
     let zsh_bin_dir = shell_zsh_path
         .parent()
         .map(|path| path.to_string_lossy().to_string())?;
-    Some(prepend_path_entry(env, &zsh_bin_dir))
+    prepend_path_entry(env, &zsh_bin_dir)
 }
 
 #[cfg(unix)]
 pub(crate) fn apply_zsh_fork_path_prepend(
     env: &mut HashMap<String, String>,
-    explicit_env_overrides: &mut HashMap<String, String>,
+    runtime_path_prepends: &mut RuntimePathPrepends,
     shell_zsh_path: &Path,
 ) {
-    let Some(updated_path) = prepend_zsh_fork_bin_to_path(env, shell_zsh_path) else {
+    let Some(zsh_bin_dir) = shell_zsh_path.parent() else {
         return;
     };
-    // Snapshot wrapping restores explicit overrides after sourcing the shell
-    // snapshot, so capture this PATH override there as well.
-    explicit_env_overrides.insert("PATH".to_string(), updated_path);
+    runtime_path_prepends.prepend(env, zsh_bin_dir);
 }
 
 pub(crate) fn disable_powershell_profile_for_elevated_windows_sandbox(
@@ -172,12 +242,17 @@ pub(crate) fn disable_powershell_profile_for_elevated_windows_sandbox(
 /// environment. We need access to both so snapshot restore logic can preserve
 /// runtime-only vars like `CODEX_THREAD_ID` without pretending they came from
 /// the explicit override policy.
+///
+/// `runtime_path_prepends` contains Codex-owned PATH entries already applied to
+/// the live `env`; snapshot wrapping replays them after restoring the snapshot
+/// PATH unless the user explicitly overrides `PATH`.
 pub(crate) fn maybe_wrap_shell_lc_with_snapshot(
     command: &[String],
     session_shell: &Shell,
     cwd: &AbsolutePathBuf,
     explicit_env_overrides: &HashMap<String, String>,
     env: &HashMap<String, String>,
+    runtime_path_prepends: &RuntimePathPrepends,
 ) -> Vec<String> {
     if cfg!(windows) {
         return command.to_vec();
@@ -219,8 +294,14 @@ pub(crate) fn maybe_wrap_shell_lc_with_snapshot(
     }
     let (override_captures, override_exports) = build_override_exports(&override_env);
     let (proxy_captures, proxy_exports) = build_proxy_env_exports();
+    let runtime_path_prepend_exports =
+        runtime_path_prepends.shell_exports_after_snapshot(explicit_env_overrides);
     let override_captures = join_shell_blocks([override_captures, proxy_captures]);
-    let override_exports = join_shell_blocks([override_exports, proxy_exports]);
+    let override_exports = join_shell_blocks([
+        override_exports,
+        proxy_exports,
+        runtime_path_prepend_exports,
+    ]);
     let rewritten_script = if override_exports.is_empty() {
         format!(
             "if . '{snapshot_path}' >/dev/null 2>&1; then :; fi\n\nexec '{original_shell}' -c '{original_script}'{trailing_args}"

@@ -13,9 +13,11 @@ use super::segment::ClientSegmentReassembler;
 use super::segment::REMOTE_CONTROL_SEGMENT_MAX_BYTES;
 use super::segment::split_server_envelope_for_transport;
 use crate::transport::TransportEvent;
+use crate::transport::remote_control::auth::RemoteControlConnectionAuth;
+use crate::transport::remote_control::auth::load_remote_control_auth;
+use crate::transport::remote_control::auth::recover_remote_control_auth;
 use crate::transport::remote_control::client_tracker::ClientTracker;
 use crate::transport::remote_control::client_tracker::REMOTE_CONTROL_IDLE_SWEEP_INTERVAL;
-use crate::transport::remote_control::enroll::RemoteControlConnectionAuth;
 use crate::transport::remote_control::enroll::RemoteControlEnrollment;
 use crate::transport::remote_control::enroll::enroll_remote_control_server;
 use crate::transport::remote_control::enroll::format_headers;
@@ -1172,51 +1174,6 @@ fn build_remote_control_websocket_request(
     Ok(request)
 }
 
-pub(crate) async fn load_remote_control_auth(
-    auth_manager: &Arc<AuthManager>,
-) -> io::Result<RemoteControlConnectionAuth> {
-    let mut reloaded = false;
-    let auth = loop {
-        let Some(auth) = auth_manager.auth().await else {
-            if reloaded {
-                return Err(io::Error::new(
-                    ErrorKind::PermissionDenied,
-                    "remote control requires ChatGPT authentication",
-                ));
-            }
-            auth_manager.reload().await;
-            reloaded = true;
-            continue;
-        };
-        if !auth.uses_codex_backend() {
-            break auth;
-        }
-        if auth.get_account_id().is_none() && !reloaded {
-            auth_manager.reload().await;
-            reloaded = true;
-            continue;
-        }
-        break auth;
-    };
-
-    if !auth.uses_codex_backend() {
-        return Err(io::Error::new(
-            ErrorKind::PermissionDenied,
-            "remote control requires ChatGPT authentication; API key auth is not supported",
-        ));
-    }
-
-    Ok(RemoteControlConnectionAuth {
-        auth_provider: codex_model_provider::auth_provider_from_auth(&auth),
-        account_id: auth.get_account_id().ok_or_else(|| {
-            io::Error::new(
-                ErrorKind::WouldBlock,
-                "remote control enrollment is waiting for a ChatGPT account id",
-            )
-        })?,
-    })
-}
-
 fn next_reconnect_delay(reconnect_attempt: &mut u64) -> (std::time::Duration, bool) {
     let reconnect_delay = backoff(*reconnect_attempt).min(REMOTE_CONTROL_RECONNECT_BACKOFF_CAP);
     let reconnect_backoff_reset = reconnect_delay == REMOTE_CONTROL_RECONNECT_BACKOFF_CAP;
@@ -1548,52 +1505,6 @@ async fn enroll_remote_control_server_if_missing(
     Ok(())
 }
 
-pub(super) async fn recover_remote_control_auth(
-    auth_recovery: &mut UnauthorizedRecovery,
-    auth_change_rx: &mut watch::Receiver<u64>,
-) -> bool {
-    if !auth_recovery.has_next() {
-        return false;
-    }
-
-    let mode = auth_recovery.mode_name();
-    let step = auth_recovery.step_name();
-    let auth_change_revision_before_recovery = *auth_change_rx.borrow();
-    match auth_recovery.next().await {
-        Ok(step_result) => {
-            if step_result.auth_state_changed() == Some(true) {
-                mark_recovery_auth_change_seen(
-                    auth_change_rx,
-                    auth_change_revision_before_recovery,
-                );
-            }
-            info!(
-                "remote control websocket auth recovery succeeded: mode={mode}, step={step}, auth_state_changed={:?}",
-                step_result.auth_state_changed()
-            );
-            true
-        }
-        Err(err) => {
-            warn!("remote control websocket auth recovery failed: mode={mode}, step={step}: {err}");
-            false
-        }
-    }
-}
-
-fn mark_recovery_auth_change_seen(
-    auth_change_rx: &mut watch::Receiver<u64>,
-    auth_change_revision_before_recovery: u64,
-) {
-    let auth_change_revision_after_recovery = *auth_change_rx.borrow();
-    if auth_change_revision_after_recovery == auth_change_revision_before_recovery.wrapping_add(1) {
-        // Recovery updated the same watch that wakes the outer reconnect
-        // loop. Mark only that single revision seen; if more revisions
-        // arrived while recovery was in flight, leave them pending so the
-        // reconnect loop still reacts to the later external auth change.
-        auth_change_rx.borrow_and_update();
-    }
-}
-
 fn format_remote_control_websocket_connect_error(
     websocket_url: &str,
     err: &tungstenite::Error,
@@ -1620,6 +1531,7 @@ mod tests {
     use super::*;
     use crate::outgoing_message::OutgoingMessage;
     use crate::transport::remote_control::ServerEvent;
+    use crate::transport::remote_control::auth::mark_recovery_auth_change_seen;
     use crate::transport::remote_control::protocol::StreamId;
     use crate::transport::remote_control::protocol::normalize_remote_control_url;
     use chrono::Utc;

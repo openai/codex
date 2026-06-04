@@ -27,7 +27,7 @@ impl UserShellCommand {
 }
 
 impl ContextualUserFragment for UserShellCommand {
-    fn role() -> &'static str {
+    fn role(&self) -> &'static str {
         "user"
     }
 

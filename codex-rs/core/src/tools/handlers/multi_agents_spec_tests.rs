@@ -197,7 +197,12 @@ fn spawn_agent_tool_hides_service_tier_with_spawn_metadata() {
         max_concurrent_threads_per_session: Some(4),
     });
 
-    let ToolSpec::Function(ResponsesApiTool { parameters, .. }) = tool else {
+    let ToolSpec::Function(ResponsesApiTool {
+        description,
+        parameters,
+        ..
+    }) = tool
+    else {
         panic!("spawn_agent should be a function tool");
     };
     let properties = parameters
@@ -209,6 +214,8 @@ fn spawn_agent_tool_hides_service_tier_with_spawn_metadata() {
     assert!(!properties.contains_key("model"));
     assert!(!properties.contains_key("reasoning_effort"));
     assert!(!properties.contains_key("service_tier"));
+    assert!(!description.contains(SPAWN_AGENT_INHERITED_MODEL_GUIDANCE));
+    assert!(!description.contains("Available model overrides"));
 }
 
 #[test]
