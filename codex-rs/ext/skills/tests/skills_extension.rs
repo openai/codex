@@ -82,10 +82,18 @@ async fn installed_extension_loads_host_skills_from_legacy_roots() -> TestResult
         config.config_layer_stack.clone(),
         config.bundled_skills_enabled(),
     );
+    let loaded_skills = Arc::new(manager.skills_for_config(&input, /*fs*/ None).await);
+    let skill_path_string = loaded_skills
+        .skills
+        .iter()
+        .find(|skill| skill.name == "demo")
+        .ok_or("demo skill should load")?
+        .path_to_skills_md
+        .to_string_lossy()
+        .into_owned();
+    let skill_prompt_path = skill_path_string.replace('\\', "/");
     let turn_store = ExtensionData::new("turn-1");
-    turn_store.insert(HostLoadedSkills::new(Arc::new(
-        manager.skills_for_config(&input, /*fs*/ None).await,
-    )));
+    turn_store.insert(HostLoadedSkills::new(Arc::clone(&loaded_skills)));
 
     let fragments = registry.turn_input_contributors()[0]
         .contribute(
@@ -102,9 +110,6 @@ async fn installed_extension_loads_host_skills_from_legacy_roots() -> TestResult
             &turn_store,
         )
         .await;
-
-    let skill_path_string = skill_path.to_string_lossy();
-    let skill_prompt_path = skill_path_string.replace('\\', "/");
 
     assert_eq!(2, fragments.len());
     assert!(fragments[0].render().contains("demo"));
