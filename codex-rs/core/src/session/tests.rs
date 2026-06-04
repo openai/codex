@@ -10933,9 +10933,13 @@ while :; do sleep 1; done"#,
         .expect("shell command response item should build a tool call");
     let cancellation_token = CancellationToken::new();
     let cancellation_tx = cancellation_token.clone();
+    let tool_timing_guard = turn_context.turn_timing_state.begin_tool();
     let handle = tokio::spawn(
-        test_tool_runtime(Arc::clone(&session), Arc::clone(&turn_context))
-            .handle_tool_call(call, cancellation_token),
+        test_tool_runtime(Arc::clone(&session), Arc::clone(&turn_context)).handle_tool_call(
+            call,
+            cancellation_token,
+            tool_timing_guard,
+        ),
     );
 
     let mut ready = false;
