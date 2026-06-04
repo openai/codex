@@ -94,6 +94,7 @@ mod tests {
             risk_level: None,
             user_authorization: None,
             rationale: Some(format!("rationale {id}")),
+            denial_kind: None,
             decision_source: None,
             action: GuardianAssessmentAction::Command {
                 source: GuardianCommandSource::Shell,

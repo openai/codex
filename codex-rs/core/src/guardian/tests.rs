@@ -43,6 +43,7 @@ use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::GranularApprovalConfig;
 use codex_protocol::protocol::GuardianAssessmentStatus;
+use codex_protocol::protocol::GuardianDenialKind;
 use codex_protocol::protocol::GuardianRiskLevel;
 use codex_protocol::protocol::GuardianUserAuthorization;
 use codex_protocol::protocol::ReviewDecision;
@@ -101,6 +102,47 @@ fn guardian_rejection_circuit_breaker_interrupts_after_three_consecutive_denials
         circuit_breaker.record_denial("turn-1"),
         GuardianRejectionCircuitBreakerAction::Continue
     );
+}
+
+#[test]
+fn guardian_denied_action_registry_claims_only_exact_soft_denial_once() {
+    let action = codex_protocol::protocol::GuardianAssessmentAction::Command {
+        source: codex_protocol::protocol::GuardianCommandSource::Shell,
+        command: "rm -f /tmp/guardian".to_string(),
+        cwd: test_path_buf("/tmp").abs(),
+    };
+    let mut event = codex_protocol::protocol::GuardianAssessmentEvent {
+        id: "soft-1".to_string(),
+        target_item_id: None,
+        turn_id: "turn-1".to_string(),
+        started_at_ms: 0,
+        completed_at_ms: Some(1),
+        status: GuardianAssessmentStatus::Denied,
+        risk_level: Some(GuardianRiskLevel::High),
+        user_authorization: Some(GuardianUserAuthorization::Low),
+        rationale: Some("Needs explicit approval".to_string()),
+        denial_kind: Some(GuardianDenialKind::Soft),
+        decision_source: Some(GuardianAssessmentDecisionSource::Agent),
+        action: action.clone(),
+    };
+    let mut registry = GuardianDeniedActionRegistry::default();
+
+    registry.record(event.id.clone(), action.clone(), GuardianDenialKind::Soft);
+    assert!(registry.claim_explicit_retry(&event));
+    assert!(!registry.claim_explicit_retry(&event));
+
+    event.id = "denial-1".to_string();
+    registry.record(event.id.clone(), action.clone(), GuardianDenialKind::Denial);
+    assert!(!registry.claim_explicit_retry(&event));
+
+    event.id = "altered-1".to_string();
+    registry.record(event.id.clone(), action, GuardianDenialKind::Soft);
+    event.action = codex_protocol::protocol::GuardianAssessmentAction::Command {
+        source: codex_protocol::protocol::GuardianCommandSource::Shell,
+        command: "rm -f /tmp/different".to_string(),
+        cwd: test_path_buf("/tmp").abs(),
+    };
+    assert!(!registry.claim_explicit_retry(&event));
 }
 
 #[test]
@@ -1235,6 +1277,7 @@ fn parse_guardian_assessment_extracts_embedded_json() {
             user_authorization: GuardianUserAuthorization::Low,
             outcome: GuardianAssessmentOutcome::Allow,
             rationale: "ok".to_string(),
+            denial_kind: None,
         }
     );
 }
@@ -1251,6 +1294,7 @@ fn parse_guardian_assessment_treats_bare_allow_as_low_risk() {
             user_authorization: GuardianUserAuthorization::Unknown,
             outcome: GuardianAssessmentOutcome::Allow,
             rationale: "Auto-review returned a low-risk allow decision.".to_string(),
+            denial_kind: None,
         }
     );
 }
@@ -1267,8 +1311,36 @@ fn parse_guardian_assessment_treats_bare_deny_as_high_risk() {
             user_authorization: GuardianUserAuthorization::Unknown,
             outcome: GuardianAssessmentOutcome::Deny,
             rationale: "Auto-review returned a deny decision without a rationale.".to_string(),
+            denial_kind: Some(GuardianDenialKind::Soft),
         }
     );
+}
+
+#[test]
+fn parse_guardian_assessment_preserves_explicit_denial() {
+    let parsed = parse_guardian_assessment(Some(
+        r#"{"risk_level":"high","user_authorization":"high","outcome":"deny","denial_kind":"denial","rationale":"Absolute tenant policy deny."}"#,
+    ))
+    .expect("guardian assessment");
+
+    assert_eq!(
+        parsed,
+        GuardianAssessment {
+            risk_level: GuardianRiskLevel::High,
+            user_authorization: GuardianUserAuthorization::High,
+            outcome: GuardianAssessmentOutcome::Deny,
+            rationale: "Absolute tenant policy deny.".to_string(),
+            denial_kind: Some(GuardianDenialKind::Denial),
+        }
+    );
+}
+
+#[test]
+fn parse_guardian_assessment_defaults_critical_deny_to_denial_kind() {
+    let parsed = parse_guardian_assessment(Some(r#"{"risk_level":"critical","outcome":"deny"}"#))
+        .expect("guardian assessment");
+
+    assert_eq!(parsed.denial_kind, Some(GuardianDenialKind::Denial));
 }
 
 #[test]
@@ -1295,6 +1367,10 @@ fn guardian_output_schema_requires_only_outcome_and_allows_optional_details() {
                 },
                 "rationale": {
                     "type": "string"
+                },
+                "denial_kind": {
+                    "type": "string",
+                    "enum": ["soft", "denial"]
                 }
             },
             "required": ["outcome"]
@@ -1496,6 +1572,10 @@ async fn guardian_review_request_layout_matches_model_visible_request_snapshot()
                 },
                 "rationale": {
                     "type": "string"
+                },
+                "denial_kind": {
+                    "type": "string",
+                    "enum": ["soft", "denial"]
                 }
             },
             "required": ["outcome"]

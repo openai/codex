@@ -2280,6 +2280,8 @@ mod tests {
             risk_level,
             user_authorization,
             rationale,
+            denial_kind: matches!(status, GuardianAssessmentStatus::Denied)
+                .then_some(codex_protocol::protocol::GuardianDenialKind::Soft),
             decision_source: if matches!(status, GuardianAssessmentStatus::InProgress) {
                 None
             } else {
@@ -2346,6 +2348,7 @@ mod tests {
                 risk_level: None,
                 user_authorization: None,
                 rationale: None,
+                denial_kind: None,
                 decision_source: None,
                 action: action.clone(),
             },
@@ -2392,6 +2395,7 @@ mod tests {
                 risk_level: Some(codex_protocol::protocol::GuardianRiskLevel::High),
                 user_authorization: Some(codex_protocol::protocol::GuardianUserAuthorization::Low),
                 rationale: Some("too risky".to_string()),
+                denial_kind: Some(codex_protocol::protocol::GuardianDenialKind::Soft),
                 decision_source: Some(
                     codex_protocol::protocol::GuardianAssessmentDecisionSource::Agent,
                 ),
@@ -2446,6 +2450,7 @@ mod tests {
                 risk_level: None,
                 user_authorization: None,
                 rationale: None,
+                denial_kind: None,
                 decision_source: Some(
                     codex_protocol::protocol::GuardianAssessmentDecisionSource::Agent,
                 ),

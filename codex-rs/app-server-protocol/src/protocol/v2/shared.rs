@@ -233,7 +233,7 @@ impl From<CoreAskForApproval> for AskForApproval {
 pub enum ApprovalsReviewer {
     #[serde(rename = "user")]
     User,
-    #[serde(rename = "guardian_subagent", alias = "auto_review")]
+    #[serde(rename = "auto_review", alias = "guardian_subagent")]
     AutoReview,
 }
 

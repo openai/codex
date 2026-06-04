@@ -123,6 +123,14 @@ impl ChatWidget {
                 }
             }),
             rationale: review.rationale,
+            denial_kind: review.denial_kind.map(|denial_kind| match denial_kind {
+                codex_app_server_protocol::GuardianDenialKind::Soft => {
+                    codex_protocol::approvals::GuardianDenialKind::Soft
+                }
+                codex_app_server_protocol::GuardianDenialKind::Denial => {
+                    codex_protocol::approvals::GuardianDenialKind::Denial
+                }
+            }),
             decision_source: decision_source.map(|source| match source {
                 codex_app_server_protocol::AutoReviewDecisionSource::Agent => {
                     GuardianAssessmentDecisionSource::Agent

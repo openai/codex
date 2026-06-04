@@ -11,6 +11,7 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::GuardianAssessmentDecisionSource;
 use codex_protocol::protocol::GuardianAssessmentEvent;
 use codex_protocol::protocol::GuardianAssessmentStatus;
+use codex_protocol::protocol::GuardianDenialKind;
 use codex_protocol::protocol::GuardianRiskLevel;
 use codex_protocol::protocol::GuardianUserAuthorization;
 use codex_protocol::protocol::ReviewDecision;
@@ -52,6 +53,12 @@ const GUARDIAN_REJECTION_INSTRUCTIONS: &str = concat!(
     "Otherwise, stop and request user input.",
 );
 
+const GUARDIAN_DENIAL_INSTRUCTIONS: &str = concat!(
+    "This denial cannot be approved by the user. ",
+    "Do not attempt the same outcome via workaround, indirect execution, or policy circumvention. ",
+    "Proceed only with a materially safer alternative, or stop and request user input."
+);
+
 const GUARDIAN_TIMEOUT_INSTRUCTIONS: &str = concat!(
     "The automatic permission approval review did not finish before its deadline. ",
     "Do not assume the action is unsafe based on the timeout alone. ",
@@ -73,13 +80,21 @@ pub(crate) async fn guardian_rejection_message(session: &Session, review_id: &st
         .unwrap_or_else(|| GuardianRejection {
             rationale: "Auto-reviewer denied the action without a specific rationale.".to_string(),
             source: GuardianAssessmentDecisionSource::Agent,
+            denial_kind: None,
         });
     match rejection.source {
-        GuardianAssessmentDecisionSource::Agent => format!(
-            "This action was rejected due to unacceptable risk.\nReason: {}\n{}",
-            rejection.rationale.trim(),
-            GUARDIAN_REJECTION_INSTRUCTIONS
-        ),
+        GuardianAssessmentDecisionSource::Agent => {
+            let rationale = rejection.rationale.trim();
+            if rejection.denial_kind == Some(GuardianDenialKind::Denial) {
+                format!(
+                    "This action was denied due to unacceptable risk.\nReason: {rationale}\n{GUARDIAN_DENIAL_INSTRUCTIONS}",
+                )
+            } else {
+                format!(
+                    "This action was rejected due to unacceptable risk.\nReason: {rationale}\n{GUARDIAN_REJECTION_INSTRUCTIONS}",
+                )
+            }
+        }
     }
 }
 
@@ -287,6 +302,7 @@ async fn run_guardian_review(
                 risk_level: None,
                 user_authorization: None,
                 rationale: None,
+                denial_kind: None,
                 decision_source: None,
                 action: action_summary.clone(),
             }),
@@ -324,6 +340,7 @@ async fn run_guardian_review(
                     risk_level: None,
                     user_authorization: None,
                     rationale: None,
+                    denial_kind: None,
                     decision_source: Some(GuardianAssessmentDecisionSource::Agent),
                     action: action_summary,
                 }),
@@ -416,6 +433,7 @@ async fn run_guardian_review(
                             risk_level: None,
                             user_authorization: None,
                             rationale: Some(rationale),
+                            denial_kind: None,
                             decision_source: Some(GuardianAssessmentDecisionSource::Agent),
                             action: terminal_action,
                         }),
@@ -451,6 +469,7 @@ async fn run_guardian_review(
                             risk_level: None,
                             user_authorization: None,
                             rationale: None,
+                            denial_kind: None,
                             decision_source: Some(GuardianAssessmentDecisionSource::Agent),
                             action: action_summary,
                         }),
@@ -490,6 +509,7 @@ async fn run_guardian_review(
                         user_authorization: GuardianUserAuthorization::Unknown,
                         outcome: GuardianAssessmentOutcome::Deny,
                         rationale,
+                        denial_kind: None,
                     },
                     false,
                 )
@@ -508,8 +528,15 @@ async fn run_guardian_review(
         GuardianUserAuthorization::Medium => "medium",
         GuardianUserAuthorization::High => "high",
     };
+    let denial_kind = assessment
+        .denial_kind
+        .map(|kind| match kind {
+            GuardianDenialKind::Soft => ", denial: soft",
+            GuardianDenialKind::Denial => ", denial",
+        })
+        .unwrap_or_default();
     let warning = format!(
-        "Automatic approval review {verdict} (risk: {}, authorization: {user_authorization}): {}",
+        "Automatic approval review {verdict} (risk: {}, authorization: {user_authorization}{denial_kind}): {}",
         guardian_risk_level_str(assessment.risk_level),
         assessment.rationale
     );
@@ -532,8 +559,21 @@ async fn run_guardian_review(
             let rejection = GuardianRejection {
                 rationale: assessment.rationale.clone(),
                 source: GuardianAssessmentDecisionSource::Agent,
+                denial_kind: assessment.denial_kind,
             };
             rationales.insert(review_id.clone(), rejection);
+        }
+    }
+    {
+        let mut denied_actions = session.services.guardian_denied_actions.lock().await;
+        if !approved && assessment.denial_kind == Some(GuardianDenialKind::Soft) {
+            denied_actions.record(
+                review_id.clone(),
+                terminal_action.clone(),
+                GuardianDenialKind::Soft,
+            );
+        } else {
+            denied_actions.remove(&review_id);
         }
     }
     session
@@ -549,6 +589,7 @@ async fn run_guardian_review(
                 risk_level: Some(assessment.risk_level),
                 user_authorization: Some(assessment.user_authorization),
                 rationale: Some(assessment.rationale.clone()),
+                denial_kind: assessment.denial_kind,
                 decision_source: Some(GuardianAssessmentDecisionSource::Agent),
                 action: terminal_action,
             }),

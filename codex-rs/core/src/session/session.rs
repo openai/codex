@@ -1012,6 +1012,7 @@ impl Session {
                 session_telemetry,
                 models_manager: Arc::clone(&models_manager),
                 tool_approvals: Mutex::new(ApprovalStore::default()),
+                guardian_denied_actions: Mutex::new(Default::default()),
                 guardian_rejections: Mutex::new(HashMap::new()),
                 guardian_rejection_circuit_breaker: Mutex::new(Default::default()),
                 runtime_handle: tokio::runtime::Handle::current(),

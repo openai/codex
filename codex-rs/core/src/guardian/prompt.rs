@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::GuardianDenialKind;
 use codex_protocol::protocol::GuardianRiskLevel;
 use codex_protocol::protocol::GuardianUserAuthorization;
 use codex_protocol::user_input::UserInput;
@@ -611,6 +612,16 @@ pub(crate) fn parse_guardian_assessment(text: Option<&str>) -> anyhow::Result<Gu
                 "Auto-review returned a deny decision without a rationale.".to_string()
             }
         });
+    let denial_kind = match outcome {
+        super::GuardianAssessmentOutcome::Allow => None,
+        super::GuardianAssessmentOutcome::Deny => Some(parsed_payload.denial_kind.unwrap_or(
+            if risk_level == GuardianRiskLevel::Critical {
+                GuardianDenialKind::Denial
+            } else {
+                GuardianDenialKind::Soft
+            },
+        )),
+    };
 
     Ok(GuardianAssessment {
         risk_level,
@@ -619,6 +630,7 @@ pub(crate) fn parse_guardian_assessment(text: Option<&str>) -> anyhow::Result<Gu
             .unwrap_or(GuardianUserAuthorization::Unknown),
         outcome,
         rationale,
+        denial_kind,
     })
 }
 
@@ -628,6 +640,7 @@ struct GuardianAssessmentPayload {
     user_authorization: Option<GuardianUserAuthorization>,
     outcome: super::GuardianAssessmentOutcome,
     rationale: Option<String>,
+    denial_kind: Option<GuardianDenialKind>,
 }
 
 /// JSON schema supplied as `final_output_json_schema` to guide a structured
@@ -654,6 +667,10 @@ pub(crate) fn guardian_output_schema() -> Value {
             },
             "rationale": {
                 "type": "string"
+            },
+            "denial_kind": {
+                "type": "string",
+                "enum": ["soft", "denial"]
             }
         },
         "required": ["outcome"]
@@ -672,7 +689,8 @@ For anything else, use this JSON schema:
   "risk_level": "low" | "medium" | "high" | "critical",
   "user_authorization": "unknown" | "low" | "medium" | "high",
   "outcome": "allow" | "deny",
-  "rationale": string
+  "rationale": string,
+  "denial_kind": "soft" | "denial"
 }"#
 }
 

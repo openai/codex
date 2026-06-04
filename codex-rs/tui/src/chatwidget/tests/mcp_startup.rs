@@ -219,6 +219,7 @@ async fn mcp_startup_complete_preserves_review_status() {
         risk_level: None,
         user_authorization: None,
         rationale: None,
+        denial_kind: None,
         decision_source: None,
         action: GuardianAssessmentAction::Command {
             source: GuardianCommandSource::Shell,

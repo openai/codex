@@ -12,6 +12,7 @@ fn auto_review_denial_event() -> GuardianAssessmentEvent {
         risk_level: Some(GuardianRiskLevel::High),
         user_authorization: Some(GuardianUserAuthorization::Low),
         rationale: Some("Would send a local source file to an external endpoint.".into()),
+        denial_kind: Some(GuardianDenialKind::Soft),
         decision_source: Some(GuardianAssessmentDecisionSource::Agent),
         action: GuardianAssessmentAction::Command {
             source: GuardianCommandSource::Shell,
@@ -52,6 +53,7 @@ async fn approving_recent_denial_emits_structured_core_op_once() {
         }) if submitted_thread_id == thread_id
                 && event.id == "auto-review-recent-1"
                 && event.status == GuardianAssessmentStatus::Denied
+                && event.denial_kind == Some(GuardianDenialKind::Soft)
     );
     assert_matches!(rx.try_recv(), Ok(AppEvent::InsertHistoryCell(_)));
 
@@ -81,6 +83,7 @@ async fn guardian_denied_exec_renders_warning_and_denied_request() {
         risk_level: None,
         user_authorization: None,
         rationale: None,
+        denial_kind: None,
         decision_source: None,
         action: action.clone(),
     });
@@ -95,6 +98,7 @@ async fn guardian_denied_exec_renders_warning_and_denied_request() {
         risk_level: Some(GuardianRiskLevel::High),
         user_authorization: Some(GuardianUserAuthorization::Low),
         rationale: Some("Would exfiltrate local source code.".into()),
+        denial_kind: Some(GuardianDenialKind::Soft),
         decision_source: Some(GuardianAssessmentDecisionSource::Agent),
         action,
     });
@@ -139,6 +143,7 @@ async fn guardian_approved_exec_renders_approved_request() {
         risk_level: Some(GuardianRiskLevel::Low),
         user_authorization: Some(GuardianUserAuthorization::High),
         rationale: Some("Narrowly scoped to the requested file.".into()),
+        denial_kind: None,
         decision_source: Some(GuardianAssessmentDecisionSource::Agent),
         action: GuardianAssessmentAction::Command {
             source: GuardianCommandSource::Shell,
@@ -197,6 +202,7 @@ async fn guardian_approved_request_permissions_renders_request_summary() {
         risk_level: None,
         user_authorization: None,
         rationale: None,
+        denial_kind: None,
         decision_source: None,
         action: action.clone(),
     });
@@ -221,6 +227,7 @@ async fn guardian_approved_request_permissions_renders_request_summary() {
         risk_level: Some(GuardianRiskLevel::Low),
         user_authorization: Some(GuardianUserAuthorization::High),
         rationale: Some("Request is scoped to report output.".into()),
+        denial_kind: None,
         decision_source: Some(GuardianAssessmentDecisionSource::Agent),
         action,
     });
@@ -271,6 +278,7 @@ async fn guardian_timed_out_exec_renders_warning_and_timed_out_request() {
         risk_level: None,
         user_authorization: None,
         rationale: None,
+        denial_kind: None,
         decision_source: None,
         action: action.clone(),
     });
@@ -287,6 +295,7 @@ async fn guardian_timed_out_exec_renders_warning_and_timed_out_request() {
         rationale: Some(
             "Automatic approval review timed out while evaluating the requested approval.".into(),
         ),
+        denial_kind: None,
         decision_source: Some(GuardianAssessmentDecisionSource::Agent),
         action,
     });
@@ -339,6 +348,7 @@ async fn app_server_guardian_review_started_sets_review_status() {
                     risk_level: None,
                     user_authorization: None,
                     rationale: None,
+                    denial_kind: None,
                 },
                 action,
             },
@@ -381,6 +391,7 @@ async fn app_server_guardian_review_denied_renders_denied_request_snapshot() {
                     risk_level: None,
                     user_authorization: None,
                     rationale: None,
+                    denial_kind: None,
                 },
                 action: action.clone(),
             },
@@ -403,6 +414,7 @@ async fn app_server_guardian_review_denied_renders_denied_request_snapshot() {
                     risk_level: Some(AppServerGuardianRiskLevel::High),
                     user_authorization: Some(AppServerGuardianUserAuthorization::Low),
                     rationale: Some("Would exfiltrate local source code.".to_string()),
+                    denial_kind: Some(AppServerGuardianDenialKind::Soft),
                 },
                 action,
             },
@@ -459,6 +471,7 @@ async fn app_server_guardian_review_timed_out_renders_timed_out_request_snapshot
                     risk_level: None,
                     user_authorization: None,
                     rationale: None,
+                    denial_kind: None,
                 },
                 action: action.clone(),
             },
@@ -484,6 +497,7 @@ async fn app_server_guardian_review_timed_out_renders_timed_out_request_snapshot
                         "Automatic approval review timed out while evaluating the requested approval."
                             .to_string(),
                     ),
+                    denial_kind: None,
                 },
                 action,
             },
@@ -535,6 +549,7 @@ async fn guardian_parallel_reviews_render_aggregate_status_snapshot() {
             risk_level: None,
             user_authorization: None,
             rationale: None,
+            denial_kind: None,
             decision_source: None,
             action: GuardianAssessmentAction::Command {
                 source: GuardianCommandSource::Shell,
@@ -566,6 +581,7 @@ async fn guardian_parallel_reviews_keep_remaining_review_visible_after_denial() 
         risk_level: None,
         user_authorization: None,
         rationale: None,
+        denial_kind: None,
         decision_source: None,
         action: GuardianAssessmentAction::Command {
             source: GuardianCommandSource::Shell,
@@ -583,6 +599,7 @@ async fn guardian_parallel_reviews_keep_remaining_review_visible_after_denial() 
         risk_level: None,
         user_authorization: None,
         rationale: None,
+        denial_kind: None,
         decision_source: None,
         action: GuardianAssessmentAction::Command {
             source: GuardianCommandSource::Shell,
@@ -600,6 +617,7 @@ async fn guardian_parallel_reviews_keep_remaining_review_visible_after_denial() 
         risk_level: Some(GuardianRiskLevel::High),
         user_authorization: Some(GuardianUserAuthorization::Low),
         rationale: Some("Would delete important data.".to_string()),
+        denial_kind: Some(GuardianDenialKind::Soft),
         decision_source: Some(GuardianAssessmentDecisionSource::Agent),
         action: GuardianAssessmentAction::Command {
             source: GuardianCommandSource::Shell,

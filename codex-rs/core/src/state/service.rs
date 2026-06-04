@@ -8,6 +8,7 @@ use crate::client::ModelClient;
 use crate::config::NetworkProxyAuditMetadata;
 use crate::config::StartedNetworkProxy;
 use crate::exec_policy::ExecPolicyManager;
+use crate::guardian::GuardianDeniedActionRegistry;
 use crate::guardian::GuardianRejection;
 use crate::guardian::GuardianRejectionCircuitBreaker;
 use crate::mcp::McpManager;
@@ -57,6 +58,7 @@ pub(crate) struct SessionServices {
     pub(crate) models_manager: SharedModelsManager,
     pub(crate) session_telemetry: SessionTelemetry,
     pub(crate) tool_approvals: Mutex<ApprovalStore>,
+    pub(crate) guardian_denied_actions: Mutex<GuardianDeniedActionRegistry>,
     pub(crate) guardian_rejections: Mutex<HashMap<String, GuardianRejection>>,
     pub(crate) guardian_rejection_circuit_breaker: Mutex<GuardianRejectionCircuitBreaker>,
     pub(crate) runtime_handle: Handle,

@@ -2324,6 +2324,7 @@ mod tests {
                 risk_level: None,
                 user_authorization: None,
                 rationale: None,
+                denial_kind: None,
                 decision_source: None,
                 action: serde_json::from_value(serde_json::json!({
                     "type": "command",
@@ -2343,6 +2344,7 @@ mod tests {
                 risk_level: Some(codex_protocol::protocol::GuardianRiskLevel::High),
                 user_authorization: Some(codex_protocol::protocol::GuardianUserAuthorization::Low),
                 rationale: Some("Would delete user data.".into()),
+                denial_kind: Some(codex_protocol::protocol::GuardianDenialKind::Soft),
                 decision_source: Some(
                     codex_protocol::protocol::GuardianAssessmentDecisionSource::Agent,
                 ),
@@ -2410,6 +2412,7 @@ mod tests {
                 risk_level: None,
                 user_authorization: None,
                 rationale: None,
+                denial_kind: None,
                 decision_source: None,
                 action: serde_json::from_value(serde_json::json!({
                     "type": "execve",
