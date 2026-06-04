@@ -1,6 +1,8 @@
+use super::super::protocol::RemoteControlPairingStatusRequest;
 use super::super::protocol::StartRemoteControlPairingRequest;
 use super::*;
 use pretty_assertions::assert_eq;
+use std::io;
 
 fn remote_control_enrollment(
     remote_control_url: &str,
@@ -64,6 +66,36 @@ async fn pairing_response_error(body: serde_json::Value) -> String {
         .expect_err("pairing should fail");
     server_task.await.expect("server task should finish");
     err.to_string()
+}
+
+async fn pairing_status_error(status: &'static str, body: &'static str) -> (io::Error, String) {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("listener should bind");
+    let remote_control_url = remote_control_url_for_listener(&listener);
+    let expected_status_url = normalize_remote_control_url(&remote_control_url)
+        .expect("target should normalize")
+        .pair_status_url;
+    let server_task = tokio::spawn(async move {
+        let status_request = accept_http_request(&listener).await;
+        respond_with_status_and_headers(
+            status_request.stream,
+            status,
+            &[("x-request-id", "request-123"), ("cf-ray", "ray-123")],
+            body,
+        )
+        .await;
+    });
+
+    let err = remote_control_enrollment(&remote_control_url, "remote-control-token")
+        .pairing_status(RemoteControlPairingStatusRequest {
+            pairing_code: Some("pairing-code".to_string()),
+            manual_pairing_code: None,
+        })
+        .await
+        .expect_err("pairing status should fail");
+    server_task.await.expect("server task should finish");
+    (err, expected_status_url)
 }
 
 #[tokio::test]
@@ -154,6 +186,190 @@ async fn remote_control_handle_starts_pairing_before_websocket_connects() {
             expires_at: 33_336_362_096,
         }
     );
+}
+
+#[tokio::test]
+async fn remote_control_pairing_status_returns_pending() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("listener should bind");
+    let remote_control_url = remote_control_url_for_listener(&listener);
+    let server_task = tokio::spawn(async move {
+        let status_request = accept_http_request(&listener).await;
+        assert_eq!(
+            status_request.request_line,
+            "POST /backend-api/wham/remote/control/server/pair/status HTTP/1.1"
+        );
+        assert_eq!(
+            status_request.headers.get("authorization"),
+            Some(&"Bearer remote-control-token".to_string())
+        );
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&status_request.body)
+                .expect("status request body should deserialize"),
+            json!({ "pairing_code": "pairing-code" })
+        );
+        respond_with_json(status_request.stream, json!({ "claimed": false })).await;
+    });
+
+    let response = remote_control_enrollment(&remote_control_url, "remote-control-token")
+        .pairing_status(RemoteControlPairingStatusRequest {
+            pairing_code: Some("pairing-code".to_string()),
+            manual_pairing_code: None,
+        })
+        .await
+        .expect("pairing status should succeed");
+    server_task.await.expect("server task should finish");
+
+    assert!(!response.claimed);
+}
+
+#[tokio::test]
+async fn remote_control_pairing_status_accepts_manual_pairing_code() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("listener should bind");
+    let remote_control_url = remote_control_url_for_listener(&listener);
+    let server_task = tokio::spawn(async move {
+        let status_request = accept_http_request(&listener).await;
+        assert_eq!(
+            status_request.request_line,
+            "POST /backend-api/wham/remote/control/server/pair/status HTTP/1.1"
+        );
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&status_request.body)
+                .expect("status request body should deserialize"),
+            json!({ "manual_pairing_code": "ABCD-EFGH" })
+        );
+        respond_with_json(status_request.stream, json!({ "claimed": false })).await;
+    });
+
+    let response = remote_control_enrollment(&remote_control_url, "remote-control-token")
+        .pairing_status(RemoteControlPairingStatusRequest {
+            pairing_code: None,
+            manual_pairing_code: Some("ABCD-EFGH".to_string()),
+        })
+        .await
+        .expect("pairing status should succeed");
+    server_task.await.expect("server task should finish");
+
+    assert!(!response.claimed);
+}
+
+#[tokio::test]
+async fn remote_control_pairing_status_returns_claimed() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("listener should bind");
+    let remote_control_url = remote_control_url_for_listener(&listener);
+    let server_task = tokio::spawn(async move {
+        let status_request = accept_http_request(&listener).await;
+        assert_eq!(
+            status_request.request_line,
+            "POST /backend-api/wham/remote/control/server/pair/status HTTP/1.1"
+        );
+        respond_with_json(status_request.stream, json!({ "claimed": true })).await;
+    });
+
+    let response = remote_control_enrollment(&remote_control_url, "remote-control-token")
+        .pairing_status(RemoteControlPairingStatusRequest {
+            pairing_code: Some("pairing-code".to_string()),
+            manual_pairing_code: None,
+        })
+        .await
+        .expect("pairing status should succeed");
+    server_task.await.expect("server task should finish");
+
+    assert!(response.claimed);
+}
+
+#[tokio::test]
+async fn remote_control_handle_refreshes_after_pairing_status_auth_failure() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("listener should bind");
+    let remote_control_url = remote_control_url_for_listener(&listener);
+    let server_task = tokio::spawn(async move {
+        let stale_status_request = accept_http_request(&listener).await;
+        assert_eq!(
+            stale_status_request.request_line,
+            "POST /backend-api/wham/remote/control/server/pair/status HTTP/1.1"
+        );
+        assert_eq!(
+            stale_status_request.headers.get("authorization"),
+            Some(&format!("Bearer {TEST_REMOTE_CONTROL_SERVER_TOKEN}"))
+        );
+        respond_with_status(stale_status_request.stream, "401 Unauthorized", "").await;
+
+        let refresh_request = accept_http_request(&listener).await;
+        assert_eq!(
+            refresh_request.request_line,
+            "POST /backend-api/wham/remote/control/server/refresh HTTP/1.1"
+        );
+        respond_with_json(
+            refresh_request.stream,
+            remote_control_server_token_response(
+                "srv_e_test",
+                "env_test",
+                TEST_REFRESHED_REMOTE_CONTROL_SERVER_TOKEN,
+            ),
+        )
+        .await;
+
+        let refreshed_status_request = accept_http_request(&listener).await;
+        assert_eq!(
+            refreshed_status_request.request_line,
+            "POST /backend-api/wham/remote/control/server/pair/status HTTP/1.1"
+        );
+        assert_eq!(
+            refreshed_status_request.headers.get("authorization"),
+            Some(&format!(
+                "Bearer {TEST_REFRESHED_REMOTE_CONTROL_SERVER_TOKEN}"
+            ))
+        );
+        respond_with_json(refreshed_status_request.stream, json!({ "claimed": true })).await;
+    });
+    let remote_handle = remote_control_handle_with_current_enrollment(
+        &remote_control_url,
+        remote_control_auth_manager(),
+    );
+
+    let response = remote_handle
+        .pairing_status(RemoteControlPairingStatusParams {
+            pairing_code: Some("pairing-code".to_string()),
+            manual_pairing_code: None,
+        })
+        .await
+        .expect("pairing status should refresh after server token auth failure");
+    server_task.await.expect("server task should finish");
+
+    assert!(response.claimed);
+}
+
+#[tokio::test]
+async fn remote_control_pairing_status_maps_user_actionable_backend_errors() {
+    for (status, expected_kind) in [
+        ("403 Forbidden", io::ErrorKind::PermissionDenied),
+        ("404 Not Found", io::ErrorKind::InvalidInput),
+        ("410 Gone", io::ErrorKind::InvalidInput),
+    ] {
+        let (err, _expected_status_url) = pairing_status_error(status, "not available").await;
+        assert_eq!(err.kind(), expected_kind);
+    }
+}
+
+#[tokio::test]
+async fn remote_control_pairing_status_preserves_decode_error_context() {
+    let (err, expected_status_url) = pairing_status_error("200 OK", "{").await;
+    let err = err.to_string();
+
+    assert!(err.contains(&format!(
+        "failed to parse remote control pairing status response from `{expected_status_url}`: HTTP 200 OK"
+    )));
+    assert!(err.contains("request-id: request-123"));
+    assert!(err.contains("cf-ray: ray-123"));
+    assert!(err.contains("body: {"));
+    assert!(err.contains("decode error:"));
 }
 
 #[tokio::test]
