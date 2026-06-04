@@ -46,7 +46,16 @@ pub struct RequestPluginInstallMeta<'a> {
     pub tool_id: &'a str,
     pub tool_name: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub remote_plugin_id: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub app_ids: Option<&'a [String]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub install_url: Option<&'a str>,
+}
+
+struct RemotePluginInstallMeta<'a> {
+    remote_plugin_id: &'a str,
+    app_ids: &'a [String],
 }
 
 pub fn build_request_plugin_install_elicitation_request(
@@ -59,6 +68,18 @@ pub fn build_request_plugin_install_elicitation_request(
 ) -> McpServerElicitationRequestParams {
     let tool_name = tool.name().to_string();
     let install_url = tool.install_url().map(ToString::to_string);
+    let remote_plugin = match tool {
+        DiscoverableTool::Connector(_) => None,
+        DiscoverableTool::Plugin(plugin) => {
+            plugin
+                .remote_plugin_id
+                .as_deref()
+                .map(|remote_plugin_id| RemotePluginInstallMeta {
+                    remote_plugin_id,
+                    app_ids: plugin.app_connector_ids.as_slice(),
+                })
+        }
+    };
     let message = suggest_reason.to_string();
 
     McpServerElicitationRequestParams {
@@ -72,6 +93,7 @@ pub fn build_request_plugin_install_elicitation_request(
                 suggest_reason,
                 tool.id(),
                 tool_name.as_str(),
+                remote_plugin,
                 install_url.as_deref(),
             ))),
             message,
@@ -110,8 +132,17 @@ fn build_request_plugin_install_meta<'a>(
     suggest_reason: &'a str,
     tool_id: &'a str,
     tool_name: &'a str,
+    remote_plugin: Option<RemotePluginInstallMeta<'a>>,
     install_url: Option<&'a str>,
 ) -> RequestPluginInstallMeta<'a> {
+    let (remote_plugin_id, app_ids) = match remote_plugin {
+        Some(remote_plugin) => (
+            Some(remote_plugin.remote_plugin_id),
+            Some(remote_plugin.app_ids),
+        ),
+        None => (None, None),
+    };
+
     RequestPluginInstallMeta {
         codex_approval_kind: REQUEST_PLUGIN_INSTALL_APPROVAL_KIND_VALUE,
         persist: REQUEST_PLUGIN_INSTALL_PERSIST_ALWAYS_VALUE,
@@ -120,6 +151,8 @@ fn build_request_plugin_install_meta<'a>(
         suggest_reason,
         tool_id,
         tool_name,
+        remote_plugin_id,
+        app_ids,
         install_url,
     }
 }

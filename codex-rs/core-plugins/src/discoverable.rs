@@ -64,6 +64,7 @@ pub struct ToolSuggestPluginDiscoveryInput {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ToolSuggestDiscoverablePlugin {
     pub id: String,
+    pub remote_plugin_id: Option<String>,
     pub name: String,
     pub description: Option<String>,
     pub has_skills: bool,
@@ -145,6 +146,7 @@ impl PluginsManager {
 
                         discoverable_plugins.push(ToolSuggestDiscoverablePlugin {
                             id: plugin.config_name,
+                            remote_plugin_id: None,
                             name: plugin.display_name,
                             description: plugin.description,
                             has_skills: plugin.has_skills,
@@ -200,6 +202,7 @@ impl PluginsManager {
 
                 discoverable_plugins.push(ToolSuggestDiscoverablePlugin {
                     id: plugin.config_id,
+                    remote_plugin_id: Some(plugin.remote_plugin_id),
                     name: plugin.name,
                     description: plugin.description,
                     has_skills: plugin.has_skills,

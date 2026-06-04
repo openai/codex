@@ -54,6 +54,8 @@ fn build_request_plugin_install_elicitation_request_uses_expected_shape() {
                     suggest_reason: "Plan and reference events from your calendar",
                     tool_id: "connector_2128aebfecb84f64a069897515042a44",
                     tool_name: "Google Calendar",
+                    remote_plugin_id: None,
+                    app_ids: None,
                     install_url: Some(
                         "https://chatgpt.com/apps/google-calendar/connector_2128aebfecb84f64a069897515042a44"
                     ),
@@ -80,6 +82,7 @@ fn build_request_plugin_install_elicitation_request_for_plugin_omits_install_url
     };
     let plugin = DiscoverableTool::Plugin(Box::new(DiscoverablePluginInfo {
         id: "sample@openai-curated".to_string(),
+        remote_plugin_id: None,
         name: "Sample Plugin".to_string(),
         description: Some("Includes skills, MCP servers, and apps.".to_string()),
         has_skills: true,
@@ -111,6 +114,8 @@ fn build_request_plugin_install_elicitation_request_for_plugin_omits_install_url
                     suggest_reason: "Use the sample plugin's skills and MCP server",
                     tool_id: "sample@openai-curated",
                     tool_name: "Sample Plugin",
+                    remote_plugin_id: None,
+                    app_ids: None,
                     install_url: None,
                 })),
                 message: "Use the sample plugin's skills and MCP server".to_string(),
@@ -133,6 +138,7 @@ fn build_request_plugin_install_meta_uses_expected_shape() {
         "Find and reference emails from your inbox",
         "connector_68df038e0ba48191908c8434991bbac2",
         "Gmail",
+        /*remote_plugin*/ None,
         Some("https://chatgpt.com/apps/gmail/connector_68df038e0ba48191908c8434991bbac2"),
     );
 
@@ -146,10 +152,71 @@ fn build_request_plugin_install_meta_uses_expected_shape() {
             suggest_reason: "Find and reference emails from your inbox",
             tool_id: "connector_68df038e0ba48191908c8434991bbac2",
             tool_name: "Gmail",
+            remote_plugin_id: None,
+            app_ids: None,
             install_url: Some(
                 "https://chatgpt.com/apps/gmail/connector_68df038e0ba48191908c8434991bbac2"
             ),
         },
+    );
+}
+
+#[test]
+fn build_request_plugin_install_elicitation_request_for_remote_plugin_includes_directory_metadata()
+{
+    let args = RequestPluginInstallArgs {
+        tool_type: DiscoverableToolType::Plugin,
+        action_type: DiscoverableToolAction::Install,
+        tool_id: "slack@openai-curated-remote".to_string(),
+        suggest_reason: "Search and reference Slack messages".to_string(),
+    };
+    let plugin = DiscoverableTool::Plugin(Box::new(DiscoverablePluginInfo {
+        id: "slack@openai-curated-remote".to_string(),
+        remote_plugin_id: Some("plugins~Plugin_slack".to_string()),
+        name: "Slack".to_string(),
+        description: Some("Search Slack messages".to_string()),
+        has_skills: true,
+        mcp_server_names: Vec::new(),
+        app_connector_ids: vec!["connector_slack".to_string()],
+    }));
+
+    let request = build_request_plugin_install_elicitation_request(
+        "codex-apps",
+        "thread-1".to_string(),
+        "turn-1".to_string(),
+        &args,
+        "Search and reference Slack messages",
+        &plugin,
+    );
+
+    assert_eq!(
+        request,
+        McpServerElicitationRequestParams {
+            thread_id: "thread-1".to_string(),
+            turn_id: Some("turn-1".to_string()),
+            server_name: "codex-apps".to_string(),
+            request: McpServerElicitationRequest::Form {
+                meta: Some(json!(RequestPluginInstallMeta {
+                    codex_approval_kind: REQUEST_PLUGIN_INSTALL_APPROVAL_KIND_VALUE,
+                    persist: REQUEST_PLUGIN_INSTALL_PERSIST_ALWAYS_VALUE,
+                    tool_type: DiscoverableToolType::Plugin,
+                    suggest_type: DiscoverableToolAction::Install,
+                    suggest_reason: "Search and reference Slack messages",
+                    tool_id: "slack@openai-curated-remote",
+                    tool_name: "Slack",
+                    remote_plugin_id: Some("plugins~Plugin_slack"),
+                    app_ids: Some(&["connector_slack".to_string()]),
+                    install_url: None,
+                })),
+                message: "Search and reference Slack messages".to_string(),
+                requested_schema: McpElicitationSchema {
+                    schema_uri: None,
+                    type_: McpElicitationObjectType::Object,
+                    properties: BTreeMap::new(),
+                    required: None,
+                },
+            },
+        }
     );
 }
 
