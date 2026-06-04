@@ -632,6 +632,17 @@ impl NetworkProxy {
         self.runtime_settings().dangerously_allow_all_unix_sockets
     }
 
+    /// Returns the generated MITM CA bundle path child sandboxes should expose to TLS clients.
+    pub fn managed_mitm_ca_trust_bundle_path(&self) -> Option<AbsolutePathBuf> {
+        self.runtime_settings()
+            .mitm_ca_trust_bundle
+            .and_then(|bundle| {
+                AbsolutePathBuf::from_absolute_path(bundle.path)
+                    .map_err(|err| warn!("managed MITM CA trust bundle path is invalid: {err}"))
+                    .ok()
+            })
+    }
+
     pub fn apply_to_env(&self, env: &mut HashMap<String, String>) {
         let runtime_settings = self.runtime_settings();
         // Enforce proxying for child processes. Proxy endpoint values are always rewritten;
