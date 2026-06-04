@@ -837,6 +837,13 @@ pub enum ThreadMemoryMode {
 }
 
 impl ThreadMemoryMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Enabled => "enabled",
+            Self::Disabled => "disabled",
+        }
+    }
+
     pub fn to_core(self) -> codex_protocol::protocol::ThreadMemoryMode {
         match self {
             Self::Enabled => codex_protocol::protocol::ThreadMemoryMode::Enabled,

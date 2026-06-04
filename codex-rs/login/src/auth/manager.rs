@@ -1764,6 +1764,17 @@ impl AuthManager {
         result
     }
 
+    /// Log out by deleting the on‑disk auth.json (if present). Returns Ok(true)
+    /// if a file was removed, Ok(false) if no auth file existed. On success,
+    /// reloads the in‑memory auth cache so callers immediately observe the
+    /// unauthenticated state.
+    pub async fn logout(&self) -> std::io::Result<bool> {
+        let removed = logout_all_stores(&self.codex_home, self.auth_credentials_store_mode)?;
+        // Always reload to clear any cached auth (even if file absent).
+        self.reload().await;
+        Ok(removed)
+    }
+
     pub async fn logout_with_revoke(&self) -> std::io::Result<bool> {
         let auth_dot_json = self
             .auth_cached()

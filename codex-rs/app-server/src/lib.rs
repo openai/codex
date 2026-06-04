@@ -372,6 +372,27 @@ fn log_format_from_env() -> LogFormat {
     LogFormat::from_env_value(value.as_deref())
 }
 
+pub async fn run_main(
+    arg0_paths: Arg0DispatchPaths,
+    cli_config_overrides: CliConfigOverrides,
+    loader_overrides: LoaderOverrides,
+    strict_config: bool,
+    default_analytics_enabled: bool,
+) -> IoResult<()> {
+    run_main_with_transport_options(
+        arg0_paths,
+        cli_config_overrides,
+        loader_overrides,
+        strict_config,
+        default_analytics_enabled,
+        AppServerTransport::Stdio,
+        SessionSource::VSCode,
+        AppServerWebsocketAuthSettings::default(),
+        AppServerRuntimeOptions::default(),
+    )
+    .await
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PluginStartupTasks {
     Start,

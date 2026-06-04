@@ -209,6 +209,16 @@ impl PermissionProfileSnapshot {
         self.resolved_permission_profile.permission_profile()
     }
 
+    /// Return the active profile id captured in this snapshot, if any.
+    pub fn active_permission_profile(&self) -> Option<ActivePermissionProfile> {
+        self.resolved_permission_profile.active_permission_profile()
+    }
+
+    /// Borrow profile-declared workspace roots captured in this snapshot.
+    pub fn profile_workspace_roots(&self) -> &[AbsolutePathBuf] {
+        self.resolved_permission_profile.profile_workspace_roots()
+    }
+
     pub(crate) fn into_resolved_permission_profile(self) -> ResolvedPermissionProfile {
         self.resolved_permission_profile
     }

@@ -250,6 +250,10 @@ pub struct NetworkDomainPermissionsToml {
 }
 
 impl NetworkDomainPermissionsToml {
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
     pub fn allowed_domains(&self) -> Option<Vec<String>> {
         let allowed_domains: Vec<String> = self
             .entries
@@ -297,6 +301,10 @@ pub struct NetworkUnixSocketPermissionsToml {
 }
 
 impl NetworkUnixSocketPermissionsToml {
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
     pub fn allow_unix_sockets(&self) -> Vec<String> {
         self.entries
             .iter()

@@ -3,6 +3,10 @@ use super::*;
 const LOG_RETENTION_DAYS: i64 = 10;
 
 impl StateRuntime {
+    pub async fn insert_log(&self, entry: &LogEntry) -> anyhow::Result<()> {
+        self.insert_logs(std::slice::from_ref(entry)).await
+    }
+
     /// Insert a batch of log entries into the logs table.
     pub async fn insert_logs(&self, entries: &[LogEntry]) -> anyhow::Result<()> {
         if entries.is_empty() {

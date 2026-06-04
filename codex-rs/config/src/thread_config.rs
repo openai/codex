@@ -74,6 +74,10 @@ impl ThreadConfigLoadError {
     pub fn code(&self) -> ThreadConfigLoadErrorCode {
         self.code
     }
+
+    pub fn status_code(&self) -> Option<u16> {
+        self.status_code
+    }
 }
 
 /// Loads typed config sources for a new thread.

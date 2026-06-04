@@ -336,6 +336,13 @@ pub struct ActivePermissionProfile {
 }
 
 impl ActivePermissionProfile {
+    pub fn new(id: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            extends: None,
+        }
+    }
+
     pub fn read_only() -> Self {
         CoreActivePermissionProfile::read_only().into()
     }

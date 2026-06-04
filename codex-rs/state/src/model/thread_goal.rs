@@ -29,6 +29,14 @@ impl ThreadGoalStatus {
             Self::Complete => "complete",
         }
     }
+
+    pub fn is_active(self) -> bool {
+        self == Self::Active
+    }
+
+    pub fn is_terminal(self) -> bool {
+        matches!(self, Self::BudgetLimited | Self::Complete)
+    }
 }
 
 impl TryFrom<&str> for ThreadGoalStatus {

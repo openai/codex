@@ -66,6 +66,16 @@ fn format_si_suffix_with_formatter(n: i64, formatter: &DecimalFormatter) -> Stri
     )
 }
 
+/// Format token counts to 3 significant figures, using base-10 SI suffixes.
+///
+/// Examples (en-US):
+///   - 999 -> "999"
+///   - 1200 -> "1.20K"
+///   - 123456789 -> "123M"
+pub fn format_si_suffix(n: i64) -> String {
+    format_si_suffix_with_formatter(n, formatter())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -33,6 +33,13 @@ impl AgentJobStatus {
             _ => Err(anyhow::anyhow!("invalid agent job status: {value}")),
         }
     }
+
+    pub fn is_final(self) -> bool {
+        matches!(
+            self,
+            AgentJobStatus::Completed | AgentJobStatus::Failed | AgentJobStatus::Cancelled
+        )
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -209,6 +209,13 @@ impl CodexErr {
         }
     }
 
+    /// Minimal shim so that existing `e.downcast_ref::<CodexErr>()` checks continue to compile
+    /// after replacing `anyhow::Error` in the return signature. This mirrors the behavior of
+    /// `anyhow::Error::downcast_ref` but works directly on our concrete enum.
+    pub fn downcast_ref<T: std::any::Any>(&self) -> Option<&T> {
+        (self as &dyn std::any::Any).downcast_ref::<T>()
+    }
+
     /// Translate core error to client-facing protocol error.
     pub fn to_codex_protocol_error(&self) -> CodexErrorInfo {
         match self {

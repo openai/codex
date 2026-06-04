@@ -177,6 +177,10 @@ impl OtelProvider {
         })
     }
 
+    pub fn codex_export_filter(meta: &tracing::Metadata<'_>) -> bool {
+        Self::log_export_filter(meta)
+    }
+
     pub fn log_export_filter(meta: &tracing::Metadata<'_>) -> bool {
         is_log_export_target(meta.target())
     }

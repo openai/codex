@@ -157,6 +157,62 @@ ON CONFLICT(child_thread_id) DO UPDATE SET
             .await
     }
 
+    /// Find a direct spawned child of `parent_thread_id` by canonical agent path.
+    pub async fn find_thread_spawn_child_by_path(
+        &self,
+        parent_thread_id: ThreadId,
+        agent_path: &str,
+    ) -> anyhow::Result<Option<ThreadId>> {
+        let rows = sqlx::query(
+            r#"
+SELECT threads.id
+FROM thread_spawn_edges
+JOIN threads ON threads.id = thread_spawn_edges.child_thread_id
+WHERE thread_spawn_edges.parent_thread_id = ?
+  AND threads.agent_path = ?
+ORDER BY threads.id
+LIMIT 2
+            "#,
+        )
+        .bind(parent_thread_id.to_string())
+        .bind(agent_path)
+        .fetch_all(self.pool.as_ref())
+        .await?;
+        one_thread_id_from_rows(rows, agent_path)
+    }
+
+    /// Find a spawned descendant of `root_thread_id` by canonical agent path.
+    pub async fn find_thread_spawn_descendant_by_path(
+        &self,
+        root_thread_id: ThreadId,
+        agent_path: &str,
+    ) -> anyhow::Result<Option<ThreadId>> {
+        let rows = sqlx::query(
+            r#"
+WITH RECURSIVE subtree(child_thread_id) AS (
+    SELECT child_thread_id
+    FROM thread_spawn_edges
+    WHERE parent_thread_id = ?
+    UNION ALL
+    SELECT edge.child_thread_id
+    FROM thread_spawn_edges AS edge
+    JOIN subtree ON edge.parent_thread_id = subtree.child_thread_id
+)
+SELECT threads.id
+FROM subtree
+JOIN threads ON threads.id = subtree.child_thread_id
+WHERE threads.agent_path = ?
+ORDER BY threads.id
+LIMIT 2
+            "#,
+        )
+        .bind(root_thread_id.to_string())
+        .bind(agent_path)
+        .fetch_all(self.pool.as_ref())
+        .await?;
+        one_thread_id_from_rows(rows, agent_path)
+    }
+
     async fn list_thread_spawn_children_matching(
         &self,
         parent_thread_id: ThreadId,
@@ -371,6 +427,41 @@ ON CONFLICT(child_thread_id) DO NOTHING
             next_anchor,
             num_scanned_rows,
         })
+    }
+
+    /// List thread ids using the underlying database (no rollout scanning).
+    pub async fn list_thread_ids(
+        &self,
+        limit: usize,
+        anchor: Option<&crate::Anchor>,
+        sort_key: crate::SortKey,
+        allowed_sources: &[String],
+        model_providers: Option<&[String]>,
+        archived_only: bool,
+    ) -> anyhow::Result<Vec<ThreadId>> {
+        let mut builder = QueryBuilder::<Sqlite>::new("SELECT threads.id FROM threads");
+        push_thread_filters(
+            &mut builder,
+            ThreadFilterOptions {
+                archived_only,
+                allowed_sources,
+                model_providers,
+                cwd_filters: None,
+                anchor,
+                sort_key,
+                sort_direction: SortDirection::Desc,
+                search_term: None,
+            },
+        );
+        push_thread_order_and_limit(&mut builder, sort_key, SortDirection::Desc, limit);
+
+        let rows = builder.build().fetch_all(self.pool.as_ref()).await?;
+        rows.into_iter()
+            .map(|row| {
+                let id: String = row.try_get("id")?;
+                Ok(ThreadId::try_from(id)?)
+            })
+            .collect()
     }
 
     /// Insert or replace thread metadata directly.
