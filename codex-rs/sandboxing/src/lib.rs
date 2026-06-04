@@ -19,7 +19,7 @@ pub use manager::SandboxType;
 pub use manager::SandboxablePreference;
 pub use manager::compatibility_sandbox_policy_for_permission_profile;
 pub use manager::get_platform_sandbox;
-pub use manager::with_managed_mitm_ca_readable_root;
+pub use manager::prepare_managed_network_child;
 
 use codex_protocol::error::CodexErr;
 

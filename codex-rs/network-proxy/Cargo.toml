@@ -44,4 +44,12 @@ pretty_assertions = { workspace = true }
 tempfile = { workspace = true }
 
 [target.'cfg(target_family = "unix")'.dependencies]
+libc = { workspace = true }
 rama-unix = { version = "=0.3.0-alpha.4" }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+security-framework = "3"
+
+[target.'cfg(windows)'.dependencies]
+schannel = "0.1"
+windows-sys = { version = "0.52", features = ["Win32_Storage_FileSystem"] }

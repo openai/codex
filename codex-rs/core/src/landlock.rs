@@ -34,7 +34,7 @@ where
     P: AsRef<Path>,
 {
     let network_sandbox_policy = permission_profile.network_sandbox_policy();
-    let mitm_ca_cert_path = network.and_then(NetworkProxy::mitm_ca_cert_path);
+    let mitm_ca_cert_path = network.and_then(NetworkProxy::managed_mitm_ca_trust_bundle_path);
     let args = create_linux_sandbox_command_args_for_permission_profile(
         command,
         command_cwd.as_path(),

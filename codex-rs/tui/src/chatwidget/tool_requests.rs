@@ -441,6 +441,7 @@ impl ChatWidget {
             thread_id: self.thread_id.unwrap_or_default(),
             thread_label: None,
             call_id: ev.call_id,
+            environment_id: ev.environment_id,
             reason: ev.reason,
             permissions: ev.permissions,
         };

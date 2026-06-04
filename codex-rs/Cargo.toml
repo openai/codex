@@ -48,6 +48,7 @@ members = [
     "ext/guardian",
     "ext/image-generation",
     "ext/memories",
+    "ext/skills",
     "ext/web-search",
     "external-agent-migration",
     "external-agent-sessions",

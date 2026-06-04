@@ -21,9 +21,9 @@ exec *args:
     cargo run --bin codex -- exec {args}
 
 # Start `codex exec-server` and run codex-tui.
-[unix]
 [no-cd]
 [positional-arguments]
+[unix]
 tui-with-exec-server *args:
     {{ justfile_directory() }}/scripts/run_tui_with_exec_server.sh "$@"
 
@@ -36,16 +36,13 @@ app-server-test-client *args:
     cargo build -p codex-cli
     cargo run -p codex-app-server-test-client -- --codex-bin ./target/debug/codex {args}
 
-# Format Rust, Python SDK code, and Python scripts.
+# Format the justfile, Rust, Python SDK code, and Python scripts.
 fmt:
-    cargo fmt -- --config imports_granularity=Item {stderr-null}
-    uv run --frozen --project ../sdk/python --extra dev ruff check --fix --fix-only ../sdk/python
-    uv run --frozen --project ../sdk/python --extra dev ruff format ../sdk/python
-    # Root scripts have their own locked Ruff environment.
-    uv run --frozen --project ../scripts ruff format ../scripts
+    {{ python }} ../scripts/format.py
 
-fmt-scripts-check:
-    uv run --frozen --project ../scripts ruff format --check ../scripts
+# Check formatting without modifying files.
+fmt-check:
+    {{ python }} ../scripts/format.py --check
 
 fix *args:
     cargo clippy --fix --tests --allow-dirty {args}
@@ -86,6 +83,12 @@ test *args:
     $env:RUST_MIN_STACK = "{{ rust_min_stack }}"; cargo nextest run --no-fail-fast @($args | Select-Object -Skip 1)
     just bench-smoke
 
+# Run from the repository root so scripts that resolve paths from `cwd` see
+# the same layout they use in GitHub Actions.
+[no-cd]
+test-github-scripts:
+    {{ python }} -m unittest discover -s {{ justfile_directory() }}/.github/scripts -p 'test_*.py'
+
 # Run explicit workspace benchmark targets.
 bench *args:
     cargo bench --workspace --bench '*' {args}
@@ -97,21 +100,21 @@ bench-smoke:
 # Build and run Codex from source using Bazel.
 # On Unix, use `[no-cd]` and `--run_under="cd $PWD &&"` to ensure Bazel runs
 # the command in the current working directory.
-[unix]
 [no-cd]
+[unix]
 bazel-codex *args:
     bazel run //codex-rs/cli:codex --run_under="cd $PWD &&" -- "$@"
 
 [windows]
 bazel-codex *args:
-    bazel run //codex-rs/cli:codex --run_under='cd /d "{{invocation_directory_native()}}" &&' -- @($args | Select-Object -Skip 1)
+    bazel run //codex-rs/cli:codex --run_under='cd /d "{{ invocation_directory_native() }}" &&' -- @($args | Select-Object -Skip 1)
 
 [no-cd]
 bazel-lock-update:
     bazel mod deps --lockfile_mode=update
 
-[unix]
 [no-cd]
+[unix]
 bazel-lock-check:
     {{ justfile_directory() }}/scripts/check-module-bazel-lock.sh
 
@@ -122,21 +125,18 @@ bazel-lock-check:
 bazel-test:
     bazel test --test_tag_filters=-argument-comment-lint //... --keep_going
 
-[unix]
 [no-cd]
+[unix]
 bazel-clippy:
     bazel_targets="$({{ justfile_directory() }}/scripts/list-bazel-clippy-targets.sh)" && bazel build --config=clippy -- ${bazel_targets}
 
-[unix]
 [no-cd]
+[unix]
 bazel-argument-comment-lint:
     bazel build --config=argument-comment-lint -- $({{ justfile_directory() }}/tools/argument-comment-lint/list-bazel-targets.sh)
 
-bazel-remote-test:
-    bazel test --test_tag_filters=-argument-comment-lint //... --config=remote --platforms=//:rbe --keep_going
-
 build-for-release:
-    bazel build //codex-rs/cli:release_binaries --config=remote
+    bazel build //codex-rs/cli:release_binaries
 
 # Run the MCP server
 mcp-server-run *args:
@@ -155,8 +155,8 @@ write-hooks-schema:
     cargo run --manifest-path {{ justfile_directory() }}/codex-rs/Cargo.toml -p codex-hooks --bin write_hooks_schema_fixtures
 
 # Run the argument-comment Dylint checks across codex-rs.
-[unix]
 [no-cd]
+[unix]
 argument-comment-lint *args:
     if [ "$#" -eq 0 ]; then \
       bazel build --config=argument-comment-lint -- $({{ justfile_directory() }}/tools/argument-comment-lint/list-bazel-targets.sh); \

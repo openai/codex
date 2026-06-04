@@ -2347,7 +2347,6 @@ dependencies = [
 name = "codex-cloud-config"
 version = "0.0.0"
 dependencies = [
- "async-trait",
  "base64 0.22.1",
  "chrono",
  "codex-backend-client",
@@ -2356,7 +2355,6 @@ dependencies = [
  "codex-login",
  "codex-otel",
  "codex-protocol",
- "codex-utils-absolute-path",
  "hmac 0.12.1",
  "pretty_assertions",
  "serde",
@@ -2365,7 +2363,6 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
- "toml 0.9.11+spec-1.1.0",
  "tracing",
 ]
 
@@ -3367,6 +3364,7 @@ dependencies = [
  "codex-utils-home-dir",
  "codex-utils-rustls-provider",
  "globset",
+ "libc",
  "pretty_assertions",
  "rama-core",
  "rama-http",
@@ -3377,6 +3375,8 @@ dependencies = [
  "rama-tls-rustls",
  "rama-unix",
  "rustls-native-certs",
+ "schannel",
+ "security-framework 3.5.1",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -3386,6 +3386,7 @@ dependencies = [
  "tokio",
  "tracing",
  "url",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -3717,6 +3718,15 @@ dependencies = [
  "codex-utils-absolute-path",
  "include_dir",
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "codex-skills-extension"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "codex-core",
+ "codex-extension-api",
 ]
 
 [[package]]

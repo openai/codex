@@ -124,15 +124,22 @@ async fn request_permissions_routes_to_guardian_when_reviewer_is_enabled() {
         }),
         ..RequestPermissionProfile::default()
     };
+    let environment = turn_context
+        .environments
+        .primary()
+        .expect("primary environment")
+        .selection();
     let response = tokio::time::timeout(
         Duration::from_secs(45),
-        session.request_permissions(
+        session.request_permissions_for_environment(
             &turn_context,
             "perm-call-1".to_string(),
             RequestPermissionsArgs {
+                environment_id: None,
                 reason: Some("need network".to_string()),
                 permissions: requested_permissions.clone(),
             },
+            environment,
             CancellationToken::new(),
         ),
     )
@@ -148,7 +155,9 @@ async fn request_permissions_routes_to_guardian_when_reviewer_is_enabled() {
         })
     );
     assert_eq!(
-        session.granted_turn_permissions().await,
+        session
+            .granted_turn_permissions(codex_exec_server::LOCAL_ENVIRONMENT_ID)
+            .await,
         Some(requested_permissions.into())
     );
 
@@ -211,14 +220,21 @@ async fn request_permissions_guardian_review_stops_when_cancelled() {
         let requested_permissions = requested_permissions.clone();
         let cancellation_token = cancellation_token.clone();
         async move {
+            let environment = turn_context
+                .environments
+                .primary()
+                .expect("primary environment")
+                .selection();
             session
-                .request_permissions(
+                .request_permissions_for_environment(
                     &turn_context,
                     "perm-call-cancelled".to_string(),
                     RequestPermissionsArgs {
+                        environment_id: None,
                         reason: Some("need network".to_string()),
                         permissions: requested_permissions,
                     },
+                    environment,
                     cancellation_token,
                 )
                 .await
@@ -246,7 +262,12 @@ async fn request_permissions_guardian_review_stops_when_cancelled() {
         .expect("request_permissions should stop when cancelled")
         .expect("request_permissions task should not panic");
     assert_eq!(response, None);
-    assert_eq!(session.granted_turn_permissions().await, None);
+    assert_eq!(
+        session
+            .granted_turn_permissions(codex_exec_server::LOCAL_ENVIRONMENT_ID)
+            .await,
+        None
+    );
 }
 
 #[tokio::test]
@@ -380,6 +401,7 @@ async fn strict_auto_review_turn_grant_forces_guardian_for_shell_command_policy_
                 scope: PermissionGrantScope::Turn,
                 strict_auto_review: true,
             },
+            codex_exec_server::LOCAL_ENVIRONMENT_ID,
             Some(&originating_turn_state),
         )
         .await;
@@ -564,12 +586,15 @@ async fn shell_command_allows_sticky_turn_permissions_without_inline_request_per
         let mut active_turn = session.active_turn.lock().await;
         let active_turn = active_turn.as_mut().expect("active turn");
         let mut turn_state = active_turn.turn_state.lock().await;
-        turn_state.record_granted_permissions(PermissionProfile {
-            network: Some(NetworkPermissions {
-                enabled: Some(true),
-            }),
-            ..Default::default()
-        });
+        turn_state.record_granted_permissions(
+            codex_exec_server::LOCAL_ENVIRONMENT_ID,
+            PermissionProfile {
+                network: Some(NetworkPermissions {
+                    enabled: Some(true),
+                }),
+                ..Default::default()
+            },
+        );
     }
 
     let session = Arc::new(session);
@@ -709,6 +734,7 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
         analytics_events_client: None,
         thread_store,
         attestation_provider: None,
+        inherited_multi_agent_version: None,
     })
     .await
     .expect("spawn guardian subagent");
@@ -728,6 +754,5 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
             }],
         }
     );
-
     drop(codex);
 }

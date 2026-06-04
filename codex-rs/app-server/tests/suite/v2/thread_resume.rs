@@ -63,6 +63,8 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ImageGenerationEndEvent;
 use codex_protocol::protocol::McpInvocation;
 use codex_protocol::protocol::McpToolCallEndEvent;
+use codex_protocol::protocol::MultiAgentVersion;
+use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionMeta;
 use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource as RolloutSessionSource;
@@ -74,6 +76,8 @@ use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::TurnStartedEvent;
 use codex_protocol::user_input::ByteRange;
 use codex_protocol::user_input::TextElement;
+use codex_rollout::append_rollout_item_to_path;
+use codex_rollout::read_session_meta_line;
 use codex_state::StateRuntime;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use core_test_support::responses;
@@ -1805,6 +1809,7 @@ stream_max_retries = 0
         base_instructions: None,
         dynamic_tools: None,
         memory_mode: None,
+        multi_agent_version: None,
     };
     std::fs::write(
         &rollout_path,
@@ -2013,7 +2018,7 @@ async fn thread_resume_and_read_interrupt_incomplete_rollout_turn_when_thread_is
 async fn thread_resume_defers_updated_at_until_turn_start() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
-    let rollout = setup_rollout_fixture(codex_home.path(), &server.uri())?;
+    let rollout = setup_rollout_fixture(codex_home.path(), &server.uri()).await?;
     let thread_id = rollout.conversation_id.clone();
 
     let mut mcp = TestAppServer::new(codex_home.path()).await?;
@@ -2404,6 +2409,36 @@ async fn thread_resume_rejects_mismatched_path_for_running_thread_id() -> Result
         primary.read_stream_until_notification_message("turn/started"),
     )
     .await??;
+
+    #[cfg(windows)]
+    {
+        let active_path = thread.path.as_ref().expect("thread should have path");
+        let active_path_display = active_path.as_os_str().to_string_lossy();
+        let equivalent_path = if let Some(path) = active_path_display.strip_prefix(r"\\?\UNC\") {
+            PathBuf::from(format!(r"\\{path}"))
+        } else if let Some(path) = active_path_display.strip_prefix(r"\\?\") {
+            PathBuf::from(path)
+        } else if let Some(path) = active_path_display.strip_prefix(r"\\") {
+            PathBuf::from(format!(r"\\?\UNC\{path}"))
+        } else {
+            PathBuf::from(format!(r"\\?\{active_path_display}"))
+        };
+        let normalized_resume_id = primary
+            .send_thread_resume_request(ThreadResumeParams {
+                thread_id: thread_id.clone(),
+                path: Some(equivalent_path),
+                ..Default::default()
+            })
+            .await?;
+        let normalized_resume_resp: JSONRPCResponse = timeout(
+            DEFAULT_READ_TIMEOUT,
+            primary.read_stream_until_response_message(RequestId::Integer(normalized_resume_id)),
+        )
+        .await??;
+        let ThreadResumeResponse { thread, .. } =
+            to_response::<ThreadResumeResponse>(normalized_resume_resp)?;
+        assert_eq!(thread.id, thread_id);
+    }
 
     let stale_thread_id = Uuid::new_v4().to_string();
     let stale_path = rollout_path(codex_home.path(), "2025-01-01T00-00-00", &stale_thread_id);
@@ -3051,7 +3086,7 @@ async fn thread_resume_with_overrides_defers_updated_at_until_turn_start() -> Re
 async fn thread_resume_fails_when_required_mcp_server_fails_to_initialize() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
-    let rollout = setup_rollout_fixture(codex_home.path(), &server.uri())?;
+    let rollout = setup_rollout_fixture(codex_home.path(), &server.uri()).await?;
     create_config_toml_with_required_broken_mcp(codex_home.path(), &server.uri())?;
 
     let mut mcp = TestAppServer::new(codex_home.path()).await?;
@@ -3086,10 +3121,10 @@ async fn thread_resume_fails_when_required_mcp_server_fails_to_initialize() -> R
 }
 
 #[tokio::test]
-async fn thread_resume_surfaces_cloud_requirements_load_errors() -> Result<()> {
+async fn thread_resume_surfaces_cloud_config_bundle_load_errors() -> Result<()> {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
-        .and(path("/backend-api/wham/config/requirements"))
+        .and(path("/backend-api/wham/config/bundle"))
         .respond_with(
             ResponseTemplate::new(401)
                 .insert_header("content-type", "text/html")
@@ -3166,7 +3201,7 @@ async fn thread_resume_surfaces_cloud_requirements_load_errors() -> Result<()> {
     assert_eq!(
         err.error.data,
         Some(json!({
-            "reason": "cloudRequirements",
+            "reason": "cloudConfigBundle",
             "errorCode": "Auth",
             "action": "relogin",
             "statusCode": 401,
@@ -3614,7 +3649,7 @@ struct RolloutFixture {
     before_modified: std::time::SystemTime,
 }
 
-fn setup_rollout_fixture(codex_home: &Path, server_uri: &str) -> Result<RolloutFixture> {
+async fn setup_rollout_fixture(codex_home: &Path, server_uri: &str) -> Result<RolloutFixture> {
     create_config_toml(codex_home, server_uri)?;
 
     let preview = "Saved user message";
@@ -3631,6 +3666,10 @@ fn setup_rollout_fixture(codex_home: &Path, server_uri: &str) -> Result<RolloutF
         /*git_info*/ None,
     )?;
     let rollout_file_path = rollout_path(codex_home, filename_ts, &conversation_id);
+    let mut session_meta = read_session_meta_line(&rollout_file_path).await?;
+    session_meta.meta.multi_agent_version = Some(MultiAgentVersion::V1);
+    append_rollout_item_to_path(&rollout_file_path, &RolloutItem::SessionMeta(session_meta))
+        .await?;
     set_rollout_mtime(rollout_file_path.as_path(), expected_updated_at_rfc3339)?;
     let before_modified = std::fs::metadata(&rollout_file_path)?.modified()?;
     Ok(RolloutFixture {

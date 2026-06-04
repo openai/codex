@@ -13,10 +13,12 @@ use crate::tools::sandboxing::ToolError;
 #[cfg(target_os = "macos")]
 use codex_network_proxy::CODEX_PROXY_GIT_SSH_COMMAND_MARKER;
 use codex_network_proxy::CUSTOM_CA_ENV_KEYS;
+use codex_network_proxy::MITM_CA_ENV_ACTIVE_ENV_KEY;
 use codex_network_proxy::PROXY_ACTIVE_ENV_KEY;
 use codex_network_proxy::PROXY_ENV_KEYS;
 #[cfg(target_os = "macos")]
 use codex_network_proxy::PROXY_GIT_SSH_COMMAND_ENV_KEY;
+use codex_network_proxy::SSL_CERT_DIR_ENV_KEY;
 use codex_network_proxy::is_managed_mitm_ca_trust_bundle_path;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::AdditionalPermissionProfile;
@@ -258,10 +260,17 @@ fn build_proxy_env_exports() -> (String, String) {
     let (captures, restores) =
         build_override_exports_for_keys("__CODEX_SNAPSHOT_PROXY_OVERRIDE", &keys);
     let key = PROXY_ACTIVE_ENV_KEY;
+    let (ssl_cert_dir_captures, ssl_cert_dir_restores) = build_override_exports_for_keys(
+        "__CODEX_SNAPSHOT_MITM_CA_OVERRIDE",
+        &[SSL_CERT_DIR_ENV_KEY],
+    );
+    let mitm_ca_key = MITM_CA_ENV_ACTIVE_ENV_KEY;
     let proxy_blocks = (
-        format!("{captures}\n__CODEX_SNAPSHOT_PROXY_ENV_SET=\"${{{key}+x}}\""),
         format!(
-            "if [ -n \"$__CODEX_SNAPSHOT_PROXY_ENV_SET\" ] || [ -n \"${{{key}+x}}\" ]; then\n{restores}\nfi"
+            "{captures}\n__CODEX_SNAPSHOT_PROXY_ENV_SET=\"${{{key}+x}}\"\n{ssl_cert_dir_captures}\n__CODEX_SNAPSHOT_MITM_CA_ENV_SET=\"${{{mitm_ca_key}+x}}\""
+        ),
+        format!(
+            "if [ -n \"$__CODEX_SNAPSHOT_PROXY_ENV_SET\" ] || [ -n \"${{{key}+x}}\" ]; then\n{restores}\nfi\nif [ -n \"$__CODEX_SNAPSHOT_MITM_CA_ENV_SET\" ] || [ -n \"${{{mitm_ca_key}+x}}\" ]; then\n{ssl_cert_dir_restores}\nfi"
         ),
     );
     let git_blocks = build_codex_proxy_git_ssh_command_exports();

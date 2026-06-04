@@ -2,6 +2,7 @@ use std::collections::HashSet;
 
 use codex_app_server_protocol::AppInfo;
 use codex_config::types::ToolSuggestDisabledTool;
+use codex_core_plugins::remote::REMOTE_GLOBAL_MARKETPLACE_NAME;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_rmcp_client::ElicitationAction;
 use codex_rmcp_client::ElicitationResponse;
@@ -273,6 +274,10 @@ async fn verify_request_plugin_install_completed(
             verified_connector_install_completed(connector.id.as_str(), &accessible_connectors)
         }),
         DiscoverableTool::Plugin(plugin) => {
+            if is_remote_plugin_install_suggestion(&plugin.id) {
+                return true;
+            }
+
             session.reload_user_config_layer().await;
             let config = session.get_config().await;
             let completed = verified_plugin_install_completed(
@@ -291,6 +296,12 @@ async fn verify_request_plugin_install_completed(
             completed
         }
     }
+}
+
+fn is_remote_plugin_install_suggestion(plugin_id: &str) -> bool {
+    plugin_id
+        .rsplit_once('@')
+        .is_some_and(|(_, marketplace_name)| marketplace_name == REMOTE_GLOBAL_MARKETPLACE_NAME)
 }
 
 #[expect(

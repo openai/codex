@@ -13,6 +13,7 @@ use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
+use codex_protocol::permissions::ReadDenyMatcher;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::HashMap;
@@ -61,25 +62,60 @@ pub fn get_platform_sandbox(windows_sandbox_enabled: bool) -> Option<SandboxType
     }
 }
 
-pub fn with_managed_mitm_ca_readable_root(
+fn with_managed_mitm_ca_readable_roots(
     permission_profile: PermissionProfile,
-    managed_mitm_ca_trust_bundle_path: Option<&AbsolutePathBuf>,
+    managed_mitm_ca_trust_bundle_paths: &[AbsolutePathBuf],
     sandbox_policy_cwd: &Path,
 ) -> PermissionProfile {
-    let Some(managed_mitm_ca_trust_bundle_path) = managed_mitm_ca_trust_bundle_path else {
+    if managed_mitm_ca_trust_bundle_paths.is_empty() {
         return permission_profile;
-    };
+    }
     let (file_system_sandbox_policy, network_sandbox_policy) =
         permission_profile.to_runtime_permissions();
-    let file_system_sandbox_policy = file_system_sandbox_policy.with_additional_readable_roots(
-        sandbox_policy_cwd,
-        std::slice::from_ref(managed_mitm_ca_trust_bundle_path),
-    );
+    let file_system_sandbox_policy = file_system_sandbox_policy
+        .with_additional_readable_roots(sandbox_policy_cwd, managed_mitm_ca_trust_bundle_paths);
     PermissionProfile::from_runtime_permissions_with_enforcement(
         permission_profile.enforcement(),
         &file_system_sandbox_policy,
         network_sandbox_policy,
     )
+}
+
+pub fn prepare_managed_network_child(
+    network: Option<&NetworkProxy>,
+    env: &mut HashMap<String, String>,
+    command_cwd: &Path,
+    permission_profile: PermissionProfile,
+    sandbox_policy_cwd: &Path,
+) -> PermissionProfile {
+    let managed_mitm_ca_trust_bundle_paths = network.map_or_else(Vec::new, |network| {
+        let file_system_sandbox_policy = permission_profile.file_system_sandbox_policy();
+        let read_deny_matcher =
+            ReadDenyMatcher::new(&file_system_sandbox_policy, sandbox_policy_cwd);
+        network.prepare_child_env(env, command_cwd, |path| {
+            can_read_path_with_policy(
+                &file_system_sandbox_policy,
+                read_deny_matcher.as_ref(),
+                path,
+                sandbox_policy_cwd,
+            )
+        })
+    });
+    with_managed_mitm_ca_readable_roots(
+        permission_profile,
+        &managed_mitm_ca_trust_bundle_paths,
+        sandbox_policy_cwd,
+    )
+}
+
+fn can_read_path_with_policy(
+    file_system_sandbox_policy: &FileSystemSandboxPolicy,
+    read_deny_matcher: Option<&ReadDenyMatcher>,
+    path: &Path,
+    cwd: &Path,
+) -> bool {
+    file_system_sandbox_policy.can_read_path_with_cwd(path, cwd)
+        && !read_deny_matcher.is_some_and(|matcher| matcher.is_read_denied(path))
 }
 
 #[derive(Debug)]
@@ -203,13 +239,13 @@ impl SandboxManager {
             windows_sandbox_private_desktop,
         } = request;
         let additional_permissions = command.additional_permissions.take();
-        let managed_mitm_ca_trust_bundle_path =
-            network.and_then(NetworkProxy::managed_mitm_ca_trust_bundle_path);
         let effective_permission_profile =
             effective_permission_profile(permissions, additional_permissions.as_ref());
-        let effective_permission_profile = with_managed_mitm_ca_readable_root(
+        let effective_permission_profile = prepare_managed_network_child(
+            network,
+            &mut command.env,
+            command.cwd.as_path(),
             effective_permission_profile,
-            managed_mitm_ca_trust_bundle_path.as_ref(),
             sandbox_policy_cwd,
         );
         let (effective_file_system_policy, effective_network_policy) =
@@ -246,7 +282,8 @@ impl SandboxManager {
                 let exe = codex_linux_sandbox_exe
                     .ok_or(SandboxTransformError::MissingLinuxSandboxExecutable)?;
                 let allow_proxy_network = allow_network_for_proxy(enforce_managed_network);
-                let mitm_ca_cert_path = network.and_then(NetworkProxy::mitm_ca_cert_path);
+                let mitm_ca_cert_path =
+                    network.and_then(NetworkProxy::managed_mitm_ca_trust_bundle_path);
                 #[cfg(target_os = "linux")]
                 ensure_linux_bubblewrap_is_supported(
                     &effective_file_system_policy,

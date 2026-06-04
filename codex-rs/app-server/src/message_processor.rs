@@ -917,6 +917,21 @@ impl MessageProcessor {
                 .remote_control_processor
                 .status_read()
                 .map(|response| Some(response.into())),
+            ClientRequest::RemoteControlPairingStart { params, .. } => self
+                .remote_control_processor
+                .pairing_start(params)
+                .await
+                .map(|response| Some(response.into())),
+            ClientRequest::RemoteControlClientsList { params, .. } => self
+                .remote_control_processor
+                .clients_list(params)
+                .await
+                .map(|response| Some(response.into())),
+            ClientRequest::RemoteControlClientsRevoke { params, .. } => self
+                .remote_control_processor
+                .clients_revoke(params)
+                .await
+                .map(|response| Some(response.into())),
             ClientRequest::ConfigRequirementsRead { params: _, .. } => self
                 .config_processor
                 .config_requirements_read()

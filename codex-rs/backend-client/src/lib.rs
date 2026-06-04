@@ -7,7 +7,6 @@ pub use client::RequestError;
 pub use types::CodeTaskDetailsResponse;
 pub use types::CodeTaskDetailsResponseExt;
 pub use types::ConfigBundleResponse;
-pub use types::ConfigFileResponse;
 pub use types::CredentialRouteAuthType;
 pub use types::DeliveredConfigToml;
 pub use types::DeliveredRequirementsToml;
