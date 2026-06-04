@@ -921,6 +921,11 @@ impl MessageProcessor {
                 .pairing_start(params, app_server_client_name.as_deref())
                 .await
                 .map(|response| Some(response.into())),
+            ClientRequest::RemoteControlPairingStatus { params, .. } => self
+                .remote_control_processor
+                .pairing_status(params)
+                .await
+                .map(|response| Some(response.into())),
             ClientRequest::RemoteControlClientsList { params, .. } => self
                 .remote_control_processor
                 .clients_list(params)

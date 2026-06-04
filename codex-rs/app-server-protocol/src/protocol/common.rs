@@ -849,6 +849,12 @@ client_request_definitions! {
         serialization: global("remote-control-pairing"),
         response: v2::RemoteControlPairingStartResponse,
     },
+    #[experimental("remoteControl/pairing/status")]
+    RemoteControlPairingStatus => "remoteControl/pairing/status" {
+        params: v2::RemoteControlPairingStatusParams,
+        serialization: global_shared_read("remote-control-pairing"),
+        response: v2::RemoteControlPairingStatusResponse,
+    },
     #[experimental("remoteControl/client/list")]
     RemoteControlClientsList => "remoteControl/client/list" {
         params: v2::RemoteControlClientsListParams,
@@ -2011,6 +2017,19 @@ mod tests {
         assert_eq!(
             remote_control_pairing_start.serialization_scope(),
             Some(ClientRequestSerializationScope::Global(
+                "remote-control-pairing"
+            ))
+        );
+        let remote_control_pairing_status = ClientRequest::RemoteControlPairingStatus {
+            request_id: request_id(),
+            params: v2::RemoteControlPairingStatusParams {
+                pairing_code: Some("pairing-code".to_string()),
+                manual_pairing_code: None,
+            },
+        };
+        assert_eq!(
+            remote_control_pairing_status.serialization_scope(),
+            Some(ClientRequestSerializationScope::GlobalSharedRead(
                 "remote-control-pairing"
             ))
         );

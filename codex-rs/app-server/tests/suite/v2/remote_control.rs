@@ -19,12 +19,15 @@ use codex_app_server_protocol::RemoteControlDisableResponse;
 use codex_app_server_protocol::RemoteControlEnableResponse;
 use codex_app_server_protocol::RemoteControlPairingStartParams;
 use codex_app_server_protocol::RemoteControlPairingStartResponse;
+use codex_app_server_protocol::RemoteControlPairingStatusParams;
+use codex_app_server_protocol::RemoteControlPairingStatusResponse;
 use codex_app_server_protocol::RemoteControlStatusReadResponse;
 use codex_app_server_protocol::RequestId;
 use codex_config::types::AuthCredentialsStoreMode;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 use tokio::io::AsyncBufReadExt;
+use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
 use tokio::io::BufReader;
 use tokio::net::TcpListener;
@@ -189,6 +192,44 @@ async fn remote_control_pairing_start_returns_pairing_artifacts() -> Result<()> 
             environment_id: "environment-id".to_string(),
             expires_at: 33_336_362_096,
         }
+    );
+
+    let request_id = mcp
+        .send_remote_control_pairing_status_request(RemoteControlPairingStatusParams {
+            pairing_code: Some("pairing-code".to_string()),
+            manual_pairing_code: None,
+        })
+        .await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    assert_eq!(response.result.get("serverId"), None);
+    let received: RemoteControlPairingStatusResponse = to_response(response)?;
+
+    assert_eq!(
+        received,
+        RemoteControlPairingStatusResponse { claimed: true }
+    );
+
+    let request_id = mcp
+        .send_remote_control_pairing_status_request(RemoteControlPairingStatusParams {
+            pairing_code: None,
+            manual_pairing_code: Some("ABCD-EFGH".to_string()),
+        })
+        .await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    assert_eq!(response.result.get("serverId"), None);
+    let received: RemoteControlPairingStatusResponse = to_response(response)?;
+
+    assert_eq!(
+        received,
+        RemoteControlPairingStatusResponse { claimed: true }
     );
     Ok(())
 }
@@ -429,6 +470,25 @@ impl PairingRemoteControlBackend {
                     }),
                 )
                 .await?;
+                for expected_body in [
+                    serde_json::json!({ "pairing_code": "pairing-code" }),
+                    serde_json::json!({ "manual_pairing_code": "ABCD-EFGH" }),
+                ] {
+                    let status_http_request = read_http_request(&listener).await?;
+                    assert_eq!(
+                        status_http_request.request_line,
+                        "POST /backend-api/wham/remote/control/server/pair/status HTTP/1.1"
+                    );
+                    assert_eq!(
+                        serde_json::from_str::<serde_json::Value>(&status_http_request.body)?,
+                        expected_body
+                    );
+                    respond_with_json(
+                        status_http_request.reader.into_inner(),
+                        serde_json::json!({ "claimed": true }),
+                    )
+                    .await?;
+                }
                 std::future::pending::<()>().await;
                 Ok::<(), anyhow::Error>(())
             }
@@ -476,6 +536,7 @@ impl Drop for ClientManagementRemoteControlBackend {
 
 struct HttpRequest {
     request_line: String,
+    body: String,
     reader: BufReader<TcpStream>,
 }
 
@@ -508,16 +569,29 @@ async fn read_http_request(listener: &TcpListener) -> Result<HttpRequest> {
 
     let mut request_line = String::new();
     reader.read_line(&mut request_line).await?;
+    let mut content_length = 0;
     loop {
         let mut line = String::new();
         reader.read_line(&mut line).await?;
         if line == "\r\n" {
             break;
         }
+        if let Some(value) = line
+            .trim_end()
+            .strip_prefix("content-length:")
+            .or_else(|| line.trim_end().strip_prefix("Content-Length:"))
+        {
+            content_length = value.trim().parse::<usize>()?;
+        }
+    }
+    let mut body = vec![0; content_length];
+    if content_length > 0 {
+        reader.read_exact(&mut body).await?;
     }
 
     Ok(HttpRequest {
         request_line: request_line.trim_end().to_string(),
+        body: String::from_utf8(body)?,
         reader,
     })
 }

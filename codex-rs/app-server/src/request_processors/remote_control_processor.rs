@@ -11,6 +11,8 @@ use codex_app_server_protocol::RemoteControlDisableResponse;
 use codex_app_server_protocol::RemoteControlEnableResponse;
 use codex_app_server_protocol::RemoteControlPairingStartParams;
 use codex_app_server_protocol::RemoteControlPairingStartResponse;
+use codex_app_server_protocol::RemoteControlPairingStatusParams;
+use codex_app_server_protocol::RemoteControlPairingStatusResponse;
 use codex_app_server_protocol::RemoteControlStatusReadResponse;
 use std::io;
 
@@ -60,6 +62,17 @@ impl RemoteControlRequestProcessor {
             .map_err(map_pairing_start_error)
     }
 
+    pub(crate) async fn pairing_status(
+        &self,
+        params: RemoteControlPairingStatusParams,
+    ) -> Result<RemoteControlPairingStatusResponse, JSONRPCErrorError> {
+        validate_pairing_status_params(&params)?;
+        self.handle()?
+            .pairing_status(params)
+            .await
+            .map_err(map_pairing_start_error)
+    }
+
     pub(crate) async fn clients_list(
         &self,
         params: RemoteControlClientsListParams,
@@ -96,6 +109,20 @@ fn map_pairing_start_error(err: io::Error) -> JSONRPCErrorError {
         invalid_request(err.to_string())
     } else {
         internal_error(err.to_string())
+    }
+}
+
+fn validate_pairing_status_params(
+    params: &RemoteControlPairingStatusParams,
+) -> Result<(), JSONRPCErrorError> {
+    match (&params.pairing_code, &params.manual_pairing_code) {
+        (Some(_), None) | (None, Some(_)) => Ok(()),
+        (Some(_), Some(_)) => Err(invalid_request(
+            "remoteControl/pairing/status accepts either pairingCode or manualPairingCode, not both",
+        )),
+        (None, None) => Err(invalid_request(
+            "remoteControl/pairing/status requires pairingCode or manualPairingCode",
+        )),
     }
 }
 
