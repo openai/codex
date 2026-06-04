@@ -230,7 +230,7 @@ Example with notification opt-out:
 - `externalAgentConfig/import` — apply selected external-agent migration items by passing explicit `migrationItems` with `cwd` (`null` for home) and any plugin/session `details` returned by detect. When a request includes migration items, the server emits `externalAgentConfig/import/completed` once after the full import finishes (immediately after the response when everything completed synchronously, or after background imports finish).
 - `config/value/write` — write a single config key/value to the user's config.toml on disk; dotted paths such as `desktop.someKey` use the same generic write surface.
 - `config/batchWrite` — apply multiple config edits atomically to the user's config.toml on disk, with optional `reloadUserConfig: true` to hot-reload loaded threads, including multiple `desktop.*` edits.
-- `configRequirements/read` — fetch loaded requirements constraints from `requirements.toml` and/or MDM (or `null` if none are configured), including allow-lists (`allowedApprovalPolicies`, `allowedSandboxModes`, `allowedWebSearchModes`, `allowedPermissions`), lifecycle hook lockdown (`allowManagedHooksOnly`), computer use policy (`computerUse`), pinned feature values (`featureRequirements`), managed lifecycle hooks (`hooks`), `enforceResidency`, and `network` constraints such as canonical domain/socket permissions plus `managedAllowedDomainsOnly` and `dangerFullAccessDenylistOnly`.
+- `configRequirements/read` — fetch loaded requirements constraints from `requirements.toml` and/or MDM (or `null` if none are configured), including allow-lists (`allowedApprovalPolicies`, `allowedSandboxModes`, `allowedWebSearchModes`, `allowedPermissions`), lifecycle hook lockdown (`allowManagedHooksOnly`), computer use policy (`computerUse`), pinned feature values (`featureRequirements`), managed lifecycle hooks (`hooks`, keyed by canonical event names such as `PreToolUse`, `Stop`, and `Interrupt`), `enforceResidency`, and `network` constraints such as canonical domain/socket permissions plus `managedAllowedDomainsOnly` and `dangerFullAccessDenylistOnly`.
 
 ### Example: Start or resume a thread
 
@@ -1593,6 +1593,8 @@ For linked Git worktrees, project hook declarations come from the matching `.cod
 
 Hooks are returned even when disabled so clients can render and re-enable them. User-controlled state lives under `hooks.state`. Managed hooks are non-configurable, and user entries for managed hook keys are ignored during loading.
 
+The returned `eventName` covers the full discovered hook surface, including `Interrupt` entries alongside the existing tool, compaction, session-start, and stop events.
+
 For unmanaged hooks, `currentHash` and `trustStatus` describe whether the current definition is first-seen, approved, or changed since approval. Only trusted unmanaged hooks become runnable. Hook keys combine the source identity with a trailing event/group/handler selector that is currently positional.
 
 ```json
@@ -1730,8 +1732,8 @@ approvals_reviewer = "user"
 ```
 
 Setting the app value to `"user"` routes its approval prompts to the user
-instead of Guardian; setting it to `"auto_review"` opts that app into Guardian
-review when allowed by configuration requirements.
+instead of `auto_review`; setting it to `"auto_review"` opts that app into
+`auto_review` review when allowed by configuration requirements.
 
 Invoke an app by inserting `$<app-slug>` in the text input. The slug is derived from the app name and lowercased with non-alphanumeric characters replaced by `-` (for example, "Demo App" becomes `$demo-app`). Add a `mention` input item (recommended) so the server uses the exact `app://<connector-id>` path rather than guessing by name. Plugins use the same `mention` item shape, but with `plugin://<plugin-name>@<marketplace-name>` paths from `plugin/installed` or `plugin/list`.
 

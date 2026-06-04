@@ -213,8 +213,12 @@ impl Hooks {
         self.engine.preview_interrupt(request)
     }
 
-    pub async fn run_interrupt(&self, request: InterruptRequest) -> InterruptOutcome {
-        self.engine.run_interrupt(request).await
+    pub async fn run_interrupt(
+        &self,
+        request: InterruptRequest,
+        execution_policy: crate::CommandExecutionPolicy,
+    ) -> InterruptOutcome {
+        self.engine.run_interrupt(request, execution_policy).await
     }
 }
 

@@ -10,6 +10,32 @@ use tokio::time::timeout;
 use super::CommandShell;
 use super::ConfiguredHandler;
 
+const SHUTDOWN_BOUNDED_TIMEOUT_SEC: u64 = 8;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommandExecutionPolicy {
+    Standard,
+    ShutdownBounded { timeout_cap_sec: u64 },
+}
+
+impl CommandExecutionPolicy {
+    pub const fn shutdown_bounded() -> Self {
+        Self::ShutdownBounded {
+            timeout_cap_sec: SHUTDOWN_BOUNDED_TIMEOUT_SEC,
+        }
+    }
+
+    fn effective_timeout_sec(self, configured_timeout_sec: u64) -> u64 {
+        match self {
+            Self::Standard => configured_timeout_sec,
+            Self::ShutdownBounded { timeout_cap_sec } => {
+                configured_timeout_sec.min(timeout_cap_sec)
+            }
+        }
+        .max(1)
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct CommandRunResult {
     pub started_at: i64,
@@ -26,6 +52,7 @@ pub(crate) async fn run_command(
     handler: &ConfiguredHandler,
     input_json: &str,
     cwd: &Path,
+    execution_policy: CommandExecutionPolicy,
 ) -> CommandRunResult {
     let started_at = chrono::Utc::now().timestamp();
     let started = Instant::now();
@@ -68,7 +95,8 @@ pub(crate) async fn run_command(
         };
     }
 
-    let timeout_duration = Duration::from_secs(handler.timeout_sec);
+    let effective_timeout_sec = execution_policy.effective_timeout_sec(handler.timeout_sec);
+    let timeout_duration = Duration::from_secs(effective_timeout_sec);
     match timeout(timeout_duration, child.wait_with_output()).await {
         Ok(Ok(output)) => CommandRunResult {
             started_at,
@@ -95,7 +123,7 @@ pub(crate) async fn run_command(
             exit_code: None,
             stdout: String::new(),
             stderr: String::new(),
-            error: Some(format!("hook timed out after {}s", handler.timeout_sec)),
+            error: Some(format!("hook timed out after {effective_timeout_sec}s")),
         },
     }
 }
@@ -131,5 +159,101 @@ fn default_shell_command() -> Command {
         let mut command = Command::new(shell);
         command.arg("-lc");
         command
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+    use std::time::Duration;
+    use std::time::Instant;
+
+    use codex_protocol::protocol::HookEventName;
+    use codex_protocol::protocol::HookSource;
+    use codex_utils_absolute_path::test_support::PathBufExt;
+    use codex_utils_absolute_path::test_support::test_path_buf;
+    use tempfile::tempdir;
+
+    use super::CommandExecutionPolicy;
+    use super::CommandShell;
+    use super::ConfiguredHandler;
+    use super::run_command;
+
+    #[test]
+    fn shutdown_bounded_policy_caps_timeout() {
+        assert_eq!(
+            CommandExecutionPolicy::Standard.effective_timeout_sec(600),
+            600
+        );
+        assert_eq!(
+            CommandExecutionPolicy::shutdown_bounded().effective_timeout_sec(600),
+            8
+        );
+        assert_eq!(
+            CommandExecutionPolicy::ShutdownBounded { timeout_cap_sec: 3 }.effective_timeout_sec(2),
+            2
+        );
+    }
+
+    #[tokio::test]
+    async fn shutdown_bounded_timeout_uses_capped_timeout() {
+        let temp_dir = tempdir().expect("create temp dir");
+        let started = Instant::now();
+        let result = run_command(
+            &test_shell(),
+            &handler(sleep_command(), 10),
+            "{}",
+            temp_dir.path(),
+            CommandExecutionPolicy::ShutdownBounded { timeout_cap_sec: 1 },
+        )
+        .await;
+
+        assert!(started.elapsed() < Duration::from_millis(1500));
+        assert_eq!(result.exit_code, None);
+        assert_eq!(result.error.as_deref(), Some("hook timed out after 1s"));
+    }
+
+    fn handler(command: String, timeout_sec: u64) -> ConfiguredHandler {
+        ConfiguredHandler {
+            event_name: HookEventName::Interrupt,
+            matcher: None,
+            command,
+            timeout_sec,
+            status_message: None,
+            source_path: test_path_buf("/tmp/hooks.json").abs(),
+            source: HookSource::User,
+            display_order: 0,
+            env: HashMap::new(),
+        }
+    }
+
+    fn test_shell() -> CommandShell {
+        #[cfg(windows)]
+        {
+            CommandShell {
+                program: "powershell".to_string(),
+                args: vec!["-NoProfile".to_string(), "-Command".to_string()],
+            }
+        }
+
+        #[cfg(not(windows))]
+        {
+            CommandShell {
+                program: "/bin/sh".to_string(),
+                args: vec!["-lc".to_string()],
+            }
+        }
+    }
+
+    fn sleep_command() -> String {
+        #[cfg(windows)]
+        {
+            "Start-Sleep -Seconds 2".to_string()
+        }
+
+        #[cfg(not(windows))]
+        {
+            "sleep 2".to_string()
+        }
     }
 }

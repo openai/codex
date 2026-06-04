@@ -272,8 +272,12 @@ impl ClaudeHooksEngine {
         crate::events::interrupt::preview(&self.handlers, request)
     }
 
-    pub(crate) async fn run_interrupt(&self, request: InterruptRequest) -> InterruptOutcome {
-        crate::events::interrupt::run(&self.handlers, &self.shell, request).await
+    pub(crate) async fn run_interrupt(
+        &self,
+        request: InterruptRequest,
+        execution_policy: command_runner::CommandExecutionPolicy,
+    ) -> InterruptOutcome {
+        crate::events::interrupt::run(&self.handlers, &self.shell, request, execution_policy).await
     }
 
     async fn maybe_spill_texts(&self, session_id: ThreadId, texts: Vec<String>) -> Vec<String> {

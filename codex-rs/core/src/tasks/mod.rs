@@ -9,6 +9,7 @@ use std::time::Duration;
 use std::time::Instant;
 
 use codex_extension_api::ExtensionData;
+use codex_hooks::InterruptReason;
 use futures::future::BoxFuture;
 use tokio::select;
 use tokio::sync::Notify;
@@ -63,6 +64,35 @@ pub(crate) use user_shell::execute_user_shell_command;
 
 const GRACEFULL_INTERRUPTION_TIMEOUT_MS: u64 = 100;
 const TASK_COMPACT_METRIC: &str = "codex.task.compact";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TaskAbort {
+    Standard(TurnAbortReason),
+    Interrupted(InterruptReason),
+}
+
+impl TaskAbort {
+    fn from_turn_abort_reason(reason: TurnAbortReason) -> Self {
+        match reason {
+            TurnAbortReason::Interrupted => Self::Interrupted(InterruptReason::User),
+            other => Self::Standard(other),
+        }
+    }
+
+    fn turn_abort_reason(self) -> TurnAbortReason {
+        match self {
+            Self::Standard(reason) => reason,
+            Self::Interrupted(_) => TurnAbortReason::Interrupted,
+        }
+    }
+
+    fn interrupt_reason(self) -> Option<InterruptReason> {
+        match self {
+            Self::Interrupted(reason) => Some(reason),
+            Self::Standard(_) => None,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum InterruptedTurnHistoryMarker {
@@ -485,6 +515,17 @@ impl Session {
     }
 
     pub async fn abort_all_tasks(self: &Arc<Self>, reason: TurnAbortReason) {
+        self.abort_all_tasks_with(TaskAbort::from_turn_abort_reason(reason))
+            .await;
+    }
+
+    pub async fn abort_all_tasks_interrupted(self: &Arc<Self>, origin: InterruptReason) {
+        self.abort_all_tasks_with(TaskAbort::Interrupted(origin))
+            .await;
+    }
+
+    async fn abort_all_tasks_with(self: &Arc<Self>, abort: TaskAbort) {
+        let reason = abort.turn_abort_reason();
         let mut aborted_turn = false;
         let mut active_turn_to_clear = None;
         let mut turn_context = None;
@@ -493,7 +534,7 @@ impl Session {
             aborted_turn = task.is_some();
             turn_context = task.as_ref().map(|task| Arc::clone(&task.turn_context));
             if let Some(task) = task {
-                self.handle_task_abort(task, reason.clone()).await;
+                self.handle_task_abort(task, abort).await;
             }
             if aborted_turn {
                 active_turn_to_clear = Some(active_turn);
@@ -518,7 +559,7 @@ impl Session {
             // in-flight approval wait can surface as a model-visible rejection before TurnAborted.
             self.input_queue.clear_pending(&active_turn).await;
         }
-        if reason == TurnAbortReason::Interrupted && aborted_turn {
+        if abort.interrupt_reason().is_some() && aborted_turn {
             self.maybe_start_turn_for_pending_work().await;
         }
     }
@@ -528,6 +569,21 @@ impl Session {
         turn_id: &str,
         reason: TurnAbortReason,
     ) -> bool {
+        self.abort_turn_if_active_with(turn_id, TaskAbort::from_turn_abort_reason(reason))
+            .await
+    }
+
+    pub(crate) async fn abort_turn_if_active_interrupted(
+        self: &Arc<Self>,
+        turn_id: &str,
+        origin: InterruptReason,
+    ) -> bool {
+        self.abort_turn_if_active_with(turn_id, TaskAbort::Interrupted(origin))
+            .await
+    }
+
+    async fn abort_turn_if_active_with(self: &Arc<Self>, turn_id: &str, abort: TaskAbort) -> bool {
+        let reason = abort.turn_abort_reason();
         let active_turn = {
             let mut active = self.active_turn.lock().await;
             if active
@@ -547,7 +603,7 @@ impl Session {
         let task = active_turn.task.take();
         let turn_context = task.as_ref().map(|task| Arc::clone(&task.turn_context));
         if let Some(task) = task {
-            self.handle_task_abort(task, reason.clone()).await;
+            self.handle_task_abort(task, abort).await;
         }
         if let Some(turn_context) = turn_context.as_deref() {
             self.emit_turn_abort_lifecycle(reason.clone(), turn_context.extension_data.as_ref())
@@ -565,7 +621,7 @@ impl Session {
         // in-flight approval wait can surface as a model-visible rejection before TurnAborted.
         self.input_queue.clear_pending(&active_turn).await;
 
-        if reason == TurnAbortReason::Interrupted {
+        if abort.interrupt_reason().is_some() {
             self.maybe_start_turn_for_pending_work().await;
         }
 
@@ -813,7 +869,8 @@ impl Session {
             .await;
     }
 
-    async fn handle_task_abort(self: &Arc<Self>, task: RunningTask, reason: TurnAbortReason) {
+    async fn handle_task_abort(self: &Arc<Self>, task: RunningTask, abort: TaskAbort) {
+        let reason = abort.turn_abort_reason();
         let sub_id = task.turn_context.sub_id.clone();
         if task.cancellation_token.is_cancelled() {
             return;
@@ -844,7 +901,7 @@ impl Session {
             .abort(session_ctx, Arc::clone(&task.turn_context))
             .await;
 
-        if reason == TurnAbortReason::Interrupted
+        if abort.interrupt_reason().is_some()
             && let Some(marker) = interrupted_turn_history_marker(
                 InterruptedTurnHistoryMarker::from_config_and_version(
                     task.turn_context.config.as_ref(),
@@ -864,8 +921,8 @@ impl Session {
             }
         }
 
-        if reason == TurnAbortReason::Interrupted {
-            run_turn_interrupt_hooks(self, &task.turn_context).await;
+        if let Some(interrupt_reason) = abort.interrupt_reason() {
+            run_turn_interrupt_hooks(self, &task.turn_context, interrupt_reason).await;
         }
 
         let (completed_at, duration_ms) = task

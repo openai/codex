@@ -12,11 +12,29 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use super::common;
 use crate::engine::CommandShell;
 use crate::engine::ConfiguredHandler;
+use crate::engine::command_runner::CommandExecutionPolicy;
 use crate::engine::command_runner::CommandRunResult;
 use crate::engine::dispatcher;
 use crate::engine::output_parser;
 use crate::schema::InterruptCommandInput;
 use crate::schema::NullableString;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InterruptReason {
+    User,
+    Shutdown,
+    AutoReview,
+}
+
+impl InterruptReason {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::User => "user",
+            Self::Shutdown => "shutdown",
+            Self::AutoReview => "auto_review",
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct InterruptRequest {
@@ -26,6 +44,7 @@ pub struct InterruptRequest {
     pub transcript_path: Option<PathBuf>,
     pub model: String,
     pub permission_mode: String,
+    pub reason: InterruptReason,
 }
 
 #[derive(Debug, Default)]
@@ -38,12 +57,12 @@ struct InterruptHandlerData;
 
 pub(crate) fn preview(
     handlers: &[ConfiguredHandler],
-    _request: &InterruptRequest,
+    request: &InterruptRequest,
 ) -> Vec<HookRunSummary> {
     dispatcher::select_handlers(
         handlers,
         HookEventName::Interrupt,
-        /*matcher_input*/ None,
+        Some(request.reason.as_str()),
     )
     .into_iter()
     .map(|handler| dispatcher::running_summary(&handler))
@@ -54,11 +73,12 @@ pub(crate) async fn run(
     handlers: &[ConfiguredHandler],
     shell: &CommandShell,
     request: InterruptRequest,
+    execution_policy: CommandExecutionPolicy,
 ) -> InterruptOutcome {
     let matched = dispatcher::select_handlers(
         handlers,
         HookEventName::Interrupt,
-        /*matcher_input*/ None,
+        Some(request.reason.as_str()),
     );
     if matched.is_empty() {
         return InterruptOutcome::default();
@@ -71,6 +91,7 @@ pub(crate) async fn run(
         transcript_path,
         model,
         permission_mode,
+        reason,
     } = request;
     let input_json = match serde_json::to_string(&InterruptCommandInput {
         session_id: session_id.to_string(),
@@ -80,6 +101,7 @@ pub(crate) async fn run(
         hook_event_name: "Interrupt".to_string(),
         model,
         permission_mode,
+        reason: reason.as_str().to_string(),
     }) {
         Ok(input_json) => input_json,
         Err(error) => {
@@ -93,12 +115,13 @@ pub(crate) async fn run(
         }
     };
 
-    let results = dispatcher::execute_handlers(
+    let results = dispatcher::execute_handlers_with_policy(
         shell,
         matched,
         input_json,
         cwd.as_path(),
         Some(turn_id),
+        execution_policy,
         parse_completed,
     )
     .await;

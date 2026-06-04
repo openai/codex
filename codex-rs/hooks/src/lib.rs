@@ -14,6 +14,7 @@ pub use config_rules::hook_states_from_stack;
 pub use declarations::PluginHookDeclaration;
 pub use declarations::plugin_hook_declarations;
 pub use engine::HookListEntry;
+pub use engine::command_runner::CommandExecutionPolicy;
 pub use events::common::SubagentHookContext;
 /// Hook event names as they appear in hooks JSON and config files.
 pub const HOOK_EVENT_NAMES: [&str; 11] = [
@@ -35,7 +36,7 @@ pub const HOOK_EVENT_NAMES: [&str; 11] = [
 /// Other events can appear in hooks JSON, but Codex ignores their matcher
 /// fields because those events do not dispatch against a tool, compaction
 /// trigger, or session-start source.
-pub const HOOK_EVENT_NAMES_WITH_MATCHERS: [&str; 8] = [
+pub const HOOK_EVENT_NAMES_WITH_MATCHERS: [&str; 9] = [
     "PreToolUse",
     "PermissionRequest",
     "PostToolUse",
@@ -44,6 +45,7 @@ pub const HOOK_EVENT_NAMES_WITH_MATCHERS: [&str; 8] = [
     "SessionStart",
     "SubagentStart",
     "SubagentStop",
+    "Interrupt",
 ];
 
 pub use events::compact::PostCompactRequest;
@@ -51,6 +53,7 @@ pub use events::compact::PreCompactOutcome;
 pub use events::compact::PreCompactRequest;
 pub use events::compact::StatelessHookOutcome;
 pub use events::interrupt::InterruptOutcome;
+pub use events::interrupt::InterruptReason;
 pub use events::interrupt::InterruptRequest;
 pub use events::permission_request::PermissionRequestDecision;
 pub use events::permission_request::PermissionRequestOutcome;

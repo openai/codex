@@ -621,6 +621,8 @@ pub(crate) struct InterruptCommandInput {
     pub model: String,
     #[schemars(schema_with = "permission_mode_schema")]
     pub permission_mode: String,
+    #[schemars(schema_with = "interrupt_reason_schema")]
+    pub reason: String,
 }
 
 pub fn write_schema_fixtures(schema_root: &Path) -> anyhow::Result<()> {
@@ -830,6 +832,10 @@ fn session_start_source_schema(_gen: &mut SchemaGenerator) -> Schema {
 
 fn compaction_trigger_schema(_gen: &mut SchemaGenerator) -> Schema {
     string_enum_schema(&["manual", "auto"])
+}
+
+fn interrupt_reason_schema(_gen: &mut SchemaGenerator) -> Schema {
+    string_enum_schema(&["user", "shutdown", "auto_review"])
 }
 
 fn string_const_schema(value: &str) -> Schema {
@@ -1151,6 +1157,16 @@ mod tests {
                 .expect("interrupt input properties")
                 .get("last_assistant_message")
                 .is_none()
+        );
+        assert_eq!(
+            interrupt_input["properties"]["reason"]["enum"],
+            serde_json::json!(["user", "shutdown", "auto_review"])
+        );
+        assert!(
+            interrupt_input["required"]
+                .as_array()
+                .expect("interrupt input required fields")
+                .contains(&Value::String("reason".to_string()))
         );
 
         let interrupt_output: Value = serde_json::from_slice(

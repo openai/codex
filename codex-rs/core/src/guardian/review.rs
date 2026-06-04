@@ -234,7 +234,7 @@ async fn record_guardian_denial(session: &Arc<Session>, turn: &Arc<TurnContext>,
     let turn_id = turn_id.to_string();
     let _abort_task = runtime_handle.spawn(async move {
         session
-            .abort_turn_if_active(&turn_id, TurnAbortReason::Interrupted)
+            .abort_turn_if_active_interrupted(&turn_id, codex_hooks::InterruptReason::AutoReview)
             .await;
     });
 }

@@ -5,6 +5,8 @@ use std::time::Duration;
 use codex_analytics::CompactionTrigger;
 use codex_analytics::HookRunFact;
 use codex_analytics::build_track_events_context;
+use codex_hooks::CommandExecutionPolicy;
+use codex_hooks::InterruptReason;
 use codex_hooks::InterruptRequest;
 use codex_hooks::PermissionRequestDecision;
 use codex_hooks::PermissionRequestOutcome;
@@ -362,7 +364,11 @@ pub(crate) async fn run_turn_stop_hooks(
     outcome
 }
 
-pub(crate) async fn run_turn_interrupt_hooks(sess: &Arc<Session>, turn_context: &Arc<TurnContext>) {
+pub(crate) async fn run_turn_interrupt_hooks(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    reason: InterruptReason,
+) {
     if matches!(&turn_context.session_source, SessionSource::SubAgent(_)) {
         return;
     }
@@ -375,11 +381,16 @@ pub(crate) async fn run_turn_interrupt_hooks(sess: &Arc<Session>, turn_context: 
         transcript_path: sess.hook_transcript_path().await,
         model: turn_context.model_info.slug.clone(),
         permission_mode: hook_permission_mode(turn_context),
+        reason,
     };
     let hooks = sess.hooks();
     emit_hook_started_events(sess, turn_context, hooks.preview_interrupt(&request)).await;
 
-    let outcome = hooks.run_interrupt(request).await;
+    let execution_policy = match reason {
+        InterruptReason::Shutdown => CommandExecutionPolicy::shutdown_bounded(),
+        InterruptReason::User | InterruptReason::AutoReview => CommandExecutionPolicy::Standard,
+    };
+    let outcome = hooks.run_interrupt(request, execution_policy).await;
     emit_hook_completed_events(sess, turn_context, outcome.hook_events).await;
 }
 

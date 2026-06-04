@@ -114,8 +114,9 @@ pub(crate) fn matcher_pattern_for_event(
         | HookEventName::SubagentStart
         | HookEventName::SubagentStop
         | HookEventName::PreCompact
-        | HookEventName::PostCompact => matcher,
-        HookEventName::UserPromptSubmit | HookEventName::Stop | HookEventName::Interrupt => None,
+        | HookEventName::PostCompact
+        | HookEventName::Interrupt => matcher,
+        HookEventName::UserPromptSubmit | HookEventName::Stop => None,
     }
 }
 
@@ -262,10 +263,6 @@ mod tests {
             matcher_pattern_for_event(HookEventName::Stop, Some("^done$")),
             None
         );
-        assert_eq!(
-            matcher_pattern_for_event(HookEventName::Interrupt, Some("^interrupted$")),
-            None
-        );
     }
 
     #[test]
@@ -289,6 +286,10 @@ mod tests {
         assert_eq!(
             matcher_pattern_for_event(HookEventName::PostCompact, Some("manual|auto")),
             Some("manual|auto")
+        );
+        assert_eq!(
+            matcher_pattern_for_event(HookEventName::Interrupt, Some("user|shutdown")),
+            Some("user|shutdown")
         );
     }
 }

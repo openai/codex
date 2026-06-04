@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context;
@@ -46,6 +47,14 @@ use tokio::time::sleep;
 use tokio::time::timeout;
 
 fn write_interrupt_hook(home: &Path, system_message: Option<&str>) -> Result<()> {
+    write_interrupt_hook_with_sleep(home, system_message, /*sleep_secs*/ 0)
+}
+
+fn write_interrupt_hook_with_sleep(
+    home: &Path,
+    system_message: Option<&str>,
+    sleep_secs: u64,
+) -> Result<()> {
     let script_path = home.join("interrupt_hook.py");
     let log_path = home.join("interrupt_hook_log.jsonl");
     let system_message_json =
@@ -54,13 +63,18 @@ fn write_interrupt_hook(home: &Path, system_message: Option<&str>) -> Result<()>
         r#"import json
 from pathlib import Path
 import sys
+import time
 
 log_path = Path(r"{log_path}")
 system_message = json.loads({system_message_json:?})
+sleep_secs = {sleep_secs}
 
 payload = json.load(sys.stdin)
 with log_path.open("a", encoding="utf-8") as handle:
     handle.write(json.dumps(payload) + "\n")
+
+if sleep_secs:
+    time.sleep(sleep_secs)
 
 if system_message is None:
     print("{{}}")
@@ -69,6 +83,7 @@ else:
 "#,
         log_path = log_path.display(),
         system_message_json = system_message_json,
+        sleep_secs = sleep_secs,
     );
     let hooks = serde_json::json!({
         "hooks": {
@@ -249,6 +264,10 @@ async fn interrupt_hook_runs_before_turn_aborted_and_records_payload() -> Result
             .get("transcript_path")
             .and_then(Value::as_str)
             .is_some_and(|path| !path.is_empty())
+    );
+    assert_eq!(
+        payload.get("reason"),
+        Some(&Value::String("user".to_string()))
     );
     assert!(payload.get("stop_hook_active").is_none());
     assert!(payload.get("last_assistant_message").is_none());
@@ -531,7 +550,113 @@ async fn guardian_interrupt_runs_interrupt_hook() -> Result<()> {
             .and_then(Value::as_str)
             .is_some_and(|path| !path.is_empty())
     );
+    assert_eq!(
+        payload.get("reason"),
+        Some(&Value::String("auto_review".to_string()))
+    );
     assert!(payload.get("last_assistant_message").is_none());
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shutdown_interrupt_runs_bounded_interrupt_hook() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let (gate_completed_tx, gate_completed_rx) = oneshot::channel();
+    let chunks = vec![vec![
+        StreamingSseChunk {
+            gate: None,
+            body: sse_event(ev_response_created("resp-shutdown-1")),
+        },
+        StreamingSseChunk {
+            gate: None,
+            body: sse_event(ev_message_item_added("msg-shutdown-1", "")),
+        },
+        StreamingSseChunk {
+            gate: None,
+            body: sse_event(ev_output_text_delta("shore ")),
+        },
+        StreamingSseChunk {
+            gate: None,
+            body: sse_event(ev_message_item_done("msg-shutdown-1", "shore break")),
+        },
+        StreamingSseChunk {
+            gate: Some(gate_completed_rx),
+            body: sse_event(ev_completed("resp-shutdown-1")),
+        },
+    ]];
+    let (server, _completions) = start_streaming_sse_server(chunks).await;
+
+    let mut builder = test_codex()
+        .with_model("gpt-5.4")
+        .with_pre_build_hook(|home| {
+            if let Err(error) = write_interrupt_hook_with_sleep(
+                home, /*system_message*/ None, /*sleep_secs*/ 9,
+            ) {
+                panic!("failed to write interrupt hook fixture: {error}");
+            }
+        })
+        .with_config(trust_discovered_hooks);
+    let test = builder.build_with_streaming_server(&server).await?;
+
+    submit_text_turn(&test, "shutdown me").await?;
+
+    let _: TurnItem = wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::ItemCompleted(ItemCompletedEvent {
+            item: TurnItem::AgentMessage(item),
+            ..
+        }) => Some(TurnItem::AgentMessage(item.clone())),
+        _ => None,
+    })
+    .await;
+
+    let codex = Arc::clone(&test.codex);
+    let shutdown_task = tokio::spawn(async move { codex.shutdown_and_wait().await });
+
+    let started = wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::HookStarted(started) if started.run.event_name == HookEventName::Interrupt => {
+            Some(started.clone())
+        }
+        _ => None,
+    })
+    .await;
+    let completed = wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::HookCompleted(completed)
+            if completed.run.event_name == HookEventName::Interrupt =>
+        {
+            Some(completed.clone())
+        }
+        _ => None,
+    })
+    .await;
+    let aborted = wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::TurnAborted(aborted) => Some(aborted.clone()),
+        _ => None,
+    })
+    .await;
+
+    let _ = gate_completed_tx.send(());
+    shutdown_task.await??;
+
+    assert_eq!(started.run.event_name, HookEventName::Interrupt);
+    assert_eq!(completed.run.event_name, HookEventName::Interrupt);
+    assert_eq!(completed.run.status, HookRunStatus::Failed);
+    assert_eq!(
+        completed.run.entries,
+        vec![HookOutputEntry {
+            kind: HookOutputEntryKind::Error,
+            text: "hook timed out after 8s".to_string(),
+        }]
+    );
+    assert_eq!(aborted.reason, TurnAbortReason::Interrupted);
+
+    let hook_inputs = read_interrupt_hook_inputs(test.codex_home_path())?;
+    assert_eq!(hook_inputs.len(), 1);
+    assert_eq!(
+        hook_inputs[0].get("reason"),
+        Some(&Value::String("shutdown".to_string()))
+    );
 
     Ok(())
 }
