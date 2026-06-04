@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use anyhow::Error;
 use anyhow::Result;
 use app_test_support::ChatGptAuthFixture;
 use app_test_support::TestAppServer;
@@ -245,15 +246,15 @@ openai_base_url = "{server_uri}/v1"
         .collect::<Vec<_>>();
     expected_items[0].supported_reasoning_efforts = vec![
         ReasoningEffortOption {
-            reasoning_effort: "max".parse()?,
+            reasoning_effort: "max".parse().map_err(Error::msg)?,
             description: "Maximum".to_string(),
         },
         ReasoningEffortOption {
-            reasoning_effort: "low".parse()?,
+            reasoning_effort: "low".parse().map_err(Error::msg)?,
             description: "Low".to_string(),
         },
         ReasoningEffortOption {
-            reasoning_effort: "focused".parse()?,
+            reasoning_effort: "focused".parse().map_err(Error::msg)?,
             description: "Focused".to_string(),
         },
     ];
