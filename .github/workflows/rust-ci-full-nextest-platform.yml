@@ -94,12 +94,6 @@ jobs:
       - name: Install DotSlash
         uses: facebook/install-dotslash@1e4e7b3e07eaca387acb98f1d4720e0bee8dbb6a # v2
 
-      - name: Expose MSVC SDK environment (Windows)
-        if: ${{ runner.os == 'Windows' && inputs.target == 'aarch64-pc-windows-msvc' }}
-        uses: ./.github/actions/setup-msvc-env
-        with:
-          target: ${{ inputs.target }}
-
       - name: Set up Cargo CI
         id: cargo_setup
         uses: ./.github/actions/setup-cargo-ci
@@ -108,6 +102,12 @@ jobs:
           profile: ${{ inputs.profile }}
           cache-runner: ${{ env.ARCHIVE_CACHE_RUNNER }}
           use-sccache: ${{ env.USE_SCCACHE }}
+
+      - name: Expose MSVC SDK environment (Windows)
+        if: ${{ runner.os == 'Windows' && inputs.target == 'aarch64-pc-windows-msvc' }}
+        uses: ./.github/actions/setup-msvc-env
+        with:
+          target: ${{ inputs.target }}
 
       - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2.62.49
         with:
