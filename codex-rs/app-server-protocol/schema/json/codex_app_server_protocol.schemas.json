@@ -18093,8 +18093,26 @@
           "lifecycleStatus": {
             "$ref": "#/definitions/v2/ThreadSubagentLifecycleStatus"
           },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "nickname": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "parentThreadId": {
             "type": "string"
+          },
+          "role": {
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "threadId": {
             "type": "string"

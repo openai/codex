@@ -3898,6 +3898,9 @@ fn thread_subagent_from_edge(edge: codex_state::ThreadSpawnEdge) -> ThreadSubage
                 ThreadSubagentLifecycleStatus::Closed
             }
         },
+        nickname: edge.agent_nickname,
+        role: edge.agent_role,
+        model: edge.model,
     }
 }
 

@@ -1,6 +1,7 @@
 use anyhow::Result;
 use app_test_support::TestAppServer;
 use app_test_support::to_response;
+use chrono::Utc;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
@@ -9,9 +10,12 @@ use codex_app_server_protocol::ThreadSubagentLifecycleStatus;
 use codex_app_server_protocol::ThreadSubagentsListParams;
 use codex_app_server_protocol::ThreadSubagentsListResponse;
 use codex_protocol::ThreadId;
+use codex_protocol::protocol::SessionSource;
 use codex_state::DirectionalThreadSpawnEdgeStatus;
 use codex_state::StateRuntime;
+use codex_state::ThreadMetadataBuilder;
 use pretty_assertions::assert_eq;
+use std::path::Path;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
@@ -29,6 +33,15 @@ async fn thread_subagents_list_uses_persisted_edges_without_rollouts() -> Result
     state_db
         .mark_backfill_complete(/*last_watermark*/ None)
         .await?;
+    upsert_subagent_metadata(
+        &state_db,
+        codex_home.path(),
+        open_child_thread_id,
+        "atlas",
+        "explorer",
+        "gpt-5.4",
+    )
+    .await?;
     state_db
         .upsert_thread_spawn_edge(
             parent_thread_id,
@@ -67,10 +80,13 @@ async fn thread_subagents_list_uses_persisted_edges_without_rollouts() -> Result
     assert_ne!(next_cursor, open_child_thread_id.to_string());
     assert_eq!(
         first_page.data,
-        vec![subagent(
+        vec![subagent_with_metadata(
             parent_thread_id,
             open_child_thread_id,
             ThreadSubagentLifecycleStatus::Open,
+            Some("atlas"),
+            Some("explorer"),
+            Some("gpt-5.4"),
         )]
     );
 
@@ -105,10 +121,13 @@ async fn thread_subagents_list_uses_persisted_edges_without_rollouts() -> Result
         )
         .await?,
         ThreadSubagentsListResponse {
-            data: vec![subagent(
+            data: vec![subagent_with_metadata(
                 parent_thread_id,
                 open_child_thread_id,
                 ThreadSubagentLifecycleStatus::Open,
+                Some("atlas"),
+                Some("explorer"),
+                Some("gpt-5.4"),
             )],
             next_cursor: None,
         }
@@ -202,11 +221,54 @@ fn subagent(
     child_thread_id: ThreadId,
     lifecycle_status: ThreadSubagentLifecycleStatus,
 ) -> ThreadSubagent {
+    subagent_with_metadata(
+        parent_thread_id,
+        child_thread_id,
+        lifecycle_status,
+        /*nickname*/ None,
+        /*role*/ None,
+        /*model*/ None,
+    )
+}
+
+fn subagent_with_metadata(
+    parent_thread_id: ThreadId,
+    child_thread_id: ThreadId,
+    lifecycle_status: ThreadSubagentLifecycleStatus,
+    nickname: Option<&str>,
+    role: Option<&str>,
+    model: Option<&str>,
+) -> ThreadSubagent {
     ThreadSubagent {
         thread_id: child_thread_id.to_string(),
         parent_thread_id: parent_thread_id.to_string(),
         lifecycle_status,
+        nickname: nickname.map(str::to_string),
+        role: role.map(str::to_string),
+        model: model.map(str::to_string),
     }
+}
+
+async fn upsert_subagent_metadata(
+    state_db: &StateRuntime,
+    codex_home: &Path,
+    thread_id: ThreadId,
+    nickname: &str,
+    role: &str,
+    model: &str,
+) -> Result<()> {
+    let mut builder = ThreadMetadataBuilder::new(
+        thread_id,
+        codex_home.join(format!("{thread_id}.jsonl")),
+        Utc::now(),
+        SessionSource::Cli,
+    );
+    builder.agent_nickname = Some(nickname.to_string());
+    builder.agent_role = Some(role.to_string());
+    let mut metadata = builder.build("mock_provider");
+    metadata.model = Some(model.to_string());
+    state_db.upsert_thread(&metadata).await?;
+    Ok(())
 }
 
 fn list_params(parent_thread_id: ThreadId) -> ThreadSubagentsListParams {

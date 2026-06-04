@@ -1143,6 +1143,9 @@ pub struct ThreadSubagent {
     pub thread_id: String,
     pub parent_thread_id: String,
     pub lifecycle_status: ThreadSubagentLifecycleStatus,
+    pub nickname: Option<String>,
+    pub role: Option<String>,
+    pub model: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

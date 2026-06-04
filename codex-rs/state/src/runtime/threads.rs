@@ -134,16 +134,16 @@ ON CONFLICT(child_thread_id) DO UPDATE SET
         }
 
         let mut builder = QueryBuilder::<Sqlite>::new(
-            "SELECT parent_thread_id, child_thread_id, status FROM thread_spawn_edges WHERE parent_thread_id = ",
+            "SELECT edge.parent_thread_id, edge.child_thread_id, edge.status, threads.agent_nickname, threads.agent_role, threads.model FROM thread_spawn_edges AS edge LEFT JOIN threads ON threads.id = edge.child_thread_id WHERE edge.parent_thread_id = ",
         );
         builder.push_bind(parent_thread_id.to_string());
         if let Some(cursor) = cursor {
             builder
-                .push(" AND child_thread_id > ")
+                .push(" AND edge.child_thread_id > ")
                 .push_bind(cursor.to_string());
         }
         if let Some(statuses) = statuses {
-            builder.push(" AND status IN (");
+            builder.push(" AND edge.status IN (");
             let mut separated = builder.separated(", ");
             for status in statuses {
                 separated.push_bind(status.as_ref());
@@ -151,7 +151,7 @@ ON CONFLICT(child_thread_id) DO UPDATE SET
             separated.push_unseparated(")");
         }
         builder
-            .push(" ORDER BY child_thread_id LIMIT ")
+            .push(" ORDER BY edge.child_thread_id LIMIT ")
             .push_bind(page_size.saturating_add(1) as i64);
 
         let rows = builder.build().fetch_all(self.pool.as_ref()).await?;
@@ -1148,6 +1148,9 @@ fn thread_spawn_edge_from_row(
         status: row
             .try_get::<String, _>("status")?
             .parse::<crate::DirectionalThreadSpawnEdgeStatus>()?,
+        agent_nickname: row.try_get("agent_nickname")?,
+        agent_role: row.try_get("agent_role")?,
+        model: row.try_get("model")?,
     })
 }
 
@@ -2104,7 +2107,7 @@ INSERT INTO thread_spawn_edges (
     #[tokio::test]
     async fn thread_spawn_children_page_uses_child_id_keyset() {
         let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home, "test-provider".to_string())
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
             .await
             .expect("state db should initialize");
         let parent_thread_id =
@@ -2115,6 +2118,15 @@ INSERT INTO thread_spawn_edges (
             ThreadId::from_string("00000000-0000-0000-0000-000000000922").expect("valid thread id");
         let child_c_thread_id =
             ThreadId::from_string("00000000-0000-0000-0000-000000000923").expect("valid thread id");
+        let mut child_a_metadata =
+            test_thread_metadata(&codex_home, child_a_thread_id, codex_home.clone());
+        child_a_metadata.agent_nickname = Some("atlas".to_string());
+        child_a_metadata.agent_role = Some("explorer".to_string());
+        child_a_metadata.model = Some("gpt-5.4".to_string());
+        runtime
+            .upsert_thread(&child_a_metadata)
+            .await
+            .expect("child metadata insert should succeed");
         for (child_thread_id, status) in [
             (child_a_thread_id, DirectionalThreadSpawnEdgeStatus::Open),
             (child_b_thread_id, DirectionalThreadSpawnEdgeStatus::Closed),
@@ -2142,11 +2154,17 @@ INSERT INTO thread_spawn_edges (
                         parent_thread_id,
                         child_thread_id: child_a_thread_id,
                         status: DirectionalThreadSpawnEdgeStatus::Open,
+                        agent_nickname: Some("atlas".to_string()),
+                        agent_role: Some("explorer".to_string()),
+                        model: Some("gpt-5.4".to_string()),
                     },
                     crate::ThreadSpawnEdge {
                         parent_thread_id,
                         child_thread_id: child_b_thread_id,
                         status: DirectionalThreadSpawnEdgeStatus::Closed,
+                        agent_nickname: None,
+                        agent_role: None,
+                        model: None,
                     },
                 ],
                 next_cursor: Some(child_b_thread_id),
@@ -2169,6 +2187,9 @@ INSERT INTO thread_spawn_edges (
                     parent_thread_id,
                     child_thread_id: child_c_thread_id,
                     status: DirectionalThreadSpawnEdgeStatus::Open,
+                    agent_nickname: None,
+                    agent_role: None,
+                    model: None,
                 }],
                 next_cursor: None,
             }

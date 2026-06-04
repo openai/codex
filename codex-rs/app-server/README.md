@@ -374,7 +374,7 @@ When `nextCursor` is `null`, you’ve reached the final page.
 
 ### Example: List thread subagents (experimental)
 
-Use `thread/subagents/list` with `capabilities.experimentalApi = true` to page through direct persisted subagent children. Results are ordered by `threadId`. Pass the opaque `nextCursor` from one response into the next request. Omit `lifecycleStatuses` to include every durable spawn-edge lifecycle status, or filter with `"open"` and `"closed"`.
+Use `thread/subagents/list` with `capabilities.experimentalApi = true` to page through direct persisted subagent children. Results are ordered by `threadId`. Pass the opaque `nextCursor` from one response into the next request. Omit `lifecycleStatuses` to include every durable spawn-edge lifecycle status, or filter with `"open"` and `"closed"`. Persisted `nickname`, `role`, and `model` metadata are `null` when unavailable.
 
 `ThreadSubagent.lifecycleStatus` is distinct from `ThreadStatus`: subagent lifecycle is durable spawn-edge state, while thread status describes runtime activity such as `active`, `idle`, `systemError`, or `notLoaded`. Descendants are not returned recursively.
 
@@ -386,7 +386,7 @@ Use `thread/subagents/list` with `capabilities.experimentalApi = true` to page t
 } }
 { "id": 21, "result": {
     "data": [
-        { "threadId": "00000000-0000-0000-0000-000000000101", "parentThreadId": "00000000-0000-0000-0000-000000000100", "lifecycleStatus": "open" }
+        { "threadId": "00000000-0000-0000-0000-000000000101", "parentThreadId": "00000000-0000-0000-0000-000000000100", "lifecycleStatus": "open", "nickname": "atlas", "role": "explorer", "model": "gpt-5.4" }
     ],
     "nextCursor": null
 } }
