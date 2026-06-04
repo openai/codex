@@ -167,7 +167,27 @@ pub struct RemotePluginDetail {
     pub app_manifest: Option<JsonValue>,
     pub skills: Vec<RemotePluginSkill>,
     pub app_ids: Vec<String>,
+    pub app_templates: Vec<RemoteAppTemplate>,
     pub mcp_servers: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemoteAppTemplate {
+    pub template_id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub canonical_connector_id: Option<String>,
+    pub logo_url: Option<String>,
+    pub logo_url_dark: Option<String>,
+    pub materialized_app_ids: Vec<String>,
+    pub reason: Option<RemoteAppTemplateUnavailableReason>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum RemoteAppTemplateUnavailableReason {
+    NotConfiguredForWorkspace,
+    NoActiveWorkspace,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -413,6 +433,8 @@ struct RemotePluginReleaseResponse {
     app_ids: Vec<String>,
     #[serde(default)]
     app_manifest: Option<JsonValue>,
+    #[serde(default, alias = "unavailable_app_templates")]
+    app_templates: Vec<RemoteAppTemplateResponse>,
     #[serde(default)]
     keywords: Vec<String>,
     interface: RemotePluginReleaseInterfaceResponse,
@@ -425,6 +447,24 @@ struct RemotePluginReleaseResponse {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 struct RemotePluginMcpServerResponse {
     key: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+struct RemoteAppTemplateResponse {
+    template_id: String,
+    name: String,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    canonical_connector_id: Option<String>,
+    #[serde(default)]
+    logo_url: Option<String>,
+    #[serde(default)]
+    logo_url_dark: Option<String>,
+    #[serde(default)]
+    materialized_app_ids: Vec<String>,
+    #[serde(default)]
+    reason: Option<RemoteAppTemplateUnavailableReason>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -975,6 +1015,21 @@ async fn build_remote_plugin_detail(
         app_manifest: plugin.release.app_manifest,
         skills,
         app_ids: plugin.release.app_ids,
+        app_templates: plugin
+            .release
+            .app_templates
+            .into_iter()
+            .map(|template| RemoteAppTemplate {
+                template_id: template.template_id,
+                name: template.name,
+                description: template.description,
+                canonical_connector_id: template.canonical_connector_id,
+                logo_url: template.logo_url,
+                logo_url_dark: template.logo_url_dark,
+                materialized_app_ids: template.materialized_app_ids,
+                reason: template.reason,
+            })
+            .collect(),
         mcp_servers,
     })
 }

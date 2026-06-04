@@ -17,6 +17,8 @@ use axum::http::Uri;
 use axum::http::header::AUTHORIZATION;
 use axum::routing::get;
 use codex_app_server_protocol::AppInfo;
+use codex_app_server_protocol::AppTemplateSummary;
+use codex_app_server_protocol::AppTemplateUnavailableReason;
 use codex_app_server_protocol::HookEventName;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
@@ -427,6 +429,28 @@ async fn plugin_read_reads_remote_plugin_details_when_remote_plugin_enabled() ->
     "display_name": "Linear",
     "description": "Track work in Linear",
     "app_ids": [],
+    "app_templates": [
+      {
+        "template_id": "templated_apps_GitHubEnterprise",
+        "name": "GitHub Enterprise",
+        "description": "Connect GitHub Enterprise",
+        "canonical_connector_id": "github_enterprise",
+        "logo_url": "https://example.com/ghe-light.png",
+        "logo_url_dark": "https://example.com/ghe-dark.png",
+        "materialized_app_ids": ["asdk_app_ghe"],
+        "reason": null
+      },
+      {
+        "template_id": "templated_apps_Databricks",
+        "name": "Databricks",
+        "description": null,
+        "canonical_connector_id": null,
+        "logo_url": null,
+        "logo_url_dark": null,
+        "materialized_app_ids": [],
+        "reason": "NOT_CONFIGURED_FOR_WORKSPACE"
+      }
+    ],
     "keywords": ["issue-tracking", "project management"],
     "interface": {
       "short_description": "Plan and track work",
@@ -564,6 +588,31 @@ async fn plugin_read_reads_remote_plugin_details_when_remote_plugin_enabled() ->
     assert_eq!(response.plugin.skills[0].path, None);
     assert_eq!(response.plugin.skills[0].enabled, false);
     assert_eq!(response.plugin.apps.len(), 0);
+    assert_eq!(
+        response.plugin.app_templates,
+        vec![
+            AppTemplateSummary {
+                template_id: "templated_apps_GitHubEnterprise".to_string(),
+                name: "GitHub Enterprise".to_string(),
+                description: Some("Connect GitHub Enterprise".to_string()),
+                canonical_connector_id: Some("github_enterprise".to_string()),
+                logo_url: Some("https://example.com/ghe-light.png".to_string()),
+                logo_url_dark: Some("https://example.com/ghe-dark.png".to_string()),
+                materialized_app_ids: vec!["asdk_app_ghe".to_string()],
+                reason: None,
+            },
+            AppTemplateSummary {
+                template_id: "templated_apps_Databricks".to_string(),
+                name: "Databricks".to_string(),
+                description: None,
+                canonical_connector_id: None,
+                logo_url: None,
+                logo_url_dark: None,
+                materialized_app_ids: Vec::new(),
+                reason: Some(AppTemplateUnavailableReason::NotConfiguredForWorkspace),
+            },
+        ]
+    );
     Ok(())
 }
 
