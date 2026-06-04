@@ -117,7 +117,7 @@ fn catalog_entry_from_skill(skill: &SkillMetadata, enabled: bool) -> SkillCatalo
         SkillAuthority::new(SkillSourceKind::Host, HOST_AUTHORITY_ID),
         skill.name.clone(),
         skill.description.clone(),
-        SkillResourceId(skill_path.clone()),
+        SkillResourceId(skill_path),
     )
     .with_short_description(skill.short_description.clone())
     .with_display_path(display_path)
