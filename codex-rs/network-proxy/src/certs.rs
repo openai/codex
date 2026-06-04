@@ -580,7 +580,8 @@ fn windows_file_identity(file: &File) -> Result<(u32, u64)> {
     use windows_sys::Win32::Storage::FileSystem::BY_HANDLE_FILE_INFORMATION;
     use windows_sys::Win32::Storage::FileSystem::GetFileInformationByHandle;
 
-    let mut file_information = BY_HANDLE_FILE_INFORMATION::default();
+    // SAFETY: Win32 fills this plain-old-data output struct before we read it.
+    let mut file_information = unsafe { std::mem::zeroed::<BY_HANDLE_FILE_INFORMATION>() };
     // SAFETY: `file` owns a live OS handle and `file_information` is writable.
     let result =
         unsafe { GetFileInformationByHandle(file.as_raw_handle() as _, &mut file_information) };
