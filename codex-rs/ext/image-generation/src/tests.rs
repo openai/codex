@@ -7,26 +7,28 @@ use codex_core::context::extension_image_generation_output_hint;
 use codex_extension_api::ToolOutput;
 use codex_extension_api::ToolPayload;
 use codex_extension_api::ToolSpec;
-use codex_protocol::models::ContentItem;
 use codex_protocol::models::DEFAULT_IMAGE_DETAIL;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
-use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
-use codex_protocol::models::ResponseItem;
 use codex_tools::ResponsesApiNamespaceTool;
 use pretty_assertions::assert_eq;
 
 use super::GeneratedImageOutput;
 use super::ImageRequest;
-use super::ImagegenAction;
 use super::ImagegenArgs;
 use super::imagegen_tool_spec;
-use super::request_for_action;
+use super::request_for_args;
 use crate::IMAGE_GEN_NAMESPACE;
 use crate::IMAGEGEN_TOOL_NAME;
 
 const RESULT: &str = "cG5n";
+const TINY_PNG_DATA_URL: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGNgAAIAAAUAAXpeqz8AAAAASUVORK5CYII=";
+const TINY_PNG_BYTES: &[u8] = &[
+    137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 6, 0,
+    0, 0, 31, 21, 196, 137, 0, 0, 0, 11, 73, 68, 65, 84, 120, 156, 99, 96, 0, 2, 0, 0, 5, 0, 1,
+    122, 94, 171, 63, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
+];
 
 #[test]
 fn uses_reserved_image_gen_namespace() {
@@ -39,12 +41,47 @@ fn uses_reserved_image_gen_namespace() {
 }
 
 #[test]
-fn generate_uses_fixed_request_defaults() {
-    assert_eq!(
-        request_for_action(&args(ImagegenAction::Generate, "paint a moonlit lake"), &[])
+fn omitted_or_empty_references_generate_with_fixed_defaults() {
+    for referenced_image_paths in [None, Some(Vec::new())] {
+        assert_eq!(
+            request_for_args(&ImagegenArgs {
+                prompt: "paint a moonlit lake".to_string(),
+                referenced_image_paths,
+            })
             .expect("generation request should build"),
-        ImageRequest::Generate(ImageGenerationRequest {
-            prompt: "paint a moonlit lake".to_string(),
+            ImageRequest::Generate(ImageGenerationRequest {
+                prompt: "paint a moonlit lake".to_string(),
+                background: Some(ImageBackground::Auto),
+                model: "gpt-image-2".to_string(),
+                n: None,
+                quality: Some(ImageQuality::Auto),
+                size: Some("auto".to_string()),
+            })
+        );
+    }
+}
+
+#[test]
+fn referenced_paths_build_edit_request() {
+    let path = std::env::temp_dir().join(format!(
+        "codex-imagegen-reference-test-{}.png",
+        std::process::id()
+    ));
+    std::fs::write(&path, TINY_PNG_BYTES).expect("test image should be written");
+
+    let request = request_for_args(&ImagegenArgs {
+        prompt: "change the lighting".to_string(),
+        referenced_image_paths: Some(vec![path.display().to_string()]),
+    });
+    std::fs::remove_file(path).expect("test image should be removed");
+
+    assert_eq!(
+        request.expect("edit request should build"),
+        ImageRequest::Edit(ImageEditRequest {
+            images: vec![ImageUrl {
+                image_url: TINY_PNG_DATA_URL.to_string(),
+            }],
+            prompt: "change the lighting".to_string(),
             background: Some(ImageBackground::Auto),
             model: "gpt-image-2".to_string(),
             n: None,
@@ -52,6 +89,24 @@ fn generate_uses_fixed_request_defaults() {
             size: Some("auto".to_string()),
         })
     );
+}
+
+#[test]
+fn unreadable_referenced_path_returns_tool_error() {
+    let path = std::env::temp_dir().join(format!(
+        "codex-imagegen-missing-test-{}.png",
+        std::process::id()
+    ));
+    let error = request_for_args(&ImagegenArgs {
+        prompt: "change the lighting".to_string(),
+        referenced_image_paths: Some(vec![path.display().to_string()]),
+    })
+    .expect_err("missing reference should fail");
+
+    assert!(error.to_string().starts_with(&format!(
+        "unable to read referenced image at `{}`:",
+        path.display()
+    )));
 }
 
 #[test]
@@ -126,233 +181,6 @@ fn generated_output_omits_oversized_output_hint() {
             detail: Some(DEFAULT_IMAGE_DETAIL),
         }]
     );
-}
-
-#[test]
-fn edit_matches_context_selector_for_generated_images_after_latest_user_anchor() {
-    let history = vec![
-        generated_item("g1"),
-        generated_item("g2"),
-        generated_item("g3"),
-        ResponseItem::Message {
-            id: None,
-            role: "user".to_string(),
-            content: vec![
-                ContentItem::InputImage {
-                    image_url: "data:image/png;base64,u1".to_string(),
-                    detail: None,
-                },
-                ContentItem::InputImage {
-                    image_url: "data:image/png;base64,u2".to_string(),
-                    detail: None,
-                },
-            ],
-            phase: None,
-        },
-        generated_item("g4"),
-        generated_item("g5"),
-        generated_item("g6"),
-        generated_item("g7"),
-    ];
-
-    assert_eq!(
-        edit_request("change the lighting", &history),
-        expected_edit_request(
-            "change the lighting",
-            &[
-                "data:image/png;base64,u1",
-                "data:image/png;base64,u2",
-                "data:image/png;base64,g5",
-                "data:image/png;base64,g6",
-                "data:image/png;base64,g7",
-            ]
-        )
-    );
-}
-
-#[test]
-fn edit_preserves_a_generated_image_when_user_anchor_fills_the_limit() {
-    let history = vec![
-        ResponseItem::Message {
-            id: None,
-            role: "user".to_string(),
-            content: ["a", "b", "c", "d", "e"]
-                .into_iter()
-                .map(|image| ContentItem::InputImage {
-                    image_url: format!("data:image/png;base64,{image}"),
-                    detail: None,
-                })
-                .collect(),
-            phase: None,
-        },
-        generated_item("generated"),
-    ];
-
-    assert_eq!(
-        edit_request("edit the last generated image", &history),
-        expected_edit_request(
-            "edit the last generated image",
-            &[
-                "data:image/png;base64,b",
-                "data:image/png;base64,c",
-                "data:image/png;base64,d",
-                "data:image/png;base64,e",
-                "data:image/png;base64,generated",
-            ]
-        )
-    );
-}
-
-#[test]
-fn edit_uses_latest_user_upload_before_a_text_only_follow_up() {
-    let history = vec![
-        ResponseItem::Message {
-            id: None,
-            role: "user".to_string(),
-            content: vec![ContentItem::InputImage {
-                image_url: "data:image/png;base64,user".to_string(),
-                detail: None,
-            }],
-            phase: None,
-        },
-        ResponseItem::Message {
-            id: None,
-            role: "user".to_string(),
-            content: vec![ContentItem::InputText {
-                text: "edit this image".to_string(),
-            }],
-            phase: None,
-        },
-    ];
-
-    assert_eq!(
-        edit_request("change the lighting", &history),
-        expected_edit_request("change the lighting", &["data:image/png;base64,user"])
-    );
-}
-
-#[test]
-fn edit_reuses_images_from_prior_standalone_imagegen_calls() {
-    let history = vec![
-        ResponseItem::FunctionCall {
-            id: None,
-            name: IMAGEGEN_TOOL_NAME.to_string(),
-            namespace: Some(IMAGE_GEN_NAMESPACE.to_string()),
-            arguments: "{}".to_string(),
-            call_id: "imagegen-1".to_string(),
-        },
-        generated_function_output("imagegen-1", "standalone"),
-    ];
-
-    assert_eq!(
-        edit_request("change the lighting", &history),
-        expected_edit_request("change the lighting", &["data:image/png;base64,standalone"])
-    );
-}
-
-#[test]
-fn edit_keeps_newest_standalone_generated_images_when_over_limit() {
-    let history = (1..=6)
-        .flat_map(|index| {
-            let call_id = format!("imagegen-{index}");
-            vec![
-                ResponseItem::FunctionCall {
-                    id: None,
-                    name: IMAGEGEN_TOOL_NAME.to_string(),
-                    namespace: Some(IMAGE_GEN_NAMESPACE.to_string()),
-                    arguments: "{}".to_string(),
-                    call_id: call_id.clone(),
-                },
-                generated_function_output(&call_id, &index.to_string()),
-            ]
-        })
-        .collect::<Vec<_>>();
-
-    assert_eq!(
-        edit_request("change the lighting", &history),
-        expected_edit_request(
-            "change the lighting",
-            &[
-                "data:image/png;base64,2",
-                "data:image/png;base64,3",
-                "data:image/png;base64,4",
-                "data:image/png;base64,5",
-                "data:image/png;base64,6",
-            ]
-        )
-    );
-}
-
-#[test]
-fn edit_without_image_history_returns_tool_error() {
-    let error = request_for_action(&args(ImagegenAction::Edit, "change the lighting"), &[])
-        .expect_err("edit should require image context");
-
-    assert_eq!(
-        error.to_string(),
-        "image edit requested without any usable image in conversation history"
-    );
-}
-
-fn args(action: ImagegenAction, prompt: &str) -> ImagegenArgs {
-    ImagegenArgs {
-        prompt: prompt.to_string(),
-        action,
-    }
-}
-
-fn edit_request(prompt: &str, history: &[ResponseItem]) -> ImageEditRequest {
-    let ImageRequest::Edit(request) =
-        request_for_action(&args(ImagegenAction::Edit, prompt), history)
-            .expect("edit request should build")
-    else {
-        panic!("expected edit request");
-    };
-    request
-}
-
-fn expected_edit_request(prompt: &str, images: &[&str]) -> ImageEditRequest {
-    ImageEditRequest {
-        images: images
-            .iter()
-            .map(|image_url| ImageUrl {
-                image_url: (*image_url).to_string(),
-            })
-            .collect(),
-        prompt: prompt.to_string(),
-        background: Some(ImageBackground::Auto),
-        model: "gpt-image-2".to_string(),
-        n: None,
-        quality: Some(ImageQuality::Auto),
-        size: Some("auto".to_string()),
-    }
-}
-
-fn generated_item(result: &str) -> ResponseItem {
-    ResponseItem::ImageGenerationCall {
-        id: format!("id-{result}"),
-        status: "completed".to_string(),
-        revised_prompt: None,
-        result: result.to_string(),
-    }
-}
-
-fn generated_function_output(call_id: &str, result: &str) -> ResponseItem {
-    ResponseItem::FunctionCallOutput {
-        call_id: call_id.to_string(),
-        output: FunctionCallOutputPayload {
-            body: FunctionCallOutputBody::ContentItems(vec![
-                FunctionCallOutputContentItem::InputImage {
-                    image_url: format!("data:image/png;base64,{result}"),
-                    detail: Some(DEFAULT_IMAGE_DETAIL),
-                },
-                FunctionCallOutputContentItem::InputText {
-                    text: "generated image save hint".to_string(),
-                },
-            ]),
-            success: Some(true),
-        },
-    }
 }
 
 fn function_payload() -> ToolPayload {

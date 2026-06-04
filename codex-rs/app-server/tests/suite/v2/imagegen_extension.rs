@@ -29,6 +29,11 @@ use wiremock::matchers::method;
 use wiremock::matchers::path;
 
 const RESULT: &str = "cG5n";
+const TINY_PNG_BYTES: &[u8] = &[
+    137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 6, 0,
+    0, 0, 31, 21, 196, 137, 0, 0, 0, 11, 73, 68, 65, 84, 120, 156, 99, 96, 0, 2, 0, 0, 5, 0, 1,
+    122, 94, 171, 63, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
+];
 
 #[derive(Clone, Copy)]
 enum ImagegenTestMode {
@@ -59,7 +64,6 @@ async fn standalone_image_generation_returns_saved_path_hint_to_model() -> Resul
                     "image_gen",
                     "imagegen",
                     &json!({
-                        "action": "generate",
                         "prompt": "paint a blue whale",
                     })
                     .to_string(),
@@ -143,6 +147,82 @@ async fn standalone_image_generation_returns_saved_path_hint_to_model() -> Resul
 }
 
 #[tokio::test]
+async fn standalone_image_edit_uses_attached_model_visible_image() -> Result<()> {
+    let call_id = "image-edit-1";
+    let server = responses::start_mock_server().await;
+    mount_image_edit_response(&server).await;
+
+    let codex_home = TempDir::new()?;
+    let image_path = codex_home.path().join("attached.png");
+    std::fs::write(&image_path, TINY_PNG_BYTES)?;
+    let response_mock = responses::mount_sse_sequence(
+        &server,
+        vec![
+            responses::sse(vec![
+                responses::ev_response_created("resp-1"),
+                responses::ev_function_call_with_namespace(
+                    call_id,
+                    "image_gen",
+                    "imagegen",
+                    &json!({
+                        "prompt": "add a red hat",
+                        "referenced_image_paths": [image_path.display().to_string()],
+                    })
+                    .to_string(),
+                ),
+                responses::ev_completed("resp-1"),
+            ]),
+            responses::sse(vec![
+                responses::ev_assistant_message("msg-1", "Done"),
+                responses::ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    create_config_toml(codex_home.path(), &server.uri(), ImagegenTestMode::Direct)?;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("access-chatgpt"),
+        AuthCredentialsStoreMode::File,
+    )?;
+
+    let mut mcp =
+        TestAppServer::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+    start_image_edit_turn(&mut mcp, image_path).await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        wait_for_image_generation_completed(&mut mcp),
+    )
+    .await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    assert_eq!(response_mock.requests().len(), 2);
+    let requests = server
+        .received_requests()
+        .await
+        .context("failed to fetch received requests")?;
+    let edit_request = requests
+        .iter()
+        .find(|request| request.url.path() == "/api/codex/images/edits")
+        .context("image edit request should be sent")?
+        .body_json::<serde_json::Value>()?;
+    assert_eq!(edit_request["prompt"], "add a red hat");
+    assert!(
+        edit_request["images"][0]["image_url"]
+            .as_str()
+            .is_some_and(|image_url| image_url.starts_with("data:image/png;base64,"))
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn standalone_image_generation_is_exposed_in_code_mode_only() -> Result<()> {
     let server = responses::start_mock_server().await;
     let response_mock = responses::mount_sse_once(
@@ -202,7 +282,6 @@ async fn standalone_image_generation_is_callable_from_code_mode_only() -> Result
                     "exec",
                     r#"
 const result = await tools.image_gen__imagegen({
-  action: "generate",
   prompt: "paint a blue whale",
 });
 generatedImage(result);
@@ -263,6 +342,37 @@ generatedImage(result);
 }
 
 async fn start_image_generation_turn(mcp: &mut TestAppServer) -> Result<()> {
+    start_turn(
+        mcp,
+        vec![V2UserInput::Text {
+            text: "Generate an image".to_string(),
+            text_elements: Vec::new(),
+        }],
+    )
+    .await
+}
+
+async fn start_image_edit_turn(
+    mcp: &mut TestAppServer,
+    image_path: std::path::PathBuf,
+) -> Result<()> {
+    start_turn(
+        mcp,
+        vec![
+            V2UserInput::Text {
+                text: "Edit the attached image".to_string(),
+                text_elements: Vec::new(),
+            },
+            V2UserInput::LocalImage {
+                path: image_path,
+                detail: None,
+            },
+        ],
+    )
+    .await
+}
+
+async fn start_turn(mcp: &mut TestAppServer, input: Vec<V2UserInput>) -> Result<()> {
     let thread_req = mcp
         .send_thread_start_request(ThreadStartParams::default())
         .await?;
@@ -277,10 +387,7 @@ async fn start_image_generation_turn(mcp: &mut TestAppServer) -> Result<()> {
         .send_turn_start_request(TurnStartParams {
             thread_id: thread.id,
             client_user_message_id: None,
-            input: vec![V2UserInput::Text {
-                text: "Generate an image".to_string(),
-                text_elements: Vec::new(),
-            }],
+            input,
             ..Default::default()
         })
         .await?;
@@ -315,6 +422,18 @@ async fn wait_for_image_generation_completed(
 async fn mount_image_response(server: &MockServer) {
     Mock::given(method("POST"))
         .and(path("/api/codex/images/generations"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "created": 1,
+            "data": [{"b64_json": RESULT}],
+        })))
+        .expect(1)
+        .mount(server)
+        .await;
+}
+
+async fn mount_image_edit_response(server: &MockServer) {
+    Mock::given(method("POST"))
+        .and(path("/api/codex/images/edits"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "created": 1,
             "data": [{"b64_json": RESULT}],
