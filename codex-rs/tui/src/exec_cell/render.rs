@@ -65,8 +65,14 @@ pub(crate) fn new_active_exec_command(
 }
 
 fn format_unified_exec_interaction(command: &[String], input: Option<&str>) -> String {
+    // Strip the shell wrapper (canonical 3-element shape, or flattened argv)
+    // so the "Waited for `…`" line shows the inner script, not `zsh -lc …`.
     let command_display = if let Some((_, script)) = extract_bash_command(command) {
         script.to_string()
+    } else if let Some((_, script)) =
+        codex_shell_command::bash::extract_bash_command_joined(command)
+    {
+        script
     } else {
         command.join(" ")
     };
@@ -721,6 +727,21 @@ mod tests {
             .iter()
             .map(|span| span.content.as_ref())
             .collect::<String>()
+    }
+
+    #[test]
+    fn flattened_shell_wrapper_unified_exec_display_snapshot() {
+        let command = [
+            "/bin/zsh".to_string(),
+            "-lc".to_string(),
+            "touch".to_string(),
+            "/tmp/foo".to_string(),
+        ];
+
+        insta::assert_snapshot!(
+            format_unified_exec_interaction(&command, /*input*/ None),
+            @"Waited for `touch /tmp/foo`"
+        );
     }
 
     #[test]

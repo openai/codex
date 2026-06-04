@@ -98,20 +98,59 @@ pub fn extract_bash_command(command: &[String]) -> Option<(&str, &str)> {
     let [shell, flag, script] = command else {
         return None;
     };
-    if !matches!(flag.as_str(), "-lc" | "-c")
-        || !matches!(
-            detect_shell_type(PathBuf::from(shell)),
-            Some(ShellType::Zsh) | Some(ShellType::Bash) | Some(ShellType::Sh)
-        )
-    {
+    if !is_recognised_bash_lc_invocation(shell, flag) {
         return None;
     }
     Some((shell, script))
 }
 
+/// Single source of truth for "is `<shell> <flag>` a recognised bash-lc
+/// invocation we want to strip the wrapper from?".
+///
+/// Shared by `extract_bash_command` and `extract_bash_command_joined` so the
+/// acceptance rules (which flags, which shells) live in exactly one place.
+fn is_recognised_bash_lc_invocation(shell: &str, flag: &str) -> bool {
+    matches!(flag, "-lc" | "-c")
+        && matches!(
+            detect_shell_type(&PathBuf::from(shell)),
+            Some(ShellType::Zsh) | Some(ShellType::Bash) | Some(ShellType::Sh)
+        )
+}
+
+/// Like `extract_bash_command`, but also recognises argv where the inner
+/// script was flattened past `[shell, flag, script]` (e.g. the protocol
+/// payload re-split an unquoted form into `[shell, flag, word, word, ...]`).
+/// Returns an owned script, shlex-joined across the tail.
+///
+/// Caveat: this assumes every token after the flag is script text, so it is
+/// deliberately wrong for POSIX `sh -c <script> <arg0> <arg1>` where the tail
+/// is `$0`/`$1`/… — `["bash","-c","echo $0","foo"]` yields `"echo $0 foo"`.
+/// That mis-rendering is fine for display-only consumers (exec history,
+/// unified-exec, tab status detail). Canonical-identity/approval matching in
+/// `core/src/command_canonicalization.rs` stays strict; do not reuse here.
+pub fn extract_bash_command_joined(command: &[String]) -> Option<(String, String)> {
+    if let Some((shell, script)) = extract_bash_command(command) {
+        return Some((shell.to_string(), script.to_string()));
+    }
+    let [shell, flag, rest @ ..] = command else {
+        return None;
+    };
+    // `rest.len() < 2` rejects both the 3-element case (handled above) and
+    // the impossible <3-element case at once.
+    if rest.len() < 2 || !is_recognised_bash_lc_invocation(shell, flag) {
+        return None;
+    }
+    Some((shell.clone(), crate::parse_command::shlex_join(rest)))
+}
+
 /// Returns the sequence of plain commands within a `bash -lc "..."` or
 /// `zsh -lc "..."` invocation when the script only contains word-only commands
 /// joined by safe operators.
+///
+/// Uses the strict `extract_bash_command`, so flattened argv returns None
+/// rather than being rich-parsed: disambiguating "tail is script" from "tail
+/// is POSIX `$0`/`$1`" isn't safe here. Such argv instead lands in
+/// `single_unknown_for_command`'s joined fallback as `Unknown { cmd }`.
 pub fn parse_shell_lc_plain_commands(command: &[String]) -> Option<Vec<Vec<String>>> {
     let (_, script) = extract_bash_command(command)?;
 
@@ -324,6 +363,121 @@ mod tests {
     fn parse_seq(src: &str) -> Option<Vec<Vec<String>>> {
         let tree = try_parse_shell(src)?;
         try_parse_word_only_commands_sequence(&tree, src)
+    }
+
+    #[test]
+    fn extract_bash_command_joined_accepts_flattened_argv() {
+        // Unquoted `zsh -lc touch /tmp/foo` shlex-splits to 4 tokens, which
+        // strict extract_bash_command rejects; the joined variant stitches it.
+        let (shell, script) = extract_bash_command_joined(&[
+            "zsh".to_string(),
+            "-lc".to_string(),
+            "touch".to_string(),
+            "/tmp/foo".to_string(),
+        ])
+        .expect("known shell + -lc + tail should match");
+        assert_eq!(shell, "zsh");
+        assert_eq!(script, "touch /tmp/foo");
+    }
+
+    #[test]
+    fn extract_bash_command_joined_accepts_absolute_shell_path() {
+        let (shell, script) = extract_bash_command_joined(&[
+            "/opt/homebrew/bin/zsh".to_string(),
+            "-lc".to_string(),
+            "touch".to_string(),
+            "/tmp/foo".to_string(),
+        ])
+        .expect("absolute path resolving to zsh should match");
+        assert_eq!(shell, "/opt/homebrew/bin/zsh");
+        assert_eq!(script, "touch /tmp/foo");
+    }
+
+    #[test]
+    fn extract_bash_command_joined_handles_three_element_canonical_shape() {
+        let (_, script) = extract_bash_command_joined(&[
+            "bash".to_string(),
+            "-c".to_string(),
+            "echo hello".to_string(),
+        ])
+        .expect("canonical 3-element form should also match");
+        // Single tail element comes back as-is (no re-shlex-join).
+        assert_eq!(script, "echo hello");
+    }
+
+    #[test]
+    fn extract_bash_command_joined_rejects_non_shell_first_arg() {
+        assert!(
+            extract_bash_command_joined(&[
+                "python3".to_string(),
+                "-c".to_string(),
+                "print('hi')".to_string(),
+            ])
+            .is_none(),
+            "python3 -c is not a recognised shell wrapper"
+        );
+    }
+
+    #[test]
+    fn extract_bash_command_joined_rejects_unknown_flag() {
+        assert!(
+            extract_bash_command_joined(&[
+                "bash".to_string(),
+                "-x".to_string(),
+                "echo hi".to_string(),
+            ])
+            .is_none(),
+            "only -lc and -c are recognised"
+        );
+    }
+
+    #[test]
+    fn extract_bash_command_joined_rejects_empty_tail() {
+        assert!(
+            extract_bash_command_joined(&["bash".to_string(), "-lc".to_string()]).is_none(),
+            "no script tail means nothing to extract"
+        );
+    }
+
+    #[test]
+    fn extract_bash_command_joined_acceptance_tracks_strict_matcher() {
+        // The 3-element and 4+-element arms now share
+        // `is_recognised_bash_lc_invocation`; assert they agree across a
+        // matrix of (shell, flag) pairs so the two can't silently diverge.
+        let cases: &[(&str, &str)] = &[
+            // Accepted.
+            ("bash", "-lc"),
+            ("bash", "-c"),
+            ("zsh", "-lc"),
+            ("zsh", "-c"),
+            ("sh", "-lc"),
+            ("/bin/bash", "-lc"),
+            ("/opt/homebrew/bin/zsh", "-lc"),
+            // Rejected.
+            ("bash", "-x"),
+            ("bash", "-ic"),
+            ("bash", "-l"),
+            ("python3", "-c"),
+            ("fish", "-lc"),
+            ("pwsh", "-c"),
+        ];
+        for &(shell, flag) in cases {
+            let three: Vec<String> = vec![shell.into(), flag.into(), "echo hi".into()];
+            let four: Vec<String> = vec![shell.into(), flag.into(), "echo".into(), "hi".into()];
+
+            let strict_three = extract_bash_command(&three).is_some();
+            let joined_three = extract_bash_command_joined(&three).is_some();
+            let joined_four = extract_bash_command_joined(&four).is_some();
+
+            assert_eq!(
+                strict_three, joined_three,
+                "3-element delegation must agree with strict for ({shell:?}, {flag:?})",
+            );
+            assert_eq!(
+                strict_three, joined_four,
+                "4+-element relaxation must accept iff strict accepts for ({shell:?}, {flag:?})",
+            );
+        }
     }
 
     #[test]

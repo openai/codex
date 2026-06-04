@@ -13,6 +13,11 @@ pub(crate) fn strip_bash_lc_and_escape(command: &[String]) -> String {
     if let Some((_, script)) = extract_shell_command(command) {
         return script.to_string();
     }
+    // Relaxed fallback for flattened argv, so every display-only wrapper-strip
+    // path agrees. Approval matching in command_canonicalization stays strict.
+    if let Some((_, script)) = codex_shell_command::bash::extract_bash_command_joined(command) {
+        return script;
+    }
     escape_command(command)
 }
 
@@ -82,6 +87,16 @@ mod tests {
         let args = vec!["/bin/bash".into(), "-lc".into(), "echo hello".into()];
         let cmdline = strip_bash_lc_and_escape(&args);
         assert_eq!(cmdline, "echo hello");
+
+        // Test a wrapper whose inner command was flattened across argv.
+        let args = vec![
+            "/bin/zsh".into(),
+            "-lc".into(),
+            "python3".into(),
+            "build.py".into(),
+        ];
+        let cmdline = strip_bash_lc_and_escape(&args);
+        assert_eq!(cmdline, "python3 build.py");
     }
 
     #[test]
