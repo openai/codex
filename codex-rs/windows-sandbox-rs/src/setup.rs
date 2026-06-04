@@ -12,8 +12,10 @@ use std::process::Stdio;
 
 use crate::allow::AllowDenyPaths;
 use crate::allow::compute_allow_paths_for_permissions;
+use crate::helper_materialization::HelperExecutable;
 use crate::helper_materialization::bundled_executable_path_for_exe;
 use crate::helper_materialization::helper_bin_dir;
+use crate::helper_materialization::resolve_helper_for_launch;
 use crate::identity::sandbox_setup_is_complete;
 use crate::logging::log_note;
 use crate::path_normalization::canonical_path_key;
@@ -209,8 +211,14 @@ fn run_setup_refresh_inner(
     };
     let json = serde_json::to_vec(&payload)?;
     let b64 = BASE64_STANDARD.encode(json);
-    let exe = find_setup_exe();
-    // Refresh should never request elevation; ensure verb isn't set and we don't trigger UAC.
+    let log_dir = sandbox_dir(request.codex_home);
+    let exe = resolve_helper_for_launch(
+        HelperExecutable::SetupHelper,
+        request.codex_home,
+        Some(&log_dir),
+    );
+    // Refresh should never request elevation, so prefer a copied helper path
+    // instead of launching the packaged setup executable directly.
     let mut cmd = Command::new(&exe);
     cmd.arg(&b64).stdout(Stdio::null()).stderr(Stdio::null());
     let cwd = std::env::current_dir().unwrap_or_else(|_| request.codex_home.to_path_buf());
@@ -221,14 +229,14 @@ fn run_setup_refresh_inner(
             cwd.display(),
             b64.len()
         ),
-        Some(&sandbox_dir(request.codex_home)),
+        Some(&log_dir),
     );
     let status = cmd
         .status()
         .map_err(|e| {
             log_note(
                 &format!("setup refresh: failed to spawn {}: {e}", exe.display()),
-                Some(&sandbox_dir(request.codex_home)),
+                Some(&log_dir),
             );
             e
         })
@@ -236,7 +244,7 @@ fn run_setup_refresh_inner(
     if !status.success() {
         log_note(
             &format!("setup refresh: exited with status {status:?}"),
-            Some(&sandbox_dir(request.codex_home)),
+            Some(&log_dir),
         );
         return Err(anyhow!("setup refresh failed with status {status}"));
     }
