@@ -22,6 +22,8 @@ REMOTE_EXECUTION_CONFIGS = {
     "--config=ci-v8",
     "--config=ci-windows-cross",
 }
+# Honor either explicit setting so the wrapper never overrides the caller's
+# choice when it supplies the CI default below.
 REMOTE_REPO_CONTENTS_CACHE_STARTUP_OPTIONS = {
     "--experimental_remote_repo_contents_cache",
     "--noexperimental_remote_repo_contents_cache",
