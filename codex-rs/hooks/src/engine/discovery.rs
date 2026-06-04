@@ -117,7 +117,7 @@ pub(crate) fn discover_handlers(
                 Some(config_folder) if visited_json_hook_folders.insert(config_folder.clone()) => {
                     load_hooks_json(Some(config_folder.as_path()), &mut warnings)
                 }
-                Some(_) | None => None,
+                _ => None,
             };
             let toml_hooks = load_toml_hooks_from_layer(layer, &mut warnings);
 
