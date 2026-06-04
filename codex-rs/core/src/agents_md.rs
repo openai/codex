@@ -206,12 +206,7 @@ impl<'a> AgentsMdManager<'a> {
             return Ok(Vec::new());
         }
 
-        let mut dir = self.config.cwd.clone();
-        // Preserve the existing symlink-aware discovery behavior, but resolve
-        // the path through the selected environment rather than the host.
-        if let Ok(canon) = fs.canonicalize(&dir, /*sandbox*/ None).await {
-            dir = canon;
-        }
+        let dir = self.config.cwd.clone();
 
         let mut merged = TomlValue::Table(toml::map::Map::new());
         for layer in self.config.config_layer_stack.get_layers(
