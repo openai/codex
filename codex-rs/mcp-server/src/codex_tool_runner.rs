@@ -9,6 +9,7 @@ use crate::exec_approval::handle_exec_approval_request;
 use crate::outgoing_message::OutgoingMessageSender;
 use crate::outgoing_message::OutgoingNotificationMeta;
 use crate::patch_approval::handle_patch_approval_request;
+use codex_core::AgentsMdManager;
 use codex_core::CodexThread;
 use codex_core::NewThread;
 use codex_core::ThreadManager;
@@ -57,16 +58,26 @@ pub(crate) fn create_call_tool_result_with_thread_id(
 pub async fn run_codex_tool_session(
     id: RequestId,
     initial_prompt: String,
-    config: CodexConfig,
+    mut config: CodexConfig,
     outgoing: Arc<OutgoingMessageSender>,
     thread_manager: Arc<ThreadManager>,
     running_requests_id_to_codex_uuid: Arc<Mutex<HashMap<RequestId, ThreadId>>>,
 ) {
+    let mut warnings = Vec::new();
+    config.user_instructions = match thread_manager.environment_manager().default_environment() {
+        Some(environment) => {
+            AgentsMdManager::new(&config)
+                .load_user_instructions(environment.as_ref(), &mut warnings)
+                .await
+        }
+        None => None,
+    };
+    config.startup_warnings.extend(warnings);
     let NewThread {
         thread_id,
         thread,
         session_configured,
-    } = match thread_manager.start_thread(config.clone()).await {
+    } = match thread_manager.start_thread(config).await {
         Ok(res) => res,
         Err(e) => {
             let result = CallToolResult::error(vec![Content::text(format!(

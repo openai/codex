@@ -1846,12 +1846,31 @@ async fn run_debug_prompt_input_command(
         additional_writable_roots: shared.add_dir,
         ..Default::default()
     };
-    let config = ConfigBuilder::default()
+    let mut config = ConfigBuilder::default()
         .cli_overrides(cli_kv_overrides)
         .harness_overrides(overrides)
         .loader_overrides(loader_overrides)
         .build()
         .await?;
+    let runtime_paths = codex_exec_server::ExecServerRuntimePaths::from_optional_paths(
+        config.codex_self_exe.clone(),
+        config.codex_linux_sandbox_exe.clone(),
+    )?;
+    let environment_manager = codex_exec_server::EnvironmentManager::from_codex_home(
+        config.codex_home.clone(),
+        Some(runtime_paths),
+    )
+    .await?;
+    let mut warnings = Vec::new();
+    config.user_instructions = match environment_manager.default_environment() {
+        Some(environment) => {
+            codex_core::AgentsMdManager::new(&config)
+                .load_user_instructions(environment.as_ref(), &mut warnings)
+                .await
+        }
+        None => None,
+    };
+    config.startup_warnings.extend(warnings);
 
     let mut input = shared
         .images

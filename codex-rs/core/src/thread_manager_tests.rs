@@ -294,6 +294,35 @@ async fn shutdown_all_threads_bounded_submits_shutdown_to_every_thread() {
 }
 
 #[tokio::test]
+async fn start_thread_does_not_load_user_instructions_from_filesystem() {
+    let temp_dir = tempdir().expect("tempdir");
+    let mut config = test_config().await;
+    config.codex_home = temp_dir.path().join("codex-home").abs();
+    config.cwd = temp_dir.path().join("workspace").abs();
+    config.user_instructions = None;
+    std::fs::create_dir_all(&config.codex_home).expect("create codex home");
+    std::fs::create_dir_all(&config.cwd).expect("create workspace");
+    // This file should be ignored because its contents were not preloaded into
+    // the config passed to the thread manager.
+    std::fs::write(config.cwd.join("AGENTS.md"), "workspace instructions")
+        .expect("write AGENTS.md");
+
+    let manager = ThreadManager::with_models_provider_and_home_for_tests(
+        CodexAuth::from_api_key("dummy"),
+        config.model_provider.clone(),
+        config.codex_home.to_path_buf(),
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+    );
+
+    let thread = manager
+        .start_thread(config)
+        .await
+        .expect("thread should start");
+
+    assert_eq!(thread.thread.instruction_sources().await, Vec::new());
+}
+
+#[tokio::test]
 async fn start_thread_rejects_explicit_local_environment_when_default_provider_is_disabled() {
     let temp_dir = tempdir().expect("tempdir");
     let mut config = test_config().await;

@@ -552,6 +552,7 @@ impl ThreadManager {
         Ok(subtree_thread_ids)
     }
 
+    /// Starts a thread using the provided config.
     pub async fn start_thread(&self, config: Config) -> CodexResult<NewThread> {
         // Box delegated thread-spawn futures so these convenience wrappers do
         // not inline the full spawn path into every caller's async state.

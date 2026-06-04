@@ -13,6 +13,7 @@ use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
 use codex_config::CloudConfigBundleLoader;
+use codex_core::AgentsMdManager;
 use codex_core::CodexThread;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
@@ -457,13 +458,18 @@ impl TestCodexBuilder {
 
     async fn build_from_config(
         &mut self,
-        config: Config,
+        mut config: Config,
         cwd: Arc<TempDir>,
         home: Arc<TempDir>,
         resume_from: Option<PathBuf>,
         test_env: TestEnv,
         environment_manager: Arc<codex_exec_server::EnvironmentManager>,
     ) -> anyhow::Result<TestCodex> {
+        let mut warnings = Vec::new();
+        config.user_instructions = AgentsMdManager::new(&config)
+            .load_user_instructions(test_env.environment(), &mut warnings)
+            .await;
+        config.startup_warnings.extend(warnings);
         let auth = self.auth.clone();
         let state_db = codex_core::init_state_db(&config).await;
         let thread_store = thread_store_from_config(&config, state_db.clone());

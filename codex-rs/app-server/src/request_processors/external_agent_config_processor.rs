@@ -42,6 +42,7 @@ use std::path::PathBuf;
 use tokio::sync::Semaphore;
 
 use super::ConfigRequestProcessor;
+use super::load_thread_user_instructions;
 
 #[derive(Clone)]
 pub(crate) struct ExternalAgentConfigRequestProcessor {
@@ -283,7 +284,7 @@ impl ExternalAgentConfigRequestProcessor {
             title,
             rollout_items,
         } = session;
-        let config = self
+        let mut config = self
             .config_manager
             .load_with_overrides(
                 /*request_overrides*/ None,
@@ -301,6 +302,9 @@ impl ExternalAgentConfigRequestProcessor {
         let environments = self
             .thread_manager
             .default_environment_selections(&config.cwd);
+        load_thread_user_instructions(self.thread_manager.as_ref(), &mut config, &environments)
+            .await
+            .map_err(|err| internal_error(format!("failed to load user instructions: {err}")))?;
         let imported_thread = self
             .thread_manager
             .start_thread_with_options(StartThreadOptions {

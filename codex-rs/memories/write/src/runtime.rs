@@ -1,3 +1,4 @@
+use codex_core::AgentsMdManager;
 use codex_core::CodexThread;
 use codex_core::ModelClient;
 use codex_core::NewThread;
@@ -230,12 +231,26 @@ impl MemoryStartupContext {
 
     pub(crate) async fn spawn_consolidation_agent(
         &self,
-        config: Config,
+        mut config: Config,
         prompt: Vec<UserInput>,
     ) -> anyhow::Result<SpawnedConsolidationAgent> {
         let environments = self
             .thread_manager
             .default_environment_selections(&config.cwd);
+        let mut warnings = Vec::new();
+        config.user_instructions = match environments.first().and_then(|selection| {
+            self.thread_manager
+                .environment_manager()
+                .get_environment(&selection.environment_id)
+        }) {
+            Some(environment) => {
+                AgentsMdManager::new(&config)
+                    .load_user_instructions(environment.as_ref(), &mut warnings)
+                    .await
+            }
+            None => None,
+        };
+        config.startup_warnings.extend(warnings);
         let NewThread {
             thread_id, thread, ..
         } = self

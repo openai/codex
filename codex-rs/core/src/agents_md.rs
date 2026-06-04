@@ -80,9 +80,12 @@ impl<'a> AgentsMdManager<'a> {
         None
     }
 
-    /// Combines configured user instructions and AGENTS.md content into a
-    /// single model-visible instruction string.
-    pub(crate) async fn user_instructions(
+    /// Loads project instructions from `environment` and combines them with
+    /// the configured user instructions.
+    ///
+    /// Callers should invoke this before constructing a thread and provide the
+    /// returned value through [`Config::user_instructions`].
+    pub async fn load_user_instructions(
         &self,
         environment: &Environment,
         startup_warnings: &mut Vec<String>,

@@ -285,7 +285,6 @@ use crate::SkillLoadOutcome;
 #[cfg(test)]
 use crate::SkillMetadata;
 use crate::SkillsManager;
-use crate::agents_md::AgentsMdManager;
 use crate::context::UserInstructions;
 use crate::exec_policy::ExecPolicyUpdateError;
 use crate::guardian::GuardianReviewSessionManager;
@@ -474,7 +473,7 @@ impl Codex {
 
     async fn spawn_internal(args: CodexSpawnArgs) -> CodexResult<CodexSpawnOk> {
         let CodexSpawnArgs {
-            mut config,
+            config,
             installation_id,
             auth_manager,
             models_manager,
@@ -505,16 +504,7 @@ impl Codex {
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
 
-        let primary_environment = environment_selections.primary_environment();
-        let mut user_instruction_warnings = Vec::new();
-        let user_instructions = if let Some(primary_environment) = primary_environment {
-            AgentsMdManager::new(&config)
-                .user_instructions(primary_environment.as_ref(), &mut user_instruction_warnings)
-                .await
-        } else {
-            None
-        };
-        config.startup_warnings.extend(user_instruction_warnings);
+        let user_instructions = config.user_instructions.clone();
 
         let exec_policy = if crate::guardian::is_guardian_reviewer_source(&session_source) {
             // Guardian review should rely on the built-in shell safety checks,

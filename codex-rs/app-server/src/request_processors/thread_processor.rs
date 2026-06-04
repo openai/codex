@@ -1042,6 +1042,13 @@ impl ThreadRequestProcessor {
                 .thread_manager
                 .default_environment_selections(&config.cwd)
         });
+        load_thread_user_instructions(
+            listener_task_context.thread_manager.as_ref(),
+            &mut config,
+            &environments,
+        )
+        .await
+        .map_err(|err| invalid_request(err.to_string()))?;
         let dynamic_tools = dynamic_tools.unwrap_or_default();
         let core_dynamic_tools = if dynamic_tools.is_empty() {
             Vec::new()
@@ -2505,7 +2512,7 @@ impl ThreadRequestProcessor {
         .await;
 
         // Derive a Config using the same logic as new conversation, honoring overrides if provided.
-        let config = match self
+        let mut config = match self
             .config_manager
             .load_for_cwd(request_overrides, typesafe_overrides, history_cwd)
             .await
@@ -2517,6 +2524,12 @@ impl ThreadRequestProcessor {
                 return Ok(());
             }
         };
+        let environments = self
+            .thread_manager
+            .default_environment_selections(&config.cwd);
+        load_thread_user_instructions(self.thread_manager.as_ref(), &mut config, &environments)
+            .await
+            .map_err(|err| invalid_request(err.to_string()))?;
 
         let response_history = thread_history.clone();
 
@@ -3217,11 +3230,17 @@ impl ThreadRequestProcessor {
         );
         typesafe_overrides.ephemeral = ephemeral.then_some(true);
         // Derive a Config using the same logic as new conversation, honoring overrides if provided.
-        let config = self
+        let mut config = self
             .config_manager
             .load_for_cwd(request_overrides, typesafe_overrides, history_cwd)
             .await
             .map_err(|err| config_load_error(&err))?;
+        let environments = self
+            .thread_manager
+            .default_environment_selections(&config.cwd);
+        load_thread_user_instructions(self.thread_manager.as_ref(), &mut config, &environments)
+            .await
+            .map_err(|err| invalid_request(err.to_string()))?;
 
         let fallback_model_provider = config.model_provider_id.clone();
 

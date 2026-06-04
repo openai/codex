@@ -1080,6 +1080,12 @@ impl TurnRequestProcessor {
         if let Some(review_model) = &config.review_model {
             config.model = Some(review_model.clone());
         }
+        let environments = self
+            .thread_manager
+            .default_environment_selections(&config.cwd);
+        load_thread_user_instructions(self.thread_manager.as_ref(), &mut config, &environments)
+            .await
+            .map_err(|err| invalid_request(err.to_string()))?;
 
         let NewThread {
             thread_id,
@@ -1089,7 +1095,7 @@ impl TurnRequestProcessor {
             .thread_manager
             .fork_thread_from_history(
                 ForkSnapshot::Interrupted,
-                config.clone(),
+                config,
                 InitialHistory::Resumed(ResumedHistory {
                     conversation_id: parent_thread_id,
                     history: parent_history.items,

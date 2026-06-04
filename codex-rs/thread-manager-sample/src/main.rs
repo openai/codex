@@ -9,6 +9,7 @@ use anyhow::Context;
 use anyhow::bail;
 use clap::Parser;
 use codex_core_api::AbsolutePathBuf;
+use codex_core_api::AgentsMdManager;
 use codex_core_api::AltScreenMode;
 use codex_core_api::ApprovalsReviewer;
 use codex_core_api::Arg0DispatchPaths;
@@ -105,7 +106,7 @@ async fn run_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
         args.prompt.join(" ")
     };
 
-    let config = new_config(args.model, arg0_paths)?;
+    let mut config = new_config(args.model, arg0_paths)?;
     let state_db = init_state_db(&config).await;
 
     let auth_manager =
@@ -120,6 +121,16 @@ async fn run_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             .await?,
     );
     let installation_id = resolve_installation_id(&config.codex_home).await?;
+    let mut warnings = Vec::new();
+    config.user_instructions = match environment_manager.default_environment() {
+        Some(environment) => {
+            AgentsMdManager::new(&config)
+                .load_user_instructions(environment.as_ref(), &mut warnings)
+                .await
+        }
+        None => None,
+    };
+    config.startup_warnings.extend(warnings);
     let thread_manager = ThreadManager::new(
         &config,
         auth_manager,
