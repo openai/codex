@@ -375,10 +375,15 @@ impl ChatWidget {
             || preset.model.starts_with("gpt-5.1-codex-max")
             || preset.model.starts_with("gpt-5.2");
 
-        let mut choices: Vec<ReasoningEffortConfig> = supported
-            .iter()
-            .map(|option| option.effort.clone())
+        let mut choices: Vec<ReasoningEffortConfig> = ReasoningEffortConfig::known_values()
+            .filter(|effort| supported.iter().any(|option| option.effort == *effort))
             .collect();
+        choices.extend(
+            supported
+                .iter()
+                .filter(|option| option.effort.known_rank().is_none())
+                .map(|option| option.effort.clone()),
+        );
         if choices.is_empty() {
             choices.push(default_effort.clone());
         }
