@@ -18,6 +18,6 @@ expression: "render_picker(params, 78)"
   Global       - Toggle Vim Mode            unbound
   Global         Toggle Raw Output          alt-r
   Chat           Interrupt Turn             esc
-  Chat           Decrease Reasoning Effort  alt-,
+  Chat           Decrease Reasoning Effort  alt-,, shift-down
 
   left/right group · enter edit shortcut · * custom · - unbound · esc close
