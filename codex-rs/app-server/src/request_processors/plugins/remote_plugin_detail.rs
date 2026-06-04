@@ -1,5 +1,4 @@
 use codex_core_plugins::OPENAI_CURATED_MARKETPLACE_NAME;
-use codex_core_plugins::PluginReadRequest;
 use codex_core_plugins::PluginsConfigInput;
 use codex_core_plugins::PluginsManager;
 use codex_core_plugins::remote::REMOTE_GLOBAL_MARKETPLACE_NAME;
@@ -16,12 +15,26 @@ pub(super) async fn local_curated_mcp_server_names(
     }
 
     let remote_plugin_name = &remote_detail.summary.name;
-    let marketplace_path = match plugins_manager.list_marketplaces_for_config(plugins_input, &[]) {
+    let local_plugin = match plugins_manager.list_marketplaces_for_config(plugins_input, &[]) {
         Ok(outcome) => outcome
             .marketplaces
             .into_iter()
             .find(|marketplace| marketplace.name == OPENAI_CURATED_MARKETPLACE_NAME)
-            .map(|marketplace| marketplace.path),
+            .and_then(|marketplace| {
+                marketplace
+                    .plugins
+                    .into_iter()
+                    .find(|plugin| {
+                        plugin.name == *remote_plugin_name
+                            && remote_detail
+                                .release_version
+                                .as_deref()
+                                .is_none_or(|version| {
+                                    plugin.local_version.as_deref() == Some(version)
+                                })
+                    })
+                    .map(|plugin| (marketplace.name, plugin))
+            }),
         Err(err) => {
             warn!(
                 plugin = %remote_plugin_name,
@@ -31,37 +44,22 @@ pub(super) async fn local_curated_mcp_server_names(
             return Vec::new();
         }
     };
-    let Some(marketplace_path) = marketplace_path else {
+    let Some((marketplace_name, plugin)) = local_plugin else {
         return Vec::new();
     };
 
-    let outcome = match plugins_manager
-        .read_plugin_for_config(
-            plugins_input,
-            &PluginReadRequest {
-                plugin_name: remote_plugin_name.clone(),
-                marketplace_path,
-            },
-        )
+    match plugins_manager
+        .read_plugin_detail_for_marketplace_plugin(plugins_input, &marketplace_name, plugin)
         .await
     {
-        Ok(outcome) => outcome,
+        Ok(plugin) => plugin.mcp_server_names,
         Err(err) => {
             warn!(
                 plugin = %remote_plugin_name,
                 error = %err,
                 "failed to hydrate remote plugin MCP server names from local curated plugin"
             );
-            return Vec::new();
+            Vec::new()
         }
-    };
-    if remote_detail
-        .release_version
-        .as_deref()
-        .is_some_and(|version| outcome.plugin.local_version.as_deref() != Some(version))
-    {
-        return Vec::new();
     }
-
-    outcome.plugin.mcp_server_names
 }
