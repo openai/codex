@@ -14,8 +14,6 @@ use crate::ExecServerRuntimePaths;
 use crate::relay::run_multiplexed_environment;
 use crate::server::ConnectionProcessor;
 
-mod noise;
-
 const ERROR_BODY_PREVIEW_BYTES: usize = 4096;
 
 #[derive(Clone)]
@@ -46,11 +44,6 @@ impl EnvironmentRegistryClient {
         })
     }
 
-    /// Register using the original body-less registry contract.
-    ///
-    /// This method intentionally preserves the legacy request shape and timeout
-    /// behavior. Noise support is opt-in and must not silently alter existing
-    /// remote exec-server registrations.
     async fn register_environment(
         &self,
         environment_id: &str,
@@ -94,27 +87,12 @@ struct EnvironmentRegistryRegistrationResponse {
     url: String,
 }
 
-/// Protocol used for an exec-server's registered remote relay.
-///
-/// Legacy is intentionally the default during rollout. Noise must be selected
-/// explicitly so mixed-version deployments keep the original registry and relay
-/// contract until both endpoints are ready for Noise.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum RemoteRelayProtocol {
-    /// Original cleartext JSON-RPC relay protocol.
-    #[default]
-    Legacy,
-    /// Authenticated, end-to-end encrypted Noise relay protocol.
-    Noise,
-}
-
 /// Configuration for registering an exec-server for remote use.
 #[derive(Clone)]
 pub struct RemoteEnvironmentConfig {
     pub base_url: String,
     pub environment_id: String,
     pub name: String,
-    pub relay_protocol: RemoteRelayProtocol,
     auth_provider: SharedAuthProvider,
 }
 
@@ -124,7 +102,6 @@ impl std::fmt::Debug for RemoteEnvironmentConfig {
             .field("base_url", &self.base_url)
             .field("environment_id", &self.environment_id)
             .field("name", &self.name)
-            .field("relay_protocol", &self.relay_protocol)
             .field("auth_provider", &"<redacted>")
             .finish()
     }
@@ -141,7 +118,6 @@ impl RemoteEnvironmentConfig {
             base_url,
             environment_id,
             name: "codex-exec-server".to_string(),
-            relay_protocol: RemoteRelayProtocol::Legacy,
             auth_provider,
         })
     }
@@ -157,10 +133,6 @@ pub async fn run_remote_environment(
     let client =
         EnvironmentRegistryClient::new(config.base_url.clone(), config.auth_provider.clone())?;
     let processor = ConnectionProcessor::new(runtime_paths);
-    if config.relay_protocol == RemoteRelayProtocol::Noise {
-        return noise::run_remote_environment(&config, &client, processor).await;
-    }
-
     let mut backoff = Duration::from_secs(1);
 
     loop {
@@ -267,4 +239,128 @@ fn preview_error_body(body: &str) -> Option<String> {
         return None;
     }
     Some(trimmed.chars().take(ERROR_BODY_PREVIEW_BYTES).collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use codex_api::AuthProvider;
+    use http::HeaderMap;
+    use http::HeaderValue;
+    use pretty_assertions::assert_eq;
+    use wiremock::Mock;
+    use wiremock::MockServer;
+    use wiremock::ResponseTemplate;
+    use wiremock::matchers::header;
+    use wiremock::matchers::method;
+    use wiremock::matchers::path;
+
+    use super::*;
+
+    #[derive(Debug)]
+    struct StaticRegistryAuthProvider;
+
+    impl AuthProvider for StaticRegistryAuthProvider {
+        fn add_auth_headers(&self, headers: &mut HeaderMap) {
+            let _ = headers.insert(
+                http::header::AUTHORIZATION,
+                HeaderValue::from_static("Bearer registry-token"),
+            );
+            let _ = headers.insert(
+                "ChatGPT-Account-ID",
+                HeaderValue::from_static("workspace-123"),
+            );
+        }
+    }
+
+    fn static_registry_auth_provider() -> SharedAuthProvider {
+        Arc::new(StaticRegistryAuthProvider)
+    }
+
+    #[tokio::test]
+    async fn register_environment_posts_with_auth_provider_headers() {
+        let server = MockServer::start().await;
+        let config = RemoteEnvironmentConfig::new(
+            server.uri(),
+            "environment-requested".to_string(),
+            static_registry_auth_provider(),
+        )
+        .expect("config");
+        Mock::given(method("POST"))
+            .and(path("/cloud/environment/environment-requested/register"))
+            .and(header("authorization", "Bearer registry-token"))
+            .and(header("chatgpt-account-id", "workspace-123"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "environment_id": "env-1",
+                "url": "wss://rendezvous.test/cloud-agent/default/ws/environment/env-1?role=environment&sig=abc"
+            })))
+            .mount(&server)
+            .await;
+        let client = EnvironmentRegistryClient::new(server.uri(), static_registry_auth_provider())
+            .expect("client");
+
+        let response = client
+            .register_environment(&config.environment_id)
+            .await
+            .expect("register environment");
+
+        assert_eq!(
+            response,
+            EnvironmentRegistryRegistrationResponse {
+                environment_id: "env-1".to_string(),
+                url: "wss://rendezvous.test/cloud-agent/default/ws/environment/env-1?role=environment&sig=abc".to_string(),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn register_environment_does_not_follow_redirects_with_auth_headers() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/cloud/environment/environment-requested/register"))
+            .and(header("authorization", "Bearer registry-token"))
+            .respond_with(
+                ResponseTemplate::new(302)
+                    .insert_header("location", format!("{}/redirect-target", server.uri())),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(path("/redirect-target"))
+            .and(header("authorization", "Bearer registry-token"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(0)
+            .mount(&server)
+            .await;
+        let client = EnvironmentRegistryClient::new(server.uri(), static_registry_auth_provider())
+            .expect("client");
+
+        let error = client
+            .register_environment("environment-requested")
+            .await
+            .expect_err("redirect response should not be followed");
+
+        assert!(matches!(
+            error,
+            ExecServerError::EnvironmentRegistryHttp {
+                status: StatusCode::FOUND,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn debug_output_redacts_auth_provider() {
+        let config = RemoteEnvironmentConfig::new(
+            "https://registry.example".to_string(),
+            "env-1".to_string(),
+            static_registry_auth_provider(),
+        )
+        .expect("config");
+
+        let debug = format!("{config:?}");
+
+        assert!(debug.contains("<redacted>"));
+        assert!(!debug.contains("workspace-123"));
+    }
 }
