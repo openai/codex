@@ -152,9 +152,11 @@ pub(super) fn apply_accepted_model_migration(
     });
 
     config.model = Some(target_model.clone());
-    config.model_reasoning_effort = Some(target_default_effort);
+    config.model_reasoning_effort = Some(target_default_effort.clone());
     app_event_tx.send(AppEvent::UpdateModel(target_model.clone()));
-    app_event_tx.send(AppEvent::UpdateReasoningEffort(Some(target_default_effort)));
+    app_event_tx.send(AppEvent::UpdateReasoningEffort(Some(
+        target_default_effort.clone(),
+    )));
     app_event_tx.send(AppEvent::PersistModelSelection {
         model: target_model,
         effort: Some(target_default_effort),
@@ -290,7 +292,7 @@ pub(super) async fn handle_model_migration_prompt_if_needed(
                     app_event_tx,
                     model.to_string(),
                     target_model.clone(),
-                    target_preset.default_reasoning_effort,
+                    target_preset.default_reasoning_effort.clone(),
                 );
             }
             ModelMigrationOutcome::Rejected => {

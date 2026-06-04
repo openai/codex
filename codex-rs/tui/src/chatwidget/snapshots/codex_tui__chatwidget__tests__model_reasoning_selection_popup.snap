@@ -8,5 +8,6 @@ expression: popup
   2. Medium (default)  Balances speed and reasoning depth for everyday tasks
 › 3. High (current)    Greater reasoning depth for complex problems
   4. Extra high        Extra high reasoning depth for complex problems
+  5. max               Maximum available reasoning
 
   Press enter to confirm or esc to go back

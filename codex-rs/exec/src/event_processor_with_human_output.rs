@@ -446,7 +446,8 @@ fn config_summary_entries(
             "reasoning effort",
             config
                 .model_reasoning_effort
-                .map(|effort| effort.to_string())
+                .as_ref()
+                .map(std::string::ToString::to_string)
                 .unwrap_or_else(|| "none".to_string()),
         ));
         entries.push((

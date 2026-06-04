@@ -182,7 +182,7 @@ pub(crate) fn spawn_request_summary(item: &ThreadItem) -> Option<SpawnRequestSum
             ..
         } => Some(SpawnRequestSummary {
             model: model.clone(),
-            reasoning_effort: *reasoning_effort,
+            reasoning_effort: reasoning_effort.clone(),
         }),
         _ => None,
     }

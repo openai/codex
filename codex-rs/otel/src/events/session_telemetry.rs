@@ -458,7 +458,7 @@ impl SessionTelemetry {
                 auth.env_provider_key_name = self.metadata.auth_env.provider_env_key_name.as_deref(),
                 auth.env_provider_key_present = self.metadata.auth_env.provider_env_key_present,
                 auth.env_refresh_token_url_override_present = self.metadata.auth_env.refresh_token_url_override_present,
-                reasoning_effort = reasoning_effort.map(|e| e.to_string()),
+                reasoning_effort = reasoning_effort.as_ref().map(ToString::to_string),
                 reasoning_summary = %reasoning_summary,
                 context_window = context_window,
                 auto_compact_token_limit = auto_compact_token_limit,

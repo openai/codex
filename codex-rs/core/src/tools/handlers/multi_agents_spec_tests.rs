@@ -187,6 +187,27 @@ fn spawn_agent_tool_caps_visible_model_summaries() {
 }
 
 #[test]
+fn spawn_agent_tool_caps_custom_reasoning_effort_values() {
+    let mut model = model_preset("visible", /*show_in_picker*/ true);
+    let custom_effort = ReasoningEffort::Custom(
+        "é".repeat(MAX_REASONING_EFFORT_CHARS_IN_SPAWN_AGENT_DESCRIPTION + 1),
+    );
+    model.default_reasoning_effort = custom_effort.clone();
+    model.supported_reasoning_efforts = vec![ReasoningEffortPreset {
+        effort: custom_effort,
+        description: "Model-defined".to_string(),
+    }];
+
+    assert_eq!(
+        spawn_agent_models_description(&[model]),
+        format!(
+            "Available model overrides (optional; inherited parent model is preferred):\n- `visible-model`: visible description Reasoning efforts: {} (default). Service tiers: priority.",
+            "é".repeat(MAX_REASONING_EFFORT_CHARS_IN_SPAWN_AGENT_DESCRIPTION)
+        )
+    );
+}
+
+#[test]
 fn spawn_agent_tool_hides_service_tier_with_spawn_metadata() {
     let tool = create_spawn_agent_tool_v2(SpawnAgentToolOptions {
         available_models: vec![model_preset("visible", /*show_in_picker*/ true)],

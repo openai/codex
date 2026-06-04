@@ -857,7 +857,7 @@ async fn send_user_turn_with_no_changes_does_not_send_environment_context() -> a
     let default_approval_policy = config.permissions.approval_policy.value();
     let default_sandbox_policy = &config.legacy_sandbox_policy();
     let default_model = session_configured.model;
-    let default_effort = config.model_reasoning_effort;
+    let default_effort = config.model_reasoning_effort.clone();
     let default_summary = config.model_reasoning_summary;
 
     codex
@@ -879,7 +879,7 @@ async fn send_user_turn_with_no_changes_does_not_send_environment_context() -> a
                     mode: codex_protocol::config_types::ModeKind::Default,
                     settings: codex_protocol::config_types::Settings {
                         model: default_model.clone(),
-                        reasoning_effort: default_effort,
+                        reasoning_effort: default_effort.clone(),
                         developer_instructions: None,
                     },
                 }),
@@ -998,7 +998,7 @@ async fn send_user_turn_with_changes_sends_environment_context() -> anyhow::Resu
     let default_approval_policy = config.permissions.approval_policy.value();
     let default_sandbox_policy = &config.legacy_sandbox_policy();
     let default_model = session_configured.model;
-    let default_effort = config.model_reasoning_effort;
+    let default_effort = config.model_reasoning_effort.clone();
     let default_summary = config.model_reasoning_summary;
 
     codex
