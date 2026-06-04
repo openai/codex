@@ -311,6 +311,7 @@ impl MessageProcessor {
                 auth_manager.clone(),
                 session_source,
                 environment_manager,
+                Arc::new(codex_code_mode_runtime::InProcessCodeModeSessionProvider),
                 thread_extensions(
                     guardian_agent_spawner(thread_manager.clone()),
                     app_server_extension_event_sink(outgoing.clone()),

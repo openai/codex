@@ -67,6 +67,7 @@ impl MessageProcessor {
             auth_manager,
             SessionSource::Mcp,
             environment_manager,
+            Arc::new(codex_code_mode_runtime::InProcessCodeModeSessionProvider),
             empty_extension_registry(),
             /*analytics_events_client*/ None,
             codex_core::thread_store_from_config(config.as_ref(), state_db.clone()),

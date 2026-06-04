@@ -1131,7 +1131,7 @@ async fn prefers_apikey_when_config_prefers_apikey_even_with_chatgpt_tokens() {
     let installation_id = resolve_installation_id(&config.codex_home)
         .await
         .expect("resolve installation id");
-    let thread_manager = ThreadManager::new(
+    let thread_manager = ThreadManager::new_without_code_mode_runtime(
         &config,
         auth_manager,
         SessionSource::Exec,

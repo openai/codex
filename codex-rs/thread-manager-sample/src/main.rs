@@ -120,7 +120,7 @@ async fn run_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             .await?,
     );
     let installation_id = resolve_installation_id(&config.codex_home).await?;
-    let thread_manager = ThreadManager::new(
+    let thread_manager = ThreadManager::new_without_code_mode_runtime(
         &config,
         auth_manager,
         SessionSource::Exec,

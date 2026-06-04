@@ -5,11 +5,15 @@ mod service;
 
 pub use description::CODE_MODE_PRAGMA_PREFIX;
 pub use description::CodeModeToolKind;
+#[doc(hidden)]
+pub use description::EnabledToolMetadata;
 pub use description::ToolDefinition;
 pub use description::ToolNamespaceDescription;
 pub use description::augment_tool_definition;
 pub use description::build_exec_tool_description;
 pub use description::build_wait_tool_description;
+#[doc(hidden)]
+pub use description::enabled_tool_metadata;
 pub use description::is_code_mode_nested_tool;
 pub use description::normalize_code_mode_identifier;
 pub use description::parse_exec_source;
@@ -30,17 +34,16 @@ pub use runtime::WaitRequest;
 pub use runtime::WaitToPendingOutcome;
 pub use runtime::WaitToPendingRequest;
 pub use service::CellId;
-pub use service::CodeModeService;
 pub use service::CodeModeSession;
 pub use service::CodeModeSessionDelegate;
 pub use service::CodeModeSessionProvider;
 pub use service::CodeModeSessionProviderFuture;
 pub use service::CodeModeSessionResultFuture;
-pub use service::InProcessCodeModeSessionProvider;
 pub use service::NoopCodeModeSessionDelegate;
 pub use service::NotificationFuture;
 pub use service::StartedCell;
 pub use service::ToolInvocationFuture;
+pub use service::UnavailableCodeModeSessionProvider;
 
 pub const PUBLIC_TOOL_NAME: &str = "exec";
 pub const WAIT_TOOL_NAME: &str = "wait";

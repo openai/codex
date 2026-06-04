@@ -1914,6 +1914,7 @@ dependencies = [
  "codex-backend-client",
  "codex-chatgpt",
  "codex-cloud-config",
+ "codex-code-mode-runtime",
  "codex-config",
  "codex-core",
  "codex-core-plugins",
@@ -2430,9 +2431,21 @@ name = "codex-code-mode"
 version = "0.0.0"
 dependencies = [
  "codex-protocol",
- "deno_core_icudata",
  "pretty_assertions",
  "serde",
+ "serde_json",
+ "tokio",
+ "tokio-util",
+]
+
+[[package]]
+name = "codex-code-mode-runtime"
+version = "0.0.0"
+dependencies = [
+ "codex-code-mode",
+ "codex-protocol",
+ "deno_core_icudata",
+ "pretty_assertions",
  "serde_json",
  "tokio",
  "tokio-util",
@@ -2536,6 +2549,7 @@ dependencies = [
  "codex-apply-patch",
  "codex-async-utils",
  "codex-code-mode",
+ "codex-code-mode-runtime",
  "codex-config",
  "codex-connectors",
  "codex-context-fragments",
@@ -3195,6 +3209,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "codex-arg0",
+ "codex-code-mode-runtime",
  "codex-config",
  "codex-core",
  "codex-exec-server",

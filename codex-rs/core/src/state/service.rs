@@ -18,6 +18,7 @@ use crate::unified_exec::UnifiedExecProcessManager;
 use arc_swap::ArcSwap;
 use arc_swap::ArcSwapOption;
 use codex_analytics::AnalyticsEventsClient;
+use codex_code_mode::CodeModeSessionProvider;
 use codex_core_plugins::PluginsManager;
 use codex_exec_server::EnvironmentManager;
 use codex_extension_api::ExtensionData;
@@ -77,6 +78,7 @@ pub(crate) struct SessionServices {
     pub(crate) attestation_provider: Option<Arc<dyn AttestationProvider>>,
     /// Session-scoped model client shared across turns.
     pub(crate) model_client: ModelClient,
+    pub(crate) code_mode_session_provider: Arc<dyn CodeModeSessionProvider>,
     pub(crate) code_mode_service: CodeModeService,
     /// Shared process-level environment registry. Sessions carry an `Arc` handle so they can pass
     /// the same manager through child-thread spawn paths without reconstructing it.

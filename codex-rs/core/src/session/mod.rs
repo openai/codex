@@ -314,6 +314,7 @@ use crate::turn_timing::TurnTimingState;
 use crate::turn_timing::record_turn_ttfm_metric;
 use crate::unified_exec::UnifiedExecProcessManager;
 use crate::windows_sandbox::WindowsSandboxLevelExt;
+use codex_code_mode::CodeModeSessionProvider;
 use codex_core_plugins::PluginsManager;
 use codex_git_utils::get_git_repo_root;
 use codex_mcp::compute_auth_statuses;
@@ -399,6 +400,7 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) plugins_manager: Arc<PluginsManager>,
     pub(crate) mcp_manager: Arc<McpManager>,
     pub(crate) extensions: Arc<codex_extension_api::ExtensionRegistry<crate::config::Config>>,
+    pub(crate) code_mode_session_provider: Arc<dyn CodeModeSessionProvider>,
     pub(crate) conversation_history: InitialHistory,
     pub(crate) session_source: SessionSource,
     pub(crate) forked_from_thread_id: Option<ThreadId>,
@@ -483,6 +485,7 @@ impl Codex {
             plugins_manager,
             mcp_manager,
             extensions,
+            code_mode_session_provider,
             conversation_history,
             session_source,
             forked_from_thread_id,
@@ -640,6 +643,7 @@ impl Codex {
             extensions,
             agent_control,
             environment_manager,
+            code_mode_session_provider,
             analytics_events_client,
             thread_store,
             parent_rollout_thread_trace,
