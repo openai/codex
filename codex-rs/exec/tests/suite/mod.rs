@@ -6,6 +6,7 @@ mod auth_env;
 mod ephemeral;
 mod mcp_required_exit;
 mod originator;
+mod output_last_message;
 mod output_schema;
 mod prompt_stdin;
 mod resume;

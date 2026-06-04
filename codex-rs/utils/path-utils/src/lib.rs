@@ -144,7 +144,10 @@ pub fn write_atomically(write_path: &Path, contents: &str) -> io::Result<()> {
     Ok(())
 }
 
-/// Opens a file for writing without following symlinks in any path component.
+/// Creates or truncates a file for writing without following symlinks in any path component.
+///
+/// Relative paths are resolved from the process's current directory. The returned file uses mode
+/// `0o666`, subject to the process umask.
 #[cfg(unix)]
 pub fn open_file_for_write_no_follow(path: &Path) -> io::Result<File> {
     open_file_no_follow(
