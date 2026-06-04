@@ -1,12 +1,11 @@
-use bytes::BytesMut;
 use futures::StreamExt;
 use futures::stream::BoxStream;
-use memchr::memchr;
 use semver::Version;
 use serde_json::Value as JsonValue;
 use std::collections::VecDeque;
 use std::io;
 
+use crate::line_buffer::LineBuffer;
 use crate::parser::pull_events_from_value;
 use crate::pull::PullEvent;
 use crate::pull::PullProgressReporter;
@@ -175,8 +174,7 @@ impl OllamaClient {
         }
 
         let mut stream = resp.bytes_stream();
-        let mut buf = BytesMut::new();
-        let mut scanned_len = 0usize;
+        let mut buf = LineBuffer::default();
         let _pending: VecDeque<PullEvent> = VecDeque::new();
 
         // Using an async stream adaptor backed by unfold-like manual loop.
@@ -185,14 +183,7 @@ impl OllamaClient {
                 match chunk {
                     Ok(bytes) => {
                         buf.extend_from_slice(&bytes);
-                        loop {
-                            let Some(relative_pos) = memchr(b'\n', &buf[scanned_len..]) else {
-                                scanned_len = buf.len();
-                                break;
-                            };
-                            let pos = scanned_len + relative_pos;
-                            let line = buf.split_to(pos + 1);
-                            scanned_len = 0;
+                        while let Some(line) = buf.take_line() {
                             if let Ok(text) = std::str::from_utf8(&line) {
                                 let text = text.trim();
                                 if text.is_empty() { continue; }
