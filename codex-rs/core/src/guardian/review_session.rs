@@ -1001,7 +1001,6 @@ pub(crate) fn build_guardian_review_session_config(
         Feature::Plugins,
         Feature::WebSearchRequest,
         Feature::WebSearchCached,
-        Feature::GuardianSessionWarmup,
     ] {
         guardian_config.features.disable(feature).map_err(|err| {
             anyhow::anyhow!(
@@ -1320,29 +1319,6 @@ mod tests {
         .expect("guardian config");
 
         assert!(!guardian_config.features.enabled(Feature::CodexHooks));
-    }
-
-    #[tokio::test]
-    async fn guardian_review_session_config_disables_warmup() {
-        let mut parent_config = crate::config::test_config().await;
-        parent_config
-            .features
-            .enable(Feature::GuardianSessionWarmup)
-            .expect("enable guardian session warmup on parent config");
-
-        let guardian_config = build_guardian_review_session_config(
-            &parent_config,
-            /*live_network_config*/ None,
-            "active-model",
-            /*reasoning_effort*/ None,
-        )
-        .expect("guardian config");
-
-        assert!(
-            !guardian_config
-                .features
-                .enabled(Feature::GuardianSessionWarmup)
-        );
     }
 
     #[tokio::test]

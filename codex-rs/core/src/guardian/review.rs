@@ -24,7 +24,6 @@ use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
-use crate::config::Config;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::turn_timing::now_unix_timestamp_ms;
@@ -696,11 +695,28 @@ pub(super) async fn run_guardian_review_session(
     schema: serde_json::Value,
     external_cancel: Option<CancellationToken>,
 ) -> (GuardianReviewOutcome, GuardianReviewAnalyticsResult) {
-    let ResolvedGuardianReviewSessionConfig {
-        guardian_config,
-        guardian_model,
+    let network_proxy = session.services.network_proxy.load_full();
+    let live_network_config = match network_proxy.as_ref() {
+        Some(network_proxy) => match network_proxy.proxy().current_cfg().await {
+            Ok(config) => Some(config),
+            Err(err) => {
+                return (
+                    GuardianReviewOutcome::Error(GuardianReviewError::prompt_build(err)),
+                    GuardianReviewAnalyticsResult::without_session(),
+                );
+            }
+        },
+        None => None,
+    };
+    let (guardian_model, guardian_reasoning_effort) =
+        resolve_guardian_review_model(session.as_ref(), turn.as_ref()).await;
+    let guardian_config = build_guardian_review_session_config(
+        turn.config.as_ref(),
+        live_network_config.clone(),
+        guardian_model.as_str(),
         guardian_reasoning_effort,
-    } = match resolve_guardian_review_session_config(session.as_ref(), turn.as_ref()).await {
+    );
+    let guardian_config = match guardian_config {
         Ok(config) => config,
         Err(err) => {
             return (
@@ -774,33 +790,36 @@ pub(super) async fn run_guardian_review_session(
     }
 }
 
-struct ResolvedGuardianReviewSessionConfig {
-    guardian_config: Config,
-    guardian_model: String,
-    guardian_reasoning_effort: Option<codex_protocol::openai_models::ReasoningEffort>,
-}
-
 pub(super) async fn warm_guardian_review_session(
     session: Arc<Session>,
     turn: Arc<TurnContext>,
 ) -> anyhow::Result<bool> {
-    let resolved_config =
-        resolve_guardian_review_session_config(session.as_ref(), turn.as_ref()).await?;
-    session
-        .guardian_review_session
-        .warm_trunk(Arc::clone(&session), turn, resolved_config.guardian_config)
-        .await
-}
-
-async fn resolve_guardian_review_session_config(
-    session: &Session,
-    turn: &TurnContext,
-) -> anyhow::Result<ResolvedGuardianReviewSessionConfig> {
     let network_proxy = session.services.network_proxy.load_full();
     let live_network_config = match network_proxy.as_ref() {
         Some(network_proxy) => Some(network_proxy.proxy().current_cfg().await?),
         None => None,
     };
+    let (guardian_model, guardian_reasoning_effort) =
+        resolve_guardian_review_model(session.as_ref(), turn.as_ref()).await;
+    let guardian_config = build_guardian_review_session_config(
+        turn.config.as_ref(),
+        live_network_config,
+        guardian_model.as_str(),
+        guardian_reasoning_effort,
+    )?;
+    session
+        .guardian_review_session
+        .warm_trunk(Arc::clone(&session), turn, guardian_config)
+        .await
+}
+
+async fn resolve_guardian_review_model(
+    session: &Session,
+    turn: &TurnContext,
+) -> (
+    String,
+    Option<codex_protocol::openai_models::ReasoningEffort>,
+) {
     let available_models = session
         .services
         .models_manager
@@ -844,17 +863,7 @@ async fn resolve_guardian_review_session_config(
             reasoning_effort,
         )
     };
-    let guardian_config = build_guardian_review_session_config(
-        turn.config.as_ref(),
-        live_network_config,
-        guardian_model.as_str(),
-        guardian_reasoning_effort,
-    )?;
-    Ok(ResolvedGuardianReviewSessionConfig {
-        guardian_config,
-        guardian_model,
-        guardian_reasoning_effort,
-    })
+    (guardian_model, guardian_reasoning_effort)
 }
 
 #[cfg(test)]
