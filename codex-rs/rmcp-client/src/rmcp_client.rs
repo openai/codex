@@ -76,6 +76,7 @@ use crate::utils::build_default_headers;
 use codex_config::types::OAuthCredentialsStoreMode;
 
 const MCP_CLIENT_INITIALIZE_METRIC: &str = "codex.mcp.client.initialize";
+const JSON_RPC_INTERNAL_ERROR_CODE: i64 = -32603;
 const STREAMABLE_HTTP_RETRY_DELAYS_MS: [u64; 2] = [250, 1_000];
 
 enum PendingTransport {
@@ -1165,15 +1166,18 @@ impl RmcpClient {
     fn is_retryable_streamable_http_error(
         error: &StreamableHttpError<StreamableHttpClientAdapterError>,
     ) -> bool {
-        matches!(
-            error,
+        match error {
             StreamableHttpError::Client(
                 StreamableHttpClientAdapterError::RetryableHttpStatus(_)
-                    | StreamableHttpClientAdapterError::HttpRequest(ExecServerError::HttpRequest(
-                        _
-                    ))
-            )
-        )
+                | StreamableHttpClientAdapterError::HttpRequest(ExecServerError::HttpRequest(_)),
+            ) => true,
+            StreamableHttpError::Client(StreamableHttpClientAdapterError::HttpRequest(
+                ExecServerError::Server { code, message },
+            )) => {
+                *code == JSON_RPC_INTERNAL_ERROR_CODE && message.starts_with("http/request failed:")
+            }
+            _ => false,
+        }
     }
 
     async fn reinitialize_after_session_expiry(

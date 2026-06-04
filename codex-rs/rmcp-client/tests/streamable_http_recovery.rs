@@ -24,19 +24,31 @@ use streamable_http_test_support::create_client_with_http_client;
 use streamable_http_test_support::expected_echo_result;
 use streamable_http_test_support::spawn_streamable_http_server;
 
+const JSON_RPC_INTERNAL_ERROR_CODE: i64 = -32603;
+const SIMULATED_NO_RESPONSE_MESSAGE: &str =
+    "http/request failed: error sending request for url (simulated no response)";
+
+#[derive(Clone, Copy)]
+enum RequestFailure {
+    LocalHttpRequest,
+    RemoteServer,
+}
+
 #[derive(Clone)]
 struct FailFirstMethodHttpClient {
     inner: Arc<dyn HttpClient>,
     method: &'static str,
+    failure: RequestFailure,
     failures_remaining: Arc<AtomicUsize>,
     matching_post_attempts: Arc<AtomicUsize>,
 }
 
 impl FailFirstMethodHttpClient {
-    fn new(inner: Arc<dyn HttpClient>, method: &'static str) -> Self {
+    fn new(inner: Arc<dyn HttpClient>, method: &'static str, failure: RequestFailure) -> Self {
         Self {
             inner,
             method,
+            failure,
             failures_remaining: Arc::new(AtomicUsize::new(1)),
             matching_post_attempts: Arc::new(AtomicUsize::new(0)),
         }
@@ -61,6 +73,7 @@ impl HttpClient for FailFirstMethodHttpClient {
     ) -> BoxFuture<'_, Result<(HttpRequestResponse, HttpResponseBodyStream), ExecServerError>> {
         let inner = Arc::clone(&self.inner);
         let method = self.method;
+        let failure = self.failure;
         let failures_remaining = Arc::clone(&self.failures_remaining);
         let matching_post_attempts = Arc::clone(&self.matching_post_attempts);
 
@@ -73,10 +86,15 @@ impl HttpClient for FailFirstMethodHttpClient {
                     })
                     .is_ok()
                 {
-                    return Err(ExecServerError::HttpRequest(
-                        "http/request failed: error sending request for url (simulated no response)"
-                            .to_string(),
-                    ));
+                    return Err(match failure {
+                        RequestFailure::LocalHttpRequest => {
+                            ExecServerError::HttpRequest(SIMULATED_NO_RESPONSE_MESSAGE.to_string())
+                        }
+                        RequestFailure::RemoteServer => ExecServerError::Server {
+                            code: JSON_RPC_INTERNAL_ERROR_CODE,
+                            message: SIMULATED_NO_RESPONSE_MESSAGE.to_string(),
+                        },
+                    });
                 }
             }
 
@@ -122,6 +140,7 @@ async fn streamable_http_initialize_retries_http_request_error() -> anyhow::Resu
     let http_client = FailFirstMethodHttpClient::new(
         Environment::default_for_tests().get_http_client(),
         "initialize",
+        RequestFailure::LocalHttpRequest,
     );
 
     let client = create_client_with_http_client(&base_url, Arc::new(http_client.clone())).await?;
@@ -129,6 +148,27 @@ async fn streamable_http_initialize_retries_http_request_error() -> anyhow::Resu
 
     assert_eq!(http_client.matching_post_attempts(), 2);
     assert_eq!(result, expected_echo_result("after-no-response-retry"));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn streamable_http_initialize_retries_remote_http_request_error() -> anyhow::Result<()> {
+    let (_server, base_url) = spawn_streamable_http_server().await?;
+    let http_client = FailFirstMethodHttpClient::new(
+        Environment::default_for_tests().get_http_client(),
+        "initialize",
+        RequestFailure::RemoteServer,
+    );
+
+    let client = create_client_with_http_client(&base_url, Arc::new(http_client.clone())).await?;
+    let result = call_echo_tool(&client, "after-remote-no-response-retry").await?;
+
+    assert_eq!(http_client.matching_post_attempts(), 2);
+    assert_eq!(
+        result,
+        expected_echo_result("after-remote-no-response-retry")
+    );
 
     Ok(())
 }
@@ -162,6 +202,28 @@ async fn streamable_http_tools_list_retries_http_request_error() -> anyhow::Resu
     let http_client = FailFirstMethodHttpClient::new(
         Environment::default_for_tests().get_http_client(),
         "tools/list",
+        RequestFailure::LocalHttpRequest,
+    );
+    let client = create_client_with_http_client(&base_url, Arc::new(http_client.clone())).await?;
+
+    let tools = client
+        .list_tools(/*params*/ None, Some(Duration::from_secs(5)))
+        .await?;
+
+    assert_eq!(http_client.matching_post_attempts(), 2);
+    assert_eq!(tools.tools.len(), 1);
+    assert_eq!(tools.tools[0].name, "echo");
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn streamable_http_tools_list_retries_remote_http_request_error() -> anyhow::Result<()> {
+    let (_server, base_url) = spawn_streamable_http_server().await?;
+    let http_client = FailFirstMethodHttpClient::new(
+        Environment::default_for_tests().get_http_client(),
+        "tools/list",
+        RequestFailure::RemoteServer,
     );
     let client = create_client_with_http_client(&base_url, Arc::new(http_client.clone())).await?;
 
