@@ -2540,7 +2540,6 @@ fn codex_turn_event_params(
         is_first_turn,
     } = resolved_config;
     let TurnProfile {
-        version: profile_version,
         before_first_sampling_ms,
         sampling_ms,
         between_sampling_overhead_ms,
@@ -2613,7 +2612,6 @@ fn codex_turn_event_params(
         total_tokens: token_usage
             .as_ref()
             .map(|token_usage| token_usage.total_tokens),
-        profile_version,
         before_first_sampling_ms,
         sampling_ms,
         between_sampling_overhead_ms,

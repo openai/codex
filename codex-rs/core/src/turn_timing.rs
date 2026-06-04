@@ -5,7 +5,6 @@ use std::time::Instant;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
-use codex_analytics::TURN_PROFILE_VERSION;
 use codex_analytics::TurnProfile;
 use codex_analytics::TurnProfileStatus;
 use codex_otel::TURN_TTFM_DURATION_METRIC;
@@ -304,7 +303,6 @@ impl TurnProfileState {
         };
 
         let mut profile = TurnProfile {
-            version: TURN_PROFILE_VERSION,
             before_first_sampling_ms: duration_to_u64_ms(self.before_first_sampling),
             sampling_ms: duration_to_u64_ms(self.sampling),
             between_sampling_overhead_ms: duration_to_u64_ms(self.between_sampling_overhead),

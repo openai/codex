@@ -60,7 +60,6 @@ use crate::facts::PluginUsedInput;
 use crate::facts::SkillInvocation;
 use crate::facts::SkillInvokedInput;
 use crate::facts::SubAgentThreadStartedInput;
-use crate::facts::TURN_PROFILE_VERSION;
 use crate::facts::ThreadInitializationMode;
 use crate::facts::TrackEventsContext;
 use crate::facts::TurnCodexErrorFact;
@@ -402,7 +401,6 @@ fn sample_turn_resolved_config(thread_id: &str, turn_id: &str) -> TurnResolvedCo
 
 fn sample_turn_profile() -> TurnProfile {
     TurnProfile {
-        version: TURN_PROFILE_VERSION,
         before_first_sampling_ms: 100,
         sampling_ms: 700,
         between_sampling_overhead_ms: 50,
@@ -3332,7 +3330,6 @@ fn turn_event_serializes_expected_shape() {
             output_tokens: None,
             reasoning_output_tokens: None,
             total_tokens: None,
-            profile_version: TURN_PROFILE_VERSION,
             before_first_sampling_ms: 100,
             sampling_ms: 700,
             between_sampling_overhead_ms: 50,
@@ -3408,7 +3405,6 @@ fn turn_event_serializes_expected_shape() {
                 "output_tokens": null,
                 "reasoning_output_tokens": null,
                 "total_tokens": null,
-                "profile_version": 1,
                 "before_first_sampling_ms": 100,
                 "sampling_ms": 700,
                 "between_sampling_overhead_ms": 50,

@@ -817,7 +817,6 @@ pub(crate) struct CodexTurnEventParams {
     pub(crate) output_tokens: Option<i64>,
     pub(crate) reasoning_output_tokens: Option<i64>,
     pub(crate) total_tokens: Option<i64>,
-    pub(crate) profile_version: u8,
     pub(crate) before_first_sampling_ms: u64,
     pub(crate) sampling_ms: u64,
     pub(crate) between_sampling_overhead_ms: u64,

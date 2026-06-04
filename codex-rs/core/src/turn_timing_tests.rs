@@ -1,4 +1,3 @@
-use codex_analytics::TURN_PROFILE_VERSION;
 use codex_analytics::TurnProfile;
 use codex_analytics::TurnProfileStatus;
 use codex_protocol::items::AgentMessageItem;
@@ -172,7 +171,6 @@ fn turn_profile_breaks_down_sampling_tool_blocking_and_retry_overhead() {
             TurnProfileStatus::Complete,
         ),
         TurnProfile {
-            version: TURN_PROFILE_VERSION,
             before_first_sampling_ms: 100,
             sampling_ms: 700,
             between_sampling_overhead_ms: 100,
@@ -203,7 +201,6 @@ fn turn_profile_counts_parallel_tools_as_one_blocking_interval() {
             TurnProfileStatus::Partial,
         ),
         TurnProfile {
-            version: TURN_PROFILE_VERSION,
             before_first_sampling_ms: 200,
             sampling_ms: 0,
             between_sampling_overhead_ms: 0,

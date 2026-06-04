@@ -32,7 +32,6 @@ use std::path::PathBuf;
 
 const INVALID_REQUEST_SUBREASON_MAX_BYTES: usize = 512;
 const INVALID_REQUEST_SUBREASON_TRUNCATION_SUFFIX: &str = "...";
-pub const TURN_PROFILE_VERSION: u8 = 1;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct AcceptedLineFingerprint {
@@ -107,7 +106,6 @@ pub struct TurnTokenUsageFact {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct TurnProfile {
-    pub version: u8,
     pub before_first_sampling_ms: u64,
     pub sampling_ms: u64,
     pub between_sampling_overhead_ms: u64,
