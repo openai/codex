@@ -311,34 +311,6 @@ WHERE id = ?
         Ok(AgentJobStatus::parse(status.as_str())? == AgentJobStatus::Cancelled)
     }
 
-    pub async fn mark_agent_job_item_running(
-        &self,
-        job_id: &str,
-        item_id: &str,
-    ) -> anyhow::Result<bool> {
-        let now = Utc::now().timestamp();
-        let result = sqlx::query(
-            r#"
-UPDATE agent_job_items
-SET
-    status = ?,
-    assigned_thread_id = NULL,
-    attempt_count = attempt_count + 1,
-    updated_at = ?,
-    last_error = NULL
-WHERE job_id = ? AND item_id = ? AND status = ?
-            "#,
-        )
-        .bind(AgentJobItemStatus::Running.as_str())
-        .bind(now)
-        .bind(job_id)
-        .bind(item_id)
-        .bind(AgentJobItemStatus::Pending.as_str())
-        .execute(self.pool.as_ref())
-        .await?;
-        Ok(result.rows_affected() > 0)
-    }
-
     pub async fn mark_agent_job_item_running_with_thread(
         &self,
         job_id: &str,
@@ -390,30 +362,6 @@ WHERE job_id = ? AND item_id = ? AND status = ?
         .bind(AgentJobItemStatus::Pending.as_str())
         .bind(now)
         .bind(error_message)
-        .bind(job_id)
-        .bind(item_id)
-        .bind(AgentJobItemStatus::Running.as_str())
-        .execute(self.pool.as_ref())
-        .await?;
-        Ok(result.rows_affected() > 0)
-    }
-
-    pub async fn set_agent_job_item_thread(
-        &self,
-        job_id: &str,
-        item_id: &str,
-        thread_id: &str,
-    ) -> anyhow::Result<bool> {
-        let now = Utc::now().timestamp();
-        let result = sqlx::query(
-            r#"
-UPDATE agent_job_items
-SET assigned_thread_id = ?, updated_at = ?
-WHERE job_id = ? AND item_id = ? AND status = ?
-            "#,
-        )
-        .bind(thread_id)
-        .bind(now)
         .bind(job_id)
         .bind(item_id)
         .bind(AgentJobItemStatus::Running.as_str())

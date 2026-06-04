@@ -114,12 +114,6 @@ impl SkillLoadOutcome {
             .collect()
     }
 
-    pub fn skills_with_enabled(&self) -> impl Iterator<Item = (&SkillMetadata, bool)> {
-        self.skills
-            .iter()
-            .map(|skill| (skill, self.is_skill_enabled(skill)))
-    }
-
     pub(crate) fn file_system_for_skill(
         &self,
         skill: &SkillMetadata,

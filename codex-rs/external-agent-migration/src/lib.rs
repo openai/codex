@@ -83,21 +83,6 @@ pub fn build_mcp_config_from_external(
     Ok(TomlValue::Table(root))
 }
 
-pub fn hooks_migration_description(
-    source_external_agent_dir: &Path,
-    target_hooks: &Path,
-) -> io::Result<Option<String>> {
-    if hook_migration_event_names(source_external_agent_dir, target_hooks)?.is_empty() {
-        return Ok(None);
-    }
-
-    Ok(Some(format!(
-        "Migrate hooks from {} to {}",
-        source_external_agent_dir.display(),
-        target_hooks.display()
-    )))
-}
-
 pub fn hook_migration_event_names(
     source_external_agent_dir: &Path,
     target_hooks: &Path,

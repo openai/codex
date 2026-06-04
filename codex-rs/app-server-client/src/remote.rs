@@ -524,28 +524,6 @@ impl RemoteAppServerClient {
             .map_err(|source| TypedRequestError::Deserialize { method, source })
     }
 
-    pub async fn notify(&self, notification: ClientNotification) -> IoResult<()> {
-        let (response_tx, response_rx) = oneshot::channel();
-        self.command_tx
-            .send(RemoteClientCommand::Notify {
-                notification,
-                response_tx,
-            })
-            .await
-            .map_err(|_| {
-                IoError::new(
-                    ErrorKind::BrokenPipe,
-                    "remote app-server worker channel is closed",
-                )
-            })?;
-        response_rx.await.map_err(|_| {
-            IoError::new(
-                ErrorKind::BrokenPipe,
-                "remote app-server notify channel is closed",
-            )
-        })?
-    }
-
     pub async fn resolve_server_request(
         &self,
         request_id: RequestId,

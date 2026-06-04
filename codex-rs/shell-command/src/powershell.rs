@@ -2,7 +2,6 @@ use std::path::PathBuf;
 
 use codex_utils_absolute_path::AbsolutePathBuf;
 
-use crate::command_safety::try_parse_powershell_ast_commands;
 use crate::shell_detect::ShellType;
 use crate::shell_detect::detect_shell_type;
 
@@ -68,18 +67,6 @@ pub fn extract_powershell_command(command: &[String]) -> Option<(&str, &str)> {
         i += 1;
     }
     None
-}
-
-/// Parse the script body from a top-level PowerShell wrapper into argv-like commands.
-///
-/// This is intentionally narrower than the Windows safe-command parser: it only unwraps the
-/// `-Command`/`-c` body from a PowerShell invocation we already recognize, then delegates the
-/// script itself to the PowerShell AST parser.
-pub fn parse_powershell_command_into_plain_commands(
-    command: &[String],
-) -> Option<Vec<Vec<String>>> {
-    let (executable, script) = extract_powershell_command(command)?;
-    try_parse_powershell_ast_commands(executable, script)
 }
 
 /// This function attempts to find a powershell.exe executable on the system.

@@ -275,11 +275,6 @@ impl TestCodexBuilder {
         self
     }
 
-    pub fn with_exec_server_url(mut self, exec_server_url: impl Into<String>) -> Self {
-        self.exec_server_url = Some(exec_server_url.into());
-        self
-    }
-
     pub fn with_windows_cmd_shell(self) -> Self {
         if cfg!(windows) {
             self.with_user_shell(get_shell_by_model_provided_path(&PathBuf::from("cmd.exe")))
@@ -631,10 +626,6 @@ impl TestCodex {
         self.cwd_path().join(rel)
     }
 
-    pub fn executor_environment(&self) -> &TestEnv {
-        &self._test_env
-    }
-
     pub fn fs(&self) -> Arc<dyn ExecutorFileSystem> {
         self._test_env.environment().get_filesystem()
     }
@@ -814,14 +805,6 @@ pub struct TestCodexHarness {
 }
 
 impl TestCodexHarness {
-    pub async fn new() -> Result<Self> {
-        Self::with_builder(test_codex()).await
-    }
-
-    pub async fn with_config(mutator: impl FnOnce(&mut Config) + Send + 'static) -> Result<Self> {
-        Self::with_builder(test_codex().with_config(mutator)).await
-    }
-
     pub async fn with_builder(mut builder: TestCodexBuilder) -> Result<Self> {
         let server = start_mock_server().await;
         let test = builder.build(&server).await?;
@@ -928,16 +911,6 @@ impl TestCodexHarness {
         // Box the submit-and-wait path so callers do not inline the full turn
         // future into their own async state.
         Box::pin(self.test.submit_turn(prompt)).await
-    }
-
-    pub async fn submit_with_policy(
-        &self,
-        prompt: &str,
-        sandbox_policy: SandboxPolicy,
-    ) -> Result<()> {
-        self.test
-            .submit_turn_with_policy(prompt, sandbox_policy)
-            .await
     }
 
     pub async fn submit_with_permission_profile(

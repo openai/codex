@@ -1,0 +1,63 @@
+preserve-uniform-field-visibility = true
+
+[[production]]
+package = "codex-cli"
+bin = "codex"
+reason = "primary shipped Codex CLI"
+
+[[production]]
+package = "codex-app-server"
+bin = "codex-app-server"
+reason = "standalone app-server release"
+
+[[production]]
+package = "codex-responses-api-proxy"
+bin = "codex-responses-api-proxy"
+reason = "standalone responses API proxy release"
+
+[[exclude]]
+crate = "codex_backend_openapi_models"
+module = "models"
+reason = "generated from the backend OpenAPI schema"
+
+[[exclude]]
+crate = "codex_windows_sandbox"
+file = "windows-sandbox-rs/src/lib.rs"
+target = "cfg(not(windows))"
+reason = "Windows sandbox APIs are consumed only by Windows products"
+
+[[exclude]]
+crate = "codex_core"
+module = "windows_sandbox"
+target = "cfg(not(windows))"
+reason = "Windows sandbox APIs are consumed only by Windows products"
+
+[[exclude]]
+crate = "codex_utils_pty"
+file = "utils/pty/src/process_group.rs"
+target = "cfg(not(target_os = \"linux\"))"
+reason = "parent-death signaling is consumed only by Linux products"
+
+[[override]]
+lint = "hawk::dead_public"
+crate = "codex_core"
+item = "spawn_command_under_linux_sandbox"
+level = "expect"
+target = "cfg(not(target_os = \"linux\"))"
+reason = "public re-export is consumed only by Linux products"
+
+[[override]]
+lint = "hawk::dead_public"
+crate = "codex_cli"
+item = "run_command_under_landlock"
+level = "expect"
+target = "cfg(not(target_os = \"linux\"))"
+reason = "public re-export is consumed only by Linux products"
+
+[[override]]
+lint = "hawk::dead_public"
+crate = "codex_cli"
+item = "run_command_under_windows_sandbox"
+level = "expect"
+target = "cfg(not(windows))"
+reason = "public re-export is consumed only by Windows products"

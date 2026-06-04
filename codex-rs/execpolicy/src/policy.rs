@@ -134,10 +134,6 @@ impl Policy {
         Ok(())
     }
 
-    pub fn set_host_executable_paths(&mut self, name: String, paths: Vec<AbsolutePathBuf>) {
-        self.host_executables_by_name.insert(name, paths.into());
-    }
-
     pub fn merge_overlay(&self, overlay: &Policy) -> Policy {
         let mut combined_rules = self.rules_by_program.clone();
         for (program, rules) in overlay.rules_by_program.iter_all() {
@@ -250,21 +246,6 @@ impl Policy {
         Evaluation::from_matches(matched_rules)
     }
 
-    /// Returns matching rules for the given command. If no rules match and
-    /// `heuristics_fallback` is provided, returns a single
-    /// `HeuristicsRuleMatch` with the decision rendered by
-    /// `heuristics_fallback`.
-    ///
-    /// If `heuristics_fallback.is_some()`, then the returned vector is
-    /// guaranteed to be non-empty.
-    pub fn matches_for_command(
-        &self,
-        cmd: &[String],
-        heuristics_fallback: HeuristicsFallback<'_>,
-    ) -> Vec<RuleMatch> {
-        self.matches_for_command_with_options(cmd, heuristics_fallback, &MatchOptions::default())
-    }
-
     pub fn matches_for_command_with_options(
         &self,
         cmd: &[String],
@@ -355,12 +336,6 @@ pub struct Evaluation {
 }
 
 impl Evaluation {
-    pub fn is_match(&self) -> bool {
-        self.matched_rules
-            .iter()
-            .any(|rule_match| !matches!(rule_match, RuleMatch::HeuristicsRuleMatch { .. }))
-    }
-
     /// Caller is responsible for ensuring that `matched_rules` is non-empty.
     fn from_matches(matched_rules: Vec<RuleMatch>) -> Self {
         let decision = matched_rules.iter().map(RuleMatch::decision).max();

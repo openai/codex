@@ -240,10 +240,6 @@ impl TextElement {
         }
     }
 
-    pub fn set_placeholder(&mut self, placeholder: Option<String>) {
-        self.placeholder = placeholder;
-    }
-
     pub fn placeholder(&self) -> Option<&str> {
         self.placeholder.as_deref()
     }

@@ -194,24 +194,6 @@ pub async fn fetch_remote_featured_plugin_ids(
     })
 }
 
-pub async fn enable_remote_plugin(
-    config: &RemotePluginServiceConfig,
-    auth: Option<&CodexAuth>,
-    plugin_id: &str,
-) -> Result<(), RemotePluginMutationError> {
-    post_remote_plugin_mutation(config, auth, plugin_id, "enable").await?;
-    Ok(())
-}
-
-pub async fn uninstall_remote_plugin(
-    config: &RemotePluginServiceConfig,
-    auth: Option<&CodexAuth>,
-    plugin_id: &str,
-) -> Result<(), RemotePluginMutationError> {
-    post_remote_plugin_mutation(config, auth, plugin_id, "uninstall").await?;
-    Ok(())
-}
-
 fn ensure_codex_backend_auth(
     auth: Option<&CodexAuth>,
 ) -> Result<&CodexAuth, RemotePluginMutationError> {

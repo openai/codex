@@ -7,7 +7,6 @@ use crate::provider::Provider;
 use bytes::Bytes;
 use codex_client::HttpTransport;
 use codex_client::RequestBody;
-use codex_client::RequestTelemetry;
 use http::HeaderMap;
 use http::HeaderValue;
 use http::Method;
@@ -48,12 +47,6 @@ impl<T: HttpTransport> RealtimeCallClient<T> {
     pub fn new(transport: T, provider: Provider, auth: SharedAuthProvider) -> Self {
         Self {
             session: EndpointSession::new(transport, provider, auth),
-        }
-    }
-
-    pub fn with_telemetry(self, request: Option<Arc<dyn RequestTelemetry>>) -> Self {
-        Self {
-            session: self.session.with_request_telemetry(request),
         }
     }
 

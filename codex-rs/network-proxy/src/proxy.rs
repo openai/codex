@@ -148,14 +148,6 @@ impl NetworkProxyBuilder {
         self
     }
 
-    pub fn blocked_request_observer<O>(mut self, observer: O) -> Self
-    where
-        O: BlockedRequestObserver,
-    {
-        self.blocked_request_observer = Some(Arc::new(observer));
-        self
-    }
-
     pub fn blocked_request_observer_arc(
         mut self,
         observer: Arc<dyn BlockedRequestObserver>,
@@ -776,28 +768,6 @@ impl NetworkProxyHandle {
             socks_task: None,
             completed: true,
         }
-    }
-
-    pub async fn wait(mut self) -> Result<()> {
-        let http_task = self.http_task.take().context("missing http proxy task")?;
-        let socks_task = self.socks_task.take();
-        let http_result = http_task.await;
-        let socks_result = match socks_task {
-            Some(task) => Some(task.await),
-            None => None,
-        };
-        self.completed = true;
-        http_result??;
-        if let Some(socks_result) = socks_result {
-            socks_result??;
-        }
-        Ok(())
-    }
-
-    pub async fn shutdown(mut self) -> Result<()> {
-        abort_tasks(self.http_task.take(), self.socks_task.take()).await;
-        self.completed = true;
-        Ok(())
     }
 }
 

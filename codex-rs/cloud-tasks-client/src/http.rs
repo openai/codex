@@ -43,11 +43,6 @@ impl HttpClient {
         self
     }
 
-    pub fn with_chatgpt_account_id(mut self, account_id: impl Into<String>) -> Self {
-        self.backend = self.backend.clone().with_chatgpt_account_id(account_id);
-        self
-    }
-
     fn tasks_api(&self) -> api::Tasks<'_> {
         api::Tasks::new(self)
     }

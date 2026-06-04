@@ -49,28 +49,6 @@ async fn connector_auth(config: &Config) -> anyhow::Result<CodexAuth> {
     Ok(auth)
 }
 
-pub async fn list_connectors(config: &Config) -> anyhow::Result<Vec<AppInfo>> {
-    if !apps_enabled(config).await {
-        return Ok(Vec::new());
-    }
-    let (connectors_result, accessible_result) = tokio::join!(
-        list_all_connectors(config),
-        list_accessible_connectors_from_mcp_tools(config),
-    );
-    let connectors = connectors_result?;
-    let accessible = accessible_result?;
-    Ok(with_app_enabled_state(
-        merge_connectors_with_accessible(
-            connectors, accessible, /*all_connectors_loaded*/ true,
-        ),
-        config,
-    ))
-}
-
-pub async fn list_all_connectors(config: &Config) -> anyhow::Result<Vec<AppInfo>> {
-    list_all_connectors_with_options(config, /*force_refetch*/ false).await
-}
-
 pub async fn list_cached_all_connectors(config: &Config) -> Option<Vec<AppInfo>> {
     if !apps_enabled(config).await {
         return Some(Vec::new());

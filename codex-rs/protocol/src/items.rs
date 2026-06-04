@@ -437,15 +437,6 @@ fn serialize_hook_prompt_fragment(text: &str, hook_run_id: &str) -> Option<Strin
 }
 
 impl AgentMessageItem {
-    pub fn new(content: &[AgentMessageContent]) -> Self {
-        Self {
-            id: uuid::Uuid::new_v4().to_string(),
-            content: content.to_vec(),
-            phase: None,
-            memory_citation: None,
-        }
-    }
-
     pub fn as_legacy_events(&self) -> Vec<EventMsg> {
         self.content
             .iter()

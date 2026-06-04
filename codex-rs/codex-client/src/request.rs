@@ -67,11 +67,6 @@ impl Request {
         self
     }
 
-    pub fn with_raw_body(mut self, body: impl Into<Bytes>) -> Self {
-        self.body = Some(RequestBody::Raw(body.into()));
-        self
-    }
-
     pub fn with_compression(mut self, compression: RequestCompression) -> Self {
         self.compression = compression;
         self

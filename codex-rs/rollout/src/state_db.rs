@@ -293,60 +293,6 @@ pub fn normalize_cwd_for_state_db(cwd: &Path) -> PathBuf {
     normalize_for_path_comparison(cwd).unwrap_or_else(|_| cwd.to_path_buf())
 }
 
-/// List thread ids from SQLite for parity checks without rollout scanning.
-#[allow(clippy::too_many_arguments)]
-pub async fn list_thread_ids_db(
-    context: Option<&codex_state::StateRuntime>,
-    codex_home: &Path,
-    page_size: usize,
-    cursor: Option<&Cursor>,
-    sort_key: ThreadSortKey,
-    allowed_sources: &[SessionSource],
-    model_providers: Option<&[String]>,
-    archived_only: bool,
-    stage: &str,
-) -> Option<Vec<ThreadId>> {
-    let ctx = context?;
-    if ctx.codex_home() != codex_home {
-        warn!(
-            "state db codex_home mismatch: expected {}, got {}",
-            ctx.codex_home().display(),
-            codex_home.display()
-        );
-    }
-
-    let anchor = cursor_to_anchor(cursor);
-    let allowed_sources: Vec<String> = allowed_sources
-        .iter()
-        .map(|value| match serde_json::to_value(value) {
-            Ok(Value::String(s)) => s,
-            Ok(other) => other.to_string(),
-            Err(_) => String::new(),
-        })
-        .collect();
-    let model_providers = model_providers.map(<[String]>::to_vec);
-    match ctx
-        .list_thread_ids(
-            page_size,
-            anchor.as_ref(),
-            match sort_key {
-                ThreadSortKey::CreatedAt => codex_state::SortKey::CreatedAt,
-                ThreadSortKey::UpdatedAt => codex_state::SortKey::UpdatedAt,
-            },
-            allowed_sources.as_slice(),
-            model_providers.as_deref(),
-            archived_only,
-        )
-        .await
-    {
-        Ok(ids) => Some(ids),
-        Err(err) => {
-            warn!("state db list_thread_ids failed during {stage}: {err}");
-            None
-        }
-    }
-}
-
 /// List thread metadata from SQLite without rollout directory traversal.
 #[allow(clippy::too_many_arguments)]
 pub async fn list_threads_db(
@@ -436,22 +382,6 @@ pub async fn list_threads_db(
             None
         }
     }
-}
-
-/// Look up the rollout path for a thread id using SQLite.
-pub async fn find_rollout_path_by_id(
-    context: Option<&codex_state::StateRuntime>,
-    thread_id: ThreadId,
-    archived_only: Option<bool>,
-    stage: &str,
-) -> Option<PathBuf> {
-    let ctx = context?;
-    ctx.find_rollout_path_by_id(thread_id, archived_only)
-        .await
-        .unwrap_or_else(|err| {
-            warn!("state db find_rollout_path_by_id failed during {stage}: {err}");
-            None
-        })
 }
 
 pub async fn mark_thread_memory_mode_polluted(
@@ -652,26 +582,6 @@ pub async fn apply_rollout_items(
             rollout_path.display()
         );
     }
-}
-
-pub async fn touch_thread_updated_at(
-    context: Option<&codex_state::StateRuntime>,
-    thread_id: Option<ThreadId>,
-    updated_at: DateTime<Utc>,
-    stage: &str,
-) -> bool {
-    let Some(ctx) = context else {
-        return false;
-    };
-    let Some(thread_id) = thread_id else {
-        return false;
-    };
-    ctx.touch_thread_updated_at(thread_id, updated_at)
-        .await
-        .unwrap_or_else(|err| {
-            warn!("state db touch_thread_updated_at failed during {stage} for {thread_id}: {err}");
-            false
-        })
 }
 
 #[cfg(test)]

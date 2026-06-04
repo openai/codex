@@ -665,29 +665,6 @@ impl InProcessAppServerClient {
             .map_err(|source| TypedRequestError::Deserialize { method, source })
     }
 
-    /// Sends a typed client notification.
-    pub async fn notify(&self, notification: ClientNotification) -> IoResult<()> {
-        let (response_tx, response_rx) = oneshot::channel();
-        self.command_tx
-            .send(ClientCommand::Notify {
-                notification,
-                response_tx,
-            })
-            .await
-            .map_err(|_| {
-                IoError::new(
-                    ErrorKind::BrokenPipe,
-                    "in-process app-server worker channel is closed",
-                )
-            })?;
-        response_rx.await.map_err(|_| {
-            IoError::new(
-                ErrorKind::BrokenPipe,
-                "in-process app-server notify channel is closed",
-            )
-        })?
-    }
-
     /// Resolves a pending server request.
     ///
     /// This should only be called with request IDs obtained from the current
@@ -840,13 +817,6 @@ impl InProcessAppServerRequestHandle {
 }
 
 impl AppServerRequestHandle {
-    pub async fn request(&self, request: ClientRequest) -> IoResult<RequestResult> {
-        match self {
-            Self::InProcess(handle) => handle.request(request).await,
-            Self::Remote(handle) => handle.request(request).await,
-        }
-    }
-
     pub async fn request_typed<T>(&self, request: ClientRequest) -> Result<T, TypedRequestError>
     where
         T: DeserializeOwned,
@@ -859,13 +829,6 @@ impl AppServerRequestHandle {
 }
 
 impl AppServerClient {
-    pub async fn request(&self, request: ClientRequest) -> IoResult<RequestResult> {
-        match self {
-            Self::InProcess(client) => client.request(request).await,
-            Self::Remote(client) => client.request(request).await,
-        }
-    }
-
     pub async fn request_typed<T>(&self, request: ClientRequest) -> Result<T, TypedRequestError>
     where
         T: DeserializeOwned,
@@ -873,13 +836,6 @@ impl AppServerClient {
         match self {
             Self::InProcess(client) => client.request_typed(request).await,
             Self::Remote(client) => client.request_typed(request).await,
-        }
-    }
-
-    pub async fn notify(&self, notification: ClientNotification) -> IoResult<()> {
-        match self {
-            Self::InProcess(client) => client.notify(notification).await,
-            Self::Remote(client) => client.notify(notification).await,
         }
     }
 

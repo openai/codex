@@ -238,19 +238,6 @@ impl NetworkProxyState {
         )
     }
 
-    pub fn with_reloader_and_blocked_observer(
-        state: ConfigState,
-        reloader: Arc<dyn ConfigReloader>,
-        blocked_request_observer: Option<Arc<dyn BlockedRequestObserver>>,
-    ) -> Self {
-        Self::with_reloader_and_audit_metadata_and_blocked_observer(
-            state,
-            reloader,
-            NetworkProxyAuditMetadata::default(),
-            blocked_request_observer,
-        )
-    }
-
     pub fn with_reloader_and_audit_metadata(
         state: ConfigState,
         reloader: Arc<dyn ConfigReloader>,
@@ -311,34 +298,6 @@ impl NetworkProxyState {
         self.reload_if_needed().await?;
         let guard = self.state.read().await;
         Ok(guard.config.network.enabled)
-    }
-
-    pub async fn force_reload(&self) -> Result<()> {
-        let previous_cfg = {
-            let guard = self.state.read().await;
-            guard.config.clone()
-        };
-
-        match self.reloader.reload_now().await {
-            Ok(mut new_state) => {
-                // Policy changes are operationally sensitive; logging diffs makes changes traceable
-                // without needing to dump full config blobs (which can include unrelated settings).
-                log_policy_changes(&previous_cfg, &new_state.config);
-                {
-                    let mut guard = self.state.write().await;
-                    new_state.blocked = guard.blocked.clone();
-                    *guard = new_state;
-                }
-                let source = self.reloader.source_label();
-                info!("reloaded config from {source}");
-                Ok(())
-            }
-            Err(err) => {
-                let source = self.reloader.source_label();
-                warn!("failed to reload config from {source}: {err}; keeping previous config");
-                Err(err)
-            }
-        }
     }
 
     pub async fn replace_config_state(&self, mut new_state: ConfigState) -> Result<()> {

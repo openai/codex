@@ -30,18 +30,6 @@ pub const PROTECTED_METADATA_PATH_NAMES: &[&str] = &[
     PROTECTED_METADATA_CODEX_PATH_NAME,
 ];
 
-/// Returns true when a path basename is one of the protected workspace metadata names.
-pub fn is_protected_metadata_name(name: &OsStr) -> bool {
-    PROTECTED_METADATA_PATH_NAMES
-        .iter()
-        .any(|metadata_name| name == OsStr::new(metadata_name))
-}
-
-pub fn is_protected_metadata_directory_name(name: &OsStr) -> bool {
-    name == OsStr::new(PROTECTED_METADATA_AGENTS_PATH_NAME)
-        || name == OsStr::new(PROTECTED_METADATA_CODEX_PATH_NAME)
-}
-
 /// Returns the protected workspace metadata name when an agent write to `path`
 /// should be blocked before execution.
 pub fn forbidden_agent_metadata_write(

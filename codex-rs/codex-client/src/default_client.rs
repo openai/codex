@@ -8,7 +8,6 @@ use reqwest::IntoUrl;
 use reqwest::Method;
 use reqwest::Response;
 use serde::Serialize;
-use std::fmt::Display;
 use std::time::Duration;
 use tracing::Span;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
@@ -83,13 +82,6 @@ impl CodexRequestBuilder {
         <HeaderValue as TryFrom<V>>::Error: Into<HttpError>,
     {
         self.map(|builder| builder.header(key, value))
-    }
-
-    pub fn bearer_auth<T>(self, token: T) -> Self
-    where
-        T: Display,
-    {
-        self.map(|builder| builder.bearer_auth(token))
     }
 
     pub fn timeout(self, timeout: Duration) -> Self {

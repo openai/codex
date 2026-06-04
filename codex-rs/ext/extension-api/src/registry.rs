@@ -1,11 +1,8 @@
 use std::sync::Arc;
 
-use codex_protocol::protocol::ReviewDecision;
-
 use crate::ApprovalReviewContributor;
 use crate::ConfigContributor;
 use crate::ContextContributor;
-use crate::ExtensionData;
 use crate::ExtensionEventSink;
 use crate::NoopExtensionEventSink;
 use crate::ThreadLifecycleContributor;
@@ -66,11 +63,6 @@ impl<C: Sync> ExtensionRegistryBuilder<C> {
     /// Returns the host event sink to pass into extension constructors.
     pub fn event_sink(&self) -> Arc<dyn ExtensionEventSink> {
         Arc::clone(&self.event_sink)
-    }
-
-    /// Registers one approval-review contributor.
-    pub fn approval_review_contributor(&mut self, contributor: Arc<dyn ApprovalReviewContributor>) {
-        self.approval_review_contributors.push(contributor);
     }
 
     /// Registers one thread-lifecycle contributor.
@@ -155,11 +147,6 @@ pub struct ExtensionRegistry<C: Sync> {
 }
 
 impl<C: Sync> ExtensionRegistry<C> {
-    /// Returns the host event sink retained by this registry.
-    pub fn event_sink(&self) -> Arc<dyn ExtensionEventSink> {
-        Arc::clone(&self.event_sink)
-    }
-
     /// Returns the registered thread-lifecycle contributors.
     pub fn thread_lifecycle_contributors(&self) -> &[Arc<dyn ThreadLifecycleContributor<C>>] {
         &self.thread_lifecycle_contributors
@@ -178,26 +165,6 @@ impl<C: Sync> ExtensionRegistry<C> {
     /// Returns the registered token-usage contributors.
     pub fn token_usage_contributors(&self) -> &[Arc<dyn TokenUsageContributor>] {
         &self.token_usage_contributors
-    }
-
-    /// Claims the first rendered approval-review prompt accepted by an
-    /// installed contributor.
-    pub async fn approval_review(
-        &self,
-        session_store: &ExtensionData,
-        thread_store: &ExtensionData,
-        prompt: &str,
-    ) -> Option<ReviewDecision> {
-        for contributor in &self.approval_review_contributors {
-            if let Some(decision) = contributor
-                .contribute(session_store, thread_store, prompt)
-                .await
-            {
-                return Some(decision);
-            }
-        }
-
-        None
     }
 
     /// Returns the registered prompt contributors.

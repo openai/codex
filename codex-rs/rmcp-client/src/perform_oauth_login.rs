@@ -331,10 +331,6 @@ impl OauthLoginHandle {
         &self.authorization_url
     }
 
-    pub fn into_parts(self) -> (String, oneshot::Receiver<Result<()>>) {
-        (self.authorization_url, self.completion)
-    }
-
     pub async fn wait(self) -> Result<()> {
         self.completion
             .await

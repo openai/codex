@@ -93,10 +93,6 @@ impl AwsAuthContext {
         &self.region
     }
 
-    pub fn service(&self) -> &str {
-        &self.service
-    }
-
     pub async fn sign(&self, request: AwsRequestToSign) -> Result<AwsSignedRequest, AwsAuthError> {
         self.sign_at(request, SystemTime::now()).await
     }

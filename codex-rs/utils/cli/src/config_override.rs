@@ -82,17 +82,6 @@ impl CliConfigOverrides {
             })
             .collect()
     }
-
-    /// Apply all parsed overrides onto `target`. Intermediate objects will be
-    /// created as necessary. Values located at the destination path will be
-    /// replaced.
-    pub fn apply_on_value(&self, target: &mut Value) -> Result<(), String> {
-        let overrides = self.parse_overrides()?;
-        for (path, value) in overrides {
-            apply_single_override(target, &path, value);
-        }
-        Ok(())
-    }
 }
 
 fn canonicalize_override_key(key: &str) -> String {

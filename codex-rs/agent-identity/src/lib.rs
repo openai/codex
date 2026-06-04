@@ -9,7 +9,6 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::SecondsFormat;
 use chrono::Utc;
 use codex_protocol::auth::PlanType as AuthPlanType;
-use codex_protocol::protocol::SessionSource;
 use crypto_box::SecretKey as Curve25519SecretKey;
 use ed25519_dalek::Signer as _;
 use ed25519_dalek::SigningKey;
@@ -275,40 +274,9 @@ pub fn generate_agent_key_material() -> Result<GeneratedAgentKeyMaterial> {
     })
 }
 
-pub fn public_key_ssh_from_private_key_pkcs8_base64(
-    private_key_pkcs8_base64: &str,
-) -> Result<String> {
-    let signing_key = signing_key_from_private_key_pkcs8_base64(private_key_pkcs8_base64)?;
-    Ok(encode_ssh_ed25519_public_key(&signing_key.verifying_key()))
-}
-
-pub fn verifying_key_from_private_key_pkcs8_base64(
-    private_key_pkcs8_base64: &str,
-) -> Result<VerifyingKey> {
-    let signing_key = signing_key_from_private_key_pkcs8_base64(private_key_pkcs8_base64)?;
-    Ok(signing_key.verifying_key())
-}
-
-pub fn curve25519_secret_key_from_private_key_pkcs8_base64(
-    private_key_pkcs8_base64: &str,
-) -> Result<Curve25519SecretKey> {
-    let signing_key = signing_key_from_private_key_pkcs8_base64(private_key_pkcs8_base64)?;
-    Ok(curve25519_secret_key_from_signing_key(&signing_key))
-}
-
-pub fn agent_registration_url(chatgpt_base_url: &str) -> String {
-    let trimmed = chatgpt_base_url.trim_end_matches('/');
-    format!("{trimmed}/v1/agent/register")
-}
-
 pub fn agent_task_registration_url(chatgpt_base_url: &str, agent_runtime_id: &str) -> String {
     let trimmed = chatgpt_base_url.trim_end_matches('/');
     format!("{trimmed}/v1/agent/{agent_runtime_id}/task/register")
-}
-
-pub fn agent_identity_biscuit_url(chatgpt_base_url: &str) -> String {
-    let trimmed = chatgpt_base_url.trim_end_matches('/');
-    format!("{trimmed}/authenticate_app_v2")
 }
 
 pub fn agent_identity_jwks_url(chatgpt_base_url: &str) -> String {
@@ -317,34 +285,6 @@ pub fn agent_identity_jwks_url(chatgpt_base_url: &str) -> String {
         format!("{trimmed}/wham/agent-identities/jwks")
     } else {
         format!("{trimmed}/agent-identities/jwks")
-    }
-}
-
-pub fn agent_identity_request_id() -> Result<String> {
-    let mut request_id_bytes = [0u8; 16];
-    OsRng
-        .try_fill_bytes(&mut request_id_bytes)
-        .context("failed to generate agent identity request id")?;
-    Ok(format!(
-        "codex-agent-identity-{}",
-        URL_SAFE_NO_PAD.encode(request_id_bytes)
-    ))
-}
-
-pub fn build_abom(session_source: SessionSource) -> AgentBillOfMaterials {
-    AgentBillOfMaterials {
-        agent_version: env!("CARGO_PKG_VERSION").to_string(),
-        agent_harness_id: match &session_source {
-            SessionSource::VSCode => "codex-app".to_string(),
-            SessionSource::Cli
-            | SessionSource::Exec
-            | SessionSource::Mcp
-            | SessionSource::Custom(_)
-            | SessionSource::Internal(_)
-            | SessionSource::SubAgent(_)
-            | SessionSource::Unknown => "codex-cli".to_string(),
-        },
-        running_location: format!("{}-{}", session_source, std::env::consts::OS),
     }
 }
 

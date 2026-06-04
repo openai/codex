@@ -63,12 +63,6 @@ where
         value()
     }
 
-    /// Builds a cache if `capacity` is non-zero, returning `None` otherwise.
-    #[must_use]
-    pub fn try_with_capacity(capacity: usize) -> Option<Self> {
-        NonZeroUsize::new(capacity).map(Self::new)
-    }
-
     /// Returns a clone of the cached value corresponding to `key`, if present.
     pub fn get<Q>(&self, key: &Q) -> Option<V>
     where

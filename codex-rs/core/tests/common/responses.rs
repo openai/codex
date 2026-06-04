@@ -7,8 +7,6 @@ use std::time::Duration;
 
 use anyhow::Result;
 use base64::Engine;
-use codex_protocol::models::ContentItem;
-use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelsResponse;
 use futures::SinkExt;
 use futures::StreamExt;
@@ -293,14 +291,6 @@ impl ResponsesRequest {
 
     pub fn path(&self) -> String {
         self.0.url.path().to_string()
-    }
-
-    pub fn query_param(&self, name: &str) -> Option<String> {
-        self.0
-            .url
-            .query_pairs()
-            .find(|(k, _)| k == name)
-            .map(|(_, v)| v.to_string())
     }
 }
 
@@ -677,17 +667,6 @@ pub fn ev_assistant_message(id: &str, text: &str) -> Value {
     })
 }
 
-pub fn user_message_item(text: &str) -> ResponseItem {
-    ResponseItem::Message {
-        id: None,
-        role: "user".to_string(),
-        content: vec![ContentItem::InputText {
-            text: text.to_string(),
-        }],
-        phase: None,
-    }
-}
-
 pub fn ev_message_item_added(id: &str, text: &str) -> Value {
     serde_json::json!({
         "type": "response.output_item.added",
@@ -866,21 +845,6 @@ pub fn ev_custom_tool_call(call_id: &str, name: &str, input: &str) -> Value {
     })
 }
 
-pub fn ev_local_shell_call(call_id: &str, status: &str, command: Vec<&str>) -> Value {
-    serde_json::json!({
-        "type": "response.output_item.done",
-        "item": {
-            "type": "local_shell_call",
-            "call_id": call_id,
-            "status": status,
-            "action": {
-                "type": "exec",
-                "command": command,
-            }
-        }
-    })
-}
-
 /// Convenience: SSE event for an `apply_patch` custom tool call with raw patch
 /// text. This mirrors the payload produced by the Responses API when the model
 /// invokes `apply_patch` directly.
@@ -995,27 +959,6 @@ where
 pub async fn mount_sse_once(server: &MockServer, body: String) -> ResponseMock {
     let (mock, response_mock) = base_mock();
     mock.respond_with(sse_response(body))
-        .up_to_n_times(1)
-        .mount(server)
-        .await;
-    response_mock
-}
-
-pub async fn mount_compact_json_once_match<M>(
-    server: &MockServer,
-    matcher: M,
-    body: serde_json::Value,
-) -> ResponseMock
-where
-    M: wiremock::Match + Send + Sync + 'static,
-{
-    let (mock, response_mock) = compact_mock();
-    mock.and(matcher)
-        .respond_with(
-            ResponseTemplate::new(200)
-                .insert_header("content-type", "application/json")
-                .set_body_json(body.clone()),
-        )
         .up_to_n_times(1)
         .mount(server)
         .await;

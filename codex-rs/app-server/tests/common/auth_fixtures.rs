@@ -69,11 +69,6 @@ impl ChatGptAuthFixture {
         self.last_refresh = Some(last_refresh);
         self
     }
-
-    pub fn claims(mut self, claims: ChatGptIdTokenClaims) -> Self {
-        self.claims = claims;
-        self
-    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -96,11 +91,6 @@ impl ChatGptIdTokenClaims {
 
     pub fn plan_type(mut self, plan_type: impl Into<String>) -> Self {
         self.plan_type = Some(plan_type.into());
-        self
-    }
-
-    pub fn chatgpt_user_id(mut self, chatgpt_user_id: impl Into<String>) -> Self {
-        self.chatgpt_user_id = Some(chatgpt_user_id.into());
         self
     }
 

@@ -6,7 +6,6 @@ use crate::events::shared::trace_event;
 use crate::metrics::API_CALL_COUNT_METRIC;
 use crate::metrics::API_CALL_DURATION_METRIC;
 use crate::metrics::MetricsClient;
-use crate::metrics::MetricsConfig;
 use crate::metrics::MetricsError;
 use crate::metrics::PLUGIN_INSTALL_ELICITATION_SENT_METRIC;
 use crate::metrics::PLUGIN_INSTALL_SUGGESTION_METRIC;
@@ -30,7 +29,6 @@ use crate::metrics::WEBSOCKET_REQUEST_COUNT_METRIC;
 use crate::metrics::WEBSOCKET_REQUEST_DURATION_METRIC;
 use crate::metrics::runtime_metrics::RuntimeMetricsSummary;
 use crate::metrics::timer::Timer;
-use crate::provider::OtelProvider;
 use crate::sanitize_metric_tag_value;
 use codex_api::ApiError;
 use codex_api::ResponseEvent;
@@ -46,8 +44,6 @@ use codex_protocol::user_input::UserInput;
 use eventsource_stream::Event as StreamEvent;
 use eventsource_stream::EventStreamError as StreamError;
 use opentelemetry_sdk::metrics::data::ResourceMetrics;
-use reqwest::Error;
-use reqwest::Response;
 use std::borrow::Cow;
 use std::future::Future;
 use std::time::Duration;
@@ -133,18 +129,6 @@ impl SessionTelemetry {
         self.metrics = Some(metrics);
         self.metrics_use_metadata_tags = false;
         self
-    }
-
-    pub fn with_metrics_config(self, config: MetricsConfig) -> MetricsResult<Self> {
-        let metrics = MetricsClient::new(config)?;
-        Ok(self.with_metrics(metrics))
-    }
-
-    pub fn with_provider_metrics(self, provider: &OtelProvider) -> Self {
-        match provider.metrics() {
-            Some(metrics) => self.with_metrics(metrics.clone()),
-            None => self,
-        }
     }
 
     pub fn counter(&self, name: &str, inc: i64, tags: &[(&str, &str)]) {
@@ -472,39 +456,6 @@ impl SessionTelemetry {
                 mcp_server_count = mcp_servers.len() as i64,
             },
         );
-    }
-
-    pub async fn log_request<F, Fut>(&self, attempt: u64, f: F) -> Result<Response, Error>
-    where
-        F: FnOnce() -> Fut,
-        Fut: Future<Output = Result<Response, Error>>,
-    {
-        let start = Instant::now();
-        let response = f().await;
-        let duration = start.elapsed();
-
-        let (status, error) = match &response {
-            Ok(response) => (Some(response.status().as_u16()), None),
-            Err(error) => (error.status().map(|s| s.as_u16()), Some(error.to_string())),
-        };
-        self.record_api_request(
-            attempt,
-            status,
-            error.as_deref(),
-            duration,
-            /*auth_header_attached*/ false,
-            /*auth_header_name*/ None,
-            /*retry_after_unauthorized*/ false,
-            /*recovery_mode*/ None,
-            /*recovery_phase*/ None,
-            "unknown",
-            /*request_id*/ None,
-            /*cf_ray*/ None,
-            /*auth_error*/ None,
-            /*auth_error_code*/ None,
-        );
-
-        response
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1034,30 +985,6 @@ impl SessionTelemetry {
         );
 
         result
-    }
-
-    pub fn log_tool_failed(&self, tool_name: &str, error: &str) {
-        log_event!(
-            self,
-            event.name = "codex.tool_result",
-            tool_name = %tool_name,
-            duration_ms = %Duration::ZERO.as_millis(),
-            success = %false,
-            output = %error,
-            mcp_server = "",
-            mcp_server_origin = "",
-        );
-        trace_event!(
-            self,
-            event.name = "codex.tool_result",
-            tool_name = %tool_name,
-            duration_ms = %Duration::ZERO.as_millis(),
-            success = %false,
-            output_length = error.len() as i64,
-            output_line_count = error.lines().count() as i64,
-            tool_origin = %"builtin",
-            error.message = %error,
-        );
     }
 
     #[allow(clippy::too_many_arguments)]
