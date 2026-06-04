@@ -1,9 +1,11 @@
+use std::fs::File;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 use std::process::Output;
 use std::process::Stdio;
 use std::time::Duration;
+use std::time::UNIX_EPOCH;
 
 use codex_otel::CURATED_PLUGINS_STARTUP_SYNC_FINAL_METRIC;
 use codex_otel::CURATED_PLUGINS_STARTUP_SYNC_METRIC;
@@ -22,12 +24,17 @@ const CURATED_PLUGINS_BACKUP_ARCHIVE_API_URL: &str =
     "https://chatgpt.com/backend-api/plugins/export/curated";
 const OPENAI_PLUGINS_OWNER: &str = "openai";
 const OPENAI_PLUGINS_REPO: &str = "plugins";
+const OPENAI_PLUGINS_GIT_URL: &str = "https://github.com/openai/plugins.git";
 const CURATED_PLUGINS_RELATIVE_DIR: &str = ".tmp/plugins";
 const CURATED_PLUGINS_SHA_FILE: &str = ".tmp/plugins.sha";
+const CURATED_PLUGINS_NEXT_CHECK_FILE: &str = ".tmp/plugins.next-check";
+const CURATED_PLUGINS_SYNC_LOCK_FILE: &str = ".tmp/plugins.sync.lock";
 const CURATED_PLUGINS_BACKUP_ARCHIVE_FALLBACK_VERSION: &str = "export-backup";
 const CURATED_PLUGINS_GIT_TIMEOUT: Duration = Duration::from_secs(30);
 const CURATED_PLUGINS_HTTP_TIMEOUT: Duration = Duration::from_secs(30);
 const CURATED_PLUGINS_BACKUP_ARCHIVE_TIMEOUT: Duration = Duration::from_secs(30);
+const CURATED_PLUGINS_MIN_CHECK_INTERVAL: Duration = Duration::from_secs(12 * 60 * 60);
+const CURATED_PLUGINS_MAX_CHECK_INTERVAL: Duration = Duration::from_secs(48 * 60 * 60);
 // Keep this comfortably above a normal sync attempt so we do not race another Codex process.
 const CURATED_PLUGINS_STALE_TEMP_DIR_MAX_AGE: Duration = Duration::from_secs(10 * 60);
 
@@ -78,7 +85,30 @@ fn sync_openai_plugins_repo_with_transport_overrides(
     api_base_url: &str,
     backup_archive_api_url: &str,
 ) -> Result<String, String> {
-    match sync_openai_plugins_repo_via_git(codex_home, git_binary) {
+    if let Some(local_sha) = local_curated_plugins_sha_before_next_check(codex_home) {
+        return Ok(local_sha);
+    }
+
+    let _file_guard = lock_curated_plugins_startup_sync(codex_home)?;
+
+    if let Some(local_sha) = local_curated_plugins_sha_before_next_check(codex_home) {
+        return Ok(local_sha);
+    }
+
+    let next_check_path = codex_home.join(CURATED_PLUGINS_NEXT_CHECK_FILE);
+    if !next_check_path.exists()
+        && let Some(local_sha) = local_curated_plugins_sha(codex_home)
+    {
+        if let Err(err) = write_curated_plugins_next_check(codex_home) {
+            warn!(
+                error = %err,
+                "failed to persist initial curated plugins sync deadline"
+            );
+        }
+        return Ok(local_sha);
+    }
+
+    let result = match sync_openai_plugins_repo_via_git(codex_home, git_binary) {
         Ok(remote_sha) => {
             emit_curated_plugins_startup_sync_metric("git", "success");
             emit_curated_plugins_startup_sync_final_metric("git", "success");
@@ -132,7 +162,66 @@ fn sync_openai_plugins_repo_with_transport_overrides(
                 }
             }
         }
+    };
+    if (result.is_ok() || has_local_curated_plugins_snapshot(codex_home))
+        && let Err(err) = write_curated_plugins_next_check(codex_home)
+    {
+        warn!(
+            error = %err,
+            "failed to persist curated plugins sync deadline"
+        );
     }
+    result
+}
+
+fn local_curated_plugins_sha_before_next_check(codex_home: &Path) -> Option<String> {
+    let local_sha = local_curated_plugins_sha(codex_home)?;
+    let now = UNIX_EPOCH.elapsed().ok()?.as_secs();
+    let next_check = read_sha_file(&codex_home.join(CURATED_PLUGINS_NEXT_CHECK_FILE))?
+        .parse::<u64>()
+        .ok()?;
+    let max_reasonable_next_check =
+        now.saturating_add(CURATED_PLUGINS_MAX_CHECK_INTERVAL.as_secs() + 5 * 60);
+    (next_check > now && next_check <= max_reasonable_next_check).then_some(local_sha)
+}
+
+fn local_curated_plugins_sha(codex_home: &Path) -> Option<String> {
+    has_local_curated_plugins_snapshot(codex_home).then(|| read_curated_plugins_sha(codex_home))?
+}
+
+fn lock_curated_plugins_startup_sync(codex_home: &Path) -> Result<File, String> {
+    let lock_path = codex_home.join(CURATED_PLUGINS_SYNC_LOCK_FILE);
+    std::fs::create_dir_all(codex_home.join(".tmp"))
+        .map_err(|err| format!("failed to create curated plugins sync directory: {err}"))?;
+    let lock_file = File::options()
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&lock_path)
+        .map_err(|err| format!("failed to open curated plugins sync lock: {err}"))?;
+    lock_file
+        .lock()
+        .map_err(|err| format!("failed to lock curated plugins sync: {err}"))?;
+    Ok(lock_file)
+}
+
+fn write_curated_plugins_next_check(codex_home: &Path) -> Result<(), String> {
+    let now = UNIX_EPOCH
+        .elapsed()
+        .map_err(|err| format!("failed to calculate curated plugins sync deadline: {err}"))?;
+    let jitter_window =
+        (CURATED_PLUGINS_MAX_CHECK_INTERVAL - CURATED_PLUGINS_MIN_CHECK_INTERVAL).as_secs();
+    let next_check = now
+        .as_secs()
+        .saturating_add(CURATED_PLUGINS_MIN_CHECK_INTERVAL.as_secs())
+        .saturating_add(u64::from(now.subsec_nanos()) % (jitter_window + 1));
+    let next_check_path = codex_home.join(CURATED_PLUGINS_NEXT_CHECK_FILE);
+    std::fs::write(&next_check_path, format!("{next_check}\n")).map_err(|err| {
+        format!(
+            "failed to write curated plugins sync deadline {}: {err}",
+            next_check_path.display()
+        )
+    })
 }
 
 fn sync_openai_plugins_repo_via_git(codex_home: &Path, git_binary: &str) -> Result<String, String> {
@@ -146,13 +235,21 @@ fn sync_openai_plugins_repo_via_git(codex_home: &Path, git_binary: &str) -> Resu
     }
 
     let staged_repo_dir = prepare_curated_repo_parent_and_temp_dir(&repo_path)?;
+    let mut clone_command = Command::new(git_binary);
+    clone_command
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .arg("clone")
+        .arg("--depth")
+        .arg("1");
+    if repo_path.join(".git").is_dir() {
+        clone_command
+            .arg("--reference-if-able")
+            .arg(&repo_path)
+            .arg("--dissociate");
+    }
     let clone_output = run_git_command_with_timeout(
-        Command::new(git_binary)
-            .env("GIT_OPTIONAL_LOCKS", "0")
-            .arg("clone")
-            .arg("--depth")
-            .arg("1")
-            .arg("https://github.com/openai/plugins.git")
+        clone_command
+            .arg(OPENAI_PLUGINS_GIT_URL)
             .arg(staged_repo_dir.path()),
         "git clone curated plugins repo",
         CURATED_PLUGINS_GIT_TIMEOUT,
