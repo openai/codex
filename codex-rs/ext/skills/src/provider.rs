@@ -1,5 +1,10 @@
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Arc;
+
+mod host;
+
+use codex_core_skills::HostLoadedSkills;
 
 use crate::catalog::SkillAuthority;
 use crate::catalog::SkillCatalog;
@@ -9,20 +14,24 @@ use crate::catalog::SkillReadResult;
 use crate::catalog::SkillResourceId;
 use crate::catalog::SkillSearchResult;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+pub use host::HostSkillProvider;
+
+#[derive(Clone, Debug)]
 pub struct SkillListQuery {
     pub turn_id: String,
     pub executor_authorities: Vec<SkillAuthority>,
+    pub host: Option<Arc<HostLoadedSkills>>,
     pub include_host_skills: bool,
     pub include_bundled_skills: bool,
     pub include_remote_skills: bool,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct SkillReadRequest {
     pub authority: SkillAuthority,
     pub package: SkillPackageId,
     pub resource: SkillResourceId,
+    pub host: Option<Arc<HostLoadedSkills>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
