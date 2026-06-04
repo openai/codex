@@ -11,6 +11,7 @@ The workflows in this directory are split so that pull requests get fast, review
 - `rust-ci.yml` keeps the Cargo-native PR checks intentionally small:
   - `cargo fmt --check`
   - `cargo shear`
+  - `cargo clippy` on native Linux x64, macOS ARM64, and Windows x64 targets
   - `argument-comment-lint` on Linux, macOS, and Windows
   - `tools/argument-comment-lint` package tests when the lint or its workflow wiring changes
 
@@ -20,7 +21,7 @@ The workflows in this directory are split so that pull requests get fast, review
   This re-verifies the merged Bazel path and helps keep the BuildBuddy caches warm.
 - `rust-ci-full.yml` is the full Cargo-native verification workflow.
   It keeps the heavier checks off the PR path while still validating them after merge:
-  - the full Cargo `clippy` matrix
+  - the full Cargo `clippy` matrix, including cross-target and release-profile coverage
   - the full Cargo `nextest` matrix via per-platform archive-backed shards
   - Windows ARM64 nextest archives cross-compiled on Windows x64, then replayed on native Windows ARM64 shards
   - release-profile Cargo builds

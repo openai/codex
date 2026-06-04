@@ -103,6 +103,136 @@ jobs:
       - name: cargo shear
         run: cargo shear --deny-warnings
 
+  clippy:
+    name: Clippy — ${{ matrix.runner }} - ${{ matrix.target }}
+    runs-on: ${{ matrix.runs_on || matrix.runner }}
+    timeout-minutes: 30
+    needs: changed
+    if: ${{ needs.changed.outputs.codex == 'true' || needs.changed.outputs.workflows == 'true' }}
+    defaults:
+      run:
+        working-directory: codex-rs
+    env:
+      USE_SCCACHE: ${{ startsWith(matrix.runner, 'windows') && 'false' || 'true' }}
+      CARGO_INCREMENTAL: "0"
+      SCCACHE_CACHE_SIZE: 10G
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+          - runner: macos-15-xlarge
+            target: aarch64-apple-darwin
+          - runner: windows-x64
+            target: x86_64-pc-windows-msvc
+            runs_on:
+              group: codex-runners
+              labels: codex-windows-x64
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Install Linux build dependencies
+        if: ${{ runner.os == 'Linux' }}
+        shell: bash
+        run: |
+          sudo apt-get update -y
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libcap-dev
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+        with:
+          targets: ${{ matrix.target }}
+          components: clippy
+      - name: Compute lockfile hash
+        id: lockhash
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "hash=$(sha256sum Cargo.lock | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          echo "toolchain_hash=$(sha256sum rust-toolchain.toml | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+      - name: Restore cargo home cache
+        id: cache_cargo_home_restore
+        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: cargo-home-${{ matrix.runner }}-${{ matrix.target }}-dev-${{ steps.lockhash.outputs.hash }}-${{ steps.lockhash.outputs.toolchain_hash }}
+          restore-keys: |
+            cargo-home-${{ matrix.runner }}-${{ matrix.target }}-dev-
+      - name: Install sccache
+        if: ${{ env.USE_SCCACHE == 'true' }}
+        uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2.62.49
+        with:
+          tool: sccache
+          version: 0.7.5
+      - name: Configure sccache backend
+        if: ${{ env.USE_SCCACHE == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "${ACTIONS_CACHE_URL:-}" && -n "${ACTIONS_RUNTIME_TOKEN:-}" ]]; then
+            echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
+            echo "Using sccache GitHub backend"
+          else
+            echo "SCCACHE_GHA_ENABLED=false" >> "$GITHUB_ENV"
+            echo "SCCACHE_DIR=${{ github.workspace }}/.sccache" >> "$GITHUB_ENV"
+            echo "Using sccache local disk + actions/cache fallback"
+          fi
+      - name: Enable sccache wrapper
+        if: ${{ env.USE_SCCACHE == 'true' }}
+        shell: bash
+        run: echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
+      - name: Restore sccache cache (fallback)
+        if: ${{ env.USE_SCCACHE == 'true' && env.SCCACHE_GHA_ENABLED != 'true' }}
+        id: cache_sccache_restore
+        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: ${{ github.workspace }}/.sccache/
+          key: sccache-${{ matrix.runner }}-${{ matrix.target }}-dev-${{ steps.lockhash.outputs.hash }}-${{ github.run_id }}
+          restore-keys: |
+            sccache-${{ matrix.runner }}-${{ matrix.target }}-dev-${{ steps.lockhash.outputs.hash }}-
+            sccache-${{ matrix.runner }}-${{ matrix.target }}-dev-
+      - if: ${{ runner.os != 'Windows' }}
+        name: Configure rusty_v8 artifact overrides and verify checksums
+        uses: ./.github/actions/setup-rusty-v8
+        with:
+          target: ${{ matrix.target }}
+      - name: cargo clippy
+        run: cargo clippy --target ${{ matrix.target }} --tests --profile dev --timings -- -D warnings
+      - name: Upload Cargo timings
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: cargo-timings-rust-ci-pr-clippy-${{ matrix.target }}
+          path: codex-rs/target/**/cargo-timings/cargo-timing.html
+          if-no-files-found: warn
+      - name: Save cargo home cache
+        if: always() && !cancelled() && steps.cache_cargo_home_restore.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: cargo-home-${{ matrix.runner }}-${{ matrix.target }}-dev-${{ steps.lockhash.outputs.hash }}-${{ steps.lockhash.outputs.toolchain_hash }}
+      - name: Save sccache cache (fallback)
+        if: always() && !cancelled() && env.USE_SCCACHE == 'true' && env.SCCACHE_GHA_ENABLED != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: ${{ github.workspace }}/.sccache/
+          key: sccache-${{ matrix.runner }}-${{ matrix.target }}-dev-${{ steps.lockhash.outputs.hash }}-${{ github.run_id }}
+      - name: sccache stats
+        if: always() && env.USE_SCCACHE == 'true'
+        continue-on-error: true
+        run: sccache --show-stats || true
+
   argument_comment_lint_package:
     name: Argument comment lint package
     runs-on: ubuntu-24.04
@@ -210,6 +340,7 @@ jobs:
         changed,
         general,
         cargo_shear,
+        clippy,
         argument_comment_lint_package,
         argument_comment_lint_prebuilt,
       ]
@@ -221,6 +352,7 @@ jobs:
         run: |
           echo "argpkg : ${{ needs.argument_comment_lint_package.result }}"
           echo "arglint: ${{ needs.argument_comment_lint_prebuilt.result }}"
+          echo "clippy : ${{ needs.clippy.result }}"
           echo "general: ${{ needs.general.result }}"
           echo "shear  : ${{ needs.cargo_shear.result }}"
 
@@ -240,6 +372,7 @@ jobs:
           fi
 
           if [[ "${NEEDS_CHANGED_OUTPUTS_CODEX}" == 'true' || "${NEEDS_CHANGED_OUTPUTS_WORKFLOWS}" == 'true' ]]; then
+            [[ '${{ needs.clippy.result }}' == 'success' ]] || { echo 'clippy failed'; exit 1; }
             [[ '${{ needs.general.result }}' == 'success' ]] || { echo 'general failed'; exit 1; }
             [[ '${{ needs.cargo_shear.result }}' == 'success' ]] || { echo 'cargo_shear failed'; exit 1; }
           fi
