@@ -992,8 +992,10 @@ fn maybe_wrap_shell_lc_with_snapshot_applies_explicit_path_override() {
 #[cfg(unix)]
 #[test]
 fn maybe_wrap_shell_lc_with_snapshot_preserves_package_path_prepend() -> anyhow::Result<()> {
-    let (stdout, package_path_dir) =
-        run_snapshot_path_probe_with_runtime_path_prepend(HashMap::new())?;
+    let (stdout, package_path_dir) = run_snapshot_path_probe_with_runtime_path_prepend(
+        HashMap::new(),
+        SnapshotPathFixture::SnapshotBinOnly,
+    )?;
 
     assert_eq!(
         stdout,
@@ -1009,6 +1011,7 @@ fn maybe_wrap_shell_lc_with_snapshot_applies_runtime_path_prepend_after_explicit
 -> anyhow::Result<()> {
     let (stdout, package_path_dir) = run_snapshot_path_probe_with_runtime_path_prepend(
         HashMap::from([("PATH".to_string(), "/worktree/bin".to_string())]),
+        SnapshotPathFixture::SnapshotBinOnly,
     )?;
 
     assert_eq!(
@@ -1020,14 +1023,46 @@ fn maybe_wrap_shell_lc_with_snapshot_applies_runtime_path_prepend_after_explicit
 }
 
 #[cfg(unix)]
+#[test]
+fn maybe_wrap_shell_lc_with_snapshot_deduplicates_runtime_path_prepend_from_snapshot_path()
+-> anyhow::Result<()> {
+    let (stdout, package_path_dir) = run_snapshot_path_probe_with_runtime_path_prepend(
+        HashMap::new(),
+        SnapshotPathFixture::AlreadyContainsPackagePath,
+    )?;
+
+    assert_eq!(
+        stdout,
+        format!("{}:/snapshot/bin", package_path_dir.display()),
+        "runtime PATH prepend should not duplicate an entry restored by the snapshot"
+    );
+    Ok(())
+}
+
+#[cfg(unix)]
+enum SnapshotPathFixture {
+    SnapshotBinOnly,
+    AlreadyContainsPackagePath,
+}
+
+#[cfg(unix)]
 fn run_snapshot_path_probe_with_runtime_path_prepend(
     explicit_env_overrides: HashMap<String, String>,
+    snapshot_path_fixture: SnapshotPathFixture,
 ) -> anyhow::Result<(String, PathBuf)> {
     let dir = tempdir()?;
+    let package_path_dir = dir.path().join("codex-path");
+    let snapshot_path_value = match snapshot_path_fixture {
+        SnapshotPathFixture::SnapshotBinOnly => "/snapshot/bin".to_string(),
+        SnapshotPathFixture::AlreadyContainsPackagePath => {
+            format!("{}:/snapshot/bin", package_path_dir.display())
+        }
+    };
     let snapshot_path = dir.path().join("snapshot.sh");
+    let snapshot_path_value = shell_single_quote(&snapshot_path_value);
     std::fs::write(
         &snapshot_path,
-        "# Snapshot file\nexport PATH='/snapshot/bin'\n",
+        format!("# Snapshot file\nexport PATH='{snapshot_path_value}'\n"),
     )?;
     let session_shell = shell_with_snapshot(
         ShellType::Bash,
@@ -1040,7 +1075,6 @@ fn run_snapshot_path_probe_with_runtime_path_prepend(
         "-lc".to_string(),
         "printf '%s' \"$PATH\"".to_string(),
     ];
-    let package_path_dir = dir.path().join("codex-path");
     let mut env = HashMap::from([("PATH".to_string(), "/worktree/bin".to_string())]);
     let mut runtime_path_prepends = RuntimePathPrepends::default();
     runtime_path_prepends.prepend(&mut env, package_path_dir.as_path());

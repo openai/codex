@@ -33,6 +33,31 @@ pub(crate) mod apply_patch;
 pub(crate) mod shell;
 pub(crate) mod unified_exec;
 
+const PREPEND_PATH_ENTRY_AFTER_SNAPSHOT: &str = r#"__codex_prepend_path_entry() {
+  __codex_path_entry="$1"
+  if [ -z "$__codex_path_entry" ]; then
+    return
+  fi
+  __codex_old_path="${PATH:-}"
+  PATH="$__codex_path_entry"
+  while [ -n "$__codex_old_path" ]; do
+    case "$__codex_old_path" in
+      *:*)
+        __codex_path_part="${__codex_old_path%%:*}"
+        __codex_old_path="${__codex_old_path#*:}"
+        ;;
+      *)
+        __codex_path_part="$__codex_old_path"
+        __codex_old_path=
+        ;;
+    esac
+    if [ -n "$__codex_path_part" ] && [ "$__codex_path_part" != "$__codex_path_entry" ]; then
+      PATH="$PATH:$__codex_path_part"
+    fi
+  done
+  export PATH
+}"#;
+
 /// Shared helper to construct sandbox transform inputs from a tokenized command line.
 /// Validates that at least a program is present.
 pub(crate) fn build_sandbox_command(
@@ -141,17 +166,21 @@ impl RuntimePathPrepends {
             return String::new();
         }
 
-        self.entries
+        let exports = self
+            .entries
             .iter()
             .filter(|entry| !entry.is_empty())
             .map(|entry| {
                 let entry = shell_single_quote(entry);
-                format!(
-                    "if [ -n \"${{PATH:-}}\" ]; then export PATH='{entry}':\"$PATH\"; else export PATH='{entry}'; fi"
-                )
+                format!("__codex_prepend_path_entry '{entry}'")
             })
             .collect::<Vec<_>>()
-            .join("\n")
+            .join("\n");
+        if exports.is_empty() {
+            String::new()
+        } else {
+            format!("{PREPEND_PATH_ENTRY_AFTER_SNAPSHOT}\n{exports}")
+        }
     }
 }
 
