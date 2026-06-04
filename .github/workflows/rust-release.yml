@@ -1946,6 +1946,9 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    environment:
+      name: mainline-release-winget
+      deployment: false
 
     steps:
       - name: Publish to WinGet
