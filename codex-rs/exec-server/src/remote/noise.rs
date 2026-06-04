@@ -269,3 +269,7 @@ fn validate_executor_registration_id(
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "noise_tests.rs"]
+mod tests;

@@ -397,3 +397,7 @@ fn send_reset(physical_outgoing_tx: &mpsc::Sender<Vec<u8>>, stream_id: String) {
     // state machine behind an overloaded physical writer queue.
     let _ = physical_outgoing_tx.try_send(encode_relay_message_frame(&reset));
 }
+
+#[cfg(test)]
+#[path = "environment_tests.rs"]
+mod tests;
