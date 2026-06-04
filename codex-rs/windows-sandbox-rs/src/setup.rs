@@ -12,8 +12,10 @@ use std::process::Stdio;
 
 use crate::allow::AllowDenyPaths;
 use crate::allow::compute_allow_paths_for_permissions;
+use crate::helper_materialization::HelperExecutable;
 use crate::helper_materialization::bundled_executable_path_for_exe;
 use crate::helper_materialization::helper_bin_dir;
+use crate::helper_materialization::resolve_helper_for_launch;
 use crate::identity::sandbox_setup_is_complete;
 use crate::logging::log_note;
 use crate::path_normalization::canonical_path_key;
@@ -209,8 +211,14 @@ fn run_setup_refresh_inner(
     };
     let json = serde_json::to_vec(&payload)?;
     let b64 = BASE64_STANDARD.encode(json);
-    let exe = find_setup_exe();
-    // Refresh should never request elevation; ensure verb isn't set and we don't trigger UAC.
+    let log_dir = sandbox_dir(request.codex_home);
+    let exe = resolve_helper_for_launch(
+        HelperExecutable::SetupHelper,
+        request.codex_home,
+        Some(&log_dir),
+    );
+    // Refresh should never request elevation, so prefer the copied helper
+    // instead of launching the packaged setup executable directly.
     let mut cmd = Command::new(&exe);
     cmd.arg(&b64).stdout(Stdio::null()).stderr(Stdio::null());
     let cwd = std::env::current_dir().unwrap_or_else(|_| request.codex_home.to_path_buf());
@@ -221,14 +229,14 @@ fn run_setup_refresh_inner(
             cwd.display(),
             b64.len()
         ),
-        Some(&sandbox_dir(request.codex_home)),
+        Some(&log_dir),
     );
     let status = cmd
         .status()
         .map_err(|e| {
             log_note(
                 &format!("setup refresh: failed to spawn {}: {e}", exe.display()),
-                Some(&sandbox_dir(request.codex_home)),
+                Some(&log_dir),
             );
             e
         })
@@ -236,7 +244,7 @@ fn run_setup_refresh_inner(
     if !status.success() {
         log_note(
             &format!("setup refresh: exited with status {status:?}"),
-            Some(&sandbox_dir(request.codex_home)),
+            Some(&log_dir),
         );
         return Err(anyhow!("setup refresh failed with status {status}"));
     }
@@ -672,17 +680,6 @@ fn report_helper_failure(
     }
 }
 
-fn verify_setup_completed(codex_home: &Path) -> Result<()> {
-    if sandbox_setup_is_complete(codex_home) {
-        Ok(())
-    } else {
-        Err(failure(
-            SetupErrorCode::OrchestratorHelperIncomplete,
-            "setup helper exited successfully before setup completed",
-        ))
-    }
-}
-
 fn run_setup_exe(
     payload: &ElevationPayload,
     needs_elevation: bool,
@@ -736,7 +733,6 @@ fn run_setup_exe(
                 status.code(),
             ));
         }
-        verify_setup_completed(codex_home)?;
         if let Err(err) = clear_setup_error_report(codex_home) {
             log_note(
                 &format!(
@@ -748,75 +744,185 @@ fn run_setup_exe(
         return Ok(());
     }
 
-    let exe_w = crate::winutil::to_wide(&exe);
+    let file = exe.display().to_string();
+    let verb = "runas".to_string();
     let params = quote_arg(&payload_b64);
-    let params_w = crate::winutil::to_wide(params);
-    let verb_w = crate::winutil::to_wide("runas");
-    let mut sei: SHELLEXECUTEINFOW = unsafe { std::mem::zeroed() };
-    sei.cbSize = std::mem::size_of::<SHELLEXECUTEINFOW>() as u32;
-    sei.fMask = SEE_MASK_NOCLOSEPROCESS;
-    sei.lpVerb = verb_w.as_ptr();
-    sei.lpFile = exe_w.as_ptr();
-    sei.lpParameters = params_w.as_ptr();
-    // Hide the window for the elevated helper.
-    sei.nShow = 0; // SW_HIDE
-    let ok = unsafe { ShellExecuteExW(&mut sei) };
-    if ok == 0 || sei.hProcess == 0 {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| codex_home.to_path_buf());
+    let file_w = widestring::U16CString::from_str(&file).map_err(|err| {
+        failure(
+            SetupErrorCode::OrchestratorHelperLaunchFailed,
+            format!("setup helper path contains interior NUL: {err}"),
+        )
+    })?;
+    let verb_w = widestring::U16CString::from_str(&verb).map_err(|err| {
+        failure(
+            SetupErrorCode::OrchestratorHelperLaunchFailed,
+            format!("ShellExecute verb contains interior NUL: {err}"),
+        )
+    })?;
+    let params_w = widestring::U16CString::from_str(&params).map_err(|err| {
+        failure(
+            SetupErrorCode::OrchestratorHelperLaunchFailed,
+            format!("setup helper params contain interior NUL: {err}"),
+        )
+    })?;
+    let cwd_w = widestring::U16CString::from_os_str(cwd.as_os_str()).map_err(|err| {
+        failure(
+            SetupErrorCode::OrchestratorHelperLaunchFailed,
+            format!("setup helper cwd contains interior NUL: {err}"),
+        )
+    })?;
+
+    let mut sei = SHELLEXECUTEINFOW {
+        cbSize: std::mem::size_of::<SHELLEXECUTEINFOW>() as u32,
+        fMask: SEE_MASK_NOCLOSEPROCESS,
+        hwnd: 0,
+        lpVerb: verb_w.as_ptr(),
+        lpFile: file_w.as_ptr(),
+        lpParameters: params_w.as_ptr(),
+        lpDirectory: cwd_w.as_ptr(),
+        nShow: 0, // SW_HIDE
+        hInstApp: 0,
+        lpIDList: std::ptr::null_mut(),
+        lpClass: std::ptr::null(),
+        hkeyClass: 0,
+        dwHotKey: 0,
+        Anonymous: windows_sys::Win32::UI::Shell::SHELLEXECUTEINFOW_0 {
+            hMonitor: 0,
+        },
+        hProcess: 0,
+    };
+    let ok = unsafe { ShellExecuteExW(&mut sei as *mut _) };
+    if ok == 0 {
         let last_error = unsafe { GetLastError() };
-        let code = if last_error == ERROR_CANCELLED {
-            SetupErrorCode::OrchestratorHelperLaunchCanceled
-        } else {
-            SetupErrorCode::OrchestratorHelperLaunchFailed
-        };
+        if last_error == ERROR_CANCELLED {
+            return Err(failure(
+                SetupErrorCode::OrchestratorHelperElevationCancelled,
+                "setup helper elevation was cancelled by the user",
+            ));
+        }
         return Err(failure(
-            code,
+            SetupErrorCode::OrchestratorHelperLaunchFailed,
             format!("ShellExecuteExW failed to launch setup helper: {last_error}"),
         ));
     }
-    unsafe {
-        WaitForSingleObject(sei.hProcess, INFINITE);
-        let mut code: u32 = 1;
-        GetExitCodeProcess(sei.hProcess, &mut code);
-        CloseHandle(sei.hProcess);
-        if code != 0 {
-            return Err(report_helper_failure(
-                codex_home,
-                cleared_report,
-                Some(code as i32),
-            ));
-        }
+
+    if sei.hProcess == 0 {
+        return Err(failure(
+            SetupErrorCode::OrchestratorHelperLaunchFailed,
+            "ShellExecuteExW did not return a process handle for the setup helper",
+        ));
     }
-    verify_setup_completed(codex_home)?;
+
+    let wait_code = unsafe { WaitForSingleObject(sei.hProcess, INFINITE) };
+    if wait_code != 0 {
+        let last_error = unsafe { GetLastError() };
+        unsafe {
+            CloseHandle(sei.hProcess);
+        }
+        return Err(failure(
+            SetupErrorCode::OrchestratorHelperWaitFailed,
+            format!("WaitForSingleObject failed for setup helper: wait_code={wait_code}, last_error={last_error}"),
+        ));
+    }
+
+    let mut exit_code: u32 = 0;
+    let got_exit_code = unsafe { GetExitCodeProcess(sei.hProcess, &mut exit_code as *mut _) };
+    unsafe {
+        CloseHandle(sei.hProcess);
+    }
+    if got_exit_code == 0 {
+        let last_error = unsafe { GetLastError() };
+        return Err(failure(
+            SetupErrorCode::OrchestratorHelperExitCodeReadFailed,
+            format!("GetExitCodeProcess failed for setup helper: {last_error}"),
+        ));
+    }
+
+    if exit_code != 0 {
+        return Err(report_helper_failure(
+            codex_home,
+            cleared_report,
+            i32::try_from(exit_code).ok(),
+        ));
+    }
+
     if let Err(err) = clear_setup_error_report(codex_home) {
         log_note(
-            &format!("setup orchestrator: failed to clear setup_error.json after success: {err}"),
+            &format!(
+                "setup orchestrator: failed to clear setup_error.json after success: {err}"
+            ),
             Some(&sandbox_dir(codex_home)),
         );
     }
     Ok(())
 }
 
-pub fn run_elevated_setup(
+pub fn ensure_setup(request: SandboxSetupRequest<'_>) -> Result<()> {
+    ensure_setup_with_overrides(request, SetupRootOverrides::default())
+}
+
+pub fn ensure_setup_with_overrides(
     request: SandboxSetupRequest<'_>,
     overrides: SetupRootOverrides,
 ) -> Result<()> {
+    let permission_profile = request.permissions.permission_profile();
     if !request.permissions.is_enforceable_by_windows_sandbox() {
-        anyhow::bail!("unsupported filesystem permissions for Windows sandbox setup");
+        return Err(failure(
+            SetupErrorCode::UnsupportedPermissions,
+            format!(
+                "permission profile {permission_profile:?} is not enforceable by Windows sandbox"
+            ),
+        ));
     }
-    // Ensure the shared sandbox directory exists before we send it to the elevated helper.
-    let sbx_dir = sandbox_dir(request.codex_home);
-    std::fs::create_dir_all(&sbx_dir).map_err(|err| {
+
+    let marker_path = setup_marker_path(request.codex_home);
+    let marker_matches = std::fs::read(&marker_path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<SetupMarker>(&bytes).ok())
+        .is_some_and(|marker| {
+            marker.version_matches()
+                && marker
+                    .request_mismatch_reason(
+                        SandboxNetworkIdentity::from_permissions(
+                            request.permissions,
+                            request.proxy_enforced,
+                        ),
+                        &offline_proxy_settings_from_env(
+                            request.env_map,
+                            SandboxNetworkIdentity::from_permissions(
+                                request.permissions,
+                                request.proxy_enforced,
+                            ),
+                        ),
+                    )
+                    .is_none()
+        });
+
+    if marker_matches && sandbox_setup_is_complete(request.codex_home).unwrap_or(false) {
+        return Ok(());
+    }
+
+    std::fs::create_dir_all(sandbox_dir(request.codex_home)).map_err(|err| {
         failure(
-            SetupErrorCode::OrchestratorSandboxDirCreateFailed,
-            format!("failed to create sandbox dir {}: {err}", sbx_dir.display()),
+            SetupErrorCode::PrepareSandboxDirFailed,
+            format!("failed to create sandbox dir: {err}"),
         )
     })?;
+    std::fs::create_dir_all(sandbox_bin_dir(request.codex_home)).map_err(|err| {
+        failure(
+            SetupErrorCode::PrepareSandboxDirFailed,
+            format!("failed to create sandbox bin dir: {err}"),
+        )
+    })?;
+
     let (read_roots, write_roots) = build_payload_roots(&request, &overrides);
     let deny_read_paths = build_payload_deny_read_paths(overrides.deny_read_paths);
     let deny_write_paths = build_payload_deny_write_paths(&request, overrides.deny_write_paths);
     let network_identity =
         SandboxNetworkIdentity::from_permissions(request.permissions, request.proxy_enforced);
     let offline_proxy_settings = offline_proxy_settings_from_env(request.env_map, network_identity);
+    let needs_elevation = !is_elevated().unwrap_or(false);
     let payload = ElevationPayload {
         version: SETUP_VERSION,
         offline_username: OFFLINE_USERNAME.to_string(),
@@ -829,83 +935,30 @@ pub fn run_elevated_setup(
         deny_write_paths,
         proxy_ports: offline_proxy_settings.proxy_ports,
         allow_local_binding: offline_proxy_settings.allow_local_binding,
+        otel: None,
         real_user: std::env::var("USERNAME").unwrap_or_else(|_| "Administrators".to_string()),
-        otel: codex_otel::global_statsig_metrics_settings(),
         mode: SetupMode::Full,
         refresh_only: false,
     };
-    let needs_elevation = !is_elevated().map_err(|err| {
-        failure(
-            SetupErrorCode::OrchestratorElevationCheckFailed,
-            format!("failed to determine elevation state: {err}"),
-        )
-    })?;
-    run_setup_exe(&payload, needs_elevation, request.codex_home)
-}
 
-pub fn run_elevated_provisioning_setup(codex_home: &Path, real_user: &str) -> Result<()> {
-    let sbx_dir = sandbox_dir(codex_home);
-    std::fs::create_dir_all(&sbx_dir).map_err(|err| {
-        failure(
-            SetupErrorCode::OrchestratorSandboxDirCreateFailed,
-            format!("failed to create sandbox dir {}: {err}", sbx_dir.display()),
-        )
-    })?;
-    if !is_elevated().map_err(|err| {
-        failure(
-            SetupErrorCode::OrchestratorElevationCheckFailed,
-            format!("failed to determine elevation state: {err}"),
-        )
-    })? {
-        return Err(failure(
-            SetupErrorCode::OrchestratorElevationRequired,
-            "sandbox provisioning setup must be run from an elevated process",
-        ));
-    }
-    let payload = ElevationPayload {
-        version: SETUP_VERSION,
-        offline_username: OFFLINE_USERNAME.to_string(),
-        online_username: ONLINE_USERNAME.to_string(),
-        codex_home: codex_home.to_path_buf(),
-        command_cwd: codex_home.to_path_buf(),
-        read_roots: Vec::new(),
-        write_roots: Vec::new(),
-        deny_read_paths: Vec::new(),
-        deny_write_paths: Vec::new(),
-        proxy_ports: Vec::new(),
-        allow_local_binding: false,
-        otel: codex_otel::global_statsig_metrics_settings(),
-        real_user: real_user.to_string(),
-        mode: SetupMode::ProvisionOnly,
-        refresh_only: false,
-    };
-    run_setup_exe(&payload, /*needs_elevation*/ false, codex_home)
+    run_setup_exe(&payload, needs_elevation, request.codex_home)
 }
 
 fn build_payload_roots(
     request: &SandboxSetupRequest<'_>,
     overrides: &SetupRootOverrides,
 ) -> (Vec<PathBuf>, Vec<PathBuf>) {
-    let write_roots = effective_write_roots_for_setup(
-        request.permissions,
-        request.command_cwd,
-        request.env_map,
-        request.codex_home,
-        overrides.write_roots.as_deref(),
-    );
-    let mut read_roots = if let Some(roots) = overrides.read_roots.as_deref() {
-        // An explicit override is the split policy's complete readable set. Keep only the
-        // helper/platform roots the elevated setup needs; do not re-add legacy cwd/full-read roots.
-        let mut read_roots = gather_helper_read_roots(request.codex_home);
+    let helper_roots = gather_helper_read_roots(request.codex_home);
+    let mut read_roots = if let Some(mut roots) = overrides.read_roots.clone() {
+        roots.extend(helper_roots);
         if overrides.read_roots_include_platform_defaults {
-            read_roots.extend(
+            roots.extend(
                 WINDOWS_PLATFORM_DEFAULT_READ_ROOTS
                     .iter()
                     .map(PathBuf::from),
             );
         }
-        read_roots.extend(roots.iter().cloned());
-        canonical_existing(&read_roots)
+        canonical_existing(&roots)
     } else {
         gather_read_roots(
             request.command_cwd,
@@ -914,208 +967,190 @@ fn build_payload_roots(
             request.codex_home,
         )
     };
-    read_roots = expand_user_profile_root(read_roots);
-    read_roots = filter_user_profile_root(read_roots);
-    read_roots = filter_user_profile_root_exclusions(read_roots);
-    read_roots = filter_ssh_config_dependency_roots(read_roots);
-    let write_root_set: HashSet<PathBuf> = write_roots.iter().cloned().collect();
-    read_roots.retain(|root| !write_root_set.contains(root));
+    read_roots.sort_by_key(|path| canonical_path_key(path));
+    read_roots.dedup_by(|a, b| canonical_path_key(a) == canonical_path_key(b));
+
+    let write_roots = effective_write_roots_for_permissions(
+        request.permissions,
+        request.command_cwd,
+        request.env_map,
+        request.codex_home,
+        overrides.write_roots.as_deref(),
+    );
+
     (read_roots, write_roots)
+}
+
+fn build_payload_deny_read_paths(deny_read_paths_override: Option<Vec<PathBuf>>) -> Vec<PathBuf> {
+    deny_read_paths_override.unwrap_or_default()
 }
 
 fn build_payload_deny_write_paths(
     request: &SandboxSetupRequest<'_>,
-    explicit_deny_write_paths: Option<Vec<PathBuf>>,
+    deny_write_paths_override: Option<Vec<PathBuf>>,
 ) -> Vec<PathBuf> {
-    let allow_deny_paths: AllowDenyPaths = compute_allow_paths_for_permissions(
-        request.permissions,
-        request.command_cwd,
-        request.env_map,
-    );
-    let mut deny_write_paths: Vec<PathBuf> = explicit_deny_write_paths
-        .unwrap_or_default()
+    let protected = request
+        .permissions
+        .writable_roots_for_cwd(request.command_cwd, request.env_map)
         .into_iter()
-        .map(|path| canonicalize_path(&path))
-        .collect();
-    deny_write_paths.extend(allow_deny_paths.deny);
-    deny_write_paths
-}
-
-fn build_payload_deny_read_paths(explicit_deny_read_paths: Option<Vec<PathBuf>>) -> Vec<PathBuf> {
-    // Keep the configured spelling here so the ACL layer can plan both the
-    // lexical path and any existing canonical target for reparse-point aliases.
-    explicit_deny_read_paths.unwrap_or_default()
+        .flat_map(|root| {
+            let mut paths = Vec::new();
+            let root_path = root.root;
+            let dot_git = root_path.join(".git");
+            if dot_git.exists() {
+                paths.push(dot_git);
+            }
+            let dot_codex = root_path.join(".codex");
+            if dot_codex.exists() {
+                paths.push(dot_codex);
+            }
+            paths
+        })
+        .collect::<Vec<_>>();
+    let mut merged = protected;
+    if let Some(extra) = deny_write_paths_override {
+        merged.extend(extra);
+    }
+    let mut dedup = HashSet::new();
+    merged.retain(|path| dedup.insert(canonical_path_key(path)));
+    merged
 }
 
 fn expand_user_profile_root(roots: Vec<PathBuf>) -> Vec<PathBuf> {
-    let Ok(user_profile) = std::env::var("USERPROFILE") else {
-        return roots;
-    };
-    expand_user_profile_root_for(roots, Path::new(&user_profile))
+    if let Ok(user_profile) = std::env::var("USERPROFILE") {
+        return expand_user_profile_root_for(roots, Path::new(&user_profile));
+    }
+    roots
 }
 
 fn expand_user_profile_root_for(roots: Vec<PathBuf>, user_profile: &Path) -> Vec<PathBuf> {
     let user_profile_key = canonical_path_key(user_profile);
-    let mut expanded = Vec::new();
+    let mut out = Vec::new();
     for root in roots {
         if canonical_path_key(&root) == user_profile_key {
-            expanded.extend(profile_read_roots(user_profile));
+            out.extend(profile_read_roots(user_profile));
         } else {
-            expanded.push(root);
+            out.push(root);
         }
     }
-
-    expanded.sort_by_key(|root| canonical_path_key(root));
-    expanded.dedup_by(|a, b| canonical_path_key(a.as_path()) == canonical_path_key(b.as_path()));
-    expanded
+    out
 }
 
-fn filter_user_profile_root(mut roots: Vec<PathBuf>) -> Vec<PathBuf> {
-    let Ok(user_profile) = std::env::var("USERPROFILE") else {
-        return roots;
-    };
-    let user_profile_key = canonical_path_key(Path::new(&user_profile));
-    roots.retain(|root| canonical_path_key(root) != user_profile_key);
+fn filter_user_profile_root(roots: Vec<PathBuf>) -> Vec<PathBuf> {
+    if let Ok(user_profile) = std::env::var("USERPROFILE") {
+        let user_profile_key = canonical_path_key(Path::new(&user_profile));
+        return roots
+            .into_iter()
+            .filter(|root| canonical_path_key(root) != user_profile_key)
+            .collect();
+    }
     roots
 }
 
-fn filter_user_profile_root_exclusions(mut roots: Vec<PathBuf>) -> Vec<PathBuf> {
+fn filter_user_profile_root_exclusions(roots: Vec<PathBuf>) -> Vec<PathBuf> {
     let Ok(user_profile) = std::env::var("USERPROFILE") else {
         return roots;
     };
-    let user_profile = Path::new(&user_profile);
-    roots.retain(|root| !is_user_profile_root_exclusion(root, user_profile));
+    let user_profile = PathBuf::from(user_profile);
     roots
+        .into_iter()
+        .filter(|root| !is_user_profile_root_exclusion(root, &user_profile))
+        .collect()
 }
 
-fn is_user_profile_root_exclusion(root: &Path, user_profile: &Path) -> bool {
-    let root_key = canonical_path_key(root);
-    let profile_key = canonical_path_key(user_profile);
-    let profile_prefix = format!("{}/", profile_key.trim_end_matches('/'));
-    let Some(relative_key) = root_key.strip_prefix(&profile_prefix) else {
+fn is_user_profile_root_exclusion(path: &Path, user_profile: &Path) -> bool {
+    let Ok(relative) = path.strip_prefix(user_profile) else {
         return false;
     };
-    let Some(child_name) = relative_key
-        .split('/')
-        .next()
-        .filter(|name| !name.is_empty())
-    else {
+    let Some(first_component) = relative.components().next() else {
         return false;
     };
-
+    let std::path::Component::Normal(name) = first_component else {
+        return false;
+    };
+    let name = name.to_string_lossy();
     USERPROFILE_ROOT_EXCLUSIONS
         .iter()
-        .any(|excluded| child_name.eq_ignore_ascii_case(excluded))
+        .any(|excluded| name.eq_ignore_ascii_case(excluded))
 }
 
-fn filter_ssh_config_dependency_roots(mut roots: Vec<PathBuf>) -> Vec<PathBuf> {
+fn filter_ssh_config_dependency_roots(roots: Vec<PathBuf>) -> Vec<PathBuf> {
     let Ok(user_profile) = std::env::var("USERPROFILE") else {
         return roots;
     };
-    let user_profile = Path::new(&user_profile);
-    let dependency_paths = ssh_config_dependency_paths(user_profile);
-    roots.retain(|root| !is_ssh_config_dependency_root(root, user_profile, &dependency_paths));
+    let user_profile = PathBuf::from(user_profile);
+    let dependency_paths = ssh_config_dependency_paths(&user_profile);
     roots
+        .into_iter()
+        .filter(|root| !is_ssh_config_dependency_root(root, &user_profile, &dependency_paths))
+        .collect()
 }
 
 fn is_ssh_config_dependency_root(
-    root: &Path,
+    path: &Path,
     user_profile: &Path,
     dependency_paths: &[PathBuf],
 ) -> bool {
-    let Some(child_name) = user_profile_child_name(root, user_profile) else {
-        return false;
-    };
-
-    dependency_paths.iter().any(|path| {
-        user_profile_child_name(path, user_profile)
-            .is_some_and(|dependency_child| child_name.eq_ignore_ascii_case(&dependency_child))
+    dependency_paths.iter().any(|dependency| {
+        path == dependency || (path.starts_with(user_profile) && dependency.starts_with(path))
     })
 }
 
-fn user_profile_child_name(path: &Path, user_profile: &Path) -> Option<String> {
-    let root_key = canonical_path_key(path);
-    let profile_key = canonical_path_key(user_profile);
-    let profile_prefix = format!("{}/", profile_key.trim_end_matches('/'));
-    let relative_key = root_key.strip_prefix(&profile_prefix)?;
-    relative_key
-        .split('/')
-        .next()
-        .filter(|name| !name.is_empty())
-        .map(str::to_string)
-}
-
-fn filter_sensitive_write_roots(mut roots: Vec<PathBuf>, codex_home: &Path) -> Vec<PathBuf> {
-    // Never grant capability write access to CODEX_HOME or anything under CODEX_HOME/.sandbox,
-    // CODEX_HOME/.sandbox-bin, or CODEX_HOME/.sandbox-secrets. These locations contain sandbox
-    // control/state and helper binaries and must remain tamper-resistant.
-    let codex_home_key = canonical_path_key(codex_home);
-    let sbx_dir_key = canonical_path_key(&sandbox_dir(codex_home));
-    let sbx_dir_prefix = format!("{}/", sbx_dir_key.trim_end_matches('/'));
-    let sbx_bin_dir_key = canonical_path_key(&sandbox_bin_dir(codex_home));
-    let sbx_bin_dir_prefix = format!("{}/", sbx_bin_dir_key.trim_end_matches('/'));
-    let secrets_dir_key = canonical_path_key(&sandbox_secrets_dir(codex_home));
-    let secrets_dir_prefix = format!("{}/", secrets_dir_key.trim_end_matches('/'));
-
-    roots.retain(|root| {
-        let key = canonical_path_key(root);
-        key != codex_home_key
-            && key != sbx_dir_key
-            && !key.starts_with(&sbx_dir_prefix)
-            && key != sbx_bin_dir_key
-            && !key.starts_with(&sbx_bin_dir_prefix)
-            && key != secrets_dir_key
-            && !key.starts_with(&secrets_dir_prefix)
-    });
+fn filter_sensitive_write_roots(roots: Vec<PathBuf>, codex_home: &Path) -> Vec<PathBuf> {
+    let forbidden = [
+        canonical_path_key(codex_home),
+        canonical_path_key(&sandbox_dir(codex_home)),
+        canonical_path_key(&sandbox_bin_dir(codex_home)),
+        canonical_path_key(&sandbox_secrets_dir(codex_home)),
+    ];
     roots
+        .into_iter()
+        .filter(|root| {
+            let key = canonical_path_key(root);
+            !forbidden.contains(&key)
+        })
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::WINDOWS_PLATFORM_DEFAULT_READ_ROOTS;
-    use super::build_payload_roots;
-    use super::find_setup_exe_for_current_exe;
+    use super::SandboxNetworkIdentity;
+    use super::canonical_existing;
+    use super::effective_write_roots_for_permissions;
     use super::gather_full_read_roots_for_permissions;
     use super::gather_read_roots;
-    use super::loopback_proxy_port_from_url;
+    use super::helper_bin_dir;
     use super::offline_proxy_settings_from_env;
-    use super::profile_read_roots;
     use super::proxy_ports_from_env;
-    use super::verify_setup_completed;
-    use crate::helper_materialization::BIN_DIRNAME;
-    use crate::helper_materialization::RESOURCES_DIRNAME;
-    use crate::helper_materialization::helper_bin_dir;
-    use crate::resolved_permissions::ResolvedWindowsSandboxPermissions;
-    use crate::setup_error::SetupErrorCode;
-    use crate::setup_error::extract_failure;
+    use super::quote_arg;
+    use super::sandbox_bin_dir;
+    use super::workspace_write_roots_remain_readable;
+    use super::*;
+    use codex_protocol::models::FilesystemAllowlistPolicy;
+    use codex_protocol::models::NetworkAccess;
     use codex_protocol::models::PermissionProfile;
-    use codex_protocol::permissions::NetworkSandboxPolicy;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
-    use std::collections::HashMap;
     use std::collections::HashSet;
     use std::fs;
-    use std::path::Path;
     use std::path::PathBuf;
     use tempfile::TempDir;
 
-    fn canonical_windows_platform_default_roots() -> Vec<PathBuf> {
-        WINDOWS_PLATFORM_DEFAULT_READ_ROOTS
-            .iter()
-            .map(|path| dunce::canonicalize(path).unwrap_or_else(|_| PathBuf::from(path)))
-            .collect()
+    fn workspace_roots_for(path: &Path) -> Vec<AbsolutePathBuf> {
+        vec![AbsolutePathBuf::from_absolute_path(path).expect("absolute workspace root")]
     }
 
-    #[test]
-    fn setup_completion_requires_ready_artifacts() {
-        let codex_home = TempDir::new().expect("tempdir");
-        let err = verify_setup_completed(codex_home.path())
-            .expect_err("missing setup artifacts should fail");
-
-        assert_eq!(
-            extract_failure(&err).map(|failure| failure.code),
-            Some(SetupErrorCode::OrchestratorHelperIncomplete)
-        );
+    fn workspace_write_profile(
+        writable_roots: &[AbsolutePathBuf],
+        exclude_tmpdir_env_var: bool,
+        exclude_slash_tmp: bool,
+    ) -> PermissionProfile {
+        PermissionProfile::WorkspaceWrite {
+            writable_roots: writable_roots.to_vec(),
+            network_access: NetworkAccess::Restricted,
+            exclude_tmpdir_env_var,
+            exclude_slash_tmp,
+        }
     }
 
     fn permissions_for(
@@ -1126,142 +1161,64 @@ mod tests {
             permission_profile,
             workspace_roots,
         )
-        .expect("managed permission profile")
+        .expect("permissions")
     }
 
-    fn workspace_roots_for(root: &Path) -> Vec<AbsolutePathBuf> {
-        vec![AbsolutePathBuf::from_absolute_path(root).expect("absolute workspace root")]
-    }
-
-    fn workspace_write_profile(
-        writable_roots: &[AbsolutePathBuf],
-        exclude_tmpdir_env_var: bool,
-        exclude_slash_tmp: bool,
-    ) -> PermissionProfile {
-        PermissionProfile::workspace_write_with(
-            writable_roots,
-            NetworkSandboxPolicy::Restricted,
-            exclude_tmpdir_env_var,
-            exclude_slash_tmp,
-        )
+    fn canonical_windows_platform_default_roots() -> Vec<PathBuf> {
+        WINDOWS_PLATFORM_DEFAULT_READ_ROOTS
+            .iter()
+            .map(PathBuf::from)
+            .map(|path| canonicalize_path(&path).unwrap_or(path))
+            .collect()
     }
 
     #[test]
-    fn setup_refresh_skips_profiles_without_managed_filesystem_permissions() {
-        let tmp = TempDir::new().expect("tempdir");
-        let command_cwd = tmp.path().join("workspace");
-        let codex_home = tmp.path().join("codex-home");
-        fs::create_dir_all(&command_cwd).expect("create workspace");
-        let workspace_roots = workspace_roots_for(command_cwd.as_path());
-
-        for permission_profile in [
-            PermissionProfile::Disabled,
-            PermissionProfile::External {
-                network: NetworkSandboxPolicy::Restricted,
-            },
-        ] {
-            super::run_setup_refresh(
-                &permission_profile,
-                workspace_roots.as_slice(),
-                command_cwd.as_path(),
-                &HashMap::new(),
-                codex_home.as_path(),
-                /*proxy_enforced*/ false,
-            )
-            .expect("unsupported profiles do not need setup refresh");
-
-            super::run_setup_refresh_with_extra_read_roots(
-                &permission_profile,
-                workspace_roots.as_slice(),
-                command_cwd.as_path(),
-                &HashMap::new(),
-                codex_home.as_path(),
-                vec![command_cwd.clone()],
-                /*proxy_enforced*/ false,
-            )
-            .expect("unsupported profiles do not need setup refresh");
-        }
+    fn quote_arg_leaves_simple_args_unquoted() {
+        assert_eq!(quote_arg("plain"), "plain");
     }
 
     #[test]
-    fn loopback_proxy_url_parsing_supports_common_forms() {
-        assert_eq!(
-            loopback_proxy_port_from_url("http://localhost:3128"),
-            Some(3128)
-        );
-        assert_eq!(
-            loopback_proxy_port_from_url("https://127.0.0.1:8080"),
-            Some(8080)
-        );
-        assert_eq!(
-            loopback_proxy_port_from_url("socks5h://user:pass@[::1]:1080"),
-            Some(1080)
-        );
+    fn quote_arg_quotes_and_escapes_spaces_and_quotes() {
+        assert_eq!(quote_arg("two words"), "\"two words\"");
+        assert_eq!(quote_arg("quote\"here"), "\"quote\\\"here\"");
+        assert_eq!(quote_arg(r"trailing\\"), "\"trailing\\\\\"");
     }
 
     #[test]
-    fn setup_exe_lookup_checks_package_resource_dir_for_bin_exe() {
-        let tmp = TempDir::new().expect("tempdir");
-        let package_dir = tmp.path().join("package");
-        let bin_dir = package_dir.join(BIN_DIRNAME);
-        let resources_dir = package_dir.join(RESOURCES_DIRNAME);
-        fs::create_dir_all(&bin_dir).expect("create bin dir");
-        fs::create_dir_all(&resources_dir).expect("create resources dir");
-        let exe = bin_dir.join("codex.exe");
-        let setup_exe = resources_dir.join("codex-windows-sandbox-setup.exe");
-        fs::write(&exe, b"codex").expect("write exe");
-        fs::write(&setup_exe, b"setup").expect("write setup");
+    fn proxy_ports_from_env_extracts_only_loopback_ports() {
+        let env_map = HashMap::from([
+            ("HTTP_PROXY".to_string(), "http://127.0.0.1:8080".to_string()),
+            (
+                "HTTPS_PROXY".to_string(),
+                "https://localhost:443/proxy".to_string(),
+            ),
+            ("ALL_PROXY".to_string(), "http://[::1]:9000".to_string()),
+            (
+                "WS_PROXY".to_string(),
+                "ws://example.com:8123/ignored".to_string(),
+            ),
+            (
+                "http_proxy".to_string(),
+                "http://127.0.0.1:8080".to_string(),
+            ),
+        ]);
 
-        let resolved = find_setup_exe_for_current_exe(&exe).expect("setup exe");
-
-        assert_eq!(resolved, setup_exe);
+        assert_eq!(proxy_ports_from_env(&env_map), vec![443, 8080, 9000]);
     }
 
     #[test]
-    fn loopback_proxy_url_parsing_rejects_non_loopback_and_zero_port() {
-        assert_eq!(
-            loopback_proxy_port_from_url("http://example.com:3128"),
-            None
-        );
-        assert_eq!(loopback_proxy_port_from_url("http://127.0.0.1:0"), None);
-        assert_eq!(loopback_proxy_port_from_url("localhost:8080"), None);
-    }
-
-    #[test]
-    fn proxy_ports_from_env_dedupes_and_sorts() {
-        let mut env = HashMap::new();
-        env.insert(
-            "HTTP_PROXY".to_string(),
-            "http://127.0.0.1:8080".to_string(),
-        );
-        env.insert(
-            "http_proxy".to_string(),
-            "http://localhost:8080".to_string(),
-        );
-        env.insert("ALL_PROXY".to_string(), "socks5h://[::1]:1081".to_string());
-        env.insert(
-            "HTTPS_PROXY".to_string(),
-            "https://example.com:9999".to_string(),
-        );
-
-        assert_eq!(proxy_ports_from_env(&env), vec![1081, 8080]);
-    }
-
-    #[test]
-    fn offline_proxy_settings_ignore_proxy_env_when_online_identity_selected() {
-        let mut env = HashMap::new();
-        env.insert(
-            "HTTP_PROXY".to_string(),
-            "http://127.0.0.1:8080".to_string(),
-        );
-        env.insert(
-            "CODEX_NETWORK_ALLOW_LOCAL_BINDING".to_string(),
-            "1".to_string(),
-        );
+    fn offline_proxy_settings_from_env_ignores_online_identity() {
+        let env_map = HashMap::from([
+            ("HTTP_PROXY".to_string(), "http://127.0.0.1:8080".to_string()),
+            (
+                "CODEX_NETWORK_ALLOW_LOCAL_BINDING".to_string(),
+                "1".to_string(),
+            ),
+        ]);
 
         assert_eq!(
-            offline_proxy_settings_from_env(&env, super::SandboxNetworkIdentity::Online),
-            super::OfflineProxySettings {
+            offline_proxy_settings_from_env(&env_map, SandboxNetworkIdentity::Online),
+            OfflineProxySettings {
                 proxy_ports: vec![],
                 allow_local_binding: false,
             }
@@ -1269,77 +1226,45 @@ mod tests {
     }
 
     #[test]
-    fn offline_proxy_settings_capture_proxy_ports_and_local_binding_for_offline_identity() {
-        let mut env = HashMap::new();
-        env.insert(
-            "HTTP_PROXY".to_string(),
-            "http://127.0.0.1:8080".to_string(),
-        );
-        env.insert(
-            "ALL_PROXY".to_string(),
-            "socks5h://127.0.0.1:1081".to_string(),
-        );
-        env.insert(
-            "CODEX_NETWORK_ALLOW_LOCAL_BINDING".to_string(),
-            "1".to_string(),
-        );
+    fn offline_proxy_settings_from_env_extracts_loopback_ports_and_binding() {
+        let env_map = HashMap::from([
+            ("HTTP_PROXY".to_string(), "http://127.0.0.1:8080".to_string()),
+            (
+                "HTTPS_PROXY".to_string(),
+                "https://localhost:443/proxy".to_string(),
+            ),
+            (
+                "CODEX_NETWORK_ALLOW_LOCAL_BINDING".to_string(),
+                "1".to_string(),
+            ),
+        ]);
 
         assert_eq!(
-            offline_proxy_settings_from_env(&env, super::SandboxNetworkIdentity::Offline),
-            super::OfflineProxySettings {
-                proxy_ports: vec![1081, 8080],
+            offline_proxy_settings_from_env(&env_map, SandboxNetworkIdentity::Offline),
+            OfflineProxySettings {
+                proxy_ports: vec![443, 8080],
                 allow_local_binding: true,
             }
         );
     }
 
     #[test]
-    fn setup_marker_request_mismatch_reason_ignores_proxy_drift_for_online_identity() {
-        let marker = super::SetupMarker {
-            version: super::SETUP_VERSION,
-            offline_username: "offline".to_string(),
-            online_username: "online".to_string(),
-            created_at: None,
-            proxy_ports: vec![3128],
-            allow_local_binding: false,
-        };
-        let desired = super::OfflineProxySettings {
-            proxy_ports: vec![1081, 8080],
-            allow_local_binding: true,
-        };
+    fn canonical_existing_filters_missing_paths() {
+        let tmp = TempDir::new().expect("tempdir");
+        let existing = tmp.path().join("existing");
+        let missing = tmp.path().join("missing");
+        fs::create_dir_all(&existing).expect("create existing dir");
+
+        let roots = canonical_existing(&[existing.clone(), missing]);
 
         assert_eq!(
-            marker.request_mismatch_reason(super::SandboxNetworkIdentity::Online, &desired),
-            None
+            roots,
+            vec![dunce::canonicalize(existing).expect("canonical existing dir")]
         );
     }
 
     #[test]
-    fn setup_marker_request_mismatch_reason_reports_offline_firewall_drift() {
-        let marker = super::SetupMarker {
-            version: super::SETUP_VERSION,
-            offline_username: "offline".to_string(),
-            online_username: "online".to_string(),
-            created_at: None,
-            proxy_ports: vec![3128],
-            allow_local_binding: false,
-        };
-        let desired = super::OfflineProxySettings {
-            proxy_ports: vec![1081, 8080],
-            allow_local_binding: true,
-        };
-
-        assert_eq!(
-            marker.request_mismatch_reason(super::SandboxNetworkIdentity::Offline, &desired),
-            Some(
-                "offline firewall settings changed (stored_ports=[3128], desired_ports=[1081, 8080], stored_allow_local_binding=false, desired_allow_local_binding=true)"
-                    .to_string()
-            )
-        );
-    }
-
-    #[test]
-    fn profile_read_roots_excludes_configured_top_level_entries() {
+    fn profile_read_roots_excludes_sensitive_config_dirs() {
         let tmp = TempDir::new().expect("tempdir");
         let user_profile = tmp.path();
         let allowed_dir = user_profile.join("Documents");
