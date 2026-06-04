@@ -40,8 +40,16 @@ where
         .unwrap_or_default();
         if key == "SSL_CERT_FILE"
             && let Some(ssl_cert_dir_contents) = ssl_cert_dir_contents.as_deref()
+            && let Err(err) = crate::certs::append_bounded_pem_contents(
+                &mut custom_ca_bundle,
+                ssl_cert_dir_contents,
+            )
         {
-            crate::certs::append_pem_contents(&mut custom_ca_bundle, ssl_cert_dir_contents);
+            warn!(
+                ca_env_key = key,
+                "failed to combine child MITM CA bundle; leaving current value unchanged: {err}"
+            );
+            continue;
         }
         if custom_ca_bundle.is_empty() {
             continue;
@@ -142,7 +150,15 @@ where
     }) {
         match crate::certs::read_custom_ca_dir(&ca_dir_path, can_read_path) {
             Ok(contents) if !contents.is_empty() => {
-                crate::certs::append_pem_contents(&mut trust_bundle, &contents);
+                if let Err(err) =
+                    crate::certs::append_bounded_pem_contents(&mut trust_bundle, &contents)
+                {
+                    warn!(
+                        ca_bundle_path = %ca_dir_path.display(),
+                        "failed to combine child MITM CA directories; ignoring SSL_CERT_DIR override: {err}"
+                    );
+                    return None;
+                }
             }
             Ok(_) => {}
             Err(err) => {
