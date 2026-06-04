@@ -109,6 +109,7 @@ pub struct InMemoryThreadStoreCalls {
     pub discard_thread: usize,
     pub load_history: usize,
     pub read_thread: usize,
+    pub read_thread_with_history: usize,
     pub read_thread_by_rollout_path: usize,
     pub list_threads: usize,
     pub update_thread_metadata: usize,
@@ -262,6 +263,9 @@ impl ThreadStore for InMemoryThreadStore {
     async fn read_thread(&self, params: ReadThreadParams) -> ThreadStoreResult<StoredThread> {
         let mut state = self.state.lock().await;
         state.calls.read_thread += 1;
+        if params.include_history {
+            state.calls.read_thread_with_history += 1;
+        }
         stored_thread_from_state(&state, params.thread_id, params.include_history)
     }
 

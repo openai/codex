@@ -327,6 +327,11 @@ pub(crate) struct ThreadRequestProcessor {
     pub(super) skills_watcher: Arc<SkillsWatcher>,
 }
 
+enum RunningThreadResumeResult {
+    Handled,
+    NotRunning(Option<Box<StoredThread>>),
+}
+
 impl ThreadRequestProcessor {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
@@ -2418,7 +2423,7 @@ impl ThreadRequestProcessor {
                 return Ok(());
             }
         };
-        match self
+        let stored_thread_from_running_probe = match self
             .resume_running_thread(
                 &request_id,
                 &params,
@@ -2427,13 +2432,13 @@ impl ThreadRequestProcessor {
             )
             .await
         {
-            Ok(true) => return Ok(()),
-            Ok(false) => {}
+            Ok(RunningThreadResumeResult::Handled) => return Ok(()),
+            Ok(RunningThreadResumeResult::NotRunning(stored_thread)) => stored_thread,
             Err(error) => {
                 self.outgoing.send_error(request_id, error).await;
                 return Ok(());
             }
-        }
+        };
 
         let ThreadResumeParams {
             thread_id,
@@ -2457,15 +2462,20 @@ impl ThreadRequestProcessor {
         } = params;
         let include_turns = !exclude_turns;
 
-        let (thread_history, resume_source_thread) = match if let Some(history) = history {
+        let resume_result = if let Some(history) = history {
             self.resume_thread_from_history(history.as_slice())
                 .await
                 .map(|thread_history| (thread_history, None))
+        } else if let Some(stored_thread) = stored_thread_from_running_probe {
+            self.stored_thread_to_initial_history(&stored_thread)
+                .await
+                .map(|thread_history| (thread_history, Some(*stored_thread)))
         } else {
             self.resume_thread_from_rollout(&thread_id, path.as_ref())
                 .await
                 .map(|(thread_history, stored_thread)| (thread_history, Some(stored_thread)))
-        } {
+        };
+        let (thread_history, resume_source_thread) = match resume_result {
             Ok(value) => value,
             Err(error) => {
                 self.outgoing.send_error(request_id, error).await;
@@ -2706,7 +2716,8 @@ impl ThreadRequestProcessor {
         params: &ThreadResumeParams,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
-    ) -> Result<bool, JSONRPCErrorError> {
+    ) -> Result<RunningThreadResumeResult, JSONRPCErrorError> {
+        let mut stored_thread_from_probe = None;
         let running_thread = if params.history.is_some() {
             if let Ok(existing_thread_id) = ThreadId::from_string(&params.thread_id)
                 && self
@@ -2742,7 +2753,10 @@ impl ThreadRequestProcessor {
             let existing_thread_id = source_thread.thread_id;
             match self.thread_manager.get_thread(existing_thread_id).await {
                 Ok(existing_thread) => Some((existing_thread_id, existing_thread, source_thread)),
-                Err(_) => None,
+                Err(_) => {
+                    stored_thread_from_probe = Some(Box::new(source_thread));
+                    None
+                }
             }
         };
 
@@ -2783,7 +2797,9 @@ impl ThreadRequestProcessor {
                         ThreadShutdownResult::Complete => {
                             self.thread_manager.remove_thread(&existing_thread_id).await;
                             self.finalize_thread_teardown(existing_thread_id).await;
-                            return Ok(false);
+                            // Shutdown can flush newer rollout items, so reload the
+                            // stored thread before starting the replacement session.
+                            return Ok(RunningThreadResumeResult::NotRunning(None));
                         }
                         ThreadShutdownResult::SubmitFailed => {
                             warn!("failed to submit Shutdown to thread {existing_thread_id}");
@@ -2875,9 +2891,11 @@ impl ThreadRequestProcessor {
                     "failed to enqueue running thread resume for thread {existing_thread_id}: thread listener command channel is closed"
                 )));
             }
-            return Ok(true);
+            return Ok(RunningThreadResumeResult::Handled);
         }
-        Ok(false)
+        Ok(RunningThreadResumeResult::NotRunning(
+            stored_thread_from_probe,
+        ))
     }
 
     async fn resume_thread_from_history(
