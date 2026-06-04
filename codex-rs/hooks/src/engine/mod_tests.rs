@@ -1159,9 +1159,7 @@ fn malformed_hooks_json_is_reported_as_startup_warning() {
     .expect("write hooks.json");
     let config_layer_stack = ConfigLayerStack::new(
         vec![ConfigLayerEntry::new(
-            ConfigLayerSource::System {
-                file: config_path,
-            },
+            ConfigLayerSource::System { file: config_path },
             TomlValue::Table(Default::default()),
         )],
         ConfigRequirements::default(),
