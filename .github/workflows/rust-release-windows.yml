@@ -139,6 +139,7 @@ jobs:
     runs-on: ${{ matrix.runs_on }}
     environment:
       name: azure-artifact-signing
+      deployment: false
     timeout-minutes: 90
     permissions:
       contents: read
