@@ -303,7 +303,6 @@ use codex_core::windows_sandbox::WindowsSandboxSetupRequest;
 use codex_core::windows_sandbox::sandbox_setup_is_complete;
 use codex_core_plugins::PluginInstallError as CorePluginInstallError;
 use codex_core_plugins::PluginInstallRequest;
-use codex_core_plugins::PluginLoadOutcome;
 use codex_core_plugins::PluginReadRequest;
 use codex_core_plugins::PluginUninstallError as CorePluginUninstallError;
 use codex_core_plugins::loader::load_plugin_apps;

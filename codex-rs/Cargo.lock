@@ -2145,12 +2145,14 @@ dependencies = [
  "anyhow",
  "codex-apply-patch",
  "codex-exec-server",
+ "codex-install-context",
  "codex-linux-sandbox",
  "codex-sandboxing",
  "codex-shell-escalation",
  "codex-utils-absolute-path",
  "codex-utils-home-dir",
  "dotenvy",
+ "pretty_assertions",
  "tempfile",
  "tokio",
 ]
@@ -3291,6 +3293,7 @@ name = "codex-message-history"
 version = "0.0.0"
 dependencies = [
  "codex-config",
+ "memchr",
  "pretty_assertions",
  "serde",
  "serde_json",
@@ -3405,6 +3408,7 @@ dependencies = [
  "codex-core",
  "codex-model-provider-info",
  "futures",
+ "memchr",
  "pretty_assertions",
  "reqwest 0.12.28",
  "semver",
@@ -3574,6 +3578,7 @@ dependencies = [
  "codex-utils-pty",
  "futures",
  "keyring",
+ "memchr",
  "oauth2",
  "pretty_assertions",
  "reqwest 0.13.4",

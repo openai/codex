@@ -74,13 +74,50 @@ pub struct ThreadConfigSnapshot {
     pub thread_source: Option<ThreadSource>,
 }
 
+/// Explains why `CodexThread::try_start_turn_if_idle` rejected an automatic
+/// idle turn.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TryStartTurnIfIdleRejectionReason {
+    /// User/client-triggered mailbox work is already queued and must take
+    /// priority over extension-initiated idle work.
+    PendingTriggerTurn,
+    /// The thread is in Plan mode, where automatic idle work must not start a
+    /// new model turn.
+    PlanMode,
+    /// Another turn or task is active, or the idle reservation was lost before
+    /// the automatic turn could start.
+    Busy,
+}
+
+/// Rejection returned when an extension asks to start automatic idle work but
+/// the thread is not eligible to run it.
+#[derive(Debug)]
+pub struct TryStartTurnIfIdleError {
+    reason: TryStartTurnIfIdleRejectionReason,
+    input: Vec<ResponseItem>,
+}
+
+impl TryStartTurnIfIdleError {
+    pub(crate) fn new(reason: TryStartTurnIfIdleRejectionReason, input: Vec<ResponseItem>) -> Self {
+        Self { reason, input }
+    }
+
+    /// Returns the stable reason the automatic idle turn was rejected.
+    pub fn reason(&self) -> TryStartTurnIfIdleRejectionReason {
+        self.reason
+    }
+
+    /// Consumes the rejection and returns the original model-visible input
+    /// unchanged, so callers can retry, drop, or log it explicitly.
+    pub fn into_input(self) -> Vec<ResponseItem> {
+        self.input
+    }
+}
+
 impl ThreadConfigSnapshot {
     pub fn sandbox_policy(&self) -> SandboxPolicy {
-        let file_system_sandbox_policy = self.permission_profile.file_system_sandbox_policy();
         codex_sandboxing::compatibility_sandbox_policy_for_permission_profile(
             &self.permission_profile,
-            &file_system_sandbox_policy,
-            self.permission_profile.network_sandbox_policy(),
             self.cwd.as_path(),
         )
     }
@@ -279,11 +316,23 @@ impl CodexThread {
         self.codex.session.inject_if_running(items).await
     }
 
-    /// Starts a regular turn with model-visible items only if the thread is idle.
+    /// Starts an automatic regular turn with model-visible items only when idle
+    /// work is allowed for this thread.
+    ///
+    /// This is the required entry point for extensions that want to launch
+    /// model-visible work from `ThreadLifecycleContributor::on_thread_idle`.
+    /// The call succeeds only if no user/client-triggered turn is queued, no
+    /// task is currently active, and the thread is not in Plan mode. Active
+    /// Review tasks are rejected by the active-task check because Review turns
+    /// are not steerable.
+    ///
+    /// On rejection, the returned error includes a stable reason and carries
+    /// the original `items` unchanged so the caller can decide whether to drop
+    /// them, retry later, or log why no automatic turn was started.
     pub async fn try_start_turn_if_idle(
         &self,
         items: Vec<ResponseItem>,
-    ) -> Result<(), Vec<ResponseItem>> {
+    ) -> Result<(), TryStartTurnIfIdleError> {
         self.codex.session.try_start_turn_if_idle(items).await
     }
 

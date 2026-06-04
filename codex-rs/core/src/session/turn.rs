@@ -69,6 +69,7 @@ use codex_analytics::InvocationType;
 use codex_analytics::TurnResolvedConfigFact;
 use codex_analytics::build_track_events_context;
 use codex_async_utils::OrCancelExt;
+use codex_core_skills::injection::InjectedHostSkillPrompts;
 use codex_extension_api::TurnInputContext;
 use codex_extension_api::TurnInputEnvironment;
 use codex_features::Feature;
@@ -535,6 +536,9 @@ async fn build_skills_and_plugins(
     )
     .await;
 
+    let injected_host_skill_prompts = turn_context
+        .extension_data
+        .get::<InjectedHostSkillPrompts>();
     let SkillInjections {
         items: skill_injections,
         warnings: skill_warnings,
@@ -591,7 +595,16 @@ async fn build_skills_and_plugins(
             .track_plugin_used(tracking.clone(), plugin);
     }
 
-    let mut injection_items = skill_items;
+    let mut injection_items: Vec<ResponseItem> = match injected_host_skill_prompts {
+        Some(injected_host_skill_prompts) => skill_injections
+            .iter()
+            .filter(|skill| !injected_host_skill_prompts.contains_path(&skill.path))
+            .map(|skill| {
+                ContextualUserFragment::into(crate::context::SkillInstructions::from(skill))
+            })
+            .collect(),
+        None => skill_items,
+    };
     injection_items.extend(plugin_items);
     injection_items.extend(extension_injection_items);
     Some((injection_items, explicitly_enabled_connectors))

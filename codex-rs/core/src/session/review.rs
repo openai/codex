@@ -1,4 +1,5 @@
 use super::*;
+use codex_core_skills::HostLoadedSkills;
 use codex_protocol::openai_models::ToolMode;
 use std::sync::atomic::AtomicBool;
 
@@ -100,6 +101,13 @@ pub(super) async fn spawn_review_thread(
         parent_turn_context.network.is_some(),
     ));
 
+    let extension_data = Arc::new(codex_extension_api::ExtensionData::new(
+        review_turn_id.clone(),
+    ));
+    extension_data.insert(HostLoadedSkills::new(
+        parent_turn_context.turn_skills.outcome.clone(),
+    ));
+
     let review_turn_context = TurnContext {
         sub_id: review_turn_id.clone(),
         trace_id: current_span_trace_id(),
@@ -143,7 +151,7 @@ pub(super) async fn spawn_review_thread(
         dynamic_tools: parent_turn_context.dynamic_tools.clone(),
         truncation_policy: model_info.truncation_policy.into(),
         turn_metadata_state,
-        extension_data: Arc::new(codex_extension_api::ExtensionData::new(review_turn_id)),
+        extension_data,
         turn_skills: TurnSkillsContext::new(parent_turn_context.turn_skills.outcome.clone()),
         turn_timing_state: Arc::new(TurnTimingState::default()),
         server_model_warning_emitted: AtomicBool::new(false),

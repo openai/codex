@@ -199,6 +199,7 @@ All agents in the team, including the agents that you can assign tasks to, are e
 You can use `spawn_agent` to create a new agent, `followup_task` to give an existing agent a new task and trigger a turn, and `send_message` to pass a message to a running agent without triggering a turn.
 Child agents can also spawn their own sub-agents.
 You can decide how much context you want to propagate to your sub-agents with the `fork_turns` parameter.
+Use multi-agent capabilities only when there is a real reason to split the work; handle trivial or simple tasks directly.
 
 You will receive messages in the analysis channel in the form:
 ```
@@ -215,6 +216,7 @@ You can spawn sub-agents to handle subtasks, and those sub-agents can spawn thei
 
 You can use `spawn_agent` to create a new agent, `followup_task` to give an existing agent a new task and trigger a turn, and `send_message` to pass a message to a running agent.
 Child agents can also spawn their own sub-agents.
+Use multi-agent capabilities only when there is a real reason to split the work; handle trivial or simple tasks directly.
 
 When you provide a response in the final channel, that content is immediately delivered back to your parent agent.
 
@@ -444,13 +446,7 @@ impl Permissions {
     /// Legacy compatibility projection derived from the canonical profile.
     pub fn legacy_sandbox_policy(&self, cwd: &Path) -> SandboxPolicy {
         let permission_profile = self.materialized_permission_profile();
-        let file_system_sandbox_policy = permission_profile.file_system_sandbox_policy();
-        compatibility_sandbox_policy_for_permission_profile(
-            &permission_profile,
-            &file_system_sandbox_policy,
-            permission_profile.network_sandbox_policy(),
-            cwd,
-        )
+        compatibility_sandbox_policy_for_permission_profile(&permission_profile, cwd)
     }
 
     /// Check whether a legacy sandbox policy can be applied to this permission
@@ -1292,26 +1288,29 @@ impl Config {
         }
     }
 
+    pub(crate) fn validate_multi_agent_v2_config(&self) -> std::io::Result<()> {
+        if self.features.enabled(Feature::MultiAgentV2) && self.agent_max_threads.is_some() {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "agents.max_threads cannot be set when features.multi_agent_v2 is enabled",
+            ))
+        } else {
+            Ok(())
+        }
+    }
+
     pub(crate) fn effective_agent_max_threads(
         &self,
         multi_agent_version: MultiAgentVersion,
-    ) -> std::io::Result<Option<usize>> {
+    ) -> Option<usize> {
         match multi_agent_version {
-            MultiAgentVersion::V2 => {
-                if self.agent_max_threads.is_some() {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::InvalidInput,
-                        "agents.max_threads cannot be set when the multi-agent runtime is v2",
-                    ));
-                }
-                Ok(Some(
-                    self.multi_agent_v2
-                        .max_concurrent_threads_per_session
-                        .saturating_sub(1),
-                ))
-            }
+            MultiAgentVersion::V2 => Some(
+                self.multi_agent_v2
+                    .max_concurrent_threads_per_session
+                    .saturating_sub(1),
+            ),
             MultiAgentVersion::Disabled | MultiAgentVersion::V1 => {
-                Ok(self.agent_max_threads.or(DEFAULT_AGENT_MAX_THREADS))
+                self.agent_max_threads.or(DEFAULT_AGENT_MAX_THREADS)
             }
         }
     }
