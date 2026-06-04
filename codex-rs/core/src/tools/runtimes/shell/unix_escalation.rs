@@ -622,8 +622,7 @@ impl EscalationPolicy for CoreShellActionProvider {
                 InterceptedExecPolicyContext {
                     approval_policy: self.approval_policy,
                     permission_profile: self.permission_profile.clone(),
-                    sandbox_cwd: self.sandbox_policy_cwd.as_path(),
-                    windows_sandbox_level: self.windows_sandbox_level,
+                    windows_sandbox_level: self.turn.windows_sandbox_level,
                     sandbox_permissions: self.approval_sandbox_permissions,
                     enable_shell_wrapper_parsing:
                         ENABLE_INTERCEPTED_EXEC_POLICY_SHELL_WRAPPER_PARSING,
@@ -672,12 +671,11 @@ fn evaluate_intercepted_exec_policy(
     policy: &Policy,
     program: &AbsolutePathBuf,
     argv: &[String],
-    context: InterceptedExecPolicyContext<'_>,
+    context: InterceptedExecPolicyContext,
 ) -> Evaluation {
     let InterceptedExecPolicyContext {
         approval_policy,
         permission_profile,
-        sandbox_cwd,
         windows_sandbox_level,
         sandbox_permissions,
         enable_shell_wrapper_parsing,
@@ -723,10 +721,9 @@ fn evaluate_intercepted_exec_policy(
 }
 
 #[derive(Clone)]
-struct InterceptedExecPolicyContext<'a> {
+struct InterceptedExecPolicyContext {
     approval_policy: AskForApproval,
     permission_profile: PermissionProfile,
-    sandbox_cwd: &'a Path,
     windows_sandbox_level: WindowsSandboxLevel,
     sandbox_permissions: SandboxPermissions,
     enable_shell_wrapper_parsing: bool,
