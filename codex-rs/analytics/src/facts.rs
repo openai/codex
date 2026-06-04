@@ -111,7 +111,6 @@ pub struct TurnProfile {
     pub between_sampling_overhead_ms: u64,
     pub tool_blocking_ms: u64,
     pub after_last_sampling_ms: u64,
-    pub sampling_tool_overlap_ms: u64,
     pub sampling_request_count: u32,
     pub sampling_retry_count: u32,
     pub status: TurnProfileStatus,

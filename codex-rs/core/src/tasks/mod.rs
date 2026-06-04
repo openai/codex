@@ -745,16 +745,22 @@ impl Session {
             turn_context.config.memories.use_memories,
             turn_had_memory_citation,
         );
-        let timing_completion = turn_context
+        let (completed_at, duration_ms) = turn_context
             .turn_timing_state
-            .complete_turn(TurnProfileStatus::Complete)
+            .completed_at_and_duration_ms()
+            .await;
+        let time_to_first_token_ms = turn_context
+            .turn_timing_state
+            .time_to_first_token_ms()
             .await;
         self.services
             .analytics_events_client
             .track_turn_profile(TurnProfileFact {
                 turn_id: turn_context.sub_id.clone(),
                 thread_id: self.thread_id.to_string(),
-                profile: timing_completion.profile,
+                profile: turn_context
+                    .turn_timing_state
+                    .complete_profile(TurnProfileStatus::Complete),
             });
         self.emit_turn_stop_lifecycle(turn_context.extension_data.as_ref())
             .await;
@@ -770,9 +776,9 @@ impl Session {
         let event = EventMsg::TurnComplete(TurnCompleteEvent {
             turn_id: turn_context.sub_id.clone(),
             last_agent_message,
-            completed_at: timing_completion.completed_at,
-            duration_ms: timing_completion.duration_ms,
-            time_to_first_token_ms: timing_completion.time_to_first_token_ms,
+            completed_at,
+            duration_ms,
+            time_to_first_token_ms,
         });
         self.send_event(turn_context.as_ref(), event).await;
         self.services
@@ -868,23 +874,26 @@ impl Session {
             }
         }
 
-        let timing_completion = task
+        let (completed_at, duration_ms) = task
             .turn_context
             .turn_timing_state
-            .complete_turn(TurnProfileStatus::Partial)
+            .completed_at_and_duration_ms()
             .await;
         self.services
             .analytics_events_client
             .track_turn_profile(TurnProfileFact {
                 turn_id: task.turn_context.sub_id.clone(),
                 thread_id: self.thread_id.to_string(),
-                profile: timing_completion.profile,
+                profile: task
+                    .turn_context
+                    .turn_timing_state
+                    .complete_profile(TurnProfileStatus::Partial),
             });
         let event = EventMsg::TurnAborted(TurnAbortedEvent {
             turn_id: Some(task.turn_context.sub_id.clone()),
             reason,
-            completed_at: timing_completion.completed_at,
-            duration_ms: timing_completion.duration_ms,
+            completed_at,
+            duration_ms,
         });
         self.send_event(task.turn_context.as_ref(), event).await;
         self.services

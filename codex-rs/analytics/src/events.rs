@@ -822,7 +822,6 @@ pub(crate) struct CodexTurnEventParams {
     pub(crate) between_sampling_overhead_ms: u64,
     pub(crate) tool_blocking_ms: u64,
     pub(crate) after_last_sampling_ms: u64,
-    pub(crate) sampling_tool_overlap_ms: u64,
     pub(crate) sampling_request_count: u32,
     pub(crate) sampling_retry_count: u32,
     pub(crate) profile_status: crate::facts::TurnProfileStatus,

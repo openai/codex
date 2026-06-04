@@ -152,15 +152,15 @@ fn response_item_records_turn_ttft_ignores_empty_non_output_items() {
 }
 
 #[test]
-fn turn_profile_breaks_down_sampling_tool_blocking_and_retry_overhead() {
+fn turn_profile_breaks_down_sampling_blocking_and_retry_overhead() {
     let started_at = Instant::now();
     let mut state = TurnProfileState::default();
     state.start(started_at);
 
     let _ = state.begin_sampling(started_at + Duration::from_millis(100));
-    let _ = state.begin_tool(started_at + Duration::from_millis(300));
     state.end_sampling(started_at + Duration::from_millis(600));
-    state.end_tool(started_at + Duration::from_millis(900));
+    let _ = state.begin_tool_blocking(started_at + Duration::from_millis(600));
+    state.end_tool_blocking(started_at + Duration::from_millis(900));
     state.record_sampling_retry();
     let _ = state.begin_sampling(started_at + Duration::from_millis(1_000));
     state.end_sampling(started_at + Duration::from_millis(1_200));
@@ -176,7 +176,6 @@ fn turn_profile_breaks_down_sampling_tool_blocking_and_retry_overhead() {
             between_sampling_overhead_ms: 100,
             tool_blocking_ms: 300,
             after_last_sampling_ms: 100,
-            sampling_tool_overlap_ms: 300,
             sampling_request_count: 2,
             sampling_retry_count: 1,
             status: TurnProfileStatus::Complete,
@@ -185,15 +184,13 @@ fn turn_profile_breaks_down_sampling_tool_blocking_and_retry_overhead() {
 }
 
 #[test]
-fn turn_profile_counts_parallel_tools_as_one_blocking_interval() {
+fn turn_profile_counts_a_blocking_phase_once() {
     let started_at = Instant::now();
     let mut state = TurnProfileState::default();
     state.start(started_at);
 
-    let _ = state.begin_tool(started_at + Duration::from_millis(100));
-    let _ = state.begin_tool(started_at + Duration::from_millis(200));
-    state.end_tool(started_at + Duration::from_millis(400));
-    state.end_tool(started_at + Duration::from_millis(700));
+    let _ = state.begin_tool_blocking(started_at + Duration::from_millis(100));
+    state.end_tool_blocking(started_at + Duration::from_millis(700));
 
     assert_eq!(
         state.complete(
@@ -206,7 +203,6 @@ fn turn_profile_counts_parallel_tools_as_one_blocking_interval() {
             between_sampling_overhead_ms: 0,
             tool_blocking_ms: 600,
             after_last_sampling_ms: 0,
-            sampling_tool_overlap_ms: 0,
             sampling_request_count: 0,
             sampling_retry_count: 0,
             status: TurnProfileStatus::Partial,

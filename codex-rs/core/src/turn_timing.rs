@@ -59,24 +59,16 @@ struct TurnProfileState {
     started_at: Option<Instant>,
     last_transition_at: Option<Instant>,
     sampling_active: usize,
-    active_tools: usize,
+    tool_blocking_active: usize,
     seen_sampling: bool,
     before_first_sampling: Duration,
     sampling: Duration,
     between_sampling_overhead: Duration,
     tool_blocking: Duration,
-    sampling_tool_overlap: Duration,
     pending_idle_after_sampling: Duration,
     sampling_request_count: u32,
     sampling_retry_count: u32,
     completed_profile: Option<TurnProfile>,
-}
-
-pub(crate) struct TurnTimingCompletion {
-    pub(crate) completed_at: Option<i64>,
-    pub(crate) duration_ms: Option<i64>,
-    pub(crate) time_to_first_token_ms: Option<i64>,
-    pub(crate) profile: TurnProfile,
 }
 
 #[must_use]
@@ -86,7 +78,7 @@ pub(crate) struct SamplingTimingGuard {
 }
 
 #[must_use]
-pub(crate) struct ToolTimingGuard {
+pub(crate) struct ToolBlockingTimingGuard {
     timing: Arc<TurnTimingState>,
     active: bool,
 }
@@ -107,28 +99,24 @@ impl TurnTimingState {
         self.state.lock().await.started_at_unix_secs
     }
 
-    pub(crate) async fn complete_turn(
-        &self,
-        profile_status: TurnProfileStatus,
-    ) -> TurnTimingCompletion {
-        let completed_at_instant = Instant::now();
+    pub(crate) async fn completed_at_and_duration_ms(&self) -> (Option<i64>, Option<i64>) {
         let state = self.state.lock().await;
         let completed_at = Some(now_unix_timestamp_secs());
         let duration_ms = state
             .started_at
-            .map(|started_at| completed_at_instant.saturating_duration_since(started_at))
-            .map(duration_to_i64_ms);
-        let time_to_first_token_ms = state.time_to_first_token().map(duration_to_i64_ms);
-        drop(state);
-        let profile = self
-            .profile_state()
-            .complete(completed_at_instant, profile_status);
-        TurnTimingCompletion {
-            completed_at,
-            duration_ms,
-            time_to_first_token_ms,
-            profile,
-        }
+            .map(|started_at| i64::try_from(started_at.elapsed().as_millis()).unwrap_or(i64::MAX));
+        (completed_at, duration_ms)
+    }
+
+    pub(crate) async fn time_to_first_token_ms(&self) -> Option<i64> {
+        let state = self.state.lock().await;
+        state
+            .time_to_first_token()
+            .map(|duration| i64::try_from(duration.as_millis()).unwrap_or(i64::MAX))
+    }
+
+    pub(crate) fn complete_profile(&self, status: TurnProfileStatus) -> TurnProfile {
+        self.profile_state().complete(Instant::now(), status)
     }
 
     pub(crate) fn begin_sampling(self: &Arc<Self>) -> SamplingTimingGuard {
@@ -143,9 +131,9 @@ impl TurnTimingState {
         self.profile_state().record_sampling_retry();
     }
 
-    pub(crate) fn begin_tool(self: &Arc<Self>) -> ToolTimingGuard {
-        let active = self.profile_state().begin_tool(Instant::now());
-        ToolTimingGuard {
+    pub(crate) fn begin_tool_blocking(self: &Arc<Self>) -> ToolBlockingTimingGuard {
+        let active = self.profile_state().begin_tool_blocking(Instant::now());
+        ToolBlockingTimingGuard {
             timing: Arc::clone(self),
             active,
         }
@@ -185,10 +173,12 @@ impl Drop for SamplingTimingGuard {
     }
 }
 
-impl Drop for ToolTimingGuard {
+impl Drop for ToolBlockingTimingGuard {
     fn drop(&mut self) {
         if self.active {
-            self.timing.profile_state().end_tool(Instant::now());
+            self.timing
+                .profile_state()
+                .end_tool_blocking(Instant::now());
         }
     }
 }
@@ -201,10 +191,6 @@ pub(crate) fn now_unix_timestamp_ms() -> i64 {
     let duration = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default();
-    i64::try_from(duration.as_millis()).unwrap_or(i64::MAX)
-}
-
-fn duration_to_i64_ms(duration: Duration) -> i64 {
     i64::try_from(duration.as_millis()).unwrap_or(i64::MAX)
 }
 
@@ -249,21 +235,21 @@ impl TurnProfileState {
         }
     }
 
-    fn begin_tool(&mut self, now: Instant) -> bool {
+    fn begin_tool_blocking(&mut self, now: Instant) -> bool {
         if self.completed_profile.is_some() || self.started_at.is_none() {
             return false;
         }
         self.advance(now);
-        self.active_tools = self.active_tools.saturating_add(1);
+        self.tool_blocking_active = self.tool_blocking_active.saturating_add(1);
         true
     }
 
-    fn end_tool(&mut self, now: Instant) {
-        if self.completed_profile.is_some() || self.active_tools == 0 {
+    fn end_tool_blocking(&mut self, now: Instant) {
+        if self.completed_profile.is_some() || self.tool_blocking_active == 0 {
             return;
         }
         self.advance(now);
-        self.active_tools -= 1;
+        self.tool_blocking_active -= 1;
     }
 
     fn advance(&mut self, now: Instant) {
@@ -273,10 +259,7 @@ impl TurnProfileState {
         let elapsed = now.saturating_duration_since(previous);
         if self.sampling_active > 0 {
             self.sampling += elapsed;
-            if self.active_tools > 0 {
-                self.sampling_tool_overlap += elapsed;
-            }
-        } else if self.active_tools > 0 {
+        } else if self.tool_blocking_active > 0 {
             self.tool_blocking += elapsed;
         } else if self.seen_sampling {
             self.pending_idle_after_sampling += elapsed;
@@ -292,7 +275,7 @@ impl TurnProfileState {
 
         let final_activity = (
             self.sampling_active > 0,
-            self.active_tools > 0,
+            self.tool_blocking_active > 0,
             self.seen_sampling,
         );
         self.advance(now);
@@ -308,7 +291,6 @@ impl TurnProfileState {
             between_sampling_overhead_ms: duration_to_u64_ms(self.between_sampling_overhead),
             tool_blocking_ms: duration_to_u64_ms(self.tool_blocking),
             after_last_sampling_ms: duration_to_u64_ms(after_last_sampling),
-            sampling_tool_overlap_ms: duration_to_u64_ms(self.sampling_tool_overlap),
             sampling_request_count: self.sampling_request_count,
             sampling_retry_count: self.sampling_retry_count,
             status,
@@ -332,7 +314,7 @@ impl TurnProfileState {
         }
 
         self.sampling_active = 0;
-        self.active_tools = 0;
+        self.tool_blocking_active = 0;
         self.completed_profile = Some(profile.clone());
         profile
     }

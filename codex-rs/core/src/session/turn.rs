@@ -2214,7 +2214,13 @@ async fn try_run_sampling_request(
     )
     .await;
 
+    let tool_blocking_timing_guard = if in_flight.is_empty() {
+        None
+    } else {
+        Some(turn_context.turn_timing_state.begin_tool_blocking())
+    };
     drain_in_flight(&mut in_flight, sess.clone(), turn_context.clone()).await?;
+    drop(tool_blocking_timing_guard);
 
     if should_emit_token_count {
         // A tool call such as request_user_input can intentionally pause the turn. Emit token

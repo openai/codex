@@ -433,15 +433,11 @@ pub(crate) async fn handle_output_item_done(
                 .await;
 
             let cancellation_token = ctx.cancellation_token.child_token();
-            let tool_timing_guard = ctx.turn_context.turn_timing_state.begin_tool();
-            let tool_future = ctx
-                .tool_runtime
-                .clone()
-                .handle_tool_call(call, cancellation_token);
-            let tool_future: InFlightFuture<'static> = Box::pin(async move {
-                let _tool_timing_guard = tool_timing_guard;
-                tool_future.await
-            });
+            let tool_future: InFlightFuture<'static> = Box::pin(
+                ctx.tool_runtime
+                    .clone()
+                    .handle_tool_call(call, cancellation_token),
+            );
 
             output.needs_follow_up = true;
             output.tool_future = Some(tool_future);
