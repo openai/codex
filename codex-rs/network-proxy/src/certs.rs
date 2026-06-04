@@ -41,8 +41,6 @@ use std::os::unix::fs::MetadataExt;
 #[cfg(windows)]
 use std::os::windows::ffi::OsStringExt;
 #[cfg(windows)]
-use std::os::windows::fs::MetadataExt;
-#[cfg(windows)]
 use std::os::windows::io::AsRawHandle;
 use std::path::Path;
 use std::path::PathBuf;
@@ -308,7 +306,7 @@ where
         "CA bundle {} is not readable by child policy",
         opened_path.display()
     );
-    validate_opened_file_path(&path, &opened_path, &metadata)?;
+    validate_opened_file_path(&path, &opened_path, &file, &metadata)?;
 
     let mut bytes = Vec::with_capacity(metadata.len() as usize);
     std::io::Read::by_ref(&mut file)
@@ -524,10 +522,12 @@ fn opened_file_path(path: &Path, _file: &File) -> Result<PathBuf> {
 fn validate_opened_file_path(
     path: &Path,
     opened_path: &Path,
+    file: &File,
     metadata: &fs::Metadata,
 ) -> Result<()> {
     #[cfg(unix)]
     {
+        let _ = file;
         let opened_path_metadata = fs::metadata(opened_path).with_context(|| {
             format!("failed to stat opened CA bundle {}", opened_path.display())
         })?;
@@ -543,12 +543,15 @@ fn validate_opened_file_path(
     {
         #[cfg(windows)]
         {
-            let opened_path_metadata = fs::metadata(opened_path).with_context(|| {
-                format!("failed to stat opened CA bundle {}", opened_path.display())
+            let _ = metadata;
+            let opened_path_file = File::open(opened_path).with_context(|| {
+                format!(
+                    "failed to reopen opened CA bundle {}",
+                    opened_path.display()
+                )
             })?;
             anyhow::ensure!(
-                metadata.volume_serial_number() == opened_path_metadata.volume_serial_number()
-                    && metadata.file_index() == opened_path_metadata.file_index(),
+                windows_file_identity(&opened_path_file)? == windows_file_identity(file)?,
                 "CA bundle {} changed before it could be validated",
                 path.display()
             );
@@ -558,11 +561,31 @@ fn validate_opened_file_path(
         {
             let _ = path;
             let _ = opened_path;
+            let _ = file;
             let _ = metadata;
         }
     }
 
     Ok(())
+}
+
+#[cfg(windows)]
+fn windows_file_identity(file: &File) -> Result<(u32, u64)> {
+    use windows_sys::Win32::Storage::FileSystem::BY_HANDLE_FILE_INFORMATION;
+    use windows_sys::Win32::Storage::FileSystem::GetFileInformationByHandle;
+
+    let mut file_information = BY_HANDLE_FILE_INFORMATION::default();
+    // SAFETY: `file` owns a live OS handle and `file_information` is writable.
+    let result =
+        unsafe { GetFileInformationByHandle(file.as_raw_handle() as _, &mut file_information) };
+    anyhow::ensure!(
+        result != 0,
+        "failed to inspect opened CA bundle: {}",
+        std::io::Error::last_os_error()
+    );
+    let file_index = u64::from(file_information.nFileIndexHigh) << 32
+        | u64::from(file_information.nFileIndexLow);
+    Ok((file_information.dwVolumeSerialNumber, file_index))
 }
 
 fn push_certificate_pem(bundle: &mut String, der: &[u8]) {
