@@ -9,6 +9,8 @@ use crate::CONFIG_TOML_FILE;
 use crate::CloudConfigBundleLayers;
 use crate::ProfileV2Name;
 use crate::RequirementsLayerEntry;
+use crate::cloud_config_layers::product_default_layers_from_fragments;
+use crate::cloud_config_layers::product_default_layers_from_fragments_strict;
 use crate::compose_requirements;
 use crate::config_requirements::RequirementSource;
 use crate::config_requirements::SandboxModeRequirement;
@@ -91,6 +93,7 @@ async fn first_layer_config_error_from_entries(layers: &[ConfigLayerEntry]) -> O
 ///
 /// Configuration is built up from multiple layers in the following order:
 ///
+/// - product:  OpenAI-supplied product defaults
 /// - admin:    managed preferences (*)
 /// - system    `/etc/codex/config.toml` (Unix) or
 ///   `%ProgramData%\OpenAI\Codex\config.toml` (Windows)
@@ -133,24 +136,41 @@ pub async fn load_config_layers_state(
     let mut bundle_requirements_layers = Vec::new();
     let mut system_requirements_layer = None;
     let managed_preferences_requirements_layer;
+    let mut product_defaults_config_layers = Vec::new();
     let mut cloud_config_layers = Vec::new();
 
-    if !ignore_managed_requirements {
-        if let Some(bundle) = cloud_config_bundle.get().await.map_err(io::Error::other)? {
-            let cloud_config_base_dir = AbsolutePathBuf::from_absolute_path(codex_home)?;
+    if let Some(bundle) = cloud_config_bundle.get().await.map_err(io::Error::other)? {
+        let cloud_config_base_dir = AbsolutePathBuf::from_absolute_path(codex_home)?;
+        if ignore_managed_requirements {
+            product_defaults_config_layers = if strict_config {
+                product_default_layers_from_fragments_strict(
+                    bundle.config_toml.product_defaults,
+                    &cloud_config_base_dir,
+                )?
+            } else {
+                product_default_layers_from_fragments(
+                    bundle.config_toml.product_defaults,
+                    &cloud_config_base_dir,
+                )?
+            };
+        } else {
             let bundle_layers = if strict_config {
                 CloudConfigBundleLayers::from_bundle_strict_config(bundle, &cloud_config_base_dir)?
             } else {
                 CloudConfigBundleLayers::from_bundle(bundle, &cloud_config_base_dir)?
             };
             let CloudConfigBundleLayers {
+                product_defaults_config,
                 enterprise_managed_config,
                 enterprise_managed_requirements,
             } = bundle_layers;
+            product_defaults_config_layers = product_defaults_config;
             bundle_requirements_layers = enterprise_managed_requirements;
             cloud_config_layers = enterprise_managed_config;
         }
+    }
 
+    if !ignore_managed_requirements {
         #[cfg(target_os = "macos")]
         {
             managed_preferences_requirements_layer = macos::load_managed_admin_requirements_layer(
@@ -198,6 +218,7 @@ pub async fn load_config_layers_state(
         .map_err(io::Error::other)?;
 
     let mut layers = Vec::<ConfigLayerEntry>::new();
+    layers.extend(product_defaults_config_layers);
 
     let cli_overrides_layer = if cli_overrides.is_empty() {
         None

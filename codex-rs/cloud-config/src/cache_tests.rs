@@ -11,6 +11,7 @@ use tempfile::tempdir;
 fn test_bundle() -> CloudConfigBundle {
     CloudConfigBundle {
         config_toml: CloudConfigTomlBundle {
+            product_defaults: Vec::new(),
             enterprise_managed: vec![CloudConfigFragment {
                 id: "cfg_1".to_string(),
                 name: "Base config".to_string(),

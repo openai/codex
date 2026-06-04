@@ -9416,6 +9416,93 @@ shell_tool = false
 }
 
 #[tokio::test]
+async fn product_defaults_sets_plugin_sharing_from_delivered_config() -> std::io::Result<()> {
+    for (contents, expected_enabled) in [
+        ("[features]\nplugin_sharing = false\n", false),
+        ("[features]\nplugin_sharing = true\n", true),
+    ] {
+        let codex_home = TempDir::new()?;
+        let config = ConfigBuilder::without_managed_config_for_tests()
+            .codex_home(codex_home.path().to_path_buf())
+            .cloud_config_bundle(CloudConfigBundleFixture::loader_with_product_defaults(
+                contents,
+            ))
+            .build()
+            .await?;
+
+        assert_eq!(
+            config.features.enabled(Feature::PluginSharing),
+            expected_enabled,
+            "unexpected plugin_sharing default for {contents}"
+        );
+        assert_eq!(
+            config
+                .config_layer_stack
+                .get_layers(
+                    codex_config::ConfigLayerStackOrdering::LowestPrecedenceFirst,
+                    /*include_disabled*/ false,
+                )
+                .first()
+                .map(|layer| &layer.name),
+            Some(&codex_config::ConfigLayerSource::ProductDefaults {
+                id: "cfg_default_1".to_string(),
+                name: "Product defaults".to_string(),
+            })
+        );
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn user_config_overrides_product_defaults() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"[features]
+plugin_sharing = true
+"#,
+    )?;
+
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .cloud_config_bundle(CloudConfigBundleFixture::loader_with_product_defaults(
+            "[features]\nplugin_sharing = false\n",
+        ))
+        .build()
+        .await?;
+
+    assert!(config.features.enabled(Feature::PluginSharing));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn requirements_override_product_defaults_and_user_config() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"[features]
+plugin_sharing = true
+"#,
+    )?;
+
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .cloud_config_bundle(
+            CloudConfigBundleFixture::product_defaults("[features]\nplugin_sharing = true\n")
+                .add_enterprise_requirement("[features]\nplugin_sharing = false\n")
+                .into_loader(),
+        )
+        .build()
+        .await?;
+
+    assert!(!config.features.enabled(Feature::PluginSharing));
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn feature_requirements_auto_review_disables_guardian_approval() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
 

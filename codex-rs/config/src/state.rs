@@ -202,6 +202,7 @@ impl ConfigLayerEntry {
     // Get the `.codex/` folder associated with this config layer, if any.
     pub fn config_folder(&self) -> Option<AbsolutePathBuf> {
         match &self.name {
+            ConfigLayerSource::ProductDefaults { .. } => None,
             ConfigLayerSource::Mdm { .. } => None,
             ConfigLayerSource::System { file } => file.parent(),
             ConfigLayerSource::EnterpriseManaged { .. } => None,

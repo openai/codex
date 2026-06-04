@@ -3933,6 +3933,33 @@
     "ConfigLayerSource": {
       "oneOf": [
         {
+          "description": "Product-owned default config supplied by OpenAI. This is lower precedence than all customer/admin/user config layers.",
+          "properties": {
+            "id": {
+              "description": "Stable identifier for the delivered layer.",
+              "type": "string"
+            },
+            "name": {
+              "description": "Product-facing display name for the delivered layer.",
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "productDefaults"
+              ],
+              "title": "ProductDefaultsConfigLayerSourceType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "name",
+            "type"
+          ],
+          "title": "ProductDefaultsConfigLayerSource",
+          "type": "object"
+        },
+        {
           "description": "Managed preferences layer delivered by MDM (macOS only).",
           "properties": {
             "domain": {

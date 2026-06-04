@@ -2,6 +2,9 @@ use codex_app_server_protocol::ConfigLayerSource;
 
 pub fn format_config_layer_source(source: &ConfigLayerSource, config_toml_file: &str) -> String {
     match source {
+        ConfigLayerSource::ProductDefaults { id, name } => {
+            format!("product-defaults ({name}, {id})")
+        }
         ConfigLayerSource::Mdm { domain, key } => {
             format!("MDM ({domain}:{key})")
         }

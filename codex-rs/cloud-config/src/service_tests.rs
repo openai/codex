@@ -164,6 +164,7 @@ fn chatgpt_auth_json_with_mode(
 fn test_bundle() -> CloudConfigBundle {
     CloudConfigBundle {
         config_toml: CloudConfigTomlBundle {
+            product_defaults: Vec::new(),
             enterprise_managed: vec![test_config_fragment()],
         },
         requirements_toml: CloudRequirementsTomlBundle {
@@ -191,6 +192,7 @@ fn test_requirements_fragment() -> CloudRequirementsFragment {
 fn invalid_config_bundle() -> CloudConfigBundle {
     CloudConfigBundle {
         config_toml: CloudConfigTomlBundle {
+            product_defaults: Vec::new(),
             enterprise_managed: vec![CloudConfigFragment {
                 id: "cfg_invalid".to_string(),
                 name: "Invalid config".to_string(),
@@ -307,6 +309,7 @@ fn bundle_shape_tag_describes_sorted_enterprise_sources() {
     assert_eq!(
         bundle_shape_tag(Some(&CloudConfigBundle {
             config_toml: CloudConfigTomlBundle {
+                product_defaults: Vec::new(),
                 enterprise_managed: vec![test_config_fragment()],
             },
             requirements_toml: CloudRequirementsTomlBundle::default(),
@@ -325,6 +328,7 @@ fn bundle_shape_tag_describes_sorted_enterprise_sources() {
     assert_eq!(
         bundle_shape_tag(Some(&CloudConfigBundle {
             config_toml: CloudConfigTomlBundle {
+                product_defaults: Vec::new(),
                 enterprise_managed: vec![test_config_fragment()],
             },
             requirements_toml: CloudRequirementsTomlBundle {
@@ -959,6 +963,11 @@ async fn refresh_from_remote_updates_cached_bundle() {
 fn bundle_response_conversion_preserves_fragment_order() {
     let response = ConfigBundleResponse {
         config_toml: Some(Some(Box::new(codex_backend_client::DeliveredConfigToml {
+            product_defaults: Some(Some(vec![DeliveredTomlFragment::new(
+                "cfg_default".to_string(),
+                "Product defaults".to_string(),
+                "model = \"default\"".to_string(),
+            )])),
             enterprise_managed: Some(Some(vec![
                 DeliveredTomlFragment::new(
                     "cfg_high".to_string(),
@@ -987,6 +996,11 @@ fn bundle_response_conversion_preserves_fragment_order() {
         bundle_from_response(response),
         CloudConfigBundle {
             config_toml: CloudConfigTomlBundle {
+                product_defaults: vec![CloudConfigFragment {
+                    id: "cfg_default".to_string(),
+                    name: "Product defaults".to_string(),
+                    contents: "model = \"default\"".to_string(),
+                }],
                 enterprise_managed: vec![
                     CloudConfigFragment {
                         id: "cfg_high".to_string(),

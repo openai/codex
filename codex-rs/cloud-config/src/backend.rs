@@ -91,7 +91,15 @@ pub(crate) fn bundle_from_response(response: ConfigBundleResponse) -> CloudConfi
     let config_toml = response
         .config_toml
         .flatten()
-        .map(|config_toml| *config_toml)
+        .map(|config_toml| *config_toml);
+    let product_defaults = config_toml
+        .as_ref()
+        .and_then(|config_toml| config_toml.product_defaults.clone().flatten())
+        .unwrap_or_default()
+        .into_iter()
+        .map(config_fragment_from_delivered)
+        .collect();
+    let enterprise_managed = config_toml
         .and_then(|config_toml| config_toml.enterprise_managed.flatten())
         .unwrap_or_default()
         .into_iter()
@@ -109,7 +117,8 @@ pub(crate) fn bundle_from_response(response: ConfigBundleResponse) -> CloudConfi
 
     CloudConfigBundle {
         config_toml: CloudConfigTomlBundle {
-            enterprise_managed: config_toml,
+            product_defaults,
+            enterprise_managed,
         },
         requirements_toml: CloudRequirementsTomlBundle {
             enterprise_managed: requirements_toml,

@@ -69,24 +69,81 @@ pub fn cloud_config_layers_from_fragments(
     fragments: impl IntoIterator<Item = CloudConfigFragment>,
     base_dir: &AbsolutePathBuf,
 ) -> Result<Vec<ConfigLayerEntry>, CloudConfigLayerError> {
-    cloud_config_layers_from_fragments_impl(fragments, base_dir, /*strict_config*/ false)
+    cloud_config_layers_from_fragments_impl(
+        fragments,
+        base_dir,
+        /*strict_config*/ false,
+        CloudConfigFragmentLayerSource::EnterpriseManaged,
+    )
+}
+
+pub(crate) fn product_default_layers_from_fragments(
+    fragments: impl IntoIterator<Item = CloudConfigFragment>,
+    base_dir: &AbsolutePathBuf,
+) -> Result<Vec<ConfigLayerEntry>, CloudConfigLayerError> {
+    cloud_config_layers_from_fragments_impl(
+        fragments,
+        base_dir,
+        /*strict_config*/ false,
+        CloudConfigFragmentLayerSource::ProductDefaults,
+    )
 }
 
 pub(crate) fn cloud_config_layers_from_fragments_strict(
     fragments: impl IntoIterator<Item = CloudConfigFragment>,
     base_dir: &AbsolutePathBuf,
 ) -> Result<Vec<ConfigLayerEntry>, CloudConfigLayerError> {
-    cloud_config_layers_from_fragments_impl(fragments, base_dir, /*strict_config*/ true)
+    cloud_config_layers_from_fragments_impl(
+        fragments,
+        base_dir,
+        /*strict_config*/ true,
+        CloudConfigFragmentLayerSource::EnterpriseManaged,
+    )
+}
+
+pub(crate) fn product_default_layers_from_fragments_strict(
+    fragments: impl IntoIterator<Item = CloudConfigFragment>,
+    base_dir: &AbsolutePathBuf,
+) -> Result<Vec<ConfigLayerEntry>, CloudConfigLayerError> {
+    cloud_config_layers_from_fragments_impl(
+        fragments,
+        base_dir,
+        /*strict_config*/ true,
+        CloudConfigFragmentLayerSource::ProductDefaults,
+    )
+}
+
+#[derive(Clone, Copy, Debug)]
+enum CloudConfigFragmentLayerSource {
+    EnterpriseManaged,
+    ProductDefaults,
+}
+
+impl CloudConfigFragmentLayerSource {
+    fn layer_source(self, fragment: &CloudConfigFragment) -> ConfigLayerSource {
+        match self {
+            Self::EnterpriseManaged => ConfigLayerSource::EnterpriseManaged {
+                id: fragment.id.clone(),
+                name: fragment.name.clone(),
+            },
+            Self::ProductDefaults => ConfigLayerSource::ProductDefaults {
+                id: fragment.id.clone(),
+                name: fragment.name.clone(),
+            },
+        }
+    }
 }
 
 fn cloud_config_layers_from_fragments_impl(
     fragments: impl IntoIterator<Item = CloudConfigFragment>,
     base_dir: &AbsolutePathBuf,
     strict_config: bool,
+    layer_source: CloudConfigFragmentLayerSource,
 ) -> Result<Vec<ConfigLayerEntry>, CloudConfigLayerError> {
     let mut layers = Vec::new();
     for fragment in fragments {
         let source_ref = fragment.source_ref();
+        let config_layer_source = layer_source.layer_source(&fragment);
         let raw_toml = fragment.contents;
         let value: TomlValue =
             toml::from_str(&raw_toml).map_err(|err| CloudConfigLayerError::Parse {
@@ -104,10 +161,7 @@ fn cloud_config_layers_from_fragments_impl(
                 }
             })?;
         layers.push(ConfigLayerEntry::new_with_raw_toml(
-            ConfigLayerSource::EnterpriseManaged {
-                id: fragment.id,
-                name: fragment.name,
-            },
+            config_layer_source,
             resolved,
             raw_toml,
             base_dir.clone(),

@@ -10,6 +10,8 @@ use crate::RequirementSource;
 use crate::RequirementsLayerEntry;
 use crate::cloud_config_layers::CloudConfigLayerError;
 use crate::cloud_config_layers::cloud_config_layers_from_fragments_strict;
+use crate::cloud_config_layers::product_default_layers_from_fragments;
+use crate::cloud_config_layers::product_default_layers_from_fragments_strict;
 use crate::cloud_config_layers_from_fragments;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use futures::future::BoxFuture;
@@ -34,18 +36,23 @@ impl CloudConfigBundle {
             requirements_toml,
         } = self;
         let CloudConfigTomlBundle {
+            product_defaults,
             enterprise_managed: config_enterprise_managed,
         } = config_toml;
         let CloudRequirementsTomlBundle {
             enterprise_managed: requirements_enterprise_managed,
         } = requirements_toml;
 
-        config_enterprise_managed.is_empty() && requirements_enterprise_managed.is_empty()
+        product_defaults.is_empty()
+            && config_enterprise_managed.is_empty()
+            && requirements_enterprise_managed.is_empty()
     }
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct CloudConfigTomlBundle {
+    #[serde(default)]
+    pub product_defaults: Vec<CloudConfigFragment>,
     pub enterprise_managed: Vec<CloudConfigFragment>,
 }
 
@@ -67,6 +74,8 @@ pub struct CloudRequirementsFragment {
 /// inserted relative to local/system/user layers.
 #[derive(Clone, Debug)]
 pub struct CloudConfigBundleLayers {
+    /// Product-default config layers in `ConfigLayerStack` order.
+    pub product_defaults_config: Vec<ConfigLayerEntry>,
     /// Enterprise-managed config layers in `ConfigLayerStack` order.
     pub enterprise_managed_config: Vec<ConfigLayerEntry>,
     /// Enterprise-managed requirements layers in requirements layer merge order.
@@ -98,6 +107,7 @@ impl CloudConfigBundleLayers {
         let CloudConfigBundle {
             config_toml:
                 CloudConfigTomlBundle {
+                    product_defaults,
                     enterprise_managed: config_enterprise_managed,
                 },
             requirements_toml:
@@ -105,6 +115,12 @@ impl CloudConfigBundleLayers {
                     enterprise_managed: requirements_enterprise_managed,
                 },
         } = bundle;
+
+        let product_defaults_config = if strict_config {
+            product_default_layers_from_fragments_strict(product_defaults, base_dir)?
+        } else {
+            product_default_layers_from_fragments(product_defaults, base_dir)?
+        };
 
         let enterprise_managed_config = if strict_config {
             cloud_config_layers_from_fragments_strict(config_enterprise_managed, base_dir)?
@@ -130,6 +146,7 @@ impl CloudConfigBundleLayers {
         enterprise_managed_requirements.reverse();
 
         Ok(Self {
+            product_defaults_config,
             enterprise_managed_config,
             enterprise_managed_requirements,
         })

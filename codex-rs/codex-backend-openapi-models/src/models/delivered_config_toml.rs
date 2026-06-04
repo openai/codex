@@ -15,6 +15,13 @@ use serde::Serialize;
 #[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DeliveredConfigToml {
     #[serde(
+        rename = "product_defaults",
+        default,
+        with = "::serde_with::rust::double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub product_defaults: Option<Option<Vec<models::DeliveredTomlFragment>>>,
+    #[serde(
         rename = "enterprise_managed",
         default,
         with = "::serde_with::rust::double_option",
@@ -26,6 +33,7 @@ pub struct DeliveredConfigToml {
 impl DeliveredConfigToml {
     pub fn new() -> DeliveredConfigToml {
         DeliveredConfigToml {
+            product_defaults: None,
             enterprise_managed: None,
         }
     }

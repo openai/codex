@@ -21,6 +21,10 @@ impl CloudConfigBundleFixture {
         Self::default().add_enterprise_config(contents)
     }
 
+    pub fn product_defaults(contents: impl Into<String>) -> Self {
+        Self::default().add_product_defaults(contents)
+    }
+
     pub fn loader_with_enterprise_requirement(
         contents: impl Into<String>,
     ) -> CloudConfigBundleLoader {
@@ -29,6 +33,10 @@ impl CloudConfigBundleFixture {
 
     pub fn loader_with_enterprise_config(contents: impl Into<String>) -> CloudConfigBundleLoader {
         Self::enterprise_config(contents).into_loader()
+    }
+
+    pub fn loader_with_product_defaults(contents: impl Into<String>) -> CloudConfigBundleLoader {
+        Self::product_defaults(contents).into_loader()
     }
 
     pub fn add_enterprise_requirement(mut self, contents: impl Into<String>) -> Self {
@@ -59,6 +67,23 @@ impl CloudConfigBundleFixture {
                     "Base config".to_string()
                 } else {
                     format!("Config {index}")
+                },
+                contents: contents.into(),
+            });
+        self
+    }
+
+    pub fn add_product_defaults(mut self, contents: impl Into<String>) -> Self {
+        let index = self.bundle.config_toml.product_defaults.len() + 1;
+        self.bundle
+            .config_toml
+            .product_defaults
+            .push(CloudConfigFragment {
+                id: format!("cfg_default_{index}"),
+                name: if index == 1 {
+                    "Product defaults".to_string()
+                } else {
+                    format!("Product defaults {index}")
                 },
                 contents: contents.into(),
             });

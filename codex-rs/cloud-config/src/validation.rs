@@ -18,6 +18,7 @@ pub(crate) fn validate_bundle(
             )
         })?;
     let CloudConfigBundleLayers {
+        product_defaults_config: _,
         enterprise_managed_config: _,
         enterprise_managed_requirements,
     } = bundle_layers;

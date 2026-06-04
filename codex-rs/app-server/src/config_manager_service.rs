@@ -618,6 +618,7 @@ fn value_at_path<'a>(root: &'a TomlValue, segments: &[String]) -> Option<&'a Tom
 
 fn override_message(layer: &ConfigLayerSource) -> String {
     match layer {
+        ConfigLayerSource::ProductDefaults { .. } => "Resolved from product defaults".to_string(),
         ConfigLayerSource::Mdm { domain, key: _ } => {
             format!("Overridden by managed policy (MDM): {domain}")
         }
