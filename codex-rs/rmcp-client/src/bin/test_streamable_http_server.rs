@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use axum::Router;
 use axum::body::Body;
+use axum::body::to_bytes;
 use axum::extract::Json;
 use axum::extract::State;
 use axum::http::HeaderMap;
@@ -52,6 +53,7 @@ use serde_json::json;
 use tokio::sync::Mutex;
 use tokio::task;
 use tokio::time::sleep;
+use urlencoding::decode;
 
 #[derive(Clone)]
 struct TestToolServer {
@@ -129,6 +131,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             SESSION_POST_FAILURE_CONTROL_PATH,
             post(arm_session_post_failure),
         )
+        .route("/oauth/token", post(exchange_refresh_token))
         .route(
             "/.well-known/oauth-authorization-server/mcp",
             get({
@@ -389,7 +392,8 @@ async fn require_bearer(
     request: Request<Body>,
     next: Next,
 ) -> Result<Response, StatusCode> {
-    if request.uri().path().contains("/.well-known/") {
+    let path = request.uri().path();
+    if path.contains("/.well-known/") || path.starts_with("/oauth/") {
         return Ok(next.run(request).await);
     }
     if request
@@ -401,6 +405,56 @@ async fn require_bearer(
     } else {
         Err(StatusCode::UNAUTHORIZED)
     }
+}
+
+async fn exchange_refresh_token(request: Request<Body>) -> Result<Response, StatusCode> {
+    let body = to_bytes(request.into_body(), 16 * 1024)
+        .await
+        .map_err(|_| StatusCode::BAD_REQUEST)?;
+    let params = parse_form_body(&body)?;
+
+    let expected_refresh_token =
+        std::env::var("MCP_EXPECT_REFRESH_TOKEN").map_err(|_| StatusCode::BAD_REQUEST)?;
+    let access_token =
+        std::env::var("MCP_REFRESH_ACCESS_TOKEN").map_err(|_| StatusCode::BAD_REQUEST)?;
+
+    if params.get("grant_type").map(String::as_str) != Some("refresh_token")
+        || params.get("refresh_token").map(String::as_str) != Some(expected_refresh_token.as_str())
+    {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    #[expect(clippy::expect_used)]
+    Ok(Response::builder()
+        .status(StatusCode::OK)
+        .header(CONTENT_TYPE, "application/json")
+        .body(Body::from(
+            serde_json::to_vec(&json!({
+                "access_token": access_token,
+                "token_type": "Bearer",
+                "expires_in": 7200,
+                "refresh_token": expected_refresh_token,
+            }))
+            .expect("failed to serialize token response"),
+        ))
+        .expect("valid token response"))
+}
+
+fn parse_form_body(body: &[u8]) -> Result<HashMap<String, String>, StatusCode> {
+    let body = std::str::from_utf8(body).map_err(|_| StatusCode::BAD_REQUEST)?;
+    body.split('&')
+        .filter(|part| !part.is_empty())
+        .map(|part| {
+            let (name, value) = part.split_once('=').ok_or(StatusCode::BAD_REQUEST)?;
+            let name = decode(name)
+                .map_err(|_| StatusCode::BAD_REQUEST)?
+                .into_owned();
+            let value = decode(value)
+                .map_err(|_| StatusCode::BAD_REQUEST)?
+                .into_owned();
+            Ok((name, value))
+        })
+        .collect()
 }
 
 async fn arm_session_post_failure(
