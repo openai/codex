@@ -865,6 +865,11 @@ impl AuthModeWidget {
         }
 
         self.set_error(/*message*/ None);
+        let auth_session_logging_id = Uuid::new_v4().to_string();
+        tracing::info!(
+            auth_session_logging_id = %auth_session_logging_id,
+            "starting browser login attempt"
+        );
         let request_handle = self.app_server_request_handle.clone();
         let sign_in_state = self.sign_in_state.clone();
         let error = self.error.clone();
@@ -875,6 +880,7 @@ impl AuthModeWidget {
                     request_id: onboarding_request_id(),
                     params: LoginAccountParams::Chatgpt {
                         codex_streamlined_login: false,
+                        auth_session_logging_id: Some(auth_session_logging_id),
                     },
                 })
                 .await

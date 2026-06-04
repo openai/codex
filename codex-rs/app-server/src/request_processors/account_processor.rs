@@ -218,8 +218,9 @@ impl AccountRequestProcessor {
             }
             LoginAccountParams::Chatgpt {
                 codex_streamlined_login,
+                auth_session_logging_id,
             } => {
-                self.login_chatgpt_v2(request_id, codex_streamlined_login)
+                self.login_chatgpt_v2(request_id, codex_streamlined_login, auth_session_logging_id)
                     .await;
             }
             LoginAccountParams::ChatgptDeviceCode => {
@@ -304,6 +305,7 @@ impl AccountRequestProcessor {
     async fn login_chatgpt_common(
         &self,
         codex_streamlined_login: bool,
+        auth_session_logging_id: Option<String>,
     ) -> std::result::Result<LoginServerOptions, JSONRPCErrorError> {
         let config = self.config.as_ref();
 
@@ -320,6 +322,7 @@ impl AccountRequestProcessor {
         let opts = LoginServerOptions {
             open_browser: false,
             codex_streamlined_login,
+            auth_session_logging_id,
             ..LoginServerOptions::new(
                 config.codex_home.to_path_buf(),
                 CLIENT_ID.to_string(),
@@ -354,16 +357,22 @@ impl AccountRequestProcessor {
         &self,
         request_id: ConnectionRequestId,
         codex_streamlined_login: bool,
+        auth_session_logging_id: Option<String>,
     ) {
-        let result = self.login_chatgpt_response(codex_streamlined_login).await;
+        let result = self
+            .login_chatgpt_response(codex_streamlined_login, auth_session_logging_id)
+            .await;
         self.outgoing.send_result(request_id, result).await;
     }
 
     async fn login_chatgpt_response(
         &self,
         codex_streamlined_login: bool,
+        auth_session_logging_id: Option<String>,
     ) -> Result<LoginAccountResponse, JSONRPCErrorError> {
-        let opts = self.login_chatgpt_common(codex_streamlined_login).await?;
+        let opts = self
+            .login_chatgpt_common(codex_streamlined_login, auth_session_logging_id)
+            .await?;
         let server = run_login_server(opts)
             .map_err(|err| internal_error(format!("failed to start login server: {err}")))?;
         let login_id = Uuid::new_v4();
@@ -435,7 +444,9 @@ impl AccountRequestProcessor {
         &self,
     ) -> Result<LoginAccountResponse, JSONRPCErrorError> {
         let opts = self
-            .login_chatgpt_common(/*codex_streamlined_login*/ false)
+            .login_chatgpt_common(
+                /*codex_streamlined_login*/ false, /*auth_session_logging_id*/ None,
+            )
             .await?;
         let device_code = request_device_code(&opts)
             .await

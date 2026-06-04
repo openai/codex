@@ -30,6 +30,7 @@ use tracing_subscriber::EnvFilter;
 use tracing_subscriber::Layer;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
+use uuid::Uuid;
 
 const CHATGPT_LOGIN_DISABLED_MESSAGE: &str =
     "ChatGPT login is disabled. Use API key login instead.";
@@ -118,12 +119,15 @@ pub async fn login_with_chatgpt(
     forced_chatgpt_workspace_id: Option<Vec<String>>,
     cli_auth_credentials_store_mode: AuthCredentialsStoreMode,
 ) -> std::io::Result<()> {
-    let opts = ServerOptions::new(
+    let auth_session_logging_id = Uuid::new_v4().to_string();
+    tracing::info!(auth_session_logging_id = %auth_session_logging_id, "starting browser login attempt");
+    let mut opts = ServerOptions::new(
         codex_home,
         CLIENT_ID.to_string(),
         forced_chatgpt_workspace_id,
         cli_auth_credentials_store_mode,
     );
+    opts.auth_session_logging_id = Some(auth_session_logging_id);
     let server = run_login_server(opts)?;
 
     print_login_server_start(server.actual_port, &server.auth_url);
@@ -335,6 +339,12 @@ pub async fn run_login_with_device_code_fallback_to_browser(
         Err(e) => {
             if e.kind() == std::io::ErrorKind::NotFound {
                 eprintln!("Device code login is not enabled; falling back to browser login.");
+                let auth_session_logging_id = Uuid::new_v4().to_string();
+                tracing::info!(
+                    auth_session_logging_id = %auth_session_logging_id,
+                    "starting browser login fallback attempt"
+                );
+                opts.auth_session_logging_id = Some(auth_session_logging_id);
                 match run_login_server(opts) {
                     Ok(server) => {
                         print_login_server_start(server.actual_port, &server.auth_url);

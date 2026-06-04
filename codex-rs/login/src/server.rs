@@ -71,6 +71,7 @@ pub struct ServerOptions {
     pub force_state: Option<String>,
     pub forced_chatgpt_workspace_id: Option<Vec<String>>,
     pub codex_streamlined_login: bool,
+    pub auth_session_logging_id: Option<String>,
     pub cli_auth_credentials_store_mode: AuthCredentialsStoreMode,
 }
 
@@ -91,6 +92,7 @@ impl ServerOptions {
             force_state: None,
             forced_chatgpt_workspace_id,
             codex_streamlined_login: false,
+            auth_session_logging_id: None,
             cli_auth_credentials_store_mode,
         }
     }
@@ -161,6 +163,7 @@ pub fn run_login_server(opts: ServerOptions) -> io::Result<LoginServer> {
         &pkce,
         &state,
         opts.forced_chatgpt_workspace_id.as_deref(),
+        opts.auth_session_logging_id.as_deref(),
     );
 
     if opts.open_browser {
@@ -487,6 +490,7 @@ fn build_authorize_url(
     pkce: &PkceCodes,
     state: &str,
     forced_chatgpt_workspace_ids: Option<&[String]>,
+    auth_session_logging_id: Option<&str>,
 ) -> String {
     let mut query = vec![
         ("response_type".to_string(), "code".to_string()),
@@ -509,6 +513,14 @@ fn build_authorize_url(
     ];
     if let Some(workspace_ids) = forced_chatgpt_workspace_ids {
         query.push(("allowed_workspace_id".to_string(), workspace_ids.join(",")));
+    }
+    if let Some(auth_session_logging_id) = auth_session_logging_id
+        .filter(|auth_session_logging_id| !auth_session_logging_id.is_empty())
+    {
+        query.push((
+            "auth_session_logging_id".to_string(),
+            auth_session_logging_id.to_string(),
+        ));
     }
     let qs = query
         .into_iter()

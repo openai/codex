@@ -10569,6 +10569,13 @@
           },
           {
             "properties": {
+              "authSessionLoggingId": {
+                "description": "Optional auth session logging ID propagated to authapi for analytics correlation.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
               "codexStreamlinedLogin": {
                 "type": "boolean"
               },

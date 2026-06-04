@@ -2507,6 +2507,7 @@ mod tests {
             request_id: RequestId::Integer(3),
             params: v2::LoginAccountParams::Chatgpt {
                 codex_streamlined_login: false,
+                auth_session_logging_id: None,
             },
         };
         assert_eq!(
@@ -2528,6 +2529,7 @@ mod tests {
             request_id: RequestId::Integer(3),
             params: v2::LoginAccountParams::Chatgpt {
                 codex_streamlined_login: true,
+                auth_session_logging_id: None,
             },
         };
         assert_eq!(
@@ -2537,6 +2539,29 @@ mod tests {
                 "params": {
                     "type": "chatgpt",
                     "codexStreamlinedLogin": true
+                }
+            }),
+            serde_json::to_value(&request)?,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_account_login_chatgpt_with_auth_session_logging_id() -> Result<()> {
+        let request = ClientRequest::LoginAccount {
+            request_id: RequestId::Integer(3),
+            params: v2::LoginAccountParams::Chatgpt {
+                codex_streamlined_login: false,
+                auth_session_logging_id: Some("auth-session-123".to_string()),
+            },
+        };
+        assert_eq!(
+            json!({
+                "method": "account/login/start",
+                "id": 3,
+                "params": {
+                    "type": "chatgpt",
+                    "authSessionLoggingId": "auth-session-123"
                 }
             }),
             serde_json::to_value(&request)?,

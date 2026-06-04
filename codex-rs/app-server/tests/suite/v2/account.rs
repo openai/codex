@@ -1485,6 +1485,40 @@ async fn login_account_chatgpt_includes_forced_workspace_query_param() -> Result
 #[tokio::test]
 // Serialize tests that launch the login server since it binds to a fixed port.
 #[serial(login_port)]
+async fn login_account_chatgpt_includes_auth_session_logging_id_query_param() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), CreateConfigTomlParams::default())?;
+
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_login_account_chatgpt_request_with_auth_session_logging_id(Some("auth-session-123"))
+        .await?;
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+
+    let login: LoginAccountResponse = to_response(resp)?;
+    let LoginAccountResponse::Chatgpt { auth_url, .. } = login else {
+        bail!("unexpected login response: {login:?}");
+    };
+    let auth_url = Url::parse(&auth_url)?;
+    assert_eq!(
+        auth_url
+            .query_pairs()
+            .find(|(key, _)| key == "auth_session_logging_id")
+            .map(|(_, value)| value.into_owned()),
+        Some("auth-session-123".to_string())
+    );
+    Ok(())
+}
+
+#[tokio::test]
+// Serialize tests that launch the login server since it binds to a fixed port.
+#[serial(login_port)]
 async fn login_account_chatgpt_includes_forced_workspace_allowlist_query_param() -> Result<()> {
     let codex_home = TempDir::new()?;
     create_config_toml(
