@@ -614,15 +614,6 @@ impl ThreadRequestProcessor {
             .map(|response| Some(response.into()))
     }
 
-    pub(crate) async fn thread_subagents_read(
-        &self,
-        params: ThreadSubagentsReadParams,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.thread_subagents_read_response_inner(params)
-            .await
-            .map(|response| Some(response.into()))
-    }
-
     pub(crate) async fn thread_read(
         &self,
         params: ThreadReadParams,
@@ -2126,23 +2117,6 @@ impl ThreadRequestProcessor {
                 .next_cursor
                 .map(|child_thread_id| URL_SAFE_NO_PAD.encode(child_thread_id.to_string())),
         })
-    }
-
-    async fn thread_subagents_read_response_inner(
-        &self,
-        params: ThreadSubagentsReadParams,
-    ) -> Result<ThreadSubagentsReadResponse, JSONRPCErrorError> {
-        let child_thread_id = ThreadId::from_string(&params.child_thread_id)
-            .map_err(|err| invalid_request(format!("invalid child thread id: {err}")))?;
-        let state_db = self.state_db.as_ref().ok_or_else(|| {
-            internal_error("sqlite state db unavailable for thread/subagents/read")
-        })?;
-        let subagent = state_db
-            .get_thread_spawn_edge(child_thread_id)
-            .await
-            .map_err(|err| internal_error(format!("failed to read thread subagent: {err}")))?
-            .map(thread_subagent_from_edge);
-        Ok(ThreadSubagentsReadResponse { subagent })
     }
 
     /// Builds the API view for `thread/read` from persisted metadata plus optional live state.
@@ -3914,7 +3888,7 @@ fn normalize_thread_turns_status(
 
 fn thread_subagent_from_edge(edge: codex_state::ThreadSpawnEdge) -> ThreadSubagent {
     ThreadSubagent {
-        child_thread_id: edge.child_thread_id.to_string(),
+        thread_id: edge.child_thread_id.to_string(),
         parent_thread_id: edge.parent_thread_id.to_string(),
         lifecycle_status: match edge.status {
             codex_state::DirectionalThreadSpawnEdgeStatus::Open => {

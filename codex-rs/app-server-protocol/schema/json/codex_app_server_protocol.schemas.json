@@ -18090,20 +18090,20 @@
       },
       "ThreadSubagent": {
         "properties": {
-          "childThreadId": {
-            "type": "string"
-          },
           "lifecycleStatus": {
             "$ref": "#/definitions/v2/ThreadSubagentLifecycleStatus"
           },
           "parentThreadId": {
             "type": "string"
+          },
+          "threadId": {
+            "type": "string"
           }
         },
         "required": [
-          "childThreadId",
           "lifecycleStatus",
-          "parentThreadId"
+          "parentThreadId",
+          "threadId"
         ],
         "type": "object"
       },

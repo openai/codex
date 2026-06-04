@@ -98,7 +98,6 @@ use codex_app_server_protocol::ThreadSettingsUpdateParams;
 use codex_app_server_protocol::ThreadShellCommandParams;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadSubagentsListParams;
-use codex_app_server_protocol::ThreadSubagentsReadParams;
 use codex_app_server_protocol::ThreadTurnsItemsListParams;
 use codex_app_server_protocol::ThreadTurnsListParams;
 use codex_app_server_protocol::ThreadUnarchiveParams;
@@ -563,15 +562,6 @@ impl TestAppServer {
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("thread/subagents/list", params).await
-    }
-
-    /// Send a `thread/subagents/read` JSON-RPC request.
-    pub async fn send_thread_subagents_read_request(
-        &mut self,
-        params: ThreadSubagentsReadParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("thread/subagents/read", params).await
     }
 
     /// Send a `thread/read` JSON-RPC request.

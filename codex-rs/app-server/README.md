@@ -136,8 +136,7 @@ Example with notification opt-out:
 - `thread/start`, `thread/resume`, and `thread/fork` responses include the legacy `sandbox` compatibility projection. Experimental clients can read `runtimeWorkspaceRoots` for the thread-scoped runtime roots and `activePermissionProfile` for the named or implicit built-in profile identity/provenance when known.
 - `thread/list` — page through stored rollouts; supports cursor-based pagination and optional `modelProviders`, `sourceKinds`, `archived`, `cwd`, and `searchTerm` filters. Each returned `thread` includes `status` (`ThreadStatus`), defaulting to `notLoaded` when the thread is not currently loaded. Subagent threads also include `parentThreadId` when the immediate control/spawn parent is known.
 - `thread/loaded/list` — list the thread ids currently loaded in memory.
-- `thread/subagents/list` — experimental; page through a thread's direct persisted subagent children without reading rollout transcripts or resuming threads. Supports an optional durable spawn-edge `lifecycleStatuses` filter.
-- `thread/subagents/read` — experimental; read one persisted subagent spawn edge by child thread id without reading rollout transcripts or resuming threads.
+- `thread/subagents/list` — experimental; page through a thread's direct persisted subagent children. Supports an optional durable spawn-edge `lifecycleStatuses` filter.
 - `thread/read` — read a stored thread by id without resuming it; optionally include turns via `includeTurns`. The returned `thread` includes `status` (`ThreadStatus`), defaulting to `notLoaded` when the thread is not currently loaded.
 - `thread/turns/list` — experimental; page through a stored thread’s turn history without resuming it; supports cursor-based pagination with `sortDirection`, `itemsView`, `nextCursor`, and `backwardsCursor`.
 - `thread/turns/items/list` — experimental; reserved for paging full items for one turn. The API shape is present, but app-server currently returns an unsupported-method JSON-RPC error.
@@ -373,9 +372,9 @@ Example:
 
 When `nextCursor` is `null`, you’ve reached the final page.
 
-### Example: List and read thread subagents (experimental)
+### Example: List thread subagents (experimental)
 
-Use `thread/subagents/list` with `capabilities.experimentalApi = true` to page through direct persisted subagent children without resuming threads or reading JSONL rollout transcripts. Results are ordered by `childThreadId`. Pass the opaque `nextCursor` from one response into the next request. Omit `lifecycleStatuses` to include every durable spawn-edge lifecycle status, or filter with `"open"` and `"closed"`.
+Use `thread/subagents/list` with `capabilities.experimentalApi = true` to page through direct persisted subagent children. Results are ordered by `threadId`. Pass the opaque `nextCursor` from one response into the next request. Omit `lifecycleStatuses` to include every durable spawn-edge lifecycle status, or filter with `"open"` and `"closed"`.
 
 `ThreadSubagent.lifecycleStatus` is distinct from `ThreadStatus`: subagent lifecycle is durable spawn-edge state, while thread status describes runtime activity such as `active`, `idle`, `systemError`, or `notLoaded`. Descendants are not returned recursively.
 
@@ -387,18 +386,9 @@ Use `thread/subagents/list` with `capabilities.experimentalApi = true` to page t
 } }
 { "id": 21, "result": {
     "data": [
-        { "childThreadId": "00000000-0000-0000-0000-000000000101", "parentThreadId": "00000000-0000-0000-0000-000000000100", "lifecycleStatus": "open" }
+        { "threadId": "00000000-0000-0000-0000-000000000101", "parentThreadId": "00000000-0000-0000-0000-000000000100", "lifecycleStatus": "open" }
     ],
     "nextCursor": null
-} }
-```
-
-Use `thread/subagents/read` for an O(1) lookup by child edge primary key. A child without a persisted spawn edge returns `{ "subagent": null }`.
-
-```json
-{ "method": "thread/subagents/read", "id": 22, "params": { "childThreadId": "00000000-0000-0000-0000-000000000101" } }
-{ "id": 22, "result": {
-    "subagent": { "childThreadId": "00000000-0000-0000-0000-000000000101", "parentThreadId": "00000000-0000-0000-0000-000000000100", "lifecycleStatus": "open" }
 } }
 ```
 

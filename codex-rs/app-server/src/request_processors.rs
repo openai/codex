@@ -238,8 +238,6 @@ use codex_app_server_protocol::ThreadSubagent;
 use codex_app_server_protocol::ThreadSubagentLifecycleStatus;
 use codex_app_server_protocol::ThreadSubagentsListParams;
 use codex_app_server_protocol::ThreadSubagentsListResponse;
-use codex_app_server_protocol::ThreadSubagentsReadParams;
-use codex_app_server_protocol::ThreadSubagentsReadResponse;
 use codex_app_server_protocol::ThreadTurnsItemsListParams;
 use codex_app_server_protocol::ThreadTurnsListParams;
 use codex_app_server_protocol::ThreadTurnsListResponse;

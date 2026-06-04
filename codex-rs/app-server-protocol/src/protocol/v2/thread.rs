@@ -1140,7 +1140,7 @@ pub enum ThreadSubagentLifecycleStatus {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ThreadSubagent {
-    pub child_thread_id: String,
+    pub thread_id: String,
     pub parent_thread_id: String,
     pub lifecycle_status: ThreadSubagentLifecycleStatus,
 }
@@ -1169,20 +1169,6 @@ pub struct ThreadSubagentsListResponse {
     /// Opaque cursor to pass to the next call to continue after the last item.
     /// If None, there are no more items to return.
     pub next_cursor: Option<String>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct ThreadSubagentsReadParams {
-    pub child_thread_id: String,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct ThreadSubagentsReadResponse {
-    pub subagent: Option<ThreadSubagent>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]

@@ -586,12 +586,6 @@ client_request_definitions! {
         serialization: None,
         response: v2::ThreadSubagentsListResponse,
     },
-    #[experimental("thread/subagents/read")]
-    ThreadSubagentsRead => "thread/subagents/read" {
-        params: v2::ThreadSubagentsReadParams,
-        serialization: None,
-        response: v2::ThreadSubagentsReadResponse,
-    },
     ThreadRead => "thread/read" {
         params: v2::ThreadReadParams,
         serialization: thread_id(params.thread_id),

@@ -115,24 +115,6 @@ ON CONFLICT(child_thread_id) DO UPDATE SET
         Ok(())
     }
 
-    /// Look up a spawned thread's incoming edge by child id.
-    pub async fn get_thread_spawn_edge(
-        &self,
-        child_thread_id: ThreadId,
-    ) -> anyhow::Result<Option<crate::ThreadSpawnEdge>> {
-        let row = sqlx::query(
-            r#"
-SELECT parent_thread_id, child_thread_id, status
-FROM thread_spawn_edges
-WHERE child_thread_id = ?
-            "#,
-        )
-        .bind(child_thread_id.to_string())
-        .fetch_optional(self.pool.as_ref())
-        .await?;
-        row.map(thread_spawn_edge_from_row).transpose()
-    }
-
     /// List a page of direct spawned children ordered by child id.
     ///
     /// `statuses = None` includes every persisted lifecycle status. An empty
@@ -2190,18 +2172,6 @@ INSERT INTO thread_spawn_edges (
                 }],
                 next_cursor: None,
             }
-        );
-
-        assert_eq!(
-            runtime
-                .get_thread_spawn_edge(child_b_thread_id)
-                .await
-                .expect("edge lookup should succeed"),
-            Some(crate::ThreadSpawnEdge {
-                parent_thread_id,
-                child_thread_id: child_b_thread_id,
-                status: DirectionalThreadSpawnEdgeStatus::Closed,
-            })
         );
     }
 }
