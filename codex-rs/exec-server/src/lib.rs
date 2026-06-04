@@ -115,7 +115,6 @@ pub use protocol::WriteParams;
 pub use protocol::WriteResponse;
 pub use protocol::WriteStatus;
 pub use remote::RemoteEnvironmentConfig;
-pub use remote::RemoteRelayProtocol;
 pub use remote::run_remote_environment;
 pub use runtime_paths::ExecServerRuntimePaths;
 pub use server::DEFAULT_LISTEN_URL;
