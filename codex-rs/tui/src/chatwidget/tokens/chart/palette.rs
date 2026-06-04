@@ -1,3 +1,8 @@
+//! Builds terminal-aware styles and glyph choices for token activity charts.
+//!
+//! The palette adapts theme colors to the active terminal color level while
+//! keeping chart-specific glyph policy local to the token activity renderer.
+
 use ratatui::style::Color;
 use ratatui::style::Style;
 use ratatui::style::Stylize;
@@ -7,10 +12,9 @@ use crate::color::blend;
 use crate::render::highlight::foreground_style_for_scopes;
 use crate::style::accent_style;
 use crate::terminal_palette::StdoutColorLevel;
-use crate::terminal_palette::best_color;
+use crate::terminal_palette::best_color_for_level;
 use crate::terminal_palette::default_bg;
 use crate::terminal_palette::default_fg;
-use crate::terminal_palette::rgb_color;
 use crate::terminal_palette::stdout_color_level;
 
 // In low-color terminals we distinguish empty vs active cells by glyph (a
@@ -143,17 +147,10 @@ fn activity_anchor_rgb(style: Style) -> Option<(u8, u8, u8)> {
     }
 }
 
-fn best_color_for_level(target: (u8, u8, u8), color_level: StdoutColorLevel) -> Color {
-    match color_level {
-        StdoutColorLevel::TrueColor => rgb_color(target),
-        StdoutColorLevel::Ansi256 => best_color(target),
-        StdoutColorLevel::Ansi16 | StdoutColorLevel::Unknown => Color::default(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::terminal_palette::rgb_color;
     use pretty_assertions::assert_eq;
     use ratatui::style::Modifier;
 

@@ -1,3 +1,9 @@
+//! Renders account token usage summaries and activity charts for `/usage`.
+//!
+//! This module owns the chart data bucketing and ratatui line construction. The
+//! async card lifecycle stays in the parent `tokens` module so chart rendering
+//! remains a pure transformation from a loaded usage response.
+
 mod palette;
 
 use std::collections::BTreeMap;
