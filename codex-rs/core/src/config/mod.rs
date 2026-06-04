@@ -3864,7 +3864,7 @@ fn resolve_default_permissions<'a>(
     match selected_permissions {
         None => Ok(Some(fallback_permissions)),
         Some(selected_permissions)
-            if is_permission_effectively_allowed(allowed_permissions, selected_permissions) =>
+            if is_permission_allowed(allowed_permissions, selected_permissions) =>
         {
             Ok(Some(selected_permissions))
         }
@@ -3918,7 +3918,7 @@ fn validate_required_permission_profile_catalog(
             "requirements.toml default_permissions must be set unless allowed_permissions allows both `:workspace` and `:read-only`",
         ));
     };
-    if !is_permission_effectively_allowed(allowed_permissions, default_permissions) {
+    if !is_permission_allowed(allowed_permissions, default_permissions) {
         return Err(std::io::Error::new(
             ErrorKind::InvalidInput,
             format!(
@@ -3933,23 +3933,16 @@ fn validate_required_permission_profile_catalog(
 fn implicit_default_permissions(
     allowed_permissions: &BTreeMap<String, bool>,
 ) -> Option<&'static str> {
-    (is_permission_effectively_allowed(allowed_permissions, BUILT_IN_WORKSPACE_PROFILE)
-        && is_permission_effectively_allowed(allowed_permissions, BUILT_IN_READ_ONLY_PROFILE))
+    (is_permission_allowed(allowed_permissions, BUILT_IN_WORKSPACE_PROFILE)
+        && is_permission_allowed(allowed_permissions, BUILT_IN_READ_ONLY_PROFILE))
     .then_some(BUILT_IN_WORKSPACE_PROFILE)
 }
 
-/// Applies the managed allow map, including the default-allowed standard profiles.
-fn is_permission_effectively_allowed(
-    allowed_permissions: &BTreeMap<String, bool>,
-    profile_id: &str,
-) -> bool {
+fn is_permission_allowed(allowed_permissions: &BTreeMap<String, bool>, profile_id: &str) -> bool {
     allowed_permissions
         .get(profile_id)
         .copied()
-        .unwrap_or(matches!(
-            profile_id,
-            BUILT_IN_WORKSPACE_PROFILE | BUILT_IN_READ_ONLY_PROFILE
-        ))
+        .unwrap_or(false)
 }
 
 fn normalize_guardian_policy_config(value: Option<&str>) -> Option<String> {

@@ -1489,8 +1489,6 @@ async fn system_allowed_permissions_require_managed_default() -> anyhow::Result<
 extends = ":read-only"
 
 [allowed_permissions]
-":read-only" = false
-":workspace" = false
 managed-standard = true
 "#,
     )
@@ -1515,7 +1513,8 @@ managed-standard = true
 }
 
 #[tokio::test]
-async fn system_allowed_permissions_default_standard_pair_to_allowed() -> anyhow::Result<()> {
+async fn system_allowed_permissions_standard_pair_implicitly_defaults_to_workspace()
+-> anyhow::Result<()> {
     let tmp = tempdir()?;
     let codex_home = tmp.path().join("home");
     tokio::fs::create_dir_all(&codex_home).await?;
@@ -1524,10 +1523,8 @@ async fn system_allowed_permissions_default_standard_pair_to_allowed() -> anyhow
         &requirements_path,
         r#"
 [allowed_permissions]
-review-only = true
-
-[permissions.review-only]
-extends = ":read-only"
+":read-only" = true
+":workspace" = true
 "#,
     )
     .await?;
@@ -1699,7 +1696,6 @@ default_permissions = ":workspace"
 default_permissions = "managed-standard"
 
 [allowed_permissions]
-":workspace" = false
 managed-standard = true
 
 [permissions.managed-standard.filesystem]
