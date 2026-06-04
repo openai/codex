@@ -3858,3 +3858,49 @@ async fn load_plugins_ignores_project_config_files() {
 
     assert_eq!(outcome, PluginLoadOutcome::default());
 }
+
+#[tokio::test]
+async fn plugin_hooks_for_layer_stack_loads_configured_plugin_hooks() {
+    let codex_home = TempDir::new().unwrap();
+    let plugin_root = codex_home
+        .path()
+        .join("plugins/cache")
+        .join("test/sample/local");
+    write_plugin(
+        codex_home.path().join("plugins/cache/test").as_path(),
+        "sample/local",
+        "sample",
+    );
+    write_file(
+        &plugin_root.join("hooks/hooks.json"),
+        r#"{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo startup"
+          }
+        ]
+      }
+    ]
+  }
+}"#,
+    );
+    write_file(
+        &codex_home.path().join(CONFIG_TOML_FILE),
+        &plugin_config_toml(/*enabled*/ true, /*plugins_feature_enabled*/ true),
+    );
+    let config = load_config(codex_home.path(), codex_home.path()).await;
+
+    let outcome = PluginsManager::new(codex_home.path().to_path_buf())
+        .plugin_hooks_for_layer_stack(&config.config_layer_stack, &config);
+
+    assert_eq!(outcome.hook_sources.len(), 1);
+    assert_eq!(
+        outcome.hook_sources[0].source_relative_path,
+        "hooks/hooks.json"
+    );
+    assert_eq!(outcome.hook_load_warnings, Vec::<String>::new());
+}

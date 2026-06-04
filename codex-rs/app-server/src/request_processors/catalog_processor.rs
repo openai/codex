@@ -645,20 +645,19 @@ impl CatalogRequestProcessor {
                 .await;
             let plugins_enabled =
                 config.features.enabled(Feature::Plugins) && workspace_codex_plugins_enabled;
-            let plugin_outcome = if plugins_enabled {
+            let plugin_hooks = if plugins_enabled {
                 let plugins_input = config.plugins_config_input();
                 plugins_manager
-                    .plugins_for_layer_stack(&config.config_layer_stack, &plugins_input)
-                    .await
+                    .plugin_hooks_for_layer_stack(&config.config_layer_stack, &plugins_input)
             } else {
-                PluginLoadOutcome::default()
+                codex_core_plugins::PluginHookLoadOutcome::default()
             };
             let hooks = codex_hooks::list_hooks(codex_hooks::HooksConfig {
                 feature_enabled: config.features.enabled(Feature::CodexHooks),
                 bypass_hook_trust: config.bypass_hook_trust,
                 config_layer_stack: Some(config.config_layer_stack),
-                plugin_hook_sources: plugin_outcome.effective_plugin_hook_sources(),
-                plugin_hook_load_warnings: plugin_outcome.effective_plugin_hook_warnings(),
+                plugin_hook_sources: plugin_hooks.hook_sources,
+                plugin_hook_load_warnings: plugin_hooks.hook_load_warnings,
                 ..Default::default()
             });
             data.push(codex_app_server_protocol::HooksListEntry {

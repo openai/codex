@@ -53,6 +53,13 @@ const DEFAULT_APP_CONFIG_FILE: &str = ".app.json";
 const CONFIG_TOML_FILE: &str = "config.toml";
 const CURATED_PLUGIN_CACHE_VERSION_SHA_PREFIX_LEN: usize = 8;
 
+/// Hook declarations and warnings resolved without loading other plugin capabilities.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PluginHookLoadOutcome {
+    pub hook_sources: Vec<PluginHookSource>,
+    pub hook_load_warnings: Vec<String>,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum NonCuratedCacheRefreshMode {
     IfVersionChanged,
@@ -153,6 +160,51 @@ pub async fn load_plugins_from_layer_stack(
     }
 
     PluginLoadOutcome::from_plugins(plugins)
+}
+
+/// Load hooks from enabled plugins without loading their skills, MCP servers, or apps.
+pub fn load_plugin_hooks_from_layer_stack(
+    config_layer_stack: &ConfigLayerStack,
+    extra_plugins: HashMap<String, PluginConfig>,
+    store: &PluginStore,
+    prefer_remote_curated_conflicts: bool,
+) -> PluginHookLoadOutcome {
+    let configured_plugins = merge_configured_plugins_with_remote_installed(
+        configured_plugins_from_stack(config_layer_stack),
+        extra_plugins,
+        store,
+        prefer_remote_curated_conflicts,
+    );
+    let mut configured_plugins: Vec<_> = configured_plugins.into_iter().collect();
+    configured_plugins.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));
+
+    let mut outcome = PluginHookLoadOutcome::default();
+    for (configured_name, plugin) in configured_plugins {
+        if !plugin.enabled {
+            continue;
+        }
+        let Ok(plugin_id) = PluginId::parse(&configured_name) else {
+            continue;
+        };
+        let Some(plugin_root) = store.active_plugin_root(&plugin_id) else {
+            continue;
+        };
+        if !plugin_root.as_path().is_dir() {
+            continue;
+        }
+        let Some(manifest) = load_plugin_manifest(plugin_root.as_path()) else {
+            continue;
+        };
+        let (hook_sources, hook_load_warnings) = load_plugin_hooks(
+            &plugin_root,
+            &plugin_id,
+            &store.plugin_data_root(&plugin_id),
+            &manifest.paths,
+        );
+        outcome.hook_sources.extend(hook_sources);
+        outcome.hook_load_warnings.extend(hook_load_warnings);
+    }
+    outcome
 }
 
 fn merge_configured_plugins_with_remote_installed(
