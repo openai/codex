@@ -8,9 +8,9 @@
 //! The shortcut state machine is deliberately narrow: it only handles key
 //! presses when no modal or popup owns input, it anchors unset reasoning to the
 //! current model preset's default, and it walks only efforts advertised by the
-//! active model. Unsupported known efforts move to the nearest advertised known
-//! effort in the requested direction. Unknown efforts anchor to the model
-//! default before stepping through the advertised order.
+//! active model. Unsupported efforts anchor to the model default, or the first
+//! advertised effort when the default is absent, before stepping through the
+//! advertised order.
 
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::openai_models::ModelPreset;
@@ -130,21 +130,11 @@ impl ChatWidget {
 }
 
 fn reasoning_choices(preset: &ModelPreset) -> Vec<ReasoningEffortConfig> {
-    let mut choices: Vec<ReasoningEffortConfig> = ReasoningEffortConfig::known_values()
-        .filter(|effort| {
-            preset
-                .supported_reasoning_efforts
-                .iter()
-                .any(|option| option.effort == *effort)
-        })
+    let mut choices: Vec<ReasoningEffortConfig> = preset
+        .supported_reasoning_efforts
+        .iter()
+        .map(|option| option.effort.clone())
         .collect();
-    choices.extend(
-        preset
-            .supported_reasoning_efforts
-            .iter()
-            .filter(|option| option.effort.known_rank().is_none())
-            .map(|option| option.effort.clone()),
-    );
     if choices.is_empty() {
         choices.push(preset.default_reasoning_effort.clone());
     }
@@ -167,42 +157,7 @@ fn next_reasoning_effort(
         };
     }
 
-    let current_rank = current_effort.known_rank()?;
-    let ranked_choice = match direction {
-        ReasoningShortcutDirection::Lower => choices
-            .iter()
-            .filter_map(|choice| choice.known_rank().map(|rank| (rank, choice)))
-            .filter(|(rank, _)| *rank < current_rank)
-            .max_by_key(|(rank, _)| *rank)
-            .map(|(_, choice)| choice.clone()),
-        ReasoningShortcutDirection::Raise => choices
-            .iter()
-            .filter_map(|choice| choice.known_rank().map(|rank| (rank, choice)))
-            .filter(|(rank, _)| *rank > current_rank)
-            .min_by_key(|(rank, _)| *rank)
-            .map(|(_, choice)| choice.clone()),
-    };
-    if let Some(ranked_choice) = ranked_choice {
-        return Some(ranked_choice);
-    }
-
-    let nearest_known_index = choices
-        .iter()
-        .enumerate()
-        .filter_map(|(index, choice)| {
-            choice
-                .known_rank()
-                .map(|rank| (rank.abs_diff(current_rank), index))
-        })
-        .min_by_key(|(distance, _)| *distance)
-        .map(|(_, index)| index)?;
-    match direction {
-        ReasoningShortcutDirection::Lower => nearest_known_index
-            .checked_sub(1)
-            .and_then(|index| choices.get(index))
-            .cloned(),
-        ReasoningShortcutDirection::Raise => choices.get(nearest_known_index + 1).cloned(),
-    }
+    None
 }
 
 #[cfg(test)]
@@ -248,39 +203,52 @@ mod tests {
     }
 
     #[test]
-    fn next_reasoning_effort_skips_to_supported_level_from_unsupported_current() {
+    fn next_reasoning_effort_does_not_infer_position_for_unsupported_current() {
         let choices = vec![ReasoningEffortConfig::Low, ReasoningEffortConfig::High];
 
         assert_eq!(
-            next_reasoning_effort(
-                &choices,
-                Some(ReasoningEffortConfig::Medium),
-                ReasoningShortcutDirection::Raise,
+            (
+                next_reasoning_effort(
+                    &choices,
+                    Some(ReasoningEffortConfig::Medium),
+                    ReasoningShortcutDirection::Raise,
+                ),
+                next_reasoning_effort(
+                    &choices,
+                    Some(ReasoningEffortConfig::Medium),
+                    ReasoningShortcutDirection::Lower,
+                ),
             ),
-            Some(ReasoningEffortConfig::High)
-        );
-        assert_eq!(
-            next_reasoning_effort(
-                &choices,
-                Some(ReasoningEffortConfig::Medium),
-                ReasoningShortcutDirection::Lower,
-            ),
-            Some(ReasoningEffortConfig::Low)
+            (None, None)
         );
     }
 
     #[test]
-    fn next_reasoning_effort_reaches_custom_level_from_nearest_known_anchor() {
+    fn next_reasoning_effort_uses_advertised_order_for_custom_levels() {
         let custom_effort = ReasoningEffortConfig::Custom("max".to_string());
-        let choices = vec![ReasoningEffortConfig::Medium, custom_effort.clone()];
+        let choices = vec![
+            ReasoningEffortConfig::High,
+            ReasoningEffortConfig::Low,
+            custom_effort.clone(),
+        ];
 
         assert_eq!(
-            next_reasoning_effort(
-                &choices,
-                Some(ReasoningEffortConfig::High),
-                ReasoningShortcutDirection::Raise,
+            (
+                next_reasoning_effort(
+                    &choices,
+                    Some(ReasoningEffortConfig::High),
+                    ReasoningShortcutDirection::Raise,
+                ),
+                next_reasoning_effort(
+                    &choices,
+                    Some(custom_effort),
+                    ReasoningShortcutDirection::Lower,
+                ),
             ),
-            Some(custom_effort)
+            (
+                Some(ReasoningEffortConfig::Low),
+                Some(ReasoningEffortConfig::Low),
+            )
         );
     }
 

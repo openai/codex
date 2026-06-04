@@ -2406,12 +2406,13 @@ async fn model_reasoning_selection_popup_snapshot() {
     chat.set_reasoning_effort(Some(ReasoningEffortConfig::High));
 
     let mut preset = get_available_model(&chat, "gpt-5.4");
-    preset
-        .supported_reasoning_efforts
-        .push(ReasoningEffortPreset {
+    preset.supported_reasoning_efforts.insert(
+        2,
+        ReasoningEffortPreset {
             effort: ReasoningEffortConfig::Custom("max".to_string()),
             description: "Maximum available reasoning".to_string(),
-        });
+        },
+    );
     chat.open_reasoning_popup(preset);
 
     let popup = render_bottom_popup(&chat, /*width*/ 80);
