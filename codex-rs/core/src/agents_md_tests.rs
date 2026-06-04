@@ -152,15 +152,15 @@ fn empty_loaded_instructions_are_empty() {
 #[test]
 fn loaded_instructions_with_only_empty_or_whitespace_entries_are_empty() {
     let empty = LoadedAgentsMd {
-        instructions: vec![LoadedInstruction {
+        entries: vec![InstructionEntry {
             contents: String::new(),
-            source: InstructionSource::Internal,
+            provenance: InstructionProvenance::Internal,
         }],
     };
     let whitespace = LoadedAgentsMd {
-        instructions: vec![LoadedInstruction {
+        entries: vec![InstructionEntry {
             contents: " \n\t".to_string(),
-            source: InstructionSource::Internal,
+            provenance: InstructionProvenance::Internal,
         }],
     };
 
@@ -394,14 +394,14 @@ async fn concatenates_root_and_cwd_docs() {
     )
     .expect("absolute crate doc path");
     let expected = LoadedAgentsMd {
-        instructions: vec![
-            LoadedInstruction {
+        entries: vec![
+            InstructionEntry {
                 contents: "root doc".to_string(),
-                source: InstructionSource::Project(root_agents.clone()),
+                provenance: InstructionProvenance::Project(root_agents.clone()),
             },
-            LoadedInstruction {
+            InstructionEntry {
                 contents: "crate doc".to_string(),
-                source: InstructionSource::Project(crate_agents.clone()),
+                provenance: InstructionProvenance::Project(crate_agents.clone()),
             },
         ],
     };
@@ -463,14 +463,14 @@ async fn child_agents_message_after_global_instructions_uses_plain_separator() {
         .expect("instructions expected");
     let global_agents = cfg.codex_home.join(DEFAULT_AGENTS_MD_FILENAME);
     let expected = LoadedAgentsMd {
-        instructions: vec![
-            LoadedInstruction {
+        entries: vec![
+            InstructionEntry {
                 contents: "global doc".to_string(),
-                source: InstructionSource::User(global_agents),
+                provenance: InstructionProvenance::User(global_agents),
             },
-            LoadedInstruction {
+            InstructionEntry {
                 contents: HIERARCHICAL_AGENTS_MESSAGE.to_string(),
-                source: InstructionSource::Internal,
+                provenance: InstructionProvenance::Internal,
             },
         ],
     };
@@ -503,14 +503,14 @@ async fn instruction_sources_include_global_before_agents_md_docs() {
     .expect("absolute project doc path");
 
     let expected = LoadedAgentsMd {
-        instructions: vec![
-            LoadedInstruction {
+        entries: vec![
+            InstructionEntry {
                 contents: "global doc".to_string(),
-                source: InstructionSource::User(global_agents.clone()),
+                provenance: InstructionProvenance::User(global_agents.clone()),
             },
-            LoadedInstruction {
+            InstructionEntry {
                 contents: "project doc".to_string(),
-                source: InstructionSource::Project(project_agents.clone()),
+                provenance: InstructionProvenance::Project(project_agents.clone()),
             },
         ],
     };
@@ -547,18 +547,18 @@ async fn child_agents_message_after_project_docs_is_not_an_instruction_source() 
     .expect("absolute project doc path");
 
     let expected = LoadedAgentsMd {
-        instructions: vec![
-            LoadedInstruction {
+        entries: vec![
+            InstructionEntry {
                 contents: "global doc".to_string(),
-                source: InstructionSource::User(global_agents.clone()),
+                provenance: InstructionProvenance::User(global_agents.clone()),
             },
-            LoadedInstruction {
+            InstructionEntry {
                 contents: "project doc".to_string(),
-                source: InstructionSource::Project(project_agents.clone()),
+                provenance: InstructionProvenance::Project(project_agents.clone()),
             },
-            LoadedInstruction {
+            InstructionEntry {
                 contents: HIERARCHICAL_AGENTS_MESSAGE.to_string(),
-                source: InstructionSource::Internal,
+                provenance: InstructionProvenance::Internal,
             },
         ],
     };

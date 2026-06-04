@@ -102,7 +102,7 @@ impl<'a> AgentsMdManager<'a> {
         let mut loaded = self.config.user_instructions.clone().unwrap_or_default();
 
         match agents_md_docs {
-            Ok(Some(docs)) => loaded.instructions.extend(docs.instructions),
+            Ok(Some(docs)) => loaded.entries.extend(docs.entries),
             Ok(None) => {}
             Err(e) => {
                 error!("error trying to find AGENTS.md docs: {e:#}");
@@ -110,9 +110,9 @@ impl<'a> AgentsMdManager<'a> {
         };
 
         if self.config.features.enabled(Feature::ChildAgentsMd) {
-            loaded.instructions.push(LoadedInstruction {
+            loaded.entries.push(InstructionEntry {
                 contents: HIERARCHICAL_AGENTS_MESSAGE.to_string(),
-                source: InstructionSource::Internal,
+                provenance: InstructionProvenance::Internal,
             });
         }
 
@@ -178,9 +178,9 @@ impl<'a> AgentsMdManager<'a> {
 
             let text = String::from_utf8_lossy(&data).to_string();
             if !text.trim().is_empty() {
-                loaded.instructions.push(LoadedInstruction {
+                loaded.entries.push(InstructionEntry {
                     contents: text,
-                    source: InstructionSource::Project(p),
+                    provenance: InstructionProvenance::Project(p),
                 });
                 remaining = remaining.saturating_sub(data.len() as u64);
             }
@@ -207,6 +207,8 @@ impl<'a> AgentsMdManager<'a> {
         }
 
         let mut dir = self.config.cwd.clone();
+        // Preserve the existing symlink-aware discovery behavior, but resolve
+        // the path through the selected environment rather than the host.
         if let Ok(canon) = fs.canonicalize(&dir, /*sandbox*/ None).await {
             dir = canon;
         }
@@ -313,7 +315,7 @@ impl<'a> AgentsMdManager<'a> {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct LoadedAgentsMd {
     /// Ordered instructions and their provenance.
-    instructions: Vec<LoadedInstruction>,
+    entries: Vec<InstructionEntry>,
 }
 
 impl LoadedAgentsMd {
@@ -323,9 +325,9 @@ impl LoadedAgentsMd {
             return Self::default();
         }
         Self {
-            instructions: vec![LoadedInstruction {
+            entries: vec![InstructionEntry {
                 contents,
-                source: InstructionSource::User(path),
+                provenance: InstructionProvenance::User(path),
             }],
         }
     }
@@ -340,53 +342,63 @@ impl LoadedAgentsMd {
             return Self::default();
         }
         Self {
-            instructions: vec![LoadedInstruction {
+            entries: vec![InstructionEntry {
                 contents,
-                source: InstructionSource::Internal,
+                provenance: InstructionProvenance::Internal,
             }],
         }
     }
 
     fn is_empty(&self) -> bool {
-        self.instructions
+        self.entries
             .iter()
-            .all(|instruction| instruction.contents.trim().is_empty())
+            .all(|entry| entry.contents.trim().is_empty())
     }
 
     /// Returns the concatenated model-visible instruction text.
     pub fn text(&self) -> String {
         let mut output = String::new();
-        let mut previous_source = None;
-        for instruction in &self.instructions {
-            if let Some(previous_source) = previous_source {
-                output.push_str(instruction.source.separator_after(previous_source));
+        let mut previous_provenance: Option<&InstructionProvenance> = None;
+        for entry in &self.entries {
+            if let Some(previous_provenance) = previous_provenance {
+                // The project-doc marker tells the model where workspace-scoped
+                // instructions begin, so it is only needed on the transition
+                // from user or internal instructions to project instructions.
+                let separator = match (previous_provenance, &entry.provenance) {
+                    (
+                        InstructionProvenance::User(_) | InstructionProvenance::Internal,
+                        InstructionProvenance::Project(_),
+                    ) => AGENTS_MD_SEPARATOR,
+                    _ => "\n\n",
+                };
+                output.push_str(separator);
             }
-            output.push_str(&instruction.contents);
-            previous_source = Some(&instruction.source);
+            output.push_str(&entry.contents);
+            previous_provenance = Some(&entry.provenance);
         }
         output
     }
 
     /// Returns the AGENTS.md files that supplied instruction entries.
     pub fn sources(&self) -> impl Iterator<Item = &AbsolutePathBuf> {
-        self.instructions
+        self.entries
             .iter()
-            .filter_map(|instruction| instruction.source.path())
+            .filter_map(|entry| entry.provenance.path())
     }
 }
 
 /// One model-visible instruction and its provenance.
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct LoadedInstruction {
+struct InstructionEntry {
     /// Model-visible instruction text.
     contents: String,
 
     /// Origin of the instruction.
-    source: InstructionSource,
+    provenance: InstructionProvenance,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-enum InstructionSource {
+enum InstructionProvenance {
     /// User-level instructions, normally loaded from CODEX_HOME.
     User(AbsolutePathBuf),
 
@@ -397,18 +409,7 @@ enum InstructionSource {
     Internal,
 }
 
-impl InstructionSource {
-    fn separator_after(&self, previous: &Self) -> &'static str {
-        // The project-doc marker tells the model where workspace-scoped
-        // instructions begin. It belongs only before the first project entry;
-        // subsequent project docs and trailing internal guidance are part of
-        // an already established instruction section.
-        match (previous, self) {
-            (Self::User(_) | Self::Internal, Self::Project(_)) => AGENTS_MD_SEPARATOR,
-            _ => "\n\n",
-        }
-    }
-
+impl InstructionProvenance {
     fn path(&self) -> Option<&AbsolutePathBuf> {
         match self {
             Self::User(path) | Self::Project(path) => Some(path),
