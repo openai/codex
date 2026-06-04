@@ -226,6 +226,7 @@ impl UnifiedExecProcess {
                     .map_err(|err| UnifiedExecError::process_failed(err.to_string()))?;
             }
         }
+        self.signal_exit(self.exit_code());
         self.finish_termination();
         Ok(())
     }

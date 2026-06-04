@@ -152,6 +152,18 @@ async fn remote_terminate_failure_does_not_mark_process_exited() {
 }
 
 #[tokio::test]
+async fn remote_terminate_confirmed_marks_process_exited() {
+    let process = remote_process(WriteStatus::Accepted, /*terminate_error*/ None).await;
+
+    process
+        .terminate_confirmed()
+        .await
+        .expect("terminate should succeed");
+
+    assert!(process.has_exited());
+}
+
+#[tokio::test]
 async fn remote_process_waits_for_early_exit_event() {
     let (wake_tx, _wake_rx) = watch::channel(0);
     let started = StartedExecProcess {

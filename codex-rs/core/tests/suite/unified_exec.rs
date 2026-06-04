@@ -2298,6 +2298,96 @@ async fn unified_exec_interrupt_preserves_long_running_session() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unified_exec_background_terminal_list_and_terminate_in_flight() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+    skip_if_windows!(Ok(()));
+
+    let server = start_mock_server().await;
+
+    let mut builder = test_codex().with_config(|config| {
+        config.use_experimental_unified_exec_tool = true;
+        config
+            .features
+            .enable(Feature::UnifiedExec)
+            .expect("test config should allow feature update");
+    });
+    let test = builder.build(&server).await?;
+
+    let temp_dir = tempfile::tempdir()?;
+    let pid_path = temp_dir.path().join("uexec_pid_terminate");
+    let pid_path_str = pid_path.to_string_lossy();
+
+    let call_id = "uexec-background-terminate";
+    let command = format!("printf '%s' $$ > '{pid_path_str}' && exec sleep 3000");
+    let args = json!({
+        "cmd": command,
+        "yield_time_ms": 30000,
+    });
+
+    let responses = vec![
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call(call_id, "exec_command", &serde_json::to_string(&args)?),
+            ev_completed("resp-1"),
+        ]),
+        sse(vec![
+            ev_assistant_message("msg-1", "terminated"),
+            ev_completed("resp-2"),
+        ]),
+    ];
+    mount_sse_sequence(&server, responses).await;
+
+    submit_unified_exec_turn(
+        &test,
+        "terminate background unified exec",
+        PermissionProfile::Disabled,
+    )
+    .await?;
+
+    let _begin_event = wait_for_event_match(&test.codex, |msg| match msg {
+        EventMsg::ExecCommandBegin(ev) if ev.call_id == call_id => Some(ev.clone()),
+        _ => None,
+    })
+    .await;
+
+    let pid = wait_for_pid_file(&pid_path).await?;
+    let terminal = {
+        let mut terminal = None;
+        for _ in 0..100 {
+            terminal = test
+                .codex
+                .list_background_terminals()
+                .await
+                .into_iter()
+                .find(|terminal| terminal.item_id == call_id);
+            if terminal.is_some() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        terminal.expect("expected background terminal to be listed")
+    };
+
+    assert_eq!(terminal.command, command);
+    assert!(
+        process_is_alive(&pid)?,
+        "expected process to be alive before terminate"
+    );
+    let process_id = terminal.process_id.parse::<i32>()?;
+    assert!(test.codex.terminate_background_terminal(process_id).await);
+    wait_for_process_exit(&pid).await?;
+
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    assert!(test.codex.list_background_terminals().await.is_empty());
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn unified_exec_reuses_session_via_stdin() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
