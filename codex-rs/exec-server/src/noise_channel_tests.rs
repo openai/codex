@@ -86,6 +86,27 @@ fn initiator_rejects_wrong_responder_key() {
 }
 
 #[test]
+fn initiator_rejects_oversized_payload_before_calling_clatter() {
+    let initiator = NoiseChannelIdentity::generate().expect("generate initiator identity");
+    let responder = NoiseChannelIdentity::generate().expect("generate responder identity");
+    let prologue =
+        noise_channel_prologue("env-1", "registration-1", "stream-1").expect("build prologue");
+    let oversized_payload = vec![0; clatter::constants::MAX_MESSAGE_LEN];
+
+    assert!(matches!(
+        InitiatorHandshake::start(
+            &initiator,
+            &responder.public_key(),
+            &prologue,
+            &oversized_payload,
+        ),
+        Err(NoiseChannelError::InvalidMessage(
+            "handshake request is too large"
+        ))
+    ));
+}
+
+#[test]
 fn responder_rejects_mismatched_prologue() {
     let initiator = NoiseChannelIdentity::generate().expect("generate initiator identity");
     let responder = NoiseChannelIdentity::generate().expect("generate responder identity");

@@ -156,6 +156,17 @@ impl InitiatorHandshake {
             .with_rs(responder_dh)
             .with_rs_kem(responder_kem);
         let mut handshake = Handshake::new(params)?;
+        // Clatter panics, rather than returning an error, when a handshake
+        // message would exceed Noise's 65,535-byte limit. The first-message
+        // payload comes from the environment registry, so enforce the complete
+        // encoded size before crossing that library boundary.
+        let request_len = payload
+            .len()
+            .checked_add(handshake.get_next_message_overhead()?)
+            .ok_or(NoiseChannelError::InvalidMessage(
+                "handshake request is too large",
+            ))?;
+        ensure_noise_frame_len(request_len, "handshake request is too large")?;
         let mut output = [0u8; MAX_MESSAGE_LEN];
         let output_len = handshake.write_message(payload, &mut output)?;
         Ok((Self { handshake }, output[..output_len].to_vec()))
