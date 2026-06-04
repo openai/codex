@@ -618,6 +618,7 @@ fn config_toml_deserializes_model_availability_nux() {
             status_line: None,
             status_line_use_colors: true,
             terminal_title: None,
+            tab_status: true,
             theme: None,
             pet: None,
             pet_anchor: TuiPetAnchor::Composer,
@@ -663,6 +664,33 @@ status_line_use_colors = false
             .expect("tui config should deserialize")
             .status_line_use_colors
     );
+}
+
+#[test]
+fn config_toml_tab_status_defaults_to_enabled() {
+    let cfg: ConfigToml =
+        toml::from_str("[tui]").expect("TOML deserialization should succeed for TUI config");
+
+    assert!(cfg.tui.expect("tui config should deserialize").tab_status);
+}
+
+#[tokio::test]
+async fn runtime_config_resolves_tab_status_disabled() {
+    let cfg = Config::load_from_base_config_with_overrides(
+        toml::from_str(
+            r#"
+[tui]
+tab_status = false
+"#,
+        )
+        .expect("TOML deserialization should succeed for TUI config"),
+        ConfigOverrides::default(),
+        tempdir().expect("tempdir").abs(),
+    )
+    .await
+    .expect("load config");
+
+    assert!(!cfg.tui_tab_status);
 }
 
 #[test]
@@ -3366,6 +3394,7 @@ fn tui_config_missing_notifications_field_defaults_to_enabled() {
             status_line: None,
             status_line_use_colors: true,
             terminal_title: None,
+            tab_status: true,
             theme: None,
             pet: None,
             pet_anchor: TuiPetAnchor::Composer,

@@ -229,6 +229,9 @@ impl ChatWidget {
         }
         widget
             .bottom_pane
+            .set_tab_status_enabled(widget.config.tui_tab_status);
+        widget
+            .bottom_pane
             .set_vim_enabled(widget.config.tui_vim_mode_default);
         widget
             .bottom_pane

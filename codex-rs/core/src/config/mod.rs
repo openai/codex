@@ -749,6 +749,12 @@ pub struct Config {
     /// message when blocked on the user.
     pub tui_terminal_title: Option<Vec<String>>,
 
+    /// Whether to emit OSC 21337 tab-status indicators (iTerm2's per-tab dot).
+    ///
+    /// Defaults to `true`. Other terminals ignore the OSC silently, so this
+    /// is effectively iTerm2-only. Set to `false` to suppress emission.
+    pub tui_tab_status: bool,
+
     /// Syntax highlighting theme override (kebab-case name).
     pub tui_theme: Option<String>,
 
@@ -3659,6 +3665,11 @@ impl Config {
                 .map(|t| t.status_line_use_colors)
                 .unwrap_or(true),
             tui_terminal_title: cfg.tui.as_ref().and_then(|t| t.terminal_title.clone()),
+            tui_tab_status: cfg
+                .tui
+                .as_ref()
+                .map(|t| t.tab_status)
+                .unwrap_or(/*default*/ true),
             tui_theme: cfg.tui.as_ref().and_then(|t| t.theme.clone()),
             tui_pet: cfg.tui.as_ref().and_then(|t| t.pet.clone()),
             tui_pet_anchor: cfg

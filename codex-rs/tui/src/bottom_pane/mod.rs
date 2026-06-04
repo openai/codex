@@ -59,6 +59,7 @@ mod request_user_input;
 mod status_line_setup;
 mod status_line_style;
 mod status_surface_preview;
+mod tab_status_state;
 mod title_setup;
 pub(crate) use action_required_title::ACTION_REQUIRED_PREVIEW_PREFIX;
 pub(crate) use action_required_title::build_action_required_title_text;
@@ -188,10 +189,12 @@ pub(crate) use chat_composer_history::HistoryEntry;
 
 use crate::status_indicator_widget::StatusDetailsCapitalization;
 use crate::status_indicator_widget::StatusIndicatorWidget;
+use crate::tab_status::TabStatus;
 pub(crate) use experimental_features_view::ExperimentalFeatureItem;
 pub(crate) use experimental_features_view::ExperimentalFeaturesView;
 pub(crate) use list_selection_view::SelectionAction;
 pub(crate) use list_selection_view::SelectionItem;
+use tab_status_state::TabStatusState;
 
 struct DelayedApprovalRequest {
     request: ApprovalRequest,
@@ -238,6 +241,7 @@ pub(crate) struct BottomPane {
     context_window_percent: Option<i64>,
     context_window_used_tokens: Option<i64>,
     keymap: RuntimeKeymap,
+    tab_status: TabStatusState,
 }
 
 pub(crate) struct BottomPaneParams {
@@ -295,7 +299,36 @@ impl BottomPane {
             context_window_percent: None,
             context_window_used_tokens: None,
             keymap,
+            tab_status: TabStatusState::new(),
         }
+    }
+
+    /// Toggle OSC 21337 tab-status emission. Set post-construction by
+    /// `ChatWidget` so tests don't need to thread it through BottomPaneParams.
+    pub(crate) fn set_tab_status_enabled(&mut self, enabled: bool) {
+        self.tab_status.set_enabled(enabled);
+    }
+
+    /// Compute the desired tab-status state from current task + modal state.
+    ///
+    /// Waiting pre-empts Working: a user-blocking modal is the more important
+    /// signal to surface. Waiting reads the same `terminal_title_requires_action`
+    /// signal as the title indicator, so the two can never disagree.
+    fn desired_tab_status(&self) -> TabStatus {
+        if self.terminal_title_requires_action() {
+            TabStatus::Waiting
+        } else if self.is_task_running {
+            TabStatus::Working
+        } else {
+            TabStatus::Idle
+        }
+    }
+
+    /// Emit an OSC 21337 update if the desired state differs from what we
+    /// last wrote. Invoked at state-class transitions only.
+    fn refresh_tab_status(&mut self) {
+        let desired = self.desired_tab_status();
+        self.tab_status.refresh(desired);
     }
 
     pub fn set_skills(&mut self, skills: Option<Vec<SkillMetadata>>) {
@@ -494,6 +527,9 @@ impl BottomPane {
     fn push_view(&mut self, view: Box<dyn BottomPaneView>) {
         self.view_stack.push(view);
         self.schedule_active_view_frame();
+        // The new top-of-stack may be a user-blocking modal, so re-evaluate
+        // (the tab moves to Waiting when the view declares it).
+        self.refresh_tab_status();
         self.request_redraw();
     }
 
@@ -740,6 +776,10 @@ impl BottomPane {
         self.composer.sync_popups();
         self.maybe_show_delayed_approval_requests_at(now);
         self.schedule_active_view_frame();
+        // Poll every frame: the imperative refresh at push/task-state sites
+        // misses transitions where a pop into a non-empty stack changes the
+        // active view, or where a dismissal bypasses on_active_view_complete.
+        self.refresh_tab_status();
     }
 
     fn schedule_active_view_frame(&self) {
@@ -964,6 +1004,12 @@ impl BottomPane {
         self.status.is_some()
     }
 
+    /// Test-only view of the last OSC 21337 tab status we wrote.
+    #[cfg(test)]
+    pub(crate) fn last_tab_status_for_test(&self) -> Option<TabStatus> {
+        self.tab_status.last_status()
+    }
+
     #[cfg(test)]
     pub(crate) fn status_line_text(&self) -> Option<String> {
         self.composer.status_line_text()
@@ -1010,6 +1056,7 @@ impl BottomPane {
             // Hide the status indicator when a task completes, but keep other modal views.
             self.hide_status_indicator();
         }
+        self.refresh_tab_status();
     }
 
     pub(crate) fn set_queue_submissions(&mut self, queue_submissions: bool) {
@@ -1474,6 +1521,10 @@ impl BottomPane {
     fn on_active_view_complete(&mut self) {
         self.resume_status_timer_after_modal();
         self.set_composer_input_enabled(/*enabled*/ true, /*placeholder*/ None);
+        // Re-evaluate so completion paths that bypass
+        // pop_active_view_with_completion (paste-completes-modal, shutdown
+        // view_stack.clear) still drop out of Waiting.
+        self.refresh_tab_status();
     }
 
     fn pause_status_timer_for_modal(&mut self) {
@@ -1929,6 +1980,106 @@ mod tests {
         fn view_id(&self) -> Option<&'static str> {
             self.id
         }
+    }
+
+    fn fresh_pane() -> BottomPane {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        BottomPane::new(BottomPaneParams {
+            app_event_tx: tx,
+            frame_requester: FrameRequester::test_dummy(),
+            has_input_focus: true,
+            enhanced_keys_supported: false,
+            placeholder_text: "Ask Codex to do anything".to_string(),
+            disable_paste_burst: true,
+            animations_enabled: true,
+            skills: Some(Vec::new()),
+        })
+    }
+
+    #[test]
+    fn tab_status_disabled_suppresses_emission() {
+        // Refresh must honor the `tui.tab_status = false` opt-out: nothing
+        // recorded across the Working/Idle arc.
+        let mut pane = fresh_pane();
+        pane.set_tab_status_enabled(/*enabled*/ false);
+
+        pane.set_task_running(/*running*/ true);
+        assert_eq!(pane.last_tab_status_for_test(), None);
+
+        pane.set_task_running(/*running*/ false);
+        assert_eq!(pane.last_tab_status_for_test(), None);
+    }
+
+    #[test]
+    fn tab_status_transitions_through_a_typical_turn() {
+        let features = Features::with_defaults();
+        let mut pane = fresh_pane();
+        pane.refresh_tab_status();
+        assert_eq!(pane.last_tab_status_for_test(), Some(TabStatus::Idle));
+
+        pane.set_task_running(/*running*/ true);
+        assert_eq!(pane.last_tab_status_for_test(), Some(TabStatus::Working));
+
+        pane.push_approval_request(exec_request(), &features);
+        assert_eq!(pane.last_tab_status_for_test(), Some(TabStatus::Waiting));
+
+        let _ = pane.on_ctrl_c();
+        assert_eq!(pane.last_tab_status_for_test(), Some(TabStatus::Working));
+
+        pane.set_task_running(/*running*/ false);
+        assert_eq!(pane.last_tab_status_for_test(), Some(TabStatus::Idle));
+    }
+
+    #[test]
+    fn tab_status_clears_via_on_active_view_complete_bypass() {
+        // Some completion paths bypass pop_active_view_with_completion
+        // (handle_paste's view-complete branch, show_shutdown_in_progress).
+        // Driving state off on_active_view_complete must drop out of Waiting
+        // for those too.
+        let features = Features::with_defaults();
+        let mut pane = fresh_pane();
+        pane.set_task_running(/*running*/ true);
+        pane.push_approval_request(exec_request(), &features);
+        assert_eq!(pane.last_tab_status_for_test(), Some(TabStatus::Waiting));
+
+        // Simulate handle_paste's view-complete branch: clear then complete.
+        pane.view_stack.clear();
+        pane.on_active_view_complete();
+        assert_eq!(pane.last_tab_status_for_test(), Some(TabStatus::Working));
+    }
+
+    #[test]
+    fn tab_status_drops_waiting_when_pop_leaves_non_empty_stack() {
+        // pop_active_view_with_completion only calls on_active_view_complete
+        // when the stack empties. Popping an action modal while a non-action
+        // view remains underneath fires no imperative refresh, so only the
+        // per-frame poll can drop the tab out of Waiting.
+        let features = Features::with_defaults();
+        let mut pane = fresh_pane();
+
+        // Underlay: a non-action view that stays on the stack.
+        pane.show_view(Box::new(DismissibleView::default()));
+        pane.set_task_running(/*running*/ true);
+        assert_eq!(
+            pane.last_tab_status_for_test(),
+            Some(TabStatus::Working),
+            "non-action underlay shouldn't move us off Working",
+        );
+
+        pane.push_approval_request(exec_request(), &features);
+        assert_eq!(pane.last_tab_status_for_test(), Some(TabStatus::Waiting));
+
+        // Cancel: DismissibleView remains underneath, so on_active_view_complete
+        // does not fire and only the per-frame poll catches the transition.
+        let _ = pane.on_ctrl_c();
+        pane.pre_draw_tick();
+        assert_eq!(
+            pane.last_tab_status_for_test(),
+            Some(TabStatus::Working),
+            "pre_draw_tick must drop the tab out of Waiting once the \
+             top of the stack is no longer action-required",
+        );
     }
 
     #[test]

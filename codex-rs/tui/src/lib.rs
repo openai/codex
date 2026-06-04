@@ -186,6 +186,7 @@ mod status;
 mod status_indicator_widget;
 mod streaming;
 mod style;
+mod tab_status;
 mod terminal_hyperlinks;
 mod terminal_palette;
 mod terminal_probe;

@@ -207,6 +207,7 @@ fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::R
         tui_status_line: None,
         tui_status_line_use_colors: true,
         tui_terminal_title: None,
+        tui_tab_status: true,
         tui_theme: None,
         tui_raw_output_mode: false,
         tui_pet: None,

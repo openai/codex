@@ -291,6 +291,10 @@ pub fn restore_after_exit() -> Result<()> {
     if let Err(err) = terminal_stderr::finish() {
         first_error.get_or_insert(err);
     }
+    // Clear any tab-status indicator Codex was managing so the tab returns
+    // to a neutral state after exit. Best-effort: ignore failures, they
+    // don't block restoring the terminal.
+    let _ = crate::tab_status::clear_tab_status();
 
     match first_error {
         Some(err) => Err(err),

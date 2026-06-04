@@ -3040,6 +3040,11 @@
           "description": "Color status line items with colors derived from the active syntax theme. Defaults to `true`.",
           "type": "boolean"
         },
+        "tab_status": {
+          "default": true,
+          "description": "Emit OSC 21337 tab-status indicators (the colored dot iTerm2 paints on the tab itself for Working / Waiting / Idle).\n\nOther terminals ignore OSC 21337 silently, so this only has an effect in iTerm2. Defaults to `true`; set to `false` to suppress emission (e.g. if another tool is already managing the tab status).",
+          "type": "boolean"
+        },
         "terminal_resize_reflow_max_rows": {
           "default": null,
           "description": "Trim terminal resize-reflow replay to the most recent rendered terminal rows when the transcript exceeds this cap. Omit to use Codex's terminal-specific default. Set to `0` to keep all rendered rows.",

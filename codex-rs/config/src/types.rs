@@ -730,6 +730,15 @@ pub struct Tui {
     #[serde(default)]
     pub terminal_title: Option<Vec<String>>,
 
+    /// Emit OSC 21337 tab-status indicators (the colored dot iTerm2 paints on
+    /// the tab itself for Working / Waiting / Idle).
+    ///
+    /// Other terminals ignore OSC 21337 silently, so this only has an effect
+    /// in iTerm2. Defaults to `true`; set to `false` to suppress emission
+    /// (e.g. if another tool is already managing the tab status).
+    #[serde(default = "default_true")]
+    pub tab_status: bool,
+
     /// Syntax highlighting theme name (kebab-case).
     ///
     /// When set, overrides automatic light/dark theme detection.
