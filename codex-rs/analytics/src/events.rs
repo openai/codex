@@ -817,6 +817,7 @@ pub(crate) struct CodexTurnEventParams {
     pub(crate) output_tokens: Option<i64>,
     pub(crate) reasoning_output_tokens: Option<i64>,
     pub(crate) total_tokens: Option<i64>,
+    pub(crate) profile: crate::facts::TurnProfile,
     pub(crate) duration_ms: Option<u64>,
     pub(crate) started_at: Option<u64>,
     pub(crate) completed_at: Option<u64>,

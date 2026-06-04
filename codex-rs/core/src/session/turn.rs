@@ -1083,6 +1083,7 @@ async fn run_sampling_request(
             ResponsesStreamRequest::Sampling,
         )
         .await?;
+        turn_context.turn_timing_state.record_sampling_retry();
     }
 }
 
@@ -1794,6 +1795,7 @@ async fn try_run_sampling_request(
         turn_context.model_info.slug.as_str(),
         turn_context.provider.info().name.as_str(),
     );
+    let sampling_timing_guard = turn_context.turn_timing_state.begin_sampling();
     let mut stream = client_session
         .stream(
             prompt,
@@ -2202,6 +2204,7 @@ async fn try_run_sampling_request(
             }
         }
     };
+    drop(sampling_timing_guard);
 
     flush_assistant_text_segments_all(
         &sess,

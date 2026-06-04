@@ -1,13 +1,18 @@
+use codex_analytics::TURN_PROFILE_VERSION;
+use codex_analytics::TurnProfile;
+use codex_analytics::TurnProfileStatus;
 use codex_protocol::items::AgentMessageItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseItem;
 use pretty_assertions::assert_eq;
+use std::time::Duration;
 use std::time::Instant;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
+use super::TurnProfileState;
 use super::TurnTimingState;
 use super::response_item_records_turn_ttft;
 use crate::ResponseEvent;
@@ -145,4 +150,69 @@ fn response_item_records_turn_ttft_ignores_empty_non_output_items() {
             output: FunctionCallOutputPayload::from_text("ok".to_string()),
         }
     ));
+}
+
+#[test]
+fn turn_profile_breaks_down_sampling_tool_blocking_and_retry_overhead() {
+    let started_at = Instant::now();
+    let mut state = TurnProfileState::default();
+    state.start(started_at);
+
+    let _ = state.begin_sampling(started_at + Duration::from_millis(100));
+    let _ = state.begin_tool(started_at + Duration::from_millis(300));
+    state.end_sampling(started_at + Duration::from_millis(600));
+    state.end_tool(started_at + Duration::from_millis(900));
+    state.record_sampling_retry();
+    let _ = state.begin_sampling(started_at + Duration::from_millis(1_000));
+    state.end_sampling(started_at + Duration::from_millis(1_200));
+
+    assert_eq!(
+        state.complete(
+            started_at + Duration::from_millis(1_300),
+            TurnProfileStatus::Complete,
+        ),
+        TurnProfile {
+            version: TURN_PROFILE_VERSION,
+            before_first_sampling_ms: 100,
+            sampling_ms: 700,
+            between_sampling_overhead_ms: 100,
+            tool_blocking_ms: 300,
+            after_last_sampling_ms: 100,
+            sampling_tool_overlap_ms: 300,
+            sampling_request_count: 2,
+            sampling_retry_count: 1,
+            status: TurnProfileStatus::Complete,
+        }
+    );
+}
+
+#[test]
+fn turn_profile_counts_parallel_tools_as_one_blocking_interval() {
+    let started_at = Instant::now();
+    let mut state = TurnProfileState::default();
+    state.start(started_at);
+
+    let _ = state.begin_tool(started_at + Duration::from_millis(100));
+    let _ = state.begin_tool(started_at + Duration::from_millis(200));
+    state.end_tool(started_at + Duration::from_millis(400));
+    state.end_tool(started_at + Duration::from_millis(700));
+
+    assert_eq!(
+        state.complete(
+            started_at + Duration::from_millis(800),
+            TurnProfileStatus::Partial,
+        ),
+        TurnProfile {
+            version: TURN_PROFILE_VERSION,
+            before_first_sampling_ms: 200,
+            sampling_ms: 0,
+            between_sampling_overhead_ms: 0,
+            tool_blocking_ms: 600,
+            after_last_sampling_ms: 0,
+            sampling_tool_overlap_ms: 0,
+            sampling_request_count: 0,
+            sampling_retry_count: 0,
+            status: TurnProfileStatus::Partial,
+        }
+    );
 }

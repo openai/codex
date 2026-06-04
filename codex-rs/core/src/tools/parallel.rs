@@ -100,6 +100,7 @@ impl ToolCallRuntime {
         let terminal_outcome_reached = Arc::new(AtomicBool::new(false));
         let dispatch_terminal_outcome_reached = Arc::clone(&terminal_outcome_reached);
         let dispatch_call = call.clone();
+        let tool_timing_guard = turn.turn_timing_state.begin_tool();
 
         let dispatch_span = trace_span!(
             "dispatch_tool_call_with_code_mode_result",
@@ -112,6 +113,7 @@ impl ToolCallRuntime {
 
         let mut handle: AbortOnDropHandle<Result<AnyToolResult, FunctionCallError>> =
             AbortOnDropHandle::new(tokio::spawn(async move {
+                let _tool_timing_guard = tool_timing_guard;
                 let _guard = if supports_parallel {
                     Either::Left(lock.read().await)
                 } else {

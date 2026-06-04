@@ -32,6 +32,7 @@ use std::path::PathBuf;
 
 const INVALID_REQUEST_SUBREASON_MAX_BYTES: usize = 512;
 const INVALID_REQUEST_SUBREASON_TRUNCATION_SUFFIX: &str = "...";
+pub const TURN_PROFILE_VERSION: u8 = 1;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct AcceptedLineFingerprint {
@@ -102,6 +103,34 @@ pub struct TurnTokenUsageFact {
     pub turn_id: String,
     pub thread_id: String,
     pub token_usage: TokenUsage,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct TurnProfile {
+    pub version: u8,
+    pub before_first_sampling_ms: u64,
+    pub sampling_ms: u64,
+    pub between_sampling_overhead_ms: u64,
+    pub tool_blocking_ms: u64,
+    pub after_last_sampling_ms: u64,
+    pub sampling_tool_overlap_ms: u64,
+    pub sampling_request_count: u32,
+    pub sampling_retry_count: u32,
+    pub status: TurnProfileStatus,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TurnProfileStatus {
+    Complete,
+    Partial,
+}
+
+#[derive(Clone)]
+pub struct TurnProfileFact {
+    pub turn_id: String,
+    pub thread_id: String,
+    pub profile: TurnProfile,
 }
 
 #[derive(Clone)]
@@ -476,6 +505,7 @@ pub(crate) enum CustomAnalyticsFact {
     GuardianReview(Box<GuardianReviewEventParams>),
     TurnResolvedConfig(Box<TurnResolvedConfigFact>),
     TurnTokenUsage(Box<TurnTokenUsageFact>),
+    TurnProfile(Box<TurnProfileFact>),
     TurnCodexError(Box<TurnCodexErrorFact>),
     SkillInvoked(SkillInvokedInput),
     AppMentioned(AppMentionedInput),

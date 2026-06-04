@@ -72,6 +72,8 @@ use crate::facts::SubAgentThreadStartedInput;
 use crate::facts::ThreadInitializationMode;
 use crate::facts::TurnCodexError;
 use crate::facts::TurnCodexErrorFact;
+use crate::facts::TurnProfile;
+use crate::facts::TurnProfileFact;
 use crate::facts::TurnResolvedConfigFact;
 use crate::facts::TurnStatus;
 use crate::facts::TurnSteerRejectionReason;
@@ -323,6 +325,7 @@ struct TurnState {
     resolved_config: Option<TurnResolvedConfigFact>,
     started_at: Option<u64>,
     token_usage: Option<TokenUsage>,
+    profile: Option<TurnProfile>,
     completed: Option<CompletedTurnState>,
     codex_error: Option<TurnCodexError>,
     latest_diff: Option<String>,
@@ -463,6 +466,9 @@ impl AnalyticsReducer {
                 }
                 CustomAnalyticsFact::TurnTokenUsage(input) => {
                     self.ingest_turn_token_usage(*input, out).await;
+                }
+                CustomAnalyticsFact::TurnProfile(input) => {
+                    self.ingest_turn_profile(*input, out).await;
                 }
                 CustomAnalyticsFact::TurnCodexError(input) => {
                     self.ingest_turn_codex_error(*input);
@@ -611,6 +617,7 @@ impl AnalyticsReducer {
             resolved_config: None,
             started_at: None,
             token_usage: None,
+            profile: None,
             completed: None,
             codex_error: None,
             latest_diff: None,
@@ -636,6 +643,7 @@ impl AnalyticsReducer {
             resolved_config: None,
             started_at: None,
             token_usage: None,
+            profile: None,
             completed: None,
             codex_error: None,
             latest_diff: None,
@@ -644,6 +652,35 @@ impl AnalyticsReducer {
         });
         turn_state.thread_id = Some(input.thread_id);
         turn_state.token_usage = Some(input.token_usage);
+        self.maybe_emit_turn_event(&turn_id, out).await;
+    }
+
+    async fn ingest_turn_profile(
+        &mut self,
+        input: TurnProfileFact,
+        out: &mut Vec<TrackEventRequest>,
+    ) {
+        let TurnProfileFact {
+            turn_id,
+            thread_id,
+            profile,
+        } = input;
+        let turn_state = self.turns.entry(turn_id.clone()).or_insert(TurnState {
+            connection_id: None,
+            thread_id: None,
+            num_input_images: None,
+            resolved_config: None,
+            started_at: None,
+            token_usage: None,
+            profile: None,
+            completed: None,
+            codex_error: None,
+            latest_diff: None,
+            steer_count: 0,
+            tool_counts: TurnToolCounts::default(),
+        });
+        turn_state.thread_id.get_or_insert(thread_id);
+        turn_state.profile = Some(profile);
         self.maybe_emit_turn_event(&turn_id, out).await;
     }
 
@@ -660,6 +697,7 @@ impl AnalyticsReducer {
             resolved_config: None,
             started_at: None,
             token_usage: None,
+            profile: None,
             completed: None,
             codex_error: None,
             latest_diff: None,
@@ -825,6 +863,7 @@ impl AnalyticsReducer {
                     resolved_config: None,
                     started_at: None,
                     token_usage: None,
+                    profile: None,
                     completed: None,
                     codex_error: None,
                     latest_diff: None,
@@ -1185,6 +1224,7 @@ impl AnalyticsReducer {
                     resolved_config: None,
                     started_at: None,
                     token_usage: None,
+                    profile: None,
                     completed: None,
                     codex_error: None,
                     latest_diff: None,
@@ -1207,6 +1247,7 @@ impl AnalyticsReducer {
                             resolved_config: None,
                             started_at: None,
                             token_usage: None,
+                            profile: None,
                             completed: None,
                             codex_error: None,
                             latest_diff: None,
@@ -1227,6 +1268,7 @@ impl AnalyticsReducer {
                             resolved_config: None,
                             started_at: None,
                             token_usage: None,
+                            profile: None,
                             completed: None,
                             codex_error: None,
                             latest_diff: None,
@@ -1511,6 +1553,7 @@ impl AnalyticsReducer {
         if turn_state.thread_id.is_none()
             || turn_state.num_input_images.is_none()
             || turn_state.resolved_config.is_none()
+            || turn_state.profile.is_none()
             || turn_state.completed.is_none()
         {
             return;
@@ -2457,12 +2500,20 @@ fn codex_turn_event_params(
     turn_state: &TurnState,
     thread_metadata: &ThreadMetadataState,
 ) -> CodexTurnEventParams {
-    let (Some(thread_id), Some(num_input_images), Some(resolved_config), Some(completed)) = (
+    let (
+        Some(thread_id),
+        Some(num_input_images),
+        Some(resolved_config),
+        Some(profile),
+        Some(completed),
+    ) = (
         turn_state.thread_id.clone(),
         turn_state.num_input_images,
         turn_state.resolved_config.clone(),
+        turn_state.profile.clone(),
         turn_state.completed.clone(),
-    ) else {
+    )
+    else {
         unreachable!("turn event params require a fully populated turn state");
     };
     let started_at = turn_state.started_at;
@@ -2550,6 +2601,7 @@ fn codex_turn_event_params(
         total_tokens: token_usage
             .as_ref()
             .map(|token_usage| token_usage.total_tokens),
+        profile,
         duration_ms: completed.duration_ms,
         started_at,
         completed_at: Some(completed.completed_at),

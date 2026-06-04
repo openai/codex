@@ -60,9 +60,13 @@ use crate::facts::PluginUsedInput;
 use crate::facts::SkillInvocation;
 use crate::facts::SkillInvokedInput;
 use crate::facts::SubAgentThreadStartedInput;
+use crate::facts::TURN_PROFILE_VERSION;
 use crate::facts::ThreadInitializationMode;
 use crate::facts::TrackEventsContext;
 use crate::facts::TurnCodexErrorFact;
+use crate::facts::TurnProfile;
+use crate::facts::TurnProfileFact;
+use crate::facts::TurnProfileStatus;
 use crate::facts::TurnResolvedConfigFact;
 use crate::facts::TurnStatus;
 use crate::facts::TurnSteerRequestError;
@@ -396,6 +400,21 @@ fn sample_turn_resolved_config(thread_id: &str, turn_id: &str) -> TurnResolvedCo
     }
 }
 
+fn sample_turn_profile() -> TurnProfile {
+    TurnProfile {
+        version: TURN_PROFILE_VERSION,
+        before_first_sampling_ms: 100,
+        sampling_ms: 700,
+        between_sampling_overhead_ms: 50,
+        tool_blocking_ms: 250,
+        after_last_sampling_ms: 134,
+        sampling_tool_overlap_ms: 75,
+        sampling_request_count: 2,
+        sampling_retry_count: 1,
+        status: TurnProfileStatus::Complete,
+    }
+}
+
 fn sample_turn_steer_request(
     thread_id: &str,
     expected_turn_id: &str,
@@ -649,6 +668,19 @@ async fn ingest_turn_prerequisites(
             )
             .await;
     }
+
+    reducer
+        .ingest(
+            AnalyticsFact::Custom(CustomAnalyticsFact::TurnProfile(Box::new(
+                TurnProfileFact {
+                    turn_id: "turn-2".to_string(),
+                    thread_id: "thread-2".to_string(),
+                    profile: sample_turn_profile(),
+                },
+            ))),
+            out,
+        )
+        .await;
 }
 
 async fn ingest_review_prerequisites(
@@ -3300,6 +3332,7 @@ fn turn_event_serializes_expected_shape() {
             output_tokens: None,
             reasoning_output_tokens: None,
             total_tokens: None,
+            profile: sample_turn_profile(),
             duration_ms: Some(1234),
             started_at: Some(455),
             completed_at: Some(456),
@@ -3366,6 +3399,18 @@ fn turn_event_serializes_expected_shape() {
                 "output_tokens": null,
                 "reasoning_output_tokens": null,
                 "total_tokens": null,
+                "profile": {
+                    "version": 1,
+                    "before_first_sampling_ms": 100,
+                    "sampling_ms": 700,
+                    "between_sampling_overhead_ms": 50,
+                    "tool_blocking_ms": 250,
+                    "after_last_sampling_ms": 134,
+                    "sampling_tool_overlap_ms": 75,
+                    "sampling_request_count": 2,
+                    "sampling_retry_count": 1,
+                    "status": "complete"
+                },
                 "duration_ms": 1234,
                 "started_at": 455,
                 "completed_at": 456
