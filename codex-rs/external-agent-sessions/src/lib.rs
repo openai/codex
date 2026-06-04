@@ -13,7 +13,10 @@ use std::path::PathBuf;
 
 pub use detect::detect_recent_sessions;
 pub use export::load_session_for_import;
+use export::load_session_for_import_with_content_sha256;
+pub use ledger::CompletedExternalAgentSessionImport;
 pub use ledger::has_current_session_been_imported;
+pub use ledger::record_completed_session_imports;
 pub use ledger::record_imported_session;
 pub use records::SessionSummary;
 pub use records::summarize_session;
@@ -31,12 +34,14 @@ pub struct ExternalAgentSessionMigration {
 pub struct ImportedExternalAgentSession {
     pub cwd: PathBuf,
     pub title: Option<String>,
+    pub first_user_message: Option<String>,
     pub rollout_items: Vec<RolloutItem>,
 }
 
 #[derive(Debug, Clone)]
 pub struct PendingSessionImport {
     pub source_path: PathBuf,
+    pub source_content_sha256: String,
     pub session: ImportedExternalAgentSession,
 }
 
@@ -82,12 +87,14 @@ pub fn prepare_pending_session_imports(
         if has_been_imported {
             continue;
         }
-        let imported_session = match load_importable_session(&session.path) {
-            Ok(Some(imported_session)) => imported_session,
-            Ok(None) | Err(_) => continue,
-        };
+        let (source_path, imported_session, source_content_sha256) =
+            match load_importable_session(&session.path) {
+                Ok(Some(importable_session)) => importable_session,
+                Ok(None) | Err(_) => continue,
+            };
         pending_session_imports.push(PendingSessionImport {
-            source_path: session.path,
+            source_path,
+            source_content_sha256,
             session: imported_session,
         });
     }
@@ -100,11 +107,11 @@ pub fn prepare_validated_session_imports(
 ) -> Vec<PendingSessionImport> {
     requested_sessions
         .into_iter()
-        .filter_map(|session| pending_session_import(codex_home, session))
+        .filter_map(|session| prepare_validated_session_import(codex_home, session))
         .collect()
 }
 
-fn pending_session_import(
+pub fn prepare_validated_session_import(
     codex_home: &Path,
     session: ExternalAgentSessionMigration,
 ) -> Option<PendingSessionImport> {
@@ -115,21 +122,32 @@ fn pending_session_import(
     if has_been_imported {
         return None;
     }
-    let imported_session = match load_importable_session(&session.path) {
-        Ok(Some(imported_session)) => imported_session,
-        Ok(None) | Err(_) => return None,
-    };
+    let (source_path, imported_session, source_content_sha256) =
+        match load_importable_session(&session.path) {
+            Ok(Some(importable_session)) => importable_session,
+            Ok(None) | Err(_) => return None,
+        };
     Some(PendingSessionImport {
-        source_path: session.path,
+        source_path,
+        source_content_sha256,
         session: imported_session,
     })
 }
 
-fn load_importable_session(path: &Path) -> io::Result<Option<ImportedExternalAgentSession>> {
-    let Some(imported_session) = load_session_for_import(path)? else {
+fn load_importable_session(
+    path: &Path,
+) -> io::Result<Option<(PathBuf, ImportedExternalAgentSession, String)>> {
+    let source_path = std::fs::canonicalize(path)?;
+    let Some((imported_session, source_content_sha256)) =
+        load_session_for_import_with_content_sha256(&source_path)?
+    else {
         return Ok(None);
     };
-    Ok(imported_session.cwd.is_dir().then_some(imported_session))
+    Ok(imported_session.cwd.is_dir().then_some((
+        source_path,
+        imported_session,
+        source_content_sha256,
+    )))
 }
 
 #[derive(Debug, Clone)]
@@ -172,6 +190,8 @@ fn now_unix_seconds() -> i64 {
 mod tests {
     use super::*;
     use codex_protocol::ThreadId;
+    use sha2::Digest;
+    use sha2::Sha256;
     use tempfile::TempDir;
 
     #[test]
@@ -211,6 +231,29 @@ mod tests {
         .expect("already imported session should be skipped");
 
         assert!(pending.is_empty());
+    }
+
+    #[test]
+    fn prepares_one_validated_session_import_with_content_hash() {
+        let root = TempDir::new().expect("tempdir");
+        let source_path = root.path().join("session.jsonl");
+        let contents = serde_json::json!({
+            "type": "user",
+            "cwd": root.path(),
+            "timestamp": "2026-06-03T12:00:00Z",
+            "message": { "content": "first request" },
+        })
+        .to_string();
+        std::fs::write(&source_path, &contents).expect("session");
+
+        let pending =
+            prepare_validated_session_import(root.path(), session_migration(&source_path))
+                .expect("pending import");
+
+        assert_eq!(
+            pending.source_content_sha256,
+            format!("{:x}", Sha256::digest(contents))
+        );
     }
 
     fn session_migration(path: &Path) -> ExternalAgentSessionMigration {
