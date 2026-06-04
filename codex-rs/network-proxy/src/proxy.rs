@@ -769,6 +769,28 @@ impl NetworkProxyHandle {
             completed: true,
         }
     }
+
+    pub async fn wait(mut self) -> Result<()> {
+        let http_task = self.http_task.take().context("missing http proxy task")?;
+        let socks_task = self.socks_task.take();
+        let http_result = http_task.await;
+        let socks_result = match socks_task {
+            Some(task) => Some(task.await),
+            None => None,
+        };
+        self.completed = true;
+        http_result??;
+        if let Some(socks_result) = socks_result {
+            socks_result??;
+        }
+        Ok(())
+    }
+
+    pub async fn shutdown(mut self) -> Result<()> {
+        abort_tasks(self.http_task.take(), self.socks_task.take()).await;
+        self.completed = true;
+        Ok(())
+    }
 }
 
 async fn abort_task(task: Option<JoinHandle<Result<()>>>) {

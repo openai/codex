@@ -33,6 +33,11 @@ impl PromptFragment {
         Self::new(PromptSlot::DeveloperCapabilities, text)
     }
 
+    /// Creates a separate top-level developer prompt fragment.
+    pub fn separate_developer(text: impl Into<String>) -> Self {
+        Self::new(PromptSlot::SeparateDeveloper, text)
+    }
+
     /// Returns the target prompt slot.
     pub fn slot(&self) -> PromptSlot {
         self.slot

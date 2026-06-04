@@ -22,14 +22,19 @@ use reqwest::header::AUTHORIZATION;
 use reqwest::header::HeaderMap;
 use rmcp::model::CallToolRequestParams;
 use rmcp::model::CallToolResult;
+use rmcp::model::ClientNotification;
 use rmcp::model::ClientRequest;
 use rmcp::model::CreateElicitationRequestParams;
 use rmcp::model::CreateElicitationResult;
+use rmcp::model::CustomNotification;
+use rmcp::model::CustomRequest;
 use rmcp::model::ElicitationAction;
+use rmcp::model::Extensions;
 use rmcp::model::InitializeRequestParams;
 use rmcp::model::InitializeResult;
 use rmcp::model::ListResourceTemplatesResult;
 use rmcp::model::ListResourcesResult;
+use rmcp::model::ListToolsResult;
 use rmcp::model::PaginatedRequestParams;
 use rmcp::model::ReadResourceRequestParams;
 use rmcp::model::ReadResourceResult;
@@ -278,6 +283,26 @@ pub struct RmcpClient {
 }
 
 impl RmcpClient {
+    pub async fn new_in_process_client(
+        factory: Arc<dyn InProcessTransportFactory>,
+    ) -> io::Result<Self> {
+        let transport_recipe = TransportRecipe::InProcess { factory };
+        let transport = Self::create_pending_transport(&transport_recipe)
+            .await
+            .map_err(io::Error::other)?;
+
+        Ok(Self {
+            state: Mutex::new(ClientState::Connecting {
+                transport: Some(transport),
+            }),
+            stdio_process: None,
+            transport_recipe,
+            initialize_context: Mutex::new(None),
+            session_recovery_lock: Semaphore::new(/*permits*/ 1),
+            elicitation_pause_state: ElicitationPauseState::new(),
+        })
+    }
+
     pub async fn new_stdio_client(
         program: OsString,
         args: Vec<OsString>,
@@ -407,6 +432,22 @@ impl RmcpClient {
         }
 
         Ok(initialize_result)
+    }
+
+    pub async fn list_tools(
+        &self,
+        params: Option<PaginatedRequestParams>,
+        timeout: Option<Duration>,
+    ) -> Result<ListToolsResult> {
+        self.refresh_oauth_if_needed().await;
+        let result = self
+            .run_service_operation("tools/list", timeout, move |service| {
+                let params = params.clone();
+                async move { service.list_tools(params).await }.boxed()
+            })
+            .await?;
+        self.persist_oauth_tokens().await;
+        Ok(result)
     }
 
     pub async fn list_tools_with_connector_ids(
@@ -558,6 +599,59 @@ impl RmcpClient {
             .await?;
         self.persist_oauth_tokens().await;
         Ok(result)
+    }
+
+    pub async fn send_custom_notification(
+        &self,
+        method: &str,
+        params: Option<serde_json::Value>,
+    ) -> Result<()> {
+        self.refresh_oauth_if_needed().await;
+        self.run_service_operation(
+            "notifications/custom",
+            /*timeout*/ None,
+            move |service| {
+                let params = params.clone();
+                async move {
+                    service
+                        .send_notification(ClientNotification::CustomNotification(
+                            CustomNotification {
+                                method: method.to_string(),
+                                params,
+                                extensions: Extensions::new(),
+                            },
+                        ))
+                        .await
+                }
+                .boxed()
+            },
+        )
+        .await?;
+        self.persist_oauth_tokens().await;
+        Ok(())
+    }
+
+    pub async fn send_custom_request(
+        &self,
+        method: &str,
+        params: Option<serde_json::Value>,
+    ) -> Result<ServerResult> {
+        self.refresh_oauth_if_needed().await;
+        let response = self
+            .run_service_operation("requests/custom", /*timeout*/ None, move |service| {
+                let params = params.clone();
+                async move {
+                    service
+                        .send_request(ClientRequest::CustomRequest(CustomRequest::new(
+                            method, params,
+                        )))
+                        .await
+                }
+                .boxed()
+            })
+            .await?;
+        self.persist_oauth_tokens().await;
+        Ok(response)
     }
 
     async fn service(&self) -> Result<Arc<RunningService<RoleClient, ElicitationClientService>>> {

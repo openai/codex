@@ -16,6 +16,10 @@ pub enum SkillSourceKind {
 }
 
 impl SkillSourceKind {
+    pub fn custom(kind: impl Into<String>) -> Self {
+        Self::Custom(kind.into())
+    }
+
     fn as_str(&self) -> &str {
         match self {
             Self::Host => "host",
@@ -93,8 +97,23 @@ impl SkillCatalogEntry {
         }
     }
 
+    pub fn with_short_description(mut self, short_description: Option<String>) -> Self {
+        self.short_description = short_description;
+        self
+    }
+
     pub fn with_display_path(mut self, display_path: impl Into<String>) -> Self {
         self.display_path = Some(display_path.into());
+        self
+    }
+
+    pub fn with_dependencies(mut self, dependencies: Option<SkillDependencies>) -> Self {
+        self.dependencies = dependencies;
+        self
+    }
+
+    pub fn disabled(mut self) -> Self {
+        self.enabled = false;
         self
     }
 

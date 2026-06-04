@@ -47,6 +47,17 @@ impl ComposerInput {
         Self { inner, _tx: tx, rx }
     }
 
+    /// Returns true if the input is empty.
+    pub fn is_empty(&self) -> bool {
+        self.inner.is_empty()
+    }
+
+    /// Clear the input text.
+    pub fn clear(&mut self) {
+        self.inner
+            .set_text_content(String::new(), Vec::new(), Vec::new());
+    }
+
     /// Feed a key event into the composer and return a high-level action.
     pub fn input(&mut self, key: KeyEvent) -> ComposerAction {
         let action = match self.inner.handle_key_event(key).0 {
@@ -71,6 +82,11 @@ impl ComposerInput {
             .map(|(k, v)| (k.into(), v.into()))
             .collect();
         self.inner.set_footer_hint_override(Some(mapped));
+    }
+
+    /// Clear any previously set custom hint items and restore the default hints.
+    pub fn clear_hint_items(&mut self) {
+        self.inner.set_footer_hint_override(/*items*/ None);
     }
 
     /// Desired height (in rows) for a given width.

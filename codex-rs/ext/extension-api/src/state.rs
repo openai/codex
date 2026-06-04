@@ -62,6 +62,14 @@ impl ExtensionData {
             .map(downcast_data)
     }
 
+    /// Removes and returns the attached value of type `T`, if one exists.
+    pub fn remove<T>(&self) -> Option<Arc<T>>
+    where
+        T: Any + Send + Sync,
+    {
+        self.entries().remove(&TypeId::of::<T>()).map(downcast_data)
+    }
+
     fn entries(&self) -> std::sync::MutexGuard<'_, HashMap<TypeId, ErasedData>> {
         self.entries.lock().unwrap_or_else(PoisonError::into_inner)
     }

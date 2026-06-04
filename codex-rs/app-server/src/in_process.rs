@@ -283,6 +283,27 @@ impl InProcessClientHandle {
         self.client.notify(notification)
     }
 
+    /// Resolves a pending [`ServerRequest`](InProcessServerEvent::ServerRequest).
+    ///
+    /// This should be used only with request IDs received from the current
+    /// runtime event stream; sending arbitrary IDs has no effect on app-server
+    /// state and can mask a stuck approval flow in the caller.
+    pub fn respond_to_server_request(&self, request_id: RequestId, result: Result) -> IoResult<()> {
+        self.client.respond_to_server_request(request_id, result)
+    }
+
+    /// Rejects a pending [`ServerRequest`](InProcessServerEvent::ServerRequest).
+    ///
+    /// Use this when the embedder cannot satisfy a server request; leaving
+    /// requests unanswered can stall turn progress.
+    pub fn fail_server_request(
+        &self,
+        request_id: RequestId,
+        error: JSONRPCErrorError,
+    ) -> IoResult<()> {
+        self.client.fail_server_request(request_id, error)
+    }
+
     /// Receives the next server event from the in-process runtime.
     ///
     /// Returns `None` when the runtime task exits and no more events are

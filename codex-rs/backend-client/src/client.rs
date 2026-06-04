@@ -1,3 +1,4 @@
+use crate::types::AccountsCheckResponse;
 use crate::types::CodeTaskDetailsResponse;
 use crate::types::ConfigBundleResponse;
 use crate::types::PaginatedListTaskListItem;
@@ -188,6 +189,21 @@ impl Client {
         self
     }
 
+    pub fn with_chatgpt_account_id(mut self, account_id: impl Into<String>) -> Self {
+        self.chatgpt_account_id = Some(account_id.into());
+        self
+    }
+
+    pub fn with_fedramp_routing_header(mut self) -> Self {
+        self.chatgpt_account_is_fedramp = true;
+        self
+    }
+
+    pub fn with_path_style(mut self, style: PathStyle) -> Self {
+        self.path_style = style;
+        self
+    }
+
     fn headers(&self) -> HeaderMap {
         let mut h = HeaderMap::new();
         if let Some(ua) = &self.user_agent {
@@ -276,6 +292,16 @@ impl Client {
         let (body, ct) = self.exec_request(req, "GET", &url).await?;
         let payload: RateLimitStatusPayload = self.decode_json(&url, &ct, &body)?;
         Ok(Self::rate_limit_snapshots_from_payload(payload))
+    }
+
+    pub async fn get_accounts_check(&self) -> Result<AccountsCheckResponse> {
+        let url = match self.path_style {
+            PathStyle::CodexApi => format!("{}/api/codex/accounts/check", self.base_url),
+            PathStyle::ChatGptApi => format!("{}/wham/accounts/check", self.base_url),
+        };
+        let req = self.http.get(&url).headers(self.headers());
+        let (body, ct) = self.exec_request(req, "GET", &url).await?;
+        self.decode_json(&url, &ct, &body)
     }
 
     pub async fn send_add_credits_nudge_email(
