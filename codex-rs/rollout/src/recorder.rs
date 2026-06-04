@@ -42,6 +42,7 @@ use super::list::get_threads;
 use super::list::get_threads_in_root;
 use super::list::parse_cursor;
 use super::list::parse_timestamp_uuid_from_filename;
+#[cfg(test)]
 use super::metadata;
 use super::session_index::find_thread_names_by_ids;
 use crate::config::RolloutConfigView;
@@ -61,6 +62,7 @@ use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::ThreadSource;
 use codex_state::StateRuntime;
+#[cfg(test)]
 use codex_utils_path as path_utils;
 
 /// Writes canonical session rollout items to JSONL.
@@ -1655,31 +1657,7 @@ fn thread_item_from_state_metadata(item: codex_state::ThreadMetadata) -> ThreadI
     }
 }
 
-async fn select_resume_path(
-    page: &ThreadsPage,
-    filter_cwd: Option<&Path>,
-    default_provider: &str,
-) -> Option<PathBuf> {
-    match filter_cwd {
-        Some(cwd) => {
-            for item in &page.items {
-                if resume_candidate_matches_cwd(
-                    item.path.as_path(),
-                    item.cwd.as_deref(),
-                    cwd,
-                    default_provider,
-                )
-                .await
-                {
-                    return Some(item.path.clone());
-                }
-            }
-            None
-        }
-        None => page.items.first().map(|item| item.path.clone()),
-    }
-}
-
+#[cfg(test)]
 async fn resume_candidate_matches_cwd(
     rollout_path: &Path,
     cached_cwd: Option<&Path>,
@@ -1707,31 +1685,7 @@ async fn resume_candidate_matches_cwd(
         .is_ok_and(|outcome| cwd_matches(outcome.metadata.cwd.as_path(), cwd))
 }
 
-async fn select_resume_path_from_db_page(
-    page: &codex_state::ThreadsPage,
-    filter_cwd: Option<&Path>,
-    default_provider: &str,
-) -> Option<PathBuf> {
-    match filter_cwd {
-        Some(cwd) => {
-            for item in &page.items {
-                if resume_candidate_matches_cwd(
-                    item.rollout_path.as_path(),
-                    Some(item.cwd.as_path()),
-                    cwd,
-                    default_provider,
-                )
-                .await
-                {
-                    return Some(item.rollout_path.clone());
-                }
-            }
-            None
-        }
-        None => page.items.first().map(|item| item.rollout_path.clone()),
-    }
-}
-
+#[cfg(test)]
 fn cwd_matches(session_cwd: &Path, cwd: &Path) -> bool {
     path_utils::paths_match_after_normalization(session_cwd, cwd)
 }

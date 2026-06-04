@@ -4,25 +4,16 @@ use codex_login::default_client::build_reqwest_client;
 use codex_protocol::protocol::Product;
 use serde::Deserialize;
 use std::time::Duration;
-use url::Url;
 
 const DEFAULT_REMOTE_MARKETPLACE_NAME: &str = "openai-curated";
 const REMOTE_PLUGIN_FETCH_TIMEOUT: Duration = Duration::from_secs(30);
 const REMOTE_FEATURED_PLUGIN_FETCH_TIMEOUT: Duration = Duration::from_secs(10);
-const REMOTE_PLUGIN_MUTATION_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct RemotePluginStatusSummary {
     pub name: String,
     #[serde(default = "default_remote_marketplace_name")]
     pub marketplace_name: String,
-    pub enabled: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct RemotePluginMutationResponse {
-    pub id: String,
     pub enabled: bool,
 }
 
@@ -194,87 +185,6 @@ pub async fn fetch_remote_featured_plugin_ids(
     })
 }
 
-fn ensure_codex_backend_auth(
-    auth: Option<&CodexAuth>,
-) -> Result<&CodexAuth, RemotePluginMutationError> {
-    let Some(auth) = auth else {
-        return Err(RemotePluginMutationError::AuthRequired);
-    };
-    if !auth.uses_codex_backend() {
-        return Err(RemotePluginMutationError::UnsupportedAuthMode);
-    }
-    Ok(auth)
-}
-
 fn default_remote_marketplace_name() -> String {
     DEFAULT_REMOTE_MARKETPLACE_NAME.to_string()
-}
-
-async fn post_remote_plugin_mutation(
-    config: &RemotePluginServiceConfig,
-    auth: Option<&CodexAuth>,
-    plugin_id: &str,
-    action: &str,
-) -> Result<RemotePluginMutationResponse, RemotePluginMutationError> {
-    let auth = ensure_codex_backend_auth(auth)?;
-    let url = remote_plugin_mutation_url(config, plugin_id, action)?;
-    let client = build_reqwest_client();
-    let request = client
-        .post(url.clone())
-        .timeout(REMOTE_PLUGIN_MUTATION_TIMEOUT)
-        .headers(codex_model_provider::auth_provider_from_auth(auth).to_auth_headers());
-
-    let response = request
-        .send()
-        .await
-        .map_err(|source| RemotePluginMutationError::Request {
-            url: url.clone(),
-            source,
-        })?;
-    let status = response.status();
-    let body = response.text().await.unwrap_or_default();
-    if !status.is_success() {
-        return Err(RemotePluginMutationError::UnexpectedStatus { url, status, body });
-    }
-
-    let parsed: RemotePluginMutationResponse =
-        serde_json::from_str(&body).map_err(|source| RemotePluginMutationError::Decode {
-            url: url.clone(),
-            source,
-        })?;
-    let expected_enabled = action == "enable";
-    if parsed.id != plugin_id {
-        return Err(RemotePluginMutationError::UnexpectedPluginId {
-            expected: plugin_id.to_string(),
-            actual: parsed.id,
-        });
-    }
-    if parsed.enabled != expected_enabled {
-        return Err(RemotePluginMutationError::UnexpectedEnabledState {
-            plugin_id: plugin_id.to_string(),
-            expected_enabled,
-            actual_enabled: parsed.enabled,
-        });
-    }
-
-    Ok(parsed)
-}
-
-fn remote_plugin_mutation_url(
-    config: &RemotePluginServiceConfig,
-    plugin_id: &str,
-    action: &str,
-) -> Result<String, RemotePluginMutationError> {
-    let mut url = Url::parse(config.chatgpt_base_url.trim_end_matches('/'))
-        .map_err(RemotePluginMutationError::InvalidBaseUrl)?;
-    {
-        let mut segments = url
-            .path_segments_mut()
-            .map_err(|()| RemotePluginMutationError::InvalidBaseUrlPath)?;
-        segments.pop_if_empty();
-        segments.push("plugins");
-        segments.push(plugin_id);
-        segments.push(action);
-    }
-    Ok(url.to_string())
 }
