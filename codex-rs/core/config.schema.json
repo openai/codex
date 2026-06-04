@@ -2736,6 +2736,13 @@
     "ToolsToml": {
       "additionalProperties": false,
       "properties": {
+        "experimental_code_mode_excluded_namespaces": {
+          "description": "Exact tool namespaces to omit from the code-mode nested tool surface.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "experimental_request_user_input": {
           "$ref": "#/definitions/ExperimentalRequestUserInput"
         },

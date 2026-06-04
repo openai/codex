@@ -3166,6 +3166,93 @@ text(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_excludes_configured_nested_tool_namespaces() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let mut builder = test_codex().with_config(|config| {
+        let _ = config.features.enable(Feature::CodeMode);
+        config.experimental_code_mode_excluded_namespaces = vec!["excluded".to_string()];
+    });
+    let base_test = builder.build(&server).await?;
+    let new_thread = base_test
+        .thread_manager
+        .start_thread_with_tools(
+            base_test.config.clone(),
+            vec![DynamicToolSpec {
+                namespace: Some("excluded".to_string()),
+                name: "lookup".to_string(),
+                description: "An excluded dynamic tool.".to_string(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": false,
+                }),
+                defer_loading: false,
+            }],
+        )
+        .await?;
+    let mut test = base_test;
+    test.codex = new_thread.thread;
+    test.session_configured = new_thread.session_configured;
+
+    let first_mock = responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_custom_tool_call(
+                "call-1",
+                "exec",
+                r#"
+text(JSON.stringify({
+  excludedType: typeof tools.excluded__lookup,
+  excludedMetadata: ALL_TOOLS.some(({ name }) => name === "excluded__lookup"),
+  allowedType: typeof tools.update_plan,
+  allowedMetadata: ALL_TOOLS.some(({ name }) => name === "update_plan"),
+}));
+"#,
+            ),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let second_mock = responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+
+    test.submit_turn("use exec to inspect nested tool namespaces")
+        .await?;
+
+    assert!(
+        tool_names(&first_mock.single_request().body_json()).contains(&"excluded".to_string()),
+        "excluded namespace should remain directly exposed in mixed code mode"
+    );
+    let request = second_mock.single_request();
+    let (output, success) = custom_tool_output_body_and_success(&request, "call-1");
+    assert_ne!(
+        success,
+        Some(false),
+        "exec configured namespace exclusion failed unexpectedly: {output}"
+    );
+    assert_eq!(
+        serde_json::from_str::<Value>(&output)?,
+        serde_json::json!({
+            "excludedType": "undefined",
+            "excludedMetadata": false,
+            "allowedType": "function",
+            "allowedMetadata": true,
+        })
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn code_mode_can_print_content_only_mcp_tool_result_fields() -> Result<()> {
     skip_if_no_network!(Ok(()));
 

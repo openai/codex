@@ -939,6 +939,123 @@ async fn code_mode_only_exposes_code_executor_and_hides_nested_tools() {
 }
 
 #[tokio::test]
+async fn code_mode_excludes_configured_namespaces_only_from_nested_surface() {
+    let excluded_tool_name = ToolName::namespaced("excluded", "lookup").to_string();
+    let similarly_named_tool_name = ToolName::namespaced("excluded_extra", "lookup").to_string();
+    let allowed_tool_name = ToolName::namespaced("allowed", "lookup").to_string();
+    let mixed = probe_with(
+        |turn| {
+            set_feature(turn, Feature::CodeMode, /*enabled*/ true);
+            update_config(turn, |config| {
+                config.experimental_code_mode_excluded_namespaces = vec!["excluded".to_string()];
+            });
+        },
+        ToolPlanInputs {
+            dynamic_tools: vec![
+                dynamic_tool(Some("excluded"), "lookup", /*defer_loading*/ false),
+                dynamic_tool(
+                    Some("excluded_extra"),
+                    "lookup",
+                    /*defer_loading*/ false,
+                ),
+                dynamic_tool(Some("allowed"), "lookup", /*defer_loading*/ false),
+            ],
+            ..ToolPlanInputs::default()
+        },
+    )
+    .await;
+
+    mixed.assert_visible_contains(&["excluded", "excluded_extra", "allowed"]);
+    mixed.assert_registered_contains(&[
+        &excluded_tool_name,
+        &similarly_named_tool_name,
+        &allowed_tool_name,
+    ]);
+    let ToolSpec::Namespace(excluded_namespace) = mixed.visible_spec("excluded") else {
+        panic!("expected excluded namespace tool");
+    };
+    let ResponsesApiNamespaceTool::Function(excluded_tool) = &excluded_namespace.tools[0];
+    assert!(!excluded_tool.description.contains("exec tool declaration"));
+    let ToolSpec::Namespace(allowed_namespace) = mixed.visible_spec("allowed") else {
+        panic!("expected allowed namespace tool");
+    };
+    let ResponsesApiNamespaceTool::Function(allowed_tool) = &allowed_namespace.tools[0];
+    assert!(allowed_tool.description.contains("exec tool declaration"));
+
+    let code_mode_only = probe_with(
+        |turn| {
+            set_features(turn, &[Feature::CodeMode, Feature::CodeModeOnly]);
+            update_config(turn, |config| {
+                config.experimental_code_mode_excluded_namespaces = vec!["excluded".to_string()];
+            });
+        },
+        ToolPlanInputs {
+            dynamic_tools: vec![
+                dynamic_tool(Some("excluded"), "lookup", /*defer_loading*/ false),
+                dynamic_tool(
+                    Some("excluded_extra"),
+                    "lookup",
+                    /*defer_loading*/ false,
+                ),
+                dynamic_tool(Some("allowed"), "lookup", /*defer_loading*/ false),
+            ],
+            ..ToolPlanInputs::default()
+        },
+    )
+    .await;
+
+    code_mode_only.assert_visible_lacks(&["excluded", "excluded_extra", "allowed"]);
+    code_mode_only.assert_registered_contains(&[
+        &excluded_tool_name,
+        &similarly_named_tool_name,
+        &allowed_tool_name,
+    ]);
+    let ToolSpec::Freeform(exec) = code_mode_only.visible_spec(codex_code_mode::PUBLIC_TOOL_NAME)
+    else {
+        panic!("expected code mode exec tool");
+    };
+    assert!(exec.description.contains("allowed__lookup"));
+    assert!(exec.description.contains("excluded_extra__lookup"));
+    assert!(!exec.description.contains("excluded__lookup"));
+}
+
+#[tokio::test]
+async fn excluded_deferred_namespaces_do_not_enable_nested_tool_guidance() {
+    let plan = probe_with(
+        |turn| {
+            set_features(turn, &[Feature::CodeMode, Feature::CodeModeOnly]);
+            set_feature(turn, Feature::Collab, /*enabled*/ false);
+            turn.model_info.supports_search_tool = true;
+            update_config(turn, |config| {
+                config.experimental_code_mode_excluded_namespaces = vec!["excluded".to_string()];
+            });
+        },
+        ToolPlanInputs {
+            dynamic_tools: vec![dynamic_tool(
+                Some("excluded"),
+                "lookup",
+                /*defer_loading*/ true,
+            )],
+            ..ToolPlanInputs::default()
+        },
+    )
+    .await;
+
+    let ToolSpec::Freeform(exec) = plan.visible_spec(codex_code_mode::PUBLIC_TOOL_NAME) else {
+        panic!("expected code mode exec tool");
+    };
+    assert!(
+        !exec
+            .description
+            .contains("Some deferred nested tools may be omitted")
+    );
+    plan.assert_registered_contains(&[
+        &ToolName::namespaced("excluded", "lookup").to_string(),
+        "tool_search",
+    ]);
+}
+
+#[tokio::test]
 async fn multi_agent_feature_selects_one_agent_tool_family() {
     let v1 = probe(|turn| {
         set_feature(turn, Feature::Collab, /*enabled*/ true);

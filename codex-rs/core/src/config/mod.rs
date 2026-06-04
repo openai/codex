@@ -975,6 +975,9 @@ pub struct Config {
     /// Whether to register the experimental request_user_input tool.
     pub experimental_request_user_input_enabled: bool,
 
+    /// Tool namespaces omitted from the experimental code-mode nested tool surface.
+    pub experimental_code_mode_excluded_namespaces: Vec<String>,
+
     /// If set to `true`, used only the experimental unified exec tool.
     pub use_experimental_unified_exec_tool: bool,
 
@@ -3011,6 +3014,12 @@ impl Config {
         let web_search_config = resolve_web_search_config(&cfg);
         let experimental_request_user_input_enabled =
             resolve_experimental_request_user_input_enabled(&cfg);
+        let experimental_code_mode_excluded_namespaces = cfg
+            .tools
+            .as_ref()
+            .and_then(|tools| tools.experimental_code_mode_excluded_namespaces.as_ref())
+            .cloned()
+            .unwrap_or_default();
         let multi_agent_v2 = resolve_multi_agent_v2_config(&cfg);
         let apps_mcp_path_override = if features.enabled(Feature::AppsMcpPathOverride) {
             let base = apps_mcp_path_override_toml_config(cfg.features.as_ref());
@@ -3552,6 +3561,7 @@ impl Config {
             web_search_mode: constrained_web_search_mode.value,
             web_search_config,
             experimental_request_user_input_enabled,
+            experimental_code_mode_excluded_namespaces,
             use_experimental_unified_exec_tool,
             background_terminal_max_timeout,
             ghost_snapshot,
