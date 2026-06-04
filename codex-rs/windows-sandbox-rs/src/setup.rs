@@ -1186,15 +1186,17 @@ mod tests {
         let err = super::report_helper_failure(
             codex_home.as_path(),
             /*cleared_report*/ true,
-            Some(1),
+            /*exit_code*/ Some(1),
         );
 
         let failure = extract_failure(&err).expect("structured setup failure");
         assert_eq!(
-            failure.code,
-            super::SetupErrorCode::HelperFirewallPolicyAccessFailed
+            &super::SetupFailure::new(
+                super::SetupErrorCode::HelperFirewallPolicyAccessFailed,
+                "firewall policy unavailable",
+            ),
+            failure
         );
-        assert_eq!(failure.message, "firewall policy unavailable");
     }
 
     #[test]
@@ -1213,15 +1215,17 @@ mod tests {
         let err = super::report_helper_failure(
             codex_home.as_path(),
             /*cleared_report*/ false,
-            Some(1),
+            /*exit_code*/ Some(1),
         );
 
         let failure = extract_failure(&err).expect("structured setup failure");
         assert_eq!(
-            failure.code,
-            super::SetupErrorCode::OrchestratorHelperExitNonzero
+            &super::SetupFailure::new(
+                super::SetupErrorCode::OrchestratorHelperExitNonzero,
+                "setup helper exited with status Some(1)",
+            ),
+            failure
         );
-        assert_eq!(failure.message, "setup helper exited with status Some(1)");
     }
 
     #[test]
