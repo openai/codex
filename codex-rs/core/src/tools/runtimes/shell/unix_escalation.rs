@@ -223,7 +223,6 @@ pub(super) async fn try_run_zsh_fork(
         approval_policy: ctx.turn.approval_policy.value(),
         permission_profile: command_executor.permission_profile.clone(),
         file_system_sandbox_policy: command_executor.file_system_sandbox_policy.clone(),
-        sandbox_policy_cwd: command_executor.sandbox_policy_cwd.clone(),
         sandbox_permissions: req.sandbox_permissions,
         approval_sandbox_permissions,
         prompt_permissions: req.additional_permissions.clone(),
@@ -296,7 +295,6 @@ pub(crate) async fn prepare_unified_exec_zsh_fork(
         approval_policy: ctx.turn.approval_policy.value(),
         permission_profile: exec_request.permission_profile.clone(),
         file_system_sandbox_policy: exec_request.file_system_sandbox_policy.clone(),
-        sandbox_policy_cwd: exec_request.windows_sandbox_policy_cwd.clone(),
         sandbox_permissions: req.sandbox_permissions,
         approval_sandbox_permissions: approval_sandbox_permissions(
             req.sandbox_permissions,
@@ -331,7 +329,6 @@ struct CoreShellActionProvider {
     approval_policy: AskForApproval,
     permission_profile: PermissionProfile,
     file_system_sandbox_policy: FileSystemSandboxPolicy,
-    sandbox_policy_cwd: AbsolutePathBuf,
     sandbox_permissions: SandboxPermissions,
     approval_sandbox_permissions: SandboxPermissions,
     prompt_permissions: Option<AdditionalPermissionProfile>,
