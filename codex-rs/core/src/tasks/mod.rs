@@ -534,7 +534,7 @@ impl Session {
             aborted_turn = task.is_some();
             turn_context = task.as_ref().map(|task| Arc::clone(&task.turn_context));
             if let Some(task) = task {
-                self.handle_task_abort(task, abort).await;
+                self.handle_task_abort(task, &abort).await;
             }
             if aborted_turn {
                 active_turn_to_clear = Some(active_turn);
@@ -603,7 +603,7 @@ impl Session {
         let task = active_turn.task.take();
         let turn_context = task.as_ref().map(|task| Arc::clone(&task.turn_context));
         if let Some(task) = task {
-            self.handle_task_abort(task, abort).await;
+            self.handle_task_abort(task, &abort).await;
         }
         if let Some(turn_context) = turn_context.as_deref() {
             self.emit_turn_abort_lifecycle(reason.clone(), turn_context.extension_data.as_ref())
@@ -869,7 +869,7 @@ impl Session {
             .await;
     }
 
-    async fn handle_task_abort(self: &Arc<Self>, task: RunningTask, abort: TaskAbort) {
+    async fn handle_task_abort(self: &Arc<Self>, task: RunningTask, abort: &TaskAbort) {
         let reason = abort.turn_abort_reason();
         let sub_id = task.turn_context.sub_id.clone();
         if task.cancellation_token.is_cancelled() {
