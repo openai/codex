@@ -608,6 +608,7 @@ jobs:
               --target "$signed_path" \
               --identity unused \
               --deep false \
+              --identifier "$binary" \
               --options runtime \
               --timestamp true \
               --entitlements .github/scripts/macos-signing/codex.entitlements.plist
