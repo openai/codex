@@ -75,6 +75,7 @@ use crate::utils::apply_default_headers;
 use crate::utils::build_default_headers;
 use codex_config::types::OAuthCredentialsStoreMode;
 
+const MCP_CLIENT_INITIALIZE_METRIC: &str = "codex.mcp.client.initialize";
 const STREAMABLE_HTTP_RETRY_DELAYS_MS: [u64; 2] = [250, 1_000];
 
 enum PendingTransport {
@@ -101,6 +102,53 @@ impl PendingTransport {
                 | PendingTransport::StreamableHttpWithOAuth { .. }
         )
     }
+
+    fn metric_transport(&self) -> &'static str {
+        match self {
+            PendingTransport::InProcess { .. } => "in_process",
+            PendingTransport::Stdio { .. } => "stdio",
+            PendingTransport::StreamableHttp { .. }
+            | PendingTransport::StreamableHttpWithOAuth { .. } => "streamable_http",
+        }
+    }
+}
+
+fn initialize_metric_tags(
+    transport: &'static str,
+    outcome: &'static str,
+    attempts: usize,
+    retry_exhausted: bool,
+    failure_kind: &'static str,
+) -> Vec<(&'static str, String)> {
+    let attempts = attempts.max(1);
+    vec![
+        ("transport", transport.to_string()),
+        ("outcome", outcome.to_string()),
+        ("retried", (attempts > 1).to_string()),
+        ("attempts", attempts.to_string()),
+        ("retry_count", attempts.saturating_sub(1).to_string()),
+        ("retry_exhausted", retry_exhausted.to_string()),
+        ("failure_kind", failure_kind.to_string()),
+    ]
+}
+
+fn emit_initialize_metric(
+    transport: &'static str,
+    outcome: &'static str,
+    attempts: usize,
+    retry_exhausted: bool,
+    failure_kind: &'static str,
+) {
+    let Some(metrics) = codex_otel::global() else {
+        return;
+    };
+
+    let tags = initialize_metric_tags(transport, outcome, attempts, retry_exhausted, failure_kind);
+    let tag_refs: Vec<(&str, &str)> = tags
+        .iter()
+        .map(|(key, value)| (*key, value.as_str()))
+        .collect();
+    let _ = metrics.counter(MCP_CLIENT_INITIALIZE_METRIC, /*inc*/ 1, &tag_refs);
 }
 
 enum ClientState {
@@ -892,6 +940,7 @@ impl RmcpClient {
         Option<OAuthPersistor>,
     )> {
         let should_retry = initial_transport.is_streamable_http();
+        let metric_transport = initial_transport.metric_transport();
         let mut pending_transport = Some(initial_transport);
 
         let retry_schedule = STREAMABLE_HTTP_RETRY_DELAYS_MS
@@ -901,21 +950,50 @@ impl RmcpClient {
             .chain(std::iter::once(None));
 
         for (attempt, retry_delay_ms) in retry_schedule.enumerate() {
+            let attempt_count = attempt + 1;
             let transport = match pending_transport.take() {
                 Some(transport) => transport,
-                None => Self::create_pending_transport(&self.transport_recipe).await?,
+                None => match Self::create_pending_transport(&self.transport_recipe).await {
+                    Ok(transport) => transport,
+                    Err(error) => {
+                        emit_initialize_metric(
+                            metric_transport,
+                            "error",
+                            attempt_count,
+                            /*retry_exhausted*/ false,
+                            "transport_create",
+                        );
+                        return Err(error);
+                    }
+                },
             };
 
             match Self::connect_pending_transport(transport, client_service.clone(), timeout).await
             {
-                Ok(result) => return Ok(result),
+                Ok(result) => {
+                    emit_initialize_metric(
+                        metric_transport,
+                        "success",
+                        attempt_count,
+                        /*retry_exhausted*/ false,
+                        "none",
+                    );
+                    return Ok(result);
+                }
                 Err(error) if should_retry && Self::is_retryable_initialize_error(&error) => {
                     let Some(retry_delay_ms) = retry_delay_ms else {
+                        emit_initialize_metric(
+                            metric_transport,
+                            "error",
+                            attempt_count,
+                            /*retry_exhausted*/ true,
+                            "retry_exhausted",
+                        );
                         return Err(error);
                     };
                     let delay = Duration::from_millis(retry_delay_ms);
                     warn!(
-                        attempt = attempt + 1,
+                        attempt = attempt_count,
                         max_attempts = STREAMABLE_HTTP_RETRY_DELAYS_MS.len() + 1,
                         delay_ms = delay.as_millis(),
                         error = %error,
@@ -923,7 +1001,16 @@ impl RmcpClient {
                     );
                     time::sleep(delay).await;
                 }
-                Err(error) => return Err(error),
+                Err(error) => {
+                    emit_initialize_metric(
+                        metric_transport,
+                        "error",
+                        attempt_count,
+                        /*retry_exhausted*/ false,
+                        "non_retryable",
+                    );
+                    return Err(error);
+                }
             }
         }
 
@@ -1211,12 +1298,17 @@ async fn create_oauth_transport_and_runtime(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
     use std::time::Duration;
 
     use pretty_assertions::assert_eq;
     use tokio::time;
 
     use super::*;
+
+    fn metric_tags_map(tags: Vec<(&'static str, String)>) -> BTreeMap<&'static str, String> {
+        tags.into_iter().collect()
+    }
 
     #[tokio::test]
     async fn active_time_timeout_pauses_while_elicitation_is_pending() {
@@ -1235,5 +1327,43 @@ mod tests {
             .await;
 
         assert_eq!(Ok("done"), result);
+    }
+
+    #[test]
+    fn initialize_metric_tags_record_success_after_retry() {
+        let tags = metric_tags_map(initialize_metric_tags(
+            "streamable_http",
+            "success",
+            2,
+            /*retry_exhausted*/ false,
+            "none",
+        ));
+
+        assert_eq!(tags["transport"], "streamable_http");
+        assert_eq!(tags["outcome"], "success");
+        assert_eq!(tags["retried"], "true");
+        assert_eq!(tags["attempts"], "2");
+        assert_eq!(tags["retry_count"], "1");
+        assert_eq!(tags["retry_exhausted"], "false");
+        assert_eq!(tags["failure_kind"], "none");
+    }
+
+    #[test]
+    fn initialize_metric_tags_record_retry_exhaustion() {
+        let tags = metric_tags_map(initialize_metric_tags(
+            "streamable_http",
+            "error",
+            3,
+            /*retry_exhausted*/ true,
+            "retry_exhausted",
+        ));
+
+        assert_eq!(tags["transport"], "streamable_http");
+        assert_eq!(tags["outcome"], "error");
+        assert_eq!(tags["retried"], "true");
+        assert_eq!(tags["attempts"], "3");
+        assert_eq!(tags["retry_count"], "2");
+        assert_eq!(tags["retry_exhausted"], "true");
+        assert_eq!(tags["failure_kind"], "retry_exhausted");
     }
 }
