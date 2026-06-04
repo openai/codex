@@ -12,6 +12,8 @@ use codex_app_server_protocol::ThreadListResponse;
 use codex_app_server_protocol::ThreadSetNameParams;
 use codex_app_server_protocol::ThreadSetNameResponse;
 use codex_app_server_protocol::ThreadSortKey;
+use codex_app_server_protocol::ThreadStartParams;
+use codex_app_server_protocol::ThreadStartResponse;
 use pretty_assertions::assert_eq;
 use serde::de::DeserializeOwned;
 use tempfile::TempDir;
@@ -21,17 +23,47 @@ use tokio::time::timeout;
 const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[tokio::test]
+async fn catalog_subscription_reports_new_empty_thread() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let mut app = start_app(&codex_home).await?;
+
+    let subscribe_id = app
+        .send_raw_request("thread/catalog/subscribe", /*params*/ None)
+        .await?;
+    let _: codex_app_server_protocol::ThreadCatalogSubscribeResponse =
+        read_response(&mut app, subscribe_id).await?;
+
+    let start_id = app
+        .send_thread_start_request(ThreadStartParams::default())
+        .await?;
+    let started = read_response::<ThreadStartResponse>(&mut app, start_id).await?;
+    let notification: JSONRPCNotification = timeout(
+        DEFAULT_READ_TIMEOUT,
+        app.read_stream_until_notification_message("thread/catalog/changed"),
+    )
+    .await??;
+    let changed: ThreadCatalogChangedNotification = serde_json::from_value(
+        notification
+            .params
+            .expect("thread/catalog/changed should have params"),
+    )?;
+
+    assert_eq!(changed.thread.id, started.thread.id);
+    assert_eq!(changed.thread.preview, "");
+    assert!(
+        !started
+            .thread
+            .path
+            .expect("thread path should be present")
+            .exists()
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn catalog_subscription_reports_thread_outside_loaded_page() -> Result<()> {
     let codex_home = TempDir::new()?;
-    write_mock_responses_config_toml(
-        codex_home.path(),
-        "http://localhost:1",
-        &Default::default(),
-        i64::MAX,
-        /*requires_openai_auth*/ None,
-        "mock_provider",
-        "",
-    )?;
     let older_thread_id = create_fake_rollout(
         codex_home.path(),
         "2025-01-05T12-00-00",
@@ -48,9 +80,7 @@ async fn catalog_subscription_reports_thread_outside_loaded_page() -> Result<()>
         Some("mock_provider"),
         /*git_info*/ None,
     )?;
-
-    let mut app = TestAppServer::new(codex_home.path()).await?;
-    timeout(DEFAULT_READ_TIMEOUT, app.initialize()).await??;
+    let mut app = start_app(&codex_home).await?;
 
     let subscribe_id = app
         .send_raw_request("thread/catalog/subscribe", /*params*/ None)
@@ -102,6 +132,21 @@ async fn catalog_subscription_reports_thread_outside_loaded_page() -> Result<()>
     assert_eq!(changed.thread.archived_at, None);
 
     Ok(())
+}
+
+async fn start_app(codex_home: &TempDir) -> Result<TestAppServer> {
+    write_mock_responses_config_toml(
+        codex_home.path(),
+        "http://localhost:1",
+        &Default::default(),
+        i64::MAX,
+        /*requires_openai_auth*/ None,
+        "mock_provider",
+        "",
+    )?;
+    let mut app = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, app.initialize()).await??;
+    Ok(app)
 }
 
 async fn rename_thread(app: &mut TestAppServer, thread_id: String, name: &str) -> Result<()> {

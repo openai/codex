@@ -62,6 +62,9 @@ impl ThreadCatalogSubscriptions {
         fallback_provider: &str,
         fallback_cwd: &AbsolutePathBuf,
     ) {
+        if self.connection_ids.lock().await.is_empty() {
+            return;
+        }
         let stored_thread = match thread_store
             .read_thread(StoreReadThreadParams {
                 thread_id,

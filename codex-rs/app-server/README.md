@@ -421,7 +421,7 @@ Enable `capabilities.experimentalApi` during initialization, then use `thread/li
 } }
 ```
 
-`thread/catalog/subscribe` watches all future thread metadata changes without draining existing history. Install the subscription before calling `thread/list` when you need a race-free sidebar bootstrap; after the subscribe response arrives, buffer catalog notifications until the list response arrives, then apply the complete summaries idempotently and filter them client-side. The summary contains sidebar metadata such as id, preview/name, cwd, timestamps, archive state, git info, and source; it does not contain turns, items, messages, deltas, tool state, status, or runtime history.
+`thread/catalog/subscribe` watches all future thread metadata changes without draining existing history. For a race-free sidebar bootstrap, start buffering `thread/catalog/changed` notifications before sending the subscribe request. After the subscribe response arrives, call `thread/list`, then apply the buffered complete summaries idempotently and filter them client-side. The summary contains sidebar metadata such as id, preview/name, cwd, timestamps, archive state, git info, and source; it does not contain turns, items, messages, deltas, tool state, status, or runtime history.
 
 ```json
 { "method": "thread/catalog/subscribe", "id": 21 }

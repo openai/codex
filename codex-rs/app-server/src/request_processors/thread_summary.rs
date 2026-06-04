@@ -282,6 +282,13 @@ pub(super) fn thread_summary_from_stored_thread(
 ) -> ThreadSummary {
     let archived_at = thread.archived_at.map(|dt| dt.timestamp());
     let (thread, _) = thread_from_stored_thread(thread, fallback_provider, fallback_cwd);
+    thread_summary_from_thread(thread, archived_at)
+}
+
+pub(super) fn thread_summary_from_thread(
+    thread: Thread,
+    archived_at: Option<i64>,
+) -> ThreadSummary {
     ThreadSummary {
         id: thread.id,
         session_id: thread.session_id,
