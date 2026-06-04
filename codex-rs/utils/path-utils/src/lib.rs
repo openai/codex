@@ -145,6 +145,8 @@ pub fn write_atomically(write_path: &Path, contents: &str) -> io::Result<()> {
 }
 
 /// Opens a file for reading without following symlinks in any path component.
+///
+/// Relative paths are resolved from the process's current directory.
 #[cfg(unix)]
 pub fn open_file_for_read_no_follow(path: &Path) -> io::Result<File> {
     open_file_no_follow(path, libc::O_RDONLY, /*mode*/ 0)

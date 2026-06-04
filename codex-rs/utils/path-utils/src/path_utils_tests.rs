@@ -40,6 +40,22 @@ mod symlinks {
     }
 
     #[test]
+    fn no_follow_read_rejects_symlinked_file() -> std::io::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let dir = dir.path().canonicalize()?;
+        let target = dir.join("target");
+        let symlink_path = dir.join("link");
+        std::fs::write(&target, "secret")?;
+        symlink(&target, &symlink_path)?;
+
+        let err =
+            open_file_for_read_no_follow(&symlink_path).expect_err("symlinked file should fail");
+
+        assert_eq!(err.raw_os_error(), Some(libc::ELOOP));
+        Ok(())
+    }
+
+    #[test]
     fn no_follow_read_reads_regular_file() -> std::io::Result<()> {
         let dir = tempfile::tempdir()?;
         let path = dir.path().canonicalize()?.join("payload");

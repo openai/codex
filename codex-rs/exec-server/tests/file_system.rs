@@ -757,15 +757,14 @@ async fn file_system_read_file_no_follow_rejects_symlinked_parent(use_remote: bo
         .with_context(|| format!("mode={use_remote}"))?;
     assert_eq!(contents, b"original");
 
-    if file_system
+    if let Ok(contents) = file_system
         .read_file_no_follow(
             &absolute_path(symlinked_dir.join("payload")),
             /*sandbox*/ None,
         )
         .await
-        .is_ok()
     {
-        anyhow::bail!("symlinked parent should fail");
+        anyhow::bail!("symlinked parent should fail, but read {contents:?}");
     }
 
     Ok(())

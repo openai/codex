@@ -10,6 +10,8 @@ use codex_file_system::RemoveOptions;
 use pretty_assertions::assert_eq;
 use std::path::Path;
 use tempfile::tempdir;
+#[cfg(unix)]
+use tokio::io::AsyncReadExt;
 
 struct TestFileSystem;
 
@@ -48,7 +50,18 @@ impl ExecutorFileSystem for TestFileSystem {
         path: &AbsolutePathBuf,
         _sandbox: Option<&FileSystemSandboxContext>,
     ) -> FileSystemResult<Vec<u8>> {
-        tokio::fs::read(path.as_path()).await
+        #[cfg(unix)]
+        {
+            let file = codex_utils_path::open_file_for_read_no_follow(path.as_path())?;
+            let mut file = tokio::fs::File::from_std(file);
+            let mut contents = Vec::new();
+            file.read_to_end(&mut contents).await?;
+            Ok(contents)
+        }
+        #[cfg(not(unix))]
+        {
+            self.read_file(path, /*sandbox*/ None).await
+        }
     }
 
     async fn write_file(

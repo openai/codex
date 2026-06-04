@@ -1809,10 +1809,7 @@ fn has_explicit_write_entry_for_metadata_path(
 }
 
 fn path_exists_or_is_symlink(path: &Path) -> bool {
-    path.exists()
-        || std::fs::symlink_metadata(path)
-            .map(|metadata| metadata.file_type().is_symlink())
-            .unwrap_or(false)
+    std::fs::symlink_metadata(path).is_ok()
 }
 
 fn is_git_pointer_file(path: &AbsolutePathBuf) -> bool {
