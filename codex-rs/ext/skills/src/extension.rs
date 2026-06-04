@@ -3,6 +3,7 @@ use std::sync::Arc;
 use codex_core::config::Config;
 use codex_core_skills::HostLoadedSkills;
 use codex_core_skills::SkillInstructions;
+use codex_core_skills::injection::InjectedHostSkillPrompts;
 use codex_core_skills::injection::SkillInjection;
 use codex_extension_api::ConfigContributor;
 use codex_extension_api::ContextualUserFragment;
@@ -113,6 +114,7 @@ impl TurnInputContributor for SkillsExtension {
 
         let mut warnings = catalog.warnings.clone();
         let mut main_prompts_injected = false;
+        let mut injected_host_skill_prompts = InjectedHostSkillPrompts::default();
         for entry in &selected_entries {
             match self
                 .read_main_prompt(entry, host_loaded_skills.clone())
@@ -136,6 +138,9 @@ impl TurnInputContributor for SkillsExtension {
                     };
                     fragments.push(Box::new(SkillInstructions::from(&injection)));
                     main_prompts_injected = true;
+                    if entry.authority.kind == SkillSourceKind::Host {
+                        injected_host_skill_prompts.insert_path(entry.main_prompt.0.clone());
+                    }
                 }
                 Err(message) => {
                     let warning = format!("Failed to load skill `{}`: {message}", entry.name);
@@ -151,6 +156,9 @@ impl TurnInputContributor for SkillsExtension {
             warnings,
             main_prompts_injected,
         });
+        if !injected_host_skill_prompts.is_empty() {
+            turn_store.insert(injected_host_skill_prompts);
+        }
 
         fragments
     }

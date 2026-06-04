@@ -9,6 +9,7 @@ use codex_core::config::ConfigBuilder;
 use codex_core_skills::HostLoadedSkills;
 use codex_core_skills::SkillsLoadInput;
 use codex_core_skills::SkillsManager;
+use codex_core_skills::injection::InjectedHostSkillPrompts;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::ThreadStartInput;
@@ -112,6 +113,10 @@ async fn installed_extension_loads_host_skills_from_legacy_roots() -> TestResult
     assert!(fragments[1].render().contains("<name>demo</name>"));
     assert!(fragments[1].render().contains("# Demo"));
     assert!(fragments[1].render().contains(&skill_prompt_path));
+    let injected_host_skill_prompts = turn_store
+        .get::<InjectedHostSkillPrompts>()
+        .ok_or("host skill prompt marker should be set")?;
+    assert!(injected_host_skill_prompts.contains_path(&skill_path_string));
 
     std::fs::remove_dir_all(codex_home)?;
     Ok(())
