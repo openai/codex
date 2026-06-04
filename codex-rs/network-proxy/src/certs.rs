@@ -101,12 +101,14 @@ const MANAGED_MITM_CA_DIR: &str = "proxy";
 const MANAGED_MITM_CA_CERT: &str = "ca.pem";
 const MANAGED_MITM_CA_KEY: &str = "ca.key";
 const MANAGED_MITM_CA_TRUST_BUNDLE_PREFIX: &str = "ca-bundle";
+const SSL_CERT_FILE_ENV_KEY: &str = "SSL_CERT_FILE";
+pub const SSL_CERT_DIR_ENV_KEY: &str = "SSL_CERT_DIR";
 
 // Best-effort compatibility set for common child toolchains that accept a CA bundle path.
 // This is intentionally curated rather than pretending to cover every TLS client.
 pub const CUSTOM_CA_ENV_KEYS: [&str; 10] = [
     "CODEX_CA_CERTIFICATE",
-    "SSL_CERT_FILE",
+    SSL_CERT_FILE_ENV_KEY,
     "REQUESTS_CA_BUNDLE",
     "CURL_CA_BUNDLE",
     "NODE_EXTRA_CA_CERTS",
@@ -122,6 +124,7 @@ pub const CUSTOM_CA_ENV_KEYS: [&str; 10] = [
 pub(crate) struct ManagedMitmCaTrustBundle {
     pub(crate) path: PathBuf,
     pub(crate) startup_env_values: HashMap<&'static str, String>,
+    pub(crate) startup_cwd: PathBuf,
 }
 
 fn managed_ca_paths() -> Result<(PathBuf, PathBuf)> {
@@ -146,8 +149,11 @@ fn managed_ca_trust_bundle_for_cert_path(
     cert_path: &Path,
     env: &HashMap<&'static str, String>,
 ) -> Result<ManagedMitmCaTrustBundle> {
+    let startup_cwd =
+        std::env::current_dir().context("failed to resolve startup cwd for managed MITM CA")?;
     let startup_env_values = CUSTOM_CA_ENV_KEYS
         .into_iter()
+        .chain(std::iter::once(SSL_CERT_DIR_ENV_KEY))
         .filter_map(|key| {
             env.get(key)
                 .filter(|value| !value.is_empty())
@@ -160,6 +166,7 @@ fn managed_ca_trust_bundle_for_cert_path(
     Ok(ManagedMitmCaTrustBundle {
         path,
         startup_env_values,
+        startup_cwd,
     })
 }
 
@@ -512,12 +519,18 @@ mod tests {
         let dir = tempdir().unwrap();
         let managed_ca_cert_path = dir.path().join("ca.pem");
         fs::write(&managed_ca_cert_path, "managed ca\n").unwrap();
-        let env = HashMap::from([("SSL_CERT_FILE", "/tmp/startup-ca.pem".to_string())]);
+        let env = HashMap::from([
+            ("SSL_CERT_FILE", "/tmp/startup-ca.pem".to_string()),
+            (SSL_CERT_DIR_ENV_KEY, "/tmp/startup-certs".to_string()),
+        ]);
         let trust_bundle =
             managed_ca_trust_bundle_for_cert_path(&managed_ca_cert_path, &env).unwrap();
         assert_eq!(
             trust_bundle.startup_env_values,
-            HashMap::from([("SSL_CERT_FILE", "/tmp/startup-ca.pem".to_string())])
+            HashMap::from([
+                ("SSL_CERT_FILE", "/tmp/startup-ca.pem".to_string()),
+                (SSL_CERT_DIR_ENV_KEY, "/tmp/startup-certs".to_string()),
+            ])
         );
     }
 

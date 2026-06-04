@@ -18,6 +18,7 @@ mod state;
 mod upstream;
 
 pub use certs::CUSTOM_CA_ENV_KEYS;
+pub use certs::SSL_CERT_DIR_ENV_KEY;
 pub use certs::is_managed_mitm_ca_trust_bundle_path;
 pub use config::NetworkDomainPermission;
 pub use config::NetworkDomainPermissionEntry;
@@ -46,6 +47,7 @@ pub use proxy::Args;
 #[cfg(target_os = "macos")]
 pub use proxy::CODEX_PROXY_GIT_SSH_COMMAND_MARKER;
 pub use proxy::DEFAULT_NO_PROXY_VALUE;
+pub use proxy::MITM_CA_ENV_ACTIVE_ENV_KEY;
 pub use proxy::NO_PROXY_ENV_KEYS;
 pub use proxy::NetworkProxy;
 pub use proxy::NetworkProxyBuilder;
