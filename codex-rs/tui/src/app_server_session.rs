@@ -1419,7 +1419,9 @@ fn thread_start_params_from_config(
         ephemeral: Some(config.ephemeral),
         session_start_source,
         thread_source: Some(ThreadSource::User),
-        developer_instructions: with_terminal_visualization_instructions(config, None),
+        developer_instructions: with_terminal_visualization_instructions(
+            config, /*control_instructions*/ None,
+        ),
         ..ThreadStartParams::default()
     }
 }
@@ -1458,7 +1460,9 @@ fn thread_resume_params_from_config(
         sandbox,
         permissions,
         config: config_request_overrides_from_config(&config),
-        developer_instructions: with_terminal_visualization_instructions(&config, None),
+        developer_instructions: with_terminal_visualization_instructions(
+            &config, /*control_instructions*/ None,
+        ),
         ..ThreadResumeParams::default()
     }
 }
