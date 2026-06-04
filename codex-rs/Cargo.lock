@@ -3511,7 +3511,6 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_with",
- "strum 0.27.2",
  "strum_macros 0.28.0",
  "sys-locale",
  "tempfile",
