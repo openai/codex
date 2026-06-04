@@ -406,6 +406,7 @@ fn dynamic_tool(namespace: Option<&str>, name: &str, defer_loading: bool) -> Dyn
 fn discoverable_plugin(id: &str, name: &str) -> DiscoverableTool {
     DiscoverablePluginInfo {
         id: id.to_string(),
+        remote_plugin_id: None,
         name: name.to_string(),
         description: Some(format!("{name} plugin")),
         has_skills: false,
