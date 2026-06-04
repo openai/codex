@@ -32,6 +32,7 @@ schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 serde_with = { workspace = true, features = ["macros", "base64"] }
+strum = { workspace = true }
 strum_macros = { workspace = true }
 sys-locale = { workspace = true }
 thiserror = { workspace = true }
@@ -58,4 +59,5 @@ tempfile = { workspace = true }
 [package.metadata.cargo-shear]
 # Required because:
 # `icu_provider`: contains a required `sync` feature for `icu_decimal`
-ignored = ["icu_provider"]
+# `strum`: is referenced by generated `EnumIter` derive implementations
+ignored = ["icu_provider", "strum"]
