@@ -1,6 +1,7 @@
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 
 mod certs;
+mod child_ca;
 mod config;
 mod connect_policy;
 mod http_proxy;
