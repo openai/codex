@@ -106,6 +106,20 @@ unsafe fn set_default_dacl(h_token: HANDLE, sids: &[*mut c_void]) -> Result<()> 
     Ok(())
 }
 
+fn default_dacl_sids(
+    psid_logon: *mut c_void,
+    psid_everyone: *mut c_void,
+    psid_capabilities: &[*mut c_void],
+) -> Vec<*mut c_void> {
+    let mut dacl_sids = Vec::with_capacity(2 + usize::from(!psid_capabilities.is_empty()));
+    dacl_sids.push(psid_logon);
+    dacl_sids.push(psid_everyone);
+    if let Some(first_capability_sid) = psid_capabilities.first() {
+        dacl_sids.push(*first_capability_sid);
+    }
+    dacl_sids
+}
+
 pub unsafe fn world_sid() -> Result<Vec<u8>> {
     let mut size: u32 = 0;
     CreateWellKnownSid(
@@ -472,12 +486,43 @@ unsafe fn create_token_with_caps_from(
         return Err(anyhow!("CreateRestrictedToken failed: {}", GetLastError()));
     }
 
-    let mut dacl_sids: Vec<*mut c_void> = Vec::with_capacity(psid_capabilities.len() + 2);
-    dacl_sids.push(psid_logon);
-    dacl_sids.push(psid_everyone);
-    dacl_sids.extend_from_slice(psid_capabilities);
+    // The token default DACL only needs to stay permissive enough for child-created IPC objects.
+    // Path isolation still comes from the full restricted SID set above plus the filesystem ACLs
+    // granted to each writable root, so carrying every root capability SID here just bloats the
+    // token DACL and can overflow SetTokenInformation(TokenDefaultDacl) on large workspace-write
+    // root sets.
+    let dacl_sids = default_dacl_sids(psid_logon, psid_everyone, psid_capabilities);
     set_default_dacl(new_token, &dacl_sids)?;
 
     enable_single_privilege(new_token, "SeChangeNotifyPrivilege")?;
     Ok(new_token)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::default_dacl_sids;
+    use std::ffi::c_void;
+
+    #[test]
+    fn default_dacl_sids_keep_only_first_capability_sid() {
+        let logon = 1usize as *mut c_void;
+        let everyone = 2usize as *mut c_void;
+        let cap_a = 3usize as *mut c_void;
+        let cap_b = 4usize as *mut c_void;
+
+        let actual = default_dacl_sids(logon, everyone, &[cap_a, cap_b]);
+
+        assert_eq!(vec![logon, everyone, cap_a], actual);
+    }
+
+    #[test]
+    fn default_dacl_sids_allow_readonly_style_tokens() {
+        let logon = 1usize as *mut c_void;
+        let everyone = 2usize as *mut c_void;
+        let readonly = 3usize as *mut c_void;
+
+        let actual = default_dacl_sids(logon, everyone, &[readonly]);
+
+        assert_eq!(vec![logon, everyone, readonly], actual);
+    }
 }
