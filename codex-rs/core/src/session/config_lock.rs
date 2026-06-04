@@ -251,6 +251,14 @@ mod tests {
                 spec.key
             );
         }
+        assert_eq!(
+            features.code_mode,
+            Some(FeatureToml::Enabled(
+                sc.original_config_do_not_use
+                    .features
+                    .enabled(Feature::CodeMode)
+            ))
+        );
 
         let multi_agent_v2 = features
             .multi_agent_v2

@@ -622,8 +622,6 @@ pub struct ToolsToml {
     )]
     pub web_search: Option<WebSearchToolConfig>,
     pub experimental_request_user_input: Option<ExperimentalRequestUserInput>,
-    /// Exact tool namespaces to omit from the code-mode nested tool surface.
-    pub experimental_code_mode_excluded_namespaces: Option<Vec<String>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]

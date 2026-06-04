@@ -3172,7 +3172,7 @@ async fn code_mode_excludes_configured_nested_tool_namespaces() -> Result<()> {
     let server = responses::start_mock_server().await;
     let mut builder = test_codex().with_config(|config| {
         let _ = config.features.enable(Feature::CodeMode);
-        config.experimental_code_mode_excluded_namespaces = vec!["excluded".to_string()];
+        config.code_mode.excluded_tool_namespaces = vec!["excluded".to_string()];
     });
     let base_test = builder.build(&server).await?;
     let new_thread = base_test

@@ -394,7 +394,6 @@ web_search = true
         Some(ToolsToml {
             web_search: None,
             experimental_request_user_input: None,
-            experimental_code_mode_excluded_namespaces: None,
         })
     );
 }
@@ -414,7 +413,6 @@ web_search = false
         Some(ToolsToml {
             web_search: None,
             experimental_request_user_input: None,
-            experimental_code_mode_excluded_namespaces: None,
         })
     );
 }
@@ -433,7 +431,6 @@ fn tools_experimental_request_user_input_defaults_to_enabled() {
         Some(ToolsToml {
             web_search: None,
             experimental_request_user_input: Some(ExperimentalRequestUserInput { enabled: true }),
-            experimental_code_mode_excluded_namespaces: None,
         })
     );
 }
@@ -453,30 +450,6 @@ enabled = false
         Some(ToolsToml {
             web_search: None,
             experimental_request_user_input: Some(ExperimentalRequestUserInput { enabled: false }),
-            experimental_code_mode_excluded_namespaces: None,
-        })
-    );
-}
-
-#[test]
-fn tools_experimental_code_mode_excluded_namespaces_deserialize() {
-    let cfg: ConfigToml = toml::from_str(
-        r#"
-[tools]
-experimental_code_mode_excluded_namespaces = ["mcp__codex_apps", "multi_agent_v1"]
-"#,
-    )
-    .expect("TOML deserialization should succeed");
-
-    assert_eq!(
-        cfg.tools,
-        Some(ToolsToml {
-            web_search: None,
-            experimental_request_user_input: None,
-            experimental_code_mode_excluded_namespaces: Some(vec![
-                "mcp__codex_apps".to_string(),
-                "multi_agent_v1".to_string(),
-            ]),
         })
     );
 }
@@ -491,7 +464,6 @@ async fn load_config_resolves_experimental_request_user_input_enabled() -> std::
                 experimental_request_user_input: Some(ExperimentalRequestUserInput {
                     enabled: false,
                 }),
-                experimental_code_mode_excluded_namespaces: None,
             }),
             ..ConfigToml::default()
         },
@@ -505,29 +477,28 @@ async fn load_config_resolves_experimental_request_user_input_enabled() -> std::
 }
 
 #[tokio::test]
-async fn load_config_resolves_experimental_code_mode_excluded_namespaces() -> std::io::Result<()> {
+async fn load_config_resolves_code_mode_config() -> std::io::Result<()> {
     let codex_home = tempdir()?;
+    let config_toml: ConfigToml = toml::from_str(
+        r#"
+[features.code_mode]
+enabled = true
+excluded_tool_namespaces = ["mcp__codex_apps", "multi_agent_v1"]
+"#,
+    )
+    .expect("TOML deserialization should succeed");
     let config = Config::load_from_base_config_with_overrides(
-        ConfigToml {
-            tools: Some(ToolsToml {
-                web_search: None,
-                experimental_request_user_input: None,
-                experimental_code_mode_excluded_namespaces: Some(vec![
-                    "mcp__codex_apps".to_string(),
-                    "multi_agent_v1".to_string(),
-                ]),
-            }),
-            ..ConfigToml::default()
-        },
+        config_toml,
         ConfigOverrides::default(),
         codex_home.abs(),
     )
     .await?;
 
     assert_eq!(
-        config.experimental_code_mode_excluded_namespaces,
+        config.code_mode.excluded_tool_namespaces,
         vec!["mcp__codex_apps".to_string(), "multi_agent_v1".to_string()]
     );
+    assert!(config.features.enabled(Feature::CodeMode));
     Ok(())
 }
 

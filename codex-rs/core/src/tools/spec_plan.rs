@@ -416,7 +416,8 @@ fn is_excluded_from_code_mode(turn_context: &TurnContext, tool_name: &ToolName) 
     tool_name.namespace.as_ref().is_some_and(|namespace| {
         turn_context
             .config
-            .experimental_code_mode_excluded_namespaces
+            .code_mode
+            .excluded_tool_namespaces
             .contains(namespace)
     })
 }
