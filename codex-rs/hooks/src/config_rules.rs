@@ -9,10 +9,9 @@ use codex_config::TomlValue;
 /// Build effective hook state from config layers that are allowed to override
 /// user preferences.
 ///
-/// This intentionally reads only user and session flag layers, including
-/// disabled layers, to match the skills config behavior. Project, managed, and
-/// plugin layers can discover hooks, but they do not get to write user hook
-/// state.
+/// This intentionally reads only user-controlled layers, including disabled
+/// layers, to match the skills config behavior. Project, managed, and plugin
+/// layers can discover hooks, but they do not get to write user hook state.
 pub fn hook_states_from_stack(
     config_layer_stack: Option<&ConfigLayerStack>,
 ) -> HashMap<String, HookStateToml> {
@@ -27,7 +26,9 @@ pub fn hook_states_from_stack(
     ) {
         if !matches!(
             layer.name,
-            ConfigLayerSource::User { .. } | ConfigLayerSource::SessionFlags
+            ConfigLayerSource::User { .. }
+                | ConfigLayerSource::InMemory
+                | ConfigLayerSource::SessionFlags
         ) {
             continue;
         }

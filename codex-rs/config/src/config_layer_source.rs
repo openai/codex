@@ -14,6 +14,7 @@ pub fn format_config_layer_source(source: &ConfigLayerSource, config_toml_file: 
         ConfigLayerSource::User { file, .. } => {
             format!("user ({})", file.as_path().display())
         }
+        ConfigLayerSource::InMemory => "in-memory".to_string(),
         ConfigLayerSource::Project { dot_codex_folder } => {
             format!(
                 "project ({}/{config_toml_file})",

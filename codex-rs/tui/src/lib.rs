@@ -1968,6 +1968,7 @@ async fn load_config_toml_or_exit(
             loader_overrides,
             strict_config,
             cloud_config_bundle,
+            ..Default::default()
         },
     )
     .await

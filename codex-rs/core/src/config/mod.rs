@@ -8,6 +8,7 @@ use crate::windows_sandbox::WindowsSandboxLevelExt;
 use crate::windows_sandbox::resolve_windows_sandbox_mode;
 use crate::windows_sandbox::resolve_windows_sandbox_private_desktop;
 use codex_config::CloudConfigBundleLoader;
+use codex_config::ConfigLayerEntry;
 use codex_config::ConfigLayerSource;
 use codex_config::ConfigLayerStack;
 use codex_config::ConfigLayerStackOrdering;
@@ -1107,6 +1108,7 @@ pub struct ConfigBuilder {
     loader_overrides: Option<LoaderOverrides>,
     strict_config: bool,
     cloud_config_bundle: CloudConfigBundleLoader,
+    in_memory_layer: Option<ConfigLayerEntry>,
     thread_config_loader: Option<Arc<dyn ThreadConfigLoader>>,
     fallback_cwd: Option<PathBuf>,
 }
@@ -1142,6 +1144,11 @@ impl ConfigBuilder {
         self
     }
 
+    pub fn in_memory_layer(mut self, in_memory_layer: Option<ConfigLayerEntry>) -> Self {
+        self.in_memory_layer = in_memory_layer;
+        self
+    }
+
     pub fn thread_config_loader(
         mut self,
         thread_config_loader: Arc<dyn ThreadConfigLoader>,
@@ -1168,6 +1175,7 @@ impl ConfigBuilder {
             loader_overrides,
             strict_config,
             cloud_config_bundle,
+            in_memory_layer,
             thread_config_loader,
             fallback_cwd,
         } = self;
@@ -1193,6 +1201,7 @@ impl ConfigBuilder {
                 loader_overrides,
                 strict_config,
                 cloud_config_bundle,
+                in_memory_layer,
             },
             thread_config_loader
                 .as_deref()

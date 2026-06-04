@@ -1076,6 +1076,7 @@ impl TurnRequestProcessor {
                 ))
             })?;
 
+        // Detached review threads intentionally retain the app-server startup config snapshot.
         let mut config = self.config.as_ref().clone();
         if let Some(review_model) = &config.review_model {
             config.model = Some(review_model.clone());

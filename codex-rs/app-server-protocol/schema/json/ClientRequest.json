@@ -435,6 +435,19 @@
       ],
       "type": "object"
     },
+    "ConfigInMemorySetParams": {
+      "properties": {
+        "config": {
+          "additionalProperties": true,
+          "description": "Full replacement in-memory config layer, shaped like config.toml. An empty object clears the layer.",
+          "type": "object"
+        }
+      },
+      "required": [
+        "config"
+      ],
+      "type": "object"
+    },
     "ConfigReadParams": {
       "properties": {
         "cwd": {
@@ -6091,6 +6104,30 @@
         "params"
       ],
       "title": "Config/readRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "config/inMemory/set"
+          ],
+          "title": "Config/inMemory/setRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ConfigInMemorySetParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Config/inMemory/setRequest",
       "type": "object"
     },
     {

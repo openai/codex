@@ -1,6 +1,7 @@
 use codex_arg0::Arg0DispatchPaths;
 use codex_cloud_config::cloud_config_bundle_loader;
 use codex_config::CloudConfigBundleLoader;
+use codex_config::ConfigLayerEntry;
 use codex_config::ConfigLayerStack;
 use codex_config::LoaderOverrides;
 use codex_config::ThreadConfigLoader;
@@ -29,8 +30,9 @@ pub(crate) struct ConfigManager {
     codex_home: PathBuf,
     cli_overrides: Arc<RwLock<Vec<(String, TomlValue)>>>,
     runtime_feature_enablement: Arc<RwLock<BTreeMap<String, bool>>>,
+    in_memory_layer: Arc<RwLock<Option<ConfigLayerEntry>>>,
     loader_overrides: LoaderOverrides,
-    strict_config: bool,
+    pub(super) strict_config: bool,
     cloud_config_bundle: Arc<RwLock<CloudConfigBundleLoader>>,
     arg0_paths: Arg0DispatchPaths,
     thread_config_loader: Arc<RwLock<Arc<dyn ThreadConfigLoader>>>,
@@ -50,6 +52,7 @@ impl ConfigManager {
             codex_home,
             cli_overrides: Arc::new(RwLock::new(cli_overrides)),
             runtime_feature_enablement: Arc::new(RwLock::new(BTreeMap::new())),
+            in_memory_layer: Arc::new(RwLock::new(None)),
             loader_overrides,
             strict_config,
             cloud_config_bundle: Arc::new(RwLock::new(cloud_config_bundle)),
@@ -78,6 +81,13 @@ impl ConfigManager {
             .read()
             .map(|guard| guard.clone())
             .unwrap_or_default()
+    }
+
+    fn current_in_memory_layer(&self) -> std::io::Result<Option<ConfigLayerEntry>> {
+        self.in_memory_layer
+            .read()
+            .map(|guard| guard.clone())
+            .map_err(|_| std::io::Error::other("in-memory config layer lock poisoned"))
     }
 
     pub(crate) fn extend_runtime_feature_enablement<I>(&self, enablement: I) -> Result<(), ()>
@@ -113,6 +123,18 @@ impl ConfigManager {
         } else {
             warn!("failed to update thread config loader");
         }
+    }
+
+    pub(crate) fn replace_in_memory_layer(
+        &self,
+        in_memory_layer: Option<ConfigLayerEntry>,
+    ) -> std::io::Result<()> {
+        let mut guard = self
+            .in_memory_layer
+            .write()
+            .map_err(|_| std::io::Error::other("in-memory config layer lock poisoned"))?;
+        *guard = in_memory_layer;
+        Ok(())
     }
 
     fn current_thread_config_loader(&self) -> Arc<dyn ThreadConfigLoader> {
@@ -246,6 +268,7 @@ impl ConfigManager {
             .harness_overrides(typesafe_overrides)
             .fallback_cwd(fallback_cwd)
             .cloud_config_bundle(self.current_cloud_config_bundle())
+            .in_memory_layer(self.current_in_memory_layer()?)
             .thread_config_loader(self.current_thread_config_loader())
             .build()
             .await?;
@@ -265,6 +288,15 @@ impl ConfigManager {
         &self,
         cwd: Option<AbsolutePathBuf>,
     ) -> std::io::Result<ConfigLayerStack> {
+        self.load_config_layers_with_in_memory_layer(cwd, self.current_in_memory_layer()?)
+            .await
+    }
+
+    pub(crate) async fn load_config_layers_with_in_memory_layer(
+        &self,
+        cwd: Option<AbsolutePathBuf>,
+        in_memory_layer: Option<ConfigLayerEntry>,
+    ) -> std::io::Result<ConfigLayerStack> {
         let thread_config_loader = self.current_thread_config_loader();
         load_config_layers_state(
             LOCAL_FS.as_ref(),
@@ -275,6 +307,7 @@ impl ConfigManager {
                 loader_overrides: self.loader_overrides.clone(),
                 strict_config: self.strict_config,
                 cloud_config_bundle: self.current_cloud_config_bundle(),
+                in_memory_layer,
             },
             thread_config_loader.as_ref(),
         )

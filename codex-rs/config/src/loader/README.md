@@ -29,10 +29,11 @@ Precedence is **top overrides bottom**:
 2. `LegacyManagedConfigTomlFromFile` (`managed_config.toml`, while it is being phased out)
 3. `SessionFlags` (CLI overrides, applied as dotted-path TOML writes)
 4. `Project` config (`.codex/config.toml`)
-5. `User` profile config, when present
-6. `User` config (`config.toml`)
-7. `EnterpriseManaged` cloud-managed config bundle layers
-8. `System` config (`/etc/codex/config.toml` or the Windows system config path)
+5. `InMemory` process-scoped config supplied by a host
+6. `User` profile config, when present
+7. `User` config (`config.toml`)
+8. `EnterpriseManaged` cloud-managed config bundle layers
+9. `System` config (`/etc/codex/config.toml` or the Windows system config path)
 
 `ConfigLayerStack` stores layers in the opposite order internally: lowest
 precedence first, highest precedence last, so later layers override earlier

@@ -97,6 +97,7 @@ async fn first_layer_config_error_from_entries(layers: &[ConfigLayerEntry]) -> O
 /// - cloud     enterprise-managed cloud config bundle fragments
 /// - user      `${CODEX_HOME}/config.toml`
 /// - profile   `${CODEX_HOME}/<name>.config.toml`, when selected
+/// - in-memory process-scoped config supplied by a host
 /// - cwd       `${PWD}/config.toml` (loaded but disabled when the directory is untrusted)
 /// - tree      parent directories up to root looking for `./.codex/config.toml` (loaded but disabled when untrusted)
 /// - repo      `$(git rev-parse --show-toplevel)/.codex/config.toml` (loaded but disabled when untrusted)
@@ -123,6 +124,7 @@ pub async fn load_config_layers_state(
         loader_overrides: overrides,
         strict_config,
         cloud_config_bundle,
+        in_memory_layer,
     } = options.into();
     let active_user_profile = overrides.user_config_profile.clone();
     let ignore_managed_requirements = overrides.ignore_managed_requirements;
@@ -207,12 +209,11 @@ pub async fn load_config_layers_state(
             .as_ref()
             .map(AbsolutePathBuf::as_path)
             .unwrap_or(codex_home);
-        if strict_config {
-            validate_cli_overrides_strictly(&cli_overrides_layer, base_dir)?;
-        }
-        Some(resolve_relative_paths_in_config_toml(
+        Some(resolve_inline_config_layer(
             cli_overrides_layer,
             base_dir,
+            strict_config,
+            "-c/--config override",
         )?)
     };
 
@@ -284,6 +285,16 @@ pub async fn load_config_layers_state(
             )
             .await?,
         );
+    }
+
+    if let Some(in_memory_layer) = in_memory_layer {
+        if in_memory_layer.name != ConfigLayerSource::InMemory {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "in-memory config layer must use the InMemory source",
+            ));
+        }
+        layers.push(in_memory_layer);
     }
 
     let mut startup_warnings = None;
@@ -537,27 +548,51 @@ fn validate_config_toml_strictly(
     }
 }
 
-fn validate_cli_overrides_strictly(
-    cli_overrides_layer: &TomlValue,
+fn validate_inline_config_layer_strictly(
+    config_layer: &TomlValue,
     base_dir: &Path,
+    source_label: &str,
 ) -> io::Result<()> {
     let _guard = AbsolutePathBufGuard::new(base_dir);
-    if let Some(ignored_path) = ignored_toml_value_field::<ConfigToml>(cli_overrides_layer.clone())
-    {
+    if let Some(ignored_path) = ignored_toml_value_field::<ConfigToml>(config_layer.clone()) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            format!("unknown configuration field `{ignored_path}` in -c/--config override"),
+            format!("unknown configuration field `{ignored_path}` in {source_label}"),
         ));
     }
 
-    if let Some(ignored_path) = unknown_feature_toml_value_field(cli_overrides_layer) {
+    if let Some(ignored_path) = unknown_feature_toml_value_field(config_layer) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            format!("unknown configuration field `{ignored_path}` in -c/--config override"),
+            format!("unknown configuration field `{ignored_path}` in {source_label}"),
         ));
     }
 
     Ok(())
+}
+
+fn resolve_inline_config_layer(
+    config_layer: TomlValue,
+    base_dir: &Path,
+    strict_config: bool,
+    source_label: &str,
+) -> io::Result<TomlValue> {
+    if strict_config {
+        validate_inline_config_layer_strictly(&config_layer, base_dir, source_label)?;
+    }
+    resolve_relative_paths_in_config_toml(config_layer, base_dir)
+}
+
+/// Creates a normalized process-scoped in-memory config layer.
+#[doc(hidden)]
+pub fn create_in_memory_config_layer(
+    config: TomlValue,
+    codex_home: &Path,
+    strict_config: bool,
+) -> io::Result<ConfigLayerEntry> {
+    let config =
+        resolve_inline_config_layer(config, codex_home, strict_config, "in-memory config layer")?;
+    Ok(ConfigLayerEntry::new(ConfigLayerSource::InMemory, config))
 }
 
 /// If available, load requirements from the platform's system `requirements.toml`
@@ -1392,6 +1427,7 @@ struct LegacyManagedConfigToml {
 #[cfg(test)]
 mod unit_tests {
     use super::*;
+    use pretty_assertions::assert_eq;
     #[cfg(windows)]
     use std::path::Path;
     use tempfile::tempdir;
@@ -1430,6 +1466,35 @@ foo = "xyzzy"
         );
         expected_toml_value.insert("foo".to_string(), TomlValue::String("xyzzy".to_string()));
         assert_eq!(normalized_toml_value, TomlValue::Table(expected_toml_value));
+        Ok(())
+    }
+
+    #[test]
+    fn in_memory_config_layer_resolves_paths_against_codex_home() -> anyhow::Result<()> {
+        let codex_home = tempdir()?;
+        let layer = create_in_memory_config_layer(
+            toml::toml! {
+                model_instructions_file = "./instructions.md"
+            }
+            .into(),
+            codex_home.path(),
+            /*strict_config*/ false,
+        )?;
+        let expected = ConfigLayerEntry::new(
+            ConfigLayerSource::InMemory,
+            TomlValue::Table(toml::map::Map::from_iter([(
+                "model_instructions_file".to_string(),
+                TomlValue::String(
+                    codex_home
+                        .path()
+                        .join("instructions.md")
+                        .display()
+                        .to_string(),
+                ),
+            )])),
+        );
+
+        assert_eq!(layer, expected);
         Ok(())
     }
 

@@ -2886,6 +2886,27 @@ enabled = true
         .await;
 
     let mut config = load_config(tmp.path(), tmp.path()).await;
+    config.config_layer_stack = ConfigLayerStack::new(
+        vec![
+            config
+                .config_layer_stack
+                .get_active_user_layer()
+                .unwrap()
+                .clone(),
+            ConfigLayerEntry::new(
+                ConfigLayerSource::InMemory,
+                toml::from_str(
+                    r#"[plugins."linear@openai-curated"]
+enabled = true
+"#,
+                )
+                .unwrap(),
+            ),
+        ],
+        ConfigRequirements::default(),
+        ConfigRequirementsToml::default(),
+    )
+    .unwrap();
     config.chatgpt_base_url = format!("{}/backend-api/", server.uri());
     let manager = PluginsManager::new(tmp.path().to_path_buf());
     let result = manager

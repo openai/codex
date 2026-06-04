@@ -1879,6 +1879,7 @@ async fn strict_config_rejects_unknown_cloud_config_key() {
             cloud_config_bundle: CloudConfigBundleFixture::loader_with_enterprise_config(
                 "unknown_key = true",
             ),
+            ..Default::default()
         },
         &codex_config::NoopThreadConfigLoader,
     )
@@ -3208,6 +3209,49 @@ async fn project_root_markers_supports_alternate_markers() -> std::io::Result<()
         .and_then(TomlValue::as_str)
         .expect("foo entry");
     assert_eq!(foo, "child");
+
+    make_config_for_test(
+        &codex_home,
+        &project_root,
+        TrustLevel::Trusted,
+        /*project_root_markers*/ None,
+    )
+    .await?;
+    let layers = load_config_layers_state(
+        LOCAL_FS.as_ref(),
+        &codex_home,
+        Some(AbsolutePathBuf::from_absolute_path(&nested)?),
+        &[] as &[(String, TomlValue)],
+        ConfigLoadOptions {
+            loader_overrides: LoaderOverrides::default(),
+            in_memory_layer: Some(ConfigLayerEntry::new(
+                ConfigLayerSource::InMemory,
+                toml::toml! {
+                    project_root_markers = [".hg"]
+                    foo = "memory"
+                }
+                .into(),
+            )),
+            ..Default::default()
+        },
+        &codex_config::NoopThreadConfigLoader,
+    )
+    .await?;
+    assert_eq!(
+        layers
+            .layers_high_to_low()
+            .into_iter()
+            .filter(|layer| matches!(layer.name, ConfigLayerSource::Project { .. }))
+            .count(),
+        2
+    );
+    assert_eq!(
+        layers
+            .effective_config()
+            .get("foo")
+            .and_then(TomlValue::as_str),
+        Some("child")
+    );
 
     Ok(())
 }

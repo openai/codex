@@ -2771,6 +2771,30 @@
             },
             "method": {
               "enum": [
+                "config/inMemory/set"
+              ],
+              "title": "Config/inMemory/setRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/ConfigInMemorySetParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Config/inMemory/setRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
                 "externalAgentConfig/detect"
               ],
               "title": "ExternalAgentConfig/detectRequestMethod",
@@ -3892,6 +3916,26 @@
       ],
       "type": "object"
     },
+    "ConfigInMemorySetParams": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "config": {
+          "additionalProperties": true,
+          "description": "Full replacement in-memory config layer, shaped like config.toml. An empty object clears the layer.",
+          "type": "object"
+        }
+      },
+      "required": [
+        "config"
+      ],
+      "title": "ConfigInMemorySetParams",
+      "type": "object"
+    },
+    "ConfigInMemorySetResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "ConfigInMemorySetResponse",
+      "type": "object"
+    },
     "ConfigLayer": {
       "properties": {
         "config": true,
@@ -4041,6 +4085,23 @@
             "type"
           ],
           "title": "UserConfigLayerSource",
+          "type": "object"
+        },
+        {
+          "description": "In-memory config supplied by the host for the current process.",
+          "properties": {
+            "type": {
+              "enum": [
+                "inMemory"
+              ],
+              "title": "InMemoryConfigLayerSourceType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "InMemoryConfigLayerSource",
           "type": "object"
         },
         {

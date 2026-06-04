@@ -23,6 +23,7 @@ pub struct ConfigLoadOptions {
     pub loader_overrides: LoaderOverrides,
     pub strict_config: bool,
     pub cloud_config_bundle: CloudConfigBundleLoader,
+    pub in_memory_layer: Option<ConfigLayerEntry>,
 }
 
 impl From<LoaderOverrides> for ConfigLoadOptions {
@@ -31,6 +32,7 @@ impl From<LoaderOverrides> for ConfigLoadOptions {
             loader_overrides,
             strict_config: false,
             cloud_config_bundle: CloudConfigBundleLoader::default(),
+            in_memory_layer: None,
         }
     }
 }
@@ -206,6 +208,7 @@ impl ConfigLayerEntry {
             ConfigLayerSource::System { file } => file.parent(),
             ConfigLayerSource::EnterpriseManaged { .. } => None,
             ConfigLayerSource::User { file, .. } => file.parent(),
+            ConfigLayerSource::InMemory => None,
             ConfigLayerSource::Project { dot_codex_folder } => Some(dot_codex_folder.clone()),
             ConfigLayerSource::SessionFlags => None,
             ConfigLayerSource::LegacyManagedConfigTomlFromFile { .. } => None,
@@ -353,6 +356,35 @@ impl ConfigLayerStack {
 
         let mut merged = TomlValue::Table(toml::map::Map::new());
         for layer in user_layers {
+            merge_toml_values(&mut merged, &layer.config);
+        }
+        Some(merged)
+    }
+
+    /// Returns the user-scoped config visible to runtime consumers.
+    ///
+    /// This includes the process-scoped in-memory layer. Persistence code
+    /// should continue to use [`Self::effective_user_config`].
+    pub fn effective_runtime_user_config(&self) -> Option<TomlValue> {
+        let layers = self
+            .get_layers(
+                ConfigLayerStackOrdering::LowestPrecedenceFirst,
+                /*include_disabled*/ false,
+            )
+            .into_iter()
+            .filter(|layer| {
+                matches!(
+                    layer.name,
+                    ConfigLayerSource::User { .. } | ConfigLayerSource::InMemory
+                )
+            })
+            .collect::<Vec<_>>();
+        if layers.is_empty() {
+            return None;
+        }
+
+        let mut merged = TomlValue::Table(toml::map::Map::new());
+        for layer in layers {
             merge_toml_values(&mut merged, &layer.config);
         }
         Some(merged)

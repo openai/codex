@@ -438,7 +438,7 @@ fn refresh_non_curated_plugin_cache_with_mode(
 fn configured_plugins_from_stack(
     config_layer_stack: &ConfigLayerStack,
 ) -> HashMap<String, PluginConfig> {
-    let Some(user_config) = config_layer_stack.effective_user_config() else {
+    let Some(user_config) = config_layer_stack.effective_runtime_user_config() else {
         return HashMap::new();
     };
     configured_plugins_from_user_config_value(&user_config)

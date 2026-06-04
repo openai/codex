@@ -91,6 +91,48 @@ approval_policy = "on-failure"
 }
 
 #[test]
+fn runtime_user_config_includes_in_memory_but_persisted_user_config_does_not() {
+    let temp_dir = TempDir::new().expect("tempdir");
+    let stack = ConfigLayerStack::new(
+        vec![
+            ConfigLayerEntry::new(
+                ConfigLayerSource::User {
+                    file: test_user_config_path(&temp_dir, "config.toml"),
+                    profile: None,
+                },
+                toml::toml! { model = "user" }.into(),
+            ),
+            ConfigLayerEntry::new(
+                ConfigLayerSource::InMemory,
+                toml::toml! { model = "memory" }.into(),
+            ),
+            ConfigLayerEntry::new(
+                ConfigLayerSource::SessionFlags,
+                toml::toml! { model = "session" }.into(),
+            ),
+        ],
+        ConfigRequirements::default(),
+        ConfigRequirementsToml::default(),
+    )
+    .expect("valid config layer stack");
+
+    assert_eq!(
+        stack
+            .effective_user_config()
+            .and_then(|config| config.get("model").cloned())
+            .and_then(|model| model.as_str().map(str::to_string)),
+        Some("user".to_string())
+    );
+    assert_eq!(
+        stack
+            .effective_runtime_user_config()
+            .and_then(|config| config.get("model").cloned())
+            .and_then(|model| model.as_str().map(str::to_string)),
+        Some("memory".to_string())
+    );
+}
+
+#[test]
 fn with_user_config_updates_matching_user_layer_without_replacing_active_profile() {
     let temp_dir = TempDir::new().expect("tempdir");
     let base_file = test_user_config_path(&temp_dir, "config.toml");

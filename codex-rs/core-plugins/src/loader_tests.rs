@@ -36,6 +36,11 @@ fn configured_plugins_from_stack_merges_user_layers() {
                 user_config_path(&temp_dir, "work.config.toml"),
                 "[plugins.profile]\nenabled = false\n",
             ),
+            ConfigLayerEntry::new(
+                ConfigLayerSource::InMemory,
+                toml::from_str("[plugins.memory]\nenabled = true\n")
+                    .expect("in-memory config toml"),
+            ),
         ],
         ConfigRequirements::default(),
         ConfigRequirementsToml::default(),
@@ -58,6 +63,13 @@ fn configured_plugins_from_stack_merges_user_layers() {
                 "profile".to_string(),
                 PluginConfig {
                     enabled: false,
+                    mcp_servers: HashMap::new(),
+                },
+            ),
+            (
+                "memory".to_string(),
+                PluginConfig {
+                    enabled: true,
                     mcp_servers: HashMap::new(),
                 },
             ),

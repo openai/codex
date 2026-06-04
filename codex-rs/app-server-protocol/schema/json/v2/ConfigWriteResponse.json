@@ -134,6 +134,23 @@
           "type": "object"
         },
         {
+          "description": "In-memory config supplied by the host for the current process.",
+          "properties": {
+            "type": {
+              "enum": [
+                "inMemory"
+              ],
+              "title": "InMemoryConfigLayerSourceType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "InMemoryConfigLayerSource",
+          "type": "object"
+        },
+        {
           "description": "Path to a .codex/ folder within a project. There could be multiple of these between `cwd` and the project/repo root.",
           "properties": {
             "dotCodexFolder": {

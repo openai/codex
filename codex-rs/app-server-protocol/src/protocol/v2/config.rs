@@ -72,6 +72,9 @@ pub enum ConfigLayerSource {
         profile: Option<String>,
     },
 
+    /// In-memory config supplied by the host for the current process.
+    InMemory,
+
     /// Path to a .codex/ folder within a project. There could be multiple of
     /// these between `cwd` and the project/repo root.
     #[serde(rename_all = "camelCase")]
@@ -111,6 +114,7 @@ impl ConfigLayerSource {
                     20
                 }
             }
+            ConfigLayerSource::InMemory => 22,
             ConfigLayerSource::Project { .. } => 25,
             ConfigLayerSource::SessionFlags => 30,
             ConfigLayerSource::LegacyManagedConfigTomlFromFile { .. } => 40,
@@ -364,6 +368,20 @@ pub struct ConfigReadResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub layers: Option<Vec<ConfigLayer>>,
 }
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ConfigInMemorySetParams {
+    /// Full replacement in-memory config layer, shaped like config.toml.
+    /// An empty object clears the layer.
+    pub config: HashMap<String, JsonValue>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ConfigInMemorySetResponse {}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, ExperimentalApi)]
 #[serde(rename_all = "camelCase")]

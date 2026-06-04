@@ -253,6 +253,7 @@ async fn start_app_server_for_archive_command(
             loader_overrides: loader_overrides.clone(),
             strict_config,
             cloud_config_bundle: CloudConfigBundleLoader::default(),
+            ..Default::default()
         },
     )
     .await

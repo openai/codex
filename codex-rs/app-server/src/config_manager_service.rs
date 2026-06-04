@@ -1,6 +1,8 @@
 use crate::config_manager::ConfigManager;
 use codex_app_server_protocol::Config as ApiConfig;
 use codex_app_server_protocol::ConfigBatchWriteParams;
+use codex_app_server_protocol::ConfigInMemorySetParams;
+use codex_app_server_protocol::ConfigInMemorySetResponse;
 use codex_app_server_protocol::ConfigLayerMetadata;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_app_server_protocol::ConfigReadParams;
@@ -17,6 +19,7 @@ use codex_config::ConfigLayerStack;
 use codex_config::ConfigLayerStackOrdering;
 use codex_config::ConfigRequirementsToml;
 use codex_config::config_toml::ConfigToml;
+use codex_config::loader::create_in_memory_config_layer;
 use codex_config::merge_toml_values;
 use codex_core::config::deserialize_config_toml_with_base;
 use codex_core::config::edit::ConfigEdit;
@@ -187,6 +190,78 @@ impl ConfigManager {
 
         self.apply_edits(params.file_path, params.expected_version, edits)
             .await
+    }
+
+    pub(crate) async fn set_in_memory_config(
+        &self,
+        params: ConfigInMemorySetParams,
+    ) -> Result<ConfigInMemorySetResponse, ConfigManagerError> {
+        let ConfigInMemorySetParams { config } = params;
+        let candidate_in_memory_layer = if config.is_empty() {
+            None
+        } else {
+            let config = TomlValue::try_from(config).map_err(|err| {
+                ConfigManagerError::write(
+                    ConfigWriteErrorCode::ConfigValidationError,
+                    format!("Invalid in-memory configuration: {err}"),
+                )
+            })?;
+            Some(
+                create_in_memory_config_layer(config, self.codex_home(), self.strict_config)
+                    .map_err(|err| {
+                        ConfigManagerError::write(
+                            ConfigWriteErrorCode::ConfigValidationError,
+                            format!("Invalid in-memory configuration: {err}"),
+                        )
+                    })?,
+            )
+        };
+
+        let candidate_layers = self
+            .load_config_layers_with_in_memory_layer(
+                /*cwd*/ None,
+                candidate_in_memory_layer.clone(),
+            )
+            .await
+            .map_err(|err| ConfigManagerError::io("failed to load configuration", err))?;
+
+        if let Some(layer) = candidate_in_memory_layer.as_ref() {
+            let in_memory_config_toml =
+                deserialize_config_toml_with_base(layer.config.clone(), self.codex_home())
+                    .map_err(|err| {
+                        ConfigManagerError::write(
+                            ConfigWriteErrorCode::ConfigValidationError,
+                            format!("Invalid in-memory configuration: {err}"),
+                        )
+                    })?;
+            validate_feature_requirements_for_config_toml(
+                &in_memory_config_toml,
+                candidate_layers
+                    .requirements()
+                    .feature_requirements
+                    .as_ref(),
+            )
+            .map_err(|err| {
+                ConfigManagerError::write(
+                    ConfigWriteErrorCode::ConfigValidationError,
+                    format!("Invalid in-memory configuration: {err}"),
+                )
+            })?;
+        }
+
+        validate_config(&candidate_layers.effective_config()).map_err(|err| {
+            ConfigManagerError::write(
+                ConfigWriteErrorCode::ConfigValidationError,
+                format!("Invalid in-memory configuration: {err}"),
+            )
+        })?;
+
+        self.replace_in_memory_layer(candidate_in_memory_layer)
+            .map_err(|err| {
+                ConfigManagerError::io("failed to update in-memory config layer", err)
+            })?;
+
+        Ok(ConfigInMemorySetResponse {})
     }
 
     async fn apply_edits(
@@ -627,6 +702,7 @@ fn override_message(layer: &ConfigLayerSource) -> String {
         ConfigLayerSource::EnterpriseManaged { id: _, name } => {
             format!("Overridden by enterprise-managed config: {name}")
         }
+        ConfigLayerSource::InMemory => "Overridden by in-memory config".to_string(),
         ConfigLayerSource::Project { dot_codex_folder } => format!(
             "Overridden by project config: {}/{CONFIG_TOML_FILE}",
             dot_codex_folder.display(),

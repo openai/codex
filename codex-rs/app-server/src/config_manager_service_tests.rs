@@ -61,6 +61,79 @@ X-Doc = "42"
 }
 
 #[tokio::test]
+async fn in_memory_config_replaces_atomically_and_clears_to_latest_user_config() -> Result<()> {
+    let tmp = tempdir().expect("tempdir");
+    let config_path = tmp.path().join(CONFIG_TOML_FILE);
+    std::fs::write(&config_path, "model = \"user\"\n")?;
+    let service = ConfigManager::without_managed_config_for_tests(tmp.path().to_path_buf());
+
+    service
+        .set_in_memory_config(ConfigInMemorySetParams {
+            config: std::collections::HashMap::from([(
+                "model".to_string(),
+                serde_json::json!("memory"),
+            )]),
+        })
+        .await
+        .expect("set in-memory config");
+
+    let read = service
+        .read(ConfigReadParams {
+            include_layers: true,
+            cwd: None,
+        })
+        .await
+        .expect("read in-memory config");
+    assert_eq!(read.config.model.as_deref(), Some("memory"));
+    assert_eq!(
+        read.origins.get("model").map(|metadata| &metadata.name),
+        Some(&ConfigLayerSource::InMemory)
+    );
+
+    let error = service
+        .set_in_memory_config(ConfigInMemorySetParams {
+            config: std::collections::HashMap::from([("model".to_string(), serde_json::json!(42))]),
+        })
+        .await
+        .expect_err("invalid replacement should fail");
+    assert_eq!(
+        error.write_error_code(),
+        Some(ConfigWriteErrorCode::ConfigValidationError)
+    );
+    assert_eq!(
+        service
+            .read(ConfigReadParams {
+                include_layers: false,
+                cwd: None,
+            })
+            .await
+            .expect("read after rejected replacement")
+            .config
+            .model
+            .as_deref(),
+        Some("memory")
+    );
+
+    std::fs::write(&config_path, "model = \"latest-user\"\n")?;
+    service
+        .set_in_memory_config(ConfigInMemorySetParams {
+            config: std::collections::HashMap::new(),
+        })
+        .await
+        .expect("clear in-memory config");
+    let cleared = service
+        .read(ConfigReadParams {
+            include_layers: false,
+            cwd: None,
+        })
+        .await
+        .expect("read cleared config");
+    assert_eq!(cleared.config.model.as_deref(), Some("latest-user"));
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn write_value_preserves_comments_and_order() -> Result<()> {
     let tmp = tempdir().expect("tempdir");
     let original = r#"# Codex user configuration

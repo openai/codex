@@ -1020,6 +1020,11 @@ client_request_definitions! {
         serialization: global_shared_read("config"),
         response: v2::ConfigReadResponse,
     },
+    ConfigInMemorySet => "config/inMemory/set" {
+        params: v2::ConfigInMemorySetParams,
+        serialization: global("config"),
+        response: v2::ConfigInMemorySetResponse,
+    },
     ExternalAgentConfigDetect => "externalAgentConfig/detect" {
         params: v2::ExternalAgentConfigDetectParams,
         serialization: global("config"),

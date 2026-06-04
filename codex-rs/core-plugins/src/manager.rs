@@ -1006,7 +1006,14 @@ impl PluginsManager {
         )
         .await
         .map_err(PluginRemoteSyncError::from)?;
-        let configured_plugins = configured_plugins_from_stack(&config.config_layer_stack);
+        // Remote sync persists edits, so ephemeral runtime layers must not
+        // influence the current persisted state.
+        let configured_plugins = config
+            .config_layer_stack
+            .effective_user_config()
+            .as_ref()
+            .map(configured_plugins_from_user_config_value)
+            .unwrap_or_default();
         let curated_marketplace_root = curated_plugins_repo_path(self.codex_home.as_path());
         let curated_marketplace_path = AbsolutePathBuf::try_from(
             curated_marketplace_root.join(".agents/plugins/marketplace.json"),
@@ -2080,8 +2087,7 @@ impl PluginUninstallError {
 pub(crate) fn configured_plugins_from_stack(
     config_layer_stack: &ConfigLayerStack,
 ) -> HashMap<String, PluginConfig> {
-    // Plugin entries remain persisted user config only.
-    let Some(user_config) = config_layer_stack.effective_user_config() else {
+    let Some(user_config) = config_layer_stack.effective_runtime_user_config() else {
         return HashMap::new();
     };
     configured_plugins_from_user_config_value(&user_config)
