@@ -4,10 +4,15 @@
 import type { AbsolutePathBuf } from "../AbsolutePathBuf";
 import type { SkillDependencies } from "./SkillDependencies";
 import type { SkillInterface } from "./SkillInterface";
+import type { SkillOwnerPlugin } from "./SkillOwnerPlugin";
 import type { SkillScope } from "./SkillScope";
 
 export type SkillMetadata = { name: string, description: string,
 /**
  * Legacy short_description from SKILL.md. Prefer SKILL.json interface.short_description.
  */
-shortDescription?: string, interface?: SkillInterface, dependencies?: SkillDependencies, path: AbsolutePathBuf, scope: SkillScope, enabled: boolean, };
+shortDescription?: string, interface?: SkillInterface, dependencies?: SkillDependencies, path: AbsolutePathBuf, scope: SkillScope, enabled: boolean,
+/**
+ * Plugin that owns this skill, when the skill is contributed by a plugin.
+ */
+plugin?: SkillOwnerPlugin, };

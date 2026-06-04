@@ -3750,18 +3750,29 @@ impl ChatComposer {
                 let display_name = skill_display_name(skill);
                 let description = skill_description(skill);
                 let skill_name = skill.name.clone();
-                let search_terms = if display_name == skill.name {
+                let mut search_terms = if display_name == skill.name {
                     vec![skill_name.clone()]
                 } else {
                     vec![skill_name.clone(), display_name.clone()]
                 };
+                if let Some(plugin_display_name) = skill.plugin_display_name.as_ref() {
+                    search_terms.push(plugin_display_name.clone());
+                }
+                if let Some(plugin_id) = skill.plugin_id.as_ref() {
+                    search_terms.push(plugin_id.clone());
+                }
+                let category_tag = skill
+                    .plugin_display_name
+                    .as_ref()
+                    .map(|plugin_display_name| format!("[{plugin_display_name}]"))
+                    .unwrap_or_else(|| "[Skill]".to_string());
                 mentions.push(MentionItem {
                     display_name,
                     description,
                     insert_text: format!("${skill_name}"),
                     search_terms,
                     path: Some(skill.path_to_skills_md.to_string_lossy().into_owned()),
-                    category_tag: Some("[Skill]".to_string()),
+                    category_tag: Some(category_tag),
                     sort_rank: 1,
                 });
             }
@@ -6252,6 +6263,7 @@ mod tests {
             path_to_skills_md: skill_path.clone(),
             scope: crate::test_support::skill_scope_user(),
             plugin_id: None,
+            plugin_display_name: None,
         }]));
 
         let ActivePopup::Skill(popup) = &composer.popups.active else {
@@ -6294,7 +6306,8 @@ mod tests {
             policy: None,
             path_to_skills_md: skill_path.clone(),
             scope: crate::test_support::skill_scope_repo(),
-            plugin_id: None,
+            plugin_id: Some("google-calendar@debug".to_string()),
+            plugin_display_name: Some("Google Calendar".to_string()),
         }]));
         composer.set_plugin_mentions(Some(vec![PluginCapabilitySummary {
             config_name: "google-calendar@debug".to_string(),
@@ -6327,7 +6340,10 @@ mod tests {
 
         let mentions = composer.mention_items();
         assert_eq!(mentions.len(), 3);
-        assert_eq!(mentions[0].category_tag, Some("[Skill]".to_string()));
+        assert_eq!(
+            mentions[0].category_tag,
+            Some("[Google Calendar]".to_string())
+        );
         assert_eq!(mentions[0].path, Some(skill_path.display().to_string()));
         assert_eq!(mentions[0].display_name, "Google Calendar".to_string());
         assert_eq!(mentions[1].category_tag, Some("[Plugin]".to_string()));
@@ -6409,6 +6425,7 @@ mod tests {
                     path_to_skills_md: test_path_buf("/tmp/repo/google-calendar/SKILL.md").abs(),
                     scope: crate::test_support::skill_scope_repo(),
                     plugin_id: None,
+                    plugin_display_name: None,
                 }]));
                 composer.set_plugin_mentions(Some(vec![PluginCapabilitySummary {
                 config_name: "google-calendar@debug".to_string(),

@@ -141,7 +141,7 @@ fn write_cached_remote_plugin_with_skill(
     std::fs::create_dir_all(plugin_root.join(".codex-plugin"))?;
     std::fs::write(
         plugin_root.join(".codex-plugin/plugin.json"),
-        r#"{"name":"linear"}"#,
+        r#"{"name":"linear","interface":{"displayName":"Linear"}}"#,
     )?;
 
     let skill_dir = plugin_root.join("skills/triage-issues");
@@ -332,6 +332,12 @@ async fn skills_list_loads_remote_installed_plugin_skills_from_cache() -> Result
         expected_skill_path
     );
     assert_eq!(skill.enabled, true);
+    let plugin = skill
+        .plugin
+        .as_ref()
+        .context("expected skill owner plugin")?;
+    assert_eq!(plugin.id, "linear@openai-curated-remote");
+    assert_eq!(plugin.display_name, "Linear");
     Ok(())
 }
 

@@ -94,6 +94,7 @@ impl ChatWidget {
                 Some(SkillsToggleItem {
                     name: display_name,
                     skill_name: name,
+                    source_label: core_skill.plugin_display_name,
                     description,
                     enabled: skill.enabled,
                     path,
@@ -250,7 +251,11 @@ fn protocol_skill_to_core(skill: &ProtocolSkillMetadata) -> Option<SkillMetadata
         policy: None,
         path_to_skills_md: skill.path.clone(),
         scope,
-        plugin_id: None,
+        plugin_id: skill.plugin.as_ref().map(|plugin| plugin.id.clone()),
+        plugin_display_name: skill
+            .plugin
+            .as_ref()
+            .map(|plugin| plugin.display_name.clone()),
     })
 }
 

@@ -23,6 +23,15 @@ fn skills_to_info(
         .iter()
         .map(|skill| {
             let enabled = !disabled_paths.contains(&skill.path_to_skills_md);
+            let plugin = skill.plugin_id.as_ref().map(|plugin_id| {
+                codex_app_server_protocol::SkillOwnerPlugin {
+                    id: plugin_id.clone(),
+                    display_name: skill
+                        .plugin_display_name
+                        .clone()
+                        .unwrap_or_else(|| plugin_id.clone()),
+                }
+            });
             codex_app_server_protocol::SkillMetadata {
                 name: skill.name.clone(),
                 description: skill.description.clone(),
@@ -56,6 +65,7 @@ fn skills_to_info(
                 path: skill.path_to_skills_md.clone(),
                 scope: skill.scope.into(),
                 enabled,
+                plugin,
             }
         })
         .collect()

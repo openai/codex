@@ -2569,6 +2569,7 @@ mod tests {
                 path_to_skills_md: test_path_buf("/tmp/test-skill/SKILL.md").abs(),
                 scope: crate::test_support::skill_scope_user(),
                 plugin_id: None,
+                plugin_display_name: None,
             }]),
         });
 

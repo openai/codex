@@ -25,6 +25,7 @@ use crate::render::renderable::Renderable;
 use crate::skills_helpers::match_skill;
 use crate::skills_helpers::truncate_skill_name;
 use crate::style::user_message_style;
+use codex_utils_fuzzy_match::fuzzy_match;
 
 use super::CancellationEvent;
 use super::bottom_pane_view::BottomPaneView;
@@ -39,6 +40,7 @@ const SEARCH_PROMPT_PREFIX: &str = "> ";
 pub(crate) struct SkillsToggleItem {
     pub name: String,
     pub skill_name: String,
+    pub source_label: Option<String>,
     pub description: String,
     pub enabled: bool,
     pub path: AbsolutePathBuf,
@@ -105,7 +107,13 @@ impl SkillsToggleView {
             let mut matches: Vec<(usize, i32)> = Vec::new();
             for (idx, item) in self.items.iter().enumerate() {
                 let display_name = item.name.as_str();
-                if let Some((_indices, score)) = match_skill(filter, display_name, &item.skill_name)
+                let source_match = item
+                    .source_label
+                    .as_deref()
+                    .and_then(|source_label| fuzzy_match(source_label, filter))
+                    .map(|(_indices, score)| (None, score));
+                if let Some((_indices, score)) =
+                    match_skill(filter, display_name, &item.skill_name).or(source_match)
                 {
                     matches.push((idx, score));
                 }
@@ -147,9 +155,14 @@ impl SkillsToggleView {
                     let marker = if item.enabled { 'x' } else { ' ' };
                     let item_name = truncate_skill_name(&item.name);
                     let name = format!("{prefix} [{marker}] {item_name}");
+                    let description = item
+                        .source_label
+                        .as_ref()
+                        .map(|source_label| format!("[{source_label}] {}", item.description))
+                        .unwrap_or_else(|| item.description.clone());
                     GenericDisplayRow {
                         name,
-                        description: Some(item.description.clone()),
+                        description: Some(description),
                         ..Default::default()
                     }
                 })
@@ -461,6 +474,7 @@ mod tests {
             SkillsToggleItem {
                 name: "Repo Scout".to_string(),
                 skill_name: "repo_scout".to_string(),
+                source_label: None,
                 description: "Summarize the repo layout".to_string(),
                 enabled: true,
                 path: test_path_buf("/tmp/skills/repo_scout.toml").abs(),
@@ -468,6 +482,7 @@ mod tests {
             SkillsToggleItem {
                 name: "Changelog Writer".to_string(),
                 skill_name: "changelog_writer".to_string(),
+                source_label: None,
                 description: "Draft release notes".to_string(),
                 enabled: false,
                 path: test_path_buf("/tmp/skills/changelog_writer.toml").abs(),
@@ -491,5 +506,29 @@ mod tests {
         assert!(rendered.contains("ctrl + x"));
         assert!(!rendered.contains("enter"));
         assert!(!rendered.contains("esc"));
+    }
+
+    #[test]
+    fn source_label_is_searchable_and_rendered() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut view = SkillsToggleView::new(
+            vec![SkillsToggleItem {
+                name: "Security Scan".to_string(),
+                skill_name: "security_scan".to_string(),
+                source_label: Some("Codex Security".to_string()),
+                description: "Run repository security scan".to_string(),
+                enabled: true,
+                path: test_path_buf("/tmp/skills/security_scan.toml").abs(),
+            }],
+            tx,
+            crate::keymap::RuntimeKeymap::defaults().list,
+        );
+
+        view.search_query = "Codex Security".to_string();
+        view.apply_filter();
+
+        assert_eq!(view.filtered_indices, vec![0]);
+        assert!(render_lines(&view, /*width*/ 72).contains("[Codex Security]"));
     }
 }

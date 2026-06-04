@@ -16,4 +16,5 @@ pub struct PluginSkillRoot {
     pub path: AbsolutePathBuf,
     pub plugin_id: String,
     pub plugin_root: AbsolutePathBuf,
+    pub plugin_display_name: String,
 }

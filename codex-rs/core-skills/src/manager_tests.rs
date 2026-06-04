@@ -67,6 +67,7 @@ fn plugin_skill_root_for_skill_path(skill_path: &Path, plugin_id: &str) -> Plugi
         path: skills_root.abs(),
         plugin_id: plugin_id.to_string(),
         plugin_root: plugin_root.abs(),
+        plugin_display_name: "Test Plugin".to_string(),
     }
 }
 
@@ -84,6 +85,7 @@ fn test_skill(name: &str, path: PathBuf) -> SkillMetadata {
             .expect("skill path should canonicalize"),
         scope: SkillScope::User,
         plugin_id: None,
+        plugin_display_name: None,
     }
 }
 

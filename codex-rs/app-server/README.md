@@ -1594,6 +1594,7 @@ $skill-creator Add a new skill for triaging flaky CI and include step-by-step us
 Use `skills/list` to fetch the available skills (optionally scoped by `cwds`, with `forceReload`).
 `skills/list` might reuse a cached skills result per `cwd`; setting `forceReload` to `true` refreshes the result from disk.
 The server also emits `skills/changed` notifications when watched local skill files change. Treat this as an invalidation signal and re-run `skills/list` with your current params when needed.
+Plugin-owned skills include a `plugin` owner object when the server can determine ownership. Clients should prefer this metadata over inferring ownership from skill paths.
 Use `skills/extraRoots/set` to replace additional standalone skill roots for the current app-server process. These roots use the same layout as other standalone skill roots: each root contains skill directories, and each skill directory contains `SKILL.md`. Missing roots are accepted and load no skills until they exist. This setting is lost when app-server exits.
 
 ```json
@@ -1622,6 +1623,17 @@ Use `skills/extraRoots/set` to replace additional standalone skill roots for the
         "errors": []
     }]
 } }
+```
+
+For plugin-owned skill entries, the skill object also includes the owning plugin:
+
+```json
+{
+  "plugin": {
+    "id": "linear@chatgpt-global",
+    "displayName": "Linear"
+  }
+}
 ```
 
 ```json

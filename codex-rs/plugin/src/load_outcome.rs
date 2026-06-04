@@ -124,12 +124,17 @@ impl<M: Clone> PluginLoadOutcome<M> {
         let mut skill_roots = Vec::new();
         let mut seen_paths = HashSet::new();
         for plugin in self.plugins.iter().filter(|plugin| plugin.is_active()) {
+            let plugin_display_name = plugin
+                .manifest_name
+                .clone()
+                .unwrap_or_else(|| plugin.config_name.clone());
             for path in &plugin.skill_roots {
                 if seen_paths.insert(path.clone()) {
                     skill_roots.push(PluginSkillRoot {
                         path: path.clone(),
                         plugin_id: plugin.config_name.clone(),
                         plugin_root: plugin.root.clone(),
+                        plugin_display_name: plugin_display_name.clone(),
                     });
                 }
             }
@@ -233,8 +238,10 @@ mod tests {
     #[test]
     fn effective_plugin_skill_roots_preserves_first_plugin_for_shared_root() {
         let shared_root = test_path("shared-skills");
+        let mut zeta = loaded_plugin("zeta@test", vec![shared_root.clone()]);
+        zeta.manifest_name = Some("Zeta Plugin".to_string());
         let outcome = PluginLoadOutcome::from_plugins(vec![
-            loaded_plugin("zeta@test", vec![shared_root.clone()]),
+            zeta,
             loaded_plugin("alpha@test", vec![shared_root.clone()]),
         ]);
 
@@ -244,6 +251,7 @@ mod tests {
                 path: shared_root,
                 plugin_id: "zeta@test".to_string(),
                 plugin_root: test_path("zeta@test"),
+                plugin_display_name: "Zeta Plugin".to_string(),
             }]
         );
     }

@@ -426,6 +426,18 @@ pub struct SkillMetadata {
     pub path: AbsolutePathBuf,
     pub scope: SkillScope,
     pub enabled: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    /// Plugin that owns this skill, when the skill is contributed by a plugin.
+    pub plugin: Option<SkillOwnerPlugin>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct SkillOwnerPlugin {
+    pub id: String,
+    pub display_name: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -804,6 +816,7 @@ impl From<CoreSkillMetadata> for SkillMetadata {
             path: value.path,
             scope: value.scope.into(),
             enabled: true,
+            plugin: None,
         }
     }
 }

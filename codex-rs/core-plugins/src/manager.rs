@@ -13,6 +13,7 @@ use crate::loader::load_plugin_skills;
 use crate::loader::load_plugins_from_layer_stack;
 use crate::loader::log_plugin_load_errors;
 use crate::loader::materialize_marketplace_plugin_source;
+use crate::loader::plugin_manifest_display_name;
 use crate::loader::plugin_telemetry_metadata_from_root;
 use crate::loader::refresh_curated_plugin_cache;
 use crate::loader::refresh_non_curated_plugin_cache;
@@ -1302,6 +1303,7 @@ impl PluginsManager {
         let resolved_skills = load_plugin_skills(
             &source_path,
             &plugin_id,
+            &plugin_manifest_display_name(&manifest),
             &manifest.paths,
             self.restriction_product,
             &codex_core_skills::config_rules::skill_config_rules_from_stack(
