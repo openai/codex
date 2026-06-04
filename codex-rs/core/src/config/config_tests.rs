@@ -8037,6 +8037,10 @@ async fn load_config_applies_otel_trace_metadata() -> std::io::Result<()> {
     let mut fixture = create_test_fixture()?;
     fixture.cfg = toml::from_str(
         r#"
+[otel.resource_attributes]
+"openai_cluster_kind" = "applied-devbox"
+"openai_cluster_name" = "devbox-1"
+
 [otel.span_attributes]
 "example.trace_attr" = "enabled"
 
@@ -8057,6 +8061,16 @@ beta = "two"
     )
     .await?;
 
+    assert_eq!(
+        config.otel.resource_attributes,
+        BTreeMap::from([
+            (
+                "openai_cluster_kind".to_string(),
+                "applied-devbox".to_string(),
+            ),
+            ("openai_cluster_name".to_string(), "devbox-1".to_string()),
+        ])
+    );
     assert_eq!(
         config.otel.span_attributes,
         BTreeMap::from([("example.trace_attr".to_string(), "enabled".to_string())])
@@ -8086,6 +8100,10 @@ environment = "test"
 "" = "missing-key"
 "example.trace_attr" = "enabled"
 
+[otel.resource_attributes]
+"" = "missing-key"
+"openai_cluster_name" = "devbox-1"
+
 [otel.tracestate.example]
 alpha = "one"
 beta = "two\ntoo"
@@ -8108,6 +8126,10 @@ alpha = "one\ntwo"
 
     assert_eq!(config.otel.environment, "test");
     assert_eq!(
+        config.otel.resource_attributes,
+        BTreeMap::from([("openai_cluster_name".to_string(), "devbox-1".to_string())])
+    );
+    assert_eq!(
         config.otel.span_attributes,
         BTreeMap::from([("example.trace_attr".to_string(), "enabled".to_string())])
     );
@@ -8117,6 +8139,14 @@ alpha = "one\ntwo"
             "example".to_string(),
             BTreeMap::from([("alpha".to_string(), "one".to_string())]),
         )])
+    );
+    assert!(
+        config.startup_warnings.iter().any(|warning| {
+            warning.contains("Ignoring invalid `otel.resource_attributes` config")
+                && warning.contains("configured resource attribute key must not be empty")
+        }),
+        "{:?}",
+        config.startup_warnings
     );
     assert!(
         config.startup_warnings.iter().any(|warning| {

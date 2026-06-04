@@ -89,9 +89,9 @@ impl OtelProvider {
         }
 
         // Provider setup installs process-global OTEL state that cannot be
-        // rolled back. Validate trace metadata before any setup path can
-        // mutate those globals, and keep span attribute checks aligned with
-        // config loading when traces are exported.
+        // rolled back. Validate configured metadata before any setup path can
+        // mutate those globals, and keep checks aligned with config loading.
+        crate::config::validate_resource_attributes(&settings.resource_attributes)?;
         if trace_enabled {
             crate::config::validate_span_attributes(&settings.span_attributes)?;
         }
@@ -232,6 +232,12 @@ fn resource_attributes(
         ),
         KeyValue::new(ENV_ATTRIBUTE, settings.environment.clone()),
     ];
+    attributes.extend(
+        settings
+            .resource_attributes
+            .iter()
+            .map(|(key, value)| KeyValue::new(key.clone(), value.clone())),
+    );
     if kind == ResourceKind::Logs
         && let Some(host_name) = host_name.and_then(normalize_host_name)
     {
@@ -510,6 +516,34 @@ mod tests {
     }
 
     #[test]
+    fn resource_attributes_include_configured_attributes_for_logs_and_traces() {
+        let mut settings = test_otel_settings();
+        settings.resource_attributes = BTreeMap::from([
+            (
+                "openai_cluster_kind".to_string(),
+                "applied-devbox".to_string(),
+            ),
+            ("openai_cluster_name".to_string(), "devbox-1".to_string()),
+        ]);
+
+        for kind in [ResourceKind::Logs, ResourceKind::Traces] {
+            let attrs = resource_attributes(&settings, Some("opentelemetry-test"), kind)
+                .into_iter()
+                .map(|kv| (kv.key.as_str().to_string(), kv.value.as_str().to_string()))
+                .collect::<BTreeMap<_, _>>();
+
+            assert_eq!(
+                attrs.get("openai_cluster_kind").map(String::as_str),
+                Some("applied-devbox")
+            );
+            assert_eq!(
+                attrs.get("openai_cluster_name").map(String::as_str),
+                Some("devbox-1")
+            );
+        }
+    }
+
+    #[test]
     fn log_export_target_excludes_trace_safe_events() {
         assert!(is_log_export_target("codex_otel.log_only"));
         assert!(is_log_export_target("codex_otel.network_proxy"));
@@ -535,6 +569,7 @@ mod tests {
             trace_exporter: OtelExporter::None,
             metrics_exporter: OtelExporter::None,
             runtime_metrics: false,
+            resource_attributes: BTreeMap::new(),
             span_attributes: BTreeMap::new(),
             tracestate: BTreeMap::new(),
         }

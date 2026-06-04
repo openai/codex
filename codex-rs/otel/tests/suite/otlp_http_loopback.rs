@@ -240,6 +240,7 @@ fn otel_provider_rejects_header_unsafe_configured_tracestate() {
         },
         metrics_exporter: OtelExporter::None,
         runtime_metrics: false,
+        resource_attributes: BTreeMap::new(),
         span_attributes: BTreeMap::new(),
         tracestate: BTreeMap::from([(
             "example".to_string(),
@@ -305,6 +306,7 @@ fn otlp_http_exporter_sends_traces_to_collector()
         },
         metrics_exporter: OtelExporter::None,
         runtime_metrics: false,
+        resource_attributes: BTreeMap::new(),
         span_attributes: BTreeMap::from([(
             "test.configured_attribute".to_string(),
             "configured-value".to_string(),
@@ -449,6 +451,7 @@ async fn otlp_http_exporter_sends_traces_to_collector_in_tokio_runtime()
         },
         metrics_exporter: OtelExporter::None,
         runtime_metrics: false,
+        resource_attributes: BTreeMap::new(),
         span_attributes: BTreeMap::new(),
         tracestate: BTreeMap::new(),
     })?
@@ -570,6 +573,7 @@ fn otlp_http_exporter_sends_traces_to_collector_in_current_thread_tokio_runtime(
                 },
                 metrics_exporter: OtelExporter::None,
                 runtime_metrics: false,
+                resource_attributes: BTreeMap::new(),
                 span_attributes: BTreeMap::new(),
                 tracestate: BTreeMap::new(),
             })

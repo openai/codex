@@ -2001,6 +2001,13 @@
           ],
           "description": "Optional metrics exporter"
         },
+        "resource_attributes": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Attributes to add to exported OTEL resources.",
+          "type": "object"
+        },
         "span_attributes": {
           "additionalProperties": {
             "type": "string"

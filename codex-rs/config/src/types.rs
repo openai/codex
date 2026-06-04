@@ -526,6 +526,9 @@ pub struct OtelConfigToml {
     /// Optional metrics exporter
     pub metrics_exporter: Option<OtelExporterKind>,
 
+    /// Attributes to add to exported OTEL resources.
+    pub resource_attributes: Option<BTreeMap<String, String>>,
+
     /// Attributes to add to every exported trace span.
     pub span_attributes: Option<BTreeMap<String, String>>,
 
@@ -541,6 +544,7 @@ pub struct OtelConfig {
     pub exporter: OtelExporterKind,
     pub trace_exporter: OtelExporterKind,
     pub metrics_exporter: OtelExporterKind,
+    pub resource_attributes: BTreeMap<String, String>,
     pub span_attributes: BTreeMap<String, String>,
     pub tracestate: BTreeMap<String, BTreeMap<String, String>>,
 }
@@ -553,6 +557,7 @@ impl Default for OtelConfig {
             exporter: OtelExporterKind::None,
             trace_exporter: OtelExporterKind::None,
             metrics_exporter: OtelExporterKind::Statsig,
+            resource_attributes: BTreeMap::new(),
             span_attributes: BTreeMap::new(),
             tracestate: BTreeMap::new(),
         }

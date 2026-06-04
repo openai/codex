@@ -55,6 +55,7 @@ fn build_wfp_metrics_provider(
         trace_exporter: OtelExporter::None,
         metrics_exporter: OtelExporter::Statsig,
         runtime_metrics: false,
+        resource_attributes: BTreeMap::new(),
         span_attributes: BTreeMap::new(),
         tracestate: BTreeMap::new(),
     })

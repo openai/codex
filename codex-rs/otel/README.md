@@ -39,6 +39,7 @@ let settings = OtelSettings {
         tls: None,
     },
     metrics_exporter: OtelExporter::None,
+    resource_attributes: std::collections::BTreeMap::new(),
     span_attributes: std::collections::BTreeMap::new(),
     tracestate: std::collections::BTreeMap::new(),
 };
@@ -51,10 +52,14 @@ if let Some(provider) = OtelProvider::from(&settings)? {
 }
 ```
 
-Configured span attributes and W3C tracestate member fields are applied to
-exported trace spans and propagated trace context:
+Configured resource attributes are applied to exported OTEL resources. Configured
+span attributes and W3C tracestate member fields are applied to exported trace
+spans and propagated trace context:
 
 ```toml
+[otel.resource_attributes]
+"example.resource_attr" = "enabled"
+
 [otel.span_attributes]
 "example.trace_attr" = "enabled"
 

@@ -22,6 +22,8 @@ pub(crate) fn resolve_config(
     // Provider initialization installs process-global OTEL state. Sanitize
     // user-editable trace metadata here so malformed config is reported as a
     // startup warning instead of making startup fail.
+    let resource_attributes =
+        resolve_resource_attributes(config.resource_attributes, startup_warnings);
     let span_attributes = resolve_span_attributes(config.span_attributes, startup_warnings);
     let tracestate = resolve_tracestate(config.tracestate, startup_warnings);
 
@@ -31,9 +33,31 @@ pub(crate) fn resolve_config(
         exporter,
         trace_exporter,
         metrics_exporter,
+        resource_attributes,
         span_attributes,
         tracestate,
     }
+}
+
+fn resolve_resource_attributes(
+    resource_attributes: Option<BTreeMap<String, String>>,
+    startup_warnings: &mut Vec<String>,
+) -> BTreeMap<String, String> {
+    let Some(resource_attributes) = resource_attributes else {
+        return BTreeMap::new();
+    };
+
+    let mut valid_attributes = BTreeMap::new();
+    for (key, value) in resource_attributes {
+        let attribute = BTreeMap::from([(key.clone(), value.clone())]);
+        if let Err(err) = codex_otel::validate_resource_attributes(&attribute) {
+            push_invalid_config_warning("otel.resource_attributes", err, startup_warnings);
+            continue;
+        }
+        valid_attributes.insert(key, value);
+    }
+
+    valid_attributes
 }
 
 fn resolve_span_attributes(
