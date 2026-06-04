@@ -73,72 +73,84 @@ jobs:
             platform: linux_amd64
             sandbox: false
             target: x86_64-unknown-linux-gnu
+            v8_cpu: x64
             variant: release
           - runner: ubuntu-24.04
             bazel_config: ci-v8
             platform: linux_amd64
             sandbox: true
             target: x86_64-unknown-linux-gnu
+            v8_cpu: x64
             variant: ptrcomp-sandbox
           - runner: ubuntu-24.04-arm
             bazel_config: ci-v8
             platform: linux_arm64
             sandbox: false
             target: aarch64-unknown-linux-gnu
+            v8_cpu: arm64
             variant: release
           - runner: ubuntu-24.04-arm
             bazel_config: ci-v8
             platform: linux_arm64
             sandbox: true
             target: aarch64-unknown-linux-gnu
+            v8_cpu: arm64
             variant: ptrcomp-sandbox
           - runner: macos-15-xlarge
             bazel_config: ci-macos
             platform: macos_amd64
             sandbox: false
             target: x86_64-apple-darwin
+            v8_cpu: x64
             variant: release
           - runner: macos-15-xlarge
             bazel_config: ci-macos
             platform: macos_amd64
             sandbox: true
             target: x86_64-apple-darwin
+            v8_cpu: x64
             variant: ptrcomp-sandbox
           - runner: macos-15-xlarge
             bazel_config: ci-macos
             platform: macos_arm64
             sandbox: false
             target: aarch64-apple-darwin
+            v8_cpu: arm64
             variant: release
           - runner: macos-15-xlarge
             bazel_config: ci-macos
             platform: macos_arm64
             sandbox: true
             target: aarch64-apple-darwin
+            v8_cpu: arm64
             variant: ptrcomp-sandbox
           - runner: ubuntu-24.04
             bazel_config: ci-v8
             platform: linux_amd64_musl
             sandbox: false
             target: x86_64-unknown-linux-musl
+            v8_cpu: x64
             variant: release
           - runner: ubuntu-24.04-arm
             bazel_config: ci-v8
             platform: linux_arm64_musl
             sandbox: false
             target: aarch64-unknown-linux-musl
+            v8_cpu: arm64
             variant: release
           - runner: ubuntu-24.04
             bazel_config: ci-v8
             platform: linux_amd64_musl
             sandbox: true
             target: x86_64-unknown-linux-musl
+            v8_cpu: x64
             variant: ptrcomp-sandbox
           - runner: ubuntu-24.04-arm
             bazel_config: ci-v8
             platform: linux_arm64_musl
             sandbox: true
             target: aarch64-unknown-linux-musl
+            v8_cpu: arm64
             variant: ptrcomp-sandbox
 
     steps:
@@ -167,6 +179,7 @@ jobs:
           PLATFORM: ${{ matrix.platform }}
           SANDBOX: ${{ matrix.sandbox }}
           TARGET: ${{ matrix.target }}
+          V8_CPU: ${{ matrix.v8_cpu }}
         shell: bash
         run: |
           set -euo pipefail
@@ -184,6 +197,7 @@ jobs:
             opt
             "--platforms=@llvm//platforms:${PLATFORM}"
             --config=rusty-v8-upstream-libcxx
+            "--config=v8-target-${V8_CPU}"
             "${pair_target}"
             --build_metadata=COMMIT_SHA=$(git rev-parse HEAD)
           )
@@ -203,6 +217,7 @@ jobs:
           PLATFORM: ${{ matrix.platform }}
           SANDBOX: ${{ matrix.sandbox }}
           TARGET: ${{ matrix.target }}
+          V8_CPU: ${{ matrix.v8_cpu }}
         shell: bash
         run: |
           set -euo pipefail
@@ -213,6 +228,7 @@ jobs:
             --compilation-mode opt
             --output-dir "dist/${TARGET}"
             --bazel-config "${BAZEL_CONFIG}"
+            --bazel-config "v8-target-${V8_CPU}"
           )
           if [[ "${SANDBOX}" == "true" ]]; then
             stage_args+=(--sandbox)
