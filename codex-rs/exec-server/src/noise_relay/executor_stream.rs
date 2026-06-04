@@ -154,8 +154,7 @@ pub(super) fn spawn_noise_virtual_stream(
         };
         let reset =
             RelayMessageFrame::reset(writer_stream_id, NOISE_RELAY_RESET_REASON.to_string());
-        let _ = physical_outgoing_tx
-            .try_send(encode_relay_message_frame(&reset));
+        let _ = physical_outgoing_tx.try_send(encode_relay_message_frame(&reset));
         let _ = closed_stream_tx.send(closed_stream).await;
     });
 

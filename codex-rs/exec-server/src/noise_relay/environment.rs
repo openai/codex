@@ -395,6 +395,5 @@ fn send_reset(physical_outgoing_tx: &mpsc::Sender<Vec<u8>>, stream_id: String) {
     let reset = RelayMessageFrame::reset(stream_id, NOISE_RELAY_RESET_REASON.to_string());
     // Resets are best effort. Untrusted relay input must never block the shared
     // state machine behind an overloaded physical writer queue.
-    let _ = physical_outgoing_tx
-        .try_send(encode_relay_message_frame(&reset));
+    let _ = physical_outgoing_tx.try_send(encode_relay_message_frame(&reset));
 }
