@@ -1301,6 +1301,76 @@ async fn load_plugins_returns_empty_when_feature_disabled() {
 }
 
 #[tokio::test]
+async fn plugin_cache_ignores_unrelated_session_overrides() {
+    let codex_home = TempDir::new().unwrap();
+    let plugin_root = codex_home
+        .path()
+        .join("plugins/cache")
+        .join("test/sample/local");
+    write_plugin(
+        codex_home.path().join("plugins/cache/test").as_path(),
+        "sample/local",
+        "sample",
+    );
+    write_file(
+        &plugin_root.join(".mcp.json"),
+        r#"{
+  "mcpServers": {
+    "sample": {
+      "url": "https://sample.example/mcp"
+    }
+  }
+}"#,
+    );
+
+    let user_file = codex_home.path().join(CONFIG_TOML_FILE).abs();
+    let user_config: toml::Value = toml::from_str(&plugin_config_toml(
+        /*enabled*/ true, /*plugins_feature_enabled*/ true,
+    ))
+    .expect("user config should parse");
+    let stack = |session_config: &str| {
+        ConfigLayerStack::new(
+            vec![
+                ConfigLayerEntry::new(
+                    ConfigLayerSource::User {
+                        file: user_file.clone(),
+                        profile: None,
+                    },
+                    user_config.clone(),
+                ),
+                ConfigLayerEntry::new(
+                    ConfigLayerSource::SessionFlags,
+                    toml::from_str(session_config).expect("session config should parse"),
+                ),
+            ],
+            ConfigRequirements::default(),
+            ConfigRequirementsToml::default(),
+        )
+        .expect("config layer stack should build")
+    };
+    let config = |session_config| {
+        PluginsConfigInput::new(
+            stack(session_config),
+            /*plugins_enabled*/ true,
+            /*remote_plugin_enabled*/ false,
+            "https://chatgpt.com".to_string(),
+        )
+    };
+    let manager = PluginsManager::new(codex_home.path().to_path_buf());
+
+    let first = manager
+        .plugins_for_config(&config(r#"model = "first""#))
+        .await;
+    std::fs::remove_file(plugin_root.join(".mcp.json")).unwrap();
+    let second = manager
+        .plugins_for_config(&config(r#"model = "second""#))
+        .await;
+
+    assert_eq!(second, first);
+    assert_eq!(second.plugins()[0].mcp_servers.len(), 1);
+}
+
+#[tokio::test]
 async fn load_plugins_rejects_invalid_plugin_keys() {
     let codex_home = TempDir::new().unwrap();
     let plugin_root = codex_home

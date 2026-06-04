@@ -57,8 +57,9 @@ use codex_config::apply_user_plugin_config_edits;
 use codex_config::clear_user_plugin;
 use codex_config::set_user_plugin_enabled;
 use codex_config::types::PluginConfig;
-use codex_config::version_for_toml;
 use codex_core_skills::SkillMetadata;
+use codex_core_skills::config_rules::SkillConfigRules;
+use codex_core_skills::config_rules::skill_config_rules_from_stack;
 use codex_hooks::plugin_hook_declarations;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
@@ -77,6 +78,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::RwLock;
 use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::time::Instant;
 use tokio::sync::Semaphore;
@@ -404,6 +406,8 @@ pub struct PluginsManager {
     configured_marketplace_upgrade_state: RwLock<ConfiguredMarketplaceUpgradeState>,
     non_curated_cache_refresh_state: RwLock<NonCuratedCacheRefreshState>,
     cached_enabled_outcome: RwLock<Option<CachedPluginLoadOutcome>>,
+    enabled_outcome_load_semaphore: Semaphore,
+    enabled_outcome_cache_generation: AtomicU64,
     remote_installed_plugins_cache: RwLock<Option<Vec<RemoteInstalledPlugin>>>,
     remote_installed_plugins_cache_refresh_state: RwLock<RemoteInstalledPluginsCacheRefreshState>,
     remote_sync_lock: Semaphore,
@@ -413,8 +417,15 @@ pub struct PluginsManager {
 
 #[derive(Clone)]
 struct CachedPluginLoadOutcome {
-    config_version: String,
+    key: PluginLoadCacheKey,
     outcome: PluginLoadOutcome,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct PluginLoadCacheKey {
+    configured_plugins: HashMap<String, PluginConfig>,
+    skill_config_rules: SkillConfigRules,
+    remote_plugin_enabled: bool,
 }
 
 impl PluginsManager {
@@ -442,6 +453,8 @@ impl PluginsManager {
             ),
             non_curated_cache_refresh_state: RwLock::new(NonCuratedCacheRefreshState::default()),
             cached_enabled_outcome: RwLock::new(None),
+            enabled_outcome_load_semaphore: Semaphore::new(/*permits*/ 1),
+            enabled_outcome_cache_generation: AtomicU64::new(0),
             remote_installed_plugins_cache: RwLock::new(None),
             remote_installed_plugins_cache_refresh_state: RwLock::new(
                 RemoteInstalledPluginsCacheRefreshState::default(),
@@ -484,11 +497,25 @@ impl PluginsManager {
             return PluginLoadOutcome::default();
         }
 
-        let config_version = version_for_toml(&config.config_layer_stack.effective_config());
-        if !force_reload && let Some(outcome) = self.cached_enabled_outcome(&config_version) {
+        let cache_key = PluginLoadCacheKey {
+            configured_plugins: configured_plugins_from_stack(&config.config_layer_stack),
+            skill_config_rules: skill_config_rules_from_stack(&config.config_layer_stack),
+            remote_plugin_enabled: config.remote_plugin_enabled,
+        };
+        if !force_reload && let Some(outcome) = self.cached_enabled_outcome(&cache_key) {
             return outcome;
         }
 
+        let Ok(_load_permit) = self.enabled_outcome_load_semaphore.acquire().await else {
+            warn!("plugin load semaphore closed");
+            return PluginLoadOutcome::default();
+        };
+        if !force_reload && let Some(outcome) = self.cached_enabled_outcome(&cache_key) {
+            return outcome;
+        }
+        let cache_generation = self
+            .enabled_outcome_cache_generation
+            .load(Ordering::Acquire);
         let outcome = load_plugins_from_layer_stack(
             &config.config_layer_stack,
             self.remote_installed_plugin_configs(),
@@ -498,14 +525,20 @@ impl PluginsManager {
         )
         .await;
         log_plugin_load_errors(&outcome);
-        let mut cache = match self.cached_enabled_outcome.write() {
-            Ok(cache) => cache,
-            Err(err) => err.into_inner(),
-        };
-        *cache = Some(CachedPluginLoadOutcome {
-            config_version,
-            outcome: outcome.clone(),
-        });
+        if self
+            .enabled_outcome_cache_generation
+            .load(Ordering::Acquire)
+            == cache_generation
+        {
+            let mut cache = match self.cached_enabled_outcome.write() {
+                Ok(cache) => cache,
+                Err(err) => err.into_inner(),
+            };
+            *cache = Some(CachedPluginLoadOutcome {
+                key: cache_key,
+                outcome: outcome.clone(),
+            });
+        }
         outcome
     }
 
@@ -519,6 +552,8 @@ impl PluginsManager {
     }
 
     fn clear_enabled_outcome_cache(&self) {
+        self.enabled_outcome_cache_generation
+            .fetch_add(1, Ordering::AcqRel);
         let mut cached_enabled_outcome = match self.cached_enabled_outcome.write() {
             Ok(cache) => cache,
             Err(err) => err.into_inner(),
@@ -574,16 +609,16 @@ impl PluginsManager {
             .effective_plugin_skill_roots()
     }
 
-    fn cached_enabled_outcome(&self, config_version: &str) -> Option<PluginLoadOutcome> {
+    fn cached_enabled_outcome(&self, key: &PluginLoadCacheKey) -> Option<PluginLoadOutcome> {
         match self.cached_enabled_outcome.read() {
             Ok(cache) => cache
                 .as_ref()
-                .filter(|cached| cached.config_version == config_version)
+                .filter(|cached| cached.key == *key)
                 .map(|cached| cached.outcome.clone()),
             Err(err) => err
                 .into_inner()
                 .as_ref()
-                .filter(|cached| cached.config_version == config_version)
+                .filter(|cached| cached.key == *key)
                 .map(|cached| cached.outcome.clone()),
         }
     }
