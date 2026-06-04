@@ -546,7 +546,7 @@ impl PluginsManager {
     }
 
     /// Resolve plugin hooks for a config layer stack without loading other plugin capabilities.
-    pub fn plugin_hooks_for_layer_stack(
+    pub async fn plugin_hooks_for_layer_stack(
         &self,
         config_layer_stack: &ConfigLayerStack,
         config: &PluginsConfigInput,
@@ -560,6 +560,7 @@ impl PluginsManager {
             &self.store,
             config.remote_plugin_enabled,
         )
+        .await
     }
 
     /// Resolve plugin skill roots for a config layer stack without touching the plugins cache.

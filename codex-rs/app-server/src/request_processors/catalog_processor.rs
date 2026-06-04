@@ -649,6 +649,7 @@ impl CatalogRequestProcessor {
                 let plugins_input = config.plugins_config_input();
                 plugins_manager
                     .plugin_hooks_for_layer_stack(&config.config_layer_stack, &plugins_input)
+                    .await
             } else {
                 codex_core_plugins::PluginHookLoadOutcome::default()
             };

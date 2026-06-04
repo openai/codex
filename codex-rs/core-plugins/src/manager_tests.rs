@@ -3895,7 +3895,8 @@ async fn plugin_hooks_for_layer_stack_loads_configured_plugin_hooks() {
     let config = load_config(codex_home.path(), codex_home.path()).await;
 
     let outcome = PluginsManager::new(codex_home.path().to_path_buf())
-        .plugin_hooks_for_layer_stack(&config.config_layer_stack, &config);
+        .plugin_hooks_for_layer_stack(&config.config_layer_stack, &config)
+        .await;
 
     assert_eq!(outcome.hook_sources.len(), 1);
     assert_eq!(
