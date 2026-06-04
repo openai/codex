@@ -52,9 +52,7 @@ pub(crate) fn load_platform_native_certs() -> CertificateResult {
         for cert in iter {
             let der = cert.to_der();
             let trusted = match ts.tls_trust_settings_for_certificate(&cert) {
-                Ok(Some(trusted)) => trusted,
-                Ok(None) if *domain == Domain::System => TrustSettingsForCertificate::TrustRoot,
-                Ok(None) => continue,
+                Ok(trusted) => trusted.unwrap_or(TrustSettingsForCertificate::TrustRoot),
                 Err(err) => {
                     result.errors.push(Error {
                         context: "certificate not trusted",
