@@ -8,11 +8,18 @@ use core_test_support::responses::ev_apply_patch_shell_command_call_via_heredoc;
 use core_test_support::responses::ev_shell_command_call;
 use core_test_support::test_codex::ApplyPatchModelOutput;
 use pretty_assertions::assert_eq;
+use std::fs;
+use std::path::PathBuf;
 use std::sync::atomic::AtomicI32;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 use codex_exec_server::CreateDirectoryOptions;
+use codex_exec_server::LOCAL_ENVIRONMENT_ID;
+use codex_exec_server::REMOTE_ENVIRONMENT_ID;
+use codex_exec_server::RemoveOptions;
 use codex_features::Feature;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemAccessMode;
@@ -25,11 +32,15 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::user_input::UserInput;
 #[cfg(target_os = "linux")]
 use codex_sandboxing::landlock::CODEX_LINUX_SANDBOX_ARG0;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use core_test_support::PathBufExt;
+use core_test_support::PathExt;
 use core_test_support::assert_regex_match;
+use core_test_support::get_remote_test_env;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
@@ -37,14 +48,17 @@ use core_test_support::responses::ev_response_created;
 use core_test_support::responses::ev_shell_command_call_with_args;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
+use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::skip_if_remote;
 use core_test_support::test_codex::TestCodexBuilder;
 use core_test_support::test_codex::TestCodexHarness;
 use core_test_support::test_codex::test_codex;
+use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_with_timeout;
 use serde_json::json;
+use tempfile::TempDir;
 use wiremock::Mock;
 use wiremock::Respond;
 use wiremock::ResponseTemplate;
@@ -1550,6 +1564,138 @@ async fn apply_patch_emits_turn_diff_event_with_unified_diff() -> Result<()> {
     assert!(diff.contains("diff --git"), "diff header missing: {diff:?}");
     assert!(diff.contains("--- /dev/null") || diff.contains("--- a/"));
     assert!(diff.contains("+++ b/"));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn apply_patch_turn_diff_tracks_local_and_remote_environment_paths() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let Some(_remote_env) = get_remote_test_env() else {
+        return Ok(());
+    };
+
+    let server = start_mock_server().await;
+    let mut builder = test_codex();
+    let test = builder.build_with_remote_and_local_env(&server).await?;
+    let local_cwd = TempDir::new()?;
+    let file_name = "shared-turn-diff.txt";
+    let remote_cwd = PathBuf::from(format!(
+        "/tmp/codex-remote-turn-diff-{}",
+        SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis()
+    ))
+    .abs();
+    test.fs()
+        .create_directory(
+            &remote_cwd,
+            CreateDirectoryOptions { recursive: true },
+            /*sandbox*/ None,
+        )
+        .await?;
+
+    let local_patch = format!(
+        "*** Begin Patch\n*** Environment ID: {LOCAL_ENVIRONMENT_ID}\n*** Add File: {file_name}\n+local\n*** End Patch"
+    );
+    let remote_patch = format!(
+        "*** Begin Patch\n*** Environment ID: {REMOTE_ENVIRONMENT_ID}\n*** Add File: {file_name}\n+remote\n*** End Patch"
+    );
+    mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-local"),
+                ev_apply_patch_custom_tool_call("call-local", &local_patch),
+                ev_completed("resp-local"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-remote"),
+                ev_apply_patch_custom_tool_call("call-remote", &remote_patch),
+                ev_completed("resp-remote"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-done"),
+                ev_assistant_message("msg-done", "done"),
+                ev_completed("resp-done"),
+            ]),
+        ],
+    )
+    .await;
+
+    let (sandbox_policy, permission_profile) =
+        turn_permission_fields(PermissionProfile::Disabled, test.config.cwd.as_path());
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "apply matching patches to local and remote environments".into(),
+                text_elements: Vec::new(),
+            }],
+            environments: Some(vec![
+                TurnEnvironmentSelection {
+                    environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
+                    cwd: local_cwd.path().abs(),
+                },
+                TurnEnvironmentSelection {
+                    environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
+                    cwd: remote_cwd.clone(),
+                },
+            ]),
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+                cwd: Some(test.config.cwd.to_path_buf()),
+                approval_policy: Some(AskForApproval::Never),
+                sandbox_policy: Some(sandbox_policy),
+                permission_profile,
+                collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
+                    mode: codex_protocol::config_types::ModeKind::Default,
+                    settings: codex_protocol::config_types::Settings {
+                        model: test.session_configured.model.clone(),
+                        reasoning_effort: None,
+                        developer_instructions: None,
+                    },
+                }),
+                ..Default::default()
+            },
+        })
+        .await?;
+
+    let mut last_diff = None;
+    wait_for_event(&test.codex, |event| match event {
+        EventMsg::TurnDiff(ev) => {
+            last_diff = Some(ev.unified_diff.clone());
+            false
+        }
+        EventMsg::TurnComplete(_) => true,
+        _ => false,
+    })
+    .await;
+
+    assert_eq!(
+        fs::read_to_string(local_cwd.path().join(file_name))?,
+        "local\n"
+    );
+    assert_eq!(
+        test.fs()
+            .read_file_text(&remote_cwd.join(file_name), /*sandbox*/ None)
+            .await?,
+        "remote\n"
+    );
+    let diff = last_diff.expect("expected TurnDiff event");
+    assert!(diff.contains("shared-turn-diff.txt"), "{diff}");
+    assert!(diff.contains("+local\n"), "{diff}");
+    assert!(diff.contains("+remote\n"), "{diff}");
+
+    test.fs()
+        .remove(
+            &remote_cwd,
+            RemoveOptions {
+                recursive: true,
+                force: true,
+            },
+            /*sandbox*/ None,
+        )
+        .await?;
+
     Ok(())
 }
 

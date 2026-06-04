@@ -70,16 +70,25 @@ pub(crate) enum ToolEventFailure<'a> {
 }
 
 enum TurnDiffTrackerUpdate<'a> {
-    Track(&'a AppliedPatchDelta),
+    Track {
+        environment_id: Option<String>,
+        delta: &'a AppliedPatchDelta,
+    },
     Invalidate,
     None,
 }
 
-fn tracker_update_for_known_delta(delta: &AppliedPatchDelta) -> TurnDiffTrackerUpdate<'_> {
+fn tracker_update_for_known_delta<'a>(
+    environment_id: Option<&str>,
+    delta: &'a AppliedPatchDelta,
+) -> TurnDiffTrackerUpdate<'a> {
     if delta.is_exact() && delta.is_empty() {
         TurnDiffTrackerUpdate::None
     } else {
-        TurnDiffTrackerUpdate::Track(delta)
+        TurnDiffTrackerUpdate::Track {
+            environment_id: environment_id.map(str::to_string),
+            delta,
+        }
     }
 }
 
@@ -120,6 +129,7 @@ pub(crate) enum ToolEmitter {
     ApplyPatch {
         changes: HashMap<PathBuf, FileChange>,
         auto_approved: bool,
+        environment_id: Option<String>,
     },
     UnifiedExec {
         command: Vec<String>,
@@ -141,10 +151,24 @@ impl ToolEmitter {
         }
     }
 
+    #[cfg(test)]
     pub fn apply_patch(changes: HashMap<PathBuf, FileChange>, auto_approved: bool) -> Self {
         Self::ApplyPatch {
             changes,
             auto_approved,
+            environment_id: None,
+        }
+    }
+
+    pub fn apply_patch_for_environment(
+        changes: HashMap<PathBuf, FileChange>,
+        auto_approved: bool,
+        environment_id: String,
+    ) -> Self {
+        Self::ApplyPatch {
+            changes,
+            auto_approved,
+            environment_id: Some(environment_id),
         }
     }
 
@@ -210,7 +234,11 @@ impl ToolEmitter {
                     .await;
             }
             (
-                Self::ApplyPatch { changes, .. },
+                Self::ApplyPatch {
+                    changes,
+                    environment_id,
+                    ..
+                },
                 ToolEventStage::Success {
                     output,
                     applied_patch_delta,
@@ -222,7 +250,7 @@ impl ToolEmitter {
                     PatchApplyStatus::Failed
                 };
                 let tracker_update = applied_patch_delta
-                    .map(tracker_update_for_known_delta)
+                    .map(|delta| tracker_update_for_known_delta(environment_id.as_deref(), delta))
                     .unwrap_or(TurnDiffTrackerUpdate::Invalidate);
                 emit_patch_end(
                     ctx,
@@ -267,7 +295,11 @@ impl ToolEmitter {
                 .await;
             }
             (
-                Self::ApplyPatch { changes, .. },
+                Self::ApplyPatch {
+                    changes,
+                    environment_id,
+                    ..
+                },
                 ToolEventStage::Failure(ToolEventFailure::Rejected {
                     message,
                     applied_patch_delta,
@@ -280,7 +312,9 @@ impl ToolEmitter {
                     (*message).to_string(),
                     PatchApplyStatus::Declined,
                     applied_patch_delta
-                        .map(tracker_update_for_known_delta)
+                        .map(|delta| {
+                            tracker_update_for_known_delta(environment_id.as_deref(), delta)
+                        })
                         .unwrap_or(TurnDiffTrackerUpdate::None),
                 )
                 .await;
@@ -565,8 +599,11 @@ async fn emit_patch_end(
             let mut guard = tracker.lock().await;
             let previous_diff = guard.get_unified_diff();
             let tracker_changed = match tracker_update {
-                TurnDiffTrackerUpdate::Track(delta) => {
-                    guard.track_delta(delta);
+                TurnDiffTrackerUpdate::Track {
+                    environment_id,
+                    delta,
+                } => {
+                    guard.track_delta(environment_id.as_deref().unwrap_or_default(), delta);
                     true
                 }
                 TurnDiffTrackerUpdate::Invalidate => {

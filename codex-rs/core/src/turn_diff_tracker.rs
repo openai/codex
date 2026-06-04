@@ -13,21 +13,36 @@ const ZERO_OID: &str = "0000000000000000000000000000000000000000";
 const DEV_NULL: &str = "/dev/null";
 const REGULAR_FILE_MODE: &str = "100644";
 
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct TrackedPath {
+    environment_id: String,
+    path: PathBuf,
+}
+
+impl TrackedPath {
+    fn new(environment_id: &str, path: &Path) -> Self {
+        Self {
+            environment_id: environment_id.to_string(),
+            path: path.to_path_buf(),
+        }
+    }
+}
+
 /// Tracks the net text diff for the current turn from committed apply_patch
 /// mutations, without rereading the workspace filesystem.
 pub struct TurnDiffTracker {
     valid: bool,
-    display_root: Option<PathBuf>,
-    baseline_by_path: HashMap<PathBuf, String>,
-    current_by_path: HashMap<PathBuf, String>,
-    origin_by_current_path: HashMap<PathBuf, PathBuf>,
+    display_roots_by_environment: HashMap<String, PathBuf>,
+    baseline_by_path: HashMap<TrackedPath, String>,
+    current_by_path: HashMap<TrackedPath, String>,
+    origin_by_current_path: HashMap<TrackedPath, TrackedPath>,
 }
 
 impl Default for TurnDiffTracker {
     fn default() -> Self {
         Self {
             valid: true,
-            display_root: None,
+            display_roots_by_environment: HashMap::new(),
             baseline_by_path: HashMap::new(),
             current_by_path: HashMap::new(),
             origin_by_current_path: HashMap::new(),
@@ -40,20 +55,22 @@ impl TurnDiffTracker {
         Self::default()
     }
 
-    pub fn with_display_root(display_root: PathBuf) -> Self {
+    pub fn with_environment_display_roots(
+        display_roots: impl IntoIterator<Item = (String, PathBuf)>,
+    ) -> Self {
         let mut tracker = Self::new();
-        tracker.display_root = Some(display_root);
+        tracker.display_roots_by_environment = display_roots.into_iter().collect();
         tracker
     }
 
-    pub fn track_delta(&mut self, delta: &AppliedPatchDelta) {
+    pub fn track_delta(&mut self, environment_id: &str, delta: &AppliedPatchDelta) {
         if !delta.is_exact() {
             self.invalidate();
             return;
         }
 
         for change in delta.changes() {
-            self.apply_change(change);
+            self.apply_change(environment_id, change);
         }
     }
 
@@ -106,8 +123,8 @@ impl TurnDiffTracker {
         (!aggregated.is_empty()).then_some(aggregated)
     }
 
-    fn apply_change(&mut self, change: &AppliedPatchChange) {
-        let source_path = change.path.as_path();
+    fn apply_change(&mut self, environment_id: &str, change: &AppliedPatchChange) {
+        let source_path = TrackedPath::new(environment_id, change.path.as_path());
         match &change.change {
             AppliedPatchFileChange::Add {
                 content,
@@ -119,85 +136,87 @@ impl TurnDiffTracker {
                 old_content,
                 overwritten_move_content,
                 new_content,
-            } => self.apply_update(
-                source_path,
-                move_path.as_deref(),
-                old_content,
-                overwritten_move_content.as_deref(),
-                new_content,
-            ),
+            } => {
+                let move_path = move_path
+                    .as_deref()
+                    .map(|path| TrackedPath::new(environment_id, path));
+                self.apply_update(
+                    source_path,
+                    move_path,
+                    old_content,
+                    overwritten_move_content.as_deref(),
+                    new_content,
+                )
+            }
         }
     }
 
-    fn apply_add(&mut self, path: &Path, content: &str, overwritten_content: Option<&str>) {
-        self.origin_by_current_path.remove(path);
-        if !self.current_by_path.contains_key(path)
-            && !self.baseline_by_path.contains_key(path)
+    fn apply_add(&mut self, path: TrackedPath, content: &str, overwritten_content: Option<&str>) {
+        self.origin_by_current_path.remove(&path);
+        if !self.current_by_path.contains_key(&path)
+            && !self.baseline_by_path.contains_key(&path)
             && let Some(overwritten_content) = overwritten_content
         {
             self.baseline_by_path
-                .insert(path.to_path_buf(), overwritten_content.to_string());
+                .insert(path.clone(), overwritten_content.to_string());
         }
-        self.current_by_path
-            .insert(path.to_path_buf(), content.to_string());
+        self.current_by_path.insert(path, content.to_string());
     }
 
-    fn apply_delete(&mut self, path: &Path, content: &str) {
-        if self.current_by_path.remove(path).is_none() && !self.baseline_by_path.contains_key(path)
+    fn apply_delete(&mut self, path: TrackedPath, content: &str) {
+        if self.current_by_path.remove(&path).is_none()
+            && !self.baseline_by_path.contains_key(&path)
         {
             self.baseline_by_path
-                .insert(path.to_path_buf(), content.to_string());
+                .insert(path.clone(), content.to_string());
         }
-        self.origin_by_current_path.remove(path);
+        self.origin_by_current_path.remove(&path);
     }
 
     fn apply_update(
         &mut self,
-        source_path: &Path,
-        move_path: Option<&Path>,
+        source_path: TrackedPath,
+        move_path: Option<TrackedPath>,
         old_content: &str,
         overwritten_move_content: Option<&str>,
         new_content: &str,
     ) {
-        if !self.current_by_path.contains_key(source_path)
-            && !self.baseline_by_path.contains_key(source_path)
+        if !self.current_by_path.contains_key(&source_path)
+            && !self.baseline_by_path.contains_key(&source_path)
         {
             self.baseline_by_path
-                .insert(source_path.to_path_buf(), old_content.to_string());
+                .insert(source_path.clone(), old_content.to_string());
         }
 
         match move_path {
             Some(dest_path) => {
-                if !self.current_by_path.contains_key(dest_path)
-                    && !self.baseline_by_path.contains_key(dest_path)
+                if !self.current_by_path.contains_key(&dest_path)
+                    && !self.baseline_by_path.contains_key(&dest_path)
                     && let Some(overwritten_move_content) = overwritten_move_content
                 {
-                    self.baseline_by_path.insert(
-                        dest_path.to_path_buf(),
-                        overwritten_move_content.to_string(),
-                    );
+                    self.baseline_by_path
+                        .insert(dest_path.clone(), overwritten_move_content.to_string());
                 }
                 let origin = self
                     .origin_by_current_path
-                    .remove(source_path)
-                    .unwrap_or_else(|| source_path.to_path_buf());
-                self.current_by_path.remove(source_path);
+                    .remove(&source_path)
+                    .unwrap_or_else(|| source_path.clone());
+                self.current_by_path.remove(&source_path);
                 self.current_by_path
-                    .insert(dest_path.to_path_buf(), new_content.to_string());
-                self.origin_by_current_path.remove(dest_path);
-                if dest_path != origin.as_path() {
-                    self.origin_by_current_path
-                        .insert(dest_path.to_path_buf(), origin);
+                    .insert(dest_path.clone(), new_content.to_string());
+                self.origin_by_current_path.remove(&dest_path);
+                if dest_path != origin {
+                    self.origin_by_current_path.insert(dest_path, origin);
                 }
             }
             None => {
                 self.current_by_path
-                    .insert(source_path.to_path_buf(), new_content.to_string());
+                    .insert(source_path, new_content.to_string());
             }
         }
     }
 
-    fn rename_pairs(&self) -> HashMap<PathBuf, PathBuf> {
+    fn rename_pairs(&self) -> HashMap<TrackedPath, TrackedPath> {
         self.origin_by_current_path
             .iter()
             .filter_map(|(dest_path, origin_path)| {
@@ -215,7 +234,7 @@ impl TurnDiffTracker {
             .collect()
     }
 
-    fn render_path_diff(&self, path: &Path) -> Option<String> {
+    fn render_path_diff(&self, path: &TrackedPath) -> Option<String> {
         self.render_diff(
             path,
             self.baseline_by_path.get(path).map(String::as_str),
@@ -224,7 +243,11 @@ impl TurnDiffTracker {
         )
     }
 
-    fn render_rename_diff(&self, source_path: &Path, dest_path: &Path) -> Option<String> {
+    fn render_rename_diff(
+        &self,
+        source_path: &TrackedPath,
+        dest_path: &TrackedPath,
+    ) -> Option<String> {
         self.render_diff(
             source_path,
             self.baseline_by_path.get(source_path).map(String::as_str),
@@ -235,9 +258,9 @@ impl TurnDiffTracker {
 
     fn render_diff(
         &self,
-        left_path: &Path,
+        left_path: &TrackedPath,
         left_content: Option<&str>,
-        right_path: &Path,
+        right_path: &TrackedPath,
         right_content: Option<&str>,
     ) -> Option<String> {
         if left_content == right_content {
@@ -286,12 +309,12 @@ impl TurnDiffTracker {
         Some(diff)
     }
 
-    fn display_path(&self, path: &Path) -> String {
+    fn display_path(&self, path: &TrackedPath) -> String {
         let display = self
-            .display_root
-            .as_deref()
-            .and_then(|root| path.strip_prefix(root).ok())
-            .unwrap_or(path);
+            .display_roots_by_environment
+            .get(&path.environment_id)
+            .and_then(|root| path.path.strip_prefix(root).ok())
+            .unwrap_or(path.path.as_path());
         display.display().to_string().replace('\\', "/")
     }
 }
