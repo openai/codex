@@ -27,15 +27,33 @@ use axum::middleware::Next;
 use axum::response::Response;
 use axum::routing::get;
 use axum::routing::post;
+use codex_config::types::OAuthCredentialsStoreMode;
+use codex_exec_server::Environment;
+use codex_rmcp_client::ElicitationAction;
+use codex_rmcp_client::ElicitationResponse;
+use codex_rmcp_client::RmcpClient;
+use codex_rmcp_client::StoredOAuthTokens;
+use codex_rmcp_client::WrappedOAuthTokenResponse;
+use codex_rmcp_client::save_oauth_tokens_async;
+use futures::FutureExt as _;
+use oauth2::AccessToken;
+use oauth2::RefreshToken;
+use oauth2::basic::BasicTokenType;
 use rmcp::ErrorData as McpError;
 use rmcp::handler::server::ServerHandler;
 use rmcp::model::CallToolRequestParams;
 use rmcp::model::CallToolResult;
+use rmcp::model::ClientCapabilities;
+use rmcp::model::ElicitationCapability;
+use rmcp::model::FormElicitationCapability;
+use rmcp::model::Implementation;
+use rmcp::model::InitializeRequestParams;
 use rmcp::model::JsonObject;
 use rmcp::model::ListResourceTemplatesResult;
 use rmcp::model::ListResourcesResult;
 use rmcp::model::ListToolsResult;
 use rmcp::model::PaginatedRequestParams;
+use rmcp::model::ProtocolVersion;
 use rmcp::model::RawResource;
 use rmcp::model::RawResourceTemplate;
 use rmcp::model::ReadResourceRequestParams;
@@ -49,6 +67,8 @@ use rmcp::model::Tool;
 use rmcp::model::ToolAnnotations;
 use rmcp::transport::StreamableHttpServerConfig;
 use rmcp::transport::StreamableHttpService;
+use rmcp::transport::auth::OAuthTokenResponse;
+use rmcp::transport::auth::VendorExtraTokenFields;
 use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
 use serde::Deserialize;
 use serde_json::json;
@@ -102,6 +122,24 @@ struct EchoArgs {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    if let Ok(server_url) = std::env::var("MCP_TEST_OAUTH_CLIENT_URL") {
+        let server_name = std::env::var("MCP_TEST_OAUTH_SERVER_NAME")?;
+        return run_oauth_test_client(&server_name, &server_url).await;
+    }
+    if let Ok(server_name) = std::env::var("MCP_TEST_OAUTH_WRITE_SERVER_NAME") {
+        let server_url = std::env::var("MCP_TEST_OAUTH_WRITE_SERVER_URL")?;
+        let access_token = std::env::var("MCP_TEST_OAUTH_WRITE_ACCESS_TOKEN")?;
+        let refresh_token = std::env::var("MCP_TEST_OAUTH_WRITE_REFRESH_TOKEN")?;
+        if let Ok(barrier) = std::env::var("MCP_TEST_OAUTH_WRITE_BARRIER") {
+            while !std::path::Path::new(&barrier).exists() {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+        write_oauth_test_credentials(&server_name, &server_url, &access_token, &refresh_token)
+            .await?;
+        return Ok(());
+    }
+
     let bind_addr = parse_bind_addr()?;
     let session_failure_state = SessionFailureState::default();
     const MAX_BIND_RETRIES: u32 = 20;
@@ -184,6 +222,76 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     axum::serve(listener, router).await?;
     task::yield_now().await;
+    Ok(())
+}
+
+async fn run_oauth_test_client(
+    server_name: &str,
+    server_url: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let client = RmcpClient::new_streamable_http_client(
+        server_name,
+        server_url,
+        /*bearer_token*/ None,
+        /*http_headers*/ None,
+        /*env_http_headers*/ None,
+        OAuthCredentialsStoreMode::File,
+        Environment::default_for_tests().get_http_client(),
+        /*auth_provider*/ None,
+    )
+    .await?;
+    let mut capabilities = ClientCapabilities::default();
+    capabilities.elicitation = Some(ElicitationCapability {
+        form: Some(FormElicitationCapability {
+            schema_validation: None,
+        }),
+        url: None,
+    });
+    let params = InitializeRequestParams::new(
+        capabilities,
+        Implementation::new("codex-test", "0.0.0-test").with_title("Codex rmcp OAuth process test"),
+    )
+    .with_protocol_version(ProtocolVersion::V_2025_06_18);
+    client
+        .initialize(
+            params,
+            Some(Duration::from_secs(15)),
+            Box::new(|_, _| {
+                async {
+                    Ok(ElicitationResponse {
+                        action: ElicitationAction::Accept,
+                        content: Some(json!({})),
+                        meta: None,
+                    })
+                }
+                .boxed()
+            }),
+        )
+        .await?;
+    Ok(())
+}
+
+async fn write_oauth_test_credentials(
+    server_name: &str,
+    server_url: &str,
+    access_token: &str,
+    refresh_token: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut response = OAuthTokenResponse::new(
+        AccessToken::new(access_token.to_string()),
+        BasicTokenType::Bearer,
+        VendorExtraTokenFields::default(),
+    );
+    response.set_refresh_token(Some(RefreshToken::new(refresh_token.to_string())));
+    response.set_expires_in(Some(&Duration::from_secs(7200)));
+    let stored = StoredOAuthTokens {
+        server_name: server_name.to_string(),
+        url: server_url.to_string(),
+        client_id: "test-client-id".to_string(),
+        token_response: WrappedOAuthTokenResponse(response),
+        expires_at: None,
+    };
+    save_oauth_tokens_async(server_name, &stored, OAuthCredentialsStoreMode::File).await?;
     Ok(())
 }
 
@@ -426,7 +534,7 @@ async fn exchange_refresh_token(request: Request<Body>) -> Result<Response, Stat
     if params.get("grant_type").map(String::as_str) != Some("refresh_token")
         || params.get("refresh_token").map(String::as_str) != Some(expected_refresh_token.as_str())
     {
-        return Err(StatusCode::UNAUTHORIZED);
+        return oauth_error_response(StatusCode::BAD_REQUEST, "invalid_grant");
     }
 
     if let Ok(max_uses) = std::env::var("MCP_REFRESH_TOKEN_MAX_USES")
@@ -434,8 +542,17 @@ async fn exchange_refresh_token(request: Request<Body>) -> Result<Response, Stat
     {
         let use_count = REFRESH_TOKEN_USES.fetch_add(1, Ordering::SeqCst) + 1;
         if use_count > max_uses {
-            return Err(StatusCode::UNAUTHORIZED);
+            return oauth_error_response(StatusCode::BAD_REQUEST, "invalid_grant");
         }
+    }
+
+    if let Ok(error) = std::env::var("MCP_REFRESH_ERROR") {
+        let status = if error == "server_error" {
+            StatusCode::INTERNAL_SERVER_ERROR
+        } else {
+            StatusCode::BAD_REQUEST
+        };
+        return oauth_error_response(status, &error);
     }
 
     if let Ok(delay_ms) = std::env::var("MCP_REFRESH_TOKEN_DELAY_MS")
@@ -463,6 +580,18 @@ async fn exchange_refresh_token(request: Request<Body>) -> Result<Response, Stat
             serde_json::to_vec(&token_response).expect("failed to serialize token response"),
         ))
         .expect("valid token response"))
+}
+
+fn oauth_error_response(status: StatusCode, error: &str) -> Result<Response, StatusCode> {
+    #[expect(clippy::expect_used)]
+    Ok(Response::builder()
+        .status(status)
+        .header(CONTENT_TYPE, "application/json")
+        .body(Body::from(
+            serde_json::to_vec(&json!({ "error": error }))
+                .expect("failed to serialize OAuth error response"),
+        ))
+        .expect("valid OAuth error response"))
 }
 
 async fn delay_mcp_initialize_when_configured(request: Request<Body>, next: Next) -> Response {

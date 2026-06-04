@@ -21,6 +21,7 @@ codex-config = { workspace = true }
 codex-exec-server = { workspace = true }
 codex-keyring-store = { workspace = true }
 codex-protocol = { workspace = true }
+codex-utils-path = { workspace = true }
 codex-utils-pty = { workspace = true }
 codex-utils-home-dir = { workspace = true }
 bytes = { workspace = true }

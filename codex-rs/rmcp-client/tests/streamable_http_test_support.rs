@@ -199,6 +199,38 @@ pub(crate) async fn spawn_streamable_http_server_with_env(
     Ok((child, base_url))
 }
 
+pub(crate) fn spawn_oauth_client_process(
+    server_name: &str,
+    server_url: &str,
+    codex_home: &std::path::Path,
+) -> anyhow::Result<Child> {
+    Ok(Command::new(streamable_http_server_bin()?)
+        .env("CODEX_HOME", codex_home)
+        .env("MCP_TEST_OAUTH_CLIENT_URL", server_url)
+        .env("MCP_TEST_OAUTH_SERVER_NAME", server_name)
+        .kill_on_drop(true)
+        .spawn()?)
+}
+
+pub(crate) fn spawn_oauth_credential_writer_process(
+    server_name: &str,
+    server_url: &str,
+    access_token: &str,
+    refresh_token: &str,
+    codex_home: &std::path::Path,
+    barrier: &std::path::Path,
+) -> anyhow::Result<Child> {
+    Ok(Command::new(streamable_http_server_bin()?)
+        .env("CODEX_HOME", codex_home)
+        .env("MCP_TEST_OAUTH_WRITE_SERVER_NAME", server_name)
+        .env("MCP_TEST_OAUTH_WRITE_SERVER_URL", server_url)
+        .env("MCP_TEST_OAUTH_WRITE_ACCESS_TOKEN", access_token)
+        .env("MCP_TEST_OAUTH_WRITE_REFRESH_TOKEN", refresh_token)
+        .env("MCP_TEST_OAUTH_WRITE_BARRIER", barrier)
+        .kill_on_drop(true)
+        .spawn()?)
+}
+
 /// Owns the exec-server process used by the remote-client integration test.
 pub(crate) struct ExecServerProcess {
     _codex_home: TempDir,

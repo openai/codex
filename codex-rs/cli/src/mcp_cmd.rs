@@ -26,7 +26,7 @@ use codex_mcp::oauth_login_support;
 use codex_mcp::resolve_oauth_scopes;
 use codex_mcp::should_retry_without_scopes;
 use codex_protocol::protocol::McpAuthStatus;
-use codex_rmcp_client::delete_oauth_tokens;
+use codex_rmcp_client::delete_oauth_tokens_async;
 use codex_rmcp_client::perform_oauth_login;
 use codex_utils_cli::CliConfigOverrides;
 use codex_utils_cli::format_env_display;
@@ -514,7 +514,7 @@ async fn run_logout(config_overrides: &CliConfigOverrides, logout_args: LogoutAr
         _ => bail!("OAuth logout is only supported for streamable_http transports."),
     };
 
-    match delete_oauth_tokens(&name, &url, config.mcp_oauth_credentials_store_mode) {
+    match delete_oauth_tokens_async(&name, &url, config.mcp_oauth_credentials_store_mode).await {
         Ok(true) => println!("Removed OAuth credentials for '{name}'."),
         Ok(false) => println!("No OAuth credentials stored for '{name}'."),
         Err(err) => return Err(anyhow!("failed to delete OAuth credentials: {err}")),
