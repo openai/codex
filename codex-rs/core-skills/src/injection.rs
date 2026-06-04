@@ -41,7 +41,7 @@ pub struct InjectedHostSkillPrompts {
 impl InjectedHostSkillPrompts {
     pub fn insert_path(&mut self, path: impl Into<String>) {
         let path = path.into();
-        self.paths.insert(normalize_skill_path(&path));
+        self.paths.insert(normalize_host_skill_path(&path));
         self.paths.insert(path);
     }
 
@@ -50,7 +50,7 @@ impl InjectedHostSkillPrompts {
     }
 
     pub fn contains_path(&self, path: &str) -> bool {
-        self.paths.contains(path) || self.paths.contains(&normalize_skill_path(path))
+        self.paths.contains(path) || self.paths.contains(&normalize_host_skill_path(path))
     }
 }
 
@@ -111,8 +111,8 @@ pub async fn build_skill_injections(
     result
 }
 
-fn normalize_skill_path(path: &str) -> String {
-    path.replace('\\', "/")
+fn normalize_host_skill_path(path: &str) -> String {
+    normalize_skill_path(path).replace('\\', "/")
 }
 
 fn emit_skill_injected_metric(
