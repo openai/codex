@@ -60,7 +60,7 @@ pub enum LoginAccountParams {
         codex_streamlined_login: bool,
         /// Optional auth session logging ID propagated to authapi for analytics correlation.
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
+        #[ts(optional = nullable)]
         auth_session_logging_id: Option<String>,
     },
     #[serde(rename = "chatgptDeviceCode")]

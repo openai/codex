@@ -338,8 +338,15 @@ async fn process_request(
                 }
             };
 
-            match exchange_code_for_tokens(&opts.issuer, &opts.client_id, redirect_uri, pkce, &code)
-                .await
+            match exchange_code_for_tokens(
+                &opts.issuer,
+                &opts.client_id,
+                redirect_uri,
+                pkce,
+                &code,
+                opts.auth_session_logging_id.as_deref(),
+            )
+            .await
             {
                 Ok(tokens) => {
                     if let Err(message) = ensure_workspace_allowed(
@@ -355,9 +362,14 @@ async fn process_request(
                         );
                     }
                     // Obtain API key via token-exchange and persist
-                    let api_key = obtain_api_key(&opts.issuer, &opts.client_id, &tokens.id_token)
-                        .await
-                        .ok();
+                    let api_key = obtain_api_key(
+                        &opts.issuer,
+                        &opts.client_id,
+                        &tokens.id_token,
+                        opts.auth_session_logging_id.as_deref(),
+                    )
+                    .await
+                    .ok();
                     if let Err(err) = persist_tokens_async(
                         &opts.codex_home,
                         api_key.clone(),
@@ -528,6 +540,16 @@ fn build_authorize_url(
         .collect::<Vec<_>>()
         .join("&");
     format!("{issuer}/oauth/authorize?{qs}")
+}
+
+fn with_auth_session_logging_id(mut body: String, auth_session_logging_id: Option<&str>) -> String {
+    if let Some(auth_session_logging_id) = auth_session_logging_id
+        .filter(|auth_session_logging_id| !auth_session_logging_id.is_empty())
+    {
+        body.push_str("&auth_session_logging_id=");
+        body.push_str(&urlencoding::encode(auth_session_logging_id));
+    }
+    body
 }
 
 fn generate_state() -> String {
@@ -729,6 +751,7 @@ pub(crate) async fn exchange_code_for_tokens(
     redirect_uri: &str,
     pkce: &PkceCodes,
     code: &str,
+    auth_session_logging_id: Option<&str>,
 ) -> io::Result<ExchangedTokens> {
     #[derive(serde::Deserialize)]
     struct TokenResponse {
@@ -745,16 +768,20 @@ pub(crate) async fn exchange_code_for_tokens(
         redirect_uri = %redirect_uri,
         "starting oauth token exchange"
     );
-    let resp = client
-        .post(token_endpoint)
-        .header("Content-Type", "application/x-www-form-urlencoded")
-        .body(format!(
+    let body = with_auth_session_logging_id(
+        format!(
             "grant_type=authorization_code&code={}&redirect_uri={}&client_id={}&code_verifier={}",
             urlencoding::encode(code),
             urlencoding::encode(redirect_uri),
             urlencoding::encode(client_id),
             urlencoding::encode(&pkce.code_verifier)
-        ))
+        ),
+        auth_session_logging_id,
+    );
+    let resp = client
+        .post(token_endpoint)
+        .header("Content-Type", "application/x-www-form-urlencoded")
+        .body(body)
         .send()
         .await;
     let resp = match resp {
@@ -1134,6 +1161,7 @@ pub(crate) async fn obtain_api_key(
     issuer: &str,
     client_id: &str,
     id_token: &str,
+    auth_session_logging_id: Option<&str>,
 ) -> io::Result<String> {
     // Token exchange for an API key access token
     #[derive(serde::Deserialize)]
@@ -1142,17 +1170,21 @@ pub(crate) async fn obtain_api_key(
     }
     let client = build_reqwest_client_with_custom_ca(reqwest::Client::builder())?;
     let token_endpoint = format!("{}/oauth/token", issuer.trim_end_matches('/'));
-    let resp = client
-        .post(token_endpoint)
-        .header("Content-Type", "application/x-www-form-urlencoded")
-        .body(format!(
+    let body = with_auth_session_logging_id(
+        format!(
             "grant_type={}&client_id={}&requested_token={}&subject_token={}&subject_token_type={}",
             urlencoding::encode("urn:ietf:params:oauth:grant-type:token-exchange"),
             urlencoding::encode(client_id),
             urlencoding::encode("openai-api-key"),
             urlencoding::encode(id_token),
             urlencoding::encode("urn:ietf:params:oauth:token-type:id_token")
-        ))
+        ),
+        auth_session_logging_id,
+    );
+    let resp = client
+        .post(token_endpoint)
+        .header("Content-Type", "application/x-www-form-urlencoded")
+        .body(body)
         .send()
         .await
         .map_err(io::Error::other)?;
@@ -1202,6 +1234,7 @@ mod tests {
     use super::redact_sensitive_url_parts;
     use super::render_login_error_page;
     use super::sanitize_url_for_logging;
+    use super::with_auth_session_logging_id;
 
     #[serial_test::serial(logout_revoke)]
     #[tokio::test]
@@ -1502,6 +1535,17 @@ mod tests {
                 .find(|(key, _)| key == "codex_streamlined_login")
                 .map(|(_, value)| value.into_owned()),
             Some("true".to_string())
+        );
+    }
+
+    #[test]
+    fn token_form_body_includes_auth_session_logging_id_when_present() {
+        assert_eq!(
+            with_auth_session_logging_id(
+                "grant_type=authorization_code".to_string(),
+                Some("auth-session-123"),
+            ),
+            "grant_type=authorization_code&auth_session_logging_id=auth-session-123"
         );
     }
 

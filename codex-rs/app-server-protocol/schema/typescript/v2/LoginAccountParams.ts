@@ -6,7 +6,7 @@ export type LoginAccountParams = { "type": "apiKey", apiKey: string, } | { "type
 /**
  * Optional auth session logging ID propagated to authapi for analytics correlation.
  */
-authSessionLoggingId?: string, } | { "type": "chatgptDeviceCode" } | { "type": "chatgptAuthTokens",
+authSessionLoggingId?: string | null, } | { "type": "chatgptDeviceCode" } | { "type": "chatgptAuthTokens",
 /**
  * Access token (JWT) supplied by the client.
  * This token is used for backend API requests and email extraction.
