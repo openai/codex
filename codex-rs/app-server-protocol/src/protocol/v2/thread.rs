@@ -947,6 +947,8 @@ pub struct ThreadBackgroundTerminal {
     pub process_id: String,
     pub command: String,
     pub cwd: AbsolutePathBuf,
+    #[ts(type = "number")]
+    pub started_at_ms: i64,
     pub os_pid: Option<u32>,
     pub cpu_percent: Option<f64>,
     pub rss_kb: Option<u64>,

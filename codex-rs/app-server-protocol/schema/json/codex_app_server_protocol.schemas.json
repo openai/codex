@@ -15740,13 +15740,18 @@
               "integer",
               "null"
             ]
+          },
+          "startedAtMs": {
+            "format": "int64",
+            "type": "integer"
           }
         },
         "required": [
           "command",
           "cwd",
           "itemId",
-          "processId"
+          "processId",
+          "startedAtMs"
         ],
         "type": "object"
       },

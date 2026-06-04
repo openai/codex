@@ -120,6 +120,7 @@ pub struct BackgroundTerminalInfo {
     pub process_id: String,
     pub command: String,
     pub cwd: AbsolutePathBuf,
+    pub started_at_ms: i64,
 }
 
 /// Conduit for the bidirectional stream of messages that compose a thread

@@ -824,6 +824,7 @@ impl Session {
                 process_id: process.process_id.to_string(),
                 command: process.command,
                 cwd: process.cwd,
+                started_at_ms: process.started_at_ms,
             })
             .collect()
     }

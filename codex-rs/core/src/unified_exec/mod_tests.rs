@@ -56,6 +56,7 @@ fn background_terminal(process_id: i32, cwd: AbsolutePathBuf) -> BackgroundTermi
         process_id: process_id.to_string(),
         command: "bash -i".to_string(),
         cwd,
+        started_at_ms: 0,
     }
 }
 
@@ -127,6 +128,7 @@ async fn exec_command_with_tty(
             call_id: context.call_id.clone(),
             process_id,
             cwd: cwd.clone(),
+            started_at_ms: 0,
             hook_command: cmd.to_string(),
             tty,
             network_approval: None,
@@ -361,8 +363,20 @@ async fn background_terminals_can_be_listed_and_terminated() -> anyhow::Result<(
     .await?;
     let second_process_id = second_shell.process_id.expect("expected process id");
 
+    let listed_terminals = session.list_background_terminals().await;
+    assert!(
+        listed_terminals
+            .iter()
+            .all(|terminal| terminal.started_at_ms > 0)
+    );
     assert_eq!(
-        session.list_background_terminals().await,
+        listed_terminals
+            .into_iter()
+            .map(|terminal| BackgroundTerminalInfo {
+                started_at_ms: 0,
+                ..terminal
+            })
+            .collect::<Vec<_>>(),
         vec![
             background_terminal(first_process_id, cwd.clone()),
             background_terminal(second_process_id, cwd.clone()),
@@ -380,8 +394,20 @@ async fn background_terminals_can_be_listed_and_terminated() -> anyhow::Result<(
             .await
     );
 
+    let listed_terminals = session.list_background_terminals().await;
+    assert!(
+        listed_terminals
+            .iter()
+            .all(|terminal| terminal.started_at_ms > 0)
+    );
     assert_eq!(
-        session.list_background_terminals().await,
+        listed_terminals
+            .into_iter()
+            .map(|terminal| BackgroundTerminalInfo {
+                started_at_ms: 0,
+                ..terminal
+            })
+            .collect::<Vec<_>>(),
         vec![background_terminal(second_process_id, cwd)]
     );
 

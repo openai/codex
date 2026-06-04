@@ -1752,6 +1752,7 @@ impl ThreadRequestProcessor {
                 process_id: terminal.process_id,
                 command: terminal.command,
                 cwd: terminal.cwd,
+                started_at_ms: terminal.started_at_ms,
                 os_pid: None,
                 cpu_percent: None,
                 rss_kb: None,

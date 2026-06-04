@@ -871,6 +871,7 @@ Use `thread/backgroundTerminals/list` to inspect running background terminals as
         "processId": "42",
         "command": "python3 -m http.server",
         "cwd": "/workspace",
+        "startedAtMs": 1730831111000,
         "osPid": null,
         "cpuPercent": null,
         "rssKb": null
