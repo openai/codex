@@ -6,6 +6,7 @@
 //!   orchestrator has forwarded `http/request` over JSON-RPC
 
 use std::error::Error as StdError;
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use codex_app_server_protocol::JSONRPCErrorError;
@@ -47,18 +48,27 @@ pub(crate) struct PendingReqwestHttpBodyStream {
 /// by the exec-server route and the local [`HttpClient`] backend.
 pub(crate) struct ReqwestHttpRequestRunner {
     client: reqwest::Client,
+    timeout: Option<Duration>,
 }
 
 impl ReqwestHttpClient {
-    fn build_client(timeout_ms: Option<u64>) -> Result<reqwest::Client, ExecServerError> {
-        let builder = match timeout_ms {
-            None => reqwest::Client::builder(),
-            Some(timeout_ms) => {
-                reqwest::Client::builder().timeout(Duration::from_millis(timeout_ms))
-            }
-        };
-        build_reqwest_client_with_custom_ca(builder)
+    fn build_client() -> Result<reqwest::Client, ExecServerError> {
+        build_reqwest_client_with_custom_ca(reqwest::Client::builder())
             .map_err(|error| ExecServerError::HttpRequest(error.to_string()))
+    }
+
+    fn shared_client() -> Result<reqwest::Client, ExecServerError> {
+        static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+
+        if let Some(client) = CLIENT.get() {
+            return Ok(client.clone());
+        }
+
+        let client = Self::build_client()?;
+        match CLIENT.set(client.clone()) {
+            Ok(()) => Ok(client),
+            Err(client) => Ok(CLIENT.get().cloned().unwrap_or(client)),
+        }
     }
 }
 
@@ -112,9 +122,12 @@ impl HttpClient for ReqwestHttpClient {
 
 impl ReqwestHttpRequestRunner {
     pub(crate) fn new(timeout_ms: Option<u64>) -> Result<Self, JSONRPCErrorError> {
-        let client = ReqwestHttpClient::build_client(timeout_ms)
+        let client = ReqwestHttpClient::shared_client()
             .map_err(|error| internal_error(error.to_string()))?;
-        Ok(Self { client })
+        Ok(Self {
+            client,
+            timeout: timeout_ms.map(Duration::from_millis),
+        })
     }
 
     pub(crate) async fn run(
@@ -137,6 +150,9 @@ impl ReqwestHttpRequestRunner {
 
         let headers = Self::build_headers(params.headers)?;
         let mut request = self.client.request(method.clone(), url).headers(headers);
+        if let Some(timeout) = self.timeout {
+            request = request.timeout(timeout);
+        }
         if let Some(body) = params.body {
             request = request.body(body.into_inner());
         }

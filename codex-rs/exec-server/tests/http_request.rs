@@ -6,16 +6,19 @@ use std::collections::BTreeMap;
 use std::io::ErrorKind;
 use std::time::Duration;
 
+use anyhow::Context;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
+use codex_exec_server::HttpClient;
 use codex_exec_server::HttpHeader;
 use codex_exec_server::HttpRequestBodyDeltaNotification;
 use codex_exec_server::HttpRequestParams;
 use codex_exec_server::HttpRequestResponse;
 use codex_exec_server::InitializeParams;
+use codex_exec_server::ReqwestHttpClient;
 use common::exec_server::ExecServerHarness;
 use common::exec_server::exec_server;
 use pretty_assertions::assert_eq;
@@ -30,6 +33,8 @@ use tokio::net::TcpStream;
 use tokio::sync::oneshot;
 use tokio::time::timeout;
 
+const TEST_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// HTTP request captured by the ad-hoc TCP server in these integration tests.
 #[derive(Debug)]
 struct CapturedHttpRequest {
@@ -37,6 +42,64 @@ struct CapturedHttpRequest {
     request_line: String,
     headers: BTreeMap<String, String>,
     body: Vec<u8>,
+}
+
+/// What this tests: the local reqwest-backed HTTP client is shared across
+/// calls, so repeated requests to the same origin can reuse one TCP connection.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn reqwest_http_client_reuses_keep_alive_connection() -> anyhow::Result<()> {
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let url = format!("http://{}/mcp?case=reuse", listener.local_addr()?);
+
+    let first_task = tokio::spawn({
+        let url = url.clone();
+        async move {
+            ReqwestHttpClient
+                .http_request(HttpRequestParams {
+                    method: "GET".to_string(),
+                    url,
+                    headers: Vec::new(),
+                    body: None,
+                    timeout_ms: Some(5_000),
+                    request_id: "reuse-1".to_string(),
+                    stream_response: false,
+                })
+                .await
+        }
+    });
+
+    let first_request = accept_http_request(&listener).await?;
+    assert_eq!(first_request.request_line, "GET /mcp?case=reuse HTTP/1.1");
+    let stream = respond_with_keep_alive(first_request.stream, "200 OK", b"first").await?;
+    let first_response = first_task.await??;
+    assert_eq!(first_response.body.into_inner(), b"first".to_vec());
+
+    let second_task = tokio::spawn({
+        let url = url.clone();
+        async move {
+            ReqwestHttpClient
+                .http_request(HttpRequestParams {
+                    method: "GET".to_string(),
+                    url,
+                    headers: Vec::new(),
+                    body: None,
+                    timeout_ms: Some(5_000),
+                    request_id: "reuse-2".to_string(),
+                    stream_response: false,
+                })
+                .await
+        }
+    });
+
+    let second_request = timeout(TEST_TIMEOUT, read_http_request(stream))
+        .await
+        .context("second request should reuse the first TCP connection")??;
+    assert_eq!(second_request.request_line, "GET /mcp?case=reuse HTTP/1.1");
+    respond_with_status_and_headers(second_request.stream, "200 OK", &[], b"second").await?;
+    let second_response = second_task.await??;
+    assert_eq!(second_response.body.into_inner(), b"second".to_vec());
+
+    Ok(())
 }
 
 /// What this tests: a real exec-server websocket `http/request` performs one
@@ -410,6 +473,10 @@ async fn wait_for_error_response(
 /// Accepts one HTTP/1.1 request and captures its wire-visible fields.
 async fn accept_http_request(listener: &TcpListener) -> anyhow::Result<CapturedHttpRequest> {
     let (stream, _) = timeout(Duration::from_secs(5), listener.accept()).await??;
+    read_http_request(stream).await
+}
+
+async fn read_http_request(stream: TcpStream) -> anyhow::Result<CapturedHttpRequest> {
     let mut reader = BufReader::new(stream);
 
     let mut request_line = String::new();
@@ -443,6 +510,22 @@ async fn accept_http_request(listener: &TcpListener) -> anyhow::Result<CapturedH
         headers,
         body,
     })
+}
+
+/// Writes a fixed-length HTTP response and leaves the connection reusable.
+async fn respond_with_keep_alive(
+    mut stream: TcpStream,
+    status: &str,
+    body: &[u8],
+) -> anyhow::Result<TcpStream> {
+    let response = format!(
+        "HTTP/1.1 {status}\r\ncontent-type: text/plain\r\ncontent-length: {}\r\nconnection: keep-alive\r\n\r\n",
+        body.len(),
+    );
+    stream.write_all(response.as_bytes()).await?;
+    stream.write_all(body).await?;
+    stream.flush().await?;
+    Ok(stream)
 }
 
 /// Writes a fixed-length HTTP response to the captured request stream.
