@@ -6,6 +6,9 @@ use std::sync::atomic::Ordering;
 
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
+use codex_core_skills::HostLoadedSkills;
+use codex_core_skills::SkillsLoadInput;
+use codex_core_skills::SkillsManager;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::ThreadStartInput;
@@ -49,7 +52,11 @@ async fn installed_extension_loads_host_skills_from_legacy_roots() -> TestResult
         &skill_path,
         "---\nname: demo\ndescription: Demo skill.\n---\n# Demo\n\nUse the demo skill.\n",
     )?;
-    let config = config_with_legacy_layers_for_codex_home(codex_home.clone()).await?;
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.clone())
+        .fallback_cwd(Some(codex_home.clone()))
+        .build()
+        .await?;
 
     let mut builder = ExtensionRegistryBuilder::new();
     install(&mut builder);
@@ -67,6 +74,18 @@ async fn installed_extension_loads_host_skills_from_legacy_roots() -> TestResult
         })
         .await;
 
+    let manager = SkillsManager::new(config.codex_home.clone(), config.bundled_skills_enabled());
+    let input = SkillsLoadInput::new(
+        config.cwd.clone(),
+        Vec::new(),
+        config.config_layer_stack.clone(),
+        config.bundled_skills_enabled(),
+    );
+    let turn_store = ExtensionData::new("turn-1");
+    turn_store.insert(HostLoadedSkills::new(Arc::new(
+        manager.skills_for_config(&input, /*fs*/ None).await,
+    )));
+
     let fragments = registry.turn_input_contributors()[0]
         .contribute(
             TurnInputContext {
@@ -79,7 +98,7 @@ async fn installed_extension_loads_host_skills_from_legacy_roots() -> TestResult
             },
             &session_store,
             &thread_store,
-            &ExtensionData::new("turn-1"),
+            &turn_store,
         )
         .await;
 
@@ -180,15 +199,12 @@ async fn installed_extension_injects_available_catalog_and_selected_entrypoint()
     assert!(fragments[1].render().contains("<name>lint-fix</name>"));
     assert!(fragments[1].render().contains("# Lint Fix"));
     assert_eq!(
-        vec![SkillReadRequest {
-            authority: SkillAuthority::new(SkillSourceKind::Host, "host"),
-            package: SkillPackageId("host/lint-fix".to_string()),
-            resource: SkillResourceId("lint-fix/SKILL.md".to_string()),
-        }],
-        host_read_requests
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone()
+        vec![(
+            SkillAuthority::new(SkillSourceKind::Host, "host"),
+            SkillPackageId("host/lint-fix".to_string()),
+            SkillResourceId("lint-fix/SKILL.md".to_string()),
+        )],
+        read_request_keys(&host_read_requests)
     );
     assert!(
         remote_read_requests
@@ -285,15 +301,12 @@ async fn prompt_hidden_skill_can_still_be_invoked() -> TestResult {
     assert!(!catalog_fragment.contains("hidden-skill"));
     assert!(fragments[1].render().contains("<name>hidden-skill</name>"));
     assert_eq!(
-        vec![SkillReadRequest {
-            authority: SkillAuthority::new(SkillSourceKind::Host, "host"),
-            package: SkillPackageId("host/hidden-skill".to_string()),
-            resource: SkillResourceId("hidden-skill/SKILL.md".to_string()),
-        }],
-        read_requests
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone()
+        vec![(
+            SkillAuthority::new(SkillSourceKind::Host, "host"),
+            SkillPackageId("host/hidden-skill".to_string()),
+            SkillResourceId("hidden-skill/SKILL.md".to_string()),
+        )],
+        read_request_keys(&read_requests)
     );
 
     Ok(())
@@ -353,14 +366,11 @@ fn test_entry(
 
 async fn default_config() -> std::io::Result<Config> {
     let codex_home = test_codex_home();
-    let config = config_for_codex_home(codex_home.clone()).await?;
+    std::fs::create_dir_all(&codex_home)?;
+    let config =
+        Config::load_default_with_cli_overrides_for_codex_home(codex_home.clone(), vec![]).await?;
     std::fs::remove_dir_all(codex_home)?;
     Ok(config)
-}
-
-async fn config_for_codex_home(codex_home: PathBuf) -> std::io::Result<Config> {
-    std::fs::create_dir_all(&codex_home)?;
-    Config::load_default_with_cli_overrides_for_codex_home(codex_home, vec![]).await
 }
 
 fn test_codex_home() -> PathBuf {
@@ -371,10 +381,19 @@ fn test_codex_home() -> PathBuf {
     ))
 }
 
-async fn config_with_legacy_layers_for_codex_home(codex_home: PathBuf) -> std::io::Result<Config> {
-    ConfigBuilder::default()
-        .codex_home(codex_home.clone())
-        .fallback_cwd(Some(codex_home))
-        .build()
-        .await
+fn read_request_keys(
+    requests: &Arc<Mutex<Vec<SkillReadRequest>>>,
+) -> Vec<(SkillAuthority, SkillPackageId, SkillResourceId)> {
+    requests
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .iter()
+        .map(|request| {
+            (
+                request.authority.clone(),
+                request.package.clone(),
+                request.resource.clone(),
+            )
+        })
+        .collect()
 }

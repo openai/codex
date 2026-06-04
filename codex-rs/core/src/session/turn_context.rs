@@ -2,6 +2,7 @@ use super::*;
 use crate::SkillLoadOutcome;
 use crate::config::GhostSnapshotConfig;
 use crate::environment_selection::ResolvedTurnEnvironments;
+use codex_core_skills::HostLoadedSkills;
 use codex_model_provider::SharedModelProvider;
 use codex_model_provider::create_model_provider;
 use codex_protocol::SessionId;
@@ -530,6 +531,7 @@ impl Session {
         ));
         let (current_date, timezone) = local_time_context();
         let extension_data = Arc::new(codex_extension_api::ExtensionData::new(sub_id.clone()));
+        extension_data.insert(HostLoadedSkills::new(Arc::clone(&skills_outcome)));
         TurnContext {
             sub_id,
             trace_id: current_span_trace_id(),

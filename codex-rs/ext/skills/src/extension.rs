@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use codex_core::config::Config;
+use codex_core_skills::HostLoadedSkills;
 use codex_core_skills::SkillInstructions;
 use codex_core_skills::injection::SkillInjection;
 use codex_extension_api::ConfigContributor;
@@ -15,7 +16,6 @@ use codex_extension_api::TurnInputContributor;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::WarningEvent;
-use codex_utils_absolute_path::AbsolutePathBuf;
 
 use crate::catalog::SkillAuthority;
 use crate::catalog::SkillCatalogEntry;
@@ -80,12 +80,7 @@ impl TurnInputContributor for SkillsExtension {
         };
 
         let config = thread_state.config();
-        let host_cwd = input
-            .environments
-            .iter()
-            .find(|environment| environment.is_primary)
-            .and_then(|environment| AbsolutePathBuf::from_absolute_path(&environment.cwd).ok())
-            .unwrap_or_else(|| config.host.default_cwd());
+        let host_loaded_skills = turn_store.get::<HostLoadedSkills>();
         let query = SkillListQuery {
             turn_id: input.turn_id.clone(),
             executor_authorities: input
@@ -98,7 +93,7 @@ impl TurnInputContributor for SkillsExtension {
                     )
                 })
                 .collect(),
-            host: Some(config.host.list_query(host_cwd)),
+            host: host_loaded_skills.clone(),
             include_host_skills: true,
             include_bundled_skills: config.bundled_skills_enabled,
             include_remote_skills: true,
@@ -119,7 +114,10 @@ impl TurnInputContributor for SkillsExtension {
         let mut warnings = catalog.warnings.clone();
         let mut main_prompts_injected = false;
         for entry in &selected_entries {
-            match self.read_main_prompt(entry).await {
+            match self
+                .read_main_prompt(entry, host_loaded_skills.clone())
+                .await
+            {
                 Ok(read_result) => {
                     let (contents, truncated) =
                         truncate_main_prompt_contents(read_result.contents.as_str());
@@ -159,12 +157,17 @@ impl TurnInputContributor for SkillsExtension {
 }
 
 impl SkillsExtension {
-    async fn read_main_prompt(&self, entry: &SkillCatalogEntry) -> Result<SkillReadResult, String> {
+    async fn read_main_prompt(
+        &self,
+        entry: &SkillCatalogEntry,
+        host_loaded_skills: Option<Arc<HostLoadedSkills>>,
+    ) -> Result<SkillReadResult, String> {
         self.providers
             .read(SkillReadRequest {
                 authority: entry.authority.clone(),
                 package: entry.id.clone(),
                 resource: entry.main_prompt.clone(),
+                host: host_loaded_skills,
             })
             .await
             .map_err(|err| err.message)

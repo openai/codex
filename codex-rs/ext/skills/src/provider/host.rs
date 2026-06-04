@@ -1,9 +1,5 @@
-use std::path::PathBuf;
-use std::sync::Arc;
-
 use codex_core_skills::SkillLoadOutcome;
 use codex_core_skills::SkillMetadata;
-use codex_core_skills::SkillsManager;
 
 use crate::catalog::SkillAuthority;
 use crate::catalog::SkillCatalog;
@@ -22,72 +18,61 @@ use crate::provider::SkillSearchRequest;
 
 const HOST_AUTHORITY_ID: &str = "host";
 
-/// Host-owned skill provider backed by the legacy skill loader.
+/// Host-owned skill provider backed by the already-loaded turn skills.
 ///
-/// The provider lists local host skills through [`SkillsManager`] and reads
-/// `SKILL.md` bodies for explicit invocation. Other skill files remain ordinary
-/// filesystem paths for the model to inspect through shell/unified exec.
+/// The provider intentionally does not reload or cache host skills. Core owns
+/// skill loading, including plugin roots, runtime extra roots, and the primary
+/// environment filesystem. This adapter only maps that loaded outcome into the
+/// skills-extension catalog/read contract.
 #[derive(Clone, Default)]
-pub struct HostSkillProvider {
-    manager: Option<Arc<SkillsManager>>,
-}
+pub struct HostSkillProvider;
 
 impl HostSkillProvider {
     pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn with_manager(manager: Arc<SkillsManager>) -> Self {
-        Self {
-            manager: Some(manager),
-        }
+        Self
     }
 }
 
 impl SkillProvider for HostSkillProvider {
     fn list(&self, query: SkillListQuery) -> SkillProviderFuture<'_, SkillCatalog> {
         Box::pin(async move {
-            let Some(host_query) = query.host else {
+            let Some(host_loaded_skills) = query.host else {
                 return Err(SkillProviderError::new(
-                    "host skill provider requires host skill configuration",
+                    "host skill provider requires loaded host skills",
                 ));
             };
 
-            let local_manager;
-            let manager = match self.manager.as_deref() {
-                Some(manager) => manager,
-                None => {
-                    local_manager = SkillsManager::new(
-                        host_query.codex_home.clone(),
-                        host_query.input.bundled_skills_enabled,
-                    );
-                    &local_manager
-                }
-            };
-
-            let outcome = manager
-                .skills_for_config(&host_query.input, /*fs*/ None)
-                .await;
-            Ok(catalog_from_outcome(outcome))
+            Ok(catalog_from_outcome(host_loaded_skills.outcome()))
         })
     }
 
     fn read(&self, request: SkillReadRequest) -> SkillProviderFuture<'_, SkillReadResult> {
         Box::pin(async move {
-            let path = PathBuf::from(&request.resource.0);
-            if !path.is_absolute() {
+            let Some(host_loaded_skills) = request.host else {
+                return Err(SkillProviderError::new(
+                    "host skill provider requires loaded host skills",
+                ));
+            };
+            let Some(skill) = host_loaded_skills.outcome().skills.iter().find(|skill| {
+                let skill_path = skill.path_to_skills_md.to_string_lossy();
+                skill_path == request.resource.0.as_str()
+                    || skill_path.replace('\\', "/") == request.resource.0
+            }) else {
                 return Err(SkillProviderError::new(format!(
-                    "host skill resource is not an absolute path: {}",
+                    "host skill resource is not loaded: {}",
                     request.resource.0
                 )));
-            }
+            };
 
-            let contents = std::fs::read_to_string(&path).map_err(|err| {
-                SkillProviderError::new(format!(
-                    "failed to read host skill resource {}: {err}",
-                    path.display()
-                ))
-            })?;
+            let contents = host_loaded_skills
+                .read_skill_text(skill)
+                .await
+                .map_err(|err| {
+                    SkillProviderError::new(format!(
+                        "failed to read host skill resource {}: {err}",
+                        request.resource.0
+                    ))
+                })?;
 
             Ok(SkillReadResult {
                 resource: request.resource,
@@ -101,7 +86,7 @@ impl SkillProvider for HostSkillProvider {
     }
 }
 
-fn catalog_from_outcome(outcome: SkillLoadOutcome) -> SkillCatalog {
+fn catalog_from_outcome(outcome: &SkillLoadOutcome) -> SkillCatalog {
     let mut catalog = SkillCatalog {
         entries: Vec::new(),
         warnings: outcome
@@ -141,17 +126,9 @@ fn catalog_entry_from_skill(skill: &SkillMetadata, enabled: bool) -> SkillCatalo
     if !enabled {
         entry = entry.disabled();
     }
-    if !allows_prompt_invocation(skill) {
+    if !skill.allows_implicit_invocation() {
         entry = entry.hidden_from_prompt();
     }
 
     entry
-}
-
-fn allows_prompt_invocation(skill: &SkillMetadata) -> bool {
-    skill
-        .policy
-        .as_ref()
-        .and_then(|policy| policy.allow_implicit_invocation)
-        .unwrap_or(true)
 }
