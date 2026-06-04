@@ -41,31 +41,9 @@ pub struct PluginHookSource {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginTelemetryMetadata {
+    /// Local plugin identifier used by Codex configuration and the plugin cache.
     pub plugin_id: PluginId,
-    /// Optional backend identifier for remote plugins, used when analytics
-    /// should report the remote id instead of the local plugin cache id.
+    /// Optional backend identifier for remote plugins.
     pub remote_plugin_id: Option<String>,
     pub capability_summary: Option<PluginCapabilitySummary>,
-}
-
-impl PluginTelemetryMetadata {
-    pub fn from_plugin_id(plugin_id: &PluginId) -> Self {
-        Self {
-            plugin_id: plugin_id.clone(),
-            remote_plugin_id: None,
-            capability_summary: None,
-        }
-    }
-}
-
-impl PluginCapabilitySummary {
-    pub fn telemetry_metadata(&self) -> Option<PluginTelemetryMetadata> {
-        PluginId::parse(&self.config_name)
-            .ok()
-            .map(|plugin_id| PluginTelemetryMetadata {
-                plugin_id,
-                remote_plugin_id: None,
-                capability_summary: Some(self.clone()),
-            })
-    }
 }

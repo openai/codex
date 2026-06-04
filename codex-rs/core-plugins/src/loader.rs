@@ -28,7 +28,6 @@ use codex_plugin::PluginHookSource;
 use codex_plugin::PluginId;
 use codex_plugin::PluginIdError;
 use codex_plugin::PluginLoadOutcome;
-use codex_plugin::PluginTelemetryMetadata;
 use codex_protocol::protocol::Product;
 use codex_protocol::protocol::SkillScope;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -1019,13 +1018,11 @@ async fn load_apps_from_paths(
     connector_ids
 }
 
-pub async fn plugin_telemetry_metadata_from_root(
+pub async fn plugin_capability_summary_from_root(
     plugin_id: &PluginId,
     plugin_root: &AbsolutePathBuf,
-) -> PluginTelemetryMetadata {
-    let Some(manifest) = load_plugin_manifest(plugin_root.as_path()) else {
-        return PluginTelemetryMetadata::from_plugin_id(plugin_id);
-    };
+) -> Option<PluginCapabilitySummary> {
+    let manifest = load_plugin_manifest(plugin_root.as_path())?;
 
     let manifest_paths = &manifest.paths;
     let has_skills = !plugin_skill_roots(plugin_root, manifest_paths).is_empty();
@@ -1041,22 +1038,18 @@ pub async fn plugin_telemetry_metadata_from_root(
     mcp_server_names.sort_unstable();
     mcp_server_names.dedup();
 
-    PluginTelemetryMetadata {
-        plugin_id: plugin_id.clone(),
-        remote_plugin_id: None,
-        capability_summary: Some(PluginCapabilitySummary {
-            config_name: plugin_id.as_key(),
-            display_name: plugin_id.plugin_name.clone(),
-            description: None,
-            has_skills,
-            mcp_server_names,
-            app_connector_ids: load_apps_from_paths(
-                plugin_root.as_path(),
-                plugin_app_config_paths(plugin_root.as_path(), manifest_paths),
-            )
-            .await,
-        }),
-    }
+    Some(PluginCapabilitySummary {
+        config_name: plugin_id.as_key(),
+        display_name: plugin_id.plugin_name.clone(),
+        description: None,
+        has_skills,
+        mcp_server_names,
+        app_connector_ids: load_apps_from_paths(
+            plugin_root.as_path(),
+            plugin_app_config_paths(plugin_root.as_path(), manifest_paths),
+        )
+        .await,
+    })
 }
 
 pub async fn load_plugin_mcp_servers(plugin_root: &Path) -> HashMap<String, McpServerConfig> {
@@ -1073,24 +1066,6 @@ pub async fn load_plugin_mcp_servers(plugin_root: &Path) -> HashMap<String, McpS
     }
 
     mcp_servers
-}
-
-pub async fn installed_plugin_telemetry_metadata(
-    codex_home: &Path,
-    plugin_id: &PluginId,
-) -> PluginTelemetryMetadata {
-    let store = match PluginStore::try_new(codex_home.to_path_buf()) {
-        Ok(store) => store,
-        Err(err) => {
-            warn!("failed to resolve plugin cache root: {err}");
-            return PluginTelemetryMetadata::from_plugin_id(plugin_id);
-        }
-    };
-    let Some(plugin_root) = store.active_plugin_root(plugin_id) else {
-        return PluginTelemetryMetadata::from_plugin_id(plugin_id);
-    };
-
-    plugin_telemetry_metadata_from_root(plugin_id, &plugin_root).await
 }
 
 async fn load_mcp_servers_from_file(

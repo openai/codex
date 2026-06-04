@@ -3,10 +3,14 @@ use std::time::Duration;
 use anyhow::Result;
 use anyhow::bail;
 use app_test_support::ChatGptAuthFixture;
+use app_test_support::DEFAULT_CLIENT_NAME;
 use app_test_support::TestAppServer;
 use app_test_support::to_response;
 use app_test_support::write_chatgpt_auth;
+use codex_app_server_protocol::ConfigValueWriteParams;
+use codex_app_server_protocol::ConfigWriteResponse;
 use codex_app_server_protocol::JSONRPCResponse;
+use codex_app_server_protocol::MergeStrategy;
 use codex_app_server_protocol::PluginAuthPolicy;
 use codex_app_server_protocol::PluginInstallPolicy;
 use codex_app_server_protocol::PluginInstalledParams;
@@ -19,6 +23,7 @@ use codex_app_server_protocol::PluginShareDiscoverability;
 use codex_app_server_protocol::PluginSource;
 use codex_app_server_protocol::PluginSummary;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::WriteStatus;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_core::config::set_project_trust_level;
 use codex_protocol::config_types::TrustLevel;
@@ -277,6 +282,103 @@ enabled = true
         ]
     );
     assert_eq!(response.marketplace_load_errors, Vec::new());
+    Ok(())
+}
+
+#[tokio::test]
+async fn plugin_toggle_analytics_resolves_remote_plugin_id_from_installed_snapshot() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let server = MockServer::start().await;
+    write_remote_plugin_catalog_config(
+        codex_home.path(),
+        &format!("{}/backend-api/", server.uri()),
+    )?;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("chatgpt-token")
+            .account_id("account-123")
+            .chatgpt_user_id("user-123")
+            .chatgpt_account_id("account-123"),
+        AuthCredentialsStoreMode::File,
+    )?;
+    write_installed_plugin_with_version(&codex_home, "openai-curated-remote", "linear", "1.2.3")?;
+    let global_installed_body = remote_installed_plugin_body("", "1.2.3", /*enabled*/ true);
+    mount_remote_installed_plugins(&server, "GLOBAL", &global_installed_body).await;
+    mount_remote_installed_plugins(&server, "WORKSPACE", empty_remote_installed_plugins_body())
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/backend-api/codex/analytics-events/events"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"status":"ok"}"#))
+        .mount(&server)
+        .await;
+
+    let mut app_server = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, app_server.initialize()).await??;
+
+    let installed_request_id = app_server
+        .send_plugin_installed_request(PluginInstalledParams {
+            cwds: None,
+            install_suggestion_plugin_names: None,
+        })
+        .await?;
+    let installed_response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        app_server.read_stream_until_response_message(RequestId::Integer(installed_request_id)),
+    )
+    .await??;
+    let _: PluginInstalledResponse = to_response(installed_response)?;
+
+    for enabled in [false, true] {
+        let request_id = app_server
+            .send_config_value_write_request(ConfigValueWriteParams {
+                file_path: None,
+                key_path: "plugins.linear@openai-curated-remote.enabled".to_string(),
+                value: serde_json::json!(enabled),
+                merge_strategy: MergeStrategy::Replace,
+                expected_version: None,
+            })
+            .await?;
+        let response: JSONRPCResponse = timeout(
+            DEFAULT_TIMEOUT,
+            app_server.read_stream_until_response_message(RequestId::Integer(request_id)),
+        )
+        .await??;
+        let response: ConfigWriteResponse = to_response(response)?;
+        assert_eq!(response.status, WriteStatus::Ok);
+    }
+
+    let events = wait_for_plugin_analytics_events(&server, /*expected_count*/ 2).await?;
+    assert_eq!(
+        events,
+        vec![
+            serde_json::json!({
+                "event_type": "codex_plugin_disabled",
+                "event_params": {
+                    "plugin_id": "linear@openai-curated-remote",
+                    "remote_plugin_id": "plugins~Plugin_00000000000000000000000000000000",
+                    "plugin_name": "linear",
+                    "marketplace_name": "openai-curated-remote",
+                    "has_skills": false,
+                    "mcp_server_count": 0,
+                    "connector_ids": [],
+                    "product_client_id": DEFAULT_CLIENT_NAME,
+                }
+            }),
+            serde_json::json!({
+                "event_type": "codex_plugin_enabled",
+                "event_params": {
+                    "plugin_id": "linear@openai-curated-remote",
+                    "remote_plugin_id": "plugins~Plugin_00000000000000000000000000000000",
+                    "plugin_name": "linear",
+                    "marketplace_name": "openai-curated-remote",
+                    "has_skills": false,
+                    "mcp_server_count": 0,
+                    "connector_ids": [],
+                    "product_client_id": DEFAULT_CLIENT_NAME,
+                }
+            }),
+        ]
+    );
     Ok(())
 }
 
@@ -3414,4 +3516,39 @@ fn write_plugin_share_local_path_mapping(
         codex_home.join(".tmp/plugin-share-local-paths-v1.json"),
         format!("{contents}\n"),
     )
+}
+
+async fn wait_for_plugin_analytics_events(
+    server: &MockServer,
+    expected_count: usize,
+) -> Result<Vec<serde_json::Value>> {
+    timeout(DEFAULT_TIMEOUT, async {
+        loop {
+            let requests = server.received_requests().await.unwrap_or_default();
+            let events = requests
+                .iter()
+                .filter(|request| {
+                    request.method == "POST"
+                        && request
+                            .url
+                            .path()
+                            .ends_with("/codex/analytics-events/events")
+                })
+                .filter_map(|request| {
+                    serde_json::from_slice::<serde_json::Value>(&request.body).ok()
+                })
+                .flat_map(|payload| payload["events"].as_array().cloned().unwrap_or_default())
+                .filter(|event| {
+                    event["event_type"]
+                        .as_str()
+                        .is_some_and(|event_type| event_type.starts_with("codex_plugin_"))
+                })
+                .collect::<Vec<_>>();
+            if events.len() >= expected_count {
+                return Ok::<_, anyhow::Error>(events);
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await?
 }

@@ -863,6 +863,7 @@ pub(crate) struct CodexTurnSteerEventRequest {
 #[derive(Serialize)]
 pub(crate) struct CodexPluginMetadata {
     pub(crate) plugin_id: Option<String>,
+    pub(crate) remote_plugin_id: Option<String>,
     pub(crate) plugin_name: Option<String>,
     pub(crate) marketplace_name: Option<String>,
     pub(crate) has_skills: Option<bool>,
@@ -923,9 +924,9 @@ pub(crate) fn codex_plugin_metadata(plugin: PluginTelemetryMetadata) -> CodexPlu
         remote_plugin_id,
         capability_summary,
     } = plugin;
-    let event_plugin_id = remote_plugin_id.unwrap_or_else(|| plugin_id.as_key());
     CodexPluginMetadata {
-        plugin_id: Some(event_plugin_id),
+        plugin_id: Some(plugin_id.as_key()),
+        remote_plugin_id,
         plugin_name: Some(plugin_id.plugin_name),
         marketplace_name: Some(plugin_id.marketplace_name),
         has_skills: capability_summary

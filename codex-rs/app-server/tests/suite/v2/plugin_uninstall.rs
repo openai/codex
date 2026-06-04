@@ -139,6 +139,7 @@ async fn plugin_uninstall_tracks_analytics_event() -> Result<()> {
                 "event_type": "codex_plugin_uninstalled",
                 "event_params": {
                     "plugin_id": "sample-plugin@debug",
+                    "remote_plugin_id": null,
                     "plugin_name": "sample-plugin",
                     "marketplace_name": "debug",
                     "has_skills": false,
@@ -216,6 +217,11 @@ async fn plugin_uninstall_writes_remote_plugin_to_cloud_when_remote_plugin_enabl
         )
         .mount(&server)
         .await;
+    Mock::given(method("POST"))
+        .and(path("/backend-api/codex/analytics-events/events"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"status":"ok"}"#))
+        .mount(&server)
+        .await;
 
     let remote_plugin_cache_root = codex_home
         .path()
@@ -224,6 +230,11 @@ async fn plugin_uninstall_writes_remote_plugin_to_cloud_when_remote_plugin_enabl
     std::fs::write(
         remote_plugin_cache_root.join("1.0.0/.codex-plugin/plugin.json"),
         r#"{"name":"linear","version":"1.0.0"}"#,
+    )?;
+    std::fs::create_dir_all(remote_plugin_cache_root.join("1.0.0/skills/plan-work"))?;
+    std::fs::write(
+        remote_plugin_cache_root.join("1.0.0/skills/plan-work/SKILL.md"),
+        "---\nname: plan-work\ndescription: Plan work\n---\n",
     )?;
     let legacy_remote_plugin_cache_root = codex_home.path().join(format!(
         "plugins/cache/openai-curated-remote/{REMOTE_PLUGIN_ID}"
@@ -255,11 +266,31 @@ async fn plugin_uninstall_writes_remote_plugin_to_cloud_when_remote_plugin_enabl
     .await?;
     assert!(!remote_plugin_cache_root.exists());
     assert!(!legacy_remote_plugin_cache_root.exists());
+    let payload = wait_for_plugin_analytics_payload(&server).await?;
+    assert_eq!(
+        payload,
+        json!({
+            "events": [{
+                "event_type": "codex_plugin_uninstalled",
+                "event_params": {
+                    "plugin_id": "linear@openai-curated-remote",
+                    "remote_plugin_id": REMOTE_PLUGIN_ID,
+                    "plugin_name": "linear",
+                    "marketplace_name": "openai-curated-remote",
+                    "has_skills": true,
+                    "mcp_server_count": 0,
+                    "connector_ids": [],
+                    "product_client_id": DEFAULT_CLIENT_NAME,
+                }
+            }]
+        })
+    );
     Ok(())
 }
 
 #[tokio::test]
-async fn plugin_uninstall_uses_detail_scope_for_cache_namespace() -> Result<()> {
+async fn plugin_uninstall_uses_detail_identity_and_scope_for_uninstall_target() -> Result<()> {
+    const REQUEST_REMOTE_PLUGIN_ID: &str = "plugins~Plugin_linear_alias";
     let codex_home = TempDir::new()?;
     let server = MockServer::start().await;
     write_remote_plugin_catalog_config(
@@ -274,7 +305,15 @@ async fn plugin_uninstall_uses_detail_scope_for_cache_namespace() -> Result<()> 
             .chatgpt_account_id("account-123"),
         AuthCredentialsStoreMode::File,
     )?;
-    mount_remote_plugin_detail(&server, REMOTE_PLUGIN_ID, "1.0.0", "WORKSPACE").await;
+    mount_remote_plugin_detail_response_with_name(
+        &server,
+        REQUEST_REMOTE_PLUGIN_ID,
+        REMOTE_PLUGIN_ID,
+        "linear",
+        "1.0.0",
+        "WORKSPACE",
+    )
+    .await;
 
     Mock::given(method("POST"))
         .and(path(format!(
@@ -307,7 +346,7 @@ async fn plugin_uninstall_uses_detail_scope_for_cache_namespace() -> Result<()> 
 
     let request_id = mcp
         .send_plugin_uninstall_request(PluginUninstallParams {
-            plugin_id: REMOTE_PLUGIN_ID.to_string(),
+            plugin_id: REQUEST_REMOTE_PLUGIN_ID.to_string(),
         })
         .await?;
     let response: JSONRPCResponse = timeout(
@@ -617,6 +656,25 @@ async fn mount_remote_plugin_detail_with_name(
     release_version: &str,
     scope: &str,
 ) {
+    mount_remote_plugin_detail_response_with_name(
+        server,
+        remote_plugin_id,
+        remote_plugin_id,
+        plugin_name,
+        release_version,
+        scope,
+    )
+    .await;
+}
+
+async fn mount_remote_plugin_detail_response_with_name(
+    server: &MockServer,
+    request_remote_plugin_id: &str,
+    response_remote_plugin_id: &str,
+    plugin_name: &str,
+    release_version: &str,
+    scope: &str,
+) {
     let discoverability = if scope == "WORKSPACE" {
         r#"
   "discoverability": "LISTED","#
@@ -625,7 +683,7 @@ async fn mount_remote_plugin_detail_with_name(
     };
     let detail_body = format!(
         r#"{{
-  "id": "{remote_plugin_id}",
+  "id": "{response_remote_plugin_id}",
   "name": "{plugin_name}",
   "scope": "{scope}",{discoverability}
   "installation_policy": "AVAILABLE",
@@ -644,7 +702,9 @@ async fn mount_remote_plugin_detail_with_name(
     );
 
     Mock::given(method("GET"))
-        .and(path(format!("/backend-api/ps/plugins/{remote_plugin_id}")))
+        .and(path(format!(
+            "/backend-api/ps/plugins/{request_remote_plugin_id}"
+        )))
         .and(header("authorization", "Bearer chatgpt-token"))
         .and(header("chatgpt-account-id", "account-123"))
         .respond_with(ResponseTemplate::new(200).set_body_string(detail_body))
@@ -685,4 +745,27 @@ async fn wait_for_remote_plugin_request_count(
     })
     .await??;
     Ok(())
+}
+
+async fn wait_for_plugin_analytics_payload(server: &MockServer) -> Result<serde_json::Value> {
+    timeout(DEFAULT_TIMEOUT, async {
+        loop {
+            let Some(requests) = server.received_requests().await else {
+                tokio::time::sleep(Duration::from_millis(25)).await;
+                continue;
+            };
+            if let Some(request) = requests.iter().find(|request| {
+                request.method == "POST"
+                    && request
+                        .url
+                        .path()
+                        .ends_with("/codex/analytics-events/events")
+            }) {
+                return serde_json::from_slice(&request.body)
+                    .map_err(|err| anyhow::anyhow!("invalid analytics payload: {err}"));
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await?
 }

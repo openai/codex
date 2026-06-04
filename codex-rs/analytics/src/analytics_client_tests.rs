@@ -2877,6 +2877,7 @@ fn plugin_used_event_serializes_expected_shape() {
             "event_type": "codex_plugin_used",
             "event_params": {
                 "plugin_id": "sample@test",
+                "remote_plugin_id": null,
                 "plugin_name": "sample",
                 "marketplace_name": "test",
                 "has_skills": true,
@@ -2907,6 +2908,7 @@ fn plugin_management_event_serializes_expected_shape() {
             "event_type": "codex_plugin_installed",
             "event_params": {
                 "plugin_id": "sample@test",
+                "remote_plugin_id": null,
                 "plugin_name": "sample",
                 "marketplace_name": "test",
                 "has_skills": true,
@@ -2919,7 +2921,7 @@ fn plugin_management_event_serializes_expected_shape() {
 }
 
 #[test]
-fn plugin_management_event_can_use_remote_plugin_id_override() {
+fn plugin_management_event_serializes_local_and_remote_plugin_ids() {
     let mut plugin = sample_plugin_metadata();
     plugin.remote_plugin_id = Some("plugins~Plugin_remote".to_string());
     let event = TrackEventRequest::PluginInstalled(CodexPluginEventRequest {
@@ -2929,8 +2931,9 @@ fn plugin_management_event_can_use_remote_plugin_id_override() {
 
     let payload = serde_json::to_value(&event).expect("serialize plugin installed event");
 
+    assert_eq!(payload["event_params"]["plugin_id"], "sample@test");
     assert_eq!(
-        payload["event_params"]["plugin_id"],
+        payload["event_params"]["remote_plugin_id"],
         "plugins~Plugin_remote"
     );
     assert_eq!(payload["event_params"]["plugin_name"], "sample");
@@ -3274,6 +3277,7 @@ async fn reducer_ingests_plugin_state_changed_fact() {
             "event_type": "codex_plugin_disabled",
             "event_params": {
                 "plugin_id": "sample@test",
+                "remote_plugin_id": null,
                 "plugin_name": "sample",
                 "marketplace_name": "test",
                 "has_skills": true,

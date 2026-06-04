@@ -6,6 +6,7 @@ use std::time::Duration;
 use std::time::Instant;
 
 use anyhow::Result;
+use codex_core_plugins::remote::RemotePluginScope;
 use codex_features::Feature;
 use codex_login::CodexAuth;
 use codex_protocol::protocol::EventMsg;
@@ -23,11 +24,18 @@ use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_mcp_server;
 use tempfile::TempDir;
+use wiremock::Mock;
 use wiremock::MockServer;
+use wiremock::ResponseTemplate;
+use wiremock::matchers::method;
+use wiremock::matchers::path;
+use wiremock::matchers::query_param;
 
 const SAMPLE_PLUGIN_CONFIG_NAME: &str = "sample@test";
 const SAMPLE_PLUGIN_DISPLAY_NAME: &str = "sample";
 const SAMPLE_PLUGIN_DESCRIPTION: &str = "inspect sample data";
+const REMOTE_SAMPLE_PLUGIN_CONFIG_NAME: &str = "sample@openai-curated-remote";
+const REMOTE_SAMPLE_PLUGIN_ID: &str = "plugins~Plugin_sample";
 
 fn sample_plugin_root(home: &TempDir) -> std::path::PathBuf {
     home.path().join("plugins/cache/test/sample/local")
@@ -63,6 +71,33 @@ fn write_plugin_skill_plugin(home: &TempDir) -> std::path::PathBuf {
     )
     .expect("write plugin skill");
     skill_dir.join("SKILL.md")
+}
+
+fn write_remote_plugin_skill_plugin(home: &TempDir) {
+    let plugin_root = home
+        .path()
+        .join("plugins/cache/openai-curated-remote/sample/local");
+    std::fs::create_dir_all(plugin_root.join(".codex-plugin"))
+        .expect("create remote plugin manifest dir");
+    std::fs::write(
+        plugin_root.join(".codex-plugin/plugin.json"),
+        r#"{"name":"sample","description":"inspect sample data"}"#,
+    )
+    .expect("write remote plugin manifest");
+    let skill_dir = plugin_root.join("skills/sample-search");
+    std::fs::create_dir_all(&skill_dir).expect("create remote plugin skill dir");
+    std::fs::write(
+        skill_dir.join("SKILL.md"),
+        "---\ndescription: inspect sample data\n---\n\n# body\n",
+    )
+    .expect("write remote plugin skill");
+    std::fs::write(
+        home.path().join("config.toml"),
+        format!(
+            "[features]\nplugins = true\nremote_plugin = true\n\n[plugins.\"{REMOTE_SAMPLE_PLUGIN_CONFIG_NAME}\"]\nenabled = true\n"
+        ),
+    )
+    .expect("write remote plugin config");
 }
 
 fn write_plugin_mcp_plugin(home: &TempDir, command: &str) {
@@ -358,32 +393,12 @@ async fn explicit_plugin_mentions_track_plugin_used_analytics() -> Result<()> {
         .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
-    let deadline = Instant::now() + Duration::from_secs(10);
-    let plugin_event = loop {
-        let requests = server.received_requests().await.unwrap_or_default();
-        if let Some(event) = requests
-            .into_iter()
-            .filter(|request| request.url.path() == "/codex/analytics-events/events")
-            .find_map(|request| {
-                let payload: serde_json::Value = serde_json::from_slice(&request.body).ok()?;
-                payload["events"].as_array().and_then(|events| {
-                    events
-                        .iter()
-                        .find(|event| event["event_type"] == "codex_plugin_used")
-                        .cloned()
-                })
-            })
-        {
-            break event;
-        }
-        if Instant::now() >= deadline {
-            panic!("timed out waiting for plugin analytics request");
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    };
-
-    let event = plugin_event;
+    let event = wait_for_plugin_used_analytics_event(&server).await;
     assert_eq!(event["event_params"]["plugin_id"], "sample@test");
+    assert_eq!(
+        event["event_params"]["remote_plugin_id"],
+        serde_json::Value::Null
+    );
     assert_eq!(event["event_params"]["plugin_name"], "sample");
     assert_eq!(event["event_params"]["marketplace_name"], "test");
     assert_eq!(event["event_params"]["has_skills"], true);
@@ -405,4 +420,123 @@ async fn explicit_plugin_mentions_track_plugin_used_analytics() -> Result<()> {
     assert!(event["event_params"]["turn_id"].as_str().is_some());
 
     Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn explicit_remote_plugin_mentions_track_remote_plugin_id() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = start_mock_server().await;
+    let _resp_mock = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
+    let global_installed_body = format!(
+        r#"{{
+  "plugins": [{{
+    "id": "{REMOTE_SAMPLE_PLUGIN_ID}",
+    "name": "sample",
+    "scope": "GLOBAL",
+    "installation_policy": "AVAILABLE",
+    "authentication_policy": "ON_USE",
+    "release": {{
+      "version": "1.0.0",
+      "display_name": "Sample",
+      "description": "Inspect sample data",
+      "app_ids": [],
+      "interface": {{}},
+      "skills": []
+    }},
+    "enabled": true,
+    "disabled_skill_names": []
+  }}],
+  "pagination": {{"limit": 50, "next_page_token": null}}
+}}"#
+    );
+    Mock::given(method("GET"))
+        .and(path("/ps/plugins/installed"))
+        .and(query_param("scope", "GLOBAL"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(global_installed_body))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/ps/plugins/installed"))
+        .and(query_param("scope", "WORKSPACE"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_string(
+                r#"{"plugins":[],"pagination":{"limit":50,"next_page_token":null}}"#,
+            ),
+        )
+        .mount(&server)
+        .await;
+
+    let codex_home = Arc::new(TempDir::new()?);
+    write_remote_plugin_skill_plugin(codex_home.as_ref());
+    let test_codex = build_analytics_plugin_test_codex(&server, codex_home).await?;
+    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+    test_codex
+        .thread_manager
+        .plugins_manager()
+        .build_and_cache_remote_installed_plugin_marketplaces(
+            &test_codex.config.plugins_config_input(),
+            Some(&auth),
+            &[RemotePluginScope::Global],
+            /*on_effective_plugins_changed*/ None,
+        )
+        .await?;
+    let codex = Arc::clone(&test_codex.codex);
+
+    codex
+        .submit(Op::UserInput {
+            environments: None,
+            items: vec![codex_protocol::user_input::UserInput::Mention {
+                name: "sample".into(),
+                path: format!("plugin://{REMOTE_SAMPLE_PLUGIN_CONFIG_NAME}"),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let event = wait_for_plugin_used_analytics_event(&server).await;
+    assert_eq!(
+        event["event_params"]["plugin_id"],
+        REMOTE_SAMPLE_PLUGIN_CONFIG_NAME
+    );
+    assert_eq!(
+        event["event_params"]["remote_plugin_id"],
+        REMOTE_SAMPLE_PLUGIN_ID
+    );
+    assert_eq!(event["event_params"]["has_skills"], true);
+
+    Ok(())
+}
+
+async fn wait_for_plugin_used_analytics_event(server: &MockServer) -> serde_json::Value {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let requests = server.received_requests().await.unwrap_or_default();
+        if let Some(event) = requests
+            .into_iter()
+            .filter(|request| request.url.path() == "/codex/analytics-events/events")
+            .find_map(|request| {
+                let payload: serde_json::Value = serde_json::from_slice(&request.body).ok()?;
+                payload["events"].as_array().and_then(|events| {
+                    events
+                        .iter()
+                        .find(|event| event["event_type"] == "codex_plugin_used")
+                        .cloned()
+                })
+            })
+        {
+            return event;
+        }
+        if Instant::now() >= deadline {
+            panic!("timed out waiting for plugin analytics request");
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
 }
