@@ -384,6 +384,15 @@ async fn open_sqlite(
 pub(super) async fn ensure_backfill_state_row_in_pool(
     pool: &sqlx::SqlitePool,
 ) -> anyhow::Result<()> {
+    // A no-op conflict insert still enters SQLite's writer path and can block startup.
+    if sqlx::query_scalar::<_, i64>("SELECT 1 FROM backfill_state WHERE id = 1")
+        .fetch_optional(pool)
+        .await?
+        .is_some()
+    {
+        return Ok(());
+    }
+
     sqlx::query(
         r#"
 INSERT INTO backfill_state (id, status, last_watermark, last_success_at, updated_at)
