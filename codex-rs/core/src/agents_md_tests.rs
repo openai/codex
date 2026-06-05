@@ -1,7 +1,9 @@
 use super::*;
 use crate::config::ConfigBuilder;
+use codex_exec_server::EnvironmentManager;
 use codex_exec_server::LOCAL_FS;
 use codex_features::Feature;
+use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use core_test_support::PathBufExt;
 use core_test_support::TempDirExt;
@@ -153,16 +155,16 @@ fn empty_loaded_instructions_are_empty() {
 #[test]
 fn loaded_instructions_with_only_empty_or_whitespace_entries_are_empty() {
     let empty = LoadedAgentsMd {
-        entries: vec![InstructionEntry {
+        internal_entries: vec![InternalInstructionEntry {
             contents: String::new(),
-            provenance: InstructionProvenance::Internal,
         }],
+        ..Default::default()
     };
     let whitespace = LoadedAgentsMd {
-        entries: vec![InstructionEntry {
+        internal_entries: vec![InternalInstructionEntry {
             contents: " \n\t".to_string(),
-            provenance: InstructionProvenance::Internal,
         }],
+        ..Default::default()
     };
 
     assert!(empty.is_empty());
@@ -353,6 +355,79 @@ async fn keeps_existing_instructions_when_doc_missing() {
     assert_eq!(res, Some(INSTRUCTIONS.to_string()));
 }
 
+#[tokio::test]
+async fn resolving_again_replaces_project_instructions() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let first_project = tmp.path().join("first");
+    let second_project = tmp.path().join("second");
+    fs::create_dir_all(&first_project).unwrap();
+    fs::create_dir_all(&second_project).unwrap();
+    fs::write(first_project.join("AGENTS.md"), "first project").unwrap();
+    fs::write(second_project.join("AGENTS.md"), "second project").unwrap();
+
+    let mut config = make_config(&tmp, /*limit*/ 4096, Some("user instructions")).await;
+    config.cwd = first_project.abs();
+    let mut warnings = Vec::new();
+    config.user_instructions = AgentsMdManager::new(&config)
+        .user_instructions_with_fs(LOCAL_FS.as_ref(), &mut warnings)
+        .await;
+
+    config.cwd = second_project.abs();
+    let loaded = AgentsMdManager::new(&config)
+        .user_instructions_with_fs(LOCAL_FS.as_ref(), &mut warnings)
+        .await
+        .expect("instructions expected");
+    let user_agents = config.codex_home.join(DEFAULT_AGENTS_MD_FILENAME);
+    let second_agents = AbsolutePathBuf::try_from(
+        dunce::canonicalize(second_project.join("AGENTS.md"))
+            .expect("canonical second project doc path"),
+    )
+    .expect("absolute second project doc path");
+
+    assert_eq!(
+        loaded,
+        LoadedAgentsMd {
+            user_entries: vec![UserInstructionEntry {
+                contents: "user instructions".to_string(),
+                source: Some(user_agents),
+            }],
+            project_entries: vec![ProjectInstructionEntry {
+                contents: "second project".to_string(),
+                source: second_agents,
+            }],
+            internal_entries: Vec::new(),
+        }
+    );
+}
+
+#[tokio::test]
+async fn load_thread_user_instructions_uses_primary_environment() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    fs::write(tmp.path().join("AGENTS.md"), "project instructions").unwrap();
+    let mut config = make_config(&tmp, /*limit*/ 4096, Some("user instructions")).await;
+    let environment_manager = EnvironmentManager::default_for_tests();
+    let environment_id = environment_manager
+        .default_environment_id()
+        .expect("default environment")
+        .to_string();
+    let environments = vec![TurnEnvironmentSelection {
+        environment_id,
+        cwd: config.cwd.clone(),
+    }];
+
+    load_thread_user_instructions(&mut config, &environment_manager, &environments)
+        .await
+        .expect("load thread instructions");
+
+    assert_eq!(
+        config
+            .user_instructions
+            .expect("instructions expected")
+            .text(),
+        format!("user instructions{AGENTS_MD_SEPARATOR}project instructions")
+    );
+}
+
 /// When both the repository root and the working directory contain
 /// AGENTS.md files, their contents are concatenated from root to cwd.
 #[tokio::test]
@@ -385,16 +460,17 @@ async fn concatenates_root_and_cwd_docs() {
     let root_agents = repo.path().join("AGENTS.md").abs();
     let crate_agents = cfg.cwd.join("AGENTS.md");
     let expected = LoadedAgentsMd {
-        entries: vec![
-            InstructionEntry {
+        project_entries: vec![
+            ProjectInstructionEntry {
                 contents: "root doc".to_string(),
-                provenance: InstructionProvenance::Project(root_agents.clone()),
+                source: root_agents.clone(),
             },
-            InstructionEntry {
+            ProjectInstructionEntry {
                 contents: "crate doc".to_string(),
-                provenance: InstructionProvenance::Project(crate_agents.clone()),
+                source: crate_agents.clone(),
             },
         ],
+        ..Default::default()
     };
 
     assert_eq!(loaded, expected);
@@ -468,16 +544,14 @@ async fn child_agents_message_after_global_instructions_uses_plain_separator() {
         .expect("instructions expected");
     let global_agents = cfg.codex_home.join(DEFAULT_AGENTS_MD_FILENAME);
     let expected = LoadedAgentsMd {
-        entries: vec![
-            InstructionEntry {
-                contents: "global doc".to_string(),
-                provenance: InstructionProvenance::User(global_agents),
-            },
-            InstructionEntry {
-                contents: HIERARCHICAL_AGENTS_MESSAGE.to_string(),
-                provenance: InstructionProvenance::Internal,
-            },
-        ],
+        user_entries: vec![UserInstructionEntry {
+            contents: "global doc".to_string(),
+            source: Some(global_agents),
+        }],
+        internal_entries: vec![InternalInstructionEntry {
+            contents: HIERARCHICAL_AGENTS_MESSAGE.to_string(),
+        }],
+        ..Default::default()
     };
 
     assert_eq!(loaded, expected);
@@ -505,16 +579,15 @@ async fn instruction_sources_include_global_before_agents_md_docs() {
     let project_agents = cfg.cwd.join("AGENTS.md");
 
     let expected = LoadedAgentsMd {
-        entries: vec![
-            InstructionEntry {
-                contents: "global doc".to_string(),
-                provenance: InstructionProvenance::User(global_agents.clone()),
-            },
-            InstructionEntry {
-                contents: "project doc".to_string(),
-                provenance: InstructionProvenance::Project(project_agents.clone()),
-            },
-        ],
+        user_entries: vec![UserInstructionEntry {
+            contents: "global doc".to_string(),
+            source: Some(global_agents.clone()),
+        }],
+        project_entries: vec![ProjectInstructionEntry {
+            contents: "project doc".to_string(),
+            source: project_agents.clone(),
+        }],
+        internal_entries: Vec::new(),
     };
     assert_eq!(loaded, expected);
     assert_eq!(
@@ -546,20 +619,17 @@ async fn child_agents_message_after_project_docs_is_not_an_instruction_source() 
     let project_agents = cfg.cwd.join("AGENTS.md");
 
     let expected = LoadedAgentsMd {
-        entries: vec![
-            InstructionEntry {
-                contents: "global doc".to_string(),
-                provenance: InstructionProvenance::User(global_agents.clone()),
-            },
-            InstructionEntry {
-                contents: "project doc".to_string(),
-                provenance: InstructionProvenance::Project(project_agents.clone()),
-            },
-            InstructionEntry {
-                contents: HIERARCHICAL_AGENTS_MESSAGE.to_string(),
-                provenance: InstructionProvenance::Internal,
-            },
-        ],
+        user_entries: vec![UserInstructionEntry {
+            contents: "global doc".to_string(),
+            source: Some(global_agents.clone()),
+        }],
+        project_entries: vec![ProjectInstructionEntry {
+            contents: "project doc".to_string(),
+            source: project_agents.clone(),
+        }],
+        internal_entries: vec![InternalInstructionEntry {
+            contents: HIERARCHICAL_AGENTS_MESSAGE.to_string(),
+        }],
     };
     assert_eq!(loaded, expected);
     assert_eq!(

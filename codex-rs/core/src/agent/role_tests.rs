@@ -1,4 +1,5 @@
 use super::*;
+use crate::LoadedAgentsMd;
 use crate::SkillsManager;
 use crate::config::ConfigBuilder;
 use crate::skills_load_input_from_config;
@@ -210,6 +211,35 @@ async fn apply_role_preserves_unspecified_keys() {
         config.main_execve_wrapper_exe,
         Some(PathBuf::from("/tmp/codex-execve-wrapper"))
     );
+}
+
+#[tokio::test]
+async fn apply_role_preserves_preloaded_user_instructions() {
+    let (home, mut config) = test_config_with_cli_overrides(Vec::new()).await;
+    config.user_instructions = Some(LoadedAgentsMd::from_text_for_testing(
+        "preloaded instructions",
+    ));
+    let expected = config.user_instructions.clone();
+    let role_path = write_role_config(
+        &home,
+        "instruction-role.toml",
+        "developer_instructions = \"Stay focused\"",
+    )
+    .await;
+    config.agent_roles.insert(
+        "custom".to_string(),
+        AgentRoleConfig {
+            description: None,
+            config_file: Some(role_path),
+            nickname_candidates: None,
+        },
+    );
+
+    apply_role_to_config(&mut config, Some("custom"))
+        .await
+        .expect("custom role should apply");
+
+    assert_eq!(config.user_instructions, expected);
 }
 
 #[tokio::test]

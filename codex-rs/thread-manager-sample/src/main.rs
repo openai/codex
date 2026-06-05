@@ -9,7 +9,6 @@ use anyhow::Context;
 use anyhow::bail;
 use clap::Parser;
 use codex_core_api::AbsolutePathBuf;
-use codex_core_api::AgentsMdManager;
 use codex_core_api::AltScreenMode;
 use codex_core_api::ApprovalsReviewer;
 use codex_core_api::Arg0DispatchPaths;
@@ -59,6 +58,7 @@ use codex_core_api::empty_extension_registry;
 use codex_core_api::find_codex_home;
 use codex_core_api::init_state_db;
 use codex_core_api::item_event_to_server_notification;
+use codex_core_api::load_thread_user_instructions;
 use codex_core_api::resolve_installation_id;
 use codex_core_api::set_default_originator;
 use codex_core_api::thread_store_from_config;
@@ -121,21 +121,11 @@ async fn run_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             .await?,
     );
     let installation_id = resolve_installation_id(&config.codex_home).await?;
-    let mut warnings = Vec::new();
-    config.user_instructions = match environment_manager.default_environment() {
-        Some(environment) => {
-            AgentsMdManager::new(&config)
-                .load_user_instructions(environment.as_ref(), &mut warnings)
-                .await
-        }
-        None => None,
-    };
-    config.startup_warnings.extend(warnings);
     let thread_manager = ThreadManager::new(
         &config,
         auth_manager,
         SessionSource::Exec,
-        environment_manager,
+        Arc::clone(&environment_manager),
         empty_extension_registry(),
         /*analytics_events_client*/ None,
         Arc::clone(&thread_store),
@@ -143,6 +133,8 @@ async fn run_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
         installation_id,
         /*attestation_provider*/ None,
     );
+    let environments = thread_manager.default_environment_selections(&config.cwd);
+    load_thread_user_instructions(&mut config, environment_manager.as_ref(), &environments).await?;
 
     let NewThread {
         thread_id, thread, ..
