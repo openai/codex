@@ -235,4 +235,28 @@ mod tests {
 
         insta::assert_snapshot!(terminal.backend());
     }
+
+    #[test]
+    fn renders_snapshot_for_trust_error() {
+        let widget = TrustDirectoryWidget {
+            cwd: PathBuf::from("/workspace/project"),
+            trust_target: PathBuf::from("/workspace/project"),
+            show_windows_create_sandbox_hint: false,
+            should_quit: false,
+            selection: None,
+            highlighted: TrustDirectorySelection::Trust,
+            error: Some(
+                "Failed to set trust for /workspace/project: config/batchWrite failed in TUI: Invalid configuration: features.fast_mode=true is not supported; allowed set [fast_mode=false]"
+                    .to_string(),
+            ),
+        };
+
+        let mut terminal =
+            Terminal::new(VT100Backend::new(/*width*/ 70, /*height*/ 18)).expect("terminal");
+        terminal
+            .draw(|f| (&widget).render_ref(f.area(), f.buffer_mut()))
+            .expect("draw");
+
+        insta::assert_snapshot!(terminal.backend());
+    }
 }
