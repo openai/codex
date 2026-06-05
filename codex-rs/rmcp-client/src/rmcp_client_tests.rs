@@ -38,13 +38,18 @@ fn initialize_metric_tags_record_success_after_retry() {
         "none",
     ));
 
-    assert_eq!(tags["transport"], "streamable_http");
-    assert_eq!(tags["outcome"], "success");
-    assert_eq!(tags["retried"], "true");
-    assert_eq!(tags["attempts"], "2");
-    assert_eq!(tags["retry_count"], "1");
-    assert_eq!(tags["retry_exhausted"], "false");
-    assert_eq!(tags["failure_kind"], "none");
+    assert_eq!(
+        tags,
+        metric_tags_map(vec![
+            ("transport", "streamable_http".to_string()),
+            ("outcome", "success".to_string()),
+            ("retried", "true".to_string()),
+            ("attempts", "2".to_string()),
+            ("retry_count", "1".to_string()),
+            ("retry_exhausted", "false".to_string()),
+            ("failure_kind", "none".to_string()),
+        ])
+    );
 }
 
 #[test]
@@ -57,11 +62,16 @@ fn initialize_metric_tags_record_retry_exhaustion() {
         "retry_exhausted",
     ));
 
-    assert_eq!(tags["transport"], "streamable_http");
-    assert_eq!(tags["outcome"], "error");
-    assert_eq!(tags["retried"], "true");
-    assert_eq!(tags["attempts"], "3");
-    assert_eq!(tags["retry_count"], "2");
-    assert_eq!(tags["retry_exhausted"], "true");
-    assert_eq!(tags["failure_kind"], "retry_exhausted");
+    assert_eq!(
+        tags,
+        metric_tags_map(vec![
+            ("transport", "streamable_http".to_string()),
+            ("outcome", "error".to_string()),
+            ("retried", "true".to_string()),
+            ("attempts", "3".to_string()),
+            ("retry_count", "2".to_string()),
+            ("retry_exhausted", "true".to_string()),
+            ("failure_kind", "retry_exhausted".to_string()),
+        ])
+    );
 }

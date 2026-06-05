@@ -44,7 +44,6 @@ fmt:
 fmt-check:
     {{ python }} ../scripts/format.py --check
 
-# Check formatting without modifying files.
 fmt-check:
     cargo fmt -- --check --config imports_granularity=Item 2>/dev/null
     uv run --frozen --project ../sdk/python --extra dev ruff check --diff ../sdk/python
