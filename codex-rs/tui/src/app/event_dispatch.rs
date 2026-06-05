@@ -190,6 +190,9 @@ impl App {
 
                 tui.frame_requester().schedule_frame();
             }
+            AppEvent::BeginHistoryReplay => {
+                self.begin_history_replay();
+            }
             AppEvent::InsertHistoryCell(cell) => {
                 let cell: Arc<dyn HistoryCell> = cell.into();
                 if let Some(Overlay::Transcript(t)) = &mut self.overlay {
@@ -204,7 +207,7 @@ impl App {
                         replay.awaiting_session_header
                             && cell.as_any().is::<history_cell::SessionInfoCell>()
                     });
-                if self.initial_history_replay_buffer.is_none() || replayed_session_header {
+                if self.initial_history_replay_buffer.is_none() {
                     self.insert_history_cell_lines(
                         tui,
                         cell.as_ref(),
@@ -218,6 +221,7 @@ impl App {
                     replay.awaiting_session_header = false;
                     if replayed_session_header {
                         replay.source_start = self.transcript_cells.len();
+                        replay.preserved_session_header = Some(cell);
                     }
                 }
             }

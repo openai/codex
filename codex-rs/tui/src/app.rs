@@ -472,10 +472,12 @@ struct SessionSummary {
 }
 
 /// Marks replay whose terminal writes are deferred until `transcript_cells` is complete.
-#[derive(Debug, Default)]
-struct InitialHistoryReplayBuffer {
+#[derive(Debug)]
+pub(super) struct InitialHistoryReplayBuffer {
     source_start: usize,
     awaiting_session_header: bool,
+    preserved_session_header: Option<Arc<dyn HistoryCell>>,
+    had_emitted_history_lines: bool,
 }
 
 pub(crate) struct App {

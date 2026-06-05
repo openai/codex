@@ -1070,12 +1070,12 @@ impl App {
         self.activate_thread_channel(thread_id).await;
         self.chat_widget
             .set_initial_user_message_submit_suppressed(/*suppressed*/ true);
-        self.chat_widget.handle_thread_session(session);
         let should_buffer_initial_replay =
             self.terminal_resize_reflow_enabled() && !turns.is_empty();
         if should_buffer_initial_replay {
-            self.begin_history_replay();
+            self.app_event_tx.send(AppEvent::BeginHistoryReplay);
         }
+        self.chat_widget.handle_thread_session(session);
         self.chat_widget
             .replay_thread_turns(turns, ReplayKind::ResumeInitialMessages);
         if should_buffer_initial_replay {
@@ -1262,7 +1262,7 @@ impl App {
         let should_buffer_replay = self.terminal_resize_reflow_enabled()
             && (!snapshot.turns.is_empty() || !snapshot.events.is_empty());
         if should_buffer_replay {
-            self.begin_history_replay();
+            self.app_event_tx.send(AppEvent::BeginHistoryReplay);
         }
         let suppress_replay_notices =
             replay_filter::snapshot_has_pending_interactive_request(&snapshot);

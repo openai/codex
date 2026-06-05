@@ -386,6 +386,57 @@ async fn enqueue_primary_thread_session_replays_turns_before_initial_prompt_subm
 }
 
 #[tokio::test]
+async fn enqueue_primary_thread_session_orders_replay_after_queued_history() -> Result<()> {
+    let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    enable_terminal_resize_reflow(&mut app);
+    app.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+        PlainHistoryCell::new(vec![Line::from("startup warning")]),
+    )));
+
+    app.enqueue_primary_thread_session(
+        test_thread_session(ThreadId::new(), test_path_buf("/tmp/project")),
+        vec![test_turn("turn-1", TurnStatus::Completed, Vec::new())],
+    )
+    .await?;
+
+    let events = std::iter::from_fn(|| app_event_rx.try_recv().ok()).collect::<Vec<_>>();
+    let warning = events
+        .iter()
+        .position(|event| match event {
+            AppEvent::InsertHistoryCell(cell) => {
+                lines_to_single_string(&cell.transcript_lines(/*width*/ 80))
+                    .contains("startup warning")
+            }
+            _ => false,
+        })
+        .expect("queued warning");
+    let begin = events
+        .iter()
+        .position(|event| matches!(event, AppEvent::BeginHistoryReplay))
+        .expect("replay start");
+    let header = events
+        .iter()
+        .position(|event| {
+            matches!(
+                event,
+                AppEvent::InsertHistoryCell(cell)
+                    if cell.as_any().is::<history_cell::SessionInfoCell>()
+            )
+        })
+        .expect("session header");
+    let end = events
+        .iter()
+        .position(|event| matches!(event, AppEvent::EndHistoryReplay))
+        .expect("replay end");
+
+    assert!(warning < begin);
+    assert!(begin < header);
+    assert!(header < end);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn reset_thread_event_state_aborts_listener_tasks() {
     struct NotifyOnDrop(Option<tokio::sync::oneshot::Sender<()>>);
 
@@ -4023,10 +4074,17 @@ async fn history_replay_activates_without_row_cap() {
     let (mut app, _rx, _op_rx) = make_test_app_with_channels().await;
     enable_terminal_resize_reflow(&mut app);
     app.config.terminal_resize_reflow.max_rows = TerminalResizeReflowMaxRows::Disabled;
+    app.transcript_cells = vec![plain_line_cell("existing")];
+    app.has_emitted_history_lines = true;
 
     app.begin_history_replay();
 
-    assert!(app.initial_history_replay_buffer.is_some());
+    let replay = app
+        .initial_history_replay_buffer
+        .as_ref()
+        .expect("history replay");
+    assert_eq!(replay.source_start, 1);
+    assert!(replay.had_emitted_history_lines);
 }
 
 #[tokio::test]
@@ -4064,11 +4122,24 @@ async fn capped_history_replay_excludes_preserved_header_from_source_render() {
         /*auth_plan*/ None,
         /*show_fast_status*/ false,
     ));
-    let expected = vec![Line::from("tail").into()];
-    app.transcript_cells = vec![header, plain_line_cell("tail")];
+    let tail = plain_line_cell("tail");
+    let mut expected = header
+        .display_hyperlink_lines_for_mode(/*width*/ 80, app.chat_widget.history_render_mode());
+    expected.extend(tail.display_hyperlink_lines_for_mode(
+        /*width*/ 80,
+        app.chat_widget.history_render_mode(),
+    ));
+    app.transcript_cells = vec![header.clone(), tail];
 
-    let rendered =
-        app.render_history_replay_lines(/*source_start*/ 1, /*terminal_width*/ 80);
+    let rendered = app.render_history_replay_lines(
+        InitialHistoryReplayBuffer {
+            source_start: 1,
+            awaiting_session_header: false,
+            preserved_session_header: Some(header),
+            had_emitted_history_lines: false,
+        },
+        /*terminal_width*/ 80,
+    );
 
     assert_eq!(rendered, expected);
 }
@@ -4083,10 +4154,19 @@ async fn history_replay_preserves_separator_after_session_header_snapshot() {
         plain_line_cell("second message"),
     ];
 
-    let replayed =
-        app.render_history_replay_lines(/*source_start*/ 1, /*terminal_width*/ 80);
-    let rendered = std::iter::once("session header".to_string())
-        .chain(replayed.iter().map(rendered_line_text))
+    let header = app.transcript_cells[0].clone();
+    let rendered = app
+        .render_history_replay_lines(
+            InitialHistoryReplayBuffer {
+                source_start: 1,
+                awaiting_session_header: false,
+                preserved_session_header: Some(header),
+                had_emitted_history_lines: false,
+            },
+            /*terminal_width*/ 80,
+        )
+        .iter()
+        .map(rendered_line_text)
         .collect::<Vec<_>>()
         .join("\n");
 
@@ -4111,8 +4191,80 @@ async fn history_replay_uses_pet_reserved_width() {
         cell.display_hyperlink_lines_for_mode(width, app.chat_widget.history_render_mode());
     app.transcript_cells = vec![cell];
 
-    let rendered =
-        app.render_history_replay_lines(/*source_start*/ 0, /*terminal_width*/ 40);
+    let rendered = app.render_history_replay_lines(
+        InitialHistoryReplayBuffer {
+            source_start: 0,
+            awaiting_session_header: false,
+            preserved_session_header: None,
+            had_emitted_history_lines: false,
+        },
+        /*terminal_width*/ 40,
+    );
+
+    assert_eq!(rendered, expected);
+}
+
+#[tokio::test]
+async fn history_replay_preserves_emitted_state_after_empty_suffix() {
+    let (mut app, _rx, _op_rx) = make_test_app_with_channels().await;
+    let header = plain_line_cell("session header");
+    let empty: Arc<dyn HistoryCell> = Arc::new(PlainHistoryCell::new(Vec::new()));
+    app.transcript_cells = vec![header.clone(), empty];
+
+    let rendered = app.render_history_replay_lines(
+        InitialHistoryReplayBuffer {
+            source_start: 1,
+            awaiting_session_header: false,
+            preserved_session_header: Some(header.clone()),
+            had_emitted_history_lines: false,
+        },
+        /*terminal_width*/ 80,
+    );
+
+    assert_eq!(
+        rendered,
+        header.display_hyperlink_lines_for_mode(
+            /*width*/ 80,
+            app.chat_widget.history_render_mode(),
+        )
+    );
+    assert!(app.has_emitted_history_lines);
+}
+
+#[tokio::test]
+async fn history_replay_renders_preserved_header_at_final_width() {
+    let (mut app, _rx, _op_rx) = make_test_app_with_channels().await;
+    let session = test_thread_session(ThreadId::new(), test_path_buf("/tmp/project"));
+    let header: Arc<dyn HistoryCell> = Arc::new(new_session_info(
+        app.chat_widget.config_ref(),
+        app.chat_widget.current_model(),
+        &session,
+        /*is_first_event*/ false,
+        /*tooltip_override*/ None,
+        /*auth_plan*/ None,
+        /*show_fast_status*/ false,
+    ));
+    let final_width = 32;
+    let expected =
+        header.display_hyperlink_lines_for_mode(final_width, app.chat_widget.history_render_mode());
+    assert_ne!(
+        expected,
+        header.display_hyperlink_lines_for_mode(
+            /*width*/ 80,
+            app.chat_widget.history_render_mode(),
+        )
+    );
+    app.transcript_cells = vec![header.clone()];
+
+    let rendered = app.render_history_replay_lines(
+        InitialHistoryReplayBuffer {
+            source_start: 1,
+            awaiting_session_header: false,
+            preserved_session_header: Some(header),
+            had_emitted_history_lines: false,
+        },
+        final_width,
+    );
 
     assert_eq!(rendered, expected);
 }
