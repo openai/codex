@@ -430,6 +430,87 @@ async fn rotated_credentials_persist_after_startup_timeout_before_next_refresh()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn provider_refresh_persists_after_startup_timeout_before_next_refresh() -> anyhow::Result<()>
+{
+    let server = MockServer::start().await;
+    mount_oauth_metadata(&server, /*expected_requests*/ 2).await;
+    let refresh_attempts = Arc::new(AtomicUsize::new(0));
+    let responder_attempts = Arc::clone(&refresh_attempts);
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .respond_with(move |_request: &Request| {
+            responder_attempts.fetch_add(1, Ordering::SeqCst);
+            ResponseTemplate::new(200)
+                .set_delay(Duration::from_secs(6))
+                .set_body_json(json!({
+                    "access_token": NEW_ACCESS_TOKEN,
+                    "token_type": "Bearer",
+                    "expires_in": 7200,
+                    "refresh_token": NEW_REFRESH_TOKEN,
+                }))
+        })
+        .expect(1)
+        .mount(&server)
+        .await;
+    mount_mcp_server(&server, /*expected_requests*/ 2).await;
+
+    let codex_home = TempDir::new()?;
+    let control_dir = TempDir::new()?;
+    let server_url = format!("{}/mcp", server.uri());
+    seed_tokens(&codex_home, &server_url, /*expires_at*/ 0).await?;
+
+    let first_ready_path = control_dir.path().join("client-a.ready");
+    let first_go_path = control_dir.path().join("client-a.go");
+    let first_result_path = control_dir.path().join("client-a.result");
+    let first_release_path = control_dir.path().join("client-a.release");
+    let first_child = spawn_client_child_held_open(
+        &codex_home,
+        &server_url,
+        &first_ready_path,
+        &first_go_path,
+        &first_result_path,
+        &first_release_path,
+    )?;
+    wait_for_paths(std::slice::from_ref(&first_ready_path)).await?;
+    fs::write(&first_go_path, "go")?;
+    wait_for_paths(std::slice::from_ref(&first_result_path)).await?;
+    assert_eq!(
+        fs::read_to_string(&first_result_path)?,
+        "error:timed out handshaking with MCP server after 5s"
+    );
+    assert_eq!(refresh_attempts.load(Ordering::SeqCst), 1);
+    wait_for_persisted_token_snapshot(
+        &codex_home,
+        PersistedTokenSnapshot {
+            access_token: NEW_ACCESS_TOKEN.to_string(),
+            refresh_token: Some(NEW_REFRESH_TOKEN.to_string()),
+        },
+    )
+    .await?;
+
+    let second_ready_path = control_dir.path().join("client-b.ready");
+    let second_go_path = control_dir.path().join("client-b.go");
+    let second_result_path = control_dir.path().join("client-b.result");
+    let second_child = spawn_client_child(
+        &codex_home,
+        &server_url,
+        &second_ready_path,
+        &second_go_path,
+        &second_result_path,
+    )?;
+    wait_for_paths(std::slice::from_ref(&second_ready_path)).await?;
+    fs::write(&second_go_path, "go")?;
+    wait_for_children(vec![second_child]).await?;
+    assert_eq!(fs::read_to_string(second_result_path)?, "success");
+    assert_eq!(refresh_attempts.load(Ordering::SeqCst), 1);
+
+    fs::write(first_release_path, "release")?;
+    wait_for_children(vec![first_child]).await?;
+    server.verify().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn fallback_read_lock_wait_uses_operation_timeout_budget() -> anyhow::Result<()> {
     let server = MockServer::start().await;
     mount_oauth_metadata(&server, /*expected_requests*/ 1).await;
@@ -655,16 +736,21 @@ async fn refresh_provider_call_uses_operation_timeout_budget() -> anyhow::Result
     Mock::given(method("POST"))
         .and(path("/oauth/token"))
         .respond_with(move |_request: &Request| {
-            let response = ResponseTemplate::new(200).set_body_json(json!({
-                "access_token": NEW_ACCESS_TOKEN,
-                "token_type": "Bearer",
-                "expires_in": 31,
-                "refresh_token": NEW_REFRESH_TOKEN,
-            }));
-            if responder_attempts.fetch_add(1, Ordering::SeqCst) == 0 {
-                response
-            } else {
-                response.set_delay(Duration::from_secs(1))
+            match responder_attempts.fetch_add(1, Ordering::SeqCst) {
+                0 => ResponseTemplate::new(200).set_body_json(json!({
+                    "access_token": NEW_ACCESS_TOKEN,
+                    "token_type": "Bearer",
+                    "expires_in": 31,
+                    "refresh_token": NEW_REFRESH_TOKEN,
+                })),
+                _ => ResponseTemplate::new(200)
+                    .set_delay(Duration::from_secs(1))
+                    .set_body_json(json!({
+                        "access_token": FINAL_ACCESS_TOKEN,
+                        "token_type": "Bearer",
+                        "expires_in": 7200,
+                        "refresh_token": FINAL_REFRESH_TOKEN,
+                    })),
             }
         })
         .expect(2)
@@ -680,23 +766,132 @@ async fn refresh_provider_call_uses_operation_timeout_budget() -> anyhow::Result
     let ready_path = control_dir.path().join("client.ready");
     let go_path = control_dir.path().join("client.go");
     let result_path = control_dir.path().join("client.result");
-    let child = spawn_operation_timeout_child(
+    let release_path = control_dir.path().join("client.release");
+    let child = spawn_operation_timeout_child_held_open(
         &codex_home,
         &server_url,
         &ready_path,
         &go_path,
         &result_path,
+        &release_path,
     )?;
     wait_for_paths(std::slice::from_ref(&ready_path)).await?;
     sleep(Duration::from_secs(2)).await;
     fs::write(&go_path, "go")?;
-    wait_for_children(vec![child]).await?;
+    wait_for_paths(std::slice::from_ref(&result_path)).await?;
 
     assert_eq!(
-        fs::read_to_string(result_path)?,
+        fs::read_to_string(&result_path)?,
         format!("error:timed out awaiting tools/list after {OPERATION_TIMEOUT:?}")
     );
     assert_eq!(refresh_attempts.load(Ordering::SeqCst), 2);
+    wait_for_persisted_token_snapshot(
+        &codex_home,
+        PersistedTokenSnapshot {
+            access_token: FINAL_ACCESS_TOKEN.to_string(),
+            refresh_token: Some(FINAL_REFRESH_TOKEN.to_string()),
+        },
+    )
+    .await?;
+
+    fs::write(release_path, "release")?;
+    wait_for_children(vec![child]).await?;
+    server.verify().await;
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn rotated_token_storage_failure_blocks_another_process_refresh() -> anyhow::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let server = MockServer::start().await;
+    mount_oauth_metadata(&server, /*expected_requests*/ 2).await;
+    let refresh_attempts = Arc::new(AtomicUsize::new(0));
+    let responder_attempts = Arc::clone(&refresh_attempts);
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .respond_with(move |_request: &Request| {
+            match responder_attempts.fetch_add(1, Ordering::SeqCst) {
+                0 => ResponseTemplate::new(200).set_body_json(json!({
+                    "access_token": NEW_ACCESS_TOKEN,
+                    "token_type": "Bearer",
+                    "expires_in": 31,
+                    "refresh_token": NEW_REFRESH_TOKEN,
+                })),
+                1 => ResponseTemplate::new(200).set_body_json(json!({
+                    "access_token": FINAL_ACCESS_TOKEN,
+                    "token_type": "Bearer",
+                    "expires_in": 7200,
+                    "refresh_token": FINAL_REFRESH_TOKEN,
+                })),
+                _ => ResponseTemplate::new(400).set_body_json(json!({
+                    "error": "invalid_grant",
+                    "error_description": "refresh token already used",
+                })),
+            }
+        })
+        .expect(2)
+        .mount(&server)
+        .await;
+    mount_mcp_server(&server, /*expected_requests*/ 2).await;
+
+    let codex_home = TempDir::new()?;
+    let control_dir = TempDir::new()?;
+    let server_url = format!("{}/mcp", server.uri());
+    seed_tokens(&codex_home, &server_url, /*expires_at*/ 0).await?;
+
+    let first_ready_path = control_dir.path().join("client-a.ready");
+    let first_go_path = control_dir.path().join("client-a.go");
+    let first_result_path = control_dir.path().join("client-a.result");
+    let first_release_path = control_dir.path().join("client-a.release");
+    let first_child = spawn_operation_timeout_child_held_open(
+        &codex_home,
+        &server_url,
+        &first_ready_path,
+        &first_go_path,
+        &first_result_path,
+        &first_release_path,
+    )?;
+    wait_for_paths(std::slice::from_ref(&first_ready_path)).await?;
+
+    let credentials_path = codex_home.path().join(".credentials.json");
+    fs::set_permissions(&credentials_path, fs::Permissions::from_mode(0o400))?;
+    sleep(Duration::from_secs(2)).await;
+    fs::write(&first_go_path, "go")?;
+    wait_for_paths(std::slice::from_ref(&first_result_path)).await?;
+    let first_outcome = fs::read_to_string(&first_result_path)?;
+    assert!(
+        first_outcome.starts_with(&format!(
+            "error:OAuth refresh succeeded but failed to persist rotated credentials for server {SERVER_NAME}:"
+        )),
+        "unexpected first-client outcome: {first_outcome}"
+    );
+    assert_eq!(refresh_attempts.load(Ordering::SeqCst), 2);
+
+    let second_ready_path = control_dir.path().join("client-b.ready");
+    let second_go_path = control_dir.path().join("client-b.go");
+    let second_result_path = control_dir.path().join("client-b.result");
+    let mut second_child = spawn_client_child(
+        &codex_home,
+        &server_url,
+        &second_ready_path,
+        &second_go_path,
+        &second_result_path,
+    )?;
+    wait_for_paths(std::slice::from_ref(&second_ready_path)).await?;
+    fs::write(&second_go_path, "go")?;
+    sleep(Duration::from_millis(250)).await;
+    assert_eq!(refresh_attempts.load(Ordering::SeqCst), 2);
+    assert!(!second_result_path.exists());
+
+    second_child.kill().await?;
+    timeout(CHILD_WAIT_TIMEOUT, second_child.wait())
+        .await
+        .context("timed out stopping blocked OAuth client child")??;
+    fs::set_permissions(&credentials_path, fs::Permissions::from_mode(0o600))?;
+    fs::write(first_release_path, "release")?;
+    wait_for_children(vec![first_child]).await?;
 
     server.verify().await;
     Ok(())
@@ -1346,6 +1541,22 @@ async fn wait_for_paths(paths: &[PathBuf]) -> anyhow::Result<()> {
     })
     .await
     .context("timed out waiting for OAuth race process barrier")
+}
+
+async fn wait_for_persisted_token_snapshot(
+    codex_home: &TempDir,
+    expected: PersistedTokenSnapshot,
+) -> anyhow::Result<()> {
+    timeout(Duration::from_secs(10), async {
+        loop {
+            if persisted_token_snapshot(codex_home).ok().as_ref() == Some(&expected) {
+                return;
+            }
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .context("timed out waiting for rotated OAuth credentials to persist")
 }
 
 fn read_outcomes(paths: &[PathBuf]) -> anyhow::Result<Vec<String>> {

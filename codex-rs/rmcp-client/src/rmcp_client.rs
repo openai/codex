@@ -225,6 +225,8 @@ where
 enum ClientOperationError {
     #[error(transparent)]
     Service(#[from] rmcp::service::ServiceError),
+    #[error(transparent)]
+    OAuth(anyhow::Error),
     #[error("timed out awaiting {label} after {duration:?}")]
     Timeout { label: String, duration: Duration },
 }
@@ -863,10 +865,11 @@ impl RmcpClient {
             let service = transport
                 .await
                 .map_err(|err| anyhow!("handshaking with MCP server failed: {err}"))?;
-            if let Some(runtime) = &oauth_persistor
-                && let Err(error) = runtime.persist_if_needed().await
-            {
-                warn!("failed to persist OAuth tokens after initialize: {error}");
+            if let Some(runtime) = oauth_persistor.clone() {
+                Self::persist_oauth_tokens_in_background(
+                    runtime,
+                    "failed to persist OAuth tokens after initialize",
+                );
             }
             Ok((Arc::new(service), oauth_persistor))
         };
@@ -934,18 +937,17 @@ impl RmcpClient {
         Fut: std::future::Future<Output = std::result::Result<T, rmcp::service::ServiceError>>,
     {
         let refresh_and_operation = async move {
-            if let Some(runtime) = &oauth_persistor
-                && let Err(error) = runtime.refresh_if_needed().await
-            {
-                warn!("failed to refresh OAuth tokens: {error}");
+            if let Some(runtime) = &oauth_persistor {
+                runtime
+                    .refresh_if_needed()
+                    .await
+                    .map_err(ClientOperationError::OAuth)?;
             }
             let result = operation(service)
                 .await
                 .map_err(ClientOperationError::from)?;
-            if let Some(runtime) = oauth_persistor
-                && let Err(error) = runtime.persist_if_needed().await
-            {
-                warn!("failed to persist OAuth tokens: {error}");
+            if let Some(runtime) = oauth_persistor {
+                Self::persist_oauth_tokens_in_background(runtime, "failed to persist OAuth tokens");
             }
             Ok(result)
         };
@@ -961,6 +963,24 @@ impl RmcpClient {
             }
             None => refresh_and_operation.await,
         }
+    }
+
+    fn persist_oauth_tokens_in_background(runtime: OAuthPersistor, error_context: &'static str) {
+        Self::spawn_oauth_persistence(
+            async move { runtime.persist_if_needed().await },
+            error_context,
+        );
+    }
+
+    fn spawn_oauth_persistence(
+        persistence: impl Future<Output = Result<()>> + Send + 'static,
+        error_context: &'static str,
+    ) {
+        tokio::spawn(async move {
+            if let Err(error) = persistence.await {
+                warn!("{error_context}: {error}");
+            }
+        });
     }
 
     fn is_session_expired_404(error: &ClientOperationError) -> bool {
@@ -1112,6 +1132,7 @@ mod tests {
     use std::time::Duration;
 
     use pretty_assertions::assert_eq;
+    use tokio::sync::oneshot;
     use tokio::time;
 
     use super::*;
@@ -1133,5 +1154,38 @@ mod tests {
             .await;
 
         assert_eq!(Ok("done"), result);
+    }
+
+    #[tokio::test]
+    async fn completed_operation_is_not_delayed_by_oauth_persistence() {
+        let (started_tx, started_rx) = oneshot::channel();
+        let (release_tx, release_rx) = oneshot::channel();
+        let (finished_tx, mut finished_rx) = oneshot::channel();
+
+        RmcpClient::spawn_oauth_persistence(
+            async move {
+                started_tx.send(()).expect("signal persistence start");
+                release_rx.await.expect("release persistence");
+                finished_tx.send(()).expect("signal persistence finish");
+                Ok(())
+            },
+            "test OAuth persistence failure",
+        );
+        let completed_result = "completed tool response";
+
+        time::timeout(Duration::from_secs(1), started_rx)
+            .await
+            .expect("persistence task did not start")
+            .expect("persistence start sender dropped");
+        assert_eq!(completed_result, "completed tool response");
+        assert!(matches!(
+            finished_rx.try_recv(),
+            Err(oneshot::error::TryRecvError::Empty)
+        ));
+        release_tx.send(()).expect("release persistence task");
+        time::timeout(Duration::from_secs(1), finished_rx)
+            .await
+            .expect("persistence task did not finish")
+            .expect("persistence finish sender dropped");
     }
 }

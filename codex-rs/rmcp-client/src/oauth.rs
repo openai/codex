@@ -399,6 +399,12 @@ struct OAuthPersistorInner {
     credential_store: InMemoryCredentialStore,
     store_mode: OAuthCredentialsStoreMode,
     last_credentials: Mutex<Option<StoredOAuthTokens>>,
+    refresh_persistence_failure: Mutex<Option<RefreshPersistenceFailure>>,
+}
+
+struct RefreshPersistenceFailure {
+    message: String,
+    _refresh_locks: Vec<fs::File>,
 }
 
 impl OAuthPersistor {
@@ -418,6 +424,7 @@ impl OAuthPersistor {
                 credential_store,
                 store_mode,
                 last_credentials: Mutex::new(initial_credentials),
+                refresh_persistence_failure: Mutex::new(None),
             }),
         }
     }
@@ -425,20 +432,10 @@ impl OAuthPersistor {
     /// Persists the latest stored credentials if they have changed.
     /// Deletes the credentials if they are no longer present.
     pub(crate) async fn persist_if_needed(&self) -> Result<()> {
-        self.persist_if_needed_with_refresh_locks(Vec::new()).await
-    }
-
-    async fn persist_if_needed_with_refresh_locks(
-        &self,
-        refresh_locks: Vec<fs::File>,
-    ) -> Result<()> {
         let persistor = self.clone();
-        tokio::spawn(async move {
-            let _refresh_locks = refresh_locks;
-            persistor.persist_if_needed_inner().await
-        })
-        .await
-        .context("OAuth token persistence task failed")?
+        tokio::spawn(async move { persistor.persist_if_needed_inner().await })
+            .await
+            .context("OAuth token persistence task failed")?
     }
 
     #[expect(
@@ -508,6 +505,17 @@ impl OAuthPersistor {
         reason = "AuthorizationManager async access must be serialized through its mutex"
     )]
     pub(crate) async fn refresh_if_needed(&self) -> Result<()> {
+        let previous_failure = self
+            .inner
+            .refresh_persistence_failure
+            .lock()
+            .await
+            .as_ref()
+            .map(|failure| failure.message.clone());
+        if let Some(message) = previous_failure {
+            return Err(anyhow!(message));
+        }
+
         let initial_expires_at = {
             let guard = self.inner.last_credentials.lock().await;
             guard.as_ref().and_then(|tokens| tokens.expires_at)
@@ -568,8 +576,9 @@ impl OAuthPersistor {
             return Ok(());
         }
 
-        {
-            let manager = self.inner.authorization_manager.clone();
+        let persistor = self.clone();
+        tokio::spawn(async move {
+            let manager = persistor.inner.authorization_manager.clone();
             let guard = manager.lock().await;
             match guard.refresh_token().await {
                 Ok(_) => {}
@@ -582,15 +591,31 @@ impl OAuthPersistor {
                     return Err(error).with_context(|| {
                         format!(
                             "failed to refresh OAuth tokens for server {}",
-                            self.inner.server_name
+                            persistor.inner.server_name
                         )
                     });
                 }
             }
-        }
+            drop(guard);
 
-        self.persist_if_needed_with_refresh_locks(refresh_locks)
-            .await
+            if let Err(error) = persistor.persist_if_needed_inner().await {
+                let message = format!(
+                    "OAuth refresh succeeded but failed to persist rotated credentials for server {}: {error:#}",
+                    persistor.inner.server_name
+                );
+                warn!("{message}");
+                *persistor.inner.refresh_persistence_failure.lock().await =
+                    Some(RefreshPersistenceFailure {
+                        message: message.clone(),
+                        _refresh_locks: refresh_locks,
+                    });
+                return Err(anyhow!(message));
+            }
+
+            Ok(())
+        })
+        .await
+        .context("OAuth refresh task failed")?
     }
 }
 
