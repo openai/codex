@@ -45,6 +45,24 @@ fn test_cwd() -> PathBuf {
     std::env::temp_dir()
 }
 
+#[test]
+fn streaming_agent_tail_blank_line_uses_one_viewport_row() {
+    let cell = StreamingAgentTailCell::new(
+        vec![
+            HyperlinkLine::from("first"),
+            HyperlinkLine::from(""),
+            HyperlinkLine::from("second"),
+        ],
+        /*is_first_line*/ false,
+    );
+
+    let lines = cell.display_lines(/*width*/ 80);
+    insta::assert_snapshot!(render_lines(&lines).join("\n"), @"  first
+
+  second");
+    assert_eq!(cell.desired_height(/*width*/ 80), 3);
+}
+
 fn stdio_server_config(
     command: &str,
     args: Vec<&str>,
