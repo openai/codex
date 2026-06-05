@@ -178,6 +178,8 @@ genrule(
         "-e '/using HelpOptions = i::FlagList::HelpOptions;/d'",
         "-e '/HelpOptions help_options = HelpOptions(HelpOptions::kExit, usage);/d'",
         "-e 's|  i::FlagList::SetFlagsFromCommandLine(argc, argv, true, help_options);|  v8::V8::SetFlagsFromCommandLine(argc, argv, true);|'",
+        "-e '/const v8::External\\* v8__External__New/,/^}/ s|v8::External::New(isolate, value)|v8::External::New(isolate, value, v8::kExternalPointerTypeTagDefault)|'",
+        "-e '/void\\* v8__External__Value/ s|self.Value()|self.Value(v8::kExternalPointerTypeTagDefault)|'",
         "$(location @v8_crate_146_4_0//:binding_cc)",
         ">",
         '"$@"',
