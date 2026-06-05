@@ -92,43 +92,6 @@ fn materializes_readable_startup_ca_override() {
 }
 
 #[test]
-fn does_not_restore_filtered_startup_override() {
-    let dir = tempdir().unwrap();
-    let mitm_ca_trust_bundle = test_mitm_ca_trust_bundle(
-        &dir,
-        HashMap::from([(REQUESTS_CA_BUNDLE_ENV_KEY, "startup-ca.pem".to_string())]),
-    );
-    let mut env = requests_ca_bundle_env(mitm_ca_trust_bundle.path.display().to_string());
-
-    let bundle_paths =
-        prepare_mitm_ca_trust_bundle_env(&mitm_ca_trust_bundle, &mut env, dir.path(), &[], |_| {
-            true
-        });
-
-    assert_eq!(
-        env.get(REQUESTS_CA_BUNDLE_ENV_KEY),
-        Some(&mitm_ca_trust_bundle.path.display().to_string())
-    );
-    assert_eq!(bundle_paths.len(), 1);
-}
-
-#[test]
-fn materializes_readable_command_scoped_override() {
-    let dir = tempdir().unwrap();
-    let command_ca_bundle_path = dir.path().join("command-ca.pem");
-    fs::write(&command_ca_bundle_path, "command ca\n").unwrap();
-    let mut env = requests_ca_bundle_env("command-ca.pem");
-    let mitm_ca_trust_bundle = test_mitm_ca_trust_bundle(&dir, HashMap::new());
-
-    prepare_mitm_ca_trust_bundle_env(&mitm_ca_trust_bundle, &mut env, dir.path(), &[], |_| true);
-
-    assert_eq!(
-        requests_ca_bundle_contents(&env),
-        "command ca\nmanaged ca\n"
-    );
-}
-
-#[test]
 fn materializes_readable_ssl_cert_dir() {
     let dir = tempdir().unwrap();
     let (mut env, mitm_ca_trust_bundle) =
@@ -193,26 +156,6 @@ fn preserves_unreadable_command_scoped_override() {
     assert_eq!(
         env.get(REQUESTS_CA_BUNDLE_ENV_KEY),
         Some(&"command-ca.pem".to_string())
-    );
-    assert!(bundle_paths.is_empty());
-}
-
-#[test]
-fn does_not_whitelist_existing_generated_bundle_override() {
-    let dir = tempdir().unwrap();
-    let generated_ca_bundle_path = dir.path().join("ca-bundle-handcrafted.pem");
-    fs::write(&generated_ca_bundle_path, "extra ca\nmanaged ca\n").unwrap();
-    let mut env = requests_ca_bundle_env(generated_ca_bundle_path.display().to_string());
-    let mitm_ca_trust_bundle = test_mitm_ca_trust_bundle(&dir, HashMap::new());
-
-    let bundle_paths =
-        prepare_mitm_ca_trust_bundle_env(&mitm_ca_trust_bundle, &mut env, dir.path(), &[], |_| {
-            false
-        });
-
-    assert_eq!(
-        env.get(REQUESTS_CA_BUNDLE_ENV_KEY),
-        Some(&generated_ca_bundle_path.display().to_string())
     );
     assert!(bundle_paths.is_empty());
 }

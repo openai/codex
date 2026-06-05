@@ -23,6 +23,7 @@ use rama_tls_rustls::server::TlsAcceptorData;
 use sha2::Digest as _;
 use sha2::Sha256;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::ffi::OsStr;
 #[cfg(windows)]
 use std::ffi::OsString;
@@ -40,8 +41,6 @@ use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::MetadataExt;
 #[cfg(windows)]
 use std::os::windows::ffi::OsStringExt;
-#[cfg(windows)]
-use std::os::windows::fs::MetadataExt;
 #[cfg(windows)]
 use std::os::windows::io::AsRawHandle;
 use std::path::Path;
@@ -118,6 +117,7 @@ const MANAGED_MITM_CA_CERT: &str = "ca.pem";
 const MANAGED_MITM_CA_KEY: &str = "ca.key";
 const MANAGED_MITM_CA_TRUST_BUNDLE_PREFIX: &str = "ca-bundle";
 const MAX_CUSTOM_CA_BUNDLE_BYTES: u64 = 4 * 1024 * 1024;
+const MAX_CUSTOM_CA_DIR_ENTRIES: usize = 256;
 const SSL_CERT_FILE_ENV_KEY: &str = "SSL_CERT_FILE";
 pub const SSL_CERT_DIR_ENV_KEY: &str = "SSL_CERT_DIR";
 
@@ -177,7 +177,7 @@ fn managed_ca_trust_bundle_for_cert_path(
                 .map(|value| (key, value.clone()))
         })
         .collect();
-    let trust_bundle = build_managed_ca_trust_bundle(cert_path)?;
+    let trust_bundle = build_managed_ca_trust_bundle(cert_path, &startup_env_values)?;
     let path = persist_managed_ca_trust_bundle(cert_path, &trust_bundle)?;
 
     Ok(ManagedMitmCaTrustBundle {
@@ -187,7 +187,10 @@ fn managed_ca_trust_bundle_for_cert_path(
     })
 }
 
-fn build_managed_ca_trust_bundle(managed_ca_cert_path: &Path) -> Result<String> {
+fn build_managed_ca_trust_bundle(
+    managed_ca_cert_path: &Path,
+    startup_env_values: &HashMap<&'static str, String>,
+) -> Result<String> {
     let mut trust_bundle = String::new();
     let rustls_native_certs::CertificateResult { certs, errors, .. } =
         crate::native_certs::load_platform_native_certs();
@@ -199,6 +202,16 @@ fn build_managed_ca_trust_bundle(managed_ca_cert_path: &Path) -> Result<String> 
     }
     for cert in certs {
         push_certificate_pem(&mut trust_bundle, cert.as_ref());
+    }
+    let mut appended_startup_paths = HashSet::new();
+    for path in CUSTOM_CA_ENV_KEYS
+        .into_iter()
+        .filter_map(|key| startup_env_values.get(key))
+        .map(Path::new)
+    {
+        if path != managed_ca_cert_path && appended_startup_paths.insert(path) {
+            append_pem_file(&mut trust_bundle, path)?;
+        }
     }
     append_pem_file(&mut trust_bundle, managed_ca_cert_path)?;
     Ok(trust_bundle)
@@ -308,7 +321,7 @@ where
         "CA bundle {} is not readable by child policy",
         opened_path.display()
     );
-    validate_opened_file_path(&path, &opened_path, &metadata)?;
+    validate_opened_file_path(&path, &opened_path, &file, &metadata)?;
 
     let mut bytes = Vec::with_capacity(metadata.len() as usize);
     std::io::Read::by_ref(&mut file)
@@ -350,9 +363,14 @@ where
     );
 
     let mut trust_bundle = String::new();
-    for entry in fs::read_dir(&dir)
+    for (entry_index, entry) in fs::read_dir(&dir)
         .with_context(|| format!("failed to read CA directory {}", dir.display()))?
+        .enumerate()
     {
+        anyhow::ensure!(
+            entry_index < MAX_CUSTOM_CA_DIR_ENTRIES,
+            "CA directory exceeds {MAX_CUSTOM_CA_DIR_ENTRIES} entries"
+        );
         let entry = entry
             .with_context(|| format!("failed to read CA directory entry in {}", dir.display()))?;
         let path = entry.path();
@@ -524,10 +542,12 @@ fn opened_file_path(path: &Path, _file: &File) -> Result<PathBuf> {
 fn validate_opened_file_path(
     path: &Path,
     opened_path: &Path,
+    file: &File,
     metadata: &fs::Metadata,
 ) -> Result<()> {
     #[cfg(unix)]
     {
+        let _ = file;
         let opened_path_metadata = fs::metadata(opened_path).with_context(|| {
             format!("failed to stat opened CA bundle {}", opened_path.display())
         })?;
@@ -543,12 +563,15 @@ fn validate_opened_file_path(
     {
         #[cfg(windows)]
         {
-            let opened_path_metadata = fs::metadata(opened_path).with_context(|| {
-                format!("failed to stat opened CA bundle {}", opened_path.display())
+            let _ = metadata;
+            let opened_path_file = File::open(opened_path).with_context(|| {
+                format!(
+                    "failed to reopen opened CA bundle {}",
+                    opened_path.display()
+                )
             })?;
             anyhow::ensure!(
-                metadata.volume_serial_number() == opened_path_metadata.volume_serial_number()
-                    && metadata.file_index() == opened_path_metadata.file_index(),
+                windows_file_identity(&opened_path_file)? == windows_file_identity(file)?,
                 "CA bundle {} changed before it could be validated",
                 path.display()
             );
@@ -558,11 +581,32 @@ fn validate_opened_file_path(
         {
             let _ = path;
             let _ = opened_path;
+            let _ = file;
             let _ = metadata;
         }
     }
 
     Ok(())
+}
+
+#[cfg(windows)]
+fn windows_file_identity(file: &File) -> Result<(u32, u64)> {
+    use windows_sys::Win32::Storage::FileSystem::BY_HANDLE_FILE_INFORMATION;
+    use windows_sys::Win32::Storage::FileSystem::GetFileInformationByHandle;
+
+    // SAFETY: Win32 fills this plain-old-data output struct before we read it.
+    let mut file_information = unsafe { std::mem::zeroed::<BY_HANDLE_FILE_INFORMATION>() };
+    // SAFETY: `file` owns a live OS handle and `file_information` is writable.
+    let result =
+        unsafe { GetFileInformationByHandle(file.as_raw_handle() as _, &mut file_information) };
+    anyhow::ensure!(
+        result != 0,
+        "failed to inspect opened CA bundle: {}",
+        std::io::Error::last_os_error()
+    );
+    let file_index = u64::from(file_information.nFileIndexHigh) << 32
+        | u64::from(file_information.nFileIndexLow);
+    Ok((file_information.dwVolumeSerialNumber, file_index))
 }
 
 fn push_certificate_pem(bundle: &mut String, der: &[u8]) {
@@ -836,24 +880,30 @@ mod tests {
     fn managed_ca_trust_bundle_records_startup_ca_env_values() {
         let dir = tempdir().unwrap();
         let managed_ca_cert_path = dir.path().join("ca.pem");
+        let startup_ca_bundle_path = dir.path().join("startup-ca.pem");
+        let startup_cert_dir = dir.path().join("startup-certs");
         fs::write(&managed_ca_cert_path, "managed ca\n").unwrap();
+        fs::write(&startup_ca_bundle_path, "startup ca\n").unwrap();
+        fs::create_dir(&startup_cert_dir).unwrap();
+        let startup_ca_bundle_path = startup_ca_bundle_path.display().to_string();
+        let startup_cert_dir = startup_cert_dir.display().to_string();
         let env = HashMap::from([
-            ("SSL_CERT_FILE", "/tmp/startup-ca.pem".to_string()),
-            (SSL_CERT_DIR_ENV_KEY, "/tmp/startup-certs".to_string()),
+            ("SSL_CERT_FILE", startup_ca_bundle_path.clone()),
+            (SSL_CERT_DIR_ENV_KEY, startup_cert_dir.clone()),
         ]);
         let trust_bundle =
             managed_ca_trust_bundle_for_cert_path(&managed_ca_cert_path, &env).unwrap();
         assert_eq!(
             trust_bundle.startup_env_values,
             HashMap::from([
-                ("SSL_CERT_FILE", "/tmp/startup-ca.pem".to_string()),
-                (SSL_CERT_DIR_ENV_KEY, "/tmp/startup-certs".to_string()),
+                ("SSL_CERT_FILE", startup_ca_bundle_path),
+                (SSL_CERT_DIR_ENV_KEY, startup_cert_dir),
             ])
         );
     }
 
     #[test]
-    fn managed_ca_trust_bundle_does_not_append_startup_ca_override_to_baseline() {
+    fn managed_ca_trust_bundle_appends_startup_ca_override_to_baseline() {
         let dir = tempdir().unwrap();
         let managed_ca_cert_path = dir.path().join("ca.pem");
         let startup_ca_bundle_path = dir.path().join("startup-ca.pem");
@@ -868,7 +918,7 @@ mod tests {
             managed_ca_trust_bundle_for_cert_path(&managed_ca_cert_path, &env).unwrap();
         let baseline_bundle = fs::read_to_string(trust_bundle.path).unwrap();
 
-        assert!(!baseline_bundle.contains("startup ca"));
+        assert!(baseline_bundle.contains("startup ca"));
         assert!(baseline_bundle.contains("managed ca"));
     }
 
@@ -913,6 +963,22 @@ mod tests {
         assert_eq!(
             opened_file_path(&checked_path, &file).unwrap(),
             opened_path.canonicalize().unwrap()
+        );
+    }
+
+    #[test]
+    fn read_custom_ca_dir_rejects_too_many_entries() {
+        let dir = tempdir().unwrap();
+        for entry_index in 0..=MAX_CUSTOM_CA_DIR_ENTRIES {
+            fs::write(dir.path().join(format!("ca-{entry_index}.pem")), "ca\n").unwrap();
+        }
+
+        let err = read_custom_ca_dir(dir.path(), |_| true).unwrap_err();
+        assert!(
+            err.to_string().contains(&format!(
+                "CA directory exceeds {MAX_CUSTOM_CA_DIR_ENTRIES} entries"
+            )),
+            "unexpected error: {err:#}"
         );
     }
 
