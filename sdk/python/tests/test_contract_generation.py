@@ -40,7 +40,7 @@ def test_generated_files_are_up_to_date():
 
     # Regenerate contract artifacts via the pinned runtime package, not a local
     # app-server binary from the checkout or CI environment.
-    assert importlib.metadata.version("openai-codex-cli-bin") == "0.137.0a4"
+    assert importlib.metadata.version("openai-codex-cli-bin") == "0.132.0"
     env = os.environ.copy()
     env.pop("CODEX_EXEC_PATH", None)
     python_bin = str(Path(sys.executable).parent)
