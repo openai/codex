@@ -113,20 +113,11 @@ pub struct TurnProfile {
     pub after_last_sampling_ms: u64,
     pub sampling_request_count: u32,
     pub sampling_retry_count: u32,
-    pub status: TurnProfileStatus,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum TurnProfileStatus {
-    Complete,
-    Partial,
 }
 
 #[derive(Clone)]
 pub struct TurnProfileFact {
     pub turn_id: String,
-    pub thread_id: String,
     pub profile: TurnProfile,
 }
 

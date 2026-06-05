@@ -34,7 +34,6 @@ use crate::state::ActiveTurn;
 use crate::state::RunningTask;
 use crate::state::TaskKind;
 use codex_analytics::TurnProfileFact;
-use codex_analytics::TurnProfileStatus;
 use codex_analytics::TurnTokenUsageFact;
 use codex_login::AuthManager;
 use codex_models_manager::manager::SharedModelsManager;
@@ -757,10 +756,7 @@ impl Session {
             .analytics_events_client
             .track_turn_profile(TurnProfileFact {
                 turn_id: turn_context.sub_id.clone(),
-                thread_id: self.thread_id.to_string(),
-                profile: turn_context
-                    .turn_timing_state
-                    .complete_profile(TurnProfileStatus::Complete),
+                profile: turn_context.turn_timing_state.complete_profile(),
             });
         self.emit_turn_stop_lifecycle(turn_context.extension_data.as_ref())
             .await;
@@ -883,11 +879,7 @@ impl Session {
             .analytics_events_client
             .track_turn_profile(TurnProfileFact {
                 turn_id: task.turn_context.sub_id.clone(),
-                thread_id: self.thread_id.to_string(),
-                profile: task
-                    .turn_context
-                    .turn_timing_state
-                    .complete_profile(TurnProfileStatus::Partial),
+                profile: task.turn_context.turn_timing_state.complete_profile(),
             });
         let event = EventMsg::TurnAborted(TurnAbortedEvent {
             turn_id: Some(task.turn_context.sub_id.clone()),

@@ -65,7 +65,6 @@ use crate::facts::TrackEventsContext;
 use crate::facts::TurnCodexErrorFact;
 use crate::facts::TurnProfile;
 use crate::facts::TurnProfileFact;
-use crate::facts::TurnProfileStatus;
 use crate::facts::TurnResolvedConfigFact;
 use crate::facts::TurnStatus;
 use crate::facts::TurnSteerRequestError;
@@ -408,7 +407,6 @@ fn sample_turn_profile() -> TurnProfile {
         after_last_sampling_ms: 134,
         sampling_request_count: 2,
         sampling_retry_count: 1,
-        status: TurnProfileStatus::Complete,
     }
 }
 
@@ -671,7 +669,6 @@ async fn ingest_turn_prerequisites(
             AnalyticsFact::Custom(CustomAnalyticsFact::TurnProfile(Box::new(
                 TurnProfileFact {
                     turn_id: "turn-2".to_string(),
-                    thread_id: "thread-2".to_string(),
                     profile: sample_turn_profile(),
                 },
             ))),
@@ -3336,7 +3333,6 @@ fn turn_event_serializes_expected_shape() {
             after_last_sampling_ms: 134,
             sampling_request_count: 2,
             sampling_retry_count: 1,
-            profile_status: TurnProfileStatus::Complete,
             duration_ms: Some(1234),
             started_at: Some(455),
             completed_at: Some(456),
@@ -3410,7 +3406,6 @@ fn turn_event_serializes_expected_shape() {
                 "after_last_sampling_ms": 134,
                 "sampling_request_count": 2,
                 "sampling_retry_count": 1,
-                "profile_status": "complete",
                 "duration_ms": 1234,
                 "started_at": 455,
                 "completed_at": 456
