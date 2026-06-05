@@ -2,6 +2,7 @@ use std::time::Duration;
 use std::time::Instant;
 
 use crate::tab_status::TabStatus;
+use crate::tab_status::sanitize_detail;
 use crate::tab_status::set_tab_status;
 
 const MIN_DETAIL_INTERVAL: Duration = Duration::from_millis(/*millis*/ 250);
@@ -79,10 +80,11 @@ impl TabStatusState {
         if !self.enabled {
             return;
         }
+        let desired = (desired.0, desired.1.as_deref().map(sanitize_detail));
         if self.last_status.as_ref() == Some(&desired) {
             return;
         }
-        if let Err(err) = set_tab_status(desired.0, desired.1.as_deref()) {
+        if let Err(err) = set_tab_status(desired.0, desired.1.clone()) {
             tracing::debug!(error = %err, "failed to set tab status");
             return;
         }

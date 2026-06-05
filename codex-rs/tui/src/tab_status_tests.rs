@@ -19,9 +19,9 @@ fn status_sequences_include_detail_and_clear_stale_fields() {
     SetTabStatus(TabStatus::Working, Some("exec cargo build".to_string()))
         .write_ansi(&mut working)
         .expect("encode tab status");
-    assert_eq!(
+    insta::assert_snapshot!(
         working,
-        "\x1b]21337;status=Working;indicator=#ff9500;status-color=#ff9500;detail=exec cargo build\x07"
+        @"\u{1b}]21337;status=Working;indicator=#ff9500;status-color=#ff9500;detail=exec cargo build\u{7}"
     );
 
     let mut idle = String::new();

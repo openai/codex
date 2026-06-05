@@ -51,3 +51,19 @@ fn throttle_defers_detail_changes_but_not_status_changes() {
         None
     );
 }
+
+#[test]
+fn caches_only_bounded_sanitized_detail() {
+    let mut state = TabStatusState::new();
+    state.refresh(
+        (TabStatus::Working, Some("x".repeat(/*n*/ 1_000))),
+        Instant::now(),
+    );
+    assert_eq!(
+        state.last_status(),
+        Some((
+            TabStatus::Working,
+            Some(format!("{}…", "x".repeat(/*n*/ 200))),
+        ))
+    );
+}

@@ -128,11 +128,11 @@ pub(crate) fn oneline_truncated(value: &str) -> String {
     out
 }
 
-pub(crate) fn set_tab_status(status: TabStatus, detail: Option<&str>) -> io::Result<()> {
+pub(crate) fn set_tab_status(status: TabStatus, detail: Option<String>) -> io::Result<()> {
     if !stdout().is_terminal() {
         return Ok(());
     }
-    execute!(stdout(), SetTabStatus(status, detail.map(sanitize_detail)))?;
+    execute!(stdout(), SetTabStatus(status, detail))?;
     EMITTED.store(/*val*/ true, Ordering::Relaxed);
     Ok(())
 }
@@ -146,7 +146,7 @@ pub(crate) fn clear_tab_status() -> io::Result<()> {
     Ok(())
 }
 
-fn sanitize_detail(detail: &str) -> String {
+pub(crate) fn sanitize_detail(detail: &str) -> String {
     let mut out = String::with_capacity(detail.len().min(MAX_TAB_STATUS_DETAIL_CHARS * 2 + 1));
     let mut chars_written = 0;
     let mut pending_space = false;
