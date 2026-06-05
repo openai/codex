@@ -56,17 +56,7 @@ fn collect_resume_override_mismatches(
         }
     }
     if let Some(requested_runtime_workspace_roots) = request.runtime_workspace_roots.as_ref() {
-        let base_cwd = request
-            .cwd
-            .as_deref()
-            .map(|cwd| {
-                AbsolutePathBuf::resolve_path_against_base(cwd, config_snapshot.cwd.as_path())
-            })
-            .unwrap_or_else(|| config_snapshot.cwd.clone());
-        let requested_runtime_workspace_roots = requested_runtime_workspace_roots
-            .iter()
-            .map(|path| AbsolutePathBuf::resolve_path_against_base(path, base_cwd.as_path()))
-            .collect::<Vec<_>>();
+        let requested_runtime_workspace_roots = requested_runtime_workspace_roots.to_vec();
         if requested_runtime_workspace_roots != config_snapshot.workspace_roots {
             mismatch_details.push(format!(
                 "runtime_workspace_roots requested={requested_runtime_workspace_roots:?} active={:?}",
@@ -846,6 +836,7 @@ impl ThreadRequestProcessor {
             ));
         }
         let environment_selections = self.parse_environment_selections(environments)?;
+        let runtime_workspace_roots = runtime_workspace_roots.map(resolve_runtime_workspace_roots);
         let mut typesafe_overrides = self.build_thread_config_overrides(
             model,
             model_provider,
@@ -1215,7 +1206,7 @@ impl ThreadRequestProcessor {
         model_provider: Option<String>,
         service_tier: Option<Option<String>>,
         cwd: Option<String>,
-        runtime_workspace_roots: Option<Vec<PathBuf>>,
+        runtime_workspace_roots: Option<Vec<AbsolutePathBuf>>,
         approval_policy: Option<codex_app_server_protocol::AskForApproval>,
         approvals_reviewer: Option<codex_app_server_protocol::ApprovalsReviewer>,
         sandbox: Option<SandboxMode>,
@@ -2483,6 +2474,7 @@ impl ThreadRequestProcessor {
         };
 
         let history_cwd = thread_history.session_cwd();
+        let runtime_workspace_roots = runtime_workspace_roots.map(resolve_runtime_workspace_roots);
         let mut typesafe_overrides = self.build_thread_config_overrides(
             model,
             model_provider,
@@ -3201,6 +3193,7 @@ impl ThreadRequestProcessor {
         } else {
             Some(cli_overrides)
         };
+        let runtime_workspace_roots = runtime_workspace_roots.map(resolve_runtime_workspace_roots);
         let mut typesafe_overrides = self.build_thread_config_overrides(
             model,
             model_provider,

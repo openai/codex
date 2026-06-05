@@ -366,7 +366,10 @@ async fn turn_start_updates_runtime_workspace_roots_for_loaded_thread() -> Resul
                 text: "Hello".to_string(),
                 text_elements: Vec::new(),
             }],
-            runtime_workspace_roots: Some(vec![extra_root.clone(), extra_root.join(".")]),
+            runtime_workspace_roots: Some(vec![
+                AbsolutePathBuf::from_absolute_path(&extra_root)?,
+                AbsolutePathBuf::from_absolute_path(extra_root.join("."))?,
+            ]),
             ..Default::default()
         })
         .await?;

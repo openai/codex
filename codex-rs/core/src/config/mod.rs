@@ -2245,9 +2245,9 @@ pub struct ConfigOverrides {
     pub bypass_hook_trust: Option<bool>,
     /// Additional directories that should be treated as writable roots for this session.
     pub additional_writable_roots: Vec<PathBuf>,
-    /// Explicit runtime workspace roots for this session. When set, this is
-    /// the full runtime root list rather than an additive override.
-    pub workspace_roots: Option<Vec<PathBuf>>,
+    /// Explicit absolute runtime workspace roots for this session. When set,
+    /// this is the full runtime root list rather than an additive override.
+    pub workspace_roots: Option<Vec<AbsolutePathBuf>>,
 }
 
 fn dedupe_absolute_paths(paths: &mut Vec<AbsolutePathBuf>) {
@@ -2821,12 +2821,7 @@ impl Config {
             || !requested_additional_writable_roots.is_empty()
             || legacy_workspace_roots_explicit;
         let mut workspace_roots = match workspace_roots_override {
-            Some(workspace_roots) => workspace_roots
-                .into_iter()
-                .map(|path| {
-                    AbsolutePathBuf::resolve_path_against_base(path, resolved_cwd.as_path())
-                })
-                .collect(),
+            Some(workspace_roots) => workspace_roots,
             None => {
                 let mut workspace_roots = vec![resolved_cwd.clone()];
                 workspace_roots.extend(requested_additional_writable_roots.clone());

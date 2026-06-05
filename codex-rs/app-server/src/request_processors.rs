@@ -509,6 +509,24 @@ use crate::thread_state::ThreadStateManager;
 use token_usage_replay::latest_token_usage_turn_id_from_rollout_items;
 use token_usage_replay::send_thread_token_usage_update_to_connection;
 
+fn resolve_request_cwd(cwd: Option<PathBuf>) -> Result<Option<AbsolutePathBuf>, JSONRPCErrorError> {
+    cwd.map(|cwd| {
+        AbsolutePathBuf::relative_to_current_dir(path_utils::normalize_for_native_workdir(cwd))
+            .map_err(|err| invalid_request(format!("invalid cwd: {err}")))
+    })
+    .transpose()
+}
+
+fn resolve_runtime_workspace_roots(workspace_roots: Vec<AbsolutePathBuf>) -> Vec<AbsolutePathBuf> {
+    let mut resolved_roots = Vec::new();
+    for root in workspace_roots {
+        if !resolved_roots.iter().any(|existing| existing == &root) {
+            resolved_roots.push(root);
+        }
+    }
+    resolved_roots
+}
+
 mod config_errors;
 mod request_errors;
 mod thread_goal_processor;

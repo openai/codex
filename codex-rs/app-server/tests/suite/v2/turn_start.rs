@@ -68,6 +68,7 @@ use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS;
 use codex_protocol::models::ImageDetail;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::user_input::MAX_USER_INPUT_TEXT_CHARS;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
@@ -2301,6 +2302,8 @@ async fn turn_start_permission_profile_rebinds_runtime_workspace_roots_between_t
     std::fs::create_dir(&new_root)?;
     let old_root_text = old_root.to_string_lossy().into_owned();
     let new_root_text = new_root.to_string_lossy().into_owned();
+    let old_root = AbsolutePathBuf::from_absolute_path(old_root)?;
+    let new_root = AbsolutePathBuf::from_absolute_path(new_root)?;
 
     let server = responses::start_mock_server().await;
     let response_mock = responses::mount_sse_sequence(
