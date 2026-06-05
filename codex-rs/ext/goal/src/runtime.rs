@@ -28,6 +28,11 @@ pub(crate) struct GoalRuntimeConfig {
     pub(crate) tools_available_for_thread: bool,
 }
 
+pub(crate) enum ActiveGoalStopReason {
+    TurnError,
+    UsageLimit,
+}
+
 struct GoalRuntimeInner {
     thread_id: ThreadId,
     state_dbs: Arc<codex_state::StateRuntime>,
@@ -216,10 +221,23 @@ impl GoalRuntimeHandle {
     }
 
     pub async fn usage_limit_active_goal_for_turn(&self, turn_id: &str) -> Result<(), String> {
+        self.stop_active_goal_for_turn(turn_id, ActiveGoalStopReason::UsageLimit)
+            .await
+    }
+
+    /// Accounts the ending turn and stops its active goal after a terminal error.
+    pub(crate) async fn stop_active_goal_for_turn(
+        &self,
+        turn_id: &str,
+        reason: ActiveGoalStopReason,
+    ) -> Result<(), String> {
         if !self.is_enabled() {
             return Ok(());
         }
 
+        // Hold this through accounting and the status update so external goal
+        // mutations and idle continuation cannot interleave between them.
+        let _goal_state_permit = self.goal_state_permit().await?;
         if !self
             .inner
             .accounting_state
@@ -228,23 +246,54 @@ impl GoalRuntimeHandle {
             return Ok(());
         }
 
-        let progress_event_id = format!("{turn_id}:usage-limit-progress");
+        let (event_name, status) = match reason {
+            ActiveGoalStopReason::TurnError => {
+                ("turn-error", codex_state::ThreadGoalStatus::Blocked)
+            }
+            ActiveGoalStopReason::UsageLimit => {
+                ("usage-limit", codex_state::ThreadGoalStatus::UsageLimited)
+            }
+        };
         self.account_active_goal_progress(
             turn_id,
-            progress_event_id.as_str(),
+            &format!("{turn_id}:{event_name}-progress"),
             codex_state::GoalAccountingMode::ActiveOnly,
             BudgetLimitedGoalDisposition::ClearActive,
         )
         .await?;
 
-        let previous_status = self
-            .current_goal_status_for_metrics(/*expected_goal_id*/ None)
-            .await?;
+        let Some(active_goal) = self
+            .inner
+            .state_dbs
+            .thread_goals()
+            .get_thread_goal(self.thread_id())
+            .await
+            .map_err(|err| err.to_string())?
+        else {
+            self.inner.accounting_state.clear_active_goal();
+            return Ok(());
+        };
+        let can_stop = active_goal.status == codex_state::ThreadGoalStatus::Active
+            || (active_goal.status == codex_state::ThreadGoalStatus::BudgetLimited
+                && status == codex_state::ThreadGoalStatus::UsageLimited);
+        if !can_stop {
+            self.inner.accounting_state.clear_active_goal();
+            return Ok(());
+        }
+        let previous_status = Some(active_goal.status);
         let Some(goal) = self
             .inner
             .state_dbs
             .thread_goals()
-            .usage_limit_active_thread_goal(self.thread_id())
+            .update_thread_goal(
+                self.thread_id(),
+                codex_state::GoalUpdate {
+                    objective: None,
+                    status: Some(status),
+                    token_budget: None,
+                    expected_goal_id: Some(active_goal.goal_id),
+                },
+            )
             .await
             .map_err(|err| err.to_string())?
         else {
@@ -256,7 +305,7 @@ impl GoalRuntimeHandle {
         self.inner.accounting_state.clear_active_goal();
         let goal = protocol_goal_from_state(goal);
         self.inner.event_emitter.thread_goal_updated(
-            format!("{turn_id}:usage-limit"),
+            format!("{turn_id}:{event_name}"),
             Some(turn_id.to_string()),
             goal,
         );
