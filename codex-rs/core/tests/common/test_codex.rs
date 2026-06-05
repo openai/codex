@@ -37,6 +37,7 @@ use codex_protocol::protocol::RealtimeConversationVersion as RealtimeWsVersion;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::ThreadEnvironmentSettingsOverride;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -72,6 +73,13 @@ pub fn local(cwd: AbsolutePathBuf) -> TurnEnvironmentSelection {
     TurnEnvironmentSelection {
         environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
         cwd,
+    }
+}
+
+pub fn local_environment_settings(cwd: AbsolutePathBuf) -> ThreadEnvironmentSettingsOverride {
+    ThreadEnvironmentSettingsOverride {
+        cwd: cwd.clone(),
+        environments: vec![local(cwd)],
     }
 }
 

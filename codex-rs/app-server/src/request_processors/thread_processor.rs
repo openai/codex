@@ -1156,6 +1156,7 @@ impl ThreadRequestProcessor {
             &config_snapshot.permission_profile,
             config_snapshot.cwd().as_path(),
         );
+        let cwd = config_snapshot.cwd().clone();
         let active_permission_profile =
             thread_response_active_permission_profile(config_snapshot.active_permission_profile);
 
@@ -1164,7 +1165,7 @@ impl ThreadRequestProcessor {
             model: config_snapshot.model,
             model_provider: config_snapshot.model_provider_id,
             service_tier: config_snapshot.service_tier,
-            cwd: config_snapshot.cwd().clone(),
+            cwd,
             runtime_workspace_roots: config_snapshot.workspace_roots,
             instruction_sources,
             approval_policy: config_snapshot.approval_policy.into(),

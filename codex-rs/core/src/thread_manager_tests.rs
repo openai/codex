@@ -350,16 +350,23 @@ async fn start_thread_uses_all_default_environments_from_codex_home() {
     config.codex_home = temp_dir.path().join("codex-home").abs();
     config.cwd = config.codex_home.abs();
     std::fs::create_dir_all(&config.codex_home).expect("create codex home");
+    let codex_bin = codex_utils_cargo_bin::cargo_bin("codex")
+        .expect("codex binary should be available to core tests")
+        .to_string_lossy()
+        .to_string();
+    let codex_bin = serde_json::to_string(&codex_bin).expect("codex binary path should serialize");
     std::fs::write(
         config.codex_home.join("environments.toml"),
-        r#"
+        format!(
+            r#"
 default = "dev"
 
 [[environments]]
 id = "dev"
-program = "ssh"
-args = ["dev", "cd /tmp && true"]
+program = {codex_bin}
+args = ["exec-server", "--listen", "stdio"]
 "#,
+        ),
     )
     .expect("write environments.toml");
 

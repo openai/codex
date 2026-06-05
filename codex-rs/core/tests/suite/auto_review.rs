@@ -165,10 +165,7 @@ async fn remote_model_override_uses_catalog_model_for_strict_auto_review() -> Re
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                 environment_settings: Some(
-                    codex_protocol::protocol::ThreadEnvironmentSettingsOverride {
-                        cwd: cwd_path,
-                        environments: Vec::new(),
-                    },
+                    core_test_support::test_codex::local_environment_settings(cwd_path),
                 ),
                 approval_policy: Some(AskForApproval::OnRequest),
                 sandbox_policy: Some(sandbox_policy),

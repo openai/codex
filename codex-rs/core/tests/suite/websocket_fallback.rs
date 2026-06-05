@@ -163,10 +163,7 @@ async fn websocket_fallback_hides_first_websocket_retry_stream_error() -> Result
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                 environment_settings: Some(
-                    codex_protocol::protocol::ThreadEnvironmentSettingsOverride {
-                        cwd: cwd.abs(),
-                        environments: Vec::new(),
-                    },
+                    core_test_support::test_codex::local_environment_settings(cwd.abs()),
                 ),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),

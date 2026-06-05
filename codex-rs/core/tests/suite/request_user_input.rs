@@ -147,10 +147,7 @@ async fn request_user_input_round_trip_for_mode(mode: ModeKind) -> anyhow::Resul
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                 environment_settings: Some(
-                    codex_protocol::protocol::ThreadEnvironmentSettingsOverride {
-                        cwd: cwd.abs(),
-                        environments: Vec::new(),
-                    },
+                    core_test_support::test_codex::local_environment_settings(cwd.abs()),
                 ),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
@@ -295,10 +292,7 @@ async fn request_user_input_interrupt_emits_deferred_token_count() -> anyhow::Re
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                 environment_settings: Some(
-                    codex_protocol::protocol::ThreadEnvironmentSettingsOverride {
-                        cwd: cwd.abs(),
-                        environments: Vec::new(),
-                    },
+                    core_test_support::test_codex::local_environment_settings(cwd.abs()),
                 ),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
@@ -404,10 +398,7 @@ where
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                 environment_settings: Some(
-                    codex_protocol::protocol::ThreadEnvironmentSettingsOverride {
-                        cwd: cwd.abs(),
-                        environments: Vec::new(),
-                    },
+                    core_test_support::test_codex::local_environment_settings(cwd.abs()),
                 ),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),

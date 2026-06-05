@@ -663,10 +663,9 @@ async fn submit_turn(
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                 environment_settings: Some(
-                    codex_protocol::protocol::ThreadEnvironmentSettingsOverride {
-                        cwd: test.config.cwd.clone(),
-                        environments: Vec::new(),
-                    },
+                    core_test_support::test_codex::local_environment_settings(
+                        test.config.cwd.clone(),
+                    ),
                 ),
                 approval_policy: Some(approval_policy),
                 approvals_reviewer: Some(ApprovalsReviewer::User),
@@ -2628,10 +2627,9 @@ async fn env_zsh_script_spawned_by_python_can_request_escalation_under_zsh_fork(
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                 environment_settings: Some(
-                    codex_protocol::protocol::ThreadEnvironmentSettingsOverride {
-                        cwd: test.config.cwd.clone(),
-                        environments: Vec::new(),
-                    },
+                    core_test_support::test_codex::local_environment_settings(
+                        test.config.cwd.clone(),
+                    ),
                 ),
                 approval_policy: Some(approval_policy),
                 approvals_reviewer: Some(ApprovalsReviewer::User),
@@ -2777,10 +2775,9 @@ async fn matched_prefix_rule_runs_unsandboxed_under_zsh_fork() -> Result<()> {
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                 environment_settings: Some(
-                    codex_protocol::protocol::ThreadEnvironmentSettingsOverride {
-                        cwd: test.config.cwd.clone(),
-                        environments: Vec::new(),
-                    },
+                    core_test_support::test_codex::local_environment_settings(
+                        test.config.cwd.clone(),
+                    ),
                 ),
                 approval_policy: Some(approval_policy),
                 approvals_reviewer: Some(ApprovalsReviewer::User),
@@ -3373,10 +3370,9 @@ allow_local_binding = true
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                 environment_settings: Some(
-                    codex_protocol::protocol::ThreadEnvironmentSettingsOverride {
-                        cwd: test.config.cwd.clone(),
-                        environments: Vec::new(),
-                    },
+                    core_test_support::test_codex::local_environment_settings(
+                        test.config.cwd.clone(),
+                    ),
                 ),
                 approval_policy: Some(approval_policy),
                 approvals_reviewer: Some(ApprovalsReviewer::User),

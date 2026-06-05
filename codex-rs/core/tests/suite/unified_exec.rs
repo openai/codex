@@ -203,10 +203,9 @@ async fn submit_unified_exec_turn(
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                 environment_settings: Some(
-                    codex_protocol::protocol::ThreadEnvironmentSettingsOverride {
-                        cwd: test.config.cwd.clone(),
-                        environments: Vec::new(),
-                    },
+                    core_test_support::test_codex::local_environment_settings(
+                        test.config.cwd.clone(),
+                    ),
                 ),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
@@ -299,10 +298,7 @@ async fn unified_exec_intercepts_apply_patch_exec_command() -> Result<()> {
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                 environment_settings: Some(
-                    codex_protocol::protocol::ThreadEnvironmentSettingsOverride {
-                        cwd: cwd,
-                        environments: Vec::new(),
-                    },
+                    core_test_support::test_codex::local_environment_settings(cwd),
                 ),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
@@ -2159,10 +2155,7 @@ async fn unified_exec_keeps_long_running_session_after_turn_end() -> Result<()> 
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                 environment_settings: Some(
-                    codex_protocol::protocol::ThreadEnvironmentSettingsOverride {
-                        cwd: turn_cwd,
-                        environments: Vec::new(),
-                    },
+                    core_test_support::test_codex::local_environment_settings(turn_cwd),
                 ),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
@@ -2267,10 +2260,7 @@ async fn unified_exec_interrupt_preserves_long_running_session() -> Result<()> {
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                 environment_settings: Some(
-                    codex_protocol::protocol::ThreadEnvironmentSettingsOverride {
-                        cwd: turn_cwd,
-                        environments: Vec::new(),
-                    },
+                    core_test_support::test_codex::local_environment_settings(turn_cwd),
                 ),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
@@ -2744,10 +2734,7 @@ async fn unified_exec_runs_under_sandbox() -> Result<()> {
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                 environment_settings: Some(
-                    codex_protocol::protocol::ThreadEnvironmentSettingsOverride {
-                        cwd: turn_cwd,
-                        environments: Vec::new(),
-                    },
+                    core_test_support::test_codex::local_environment_settings(turn_cwd),
                 ),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
@@ -2871,10 +2858,7 @@ async fn unified_exec_enforces_glob_deny_read_policy() -> Result<()> {
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                 environment_settings: Some(
-                    codex_protocol::protocol::ThreadEnvironmentSettingsOverride {
-                        cwd: turn_cwd,
-                        environments: Vec::new(),
-                    },
+                    core_test_support::test_codex::local_environment_settings(turn_cwd),
                 ),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
@@ -3014,10 +2998,7 @@ async fn unified_exec_python_prompt_under_seatbelt() -> Result<()> {
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                 environment_settings: Some(
-                    codex_protocol::protocol::ThreadEnvironmentSettingsOverride {
-                        cwd: turn_cwd,
-                        environments: Vec::new(),
-                    },
+                    core_test_support::test_codex::local_environment_settings(turn_cwd),
                 ),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),

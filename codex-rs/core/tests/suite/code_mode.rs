@@ -3048,23 +3048,30 @@ async fn code_mode_can_call_hidden_dynamic_tools() -> Result<()> {
     test.codex = new_thread.thread;
     test.session_configured = new_thread.session_configured;
 
-    let code = r#"
-const tool = ALL_TOOLS.find(({ name }) => name === "codex_app_hidden_dynamic_tool");
-const out = await tools.codex_app_hidden_dynamic_tool({ city: "Paris" });
+    let hidden_tool_name = codex_tools::code_mode_name_for_tool_name(
+        &codex_tools::ToolName::namespaced("codex_app", "hidden_dynamic_tool"),
+    );
+    let hidden_tool_name_json = serde_json::to_string(&hidden_tool_name)?;
+    let code = format!(
+        r#"
+const toolName = {hidden_tool_name_json};
+const tool = ALL_TOOLS.find(({{ name }}) => name === toolName);
+const out = await tools[toolName]({{ city: "Paris" }});
 text(
-  JSON.stringify({
+  JSON.stringify({{
     name: tool?.name ?? null,
     description: tool?.description ?? null,
     out,
-  })
+  }})
 );
-"#;
+"#
+    );
 
     responses::mount_sse_once(
         &server,
         sse(vec![
             ev_response_created("resp-1"),
-            ev_custom_tool_call("call-1", "exec", code),
+            ev_custom_tool_call("call-1", "exec", &code),
             ev_completed("resp-1"),
         ]),
     )
@@ -3115,16 +3122,12 @@ text(
         })
         .await?;
 
-    let turn_id = wait_for_event_match(&test.codex, |event| match event {
-        EventMsg::TurnStarted(event) => Some(event.turn_id.clone()),
-        _ => None,
-    })
-    .await;
     let request = wait_for_event_match(&test.codex, |event| match event {
         EventMsg::DynamicToolCallRequest(request) => Some(request.clone()),
         _ => None,
     })
     .await;
+    let turn_id = request.turn_id.clone();
     assert_eq!(request.namespace.as_deref(), Some("codex_app"));
     assert_eq!(request.tool, "hidden_dynamic_tool");
     assert_eq!(request.arguments, serde_json::json!({ "city": "Paris" }));
@@ -3159,7 +3162,7 @@ text(
     )?;
     assert_eq!(
         parsed.get("name"),
-        Some(&Value::String("codex_app_hidden_dynamic_tool".to_string()))
+        Some(&Value::String(hidden_tool_name.clone()))
     );
     assert_eq!(
         parsed.get("out"),
@@ -3172,7 +3175,7 @@ text(
             .is_some_and(|description| {
                 description.contains("A hidden dynamic tool.")
                     && description.contains("declare const tools:")
-                    && description.contains("codex_app_hidden_dynamic_tool(args:")
+                    && description.contains(&format!("{hidden_tool_name}(args:"))
             })
     );
 

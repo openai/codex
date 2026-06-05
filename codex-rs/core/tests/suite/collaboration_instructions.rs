@@ -172,10 +172,9 @@ async fn collaboration_instructions_added_on_user_turn() -> Result<()> {
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                 environment_settings: Some(
-                    codex_protocol::protocol::ThreadEnvironmentSettingsOverride {
-                        cwd: test.config.cwd.clone(),
-                        environments: Vec::new(),
-                    },
+                    core_test_support::test_codex::local_environment_settings(
+                        test.config.cwd.clone(),
+                    ),
                 ),
                 approval_policy: Some(test.config.permissions.approval_policy.value()),
                 sandbox_policy: Some(test.config.legacy_sandbox_policy()),
@@ -227,10 +226,9 @@ async fn collaboration_instructions_omitted_when_disabled() -> Result<()> {
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                 environment_settings: Some(
-                    codex_protocol::protocol::ThreadEnvironmentSettingsOverride {
-                        cwd: test.config.cwd.clone(),
-                        environments: Vec::new(),
-                    },
+                    core_test_support::test_codex::local_environment_settings(
+                        test.config.cwd.clone(),
+                    ),
                 ),
                 approval_policy: Some(test.config.permissions.approval_policy.value()),
                 sandbox_policy: Some(test.config.legacy_sandbox_policy()),
@@ -339,10 +337,9 @@ async fn user_turn_overrides_collaboration_instructions_after_override() -> Resu
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                 environment_settings: Some(
-                    codex_protocol::protocol::ThreadEnvironmentSettingsOverride {
-                        cwd: test.config.cwd.clone(),
-                        environments: Vec::new(),
-                    },
+                    core_test_support::test_codex::local_environment_settings(
+                        test.config.cwd.clone(),
+                    ),
                 ),
                 approval_policy: Some(test.config.permissions.approval_policy.value()),
                 sandbox_policy: Some(test.config.legacy_sandbox_policy()),

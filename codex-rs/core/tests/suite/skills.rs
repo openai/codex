@@ -90,10 +90,9 @@ async fn user_turn_includes_skill_instructions() -> Result<()> {
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                 environment_settings: Some(
-                    codex_protocol::protocol::ThreadEnvironmentSettingsOverride {
-                        cwd: test.config.cwd.clone(),
-                        environments: Vec::new(),
-                    },
+                    core_test_support::test_codex::local_environment_settings(
+                        test.config.cwd.clone(),
+                    ),
                 ),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),

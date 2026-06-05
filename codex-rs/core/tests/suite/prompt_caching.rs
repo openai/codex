@@ -754,10 +754,7 @@ async fn per_turn_overrides_keep_cached_prefix_and_key_constant() -> anyhow::Res
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                 environment_settings: Some(
-                    codex_protocol::protocol::ThreadEnvironmentSettingsOverride {
-                        cwd: new_cwd.abs(),
-                        environments: Vec::new(),
-                    },
+                    core_test_support::test_codex::local_environment_settings(new_cwd.abs()),
                 ),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
@@ -875,10 +872,7 @@ async fn send_user_turn_with_no_changes_does_not_send_environment_context() -> a
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                 environment_settings: Some(
-                    codex_protocol::protocol::ThreadEnvironmentSettingsOverride {
-                        cwd: default_cwd.clone(),
-                        environments: Vec::new(),
-                    },
+                    core_test_support::test_codex::local_environment_settings(default_cwd.clone()),
                 ),
                 approval_policy: Some(default_approval_policy),
                 sandbox_policy: Some(default_sandbox_policy.clone()),
@@ -908,10 +902,7 @@ async fn send_user_turn_with_no_changes_does_not_send_environment_context() -> a
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                 environment_settings: Some(
-                    codex_protocol::protocol::ThreadEnvironmentSettingsOverride {
-                        cwd: default_cwd.clone(),
-                        environments: Vec::new(),
-                    },
+                    core_test_support::test_codex::local_environment_settings(default_cwd.clone()),
                 ),
                 approval_policy: Some(default_approval_policy),
                 sandbox_policy: Some(default_sandbox_policy.clone()),
@@ -1026,10 +1017,7 @@ async fn send_user_turn_with_changes_sends_environment_context() -> anyhow::Resu
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                 environment_settings: Some(
-                    codex_protocol::protocol::ThreadEnvironmentSettingsOverride {
-                        cwd: default_cwd.clone(),
-                        environments: Vec::new(),
-                    },
+                    core_test_support::test_codex::local_environment_settings(default_cwd.clone()),
                 ),
                 approval_policy: Some(default_approval_policy),
                 sandbox_policy: Some(default_sandbox_policy.clone()),
@@ -1061,10 +1049,7 @@ async fn send_user_turn_with_changes_sends_environment_context() -> anyhow::Resu
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                 environment_settings: Some(
-                    codex_protocol::protocol::ThreadEnvironmentSettingsOverride {
-                        cwd: default_cwd.clone(),
-                        environments: Vec::new(),
-                    },
+                    core_test_support::test_codex::local_environment_settings(default_cwd.clone()),
                 ),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),

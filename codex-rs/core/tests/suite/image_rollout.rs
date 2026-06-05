@@ -130,10 +130,7 @@ async fn copy_paste_local_image_persists_rollout_request_shape() -> anyhow::Resu
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                 environment_settings: Some(
-                    codex_protocol::protocol::ThreadEnvironmentSettingsOverride {
-                        cwd: cwd.abs(),
-                        environments: Vec::new(),
-                    },
+                    core_test_support::test_codex::local_environment_settings(cwd.abs()),
                 ),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
@@ -233,10 +230,7 @@ async fn drag_drop_image_persists_rollout_request_shape() -> anyhow::Result<()> 
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                 environment_settings: Some(
-                    codex_protocol::protocol::ThreadEnvironmentSettingsOverride {
-                        cwd: cwd.abs(),
-                        environments: Vec::new(),
-                    },
+                    core_test_support::test_codex::local_environment_settings(cwd.abs()),
                 ),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),

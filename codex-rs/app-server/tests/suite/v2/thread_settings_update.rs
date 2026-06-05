@@ -233,7 +233,7 @@ async fn thread_settings_update_cwd_updates_cwd() -> Result<()> {
     assert_eq!(updated.thread_id, thread.id.clone());
     assert_eq!(updated.thread_settings.cwd.as_path(), updated_cwd.as_path());
 
-    let read = read_thread_with_turns(&mut mcp, &thread.id).await?;
+    let read = read_thread(&mut mcp, &thread.id).await?;
     assert_eq!(read.thread.cwd, updated.thread_settings.cwd);
     Ok(())
 }
@@ -377,6 +377,21 @@ async fn read_thread_with_turns(
         .send_thread_read_request(ThreadReadParams {
             thread_id: thread_id.to_string(),
             include_turns: true,
+        })
+        .await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    to_response(response)
+}
+
+async fn read_thread(mcp: &mut TestAppServer, thread_id: &str) -> Result<ThreadReadResponse> {
+    let request_id = mcp
+        .send_thread_read_request(ThreadReadParams {
+            thread_id: thread_id.to_string(),
+            include_turns: false,
         })
         .await?;
     let response: JSONRPCResponse = timeout(

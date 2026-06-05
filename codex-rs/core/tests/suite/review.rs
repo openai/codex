@@ -820,12 +820,9 @@ async fn review_uses_overridden_cwd_for_base_branch_merge_base() {
     core_test_support::submit_thread_settings(
         &codex,
         codex_protocol::protocol::ThreadSettingsOverrides {
-            environment_settings: Some(
-                codex_protocol::protocol::ThreadEnvironmentSettingsOverride {
-                    cwd: repo_path.to_path_buf().abs(),
-                    environments: Vec::new(),
-                },
-            ),
+            environment_settings: Some(core_test_support::test_codex::local_environment_settings(
+                repo_path.to_path_buf().abs(),
+            )),
             ..Default::default()
         },
     )

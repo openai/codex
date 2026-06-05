@@ -599,7 +599,7 @@ async fn shell_command_timeout_includes_timeout_prefix_and_metadata() -> Result<
             .trim_end_matches('\n')
             .to_string();
 
-        let shell_output_pattern = r"(?s)^Exit code: 124\nWall time: [0-9]+(?:\.[0-9]+)? seconds\nOutput:\ncommand timed out after [0-9]+ milliseconds\n(?:.*)?$";
+        let shell_output_pattern = r"(?s)^Exit code: 124\nWall time: [0-9]+(?:\.[0-9]+)? seconds\nOutput:\ncommand timed out after [0-9]+ milliseconds\n?(?:.*)?$";
         if Regex::new(shell_output_pattern)
             .expect("shell timeout output regex should compile")
             .is_match(&normalized_output)

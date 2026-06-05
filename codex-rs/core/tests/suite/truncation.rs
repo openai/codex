@@ -529,10 +529,7 @@ async fn mcp_image_output_preserves_image_and_no_text_summary() -> Result<()> {
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                 environment_settings: Some(
-                    codex_protocol::protocol::ThreadEnvironmentSettingsOverride {
-                        cwd: fixture.cwd.abs(),
-                        environments: Vec::new(),
-                    },
+                    core_test_support::test_codex::local_environment_settings(fixture.cwd.abs()),
                 ),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),

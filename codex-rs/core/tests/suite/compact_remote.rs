@@ -3267,10 +3267,9 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_including_incoming_us
                 &codex,
                 codex_protocol::protocol::ThreadSettingsOverrides {
                     environment_settings: Some(
-                        codex_protocol::protocol::ThreadEnvironmentSettingsOverride {
-                            cwd: test_path_buf(PRETURN_CONTEXT_DIFF_CWD).abs(),
-                            environments: Vec::new(),
-                        },
+                        core_test_support::test_codex::local_environment_settings(
+                            test_path_buf(PRETURN_CONTEXT_DIFF_CWD).abs(),
+                        ),
                     ),
                     ..Default::default()
                 },

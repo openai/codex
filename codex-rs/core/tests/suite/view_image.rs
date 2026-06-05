@@ -79,12 +79,9 @@ fn disabled_user_turn(test: &TestCodex, items: Vec<UserInput>, model: String) ->
         responsesapi_client_metadata: None,
         additional_context: Default::default(),
         thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-            environment_settings: Some(
-                codex_protocol::protocol::ThreadEnvironmentSettingsOverride {
-                    cwd: test.config.cwd.clone(),
-                    environments: Vec::new(),
-                },
-            ),
+            environment_settings: Some(core_test_support::test_codex::local_environment_settings(
+                test.config.cwd.clone(),
+            )),
             approval_policy: Some(AskForApproval::Never),
             sandbox_policy: Some(sandbox_policy),
             permission_profile,

@@ -102,10 +102,9 @@ async fn renews_cache_ttl_on_matching_models_etag() -> Result<()> {
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                 environment_settings: Some(
-                    codex_protocol::protocol::ThreadEnvironmentSettingsOverride {
-                        cwd: test.config.cwd.clone(),
-                        environments: Vec::new(),
-                    },
+                    core_test_support::test_codex::local_environment_settings(
+                        test.config.cwd.clone(),
+                    ),
                 ),
                 approval_policy: Some(codex_protocol::protocol::AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),

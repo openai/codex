@@ -5986,10 +5986,7 @@ async fn user_turn_updates_approvals_reviewer() {
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                 environment_settings: Some(
-                    codex_protocol::protocol::ThreadEnvironmentSettingsOverride {
-                        cwd: config.cwd.clone(),
-                        environments: Vec::new(),
-                    },
+                    core_test_support::test_codex::local_environment_settings(config.cwd.clone()),
                 ),
                 approval_policy: Some(config.permissions.approval_policy.value()),
                 approvals_reviewer: Some(codex_config::types::ApprovalsReviewer::AutoReview),
@@ -9067,7 +9064,6 @@ async fn abort_empty_active_turn_preserves_pending_input() {
     );
 }
 
-
 async fn set_total_token_usage(sess: &Session, total_token_usage: TokenUsage) {
     let mut state = sess.state.lock().await;
     state.set_token_info(Some(TokenUsageInfo {
@@ -9076,7 +9072,6 @@ async fn set_total_token_usage(sess: &Session, total_token_usage: TokenUsage) {
         model_context_window: None,
     }));
 }
-
 
 #[tokio::test]
 async fn queue_only_mailbox_mail_waits_for_next_turn_after_answer_boundary() {
