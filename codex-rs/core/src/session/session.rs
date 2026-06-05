@@ -601,6 +601,8 @@ impl Session {
                     Box::new(codex_app_server_protocol::TurnSummaryProjectionObserver::new()),
                     Box::new(codex_app_server_protocol::LifecycleProjectionObserver::new()),
                 ];
+                // TODO(wiltzius): Once stores persist projections, restore each observer from the
+                // stored projection checkpoint on resume instead of always starting fresh.
                 Ok(Some(live_thread.with_thread_history_projection_observers(
                     thread_history_projection_observers,
                 )))

@@ -145,6 +145,8 @@ impl LiveThread {
 
     pub async fn append_items(&self, items: &[RolloutItem]) -> ThreadStoreResult<()> {
         let canonical_items = persisted_rollout_items(items);
+        // TODO(wiltzius): Once stores persist thread-history mutations, advance observer state
+        // only when the canonical append and derived mutations commit successfully together.
         let thread_history_mutations = self
             .thread_history_projection_observers
             .lock()
