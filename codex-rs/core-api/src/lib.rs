@@ -84,6 +84,10 @@ pub use codex_protocol::user_input::UserInput;
 /// Call this after the selected environments have been materialized and before
 /// passing `config` to a thread start, resume, or fork operation. When no
 /// environment is selected, this clears [`Config::user_instructions`].
+///
+/// This helper assumes user-level AGENTS.md instructions were loaded from the
+/// configured `CODEX_HOME`. Callers that source user-level instructions from
+/// another location should assemble [`Config::user_instructions`] themselves.
 pub async fn load_thread_user_instructions(
     config: &mut Config,
     environment_manager: &EnvironmentManager,

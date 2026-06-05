@@ -1861,16 +1861,18 @@ async fn run_debug_prompt_input_command(
         Some(runtime_paths),
     )
     .await?;
-    let mut warnings = Vec::new();
-    config.user_instructions = match environment_manager.default_environment() {
-        Some(environment) => {
-            codex_core::AgentsMdManager::new(&config)
-                .load_user_instructions(environment.as_ref(), &mut warnings)
-                .await
-        }
-        None => None,
-    };
-    config.startup_warnings.extend(warnings);
+    let environments = environment_manager
+        .default_environment_id()
+        .map(
+            |environment_id| codex_protocol::protocol::TurnEnvironmentSelection {
+                environment_id: environment_id.to_string(),
+                cwd: config.cwd.clone(),
+            },
+        )
+        .into_iter()
+        .collect::<Vec<_>>();
+    codex_core_api::load_thread_user_instructions(&mut config, &environment_manager, &environments)
+        .await?;
 
     let mut input = shared
         .images

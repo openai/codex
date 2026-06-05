@@ -474,7 +474,6 @@ mod search;
 mod thread_processor;
 mod token_usage_replay;
 mod turn_processor;
-mod user_instructions;
 mod windows_sandbox_processor;
 
 pub(crate) use account_processor::AccountRequestProcessor;
@@ -509,7 +508,6 @@ use crate::thread_state::ThreadState;
 use crate::thread_state::ThreadStateManager;
 use token_usage_replay::latest_token_usage_turn_id_from_rollout_items;
 use token_usage_replay::send_thread_token_usage_update_to_connection;
-use user_instructions::load_thread_user_instructions;
 
 mod config_errors;
 mod request_errors;

@@ -2260,6 +2260,7 @@ dependencies = [
  "codex-cloud-tasks",
  "codex-config",
  "codex-core",
+ "codex-core-api",
  "codex-core-plugins",
  "codex-exec",
  "codex-exec-server",

@@ -1,5 +1,6 @@
 use super::*;
 use crate::error_code::method_not_found;
+use codex_core_api::load_thread_user_instructions;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
 
@@ -1043,8 +1044,11 @@ impl ThreadRequestProcessor {
                 .default_environment_selections(&config.cwd)
         });
         load_thread_user_instructions(
-            listener_task_context.thread_manager.as_ref(),
             &mut config,
+            listener_task_context
+                .thread_manager
+                .environment_manager()
+                .as_ref(),
             &environments,
         )
         .await
@@ -2527,9 +2531,13 @@ impl ThreadRequestProcessor {
         let environments = self
             .thread_manager
             .default_environment_selections(&config.cwd);
-        load_thread_user_instructions(self.thread_manager.as_ref(), &mut config, &environments)
-            .await
-            .map_err(|err| invalid_request(err.to_string()))?;
+        load_thread_user_instructions(
+            &mut config,
+            self.thread_manager.environment_manager().as_ref(),
+            &environments,
+        )
+        .await
+        .map_err(|err| invalid_request(err.to_string()))?;
 
         let response_history = thread_history.clone();
 
@@ -3238,9 +3246,13 @@ impl ThreadRequestProcessor {
         let environments = self
             .thread_manager
             .default_environment_selections(&config.cwd);
-        load_thread_user_instructions(self.thread_manager.as_ref(), &mut config, &environments)
-            .await
-            .map_err(|err| invalid_request(err.to_string()))?;
+        load_thread_user_instructions(
+            &mut config,
+            self.thread_manager.environment_manager().as_ref(),
+            &environments,
+        )
+        .await
+        .map_err(|err| invalid_request(err.to_string()))?;
 
         let fallback_model_provider = config.model_provider_id.clone();
 

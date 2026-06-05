@@ -1,4 +1,5 @@
 use super::*;
+use codex_core_api::load_thread_user_instructions;
 use codex_protocol::protocol::AdditionalContextEntry as CoreAdditionalContextEntry;
 use codex_protocol::protocol::AdditionalContextKind as CoreAdditionalContextKind;
 
@@ -1083,9 +1084,13 @@ impl TurnRequestProcessor {
         let environments = self
             .thread_manager
             .default_environment_selections(&config.cwd);
-        load_thread_user_instructions(self.thread_manager.as_ref(), &mut config, &environments)
-            .await
-            .map_err(|err| invalid_request(err.to_string()))?;
+        load_thread_user_instructions(
+            &mut config,
+            self.thread_manager.environment_manager().as_ref(),
+            &environments,
+        )
+        .await
+        .map_err(|err| invalid_request(err.to_string()))?;
 
         let NewThread {
             thread_id,

@@ -29,6 +29,7 @@ use codex_arg0::Arg0DispatchPaths;
 use codex_core::StartThreadOptions;
 use codex_core::ThreadManager;
 use codex_core::config::ConfigOverrides;
+use codex_core_api::load_thread_user_instructions;
 use codex_external_agent_sessions::ExternalAgentSessionMigration as CoreSessionMigration;
 use codex_external_agent_sessions::ImportedExternalAgentSession;
 use codex_external_agent_sessions::PendingSessionImport;
@@ -42,7 +43,6 @@ use std::path::PathBuf;
 use tokio::sync::Semaphore;
 
 use super::ConfigRequestProcessor;
-use super::load_thread_user_instructions;
 
 #[derive(Clone)]
 pub(crate) struct ExternalAgentConfigRequestProcessor {
@@ -302,9 +302,13 @@ impl ExternalAgentConfigRequestProcessor {
         let environments = self
             .thread_manager
             .default_environment_selections(&config.cwd);
-        load_thread_user_instructions(self.thread_manager.as_ref(), &mut config, &environments)
-            .await
-            .map_err(|err| internal_error(format!("failed to load user instructions: {err}")))?;
+        load_thread_user_instructions(
+            &mut config,
+            self.thread_manager.environment_manager().as_ref(),
+            &environments,
+        )
+        .await
+        .map_err(|err| internal_error(format!("failed to load user instructions: {err}")))?;
         let imported_thread = self
             .thread_manager
             .start_thread_with_options(StartThreadOptions {

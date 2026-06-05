@@ -153,16 +153,16 @@ fn empty_loaded_instructions_are_empty() {
 #[test]
 fn loaded_instructions_with_only_empty_or_whitespace_entries_are_empty() {
     let empty = LoadedAgentsMd {
-        internal_entries: vec![InternalInstructionEntry {
+        entries: vec![InstructionEntry {
             contents: String::new(),
+            provenance: InstructionProvenance::Internal,
         }],
-        ..Default::default()
     };
     let whitespace = LoadedAgentsMd {
-        internal_entries: vec![InternalInstructionEntry {
+        entries: vec![InstructionEntry {
             contents: " \n\t".to_string(),
+            provenance: InstructionProvenance::Internal,
         }],
-        ..Default::default()
     };
 
     assert!(empty.is_empty());
@@ -385,15 +385,16 @@ async fn resolving_again_replaces_project_instructions() {
     assert_eq!(
         loaded,
         LoadedAgentsMd {
-            user_entries: vec![UserInstructionEntry {
-                contents: "user instructions".to_string(),
-                source: Some(user_agents),
-            }],
-            project_entries: vec![ProjectInstructionEntry {
-                contents: "second project".to_string(),
-                source: second_agents,
-            }],
-            internal_entries: Vec::new(),
+            entries: vec![
+                InstructionEntry {
+                    contents: "user instructions".to_string(),
+                    provenance: InstructionProvenance::User(Some(user_agents)),
+                },
+                InstructionEntry {
+                    contents: "second project".to_string(),
+                    provenance: InstructionProvenance::Project(second_agents),
+                },
+            ],
         }
     );
 }
@@ -430,17 +431,16 @@ async fn concatenates_root_and_cwd_docs() {
     let root_agents = repo.path().join("AGENTS.md").abs();
     let crate_agents = cfg.cwd.join("AGENTS.md");
     let expected = LoadedAgentsMd {
-        project_entries: vec![
-            ProjectInstructionEntry {
+        entries: vec![
+            InstructionEntry {
                 contents: "root doc".to_string(),
-                source: root_agents.clone(),
+                provenance: InstructionProvenance::Project(root_agents.clone()),
             },
-            ProjectInstructionEntry {
+            InstructionEntry {
                 contents: "crate doc".to_string(),
-                source: crate_agents.clone(),
+                provenance: InstructionProvenance::Project(crate_agents.clone()),
             },
         ],
-        ..Default::default()
     };
 
     assert_eq!(loaded, expected);
@@ -514,14 +514,16 @@ async fn child_agents_message_after_global_instructions_uses_plain_separator() {
         .expect("instructions expected");
     let global_agents = cfg.codex_home.join(DEFAULT_AGENTS_MD_FILENAME);
     let expected = LoadedAgentsMd {
-        user_entries: vec![UserInstructionEntry {
-            contents: "global doc".to_string(),
-            source: Some(global_agents),
-        }],
-        internal_entries: vec![InternalInstructionEntry {
-            contents: HIERARCHICAL_AGENTS_MESSAGE.to_string(),
-        }],
-        ..Default::default()
+        entries: vec![
+            InstructionEntry {
+                contents: "global doc".to_string(),
+                provenance: InstructionProvenance::User(Some(global_agents)),
+            },
+            InstructionEntry {
+                contents: HIERARCHICAL_AGENTS_MESSAGE.to_string(),
+                provenance: InstructionProvenance::Internal,
+            },
+        ],
     };
 
     assert_eq!(loaded, expected);
@@ -549,15 +551,16 @@ async fn instruction_sources_include_global_before_agents_md_docs() {
     let project_agents = cfg.cwd.join("AGENTS.md");
 
     let expected = LoadedAgentsMd {
-        user_entries: vec![UserInstructionEntry {
-            contents: "global doc".to_string(),
-            source: Some(global_agents.clone()),
-        }],
-        project_entries: vec![ProjectInstructionEntry {
-            contents: "project doc".to_string(),
-            source: project_agents.clone(),
-        }],
-        internal_entries: Vec::new(),
+        entries: vec![
+            InstructionEntry {
+                contents: "global doc".to_string(),
+                provenance: InstructionProvenance::User(Some(global_agents.clone())),
+            },
+            InstructionEntry {
+                contents: "project doc".to_string(),
+                provenance: InstructionProvenance::Project(project_agents.clone()),
+            },
+        ],
     };
     assert_eq!(loaded, expected);
     assert_eq!(
@@ -589,17 +592,20 @@ async fn child_agents_message_after_project_docs_is_not_an_instruction_source() 
     let project_agents = cfg.cwd.join("AGENTS.md");
 
     let expected = LoadedAgentsMd {
-        user_entries: vec![UserInstructionEntry {
-            contents: "global doc".to_string(),
-            source: Some(global_agents.clone()),
-        }],
-        project_entries: vec![ProjectInstructionEntry {
-            contents: "project doc".to_string(),
-            source: project_agents.clone(),
-        }],
-        internal_entries: vec![InternalInstructionEntry {
-            contents: HIERARCHICAL_AGENTS_MESSAGE.to_string(),
-        }],
+        entries: vec![
+            InstructionEntry {
+                contents: "global doc".to_string(),
+                provenance: InstructionProvenance::User(Some(global_agents.clone())),
+            },
+            InstructionEntry {
+                contents: "project doc".to_string(),
+                provenance: InstructionProvenance::Project(project_agents.clone()),
+            },
+            InstructionEntry {
+                contents: HIERARCHICAL_AGENTS_MESSAGE.to_string(),
+                provenance: InstructionProvenance::Internal,
+            },
+        ],
     };
     assert_eq!(loaded, expected);
     assert_eq!(
