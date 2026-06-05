@@ -72,6 +72,7 @@ use crate::utils::apply_default_headers;
 use crate::utils::build_default_headers;
 use codex_config::types::OAuthCredentialsStoreMode;
 
+#[path = "streamable_http_retry.rs"]
 mod streamable_http_retry;
 
 use self::streamable_http_retry::HandshakeError;
