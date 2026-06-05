@@ -4,6 +4,47 @@
 //! catalog state into one-time TUI prompts or warning cells without owning the main event loop.
 
 use super::*;
+use std::collections::HashSet;
+use std::path::PathBuf;
+
+#[derive(Debug, PartialEq, Eq, Hash)]
+struct SkillLoadWarningKey {
+    path: PathBuf,
+    message: String,
+}
+
+impl SkillLoadWarningKey {
+    fn from_error(error: &SkillErrorInfo) -> Self {
+        Self {
+            path: error.path.clone(),
+            message: error.message.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+pub(super) struct SkillLoadWarningState {
+    active: HashSet<SkillLoadWarningKey>,
+}
+
+impl SkillLoadWarningState {
+    pub(super) fn newly_active_errors(&mut self, errors: &[SkillErrorInfo]) -> Vec<SkillErrorInfo> {
+        let previous = std::mem::take(&mut self.active);
+        let mut current = HashSet::new();
+        let mut newly_active = Vec::new();
+
+        for error in errors {
+            let key = SkillLoadWarningKey::from_error(error);
+            let was_active = previous.contains(&key);
+            if current.insert(key) && !was_active {
+                newly_active.push(error.clone());
+            }
+        }
+
+        self.active = current;
+        newly_active
+    }
+}
 
 pub(super) fn emit_skill_load_warnings(app_event_tx: &AppEventSender, errors: &[SkillErrorInfo]) {
     if errors.is_empty() {
@@ -356,5 +397,59 @@ mod tests {
             vec![base_cwd.join("rel").into_path_buf()]
         );
         Ok(())
+    }
+
+    fn skill_error(path: &str, message: &str) -> SkillErrorInfo {
+        SkillErrorInfo {
+            path: PathBuf::from(path),
+            message: message.to_string(),
+        }
+    }
+
+    #[test]
+    fn skill_load_warning_state_suppresses_repeated_active_errors() {
+        let mut state = SkillLoadWarningState::default();
+        let error = skill_error("/repo/.codex/skills/abc/SKILL.md", "invalid description");
+
+        assert_eq!(
+            state.newly_active_errors(std::slice::from_ref(&error)),
+            vec![error.clone()]
+        );
+        assert_eq!(
+            state.newly_active_errors(std::slice::from_ref(&error)),
+            Vec::<SkillErrorInfo>::new()
+        );
+    }
+
+    #[test]
+    fn skill_load_warning_state_reemits_after_error_clears() {
+        let mut state = SkillLoadWarningState::default();
+        let error = skill_error("/repo/.codex/skills/abc/SKILL.md", "invalid description");
+
+        assert_eq!(
+            state.newly_active_errors(std::slice::from_ref(&error)),
+            vec![error.clone()]
+        );
+        assert_eq!(state.newly_active_errors(&[]), Vec::<SkillErrorInfo>::new());
+        assert_eq!(
+            state.newly_active_errors(std::slice::from_ref(&error)),
+            vec![error]
+        );
+    }
+
+    #[test]
+    fn skill_load_warning_state_displays_new_message_for_active_path() {
+        let mut state = SkillLoadWarningState::default();
+        let initial = skill_error("/repo/.codex/skills/abc/SKILL.md", "invalid description");
+        let changed = skill_error("/repo/.codex/skills/abc/SKILL.md", "invalid frontmatter");
+
+        assert_eq!(
+            state.newly_active_errors(std::slice::from_ref(&initial)),
+            vec![initial]
+        );
+        assert_eq!(
+            state.newly_active_errors(std::slice::from_ref(&changed)),
+            vec![changed]
+        );
     }
 }

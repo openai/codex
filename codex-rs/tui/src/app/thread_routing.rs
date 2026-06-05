@@ -1342,6 +1342,7 @@ impl App {
     pub(super) fn handle_skills_list_response(&mut self, response: SkillsListResponse) {
         let cwd = self.chat_widget.config_ref().cwd.clone();
         let errors = errors_for_cwd(&cwd, &response);
+        let errors = self.skill_load_warnings.newly_active_errors(&errors);
         emit_skill_load_warnings(&self.app_event_tx, &errors);
         self.chat_widget.handle_skills_list_response(response);
     }
