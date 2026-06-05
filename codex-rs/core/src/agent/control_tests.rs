@@ -528,6 +528,102 @@ async fn send_inter_agent_communication_without_turn_queues_message_without_trig
 }
 
 #[tokio::test]
+async fn ensure_v2_agent_loaded_reloads_registered_unloaded_agent() {
+    let (home, mut config) = test_config().await;
+    let _ = config.features.enable(Feature::MultiAgentV2);
+    let _ = config.features.enable(Feature::Sqlite);
+    let state_db = init_state_db(&config).await;
+    let manager = ThreadManager::with_models_provider_home_and_state_for_tests(
+        CodexAuth::from_api_key("dummy"),
+        config.model_provider.clone(),
+        config.codex_home.to_path_buf(),
+        std::sync::Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+        state_db.clone(),
+    );
+    let control = manager.agent_control();
+    let harness = AgentControlHarness {
+        _home: home,
+        config,
+        state_db,
+        manager,
+        control,
+    };
+    let (parent_thread_id, _parent_thread) = harness.start_thread().await;
+    let agent_path = AgentPath::try_from("/root/worker").expect("agent path");
+    let spawned_agent = harness
+        .control
+        .spawn_agent_with_metadata(
+            harness.config.clone(),
+            text_input("hello child"),
+            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id,
+                depth: 1,
+                agent_path: Some(agent_path.clone()),
+                agent_nickname: None,
+                agent_role: None,
+            })),
+            SpawnAgentOptions {
+                parent_thread_id: Some(parent_thread_id),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("spawn_agent should succeed");
+    let child_thread = harness
+        .manager
+        .get_thread(spawned_agent.thread_id)
+        .await
+        .expect("child thread should exist");
+    persist_thread_for_tree_resume(&child_thread, "child persisted").await;
+
+    assert!(
+        harness
+            .manager
+            .remove_thread(&spawned_agent.thread_id)
+            .await
+            .is_some()
+    );
+    assert_matches!(
+        harness.manager.get_thread(spawned_agent.thread_id).await,
+        Err(CodexErr::ThreadNotFound(id)) if id == spawned_agent.thread_id
+    );
+
+    harness
+        .control
+        .ensure_v2_agent_loaded(harness.config.clone(), spawned_agent.thread_id)
+        .await
+        .expect("known v2 agent should reload");
+    let _ = harness
+        .manager
+        .get_thread(spawned_agent.thread_id)
+        .await
+        .expect("reloaded child thread should exist");
+
+    let communication = InterAgentCommunication::new(
+        AgentPath::root(),
+        agent_path,
+        Vec::new(),
+        "hello after reload".to_string(),
+        /*trigger_turn*/ false,
+    );
+    harness
+        .control
+        .send_inter_agent_communication(spawned_agent.thread_id, communication.clone())
+        .await
+        .expect("send_inter_agent_communication should succeed after reload");
+    let expected = (
+        spawned_agent.thread_id,
+        Op::InterAgentCommunication { communication },
+    );
+    let captured = harness
+        .manager
+        .captured_ops()
+        .into_iter()
+        .find(|entry| *entry == expected);
+    assert_eq!(captured, Some(expected));
+}
+
+#[tokio::test]
 async fn encrypted_inter_agent_communication_clears_existing_last_task_message() {
     let harness = AgentControlHarness::new().await;
     let (parent_thread_id, _) = harness.start_thread().await;

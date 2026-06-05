@@ -109,6 +109,69 @@ impl AgentControl {
             .await
     }
 
+    pub(crate) async fn ensure_v2_agent_loaded(
+        &self,
+        config: Config,
+        thread_id: ThreadId,
+    ) -> CodexResult<()> {
+        let state = self.upgrade()?;
+        if state.get_thread(thread_id).await.is_ok() {
+            return Ok(());
+        }
+        if self.state.agent_metadata_for_thread(thread_id).is_none() {
+            return Err(CodexErr::ThreadNotFound(thread_id));
+        }
+
+        let stored_thread = state
+            .read_stored_thread(ReadThreadParams {
+                thread_id,
+                include_archived: true,
+                include_history: true,
+            })
+            .await?;
+        let stored_source = stored_thread.source.clone();
+        let stored_parent_thread_id = stored_thread.parent_thread_id;
+        let history = stored_thread
+            .history
+            .ok_or(CodexErr::ThreadNotFound(thread_id))?
+            .items;
+        let initial_history = InitialHistory::Resumed(ResumedHistory {
+            conversation_id: thread_id,
+            history,
+            rollout_path: stored_thread.rollout_path,
+        });
+        if initial_history.get_multi_agent_version() != Some(MultiAgentVersion::V2) {
+            return Err(CodexErr::ThreadNotFound(thread_id));
+        }
+
+        let (session_source, _) = initial_history
+            .get_resumed_session_sources()
+            .unwrap_or((stored_source, None));
+        let parent_thread_id = initial_history
+            .get_resumed_parent_thread_id()
+            .or(stored_parent_thread_id);
+        let inherited_shell_snapshot = self
+            .inherited_shell_snapshot_for_source(&state, Some(&session_source))
+            .await;
+        let inherited_exec_policy = self
+            .inherited_exec_policy_for_source(&state, Some(&session_source), &config)
+            .await;
+
+        let reloaded_thread = state
+            .resume_thread_with_history_with_source(ResumeThreadWithHistoryOptions {
+                config,
+                initial_history,
+                agent_control: self.clone(),
+                session_source,
+                parent_thread_id,
+                inherited_shell_snapshot,
+                inherited_exec_policy,
+            })
+            .await?;
+        state.notify_thread_created(reloaded_thread.thread_id);
+        Ok(())
+    }
+
     async fn spawn_agent_internal(
         &self,
         config: Config,

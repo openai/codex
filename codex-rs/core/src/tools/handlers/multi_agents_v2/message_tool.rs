@@ -75,7 +75,11 @@ pub(crate) async fn handle_message_string_tool(
         .services
         .agent_control
         .get_agent_metadata(receiver_thread_id)
-        .unwrap_or_default();
+        .ok_or_else(|| {
+            FunctionCallError::RespondToModel(format!(
+                "agent with id {receiver_thread_id} not found"
+            ))
+        })?;
     if mode == MessageDeliveryMode::TriggerTurn
         && receiver_agent
             .agent_path
@@ -86,6 +90,15 @@ pub(crate) async fn handle_message_string_tool(
             "Follow-up tasks can't target the root agent".to_string(),
         ));
     }
+    let receiver_agent_path = receiver_agent.agent_path.clone().ok_or_else(|| {
+        FunctionCallError::RespondToModel("target agent is missing an agent_path".to_string())
+    })?;
+    session
+        .services
+        .agent_control
+        .ensure_v2_agent_loaded(turn.config.as_ref().clone(), receiver_thread_id)
+        .await
+        .map_err(|err| collab_agent_error(receiver_thread_id, err))?;
     session
         .send_event(
             &turn,
@@ -99,9 +112,6 @@ pub(crate) async fn handle_message_string_tool(
             .into(),
         )
         .await;
-    let receiver_agent_path = receiver_agent.agent_path.clone().ok_or_else(|| {
-        FunctionCallError::RespondToModel("target agent is missing an agent_path".to_string())
-    })?;
     let author = turn
         .session_source
         .get_agent_path()
