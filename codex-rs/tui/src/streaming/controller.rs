@@ -272,9 +272,10 @@ impl StreamCore {
         if self.emitted_stable_len > 0 && !had_pending_queue && !had_structural_tail {
             // Avoid replaying already-emitted content after resize when no
             // stable lines were waiting in the queue and there was no mutable
-            // structural tail to preserve. Ordinary source-line tails are
-            // remapped to the new render suffix and stay mutable.
-            let target_stable_len = self.compute_target_stable_len();
+            // structural tail to preserve. Use the unfloored stable boundary so
+            // ordinary source-line tails are remapped to the new render suffix
+            // and stay mutable even if the stable prefix compressed.
+            let target_stable_len = self.stable_len_before_emitted_floor();
             self.emitted_stable_len = target_stable_len;
             self.enqueued_stable_len = target_stable_len;
             return;
@@ -315,7 +316,13 @@ impl StreamCore {
 
         let had_pending_queue = self.state.queued_len() > 0;
         let had_structural_tail = self.requires_final_scrollback_reflow();
+        let live_default_tail_source_start = if !had_pending_queue && !had_structural_tail {
+            self.live_default_tail_source_start()
+        } else {
+            None
+        };
         self.render_mode = render_mode;
+        self.stable_prefix_len_cache = None;
         if self.raw_source.is_empty() {
             return;
         }
@@ -331,7 +338,11 @@ impl StreamCore {
         }
         self.state.clear_queue();
         if self.emitted_stable_len > 0 && !had_pending_queue && !had_structural_tail {
-            let target_stable_len = self.compute_target_stable_len();
+            let target_stable_len = if let Some(source_start) = live_default_tail_source_start {
+                self.stable_prefix_len_for_source_start(source_start)
+            } else {
+                self.compute_target_stable_len()
+            };
             self.emitted_stable_len = target_stable_len;
             self.enqueued_stable_len = target_stable_len;
             return;
@@ -341,11 +352,13 @@ impl StreamCore {
 
     /// Compute how many rendered lines should be in the stable region.
     fn compute_target_stable_len(&mut self) -> usize {
-        let tail_budget = self.active_tail_budget_lines();
-        self.rendered_lines
-            .len()
-            .saturating_sub(tail_budget)
+        self.stable_len_before_emitted_floor()
             .max(self.emitted_stable_len)
+    }
+
+    fn stable_len_before_emitted_floor(&mut self) -> usize {
+        let tail_budget = self.active_tail_budget_lines();
+        self.rendered_lines.len().saturating_sub(tail_budget)
     }
 
     /// Advance `enqueued_stable_len` toward the target stable boundary and enqueue any
@@ -397,8 +410,9 @@ impl StreamCore {
     /// table region is held as tail because adding a row can reshape table
     /// column widths. For `PendingHeader`, only content from the speculative
     /// header line onward is kept mutable so earlier prose can continue
-    /// streaming. When no table is detected, everything flows directly to
-    /// stable. This is the core decision point for the holdback mechanism.
+    /// streaming. When no table is detected, the configured default source
+    /// suffix remains mutable. This is the core decision point for the holdback
+    /// mechanism.
     fn active_tail_budget_lines(&mut self) -> usize {
         if self.render_mode == HistoryRenderMode::Raw {
             return 0;
@@ -455,11 +469,8 @@ impl StreamCore {
         }
 
         let render_start = Instant::now();
-        let stable_prefix_render = render_markdown_agent_with_links_and_cwd(
-            &self.raw_source[..source_start.min(self.raw_source.len())],
-            self.width,
-            Some(self.cwd.as_path()),
-        );
+        let stable_prefix_render =
+            self.render_source(&self.raw_source[..source_start.min(self.raw_source.len())]);
         let stable_prefix_len = stable_prefix_render.len();
         tracing::trace!(
             source_start,
@@ -480,11 +491,21 @@ impl StreamCore {
         if self.default_tail_lines == 0 || self.rendered_lines.is_empty() {
             return 0;
         }
-        let Some(source_start) = tail_source_start(&self.raw_source, self.default_tail_lines)
-        else {
+        let Some(source_start) = self.default_tail_source_start() else {
             return 0;
         };
         self.tail_budget_from_source_start(source_start)
+    }
+
+    fn live_default_tail_source_start(&self) -> Option<usize> {
+        if self.default_tail_lines == 0 || self.enqueued_stable_len >= self.rendered_lines.len() {
+            return None;
+        }
+        self.default_tail_source_start()
+    }
+
+    fn default_tail_source_start(&self) -> Option<usize> {
+        tail_source_start(&self.raw_source, self.default_tail_lines)
     }
 
     fn requires_final_scrollback_reflow(&self) -> bool {
@@ -1124,6 +1145,102 @@ mod tests {
         );
 
         assert_eq!(rendered, vec!["• tail without newline".to_string()]);
+    }
+
+    #[test]
+    fn controller_set_width_preserves_default_tail_after_stable_prefix_compresses() {
+        let mut ctrl = stream_controller(Some(/*width*/ 24));
+        ctrl.push("AAAA BBBB CCCC DDDD EEEE FFFF GGGG HHHH IIII JJJJ\n");
+        ctrl.push("tail stays visible\n");
+
+        let (_cell, idle) = ctrl.on_commit_tick_batch(usize::MAX);
+        assert!(idle, "stable prefix should fully drain");
+        assert_eq!(ctrl.queued_lines(), 0, "expected empty queue before resize");
+        assert!(
+            ctrl.has_live_tail(),
+            "expected short second line to be held as the default tail",
+        );
+
+        ctrl.set_width(Some(/*width*/ 120));
+
+        let tail_after_resize = hyperlink_lines_to_plain_strings(&ctrl.current_tail_lines());
+        assert_eq!(
+            tail_after_resize,
+            vec!["tail stays visible".to_string()],
+            "wider resize must not mark the default tail as already emitted",
+        );
+
+        let (cell, _source) = ctrl.finalize();
+        let finalized = cell
+            .map(|cell| lines_to_plain_strings(&cell.transcript_lines(u16::MAX)))
+            .unwrap_or_default();
+        assert_eq!(
+            finalized,
+            vec!["  tail stays visible".to_string()],
+            "finalize should still flush the preserved default tail",
+        );
+    }
+
+    #[test]
+    fn controller_set_render_mode_does_not_replay_drained_raw_output() {
+        let mut ctrl =
+            StreamController::new(Some(/*width*/ 120), &test_cwd(), HistoryRenderMode::Raw);
+        ctrl.push("AAAA BBBB CCCC DDDD EEEE FFFF GGGG HHHH IIII JJJJ\n");
+        ctrl.push("tail already emitted\n");
+
+        let (_cell, idle) = ctrl.on_commit_tick_batch(usize::MAX);
+        assert!(idle, "raw stable output should fully drain");
+        assert_eq!(ctrl.queued_lines(), 0, "expected empty queue before toggle");
+
+        ctrl.set_render_mode(HistoryRenderMode::Rich);
+
+        let (cell, _source) = ctrl.finalize();
+        assert!(
+            cell.is_none(),
+            "already-drained raw output must not be replayed after switching to rich mode",
+        );
+    }
+
+    #[test]
+    fn controller_set_render_mode_preserves_held_default_tail_when_switching_to_raw() {
+        let mut ctrl = stream_controller(Some(/*width*/ 120));
+        ctrl.push("prefix already emitted\n");
+        ctrl.push("tail stays visible\n");
+
+        let (_cell, idle) = ctrl.on_commit_tick_batch(usize::MAX);
+        assert!(idle, "stable prefix should fully drain");
+        assert_eq!(ctrl.queued_lines(), 0, "expected empty queue before toggle");
+        assert!(
+            ctrl.has_live_tail(),
+            "expected second line to be held as the default tail",
+        );
+
+        ctrl.set_render_mode(HistoryRenderMode::Raw);
+
+        let tail_after_toggle = hyperlink_lines_to_plain_strings(&ctrl.current_tail_lines());
+        assert_eq!(
+            tail_after_toggle,
+            vec!["tail stays visible".to_string()],
+            "raw toggle must not mark the held default tail as already emitted",
+        );
+
+        assert!(
+            ctrl.push("new raw line\n"),
+            "next raw line should make the preserved tail stable",
+        );
+        let (cell, idle) = ctrl.on_commit_tick_batch(usize::MAX);
+        assert!(idle, "raw stable output should fully drain");
+        let emitted = cell
+            .map(|cell| lines_to_plain_strings(&cell.transcript_lines(u16::MAX)))
+            .unwrap_or_default();
+        assert_eq!(
+            emitted,
+            vec![
+                "  tail stays visible".to_string(),
+                "  new raw line".to_string(),
+            ],
+            "held tail should drain before newer raw output",
+        );
     }
 
     #[test]
