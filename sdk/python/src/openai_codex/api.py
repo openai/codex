@@ -542,6 +542,7 @@ class Thread:
         input: RunInput,
         *,
         approval_mode: ApprovalMode | None = None,
+        client_user_message_id: str | None = None,
         cwd: str | None = None,
         effort: ReasoningEffort | None = None,
         model: str | None = None,
@@ -555,6 +556,7 @@ class Thread:
         turn = self.turn(
             input,
             approval_mode=approval_mode,
+            client_user_message_id=client_user_message_id,
             cwd=cwd,
             effort=effort,
             model=model,
@@ -632,6 +634,7 @@ class AsyncThread:
         input: RunInput,
         *,
         approval_mode: ApprovalMode | None = None,
+        client_user_message_id: str | None = None,
         cwd: str | None = None,
         effort: ReasoningEffort | None = None,
         model: str | None = None,
@@ -645,6 +648,7 @@ class AsyncThread:
         turn = await self.turn(
             input,
             approval_mode=approval_mode,
+            client_user_message_id=client_user_message_id,
             cwd=cwd,
             effort=effort,
             model=model,
