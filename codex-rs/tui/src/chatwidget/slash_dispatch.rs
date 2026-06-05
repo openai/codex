@@ -406,6 +406,10 @@ impl ChatWidget {
             SlashCommand::Skills => {
                 self.open_skills_menu();
             }
+            SlashCommand::Import => {
+                self.app_event_tx
+                    .send(AppEvent::OpenExternalAgentConfigMigration);
+            }
             SlashCommand::Hooks => {
                 self.add_hooks_output();
             }
@@ -1018,6 +1022,7 @@ impl ChatWidget {
             | SlashCommand::Logout
             | SlashCommand::Mention
             | SlashCommand::Skills
+            | SlashCommand::Import
             | SlashCommand::Hooks
             | SlashCommand::Title
             | SlashCommand::Statusline

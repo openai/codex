@@ -131,7 +131,8 @@ mod diff_render;
 mod exec_cell;
 mod exec_command;
 mod external_agent_config_migration;
-mod external_agent_config_migration_startup;
+mod external_agent_config_migration_flow;
+mod external_agent_config_migration_model;
 mod external_editor;
 mod file_search;
 mod frames;
@@ -1810,23 +1811,11 @@ async fn run_ratatui_app(
     let hooks_request_handle = app_server.request_handle();
     let hooks_cwd = config.cwd.to_path_buf();
     let startup_prefetch_started_at = Instant::now();
-    let should_defer_bootstrap =
-        external_agent_config_migration_startup::should_show_external_agent_config_migration_prompt(
-            &config,
-            should_show_trust_screen_flag,
-        );
-    let (startup_bootstrap, startup_hooks_entry) = if should_defer_bootstrap {
-        (
-            None,
-            load_startup_hooks_review_entry(hooks_request_handle, hooks_cwd).await,
-        )
-    } else {
-        let (bootstrap, entry) = tokio::join!(
-            app_server.bootstrap(&config),
-            load_startup_hooks_review_entry(hooks_request_handle, hooks_cwd),
-        );
-        (Some(bootstrap?), entry)
-    };
+    let (startup_bootstrap, startup_hooks_entry) = tokio::join!(
+        app_server.bootstrap(&config),
+        load_startup_hooks_review_entry(hooks_request_handle, hooks_cwd),
+    );
+    let startup_bootstrap = Some(startup_bootstrap?);
     let startup_elapsed_before_app = startup_prefetch_started_at.elapsed();
     let startup_hooks_browser = match maybe_run_startup_hooks_review(
         &mut app_server,
@@ -1853,7 +1842,6 @@ async fn run_ratatui_app(
         session_selection,
         feedback,
         should_show_trust_screen, // Proxy to: is it a first run in this directory?
-        should_show_trust_screen_flag, // Preserve the startup-time trust NUX signal before onboarding
         should_prompt_windows_sandbox_nux_at_startup,
         app_server_target,
         state_db,
