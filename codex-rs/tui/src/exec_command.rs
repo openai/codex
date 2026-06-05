@@ -13,8 +13,13 @@ pub(crate) fn strip_bash_lc_and_escape(command: &[String]) -> String {
     if let Some((_, script)) = extract_shell_command(command) {
         return script.to_string();
     }
-    // Relaxed fallback for flattened argv, so every display-only wrapper-strip
-    // path agrees. Approval matching in command_canonicalization stays strict.
+    escape_command(command)
+}
+
+pub(crate) fn strip_shell_wrapper_for_display(command: &[String]) -> String {
+    if let Some((_, script)) = extract_shell_command(command) {
+        return script.to_string();
+    }
     if let Some((_, script)) = codex_shell_command::bash::extract_bash_command_joined(command) {
         return script;
     }
@@ -88,14 +93,28 @@ mod tests {
         let cmdline = strip_bash_lc_and_escape(&args);
         assert_eq!(cmdline, "echo hello");
 
-        // Test a wrapper whose inner command was flattened across argv.
+        // Approval displays must preserve positional arguments after the
+        // script rather than treating them as more script text.
+        let args = vec![
+            "bash".into(),
+            "-c".into(),
+            "rm -rf \"$1\"".into(),
+            "sh".into(),
+            "/tmp/target".into(),
+        ];
+        let cmdline = strip_bash_lc_and_escape(&args);
+        assert_eq!(cmdline, "bash -c 'rm -rf \"$1\"' sh /tmp/target");
+    }
+
+    #[test]
+    fn strip_shell_wrapper_for_display_handles_flattened_argv() {
         let args = vec![
             "/bin/zsh".into(),
             "-lc".into(),
             "python3".into(),
             "build.py".into(),
         ];
-        let cmdline = strip_bash_lc_and_escape(&args);
+        let cmdline = strip_shell_wrapper_for_display(&args);
         assert_eq!(cmdline, "python3 build.py");
     }
 

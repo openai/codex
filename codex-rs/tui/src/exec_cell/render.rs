@@ -3,7 +3,7 @@ use std::time::Instant;
 use super::model::CommandOutput;
 use super::model::ExecCall;
 use super::model::ExecCell;
-use crate::exec_command::strip_bash_lc_and_escape;
+use crate::exec_command::strip_shell_wrapper_for_display;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::plain_lines;
 use crate::motion::MotionMode;
@@ -18,7 +18,6 @@ use crate::wrapping::adaptive_wrap_lines;
 use codex_ansi_escape::ansi_escape_line;
 use codex_app_server_protocol::CommandExecutionSource as ExecCommandSource;
 use codex_protocol::parse_command::ParsedCommand;
-use codex_shell_command::bash::extract_bash_command;
 use codex_utils_elapsed::format_duration;
 use itertools::Itertools;
 use ratatui::prelude::*;
@@ -65,17 +64,7 @@ pub(crate) fn new_active_exec_command(
 }
 
 fn format_unified_exec_interaction(command: &[String], input: Option<&str>) -> String {
-    // Strip the shell wrapper (canonical 3-element shape, or flattened argv)
-    // so the "Waited for `…`" line shows the inner script, not `zsh -lc …`.
-    let command_display = if let Some((_, script)) = extract_bash_command(command) {
-        script.to_string()
-    } else if let Some((_, script)) =
-        codex_shell_command::bash::extract_bash_command_joined(command)
-    {
-        script
-    } else {
-        command.join(" ")
-    };
+    let command_display = strip_shell_wrapper_for_display(command);
     match input {
         Some(data) if !data.is_empty() => {
             let preview = summarize_interaction_input(data);
@@ -213,7 +202,7 @@ impl HistoryCell for ExecCell {
             if i > 0 {
                 lines.push("".into());
             }
-            let script = strip_bash_lc_and_escape(&call.command);
+            let script = strip_shell_wrapper_for_display(&call.command);
             let highlighted_script = highlight_bash_to_lines(&script);
             let cmd_display = adaptive_wrap_lines(
                 &highlighted_script,
@@ -400,7 +389,7 @@ impl ExecCell {
         let cmd_display = if call.is_unified_exec_interaction() {
             format_unified_exec_interaction(&call.command, call.interaction_input.as_deref())
         } else {
-            strip_bash_lc_and_escape(&call.command)
+            strip_shell_wrapper_for_display(&call.command)
         };
         let highlighted_lines = highlight_bash_to_lines(&cmd_display);
 
@@ -741,6 +730,23 @@ mod tests {
         insta::assert_snapshot!(
             format_unified_exec_interaction(&command, /*input*/ None),
             @"Waited for `touch /tmp/foo`"
+        );
+    }
+
+    #[test]
+    fn flattened_shell_wrapper_preserves_operators_snapshot() {
+        let command = [
+            "/bin/zsh".to_string(),
+            "-lc".to_string(),
+            "rg".to_string(),
+            "foo".to_string(),
+            "|".to_string(),
+            "head".to_string(),
+        ];
+
+        insta::assert_snapshot!(
+            format_unified_exec_interaction(&command, /*input*/ None),
+            @"Waited for `rg foo | head`"
         );
     }
 

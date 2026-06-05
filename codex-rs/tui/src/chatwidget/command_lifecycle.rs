@@ -170,7 +170,7 @@ impl ChatWidget {
     ) {
         let key = process_id.unwrap_or(call_id).to_string();
         let command = split_command_string(command);
-        let command_display = strip_bash_lc_and_escape(&command);
+        let command_display = strip_shell_wrapper_for_display(&command);
         if let Some(existing) = self
             .unified_exec_processes
             .iter_mut()

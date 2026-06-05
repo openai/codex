@@ -120,7 +120,8 @@ fn is_recognised_bash_lc_invocation(shell: &str, flag: &str) -> bool {
 /// Like `extract_bash_command`, but also recognises argv where the inner
 /// script was flattened past `[shell, flag, script]` (e.g. the protocol
 /// payload re-split an unquoted form into `[shell, flag, word, word, ...]`).
-/// Returns an owned script, shlex-joined across the tail.
+/// Returns an owned script reconstructed across the tail. Ordinary arguments
+/// are shell-quoted, while standalone shell operator tokens remain operators.
 ///
 /// Caveat: this assumes every token after the flag is script text, so it is
 /// deliberately wrong for POSIX `sh -c <script> <arg0> <arg1>` where the tail
@@ -140,7 +141,32 @@ pub fn extract_bash_command_joined(command: &[String]) -> Option<(String, String
     if rest.len() < 2 || !is_recognised_bash_lc_invocation(shell, flag) {
         return None;
     }
-    Some((shell.clone(), crate::parse_command::shlex_join(rest)))
+    Some((shell.clone(), join_flattened_shell_script(rest)))
+}
+
+fn join_flattened_shell_script(tokens: &[String]) -> String {
+    let mut script = String::new();
+    for token in tokens {
+        if !script.is_empty() {
+            script.push(' ');
+        }
+        if is_shell_operator_token(token) {
+            script.push_str(token);
+        } else {
+            let Ok(quoted) = shlex::try_quote(token) else {
+                return "<command included NUL byte>".to_string();
+            };
+            script.push_str(&quoted);
+        }
+    }
+    script
+}
+
+fn is_shell_operator_token(token: &str) -> bool {
+    token.chars().any(|ch| "<>|&;()".contains(ch))
+        && token
+            .chars()
+            .all(|ch| ch.is_ascii_digit() || "<>|&;()".contains(ch))
 }
 
 /// Returns the sequence of plain commands within a `bash -lc "..."` or
@@ -378,6 +404,26 @@ mod tests {
         .expect("known shell + -lc + tail should match");
         assert_eq!(shell, "zsh");
         assert_eq!(script, "touch /tmp/foo");
+    }
+
+    #[test]
+    fn extract_bash_command_joined_preserves_shell_operators() {
+        let (_, script) = extract_bash_command_joined(&[
+            "zsh".to_string(),
+            "-lc".to_string(),
+            "rg".to_string(),
+            "foo bar".to_string(),
+            "|".to_string(),
+            "head".to_string(),
+            ">".to_string(),
+            "/tmp/out".to_string(),
+            "2>&1".to_string(),
+            ";".to_string(),
+            "echo".to_string(),
+            "done".to_string(),
+        ])
+        .expect("known shell + -lc + tail should match");
+        assert_eq!(script, "rg 'foo bar' | head > /tmp/out 2>&1 ; echo done");
     }
 
     #[test]
