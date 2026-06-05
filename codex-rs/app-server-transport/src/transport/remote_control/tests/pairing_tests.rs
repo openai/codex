@@ -437,6 +437,127 @@ async fn remote_control_handle_disable_keeps_current_enrollment() {
 }
 
 #[tokio::test]
+async fn remote_control_handle_reenrolls_after_stale_pairing_enrollment() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("listener should bind");
+    let remote_control_url = remote_control_url_for_listener(&listener);
+    let codex_home = TempDir::new().expect("temp dir should create");
+    let state_db = remote_control_state_runtime(&codex_home).await;
+    let mut remote_handle = remote_control_handle_with_current_enrollment(
+        &remote_control_url,
+        remote_control_auth_manager_with_home(&codex_home),
+    );
+    remote_handle.state_db = Some(state_db.clone());
+    remote_handle.disable();
+    let stale_enrollment = remote_handle
+        .current_enrollment
+        .lock()
+        .await
+        .clone()
+        .expect("current enrollment should exist");
+    let remote_control_target = stale_enrollment.remote_control_target.clone();
+    let refreshed_enrollment = RemoteControlEnrollment {
+        remote_control_target: remote_control_target.clone(),
+        account_id: "account_id".to_string(),
+        environment_id: "env_refreshed".to_string(),
+        server_id: "srv_e_refreshed".to_string(),
+        server_name: test_server_name(),
+        remote_control_token: None,
+        expires_at: None,
+    };
+    update_persisted_remote_control_enrollment(
+        Some(state_db.as_ref()),
+        &remote_control_target,
+        "account_id",
+        /*app_server_client_name*/ None,
+        Some(&stale_enrollment),
+    )
+    .await
+    .expect("stale enrollment should save");
+    let server_refreshed_enrollment = refreshed_enrollment.clone();
+    let server_task = tokio::spawn(async move {
+        let stale_pairing_request = accept_http_request(&listener).await;
+        assert_eq!(
+            stale_pairing_request.request_line,
+            "POST /backend-api/wham/remote/control/server/pair HTTP/1.1"
+        );
+        assert_eq!(
+            stale_pairing_request.headers.get("authorization"),
+            Some(&format!("Bearer {TEST_REMOTE_CONTROL_SERVER_TOKEN}"))
+        );
+        respond_with_status(stale_pairing_request.stream, "404 Not Found", "").await;
+
+        let enroll_request = accept_http_request(&listener).await;
+        assert_eq!(
+            enroll_request.request_line,
+            "POST /backend-api/wham/remote/control/server/enroll HTTP/1.1"
+        );
+        respond_with_json(
+            enroll_request.stream,
+            remote_control_server_token_response(
+                &server_refreshed_enrollment.server_id,
+                &server_refreshed_enrollment.environment_id,
+                TEST_REFRESHED_REMOTE_CONTROL_SERVER_TOKEN,
+            ),
+        )
+        .await;
+
+        let refreshed_pairing_request = accept_http_request(&listener).await;
+        assert_eq!(
+            refreshed_pairing_request.request_line,
+            "POST /backend-api/wham/remote/control/server/pair HTTP/1.1"
+        );
+        assert_eq!(
+            refreshed_pairing_request.headers.get("authorization"),
+            Some(&format!(
+                "Bearer {TEST_REFRESHED_REMOTE_CONTROL_SERVER_TOKEN}"
+            ))
+        );
+        respond_with_json(
+            refreshed_pairing_request.stream,
+            json!({
+                "pairing_code": "pairing-code",
+                "manual_pairing_code": "ABCD-EFGH",
+                "server_id": server_refreshed_enrollment.server_id,
+                "environment_id": server_refreshed_enrollment.environment_id,
+                "expires_at": "3026-05-22T12:34:56Z",
+            }),
+        )
+        .await;
+    });
+    let response = remote_handle
+        .start_pairing(
+            RemoteControlPairingStartParams::default(),
+            /*app_server_client_name*/ None,
+        )
+        .await
+        .expect("pairing should re-enroll after stale enrollment");
+    server_task.await.expect("server task should finish");
+
+    assert_eq!(
+        response,
+        RemoteControlPairingStartResponse {
+            pairing_code: "pairing-code".to_string(),
+            manual_pairing_code: Some("ABCD-EFGH".to_string()),
+            environment_id: "env_refreshed".to_string(),
+            expires_at: 33_336_362_096,
+        }
+    );
+    assert_eq!(
+        load_persisted_remote_control_enrollment(
+            Some(state_db.as_ref()),
+            &remote_control_target,
+            "account_id",
+            /*app_server_client_name*/ None,
+        )
+        .await
+        .expect("refreshed enrollment should load"),
+        Some(refreshed_enrollment)
+    );
+}
+
+#[tokio::test]
 async fn remote_control_handle_discards_pairing_response_after_auth_change() {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await

@@ -274,6 +274,25 @@ impl RemoteControlHandle {
                 .await?;
                 enrollment.start_pairing(pairing_request()).await
             }
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {
+                clear_pairing_enrollment(
+                    &mut current_enrollment,
+                    self.state_db.as_deref(),
+                    app_server_client_name,
+                    &enrollment,
+                )
+                .await;
+                enrollment = self
+                    .load_or_enroll_pairing_server(
+                        &mut current_enrollment,
+                        &mut auth,
+                        &installation_id,
+                        &status.server_name,
+                        app_server_client_name,
+                    )
+                    .await?;
+                enrollment.start_pairing(pairing_request()).await
+            }
             pairing_response => pairing_response,
         };
         if let Err(err) = &pairing_response {
