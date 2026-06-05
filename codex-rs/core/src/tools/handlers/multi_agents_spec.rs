@@ -308,13 +308,13 @@ pub fn create_close_agent_tool_v2() -> ToolSpec {
     let properties = BTreeMap::from([(
         "target".to_string(),
         JsonSchema::string(Some(
-            "Agent id or canonical task name to close (from spawn_agent).".to_string(),
+            "Agent id or canonical task name to interrupt (from spawn_agent).".to_string(),
         )),
     )]);
 
     ToolSpec::Function(ResponsesApiTool {
         name: "close_agent".to_string(),
-        description: "Close an agent and any open descendants when they are no longer needed, and return the target agent's previous status before shutdown was requested. Idle agents do not count toward the concurrency limit.".to_string(),
+        description: "Interrupt an agent's current turn, if any, and return its previous status. The agent remains available for messages and follow-up tasks.".to_string(),
         strict: false,
         defer_loading: None,
         parameters: JsonSchema::object(properties, Some(vec!["target".to_string()]), Some(false.into())),
@@ -485,7 +485,7 @@ fn close_agent_output_schema() -> Value {
         "type": "object",
         "properties": {
             "previous_status": {
-                "description": "The agent status observed before shutdown was requested.",
+                "description": "The agent status observed before the request was handled.",
                 "allOf": [agent_status_output_schema()]
             }
         },
