@@ -434,6 +434,8 @@ pub struct CodexCompactionEvent {
     pub error: Option<String>,
     pub active_context_tokens_before: i64,
     pub active_context_tokens_after: i64,
+    pub retained_image_count: Option<usize>,
+    pub compaction_summary_tokens: Option<i64>,
     pub started_at: u64,
     pub completed_at: u64,
     pub duration_ms: Option<u64>,
