@@ -1511,7 +1511,11 @@ impl Session {
     ) -> bool {
         let state = self.state.lock().await;
         matches!(
-            state.session_configuration.environments.as_slice(),
+            state
+                .session_configuration
+                .environments
+                .environments
+                .as_slice(),
             [environment] if environment.environment_id == environment_id
         )
     }
