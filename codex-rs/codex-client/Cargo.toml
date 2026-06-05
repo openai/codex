@@ -25,8 +25,13 @@ tracing-opentelemetry = { workspace = true }
 codex-utils-rustls-provider = { workspace = true }
 zstd = { workspace = true }
 
-[target.'cfg(target_os = "windows")'.dependencies]
+[target.'cfg(any(target_os = "windows", target_os = "macos"))'.dependencies]
 sha2 = { workspace = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+system-configuration = { workspace = true }
+
+[target.'cfg(target_os = "windows")'.dependencies]
 windows-sys = { version = "0.52", features = [
     "Win32_Foundation",
     "Win32_Networking_WinHttp",
