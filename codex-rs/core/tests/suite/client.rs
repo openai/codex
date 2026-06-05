@@ -1872,6 +1872,71 @@ async fn configured_reasoning_summary_is_sent() -> anyhow::Result<()> {
             .and_then(|value| value.as_str()),
         Some("concise")
     );
+    pretty_assertions::assert_eq!(
+        request_body
+            .get("reasoning")
+            .and_then(|reasoning| reasoning.get("context")),
+        None
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn responses_lite_sets_all_turns_context_and_disables_parallel_tool_calls()
+-> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = MockServer::start().await;
+
+    let resp_mock = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp1"), ev_completed("resp1")]),
+    )
+    .await;
+
+    let mut model_catalog = bundled_models_response()
+        .unwrap_or_else(|err| panic!("bundled models.json should parse: {err}"));
+    let model = model_catalog
+        .models
+        .iter_mut()
+        .find(|model| model.slug == "gpt-5.4")
+        .expect("gpt-5.4 exists in bundled models.json");
+    model.use_responses_lite = true;
+    model.supports_parallel_tool_calls = true;
+
+    let TestCodex { codex, .. } = test_codex()
+        .with_model("gpt-5.4")
+        .with_config(move |config| {
+            config.model_catalog = Some(model_catalog);
+        })
+        .build(&server)
+        .await?;
+
+    codex
+        .submit(Op::UserInput {
+            environments: None,
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let request_body = resp_mock.single_request().body_json();
+    pretty_assertions::assert_eq!(
+        request_body
+            .get("reasoning")
+            .and_then(|reasoning| reasoning.get("context"))
+            .and_then(|value| value.as_str()),
+        Some("all_turns")
+    );
+    pretty_assertions::assert_eq!(request_body.get("parallel_tool_calls"), Some(&json!(false)));
 
     Ok(())
 }

@@ -117,7 +117,7 @@ pub struct SetupErrorReport {
     pub message: String,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct SetupFailure {
     pub code: SetupErrorCode,
     pub message: String,

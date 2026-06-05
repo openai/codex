@@ -40,7 +40,6 @@ use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use std::sync::Mutex as StdMutex;
 use tempfile::TempDir;
 use time::OffsetDateTime;
 use tokio::io::AsyncBufReadExt;
@@ -148,24 +147,29 @@ fn remote_control_handle_with_current_enrollment(
     });
     let remote_control_target = normalize_remote_control_url(remote_control_url)
         .expect("remote control target should normalize");
-    let current_enrollment = Arc::new(StdMutex::new(Some(RemoteControlEnrollment {
-        remote_control_target,
-        account_id: "account_id".to_string(),
-        environment_id: "env_test".to_string(),
-        server_id: "srv_e_test".to_string(),
-        server_name: test_server_name(),
-        remote_control_token: Some(TEST_REMOTE_CONTROL_SERVER_TOKEN.to_string()),
-        expires_at: Some(
-            OffsetDateTime::from_unix_timestamp(33_336_362_096)
-                .expect("future timestamp should parse"),
-        ),
-    })));
+    let current_enrollment = Arc::new(RemoteControlEnrollmentState::new(Some(
+        RemoteControlEnrollment {
+            remote_control_target,
+            account_id: "account_id".to_string(),
+            environment_id: "env_test".to_string(),
+            server_id: "srv_e_test".to_string(),
+            server_name: test_server_name(),
+            remote_control_token: Some(TEST_REMOTE_CONTROL_SERVER_TOKEN.to_string()),
+            expires_at: Some(
+                OffsetDateTime::from_unix_timestamp(33_336_362_096)
+                    .expect("future timestamp should parse"),
+            ),
+        },
+    )));
     RemoteControlHandle {
         enabled_tx: Arc::new(enabled_tx),
         status_tx: Arc::new(status_tx),
         state_db_available: true,
+        state_db: None,
         remote_control_url: remote_control_url.to_string(),
         current_enrollment,
+        pairing_persistence_key: watch::channel(None).0,
+        pairing_persistence_key_required: false,
         auth_manager,
     }
 }
