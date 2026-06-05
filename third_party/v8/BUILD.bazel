@@ -40,6 +40,36 @@ alias(
 )
 
 alias(
+    name = "v8_149_2_0_aarch64_apple_darwin_sandbox_release",
+    actual = "@rusty_v8_149_2_0_aarch64_apple_darwin_sandbox_archive//file",
+)
+
+alias(
+    name = "v8_149_2_0_aarch64_unknown_linux_gnu_sandbox_release",
+    actual = "@rusty_v8_149_2_0_aarch64_unknown_linux_gnu_sandbox_archive//file",
+)
+
+alias(
+    name = "v8_149_2_0_aarch64_unknown_linux_musl_sandbox_release",
+    actual = "@rusty_v8_149_2_0_aarch64_unknown_linux_musl_sandbox_archive//file",
+)
+
+alias(
+    name = "v8_149_2_0_x86_64_apple_darwin_sandbox_release",
+    actual = "@rusty_v8_149_2_0_x86_64_apple_darwin_sandbox_archive//file",
+)
+
+alias(
+    name = "v8_149_2_0_x86_64_unknown_linux_gnu_sandbox_release",
+    actual = "@rusty_v8_149_2_0_x86_64_unknown_linux_gnu_sandbox_archive//file",
+)
+
+alias(
+    name = "v8_149_2_0_x86_64_unknown_linux_musl_sandbox_release",
+    actual = "@rusty_v8_149_2_0_x86_64_unknown_linux_musl_sandbox_archive//file",
+)
+
+alias(
     name = "v8_149_2_0_aarch64_pc_windows_gnullvm",
     # `rusty_v8` only ships prebuilt Windows archives for MSVC. Build the
     # GNU-flavored archive in-tree so windows-gnullvm consumers can link
@@ -87,36 +117,66 @@ alias(
 )
 
 alias(
+    name = "src_binding_release_aarch64_apple_darwin_149_2_0_sandbox_published",
+    actual = "@rusty_v8_149_2_0_aarch64_apple_darwin_sandbox_binding//file",
+)
+
+alias(
+    name = "src_binding_release_aarch64_unknown_linux_gnu_149_2_0_sandbox_published",
+    actual = "@rusty_v8_149_2_0_aarch64_unknown_linux_gnu_sandbox_binding//file",
+)
+
+alias(
+    name = "src_binding_release_aarch64_unknown_linux_musl_149_2_0_sandbox_published",
+    actual = "@rusty_v8_149_2_0_aarch64_unknown_linux_musl_sandbox_binding//file",
+)
+
+alias(
+    name = "src_binding_release_x86_64_apple_darwin_149_2_0_sandbox_published",
+    actual = "@rusty_v8_149_2_0_x86_64_apple_darwin_sandbox_binding//file",
+)
+
+alias(
+    name = "src_binding_release_x86_64_unknown_linux_gnu_149_2_0_sandbox_published",
+    actual = "@rusty_v8_149_2_0_x86_64_unknown_linux_gnu_sandbox_binding//file",
+)
+
+alias(
+    name = "src_binding_release_x86_64_unknown_linux_musl_149_2_0_sandbox_published",
+    actual = "@rusty_v8_149_2_0_x86_64_unknown_linux_musl_sandbox_binding//file",
+)
+
+alias(
     name = "rusty_v8_archive_for_target",
     actual = select({
-        "@rules_rs//rs/experimental/platforms/config:aarch64-apple-darwin": ":v8_149_2_0_aarch64_apple_darwin_bazel",
+        "@rules_rs//rs/experimental/platforms/config:aarch64-apple-darwin": ":v8_149_2_0_aarch64_apple_darwin_sandbox_release",
         "@rules_rs//rs/experimental/platforms/config:aarch64-pc-windows-gnullvm": ":v8_149_2_0_aarch64_pc_windows_gnullvm",
         "@rules_rs//rs/experimental/platforms/config:aarch64-pc-windows-msvc": ":v8_149_2_0_aarch64_pc_windows_msvc",
-        "@rules_rs//rs/experimental/platforms/config:aarch64-unknown-linux-gnu": ":v8_149_2_0_aarch64_unknown_linux_gnu_bazel",
-        ":platform_aarch64_unknown_linux_musl": ":v8_149_2_0_aarch64_unknown_linux_musl_release_base",
-        "@rules_rs//rs/experimental/platforms/config:x86_64-apple-darwin": ":v8_149_2_0_x86_64_apple_darwin_bazel",
+        "@rules_rs//rs/experimental/platforms/config:aarch64-unknown-linux-gnu": ":v8_149_2_0_aarch64_unknown_linux_gnu_sandbox_release",
+        ":platform_aarch64_unknown_linux_musl": ":v8_149_2_0_aarch64_unknown_linux_musl_sandbox_release",
+        "@rules_rs//rs/experimental/platforms/config:x86_64-apple-darwin": ":v8_149_2_0_x86_64_apple_darwin_sandbox_release",
         "@rules_rs//rs/experimental/platforms/config:x86_64-pc-windows-gnullvm": ":v8_149_2_0_x86_64_pc_windows_gnullvm",
         "@rules_rs//rs/experimental/platforms/config:x86_64-pc-windows-msvc": ":v8_149_2_0_x86_64_pc_windows_msvc",
-        "@rules_rs//rs/experimental/platforms/config:x86_64-unknown-linux-gnu": ":v8_149_2_0_x86_64_unknown_linux_gnu_bazel",
-        ":platform_x86_64_unknown_linux_musl": ":v8_149_2_0_x86_64_unknown_linux_musl_release",
-        "//conditions:default": ":v8_149_2_0_x86_64_unknown_linux_gnu_bazel",
+        "@rules_rs//rs/experimental/platforms/config:x86_64-unknown-linux-gnu": ":v8_149_2_0_x86_64_unknown_linux_gnu_sandbox_release",
+        ":platform_x86_64_unknown_linux_musl": ":v8_149_2_0_x86_64_unknown_linux_musl_sandbox_release",
+        "//conditions:default": ":v8_149_2_0_x86_64_unknown_linux_gnu_sandbox_release",
     }),
 )
 
 alias(
     name = "rusty_v8_binding_for_target",
     actual = select({
-        "@rules_rs//rs/experimental/platforms/config:aarch64-apple-darwin": ":src_binding_release_aarch64_apple_darwin_149_2_0_release",
+        "@rules_rs//rs/experimental/platforms/config:aarch64-apple-darwin": ":src_binding_release_aarch64_apple_darwin_149_2_0_sandbox_published",
         "@rules_rs//rs/experimental/platforms/config:aarch64-pc-windows-gnullvm": ":src_binding_release_aarch64_pc_windows_gnullvm_149_2_0_release",
         "@rules_rs//rs/experimental/platforms/config:aarch64-pc-windows-msvc": ":src_binding_release_aarch64_pc_windows_msvc_149_2_0_release",
-        "@rules_rs//rs/experimental/platforms/config:aarch64-unknown-linux-gnu": ":src_binding_release_aarch64_unknown_linux_gnu_149_2_0_release",
-        ":platform_aarch64_unknown_linux_musl": ":src_binding_release_aarch64_unknown_linux_musl_149_2_0_release",
-        "@rules_rs//rs/experimental/platforms/config:x86_64-apple-darwin": ":src_binding_release_x86_64_apple_darwin_149_2_0_release",
+        "@rules_rs//rs/experimental/platforms/config:aarch64-unknown-linux-gnu": ":src_binding_release_aarch64_unknown_linux_gnu_149_2_0_sandbox_published",
+        ":platform_aarch64_unknown_linux_musl": ":src_binding_release_aarch64_unknown_linux_musl_149_2_0_sandbox_published",
+        "@rules_rs//rs/experimental/platforms/config:x86_64-apple-darwin": ":src_binding_release_x86_64_apple_darwin_149_2_0_sandbox_published",
         "@rules_rs//rs/experimental/platforms/config:x86_64-pc-windows-gnullvm": ":src_binding_release_x86_64_pc_windows_gnullvm_149_2_0_release",
         "@rules_rs//rs/experimental/platforms/config:x86_64-pc-windows-msvc": ":src_binding_release_x86_64_pc_windows_msvc_149_2_0_release",
-        "@rules_rs//rs/experimental/platforms/config:x86_64-unknown-linux-gnu": ":src_binding_release_x86_64_unknown_linux_gnu_149_2_0_release",
-        ":platform_x86_64_unknown_linux_musl": ":src_binding_release_x86_64_unknown_linux_musl_149_2_0_release",
-        "//conditions:default": ":src_binding_release_x86_64_unknown_linux_gnu_149_2_0_release",
+        "@rules_rs//rs/experimental/platforms/config:x86_64-unknown-linux-gnu": ":src_binding_release_x86_64_unknown_linux_gnu_149_2_0_sandbox_published",
+        ":platform_x86_64_unknown_linux_musl": ":src_binding_release_x86_64_unknown_linux_musl_149_2_0_sandbox_published",
+        "//conditions:default": ":src_binding_release_x86_64_unknown_linux_gnu_149_2_0_sandbox_published",
     }),
 )
 

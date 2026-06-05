@@ -4,19 +4,21 @@ This directory wires the `v8` crate to exact-version Bazel inputs.
 Bazel consumer builds use:
 
 - upstream `denoland/rusty_v8` release archives on Windows MSVC
-- source-built V8 archives on Darwin, GNU Linux, musl Linux, and Windows GNU
-- `openai/codex` release assets for published musl release pairs
+- sandbox-enabled `openai/codex` release assets on Darwin, GNU Linux, and musl
+  Linux
+- source-built V8 archives on Windows GNU
 
-Cargo builds still use prebuilt `rusty_v8` archives by default. Only Bazel
-overrides `RUSTY_V8_ARCHIVE`/`RUSTY_V8_SRC_BINDING_PATH` in `MODULE.bazel` to
-select source-built local archives for its consumer builds.
+Local Cargo builds still use upstream prebuilt `rusty_v8` archives by default.
+Selected Cargo CI, release, and package builds override
+`RUSTY_V8_ARCHIVE`/`RUSTY_V8_SRC_BINDING_PATH` with Codex release assets. Bazel
+sets the same overrides in `MODULE.bazel` to select the matching release archive
+and binding for its consumer builds.
 
-Source-built Bazel V8 artifacts enable V8's in-process sandbox by default, and
-the Bazel `v8` crate feature selection tracks those targets. A full consumer
-rollout still needs matching sandbox-enabled archives for every non-source-built
-target. Until that artifact migration lands, the rusty_v8 publishing workflows
-use `--config=v8-release-compat` to preserve the current non-sandboxed release
-artifact contract.
+The Bazel `v8` crate feature selection enables V8's in-process sandbox for
+Darwin, Linux, and Windows GNU. Darwin and Linux consume the matching published
+sandbox artifacts. Windows GNU continues to build from source because the
+release workflow does not publish Windows GNU artifacts. Windows MSVC remains
+on upstream non-sandboxed prebuilts.
 
 Current pinned versions:
 
@@ -35,8 +37,8 @@ Use this as the maintainer flow for a version bump:
 5. Once the release build completes, rerun the build on the candidate branch
    and verify that the final artifact builds and tests pass.
 
-When changing the remaining prebuilt `rusty_v8` `http_file` inputs, keep the
-checked-in checksum manifest and `MODULE.bazel` in sync:
+When changing `rusty_v8` `http_file` inputs, keep the checked-in checksum
+manifest and `MODULE.bazel` in sync:
 
 ```bash
 python3 .github/scripts/rusty_v8_bazel.py update-module-bazel
@@ -90,10 +92,12 @@ The same run also builds the matching sandbox pair targets:
 The Bazel graph pins the same libc++, libc++abi, and llvm-libc source revisions
 used by `rusty_v8 v149.2.0`, compiles published artifact targets with
 `--config=rusty-v8-upstream-libcxx`, and folds the matching runtime objects into
-the final static archive so Cargo consumers can link it with the `v8` crate's
-default `use_custom_libcxx` feature. The config keeps the object files and the
-bundled runtime on Chromium's `std::__Cr` ABI namespace instead of mixing those
-objects with the toolchain libc++ default namespace.
+the final static archive so consumers can link it with the `v8` crate's default
+`use_custom_libcxx` feature. The config keeps the object files and the bundled
+runtime on Chromium's `std::__Cr` ABI namespace instead of mixing those objects
+with the toolchain libc++ default namespace. The source-built targets remain in
+the graph as the producers for future release tags; the consumer selectors use
+the immutable assets from the current tag.
 
 MSVC is not part of the Bazel-produced matrix yet. The repository's current
 hermetic Windows C++ platform is `windows-gnullvm`/`x86_64-w64-windows-gnu`, so
