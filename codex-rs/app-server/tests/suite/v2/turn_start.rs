@@ -79,6 +79,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use tempfile::TempDir;
 use tokio::time::timeout;
+use wiremock::ResponseTemplate;
 
 use super::analytics::mount_analytics_capture;
 use super::analytics::wait_for_analytics_event;
@@ -820,8 +821,20 @@ async fn thread_start_omits_empty_instruction_overrides_from_model_request() -> 
 
 #[tokio::test]
 async fn turn_start_tracks_turn_event_analytics() -> Result<()> {
-    let responses = vec![create_final_assistant_message_sse_response("Done")?];
-    let server = create_mock_responses_server_sequence_unchecked(responses).await;
+    let server = responses::start_mock_server().await;
+    let response_mock = responses::mount_response_sequence(
+        &server,
+        vec![
+            ResponseTemplate::new(500).set_body_json(json!({
+                "error": {
+                    "type": "server_error",
+                    "message": "synthetic retryable error"
+                }
+            })),
+            responses::sse_response(create_final_assistant_message_sse_response("Done")?),
+        ],
+    )
+    .await;
 
     let codex_home = TempDir::new()?;
     write_mock_responses_config_toml_with_chatgpt_base_url(
@@ -829,6 +842,10 @@ async fn turn_start_tracks_turn_event_analytics() -> Result<()> {
         &server.uri(),
         &server.uri(),
     )?;
+    let config_path = codex_home.path().join("config.toml");
+    let config = std::fs::read_to_string(&config_path)?
+        .replace("stream_max_retries = 0", "stream_max_retries = 1");
+    std::fs::write(config_path, config)?;
     mount_analytics_capture(&server, codex_home.path()).await?;
 
     let mut mcp = TestAppServer::new_without_managed_config(codex_home.path()).await?;
@@ -925,12 +942,14 @@ async fn turn_start_tracks_turn_event_analytics() -> Result<()> {
             "toolBlockingMs": params["tool_blocking_ms"],
             "samplingRequestCount": params["sampling_request_count"],
             "samplingRetryCount": params["sampling_retry_count"],
+            "responseRequestCount": response_mock.requests().len(),
         }),
         json!({
             "timingsAreNumbers": true,
             "toolBlockingMs": 0,
-            "samplingRequestCount": 1,
-            "samplingRetryCount": 0,
+            "samplingRequestCount": 2,
+            "samplingRetryCount": 1,
+            "responseRequestCount": 2,
         })
     );
 
