@@ -1,0 +1,11 @@
+---
+source: tui/src/git_action_directives.rs
+expression: parsed.visible_markdown
+---
+Found two issues.
+
+- [P2] Preserve state — src/app.ts:10-12
+  This changes role="tab" and the `${value}` lookup.
+
+- [P1] Clamp the range — codex/src/range.ts:8
+  The line range should match the App.
