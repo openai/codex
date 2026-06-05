@@ -574,7 +574,13 @@ async fn ensure_v2_agent_loaded_reloads_registered_unloaded_agent() {
         .get_thread(spawned_agent.thread_id)
         .await
         .expect("child thread should exist");
-    persist_thread_for_tree_resume(&child_thread, "child persisted").await;
+    child_thread
+        .inject_response_items(vec![assistant_message(
+            "child persisted",
+            Some(MessagePhase::FinalAnswer),
+        )])
+        .await
+        .expect("child rollout should persist with v2 metadata");
 
     assert!(
         harness
