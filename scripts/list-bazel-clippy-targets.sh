@@ -5,6 +5,8 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${repo_root}"
 
+query_script="${CODEX_BAZEL_QUERY_SCRIPT:-./.github/scripts/run-bazel-query-ci.sh}"
+
 windows_cross_compile=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -22,31 +24,43 @@ done
 # Resolve the dynamic targets before printing anything so callers do not
 # continue with a partial list if `bazel query` fails. Target discovery is
 # local on all platforms.
+production_targets="$(
+  "${query_script}" \
+    --output=label \
+    -- 'attr(visibility, "//visibility:public", kind("rust_(binary|library|proc_macro) rule", //codex-rs/... except //codex-rs/v8-poc/...))' \
+    | LC_ALL=C sort
+)"
+
+if [[ -z "${production_targets}" ]]; then
+  echo "No Bazel clippy production targets found." >&2
+  exit 1
+fi
+
+if [[ $windows_cross_compile -eq 1 ]]; then
+  # Build-only cross-compilation has no target-platform test runner. Lint the
+  # complete production surface without analyzing rust_test or
+  # workspace_root_test rules.
+  printf '%s\n' "${production_targets}"
+  exit 0
+fi
+
 manual_rust_test_targets="$(
-  ./.github/scripts/run-bazel-query-ci.sh \
+  "${query_script}" \
     --output=label \
     -- 'kind("rust_test rule", attr(tags, "manual", //codex-rs/... except //codex-rs/v8-poc/...))'
 )"
-if [[ "${RUNNER_OS:-}" != "Windows" ]]; then
-  # Non-Windows clippy jobs lint the native test binaries; the
-  # Windows-cross binaries exist only for the fast Windows test leg.
-  manual_rust_test_targets="$(printf '%s\n' "${manual_rust_test_targets}" | grep -v -- '-windows-cross-bin$' || true)"
-elif [[ $windows_cross_compile -eq 1 ]]; then
-  # `bazel query` is intentionally pre-analysis and does not remove targets
-  # made incompatible by `target_compatible_with`. Sharded integration tests
-  # add native-only manual helpers such as `core-all-test-bin`, plus separate
-  # `core-all-test-windows-cross-bin` helpers for the Windows cross leg. Keep
-  # the Windows helpers and unit-test helpers, but do not pass the native-only
-  # sharded integration helpers as explicit clippy targets.
-  manual_rust_test_targets="$(printf '%s\n' "${manual_rust_test_targets}" | grep -v -- '-test-bin$' || true)"
-fi
-
-printf '%s\n' \
-  "//codex-rs/..." \
-  "-//codex-rs/v8-poc:all"
+manual_rust_test_targets="$(
+  printf '%s\n' "${manual_rust_test_targets}" \
+    | grep -v -- '-windows-cross-bin$' \
+    | LC_ALL=C sort \
+    || true
+)"
 
 # `--config=clippy` on the `workspace_root_test` wrappers does not lint the
 # underlying `rust_test` binaries. Add the internal manual `*-unit-tests-bin`
 # targets explicitly so inline `#[cfg(test)]` code is linted like
 # `cargo clippy --tests`.
-printf '%s\n' "${manual_rust_test_targets}"
+printf '%s\n' "${production_targets}"
+if [[ -n "${manual_rust_test_targets}" ]]; then
+  printf '%s\n' "${manual_rust_test_targets}"
+fi

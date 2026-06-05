@@ -84,6 +84,48 @@ jobs:
         shell: bash
         run: ./scripts/check-module-bazel-lock.sh
 
+      - name: Check build-only Bazel target selectors exclude tests
+        if: matrix.os == 'ubuntu-24.04' && matrix.target == 'x86_64-unknown-linux-gnu'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          check_build_only_selector() {
+            local selector_name="$1"
+            shift
+
+            local target_lines
+            target_lines="$("$@")"
+            if [[ -z "${target_lines}" ]]; then
+              echo "${selector_name} returned no targets." >&2
+              exit 1
+            fi
+
+            local targets=()
+            while IFS= read -r target; do
+              targets+=("${target}")
+            done <<< "${target_lines}"
+
+            local selected_tests
+            selected_tests="$(
+              ./.github/scripts/run-bazel-query-ci.sh \
+                --output=label \
+                -- "tests(set(${targets[*]}))"
+            )"
+            if [[ -n "${selected_tests}" ]]; then
+              echo "${selector_name} included Bazel test rules:" >&2
+              printf '%s\n' "${selected_tests}" >&2
+              exit 1
+            fi
+          }
+
+          check_build_only_selector \
+            verify-release-build \
+            bash ./scripts/list-bazel-release-targets.sh
+          check_build_only_selector \
+            windows-cross-clippy \
+            ./scripts/list-bazel-clippy-targets.sh --windows-cross-compile
+
       - name: bazel test //...
         env:
           BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
