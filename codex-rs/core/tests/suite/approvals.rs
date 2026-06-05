@@ -2942,6 +2942,274 @@ async fn unified_exec_zsh_fork_parent_approval_preserves_denied_reads() -> Resul
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[cfg(unix)]
+async fn unified_exec_zsh_fork_parent_approval_escalates_intercepted_exec() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let Some(runtime) = zsh_fork_runtime("unified-exec zsh-fork parent approval test")? else {
+        return Ok(());
+    };
+
+    let approval_policy = AskForApproval::OnRequest;
+    let permission_profile = restrictive_workspace_write_profile();
+    let outside_dir = tempfile::tempdir_in(std::env::current_dir()?)?;
+    let outside_path = outside_dir
+        .path()
+        .join("unified-exec-zsh-fork-parent-approval.txt");
+    let command = format!("printf hi > {outside_path:?}");
+
+    let server = start_mock_server().await;
+    let outside_path_for_hook = outside_path.clone();
+    let test = build_unified_exec_zsh_fork_test(
+        &server,
+        runtime,
+        approval_policy,
+        permission_profile,
+        move |_home| {
+            let _ = fs::remove_file(&outside_path_for_hook);
+        },
+    )
+    .await?;
+
+    let call_id = "uexec-zsh-fork-parent-approval";
+    let event = exec_command_event(
+        call_id,
+        &command,
+        Some(30_000),
+        SandboxPermissions::RequireEscalated,
+        Some("write outside the workspace for the test"),
+    )?;
+    let _ = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-uexec-zsh-fork-parent-approval-1"),
+            event,
+            ev_completed("resp-uexec-zsh-fork-parent-approval-1"),
+        ]),
+    )
+    .await;
+    let results = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-uexec-zsh-fork-parent-approval-1", "done"),
+            ev_completed("resp-uexec-zsh-fork-parent-approval-2"),
+        ]),
+    )
+    .await;
+
+    let session_model = test.session_configured.model.clone();
+    let (sandbox_policy, permission_profile) = turn_permission_fields(
+        test.session_configured.permission_profile.clone(),
+        test.cwd.path(),
+    );
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "run approved unified exec through zsh fork".into(),
+                text_elements: Vec::new(),
+            }],
+            environments: None,
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+                cwd: Some(test.cwd.path().to_path_buf()),
+                approval_policy: Some(approval_policy),
+                approvals_reviewer: Some(ApprovalsReviewer::User),
+                sandbox_policy: Some(sandbox_policy),
+                permission_profile,
+                collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
+                    mode: codex_protocol::config_types::ModeKind::Default,
+                    settings: codex_protocol::config_types::Settings {
+                        model: session_model,
+                        reasoning_effort: None,
+                        developer_instructions: None,
+                    },
+                }),
+                ..Default::default()
+            },
+        })
+        .await?;
+
+    let approval = expect_exec_approval(&test, &command).await;
+    test.codex
+        .submit(Op::ExecApproval {
+            id: approval.effective_approval_id(),
+            turn_id: None,
+            decision: ReviewDecision::Approved,
+        })
+        .await?;
+    wait_for_completion_without_approval(&test).await;
+
+    let result = parse_result(&results.single_request().function_call_output(call_id));
+    assert_eq!(
+        result.exit_code.unwrap_or(0),
+        0,
+        "approved unified exec zsh-fork command should complete: {}",
+        result.stdout
+    );
+    let contents = fs::read_to_string(&outside_path)
+        .with_context(|| format!("read {}", outside_path.display()))?;
+    assert_eq!(contents, "hi");
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[cfg(unix)]
+async fn unified_exec_zsh_fork_parent_approval_keeps_explicit_prompt_rule() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let Some(runtime) = zsh_fork_runtime("unified-exec zsh-fork prompt rule approval test")? else {
+        return Ok(());
+    };
+
+    let approval_policy = AskForApproval::OnRequest;
+    let permission_profile = restrictive_workspace_write_profile();
+    let outside_dir = tempfile::tempdir_in(std::env::current_dir()?)?;
+    let outside_path = outside_dir
+        .path()
+        .join("unified-exec-zsh-fork-explicit-prompt-rule.txt");
+    let command = format!("touch {outside_path:?}");
+    let rules = r#"prefix_rule(pattern=["touch"], decision="prompt")"#.to_string();
+
+    let server = start_mock_server().await;
+    let outside_path_for_hook = outside_path.clone();
+    let test = build_unified_exec_zsh_fork_test(
+        &server,
+        runtime,
+        approval_policy,
+        permission_profile,
+        move |home| {
+            let _ = fs::remove_file(&outside_path_for_hook);
+            let rules_dir = home.join("rules");
+            fs::create_dir_all(&rules_dir).unwrap();
+            fs::write(rules_dir.join("default.rules"), &rules).unwrap();
+        },
+    )
+    .await?;
+
+    let call_id = "uexec-zsh-fork-parent-approval-explicit-prompt-rule";
+    let event = exec_command_event(
+        call_id,
+        &command,
+        Some(30_000),
+        SandboxPermissions::RequireEscalated,
+        Some("write outside the workspace for the test"),
+    )?;
+    let _ = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-uexec-zsh-fork-prompt-rule-1"),
+            event,
+            ev_completed("resp-uexec-zsh-fork-prompt-rule-1"),
+        ]),
+    )
+    .await;
+    let results = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-uexec-zsh-fork-prompt-rule-1", "done"),
+            ev_completed("resp-uexec-zsh-fork-prompt-rule-2"),
+        ]),
+    )
+    .await;
+
+    let session_model = test.session_configured.model.clone();
+    let (sandbox_policy, permission_profile) = turn_permission_fields(
+        test.session_configured.permission_profile.clone(),
+        test.cwd.path(),
+    );
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "run approved unified exec prompt rule through zsh fork".into(),
+                text_elements: Vec::new(),
+            }],
+            environments: None,
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+                cwd: Some(test.cwd.path().to_path_buf()),
+                approval_policy: Some(approval_policy),
+                approvals_reviewer: Some(ApprovalsReviewer::User),
+                sandbox_policy: Some(sandbox_policy),
+                permission_profile,
+                collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
+                    mode: codex_protocol::config_types::ModeKind::Default,
+                    settings: codex_protocol::config_types::Settings {
+                        model: session_model,
+                        reasoning_effort: None,
+                        developer_instructions: None,
+                    },
+                }),
+                ..Default::default()
+            },
+        })
+        .await?;
+
+    let parent_approval = expect_exec_approval(&test, &command).await;
+    test.codex
+        .submit(Op::ExecApproval {
+            id: parent_approval.effective_approval_id(),
+            turn_id: None,
+            decision: ReviewDecision::Approved,
+        })
+        .await?;
+
+    let approval_event = wait_for_event_with_timeout(
+        &test.codex,
+        |event| {
+            matches!(
+                event,
+                EventMsg::ExecApprovalRequest(_) | EventMsg::TurnComplete(_)
+            )
+        },
+        Duration::from_secs(10),
+    )
+    .await;
+    let EventMsg::ExecApprovalRequest(inner_approval) = approval_event else {
+        panic!("expected explicit prompt rule approval before completion");
+    };
+    assert!(
+        inner_approval
+            .command
+            .iter()
+            .any(|arg| arg.ends_with("/touch"))
+            && inner_approval
+                .command
+                .iter()
+                .any(|arg| arg == outside_path.to_string_lossy().as_ref()),
+        "expected explicit prompt rule approval for intercepted touch, got: {:?}",
+        inner_approval.command
+    );
+
+    test.codex
+        .submit(Op::ExecApproval {
+            id: inner_approval.effective_approval_id(),
+            turn_id: None,
+            decision: ReviewDecision::Approved,
+        })
+        .await?;
+    wait_for_completion(&test).await;
+
+    let result = parse_result(&results.single_request().function_call_output(call_id));
+    assert_eq!(
+        result.exit_code.unwrap_or(0),
+        0,
+        "approved unified exec zsh-fork prompt-rule command should complete: {}",
+        result.stdout
+    );
+    assert!(
+        outside_path.exists(),
+        "approved intercepted touch should create the out-of-workspace file"
+    );
+
+    Ok(())
+}
+
 #[tokio::test(flavor = "current_thread")]
 #[cfg(unix)]
 async fn invalid_requested_prefix_rule_falls_back_for_compound_command() -> Result<()> {
