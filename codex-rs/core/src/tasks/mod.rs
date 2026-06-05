@@ -445,6 +445,15 @@ impl Session {
             .await;
     }
 
+    // Keep this detached work in a synchronous helper so the task runner future remains Send.
+    fn spawn_post_task_idle_work(self: &Arc<Self>) {
+        let session = Arc::clone(self);
+        tokio::spawn(async move {
+            session.maybe_start_turn_for_pending_work().await;
+            session.emit_thread_idle_lifecycle_if_idle().await;
+        });
+    }
+
     /// Starts a regular turn with the provided sub-id when pending work should wake an idle
     /// session.
     ///
@@ -755,7 +764,7 @@ impl Session {
         if !cleared_active_turn {
             return;
         }
-        self.emit_thread_idle_lifecycle_if_idle().await;
+        self.spawn_post_task_idle_work();
     }
 
     async fn take_active_turn(&self) -> Option<ActiveTurn> {
