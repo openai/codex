@@ -4,14 +4,14 @@ load("@rules_platform//platform_data:defs.bzl", "platform_data")
 load("@rules_rust//cargo/private:cargo_build_script_wrapper.bzl", "cargo_build_script")
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_proc_macro", "rust_test")
 
-PLATFORMS = [
-    "linux_arm64_musl",
-    "linux_amd64_musl",
-    "macos_amd64",
-    "macos_arm64",
-    "windows_amd64",
-    "windows_arm64",
-]
+PLATFORMS = {
+    "linux_arm64_musl": "//:release_linux_arm64_musl",
+    "linux_amd64_musl": "//:release_linux_amd64_musl",
+    "macos_amd64": "@llvm//platforms:macos_amd64",
+    "macos_arm64": "@llvm//platforms:macos_arm64",
+    "windows_amd64": "//:release_windows_amd64",
+    "windows_arm64": "//:release_windows_arm64",
+}
 
 # Match Cargo's Windows linker behavior so Bazel-built binaries and tests use
 # the same stack reserve on both Windows ABIs and resolve UCRT imports on MSVC.
@@ -54,17 +54,17 @@ MACOS_WEBRTC_RUSTC_LINK_FLAGS = select({
 })
 
 def multiplatform_binaries(name, platforms = PLATFORMS):
-    for platform in platforms:
+    for platform_name, platform_label in platforms.items():
         platform_data(
-            name = name + "_" + platform,
-            platform = "@llvm//platforms:" + platform,
+            name = name + "_" + platform_name,
+            platform = platform_label,
             target = name,
             tags = ["manual"],
         )
 
     native.filegroup(
         name = "release_binaries",
-        srcs = [name + "_" + platform for platform in platforms],
+        srcs = [name + "_" + platform for platform in platforms.keys()],
         tags = ["manual"],
     )
 

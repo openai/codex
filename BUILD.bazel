@@ -56,6 +56,52 @@ platform(
     ],
 )
 
+# Release bundles cross-compile from the host and need the complete constraint
+# set expected by both the Rust and LLVM toolchains.
+platform(
+    name = "release_linux_arm64_musl",
+    constraint_values = [
+        "@llvm//constraints/libc:musl",
+        "@llvm//constraints/pie:off",
+        "@platforms//cpu:aarch64",
+        "@platforms//os:linux",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+platform(
+    name = "release_linux_amd64_musl",
+    constraint_values = [
+        "@llvm//constraints/libc:musl",
+        "@llvm//constraints/pie:off",
+        "@platforms//cpu:x86_64",
+        "@platforms//os:linux",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+platform(
+    name = "release_windows_amd64",
+    constraint_values = [
+        "@llvm//constraints/windows_abi:gnullvm",
+        "@platforms//cpu:x86_64",
+        "@platforms//os:windows",
+        "@rules_rs//rs/experimental/platforms/constraints:windows_gnullvm",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+platform(
+    name = "release_windows_arm64",
+    constraint_values = [
+        "@llvm//constraints/windows_abi:gnullvm",
+        "@platforms//cpu:aarch64",
+        "@platforms//os:windows",
+        "@rules_rs//rs/experimental/platforms/constraints:windows_gnullvm",
+    ],
+    visibility = ["//visibility:public"],
+)
+
 toolchain(
     name = "windows_gnullvm_tests_on_msvc_host_toolchain",
     exec_compatible_with = [

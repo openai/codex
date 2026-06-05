@@ -560,6 +560,24 @@ jobs:
             -- \
             "${bazel_targets[@]}"
 
+      - name: Analyze Bazel release bundle
+        if: runner.os == 'Linux'
+        env:
+          BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
+        shell: bash
+        run: |
+          # Keep the documented `just build-for-release` target's platform
+          # transitions covered without compiling every release artifact in CI.
+          ./.github/scripts/run-bazel-ci.sh \
+            --print-failed-action-summary \
+            -- \
+            build \
+            --nobuild \
+            --build_metadata=COMMIT_SHA=${GITHUB_SHA} \
+            --build_metadata=TAG_job=analyze-release-bundle \
+            -- \
+            //codex-rs/cli:release_binaries
+
       - name: Verify Bazel builds bwrap
         if: runner.os == 'Linux'
         env:
