@@ -110,7 +110,7 @@ impl AgentRegistry {
         }
     }
 
-    pub(crate) fn release_execution_slot(&self, thread_id: ThreadId) {
+    pub(crate) fn release_execution_slot(&self, thread_id: ThreadId) -> bool {
         let mut active_agents = self
             .active_agents
             .lock()
@@ -119,6 +119,7 @@ impl AgentRegistry {
         if removed {
             self.total_count.fetch_sub(1, Ordering::AcqRel);
         }
+        removed
     }
 
     pub(crate) fn reserve_execution_slot(
