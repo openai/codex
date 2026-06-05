@@ -8,6 +8,7 @@ use codex_app_server_protocol::PluginShareTargetRole;
 use codex_config::types::McpServerConfig;
 use codex_core_plugins::OPENAI_CURATED_MARKETPLACE_NAME;
 use codex_core_plugins::remote::REMOTE_GLOBAL_MARKETPLACE_NAME;
+use codex_core_plugins::remote::RemoteAppTemplateUnavailableReason;
 use codex_core_plugins::remote::RemotePluginScope;
 use codex_core_plugins::remote::is_valid_remote_plugin_id;
 use codex_core_plugins::remote::validate_remote_plugin_id;
@@ -1062,6 +1063,7 @@ impl PluginRequestProcessor {
                         })
                         .collect(),
                     apps: app_summaries,
+                    app_templates: Vec::new(),
                     mcp_servers: outcome.plugin.mcp_server_names,
                 }
             }
@@ -2007,6 +2009,28 @@ fn remote_plugin_detail_to_info(
     detail: RemoteCatalogPluginDetail,
     apps: Vec<AppSummary>,
 ) -> PluginDetail {
+    let app_templates = detail
+        .app_templates
+        .into_iter()
+        .map(|template| AppTemplateSummary {
+            template_id: template.template_id,
+            name: template.name,
+            description: template.description,
+            canonical_connector_id: template.canonical_connector_id,
+            logo_url: template.logo_url,
+            logo_url_dark: template.logo_url_dark,
+            materialized_app_ids: template.materialized_app_ids,
+            reason: template.reason.map(|reason| match reason {
+                RemoteAppTemplateUnavailableReason::NotConfiguredForWorkspace => {
+                    AppTemplateUnavailableReason::NotConfiguredForWorkspace
+                }
+                RemoteAppTemplateUnavailableReason::NoActiveWorkspace => {
+                    AppTemplateUnavailableReason::NoActiveWorkspace
+                }
+            }),
+        })
+        .collect();
+
     PluginDetail {
         marketplace_name: detail.marketplace_name,
         marketplace_path: None,
@@ -2026,6 +2050,7 @@ fn remote_plugin_detail_to_info(
             .collect(),
         hooks: Vec::new(),
         apps,
+        app_templates,
         mcp_servers: detail.mcp_servers,
     }
 }

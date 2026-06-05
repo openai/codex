@@ -338,6 +338,7 @@ fn response_event_records_turn_ttft(event: &ResponseEvent) -> bool {
         ResponseEvent::Created
         | ResponseEvent::ServerModel(_)
         | ResponseEvent::ModelVerifications(_)
+        | ResponseEvent::TurnModerationMetadata(_)
         | ResponseEvent::ServerReasoningIncluded(_)
         | ResponseEvent::ToolCallInputDelta { .. }
         | ResponseEvent::Completed { .. }
@@ -368,6 +369,7 @@ fn response_item_records_turn_ttft(item: &ResponseItem) -> bool {
                 })
             })
         }
+        ResponseItem::AgentMessage { .. } => false,
         ResponseItem::LocalShellCall { .. }
         | ResponseItem::FunctionCall { .. }
         | ResponseItem::CustomToolCall { .. }

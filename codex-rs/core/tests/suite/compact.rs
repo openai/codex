@@ -23,6 +23,7 @@ use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
+use core_test_support::PathBufExt;
 use core_test_support::context_snapshot;
 use core_test_support::context_snapshot::ContextSnapshotOptions;
 use core_test_support::context_snapshot::ContextSnapshotRenderMode;
@@ -32,6 +33,7 @@ use core_test_support::responses::mount_models_once;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::turn_permission_fields;
+use core_test_support::test_path_buf;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
 use std::path::PathBuf;
@@ -99,7 +101,7 @@ fn disabled_permission_user_turn(text: impl Into<String>, cwd: PathBuf, model: S
         responsesapi_client_metadata: None,
         additional_context: Default::default(),
         thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-            cwd: Some(cwd),
+            cwd: Some(cwd.abs()),
             approval_policy: Some(AskForApproval::Never),
             sandbox_policy: Some(sandbox_policy),
             permission_profile,
@@ -3697,7 +3699,7 @@ async fn snapshot_request_shape_pre_turn_compaction_including_incoming_user_mess
     core_test_support::submit_thread_settings(
         &codex,
         codex_protocol::protocol::ThreadSettingsOverrides {
-            cwd: Some(PathBuf::from(PRETURN_CONTEXT_DIFF_CWD)),
+            cwd: Some(test_path_buf(PRETURN_CONTEXT_DIFF_CWD).abs()),
             ..Default::default()
         },
     )
