@@ -1338,7 +1338,7 @@ mod tests {
         let tags = metric_tags_map(initialize_metric_tags(
             "streamable_http",
             "success",
-            2,
+            /*attempts*/ 2,
             /*retry_exhausted*/ false,
             "none",
         ));
@@ -1357,7 +1357,7 @@ mod tests {
         let tags = metric_tags_map(initialize_metric_tags(
             "streamable_http",
             "error",
-            3,
+            /*attempts*/ 3,
             /*retry_exhausted*/ true,
             "retry_exhausted",
         ));
