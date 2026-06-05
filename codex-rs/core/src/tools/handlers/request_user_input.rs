@@ -74,11 +74,10 @@ impl ToolExecutor<ToolInvocation> for RequestUserInputHandler {
                 ))
             })?;
 
-        let content = serde_json::to_string(&response).map_err(|err| {
-            FunctionCallError::Fatal(format!(
-                "failed to serialize {REQUEST_USER_INPUT_TOOL_NAME} response: {err}"
-            ))
-        })?;
+        let content = serde_json::json!({
+            "answers": response.answers,
+        })
+        .to_string();
 
         Ok(boxed_tool_output(FunctionToolOutput::from_text(
             content,

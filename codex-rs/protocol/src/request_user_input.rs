@@ -38,7 +38,7 @@ pub struct RequestUserInputAnswer {
     pub answers: Vec<String>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RequestUserInputResponse {
     pub answers: HashMap<String, RequestUserInputAnswer>,
 }
