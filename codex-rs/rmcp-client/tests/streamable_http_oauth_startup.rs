@@ -1,9 +1,11 @@
 mod streamable_http_test_support;
 
+use std::collections::BTreeMap;
 use std::time::Duration;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
+use anyhow::Context;
 use codex_config::types::OAuthCredentialsStoreMode;
 use codex_exec_server::Environment;
 use codex_rmcp_client::RmcpClient;
@@ -16,6 +18,7 @@ use oauth2::RefreshToken;
 use oauth2::basic::BasicTokenType;
 use rmcp::transport::auth::OAuthTokenResponse;
 use rmcp::transport::auth::VendorExtraTokenFields;
+use serde::Deserialize;
 use serde_json::Value;
 use serde_json::json;
 use tempfile::TempDir;
@@ -39,6 +42,7 @@ const OLD_ACCESS_TOKEN: &str = "old-access-token";
 const OLD_REFRESH_TOKEN: &str = "old-refresh-token";
 const EXTERNAL_ACCESS_TOKEN: &str = "external-access-token";
 const EXTERNAL_REFRESH_TOKEN: &str = "external-refresh-token";
+const EXTERNAL_EXPIRES_AT: u64 = u64::MAX;
 const STALE_REFRESHED_ACCESS_TOKEN: &str = "stale-refreshed-access-token";
 const STALE_ROTATED_REFRESH_TOKEN: &str = "stale-rotated-refresh-token";
 
@@ -102,7 +106,7 @@ async fn oauth_external_update_child() -> anyhow::Result<()> {
         &server_url,
         EXTERNAL_ACCESS_TOKEN,
         EXTERNAL_REFRESH_TOKEN,
-        future_expiry()?,
+        EXTERNAL_EXPIRES_AT,
     )?;
 
     client
@@ -114,7 +118,7 @@ async fn oauth_external_update_child() -> anyhow::Result<()> {
         )
         .await?;
 
-    assert_persisted_tokens(EXTERNAL_ACCESS_TOKEN, EXTERNAL_REFRESH_TOKEN)?;
+    assert_persisted_tokens(&server_url, EXTERNAL_ACCESS_TOKEN, EXTERNAL_REFRESH_TOKEN)?;
     let status = Command::new(std::env::current_exe()?)
         .args([
             "oauth_external_delete_writer_child",
@@ -297,7 +301,7 @@ async fn oauth_external_update_during_refresh_child() -> anyhow::Result<()> {
         )
         .await?;
 
-    assert_persisted_tokens(EXTERNAL_ACCESS_TOKEN, EXTERNAL_REFRESH_TOKEN)?;
+    assert_persisted_tokens(&server_url, EXTERNAL_ACCESS_TOKEN, EXTERNAL_REFRESH_TOKEN)?;
     Ok(())
 }
 
@@ -312,7 +316,7 @@ async fn oauth_external_update_writer_child() -> anyhow::Result<()> {
         &server_url,
         EXTERNAL_ACCESS_TOKEN,
         EXTERNAL_REFRESH_TOKEN,
-        future_expiry()?,
+        EXTERNAL_EXPIRES_AT,
     )?;
     std::fs::write(done_path, b"done")?;
     Ok(())
@@ -427,14 +431,42 @@ fn future_expiry() -> anyhow::Result<u64> {
         .as_millis() as u64)
 }
 
-fn assert_persisted_tokens(access_token: &str, refresh_token: &str) -> anyhow::Result<()> {
+#[derive(Debug, Deserialize, PartialEq)]
+struct PersistedCredentialEntry {
+    server_name: String,
+    server_url: String,
+    client_id: String,
+    access_token: String,
+    expires_at: Option<u64>,
+    refresh_token: Option<String>,
+    scopes: Vec<String>,
+}
+
+fn assert_persisted_tokens(
+    server_url: &str,
+    access_token: &str,
+    refresh_token: &str,
+) -> anyhow::Result<()> {
     let credentials = std::fs::read_to_string(
         std::path::Path::new(&std::env::var("CODEX_HOME")?).join(".credentials.json"),
     )?;
-    assert!(credentials.contains(access_token));
-    assert!(credentials.contains(refresh_token));
-    assert!(!credentials.contains(STALE_REFRESHED_ACCESS_TOKEN));
-    assert!(!credentials.contains(STALE_ROTATED_REFRESH_TOKEN));
+    let store = serde_json::from_str::<BTreeMap<String, PersistedCredentialEntry>>(&credentials)?;
+    let actual = store
+        .values()
+        .find(|entry| entry.server_name == SERVER_NAME && entry.server_url == server_url)
+        .context("target persisted OAuth credential entry should exist")?;
+    assert_eq!(
+        actual,
+        &PersistedCredentialEntry {
+            server_name: SERVER_NAME.to_string(),
+            server_url: server_url.to_string(),
+            client_id: "test-client-id".to_string(),
+            access_token: access_token.to_string(),
+            expires_at: Some(EXTERNAL_EXPIRES_AT),
+            refresh_token: Some(refresh_token.to_string()),
+            scopes: Vec::new(),
+        }
+    );
     Ok(())
 }
 

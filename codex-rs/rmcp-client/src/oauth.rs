@@ -1373,6 +1373,7 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(any(unix, windows))]
     #[test]
     fn server_generation_lock_is_stable_across_read_only_homes_and_tmpdirs() -> Result<()> {
         #[cfg(unix)]
@@ -1385,6 +1386,14 @@ mod tests {
             std::env::set_var("TMPDIR", first_tmpdir.path());
         }
         let first = super::oauth_server_lock_path("server", "https://example.test")?;
+        #[cfg(unix)]
+        let expected_root =
+            PathBuf::from("/tmp").join(format!("codex-mcp-oauth-{}", unsafe { libc::geteuid() }));
+        #[cfg(windows)]
+        let expected_root = super::windows_local_app_data_dir()?
+            .join("Temp")
+            .join("codex-mcp-oauth-locks");
+        assert_eq!(first.parent(), Some(expected_root.as_path()));
         let other_codex_home = tempdir()?;
         let other_home = tempdir()?;
         let second_tmpdir = tempdir()?;
