@@ -84,6 +84,22 @@ fn should_emit_notification(condition: NotificationCondition, terminal_focused: 
     }
 }
 
+fn run_synchronized_draw<W, T>(
+    writer: &mut W,
+    replay_clear_pending: &mut bool,
+    operations: impl FnOnce(&mut W) -> Result<T>,
+) -> Result<T>
+where
+    W: Write,
+{
+    let replay_clear_requested = *replay_clear_pending;
+    let result = writer.sync_update(operations)?;
+    if replay_clear_requested && result.is_ok() {
+        *replay_clear_pending = false;
+    }
+    result
+}
+
 impl Drop for Tui {
     fn drop(&mut self) {
         if let Err(err) = self.clear_ambient_pet_image() {
@@ -97,10 +113,12 @@ mod tests {
     use std::io::Write as _;
 
     use super::clear_for_viewport_change;
+    use super::run_synchronized_draw;
     use super::should_emit_notification;
     use crate::custom_terminal::Terminal as CustomTerminal;
     use crate::test_backend::VT100Backend;
     use codex_config::types::NotificationCondition;
+    use pretty_assertions::assert_eq;
     use ratatui::layout::Position;
     use ratatui::layout::Rect;
 
@@ -167,6 +185,76 @@ mod tests {
             !rows.iter().skip(1).any(|row| row.contains("stale")),
             "expected stale cells inside the new viewport to be cleared, rows: {rows:?}"
         );
+    }
+
+    #[test]
+    fn synchronized_draw_wraps_replay_clear_and_repaint() {
+        let mut output = Vec::new();
+        let mut replay_clear_pending = true;
+        let replay_clear_requested = replay_clear_pending;
+
+        let value = run_synchronized_draw(&mut output, &mut replay_clear_pending, |writer| {
+            assert!(replay_clear_requested);
+            writer.write_all(b"clear")?;
+            writer.write_all(b"replay")?;
+            Ok(42)
+        })
+        .expect("synchronized draw");
+
+        assert_eq!(value, 42);
+        assert!(!replay_clear_pending);
+        assert_eq!(output, b"\x1b[?2026hclearreplay\x1b[?2026l");
+    }
+
+    #[test]
+    fn synchronized_draw_retries_replay_clear_after_render_error() {
+        let mut output = Vec::new();
+        let mut replay_clear_pending = true;
+        let replay_clear_requested = replay_clear_pending;
+
+        let error = run_synchronized_draw(&mut output, &mut replay_clear_pending, |writer| {
+            assert!(replay_clear_requested);
+            writer.write_all(b"clear")?;
+            Err::<(), _>(std::io::Error::other("render failed"))
+        })
+        .expect_err("draw should fail");
+
+        assert_eq!(error.kind(), std::io::ErrorKind::Other);
+        assert!(replay_clear_pending);
+        assert_eq!(output, b"\x1b[?2026hclear\x1b[?2026l");
+    }
+
+    #[test]
+    fn synchronized_draw_retries_replay_clear_after_sync_flush_error() {
+        struct FailOnFlush {
+            output: Vec<u8>,
+        }
+
+        impl std::io::Write for FailOnFlush {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.output.extend_from_slice(buf);
+                Ok(buf.len())
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                Err(std::io::Error::other("flush failed"))
+            }
+        }
+
+        let mut writer = FailOnFlush { output: Vec::new() };
+        let mut replay_clear_pending = true;
+        let replay_clear_requested = replay_clear_pending;
+
+        let error = run_synchronized_draw(&mut writer, &mut replay_clear_pending, |writer| {
+            assert!(replay_clear_requested);
+            writer.write_all(b"clear")?;
+            Ok(())
+        })
+        .expect_err("sync flush should fail");
+
+        assert_eq!(error.kind(), std::io::ErrorKind::Other);
+        assert!(replay_clear_pending);
+        assert_eq!(writer.output, b"\x1b[?2026hclear\x1b[?2026l");
     }
 }
 
@@ -498,6 +586,8 @@ pub struct Tui {
     suspend_context: SuspendContext,
     // True when overlay alt-screen UI is active
     alt_screen_active: Arc<AtomicBool>,
+    // Rebuilds clear the terminal inside the next synchronized draw before replaying history.
+    terminal_replay_clear_pending: bool,
     // True when terminal/tab is focused; updated internally from crossterm events
     terminal_focused: Arc<AtomicBool>,
     enhanced_keys_supported: bool,
@@ -554,6 +644,7 @@ impl Tui {
             #[cfg(unix)]
             suspend_context: SuspendContext::new(),
             alt_screen_active: Arc::new(AtomicBool::new(false)),
+            terminal_replay_clear_pending: false,
             terminal_focused: Arc::new(AtomicBool::new(true)),
             enhanced_keys_supported,
             notification_backend: Some(detect_backend(NotificationMethod::default())),
@@ -588,6 +679,10 @@ impl Tui {
 
     pub fn is_alt_screen_active(&self) -> bool {
         self.alt_screen_active.load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn request_terminal_replay_clear(&mut self) {
+        self.terminal_replay_clear_pending = true;
     }
 
     // Drop crossterm EventStream to avoid stdin conflicts with other processes.
@@ -768,6 +863,20 @@ impl Tui {
         self.pending_history_lines.clear();
     }
 
+    fn clear_terminal_for_replay(&mut self) -> Result<()> {
+        if self.is_alt_screen_active() {
+            self.terminal.clear_visible_screen()?;
+        } else {
+            self.terminal.clear_scrollback_and_visible_screen_ansi()?;
+        }
+        let mut area = self.terminal.viewport_area;
+        if area.y > 0 {
+            area.y = 0;
+            self.terminal.set_viewport_area(area);
+        }
+        Ok(())
+    }
+
     /// Resize the inline viewport for the resize-reflow path.
     ///
     /// Unlike the legacy draw path, this path does not scroll rows above the viewport when the
@@ -852,14 +961,24 @@ impl Tui {
 
         // Precompute any viewport updates that need a cursor-position query before entering
         // the synchronized update, to avoid racing with the event reader.
-        let mut pending_viewport_area = self.pending_viewport_area()?;
+        let mut pending_viewport_area = if self.terminal_replay_clear_pending {
+            None
+        } else {
+            self.pending_viewport_area()?
+        };
 
         ensure_virtual_terminal_processing()?;
 
-        stdout().sync_update(|_| {
+        let mut replay_clear_pending = self.terminal_replay_clear_pending;
+        let replay_clear_requested = replay_clear_pending;
+        let result = run_synchronized_draw(&mut stdout(), &mut replay_clear_pending, |_| {
             #[cfg(unix)]
             if let Some(prepared) = prepared_resume.take() {
                 prepared.apply(&mut self.terminal)?;
+            }
+
+            if replay_clear_requested {
+                self.clear_terminal_for_replay()?;
             }
 
             let terminal = &mut self.terminal;
@@ -910,7 +1029,9 @@ impl Tui {
             terminal.draw(|frame| {
                 draw_fn(frame);
             })
-        })?
+        });
+        self.terminal_replay_clear_pending = replay_clear_pending;
+        result
     }
 
     pub fn draw_ambient_pet_image(
@@ -988,10 +1109,16 @@ impl Tui {
 
         ensure_virtual_terminal_processing()?;
 
-        stdout().sync_update(|_| {
+        let mut replay_clear_pending = self.terminal_replay_clear_pending;
+        let replay_clear_requested = replay_clear_pending;
+        let result = run_synchronized_draw(&mut stdout(), &mut replay_clear_pending, |_| {
             #[cfg(unix)]
             if let Some(prepared) = prepared_resume.take() {
                 prepared.apply(&mut self.terminal)?;
+            }
+
+            if replay_clear_requested {
+                self.clear_terminal_for_replay()?;
             }
 
             let terminal = &mut self.terminal;
@@ -1024,7 +1151,9 @@ impl Tui {
             terminal.draw(|frame| {
                 draw_fn(frame);
             })
-        })?
+        });
+        self.terminal_replay_clear_pending = replay_clear_pending;
+        result
     }
 
     fn pending_viewport_area(&mut self) -> Result<Option<Rect>> {

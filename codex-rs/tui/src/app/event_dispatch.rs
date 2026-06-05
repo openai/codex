@@ -190,12 +190,6 @@ impl App {
 
                 tui.frame_requester().schedule_frame();
             }
-            AppEvent::BeginInitialHistoryReplayBuffer => {
-                self.begin_initial_history_replay_buffer();
-            }
-            AppEvent::BeginThreadSwitchHistoryReplayBuffer => {
-                self.begin_thread_switch_history_replay_buffer();
-            }
             AppEvent::InsertHistoryCell(cell) => {
                 let cell: Arc<dyn HistoryCell> = cell.into();
                 if let Some(Overlay::Transcript(t)) = &mut self.overlay {
@@ -205,7 +199,6 @@ impl App {
                 self.transcript_cells.push(cell.clone());
                 if self.initial_history_replay_buffer.as_ref().is_some() {
                     self.insert_history_cell_lines_with_initial_replay_buffer(
-                        tui,
                         cell.as_ref(),
                         self.chat_widget
                             .history_wrap_width(tui.terminal.last_known_screen_size.width),

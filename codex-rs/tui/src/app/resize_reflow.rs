@@ -121,6 +121,7 @@ impl App {
     /// transcript ownership, so overlay replay continues through the normal deferred-history path.
     pub(super) fn begin_initial_history_replay_buffer(&mut self) {
         if self.terminal_resize_reflow_enabled() && self.overlay.is_none() {
+            self.transcript_reflow.clear_pending_reflow();
             self.initial_history_replay_buffer = Some(Default::default());
         }
     }
@@ -131,15 +132,26 @@ impl App {
     /// defer terminal writes until the replay is complete and reuse the resize-reflow tail renderer
     /// so only the rows the terminal would retain are formatted and inserted.
     pub(super) fn begin_thread_switch_history_replay_buffer(&mut self) {
-        if self.terminal_resize_reflow_enabled()
-            && self.resize_reflow_max_rows().is_some()
-            && self.overlay.is_none()
-        {
+        if self.terminal_resize_reflow_enabled() && self.overlay.is_none() {
+            self.transcript_reflow.clear_pending_reflow();
             self.initial_history_replay_buffer = Some(InitialHistoryReplayBuffer {
                 retained_lines: VecDeque::new(),
                 render_from_transcript_tail: true,
             });
         }
+    }
+
+    /// Fold stream-consolidation repair into the source-backed render that ends startup replay.
+    pub(super) fn absorb_reflow_into_initial_history_replay(&mut self) -> bool {
+        let Some(buffer) = &mut self.initial_history_replay_buffer else {
+            return false;
+        };
+
+        buffer.retained_lines.clear();
+        buffer.render_from_transcript_tail = true;
+        self.transcript_reflow.clear_pending_reflow();
+        self.transcript_reflow.clear_stream_flags();
+        true
     }
 
     /// Flush retained initial resume replay rows into terminal scrollback.
@@ -152,17 +164,19 @@ impl App {
             return;
         };
 
-        if buffer.retained_lines.is_empty() {
-            if buffer.render_from_transcript_tail {
-                let width = tui.terminal.last_known_screen_size.width;
-                let reflowed_lines = self.render_transcript_lines_for_reflow(width).lines;
-                if !reflowed_lines.is_empty() {
-                    tui.insert_history_hyperlink_lines_with_wrap_policy(
-                        reflowed_lines,
-                        self.history_line_wrap_policy(),
-                    );
-                }
+        if buffer.render_from_transcript_tail {
+            let width = tui.terminal.last_known_screen_size.width;
+            let reflowed_lines = self.render_transcript_lines_for_reflow(width).lines;
+            if !reflowed_lines.is_empty() {
+                tui.insert_history_hyperlink_lines_with_wrap_policy(
+                    reflowed_lines,
+                    self.history_line_wrap_policy(),
+                );
             }
+            return;
+        }
+
+        if buffer.retained_lines.is_empty() {
             return;
         }
 
@@ -175,7 +189,6 @@ impl App {
 
     pub(super) fn insert_history_cell_lines_with_initial_replay_buffer(
         &mut self,
-        tui: &mut tui::Tui,
         cell: &dyn HistoryCell,
         width: u16,
     ) {
@@ -194,16 +207,12 @@ impl App {
         }
 
         let max_rows = self.resize_reflow_max_rows();
+        let overlay_active = self.overlay.is_some();
         if let Some(buffer) = &mut self.initial_history_replay_buffer {
-            if let Some(max_rows) = max_rows {
-                Self::buffer_initial_history_replay_display_lines(buffer, display, max_rows);
-            } else if self.overlay.is_some() {
+            if overlay_active {
                 self.deferred_history_lines.extend(display);
             } else {
-                tui.insert_history_hyperlink_lines_with_wrap_policy(
-                    display,
-                    self.history_line_wrap_policy(),
-                );
+                Self::buffer_initial_history_replay_display_lines(buffer, display, max_rows);
             }
         }
     }
@@ -224,11 +233,13 @@ impl App {
     pub(super) fn buffer_initial_history_replay_display_lines(
         buffer: &mut InitialHistoryReplayBuffer,
         display: Vec<HyperlinkLine>,
-        max_rows: usize,
+        max_rows: Option<usize>,
     ) {
         buffer.retained_lines.extend(display);
-        while buffer.retained_lines.len() > max_rows {
-            buffer.retained_lines.pop_front();
+        if let Some(max_rows) = max_rows {
+            while buffer.retained_lines.len() > max_rows {
+                buffer.retained_lines.pop_front();
+            }
         }
     }
 
@@ -241,20 +252,6 @@ impl App {
         crate::resize_reflow_cap::resize_reflow_max_rows(self.config.terminal_resize_reflow)
     }
 
-    fn clear_terminal_for_resize_replay(&mut self, tui: &mut tui::Tui) -> Result<()> {
-        if tui.is_alt_screen_active() {
-            tui.terminal.clear_visible_screen()?;
-        } else {
-            tui.terminal.clear_scrollback_and_visible_screen_ansi()?;
-        }
-        let mut area = tui.terminal.viewport_area;
-        if area.y > 0 {
-            area.y = 0;
-            tui.terminal.set_viewport_area(area);
-        }
-        Ok(())
-    }
-
     /// Finish stream consolidation by repairing any resize work that happened during streaming.
     ///
     /// This is called after agent-message stream cells have either been replaced by an
@@ -265,6 +262,9 @@ impl App {
     pub(super) fn maybe_finish_stream_reflow(&mut self, tui: &mut tui::Tui) -> Result<()> {
         if !self.terminal_resize_reflow_enabled() {
             self.transcript_reflow.clear();
+            return Ok(());
+        }
+        if self.absorb_reflow_into_initial_history_replay() {
             return Ok(());
         }
 
@@ -296,6 +296,9 @@ impl App {
             self.transcript_reflow.clear();
             return Ok(());
         }
+        if self.absorb_reflow_into_initial_history_replay() {
+            return Ok(());
+        }
         self.schedule_immediate_resize_reflow(tui);
         self.maybe_run_resize_reflow(tui)?;
         if !self.transcript_reflow.has_pending_reflow() {
@@ -319,9 +322,15 @@ impl App {
         let width = self.transcript_reflow.note_width(size.width);
         let reflow_needed = self.transcript_reflow.reflow_needed_for_width(size.width);
         let height_changed = size.height != last_known_screen_size.height;
-        let should_rebuild_transcript = reflow_needed || height_changed;
+        let resize_requires_rebuild = reflow_needed || height_changed;
+        let replay_in_progress = self.initial_history_replay_buffer.is_some();
+        let should_rebuild_transcript = resize_requires_rebuild && !replay_in_progress;
         if width.changed || width.initialized {
             self.chat_widget.on_terminal_resize(size.width);
+        }
+        if resize_requires_rebuild && let Some(buffer) = &mut self.initial_history_replay_buffer {
+            buffer.retained_lines.clear();
+            buffer.render_from_transcript_tail = true;
         }
         if should_rebuild_transcript {
             if self.terminal_resize_reflow_enabled() {
@@ -446,7 +455,7 @@ impl App {
 
         // Drop any queued pre-resize/pre-consolidation inserts before rebuilding from cells.
         tui.clear_pending_history_lines();
-        self.clear_terminal_for_resize_replay(tui)?;
+        tui.request_terminal_replay_clear();
 
         self.deferred_history_lines.clear();
         if !reflowed_lines.is_empty() {
@@ -475,7 +484,7 @@ impl App {
         };
 
         tui.clear_pending_history_lines();
-        self.clear_terminal_for_resize_replay(tui)?;
+        tui.request_terminal_replay_clear();
 
         self.deferred_history_lines.clear();
         if !reflowed_lines.is_empty() {

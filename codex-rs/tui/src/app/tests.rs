@@ -4031,7 +4031,7 @@ async fn initial_replay_buffer_keeps_recent_rows_when_row_cap_present() {
                 .as_mut()
                 .expect("initial replay buffer active"),
             vec![Line::from(format!("line {index}")).into()],
-            /*max_rows*/ 3,
+            /*max_rows*/ Some(3),
         );
     }
 
@@ -4070,14 +4070,87 @@ async fn thread_switch_replay_buffer_uses_transcript_tail_mode_when_row_cap_pres
 }
 
 #[tokio::test]
-async fn thread_switch_replay_buffer_is_disabled_without_row_cap() {
+async fn thread_switch_replay_buffer_uses_transcript_tail_without_row_cap() {
     let (mut app, _rx, _op_rx) = make_test_app_with_channels().await;
     enable_terminal_resize_reflow(&mut app);
     app.config.terminal_resize_reflow.max_rows = TerminalResizeReflowMaxRows::Disabled;
 
     app.begin_thread_switch_history_replay_buffer();
 
-    assert!(app.initial_history_replay_buffer.is_none());
+    let buffer = app
+        .initial_history_replay_buffer
+        .as_ref()
+        .expect("thread switch replay buffer should be active");
+    assert!(buffer.render_from_transcript_tail);
+    assert!(buffer.retained_lines.is_empty());
+}
+
+#[tokio::test]
+async fn uncapped_initial_replay_buffer_keeps_all_rows() {
+    let (mut app, _rx, _op_rx) = make_test_app_with_channels().await;
+    enable_terminal_resize_reflow(&mut app);
+    app.config.terminal_resize_reflow.max_rows = TerminalResizeReflowMaxRows::Disabled;
+
+    app.begin_initial_history_replay_buffer();
+    App::buffer_initial_history_replay_display_lines(
+        app.initial_history_replay_buffer
+            .as_mut()
+            .expect("initial replay buffer active"),
+        vec![Line::from("first").into(), Line::from("second").into()],
+        /*max_rows*/ None,
+    );
+
+    let buffer = app
+        .initial_history_replay_buffer
+        .as_ref()
+        .expect("initial replay buffer should remain active");
+    assert_eq!(
+        buffer
+            .retained_lines
+            .iter()
+            .map(rendered_line_text)
+            .collect::<Vec<_>>(),
+        vec!["first".to_string(), "second".to_string()]
+    );
+}
+
+#[tokio::test]
+async fn initial_replay_defers_resize_reflow_and_switches_to_tail_render() {
+    let (mut app, _rx, _op_rx) = make_test_app_with_channels().await;
+    enable_terminal_resize_reflow(&mut app);
+    app.config.terminal_resize_reflow.max_rows = TerminalResizeReflowMaxRows::Disabled;
+    app.transcript_reflow
+        .schedule_debounced(/*target_width*/ Some(118));
+    assert!(app.transcript_reflow.has_pending_reflow());
+
+    app.begin_initial_history_replay_buffer();
+    let frame_requester = crate::tui::FrameRequester::test_dummy();
+
+    assert!(!app.transcript_reflow.has_pending_reflow());
+    App::buffer_initial_history_replay_display_lines(
+        app.initial_history_replay_buffer
+            .as_mut()
+            .expect("initial replay buffer active"),
+        vec![Line::from("stale stream row").into()],
+        /*max_rows*/ None,
+    );
+    app.transcript_reflow
+        .schedule_debounced(/*target_width*/ Some(118));
+    assert!(app.absorb_reflow_into_initial_history_replay());
+    assert!(!app.transcript_reflow.has_pending_reflow());
+    assert!(!app.handle_draw_size_change(
+        ratatui::layout::Size::new(/*width*/ 118, /*height*/ 24),
+        ratatui::layout::Size::new(/*width*/ 118, /*height*/ 35),
+        &frame_requester,
+    ));
+
+    assert!(!app.transcript_reflow.has_pending_reflow());
+    let buffer = app
+        .initial_history_replay_buffer
+        .as_ref()
+        .expect("initial replay buffer should remain active");
+    assert!(buffer.render_from_transcript_tail);
+    assert!(buffer.retained_lines.is_empty());
 }
 
 #[tokio::test]
