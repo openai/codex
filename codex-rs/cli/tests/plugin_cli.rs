@@ -339,6 +339,32 @@ async fn marketplace_list_shows_configured_marketplace_names() -> Result<()> {
 }
 
 #[tokio::test]
+async fn marketplace_list_json_prints_configured_marketplaces() -> Result<()> {
+    let (codex_home, source) = setup_local_marketplace()?;
+
+    let assert = codex_command(codex_home.path())?
+        .args(["plugin", "marketplace", "list", "--json"])
+        .assert()
+        .success();
+    let stdout = assert.get_output().stdout.as_slice();
+    let actual: serde_json::Value = serde_json::from_slice(stdout)?;
+
+    assert_eq!(
+        actual,
+        json!({
+            "marketplaces": [
+                {
+                    "name": "debug",
+                    "root": source.path().display().to_string(),
+                },
+            ],
+        })
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn marketplace_list_includes_home_marketplace_when_present() -> Result<()> {
     let codex_home = TempDir::new()?;
     let home = TempDir::new()?;
@@ -798,6 +824,69 @@ async fn plugin_add_and_remove_updates_installed_plugin_config() -> Result<()> {
 
     let config = std::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE))?;
     assert!(!config.contains("[plugins.\"sample@debug\"]"));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn plugin_add_json_prints_install_outcome() -> Result<()> {
+    let (codex_home, _source) = setup_local_marketplace()?;
+
+    let assert = codex_command(codex_home.path())?
+        .args(["plugin", "add", "sample@debug", "--json"])
+        .assert()
+        .success();
+    let stdout = assert.get_output().stdout.as_slice();
+    let actual: serde_json::Value = serde_json::from_slice(stdout)?;
+    let installed_path = codex_home.path().join("plugins/cache/debug/sample/1.2.3");
+    let normalized_installed_path = canonicalize_existing_preserving_symlinks(&installed_path)?;
+
+    assert_eq!(
+        actual,
+        json!({
+            "pluginId": "sample@debug",
+            "name": "sample",
+            "marketplaceName": "debug",
+            "version": "1.2.3",
+            "installedPath": normalized_installed_path.display().to_string(),
+            "authPolicy": "ON_INSTALL",
+        })
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn plugin_remove_json_prints_remove_outcome() -> Result<()> {
+    let (codex_home, _source) = setup_local_marketplace()?;
+
+    codex_command(codex_home.path())?
+        .args(["plugin", "add", "sample@debug"])
+        .assert()
+        .success();
+
+    let assert = codex_command(codex_home.path())?
+        .args([
+            "plugin",
+            "remove",
+            "sample",
+            "--marketplace",
+            "debug",
+            "--json",
+        ])
+        .assert()
+        .success();
+    let stdout = assert.get_output().stdout.as_slice();
+    let actual: serde_json::Value = serde_json::from_slice(stdout)?;
+
+    assert_eq!(
+        actual,
+        json!({
+            "pluginId": "sample@debug",
+            "name": "sample",
+            "marketplaceName": "debug",
+        })
+    );
 
     Ok(())
 }
