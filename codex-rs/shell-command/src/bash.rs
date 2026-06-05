@@ -112,7 +112,7 @@ pub fn extract_bash_command(command: &[String]) -> Option<(&str, &str)> {
 fn is_recognised_bash_lc_invocation(shell: &str, flag: &str) -> bool {
     matches!(flag, "-lc" | "-c")
         && matches!(
-            detect_shell_type(&PathBuf::from(shell)),
+            detect_shell_type(PathBuf::from(shell)),
             Some(ShellType::Zsh) | Some(ShellType::Bash) | Some(ShellType::Sh)
         )
 }
