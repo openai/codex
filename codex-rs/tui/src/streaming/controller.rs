@@ -1678,11 +1678,16 @@ mod tests {
     #[test]
     fn plan_controller_holds_table_header_as_live_tail() {
         let mut ctrl = plan_stream_controller(Some(80));
-        assert!(ctrl.push("Intro\n"));
-        let (_cell, idle) = ctrl.on_commit_tick_batch(usize::MAX);
+        assert!(!ctrl.push("Intro\n"));
+        assert!(
+            ctrl.has_live_tail(),
+            "expected plan intro to start as mutable tail",
+        );
+
+        assert!(ctrl.push("| Step | Owner |\n"));
+        let (_cell, idle) = ctrl.on_commit_tick_batch(/*max_lines*/ usize::MAX);
         assert!(idle, "intro line should fully drain");
 
-        assert!(!ctrl.push("| Step | Owner |\n"));
         assert!(
             ctrl.has_live_tail(),
             "expected plan table header to be held"
