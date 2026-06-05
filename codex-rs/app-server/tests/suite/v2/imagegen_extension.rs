@@ -148,76 +148,61 @@ async fn standalone_image_generation_returns_saved_path_hint_to_model() -> Resul
 
 #[tokio::test]
 async fn standalone_image_edit_uses_attached_model_visible_image() -> Result<()> {
-    let call_id = "image-edit-1";
-    let server = responses::start_mock_server().await;
-    mount_image_edit_response(&server).await;
-
-    let codex_home = TempDir::new()?;
-    let image_path = codex_home.path().join("attached.png");
-    std::fs::write(&image_path, TINY_PNG_BYTES)?;
-    let response_mock = responses::mount_sse_sequence(
-        &server,
-        vec![
-            responses::sse(vec![
-                responses::ev_response_created("resp-1"),
-                responses::ev_function_call_with_namespace(
-                    call_id,
-                    "image_gen",
-                    "imagegen",
-                    &json!({
-                        "prompt": "add a red hat",
-                        "referenced_image_paths": [image_path.display().to_string()],
-                    })
-                    .to_string(),
-                ),
-                responses::ev_completed("resp-1"),
-            ]),
-            responses::sse(vec![
-                responses::ev_assistant_message("msg-1", "Done"),
-                responses::ev_completed("resp-2"),
-            ]),
-        ],
-    )
-    .await;
-
-    create_config_toml(codex_home.path(), &server.uri(), ImagegenTestMode::Direct)?;
-    write_chatgpt_auth(
-        codex_home.path(),
-        ChatGptAuthFixture::new("access-chatgpt"),
-        AuthCredentialsStoreMode::File,
-    )?;
-
-    let mut mcp =
-        TestAppServer::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
-    start_image_edit_turn(&mut mcp, image_path).await?;
-    timeout(
-        DEFAULT_READ_TIMEOUT,
-        wait_for_image_generation_completed(&mut mcp),
-    )
-    .await??;
-    timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("turn/completed"),
-    )
-    .await??;
-
-    assert_eq!(response_mock.requests().len(), 2);
-    let requests = server
-        .received_requests()
-        .await
-        .context("failed to fetch received requests")?;
-    let edit_request = requests
-        .iter()
-        .find(|request| request.url.path() == "/api/codex/images/edits")
-        .context("image edit request should be sent")?
-        .body_json::<serde_json::Value>()?;
+    let edit_request = run_image_edit_test(|codex_home| {
+        let image_path = codex_home.join("attached.png");
+        std::fs::write(&image_path, TINY_PNG_BYTES)?;
+        Ok((
+            json!({
+                "prompt": "add a red hat",
+                "referenced_image_paths": [image_path.display().to_string()],
+            }),
+            vec![
+                V2UserInput::Text {
+                    text: "Edit the attached image".to_string(),
+                    text_elements: Vec::new(),
+                },
+                V2UserInput::LocalImage {
+                    path: image_path,
+                    detail: None,
+                },
+            ],
+        ))
+    })
+    .await?;
     assert_eq!(edit_request["prompt"], "add a red hat");
     assert!(
         edit_request["images"][0]["image_url"]
             .as_str()
             .is_some_and(|image_url| image_url.starts_with("data:image/png;base64,"))
     );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn standalone_image_edit_uses_recent_pathless_image() -> Result<()> {
+    let image_url = "https://example.com/reference.png";
+    let edit_request = run_image_edit_test(|_| {
+        Ok((
+            json!({
+                "prompt": "add a red hat",
+                "num_last_images_to_include": 1,
+            }),
+            vec![
+                V2UserInput::Text {
+                    text: "Edit the attached image".to_string(),
+                    text_elements: Vec::new(),
+                },
+                V2UserInput::Image {
+                    url: image_url.to_string(),
+                    detail: None,
+                },
+            ],
+        ))
+    })
+    .await?;
+    assert_eq!(edit_request["prompt"], "add a red hat");
+    assert_eq!(edit_request["images"][0]["image_url"], image_url);
 
     Ok(())
 }
@@ -352,24 +337,68 @@ async fn start_image_generation_turn(mcp: &mut TestAppServer) -> Result<()> {
     .await
 }
 
-async fn start_image_edit_turn(
-    mcp: &mut TestAppServer,
-    image_path: std::path::PathBuf,
-) -> Result<()> {
-    start_turn(
-        mcp,
+async fn run_image_edit_test(
+    input: impl FnOnce(&Path) -> Result<(serde_json::Value, Vec<V2UserInput>)>,
+) -> Result<serde_json::Value> {
+    let call_id = "image-edit-1";
+    let server = responses::start_mock_server().await;
+    mount_image_edit_response(&server).await;
+
+    let codex_home = TempDir::new()?;
+    let (arguments, input) = input(codex_home.path())?;
+    let response_mock = responses::mount_sse_sequence(
+        &server,
         vec![
-            V2UserInput::Text {
-                text: "Edit the attached image".to_string(),
-                text_elements: Vec::new(),
-            },
-            V2UserInput::LocalImage {
-                path: image_path,
-                detail: None,
-            },
+            responses::sse(vec![
+                responses::ev_response_created("resp-1"),
+                responses::ev_function_call_with_namespace(
+                    call_id,
+                    "image_gen",
+                    "imagegen",
+                    &arguments.to_string(),
+                ),
+                responses::ev_completed("resp-1"),
+            ]),
+            responses::sse(vec![
+                responses::ev_assistant_message("msg-1", "Done"),
+                responses::ev_completed("resp-2"),
+            ]),
         ],
     )
-    .await
+    .await;
+
+    create_config_toml(codex_home.path(), &server.uri(), ImagegenTestMode::Direct)?;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("access-chatgpt"),
+        AuthCredentialsStoreMode::File,
+    )?;
+
+    let mut mcp =
+        TestAppServer::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+    start_turn(&mut mcp, input).await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        wait_for_image_generation_completed(&mut mcp),
+    )
+    .await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    assert_eq!(response_mock.requests().len(), 2);
+    let requests = server
+        .received_requests()
+        .await
+        .context("failed to fetch received requests")?;
+    Ok(requests
+        .iter()
+        .find(|request| request.url.path() == "/api/codex/images/edits")
+        .context("image edit request should be sent")?
+        .body_json::<serde_json::Value>()?)
 }
 
 async fn start_turn(mcp: &mut TestAppServer, input: Vec<V2UserInput>) -> Result<()> {

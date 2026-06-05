@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use codex_api::ImageBackground;
 use codex_api::ImageEditRequest;
 use codex_api::ImageGenerationRequest;
@@ -15,11 +17,13 @@ use codex_extension_api::ToolPayload;
 use codex_extension_api::ToolSpec;
 use codex_extension_api::parse_tool_input_schema;
 use codex_protocol::items::ImageGenerationItem;
+use codex_protocol::models::ContentItem;
 use codex_protocol::models::DEFAULT_IMAGE_DETAIL;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
+use codex_protocol::models::ResponseItem;
 use codex_tools::ResponsesApiNamespace;
 use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::ResponsesApiTool;
@@ -39,6 +43,7 @@ use crate::IMAGEGEN_TOOL_NAME;
 use crate::backend::CodexImagesBackend;
 
 const IMAGE_MODEL: &str = "gpt-image-2";
+const MAX_EDIT_IMAGES: usize = 5;
 const IMAGEGEN_DESCRIPTION: &str = include_str!("../imagegen_description.md");
 
 #[derive(Clone)]
@@ -67,7 +72,10 @@ impl ImageGenerationTool {
 #[serde(deny_unknown_fields)]
 struct ImagegenArgs {
     prompt: String,
+    #[schemars(length(max = 5))]
     referenced_image_paths: Option<Vec<AbsolutePathBuf>>,
+    #[schemars(range(min = 1, max = 5))]
+    num_last_images_to_include: Option<usize>,
 }
 
 #[async_trait::async_trait]
@@ -90,7 +98,7 @@ impl ToolExecutor<ToolCall> for ImageGenerationTool {
     /// Executes the selected image operation and returns the completed image result.
     async fn handle(&self, call: ToolCall) -> Result<Box<dyn ToolOutput>, FunctionCallError> {
         let args = parse_args(&call)?;
-        let request = request_for_args(&args)?;
+        let request = request_for_args(&args, call.conversation_history.items())?;
         call.turn_item_emitter
             .emit_started(ExtensionTurnItem::ImageGeneration(ImageGenerationItem {
                 id: call.call_id.clone(),
@@ -141,20 +149,53 @@ enum ImageRequest {
     Edit(ImageEditRequest),
 }
 
-fn request_for_args(args: &ImagegenArgs) -> Result<ImageRequest, FunctionCallError> {
+/// Builds a generation or edit request from the mutually exclusive image selectors.
+fn request_for_args(
+    args: &ImagegenArgs,
+    history: &[ResponseItem],
+) -> Result<ImageRequest, FunctionCallError> {
     let paths = args.referenced_image_paths.as_deref().unwrap_or_default();
-    if paths.is_empty() {
-        return Ok(ImageRequest::Generate(ImageGenerationRequest {
-            prompt: args.prompt.clone(),
-            background: Some(ImageBackground::Auto),
-            model: IMAGE_MODEL.to_string(),
-            n: None,
-            quality: Some(ImageQuality::Auto),
-            size: Some("auto".to_string()),
-        }));
+    if paths.len() > MAX_EDIT_IMAGES {
+        return Err(FunctionCallError::RespondToModel(format!(
+            "`referenced_image_paths` must contain at most {MAX_EDIT_IMAGES} paths"
+        )));
     }
+    let images = match (paths.is_empty(), args.num_last_images_to_include) {
+        (true, None) => {
+            return Ok(ImageRequest::Generate(ImageGenerationRequest {
+                prompt: args.prompt.clone(),
+                background: Some(ImageBackground::Auto),
+                model: IMAGE_MODEL.to_string(),
+                n: None,
+                quality: Some(ImageQuality::Auto),
+                size: Some("auto".to_string()),
+            }));
+        }
+        (false, None) => paths.iter().map(image_url).collect::<Result<Vec<_>, _>>()?,
+        (true, Some(count)) => {
+            if !(1..=MAX_EDIT_IMAGES).contains(&count) {
+                return Err(FunctionCallError::RespondToModel(format!(
+                    "`num_last_images_to_include` must be between 1 and {MAX_EDIT_IMAGES}"
+                )));
+            }
+            let images = recent_images(history, count);
+            if images.len() != count {
+                return Err(FunctionCallError::RespondToModel(format!(
+                    "requested the last {count} conversation images, but only {} were available",
+                    images.len()
+                )));
+            }
+            images
+        }
+        (false, Some(_)) => {
+            return Err(FunctionCallError::RespondToModel(
+                "provide only one of `referenced_image_paths` or \
+                 `num_last_images_to_include`"
+                    .to_string(),
+            ));
+        }
+    };
 
-    let images = paths.iter().map(image_url).collect::<Result<Vec<_>, _>>()?;
     Ok(ImageRequest::Edit(ImageEditRequest {
         images,
         prompt: args.prompt.clone(),
@@ -164,6 +205,97 @@ fn request_for_args(args: &ImagegenArgs) -> Result<ImageRequest, FunctionCallErr
         quality: Some(ImageQuality::Auto),
         size: Some("auto".to_string()),
     }))
+}
+
+/// Selects the newest requested images while preserving their conversation order.
+fn recent_images(history: &[ResponseItem], count: usize) -> Vec<ImageUrl> {
+    let mut function_call_ids = HashSet::new();
+    let mut custom_tool_call_ids = HashSet::new();
+    for item in history {
+        match item {
+            ResponseItem::FunctionCall { call_id, .. } => {
+                function_call_ids.insert(call_id.as_str());
+            }
+            ResponseItem::CustomToolCall { call_id, .. } => {
+                custom_tool_call_ids.insert(call_id.as_str());
+            }
+            ResponseItem::Message { .. }
+            | ResponseItem::Reasoning { .. }
+            | ResponseItem::LocalShellCall { .. }
+            | ResponseItem::ToolSearchCall { .. }
+            | ResponseItem::FunctionCallOutput { .. }
+            | ResponseItem::CustomToolCallOutput { .. }
+            | ResponseItem::ToolSearchOutput { .. }
+            | ResponseItem::WebSearchCall { .. }
+            | ResponseItem::ImageGenerationCall { .. }
+            | ResponseItem::Compaction { .. }
+            | ResponseItem::CompactionTrigger
+            | ResponseItem::ContextCompaction { .. }
+            | ResponseItem::Other => {}
+        }
+    }
+
+    let mut images = Vec::with_capacity(count);
+    'history: for item in history.iter().rev() {
+        let mut image_urls = Vec::new();
+        match item {
+            ResponseItem::Message { content, .. } => {
+                image_urls.extend(content.iter().rev().filter_map(|item| match item {
+                    ContentItem::InputImage { image_url, .. } => Some(image_url.clone()),
+                    ContentItem::InputText { .. } | ContentItem::OutputText { .. } => None,
+                }));
+            }
+            ResponseItem::FunctionCallOutput { call_id, output }
+                if function_call_ids.contains(call_id.as_str()) =>
+            {
+                image_urls.extend(output_image_urls(output));
+            }
+            ResponseItem::CustomToolCallOutput {
+                call_id, output, ..
+            } if custom_tool_call_ids.contains(call_id.as_str()) => {
+                image_urls.extend(output_image_urls(output));
+            }
+            ResponseItem::ImageGenerationCall { result, .. } if !result.is_empty() => {
+                image_urls.push(format!("data:image/png;base64,{result}"));
+            }
+            ResponseItem::Reasoning { .. }
+            | ResponseItem::LocalShellCall { .. }
+            | ResponseItem::FunctionCall { .. }
+            | ResponseItem::ToolSearchCall { .. }
+            | ResponseItem::CustomToolCall { .. }
+            | ResponseItem::FunctionCallOutput { .. }
+            | ResponseItem::CustomToolCallOutput { .. }
+            | ResponseItem::ToolSearchOutput { .. }
+            | ResponseItem::WebSearchCall { .. }
+            | ResponseItem::ImageGenerationCall { .. }
+            | ResponseItem::Compaction { .. }
+            | ResponseItem::CompactionTrigger
+            | ResponseItem::ContextCompaction { .. }
+            | ResponseItem::Other => {}
+        }
+        for image_url in image_urls {
+            images.push(ImageUrl { image_url });
+            if images.len() == count {
+                break 'history;
+            }
+        }
+    }
+    images.reverse();
+    images
+}
+
+/// Extracts image URLs from a tool output in newest-first order.
+fn output_image_urls(output: &FunctionCallOutputPayload) -> impl Iterator<Item = String> + '_ {
+    output
+        .content_items()
+        .into_iter()
+        .flatten()
+        .rev()
+        .filter_map(|item| match item {
+            FunctionCallOutputContentItem::InputImage { image_url, .. } => Some(image_url.clone()),
+            FunctionCallOutputContentItem::InputText { .. }
+            | FunctionCallOutputContentItem::EncryptedContent { .. } => None,
+        })
 }
 
 fn image_url(path: &AbsolutePathBuf) -> Result<ImageUrl, FunctionCallError> {
