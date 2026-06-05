@@ -876,8 +876,8 @@ async fn code_mode_only_exposes_code_executor_and_hides_nested_tools() {
         &["lookup".to_string()]
     );
     plain.assert_visible_lacks(&[
-        codex_code_mode::PUBLIC_TOOL_NAME,
-        codex_code_mode::WAIT_TOOL_NAME,
+        codex_code_mode_protocol::PUBLIC_TOOL_NAME,
+        codex_code_mode_protocol::WAIT_TOOL_NAME,
     ]);
 
     let code_mode_only = probe_with(
@@ -895,8 +895,8 @@ async fn code_mode_only_exposes_code_executor_and_hides_nested_tools() {
     )
     .await;
     code_mode_only.assert_visible_contains(&[
-        codex_code_mode::PUBLIC_TOOL_NAME,
-        codex_code_mode::WAIT_TOOL_NAME,
+        codex_code_mode_protocol::PUBLIC_TOOL_NAME,
+        codex_code_mode_protocol::WAIT_TOOL_NAME,
     ]);
     assert_eq!(
         code_mode_only.namespace_function_names("codex_app"),
@@ -926,7 +926,8 @@ async fn excluded_deferred_namespaces_do_not_enable_nested_tool_guidance() {
     )
     .await;
 
-    let ToolSpec::Freeform(exec) = plan.visible_spec(codex_code_mode::PUBLIC_TOOL_NAME) else {
+    let ToolSpec::Freeform(exec) = plan.visible_spec(codex_code_mode_protocol::PUBLIC_TOOL_NAME)
+    else {
         panic!("expected code mode exec tool");
     };
     assert!(
@@ -1071,8 +1072,8 @@ async fn tool_mode_selector_overrides_feature_flags() {
     })
     .await;
     direct.assert_visible_lacks(&[
-        codex_code_mode::PUBLIC_TOOL_NAME,
-        codex_code_mode::WAIT_TOOL_NAME,
+        codex_code_mode_protocol::PUBLIC_TOOL_NAME,
+        codex_code_mode_protocol::WAIT_TOOL_NAME,
     ]);
 }
 
@@ -1307,8 +1308,8 @@ async fn hosted_tools_follow_provider_auth_model_and_config_gates() {
         code_mode_only.visible_names,
         vec![
             // Code-mode entrypoints.
-            codex_code_mode::PUBLIC_TOOL_NAME,
-            codex_code_mode::WAIT_TOOL_NAME,
+            codex_code_mode_protocol::PUBLIC_TOOL_NAME,
+            codex_code_mode_protocol::WAIT_TOOL_NAME,
             // Multi-agent v2 tools.
             "spawn_agent",
             "send_message",

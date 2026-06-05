@@ -10,3 +10,14 @@ path = "src/main.rs"
 
 [lints]
 workspace = true
+
+[dependencies]
+codex-code-mode = { workspace = true, features = ["sandbox"] }
+codex-code-mode-protocol = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["io-std", "io-util", "macros", "rt-multi-thread", "sync"] }
+tokio-util = { workspace = true, features = ["rt"] }
+
+[dev-dependencies]
+codex-utils-cargo-bin = { workspace = true }
+pretty_assertions = { workspace = true }

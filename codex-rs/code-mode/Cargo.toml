@@ -16,6 +16,7 @@ sandbox = ["v8/v8_enable_sandbox"]
 workspace = true
 
 [dependencies]
+codex-code-mode-protocol = { workspace = true }
 codex-protocol = { workspace = true }
 deno_core_icudata = { workspace = true }
 serde = { workspace = true, features = ["derive"] }

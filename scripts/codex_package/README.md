@@ -10,7 +10,8 @@ The builder creates a canonical Codex package directory:
 .
 ├── codex-package.json
 ├── bin
-│   └── <entrypoint>[.exe]
+│   ├── <entrypoint>[.exe]
+│   └── codex-code-mode-host[.exe]
 ├── codex-resources
 │   ├── bwrap                             # Linux only
 │   ├── zsh/bin/zsh                       # supported Unix targets only
@@ -40,6 +41,7 @@ grouped `cargo build` command per package when they are needed and no prebuilt
 override was provided:
 
 - all targets: the selected entrypoint, unless `--entrypoint-bin` is provided
+- all targets: `codex-code-mode-host`, unless `--code-mode-host-bin` is provided
 - Linux targets: `bwrap`, unless `--bwrap-bin` is provided
 - Windows targets: `codex-command-runner` and `codex-windows-sandbox-setup`,
   unless the corresponding prebuilt helper flags are provided

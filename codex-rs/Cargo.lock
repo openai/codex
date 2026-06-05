@@ -2483,6 +2483,7 @@ dependencies = [
 name = "codex-code-mode"
 version = "0.0.0"
 dependencies = [
+ "codex-code-mode-protocol",
  "codex-protocol",
  "deno_core_icudata",
  "pretty_assertions",
@@ -2495,8 +2496,41 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-code-mode-client"
+version = "0.0.0"
+dependencies = [
+ "codex-code-mode-protocol",
+ "pretty_assertions",
+ "serde_json",
+ "tokio",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
 name = "codex-code-mode-host"
 version = "0.0.0"
+dependencies = [
+ "codex-code-mode",
+ "codex-code-mode-protocol",
+ "codex-utils-cargo-bin",
+ "pretty_assertions",
+ "serde_json",
+ "tokio",
+ "tokio-util",
+]
+
+[[package]]
+name = "codex-code-mode-protocol"
+version = "0.0.0"
+dependencies = [
+ "codex-protocol",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-util",
+]
 
 [[package]]
 name = "codex-collaboration-mode-templates"
@@ -2593,7 +2627,8 @@ dependencies = [
  "codex-app-server-protocol",
  "codex-apply-patch",
  "codex-async-utils",
- "codex-code-mode",
+ "codex-code-mode-client",
+ "codex-code-mode-protocol",
  "codex-config",
  "codex-connectors",
  "codex-context-fragments",
@@ -3709,7 +3744,7 @@ name = "codex-rollout-trace"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "codex-code-mode",
+ "codex-code-mode-protocol",
  "codex-protocol",
  "http 1.4.0",
  "pretty_assertions",
@@ -3918,7 +3953,7 @@ name = "codex-tools"
 version = "0.0.0"
 dependencies = [
  "codex-app-server-protocol",
- "codex-code-mode",
+ "codex-code-mode-protocol",
  "codex-features",
  "codex-protocol",
  "codex-utils-absolute-path",
@@ -4577,6 +4612,7 @@ dependencies = [
  "assert_cmd",
  "base64 0.22.1",
  "codex-arg0",
+ "codex-code-mode",
  "codex-config",
  "codex-core",
  "codex-exec-server",

@@ -41,14 +41,14 @@ jobs:
           - runner: windows-x64
             target: x86_64-pc-windows-msvc
             bundle: helpers
-            binaries: "codex-windows-sandbox-setup codex-command-runner"
+            binaries: "codex-windows-sandbox-setup codex-command-runner codex-code-mode-host"
             runs_on:
               group: ${{ github.event.repository.name }}-runners
               labels: ${{ github.event.repository.name }}-windows-x64
           - runner: windows-arm64
             target: aarch64-pc-windows-msvc
             bundle: helpers
-            binaries: "codex-windows-sandbox-setup codex-command-runner"
+            binaries: "codex-windows-sandbox-setup codex-command-runner codex-code-mode-host"
             runs_on:
               group: ${{ github.event.repository.name }}-runners
               labels: ${{ github.event.repository.name }}-windows-arm64
@@ -158,7 +158,7 @@ jobs:
       run:
         working-directory: codex-rs
     env:
-      WINDOWS_BINARIES: "codex codex-responses-api-proxy codex-windows-sandbox-setup codex-command-runner codex-app-server"
+      WINDOWS_BINARIES: "codex codex-responses-api-proxy codex-windows-sandbox-setup codex-command-runner codex-code-mode-host codex-app-server"
 
     strategy:
       fail-fast: false
@@ -340,16 +340,18 @@ jobs:
               bundle_dir="$(mktemp -d)"
               runner_src="$dest/codex-command-runner-${{ matrix.target }}.exe"
               setup_src="$dest/codex-windows-sandbox-setup-${{ matrix.target }}.exe"
-              if [[ -f "$runner_src" && -f "$setup_src" ]]; then
+              code_mode_host_src="$dest/codex-code-mode-host-${{ matrix.target }}.exe"
+              if [[ -f "$runner_src" && -f "$setup_src" && -f "$code_mode_host_src" ]]; then
                 cp "$dest/$base" "$bundle_dir/$base"
                 cp "$runner_src" "$bundle_dir/codex-command-runner.exe"
                 cp "$setup_src" "$bundle_dir/codex-windows-sandbox-setup.exe"
+                cp "$code_mode_host_src" "$bundle_dir/codex-code-mode-host.exe"
                 # Use an absolute path so bundle zips land in the real dist
                 # dir even when 7z runs from a temp directory.
                 (cd "$bundle_dir" && 7z a "$repo_root/$dest/${base}.zip" .)
               else
-                echo "warning: missing sandbox binaries; falling back to single-binary zip"
-                echo "warning: expected $runner_src and $setup_src"
+                echo "warning: missing bundled binaries; falling back to single-binary zip"
+                echo "warning: expected $runner_src, $setup_src, and $code_mode_host_src"
                 (cd "$dest" && 7z a "${base}.zip" "$base")
               fi
               rm -rf "$bundle_dir"

@@ -520,6 +520,13 @@ impl TestCodexBuilder {
             installation_id,
             /*attestation_provider*/ None,
         );
+        let thread_manager = if std::env::var_os("CODEX_CODE_MODE_HOST_PATH").is_some() {
+            thread_manager
+        } else {
+            thread_manager.with_code_mode_session_provider(Arc::new(
+                codex_code_mode::InProcessCodeModeSessionProvider,
+            ))
+        };
         let thread_manager = Arc::new(thread_manager);
         let user_shell_override = self.user_shell_override.clone();
 

@@ -1,0 +1,23 @@
+[package]
+edition.workspace = true
+license.workspace = true
+name = "codex-code-mode-client"
+version.workspace = true
+
+[lib]
+doctest = false
+name = "codex_code_mode_client"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+codex-code-mode-protocol = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["io-std", "io-util", "process", "rt", "sync"] }
+tokio-util = { workspace = true, features = ["rt"] }
+tracing = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }

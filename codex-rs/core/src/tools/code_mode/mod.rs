@@ -8,13 +8,15 @@ pub(crate) mod wait_spec;
 use std::sync::Arc;
 use std::time::Duration;
 
-use codex_code_mode::CellId;
-use codex_code_mode::CodeModeNestedToolCall;
-use codex_code_mode::CodeModeSession;
-use codex_code_mode::CodeModeToolKind;
-use codex_code_mode::RuntimeResponse;
+use codex_code_mode_protocol::CellId;
+use codex_code_mode_protocol::CodeModeNestedToolCall;
+use codex_code_mode_protocol::CodeModeSession;
+use codex_code_mode_protocol::CodeModeSessionProvider;
+use codex_code_mode_protocol::CodeModeToolKind;
+use codex_code_mode_protocol::RuntimeResponse;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use serde_json::Value as JsonValue;
+use tokio::sync::OnceCell;
 use tokio_util::sync::CancellationToken;
 
 use crate::function_tool::FunctionCallError;
@@ -42,9 +44,10 @@ pub(crate) use execute_handler::CodeModeExecuteHandler;
 use response_adapter::into_function_call_output_content_items;
 pub(crate) use wait_handler::CodeModeWaitHandler;
 
-pub(crate) const PUBLIC_TOOL_NAME: &str = codex_code_mode::PUBLIC_TOOL_NAME;
-pub(crate) const WAIT_TOOL_NAME: &str = codex_code_mode::WAIT_TOOL_NAME;
-pub(crate) const DEFAULT_WAIT_YIELD_TIME_MS: u64 = codex_code_mode::DEFAULT_WAIT_YIELD_TIME_MS;
+pub(crate) const PUBLIC_TOOL_NAME: &str = codex_code_mode_protocol::PUBLIC_TOOL_NAME;
+pub(crate) const WAIT_TOOL_NAME: &str = codex_code_mode_protocol::WAIT_TOOL_NAME;
+pub(crate) const DEFAULT_WAIT_YIELD_TIME_MS: u64 =
+    codex_code_mode_protocol::DEFAULT_WAIT_YIELD_TIME_MS;
 
 /// Returns true for the un-namespaced code-mode `exec` tool.
 pub(crate) fn is_exec_tool_name(tool_name: &ToolName) -> bool {
@@ -58,50 +61,50 @@ pub(crate) struct ExecContext {
 }
 
 pub(crate) struct CodeModeService {
-    session: Option<Arc<dyn CodeModeSession>>,
+    session: OnceCell<Arc<dyn CodeModeSession>>,
+    provider: Arc<dyn CodeModeSessionProvider>,
     dispatch_broker: Arc<CodeModeDispatchBroker>,
 }
 
 impl CodeModeService {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(provider: Arc<dyn CodeModeSessionProvider>) -> Self {
         let dispatch_broker = Arc::new(CodeModeDispatchBroker::new());
         Self {
-            session: Some(Arc::new(codex_code_mode::CodeModeService::with_delegate(
-                dispatch_broker.clone(),
-            ))),
+            session: OnceCell::new(),
+            provider,
             dispatch_broker,
         }
     }
 
     pub(crate) async fn execute(
         &self,
-        request: codex_code_mode::ExecuteRequest,
-    ) -> Result<codex_code_mode::StartedCell, String> {
-        self.session()?.execute(request).await
+        request: codex_code_mode_protocol::ExecuteRequest,
+    ) -> Result<codex_code_mode_protocol::StartedCell, String> {
+        self.session().await?.execute(request).await
     }
 
     pub(crate) async fn wait(
         &self,
-        request: codex_code_mode::WaitRequest,
-    ) -> Result<codex_code_mode::WaitOutcome, String> {
-        self.session()?.wait(request).await
+        request: codex_code_mode_protocol::WaitRequest,
+    ) -> Result<codex_code_mode_protocol::WaitOutcome, String> {
+        self.session().await?.wait(request).await
     }
 
     pub(crate) async fn terminate(
         &self,
         cell_id: CellId,
-    ) -> Result<codex_code_mode::WaitOutcome, String> {
-        self.session()?.terminate(cell_id).await
+    ) -> Result<codex_code_mode_protocol::WaitOutcome, String> {
+        self.session().await?.terminate(cell_id).await
     }
 
     pub(crate) async fn shutdown(&self) -> Result<(), String> {
-        match &self.session {
+        match self.session.get() {
             Some(session) => session.shutdown().await,
             None => Ok(()),
         }
     }
 
-    pub(crate) fn mark_cell_ready_for_dispatch(&self, cell_id: &codex_code_mode::CellId) {
+    pub(crate) fn mark_cell_ready_for_dispatch(&self, cell_id: &codex_code_mode_protocol::CellId) {
         self.dispatch_broker.mark_cell_ready_for_dispatch(cell_id);
     }
 
@@ -116,9 +119,7 @@ impl CodeModeService {
         router: Arc<ToolRouter>,
         tracker: SharedTurnDiffTracker,
     ) -> Option<CodeModeDispatchWorker> {
-        if !matches!(turn.tool_mode, ToolMode::CodeMode | ToolMode::CodeModeOnly)
-            || self.session.is_none()
-        {
+        if !matches!(turn.tool_mode, ToolMode::CodeMode | ToolMode::CodeModeOnly) {
             return None;
         }
 
@@ -132,10 +133,10 @@ impl CodeModeService {
         )
     }
 
-    fn session(&self) -> Result<&Arc<dyn CodeModeSession>, String> {
+    async fn session(&self) -> Result<&Arc<dyn CodeModeSession>, String> {
         self.session
-            .as_ref()
-            .ok_or_else(|| "code mode is unavailable".to_string())
+            .get_or_try_init(|| self.provider.create_session(self.dispatch_broker.clone()))
+            .await
     }
 }
 
@@ -322,7 +323,7 @@ fn build_freeform_tool_payload(
 mod tests {
     use super::build_nested_tool_payload;
     use crate::tools::context::ToolPayload;
-    use codex_code_mode::CodeModeToolKind;
+    use codex_code_mode_protocol::CodeModeToolKind;
     use codex_tools::ToolName;
     use serde_json::json;
 

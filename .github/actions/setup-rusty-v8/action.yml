@@ -4,6 +4,10 @@ inputs:
   target:
     description: Rust target triple with Codex-built V8 release artifacts.
     required: true
+  sandbox:
+    description: Use the V8 pointer-compression sandbox artifact profile.
+    required: false
+    default: "false"
 
 runs:
   using: composite
@@ -11,6 +15,7 @@ runs:
     - name: Configure rusty_v8 artifact overrides and verify checksums
       shell: bash
       env:
+        SANDBOX: ${{ inputs.sandbox }}
         TARGET: ${{ inputs.target }}
       run: |
         set -euo pipefail
@@ -19,14 +24,18 @@ runs:
         release_tag="rusty-v8-v${version}"
         base_url="https://github.com/openai/codex/releases/download/${release_tag}"
         binding_dir="${RUNNER_TEMP}/rusty_v8"
-        archive_path="${binding_dir}/librusty_v8_release_${TARGET}.a.gz"
-        binding_path="${binding_dir}/src_binding_release_${TARGET}.rs"
-        checksums_path="${binding_dir}/rusty_v8_release_${TARGET}.sha256"
+        artifact_profile="release"
+        if [[ "${SANDBOX}" == "true" ]]; then
+          artifact_profile="ptrcomp_sandbox_release"
+        fi
+        archive_path="${binding_dir}/librusty_v8_${artifact_profile}_${TARGET}.a.gz"
+        binding_path="${binding_dir}/src_binding_${artifact_profile}_${TARGET}.rs"
+        checksums_path="${binding_dir}/rusty_v8_${artifact_profile}_${TARGET}.sha256"
 
         mkdir -p "${binding_dir}"
-        curl -fsSL "${base_url}/librusty_v8_release_${TARGET}.a.gz" -o "${archive_path}"
-        curl -fsSL "${base_url}/src_binding_release_${TARGET}.rs" -o "${binding_path}"
-        curl -fsSL "${base_url}/rusty_v8_release_${TARGET}.sha256" -o "${checksums_path}"
+        curl -fsSL "${base_url}/$(basename "${archive_path}")" -o "${archive_path}"
+        curl -fsSL "${base_url}/$(basename "${binding_path}")" -o "${binding_path}"
+        curl -fsSL "${base_url}/$(basename "${checksums_path}")" -o "${checksums_path}"
 
         if [[ "$(wc -l < "${checksums_path}")" -ne 2 ]]; then
           echo "Expected exactly two checksums for ${TARGET} in ${checksums_path}" >&2

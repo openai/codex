@@ -491,6 +491,7 @@ impl Session {
         thread_store: Arc<dyn ThreadStore>,
         parent_rollout_thread_trace: ThreadTraceContext,
         attestation_provider: Option<Arc<dyn AttestationProvider>>,
+        code_mode_session_provider: Arc<dyn codex_code_mode_protocol::CodeModeSessionProvider>,
         multi_agent_version: Option<MultiAgentVersion>,
     ) -> anyhow::Result<Arc<Self>> {
         debug!(
@@ -1033,7 +1034,10 @@ impl Session {
                         session_configuration.parent_thread_id,
                     ),
                 ),
-                code_mode_service: crate::tools::code_mode::CodeModeService::new(),
+                code_mode_service: crate::tools::code_mode::CodeModeService::new(
+                    Arc::clone(&code_mode_session_provider),
+                ),
+                code_mode_session_provider,
                 environment_manager,
             };
             let (out_of_band_elicitation_paused, _out_of_band_elicitation_paused_rx) =

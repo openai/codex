@@ -382,6 +382,7 @@ jobs:
         name: Configure rusty_v8 artifact overrides and verify checksums
         uses: ./.github/actions/setup-rusty-v8
         with:
+          sandbox: "true"
           target: ${{ matrix.target }}
 
       - name: Install cargo-chef

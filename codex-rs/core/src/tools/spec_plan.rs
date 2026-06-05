@@ -240,7 +240,7 @@ fn spec_for_model_request(
         ToolMode::CodeMode | ToolMode::CodeModeOnly
     ) && exposure != ToolExposure::DirectModelOnly
         && !is_excluded_from_code_mode(turn_context, tool_name)
-        && codex_code_mode::is_code_mode_nested_tool(spec.name())
+        && codex_code_mode_protocol::is_code_mode_nested_tool(spec.name())
     {
         codex_tools::augment_tool_spec_for_code_mode(spec)
     } else {
@@ -415,9 +415,9 @@ fn is_hidden_by_code_mode_only(
 ) -> bool {
     turn_context.tool_mode == ToolMode::CodeModeOnly
         && exposure != ToolExposure::DirectModelOnly
-        && codex_code_mode::is_code_mode_nested_tool(&codex_tools::code_mode_name_for_tool_name(
-            tool_name,
-        ))
+        && codex_code_mode_protocol::is_code_mode_nested_tool(
+            &codex_tools::code_mode_name_for_tool_name(tool_name),
+        )
 }
 
 fn is_excluded_from_code_mode(turn_context: &TurnContext, tool_name: &ToolName) -> bool {
@@ -540,7 +540,7 @@ fn merge_into_namespaces(specs: Vec<ToolSpec>) -> Vec<ToolSpec> {
 
 fn code_mode_namespace_descriptions(
     specs: &[ToolSpec],
-) -> BTreeMap<String, codex_code_mode::ToolNamespaceDescription> {
+) -> BTreeMap<String, codex_code_mode_protocol::ToolNamespaceDescription> {
     let mut namespace_descriptions = BTreeMap::new();
     for spec in specs {
         let ToolSpec::Namespace(namespace) = spec else {
@@ -549,7 +549,7 @@ fn code_mode_namespace_descriptions(
 
         let entry = namespace_descriptions
             .entry(namespace.name.clone())
-            .or_insert_with(|| codex_code_mode::ToolNamespaceDescription {
+            .or_insert_with(|| codex_code_mode_protocol::ToolNamespaceDescription {
                 name: namespace.name.clone(),
                 description: namespace.description.clone(),
             });
@@ -891,8 +891,8 @@ fn append_extension_tool_executors(
         turn_context.tool_mode,
         ToolMode::CodeMode | ToolMode::CodeModeOnly
     ) {
-        reserved_tool_names.insert(ToolName::plain(codex_code_mode::PUBLIC_TOOL_NAME));
-        reserved_tool_names.insert(ToolName::plain(codex_code_mode::WAIT_TOOL_NAME));
+        reserved_tool_names.insert(ToolName::plain(codex_code_mode_protocol::PUBLIC_TOOL_NAME));
+        reserved_tool_names.insert(ToolName::plain(codex_code_mode_protocol::WAIT_TOOL_NAME));
     }
     if search_tool_enabled(turn_context)
         && namespace_tools_enabled(turn_context)
@@ -991,9 +991,9 @@ impl CoreToolRuntime for MultiAgentV2NamespaceOverride {
 }
 
 fn compare_code_mode_tools(
-    left: &codex_code_mode::ToolDefinition,
-    right: &codex_code_mode::ToolDefinition,
-    namespace_descriptions: &BTreeMap<String, codex_code_mode::ToolNamespaceDescription>,
+    left: &codex_code_mode_protocol::ToolDefinition,
+    right: &codex_code_mode_protocol::ToolDefinition,
+    namespace_descriptions: &BTreeMap<String, codex_code_mode_protocol::ToolNamespaceDescription>,
 ) -> std::cmp::Ordering {
     let left_namespace = code_mode_namespace_name(left, namespace_descriptions);
     let right_namespace = code_mode_namespace_name(right, namespace_descriptions);
@@ -1005,8 +1005,11 @@ fn compare_code_mode_tools(
 }
 
 fn code_mode_namespace_name<'a>(
-    tool: &codex_code_mode::ToolDefinition,
-    namespace_descriptions: &'a BTreeMap<String, codex_code_mode::ToolNamespaceDescription>,
+    tool: &codex_code_mode_protocol::ToolDefinition,
+    namespace_descriptions: &'a BTreeMap<
+        String,
+        codex_code_mode_protocol::ToolNamespaceDescription,
+    >,
 ) -> Option<&'a str> {
     tool.tool_name
         .namespace
