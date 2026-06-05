@@ -218,9 +218,10 @@ fn install_network_seccomp_filter_on_current_thread(
         NetworkSeccompMode::ProxyRouted => {
             // In proxy-routed mode we allow IP sockets in the isolated
             // namespace (used to reach the local TCP bridge) but deny socket()
-            // for all other families, including AF_UNIX. AF_UNIX socketpair()
-            // remains available for process-local IPC because it cannot
-            // connect to a socket outside the sandbox or bypass the bridge.
+            // for all other families, including AF_UNIX. Only AF_UNIX
+            // socketpair() remains available for process-local IPC because it
+            // cannot connect to a socket outside the sandbox or bypass the
+            // bridge.
             let deny_non_ip_socket = SeccompRule::new(vec![
                 SeccompCondition::new(
                     0,
@@ -235,7 +236,14 @@ fn install_network_seccomp_filter_on_current_thread(
                     libc::AF_INET6 as u64,
                 )?,
             ])?;
+            let deny_non_unix_socketpair = SeccompRule::new(vec![SeccompCondition::new(
+                0,
+                SeccompCmpArgLen::Dword,
+                SeccompCmpOp::Ne,
+                libc::AF_UNIX as u64,
+            )?])?;
             rules.insert(libc::SYS_socket, vec![deny_non_ip_socket]);
+            rules.insert(libc::SYS_socketpair, vec![deny_non_unix_socketpair]);
         }
     }
 
