@@ -670,12 +670,12 @@ fn windows_local_app_data_dir() -> Result<PathBuf> {
     use std::os::windows::ffi::OsStringExt;
     use windows_sys::Win32::System::Com::CoTaskMemFree;
     use windows_sys::Win32::UI::Shell::FOLDERID_LocalAppData;
-    use windows_sys::Win32::UI::Shell::KF_FLAG_DEFAULT;
+    use windows_sys::Win32::UI::Shell::KF_FLAG_DONT_VERIFY;
     use windows_sys::Win32::UI::Shell::SHGetKnownFolderPath;
 
     let mut path_ptr = std::ptr::null_mut::<u16>();
     let known_folder_flags =
-        u32::try_from(KF_FLAG_DEFAULT).context("KF_FLAG_DEFAULT did not fit in u32")?;
+        u32::try_from(KF_FLAG_DONT_VERIFY).context("KF_FLAG_DONT_VERIFY did not fit in u32")?;
     let hr = unsafe {
         SHGetKnownFolderPath(&FOLDERID_LocalAppData, known_folder_flags, 0, &mut path_ptr)
     };
@@ -1541,6 +1541,7 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
 
         let _env = TempCodexHome::new();
+        #[cfg(unix)]
         let first_home = PathBuf::from(std::env::var_os("HOME").expect("HOME should be set"));
         let first_tmpdir = tempdir()?;
         unsafe {

@@ -609,7 +609,12 @@ async fn oauth_external_update_during_refresh_child() -> anyhow::Result<()> {
     )?;
 
     let client = initialized_oauth_client(&server_url).await?;
-    save_test_tokens(&server_url, OLD_ACCESS_TOKEN, OLD_REFRESH_TOKEN, 0)?;
+    save_test_tokens(
+        &server_url,
+        OLD_ACCESS_TOKEN,
+        OLD_REFRESH_TOKEN,
+        /*expires_at*/ 0,
+    )?;
     client
         .call_tool(
             "trigger-refresh-contention".to_string(),
