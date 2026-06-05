@@ -10,6 +10,7 @@ use super::SetTabStatus;
 use super::TabStatus;
 use super::format_command_for_tab_status;
 use super::format_parsed_command_for_tab_status;
+use super::oneline_truncated;
 use super::sanitize_detail;
 
 #[test]
@@ -114,4 +115,10 @@ fn unknown_command_detail_collapses_and_truncates() {
     assert_eq!(summary.chars().count(), "Run ".chars().count() + 81);
     assert!(summary.starts_with("Run echo "));
     assert!(summary.ends_with('…'));
+}
+
+#[test]
+fn oneline_detail_stops_scanning_long_trailing_whitespace() {
+    let detail = format!("message{}unreachable", " ".repeat(/*n*/ 10_000));
+    assert_eq!(oneline_truncated(&detail), "message…");
 }

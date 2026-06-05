@@ -1,9 +1,6 @@
 //! OSC 21337 tab-status output helpers for the TUI.
 //!
-//! Callers decide when the tab status changes; this module formats activity
-//! detail and owns the low-level terminal write path. OSC 21337 values escape
-//! `;` and `\`, and every field is emitted on every transition so iTerm clears
-//! stale values.
+//! Formats bounded activity detail and owns the low-level terminal write path.
 
 use std::fmt;
 use std::io;
@@ -19,6 +16,7 @@ use ratatui::crossterm::execute;
 static EMITTED: AtomicBool = AtomicBool::new(/*v*/ false);
 const MAX_TAB_STATUS_DETAIL_CHARS: usize = 200;
 const MAX_UNKNOWN_COMMAND_CHARS: usize = 80;
+const MAX_UNKNOWN_COMMAND_INPUT_CHARS: usize = MAX_UNKNOWN_COMMAND_CHARS * 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TabStatus {
@@ -98,18 +96,36 @@ pub(crate) fn format_parsed_command_for_tab_status(parsed: &[ParsedCommand]) -> 
     }
 }
 
-fn oneline_truncated(value: &str) -> String {
-    let collapsed = value.split_whitespace().collect::<Vec<_>>().join(" ");
-    if collapsed.chars().count() <= MAX_UNKNOWN_COMMAND_CHARS {
-        return collapsed;
+pub(crate) fn oneline_truncated(value: &str) -> String {
+    let mut out = String::with_capacity(MAX_UNKNOWN_COMMAND_CHARS + 1);
+    let mut pending_space = false;
+    let mut chars_written = 0;
+    for (chars_scanned, ch) in value.chars().enumerate() {
+        if chars_scanned == MAX_UNKNOWN_COMMAND_INPUT_CHARS {
+            out.push('…');
+            break;
+        }
+        if chars_written == MAX_UNKNOWN_COMMAND_CHARS {
+            out.push('…');
+            break;
+        }
+        if ch.is_whitespace() {
+            pending_space = !out.is_empty();
+        } else {
+            if pending_space {
+                out.push(' ');
+                chars_written += 1;
+                pending_space = false;
+            }
+            if chars_written == MAX_UNKNOWN_COMMAND_CHARS {
+                out.push('…');
+                break;
+            }
+            out.push(ch);
+            chars_written += 1;
+        }
     }
-    format!(
-        "{}…",
-        collapsed
-            .chars()
-            .take(MAX_UNKNOWN_COMMAND_CHARS)
-            .collect::<String>()
-    )
+    out
 }
 
 pub(crate) fn set_tab_status(status: TabStatus, detail: Option<&str>) -> io::Result<()> {
