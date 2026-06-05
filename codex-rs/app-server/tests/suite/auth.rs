@@ -5,11 +5,11 @@ use app_test_support::to_response;
 use app_test_support::write_chatgpt_auth;
 use chrono::Duration;
 use chrono::Utc;
+use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::GetAuthStatusParams;
 use codex_app_server_protocol::GetAuthStatusResponse;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
-use codex_app_server_protocol::LegacyAuthMode as AuthMode;
 use codex_app_server_protocol::LoginAccountResponse;
 use codex_app_server_protocol::RequestId;
 use codex_config::types::AuthCredentialsStoreMode;
@@ -209,7 +209,7 @@ async fn get_auth_status_with_personal_access_token_omits_token() -> Result<()> 
     assert_eq!(
         status,
         GetAuthStatusResponse {
-            auth_method: Some(AuthMode::Chatgpt),
+            auth_method: Some(AuthMode::PersonalAccessToken),
             auth_token: None,
             requires_openai_auth: Some(true),
         }

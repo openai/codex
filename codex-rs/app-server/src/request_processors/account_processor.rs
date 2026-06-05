@@ -775,14 +775,15 @@ impl AccountRequestProcessor {
                 Some(auth) => {
                     let permanent_refresh_failure =
                         self.auth_manager.refresh_failure_for_auth(&auth).is_some();
-                    let auth_mode = LegacyAuthMode::from(auth.api_auth_mode());
+                    let auth_mode = auth.api_auth_mode();
                     let (reported_auth_method, token_opt) = if matches!(
                         auth,
                         CodexAuth::AgentIdentity(_) | CodexAuth::PersonalAccessToken(_)
                     ) || include_token
                         && permanent_refresh_failure
                     {
-                        // V1 cannot represent the metadata needed to reuse these credentials.
+                        // This response cannot represent the metadata needed to reuse these
+                        // credentials.
                         (Some(auth_mode), None)
                     } else {
                         match auth.get_token() {
