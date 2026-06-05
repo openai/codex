@@ -14,6 +14,7 @@ use tokio_util::task::TaskTracker;
 use crate::ExecServerRuntimePaths;
 use crate::client::http_client::PendingReqwestHttpBodyStream;
 use crate::client::http_client::ReqwestHttpRequestRunner;
+use crate::protocol::EnvironmentInfo;
 use crate::protocol::ExecParams;
 use crate::protocol::ExecResponse;
 use crate::protocol::FsCanonicalizeParams;
@@ -145,6 +146,11 @@ impl ExecServerHandler {
     pub(crate) async fn exec(&self, params: ExecParams) -> Result<ExecResponse, JSONRPCErrorError> {
         let session = self.require_initialized_for("exec")?;
         session.process().exec(params).await
+    }
+
+    pub(crate) fn environment_info(&self) -> Result<EnvironmentInfo, JSONRPCErrorError> {
+        self.require_initialized_for("environment info")?;
+        Ok(EnvironmentInfo::local())
     }
 
     pub(crate) async fn exec_read(
