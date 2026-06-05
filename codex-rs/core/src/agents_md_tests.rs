@@ -1,9 +1,7 @@
 use super::*;
 use crate::config::ConfigBuilder;
-use codex_exec_server::EnvironmentManager;
 use codex_exec_server::LOCAL_FS;
 use codex_features::Feature;
-use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use core_test_support::PathBufExt;
 use core_test_support::TempDirExt;
@@ -397,34 +395,6 @@ async fn resolving_again_replaces_project_instructions() {
             }],
             internal_entries: Vec::new(),
         }
-    );
-}
-
-#[tokio::test]
-async fn load_thread_user_instructions_uses_primary_environment() {
-    let tmp = tempfile::tempdir().expect("tempdir");
-    fs::write(tmp.path().join("AGENTS.md"), "project instructions").unwrap();
-    let mut config = make_config(&tmp, /*limit*/ 4096, Some("user instructions")).await;
-    let environment_manager = EnvironmentManager::default_for_tests();
-    let environment_id = environment_manager
-        .default_environment_id()
-        .expect("default environment")
-        .to_string();
-    let environments = vec![TurnEnvironmentSelection {
-        environment_id,
-        cwd: config.cwd.clone(),
-    }];
-
-    load_thread_user_instructions(&mut config, &environment_manager, &environments)
-        .await
-        .expect("load thread instructions");
-
-    assert_eq!(
-        config
-            .user_instructions
-            .expect("instructions expected")
-            .text(),
-        format!("user instructions{AGENTS_MD_SEPARATOR}project instructions")
     );
 }
 

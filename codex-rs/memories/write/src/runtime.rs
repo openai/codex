@@ -1,3 +1,4 @@
+use codex_core::AgentsMdManager;
 use codex_core::CodexThread;
 use codex_core::ModelClient;
 use codex_core::NewThread;
@@ -7,7 +8,6 @@ use codex_core::StartThreadOptions;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
 use codex_core::content_items_to_text;
-use codex_core::load_thread_user_instructions;
 use codex_core::resolve_installation_id;
 use codex_features::Feature;
 use codex_login::AuthManager;
@@ -237,12 +237,20 @@ impl MemoryStartupContext {
         let environments = self
             .thread_manager
             .default_environment_selections(&config.cwd);
-        load_thread_user_instructions(
-            &mut config,
-            self.thread_manager.environment_manager().as_ref(),
-            &environments,
-        )
-        .await?;
+        let mut warnings = Vec::new();
+        config.user_instructions = match environments.first().and_then(|selection| {
+            self.thread_manager
+                .environment_manager()
+                .get_environment(&selection.environment_id)
+        }) {
+            Some(environment) => {
+                AgentsMdManager::new(&config)
+                    .load_user_instructions(environment.as_ref(), &mut warnings)
+                    .await
+            }
+            None => None,
+        };
+        config.startup_warnings.extend(warnings);
         let NewThread {
             thread_id, thread, ..
         } = self

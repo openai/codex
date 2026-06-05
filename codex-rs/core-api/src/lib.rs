@@ -42,7 +42,6 @@ pub use codex_core::config::TerminalResizeReflowConfig;
 pub use codex_core::config::ThreadStoreConfig;
 pub use codex_core::config::find_codex_home;
 pub use codex_core::init_state_db;
-pub use codex_core::load_thread_user_instructions;
 pub use codex_core::resolve_installation_id;
 pub use codex_core::skills::SkillsManager;
 pub use codex_core::thread_store_from_config;
@@ -78,4 +77,36 @@ pub use codex_protocol::protocol::SessionSource;
 pub use codex_protocol::protocol::TurnEnvironmentSelection;
 pub use codex_protocol::protocol::W3cTraceContext;
 pub use codex_protocol::user_input::UserInput;
+
+/// Preloads AGENTS.md instructions for thread construction from the primary
+/// selected environment.
+///
+/// Call this after the selected environments have been materialized and before
+/// passing `config` to a thread start, resume, or fork operation. When no
+/// environment is selected, this clears [`Config::user_instructions`].
+pub async fn load_thread_user_instructions(
+    config: &mut Config,
+    environment_manager: &EnvironmentManager,
+    environments: &[TurnEnvironmentSelection],
+) -> CodexResult<()> {
+    let Some(primary_selection) = environments.first() else {
+        config.user_instructions = None;
+        return Ok(());
+    };
+    let environment = environment_manager
+        .get_environment(&primary_selection.environment_id)
+        .ok_or_else(|| {
+            codex_protocol::error::CodexErr::InvalidRequest(format!(
+                "unknown turn environment id `{}`",
+                primary_selection.environment_id
+            ))
+        })?;
+    let mut warnings = Vec::new();
+    let user_instructions = codex_core::AgentsMdManager::new(config)
+        .load_user_instructions(environment.as_ref(), &mut warnings)
+        .await;
+    config.startup_warnings.extend(warnings);
+    config.user_instructions = user_instructions;
+    Ok(())
+}
 pub use codex_utils_absolute_path::AbsolutePathBuf;

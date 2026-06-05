@@ -22,13 +22,9 @@ use codex_config::default_project_root_markers;
 use codex_config::merge_toml_values;
 use codex_config::project_root_markers_from_config;
 use codex_exec_server::Environment;
-use codex_exec_server::EnvironmentManager;
 use codex_exec_server::ExecutorFileSystem;
 use codex_features::Feature;
 use codex_prompts::HIERARCHICAL_AGENTS_MESSAGE;
-use codex_protocol::error::CodexErr;
-use codex_protocol::error::Result as CodexResult;
-use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::io;
 use toml::Value as TomlValue;
@@ -42,38 +38,6 @@ pub const LOCAL_AGENTS_MD_FILENAME: &str = "AGENTS.override.md";
 /// When both user and project AGENTS.md docs are present, they will be
 /// concatenated with the following separator.
 const AGENTS_MD_SEPARATOR: &str = "\n\n--- project-doc ---\n\n";
-
-/// Preloads AGENTS.md instructions for thread construction from the primary
-/// selected environment.
-///
-/// Call this after the selected environments have been materialized and before
-/// passing `config` to a thread start, resume, or fork operation. When no
-/// environment is selected, this clears [`Config::user_instructions`].
-pub async fn load_thread_user_instructions(
-    config: &mut Config,
-    environment_manager: &EnvironmentManager,
-    environments: &[TurnEnvironmentSelection],
-) -> CodexResult<()> {
-    let Some(primary_selection) = environments.first() else {
-        config.user_instructions = None;
-        return Ok(());
-    };
-    let environment = environment_manager
-        .get_environment(&primary_selection.environment_id)
-        .ok_or_else(|| {
-            CodexErr::InvalidRequest(format!(
-                "unknown turn environment id `{}`",
-                primary_selection.environment_id
-            ))
-        })?;
-    let mut warnings = Vec::new();
-    let user_instructions = AgentsMdManager::new(config)
-        .load_user_instructions(environment.as_ref(), &mut warnings)
-        .await;
-    config.startup_warnings.extend(warnings);
-    config.user_instructions = user_instructions;
-    Ok(())
-}
 
 /// Resolves AGENTS.md files into model-visible user instructions and source
 /// paths.
