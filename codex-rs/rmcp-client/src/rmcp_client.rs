@@ -439,7 +439,7 @@ impl RmcpClient {
         params: Option<PaginatedRequestParams>,
         timeout: Option<Duration>,
     ) -> Result<ListToolsResult> {
-        self.refresh_oauth_if_needed().await;
+        self.refresh_oauth_if_needed().await?;
         let result = self
             .run_service_operation("tools/list", timeout, move |service| {
                 let params = params.clone();
@@ -455,7 +455,7 @@ impl RmcpClient {
         params: Option<PaginatedRequestParams>,
         timeout: Option<Duration>,
     ) -> Result<ListToolsWithConnectorIdResult> {
-        self.refresh_oauth_if_needed().await;
+        self.refresh_oauth_if_needed().await?;
         let result = self
             .run_service_operation("tools/list", timeout, move |service| {
                 let params = params.clone();
@@ -500,7 +500,7 @@ impl RmcpClient {
         params: Option<PaginatedRequestParams>,
         timeout: Option<Duration>,
     ) -> Result<ListResourcesResult> {
-        self.refresh_oauth_if_needed().await;
+        self.refresh_oauth_if_needed().await?;
         let result = self
             .run_service_operation("resources/list", timeout, move |service| {
                 let params = params.clone();
@@ -516,7 +516,7 @@ impl RmcpClient {
         params: Option<PaginatedRequestParams>,
         timeout: Option<Duration>,
     ) -> Result<ListResourceTemplatesResult> {
-        self.refresh_oauth_if_needed().await;
+        self.refresh_oauth_if_needed().await?;
         let result = self
             .run_service_operation("resources/templates/list", timeout, move |service| {
                 let params = params.clone();
@@ -532,7 +532,7 @@ impl RmcpClient {
         params: ReadResourceRequestParams,
         timeout: Option<Duration>,
     ) -> Result<ReadResourceResult> {
-        self.refresh_oauth_if_needed().await;
+        self.refresh_oauth_if_needed().await?;
         let result = self
             .run_service_operation("resources/read", timeout, move |service| {
                 let params = params.clone();
@@ -550,7 +550,7 @@ impl RmcpClient {
         meta: Option<serde_json::Value>,
         timeout: Option<Duration>,
     ) -> Result<CallToolResult> {
-        self.refresh_oauth_if_needed().await;
+        self.refresh_oauth_if_needed().await?;
         let arguments = match arguments {
             Some(Value::Object(map)) => Some(map),
             Some(other) => {
@@ -606,7 +606,7 @@ impl RmcpClient {
         method: &str,
         params: Option<serde_json::Value>,
     ) -> Result<()> {
-        self.refresh_oauth_if_needed().await;
+        self.refresh_oauth_if_needed().await?;
         self.run_service_operation(
             "notifications/custom",
             /*timeout*/ None,
@@ -636,7 +636,7 @@ impl RmcpClient {
         method: &str,
         params: Option<serde_json::Value>,
     ) -> Result<ServerResult> {
-        self.refresh_oauth_if_needed().await;
+        self.refresh_oauth_if_needed().await?;
         let response = self
             .run_service_operation("requests/custom", /*timeout*/ None, move |service| {
                 let params = params.clone();
@@ -700,12 +700,11 @@ impl RmcpClient {
         }
     }
 
-    async fn refresh_oauth_if_needed(&self) {
-        if let Some(runtime) = self.oauth_persistor().await
-            && let Err(error) = runtime.refresh_if_needed().await
-        {
-            warn!("failed to refresh OAuth tokens: {error}");
+    async fn refresh_oauth_if_needed(&self) -> Result<()> {
+        if let Some(runtime) = self.oauth_persistor().await {
+            runtime.refresh_if_needed().await?;
         }
+        Ok(())
     }
 
     async fn create_pending_transport(
@@ -1060,6 +1059,10 @@ async fn create_oauth_transport_and_runtime(
 
     Ok((transport, runtime))
 }
+
+#[cfg(test)]
+#[path = "rmcp_client_oauth_tests.rs"]
+mod oauth_tests;
 
 #[cfg(test)]
 mod tests {

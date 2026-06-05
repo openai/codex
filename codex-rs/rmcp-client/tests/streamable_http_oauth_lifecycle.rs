@@ -2,8 +2,6 @@ mod streamable_http_test_support;
 
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::sync::atomic::AtomicUsize;
-use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use codex_config::types::OAuthCredentialsStoreMode;
@@ -35,36 +33,10 @@ use streamable_http_test_support::initialize_client;
 const SERVER_NAME: &str = "test-streamable-http-oauth-lifecycle";
 const INITIAL_ACCESS_TOKEN: &str = "initial-expired-access-token";
 const INITIAL_REFRESH_TOKEN: &str = "initial-refresh-token";
-const SHORT_LIVED_ACCESS_TOKEN: &str = "short-lived-access-token";
-const SHORT_LIVED_REFRESH_TOKEN: &str = "short-lived-refresh-token";
 const LONG_LIVED_ACCESS_TOKEN: &str = "long-lived-access-token";
 const LONG_LIVED_REFRESH_TOKEN: &str = "long-lived-refresh-token";
 const CHILD_SERVER_URL_ENV: &str = "MCP_TEST_OAUTH_LIFECYCLE_SERVER_URL";
 const CHILD_CHECKPOINT_URL_ENV: &str = "MCP_TEST_OAUTH_LIFECYCLE_CHECKPOINT_URL";
-const CHILD_SCENARIO_ENV: &str = "MCP_TEST_OAUTH_LIFECYCLE_SCENARIO";
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Scenario {
-    RefreshSucceeds,
-    RefreshTokenExpired,
-}
-
-impl Scenario {
-    fn as_env(self) -> &'static str {
-        match self {
-            Self::RefreshSucceeds => "refresh-succeeds",
-            Self::RefreshTokenExpired => "refresh-token-expired",
-        }
-    }
-
-    fn from_env(value: &str) -> anyhow::Result<Self> {
-        match value {
-            "refresh-succeeds" => Ok(Self::RefreshSucceeds),
-            "refresh-token-expired" => Ok(Self::RefreshTokenExpired),
-            _ => anyhow::bail!("unknown OAuth lifecycle scenario: {value}"),
-        }
-    }
-}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum TimelineEvent {
@@ -104,46 +76,27 @@ impl Timeline {
     }
 }
 
+#[derive(Clone)]
 struct TokenResponder {
-    scenario: Scenario,
     timeline: Timeline,
-    calls: AtomicUsize,
 }
 
 impl Respond for TokenResponder {
     fn respond(&self, request: &Request) -> ResponseTemplate {
         let body = String::from_utf8_lossy(&request.body);
-        let refresh_token = if body.contains(INITIAL_REFRESH_TOKEN) {
-            INITIAL_REFRESH_TOKEN
-        } else if body.contains(SHORT_LIVED_REFRESH_TOKEN) {
-            SHORT_LIVED_REFRESH_TOKEN
-        } else {
-            panic!("unexpected refresh request body: {body}");
-        };
+        assert!(
+            body.contains(INITIAL_REFRESH_TOKEN),
+            "unexpected refresh request body: {body}"
+        );
         self.timeline
-            .push(TimelineEvent::Refresh(refresh_token.to_string()));
+            .push(TimelineEvent::Refresh(INITIAL_REFRESH_TOKEN.to_string()));
 
-        match self.calls.fetch_add(1, Ordering::SeqCst) {
-            0 => ResponseTemplate::new(200).set_body_json(json!({
-                "access_token": SHORT_LIVED_ACCESS_TOKEN,
-                "token_type": "Bearer",
-                "expires_in": 32,
-                "refresh_token": SHORT_LIVED_REFRESH_TOKEN,
-            })),
-            1 if self.scenario == Scenario::RefreshSucceeds => ResponseTemplate::new(200)
-                .set_body_json(json!({
-                    "access_token": LONG_LIVED_ACCESS_TOKEN,
-                    "token_type": "Bearer",
-                    "expires_in": 7200,
-                    "refresh_token": LONG_LIVED_REFRESH_TOKEN,
-                })),
-            1 | 2 if self.scenario == Scenario::RefreshTokenExpired => ResponseTemplate::new(400)
-                .set_body_json(json!({
-                    "error": "invalid_grant",
-                    "error_description": "refresh token expired",
-                })),
-            call => panic!("unexpected OAuth token request #{call}"),
-        }
+        ResponseTemplate::new(200).set_body_json(json!({
+            "access_token": LONG_LIVED_ACCESS_TOKEN,
+            "token_type": "Bearer",
+            "expires_in": 7200,
+            "refresh_token": LONG_LIVED_REFRESH_TOKEN,
+        }))
     }
 }
 
@@ -206,60 +159,7 @@ impl Respond for McpResponder {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
-async fn refreshes_only_when_the_next_operation_starts_after_idle() -> anyhow::Result<()> {
-    let timeline = run_scenario(Scenario::RefreshSucceeds).await?;
-
-    assert_eq!(
-        timeline,
-        vec![
-            TimelineEvent::Refresh(INITIAL_REFRESH_TOKEN.to_string()),
-            TimelineEvent::Mcp {
-                method: "initialize".to_string(),
-                authorization: format!("Bearer {SHORT_LIVED_ACCESS_TOKEN}"),
-            },
-            TimelineEvent::Mcp {
-                method: "notifications/initialized".to_string(),
-                authorization: format!("Bearer {SHORT_LIVED_ACCESS_TOKEN}"),
-            },
-            TimelineEvent::IdleStarted,
-            TimelineEvent::IdleFinished,
-            TimelineEvent::Refresh(SHORT_LIVED_REFRESH_TOKEN.to_string()),
-            TimelineEvent::Mcp {
-                method: "tools/list".to_string(),
-                authorization: format!("Bearer {LONG_LIVED_ACCESS_TOKEN}"),
-            },
-        ]
-    );
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
-async fn expired_refresh_token_before_next_operation_requires_reauthorization() -> anyhow::Result<()>
-{
-    let timeline = run_scenario(Scenario::RefreshTokenExpired).await?;
-
-    assert_eq!(
-        timeline,
-        vec![
-            TimelineEvent::Refresh(INITIAL_REFRESH_TOKEN.to_string()),
-            TimelineEvent::Mcp {
-                method: "initialize".to_string(),
-                authorization: format!("Bearer {SHORT_LIVED_ACCESS_TOKEN}"),
-            },
-            TimelineEvent::Mcp {
-                method: "notifications/initialized".to_string(),
-                authorization: format!("Bearer {SHORT_LIVED_ACCESS_TOKEN}"),
-            },
-            TimelineEvent::IdleStarted,
-            TimelineEvent::IdleFinished,
-            TimelineEvent::Refresh(SHORT_LIVED_REFRESH_TOKEN.to_string()),
-            TimelineEvent::Refresh(SHORT_LIVED_REFRESH_TOKEN.to_string()),
-        ]
-    );
-    Ok(())
-}
-
-async fn run_scenario(scenario: Scenario) -> anyhow::Result<Vec<TimelineEvent>> {
+async fn does_not_refresh_in_background_while_idle() -> anyhow::Result<()> {
     let server = MockServer::start().await;
     let timeline = Timeline::new();
 
@@ -270,15 +170,15 @@ async fn run_scenario(scenario: Scenario) -> anyhow::Result<Vec<TimelineEvent>> 
             "token_endpoint": format!("{}/oauth/token", server.uri()),
             "scopes_supported": [""],
         })))
+        .expect(1)
         .mount(&server)
         .await;
     Mock::given(method("POST"))
         .and(path("/oauth/token"))
         .respond_with(TokenResponder {
-            scenario,
             timeline: timeline.clone(),
-            calls: AtomicUsize::new(0),
         })
+        .expect(1)
         .mount(&server)
         .await;
     Mock::given(method("POST"))
@@ -286,20 +186,22 @@ async fn run_scenario(scenario: Scenario) -> anyhow::Result<Vec<TimelineEvent>> 
         .respond_with(McpResponder {
             timeline: timeline.clone(),
         })
+        .expect(3)
         .mount(&server)
         .await;
 
-    for (path, event) in [
+    for (checkpoint_path, event) in [
         ("/checkpoint/idle-started", TimelineEvent::IdleStarted),
         ("/checkpoint/idle-finished", TimelineEvent::IdleFinished),
     ] {
         let timeline = timeline.clone();
         Mock::given(method("POST"))
-            .and(wiremock::matchers::path(path))
+            .and(path(checkpoint_path))
             .respond_with(move |_: &Request| {
                 timeline.push(event.clone());
                 ResponseTemplate::new(204)
             })
+            .expect(1)
             .mount(&server)
             .await;
     }
@@ -315,20 +217,39 @@ async fn run_scenario(scenario: Scenario) -> anyhow::Result<Vec<TimelineEvent>> 
         .env("CODEX_HOME", codex_home.path())
         .env(CHILD_SERVER_URL_ENV, format!("{}/mcp", server.uri()))
         .env(CHILD_CHECKPOINT_URL_ENV, server.uri())
-        .env(CHILD_SCENARIO_ENV, scenario.as_env())
         .status()
         .await?;
     assert!(status.success(), "OAuth lifecycle child failed: {status}");
 
-    Ok(timeline.snapshot())
+    assert_eq!(
+        timeline.snapshot(),
+        vec![
+            TimelineEvent::Refresh(INITIAL_REFRESH_TOKEN.to_string()),
+            TimelineEvent::Mcp {
+                method: "initialize".to_string(),
+                authorization: format!("Bearer {LONG_LIVED_ACCESS_TOKEN}"),
+            },
+            TimelineEvent::Mcp {
+                method: "notifications/initialized".to_string(),
+                authorization: format!("Bearer {LONG_LIVED_ACCESS_TOKEN}"),
+            },
+            TimelineEvent::IdleStarted,
+            TimelineEvent::IdleFinished,
+            TimelineEvent::Mcp {
+                method: "tools/list".to_string(),
+                authorization: format!("Bearer {LONG_LIVED_ACCESS_TOKEN}"),
+            },
+        ]
+    );
+    server.verify().await;
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
-#[ignore = "spawned by OAuth lifecycle parent tests"]
+#[ignore = "spawned by OAuth lifecycle parent test"]
 async fn oauth_lifecycle_child() -> anyhow::Result<()> {
     let server_url = std::env::var(CHILD_SERVER_URL_ENV)?;
     let checkpoint_url = std::env::var(CHILD_CHECKPOINT_URL_ENV)?;
-    let scenario = Scenario::from_env(&std::env::var(CHILD_SCENARIO_ENV)?)?;
 
     let mut response = OAuthTokenResponse::new(
         AccessToken::new(INITIAL_ACCESS_TOKEN.to_string()),
@@ -363,25 +284,16 @@ async fn oauth_lifecycle_child() -> anyhow::Result<()> {
     initialize_client(&client).await?;
 
     post_checkpoint(&checkpoint_url, "idle-started").await?;
-    tokio::time::sleep(Duration::from_secs(3)).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
     post_checkpoint(&checkpoint_url, "idle-finished").await?;
 
-    let result = client
-        .list_tools(/*params*/ None, Some(Duration::from_secs(5)))
-        .await;
-    match scenario {
-        Scenario::RefreshSucceeds => {
-            assert_eq!(result?.tools, Vec::new());
-        }
-        Scenario::RefreshTokenExpired => {
-            let error = result.expect_err("expired refresh token should fail the operation");
-            assert!(
-                error.to_string().contains("authorization required"),
-                "unexpected expired refresh token error: {error:#}"
-            );
-        }
-    }
-
+    assert_eq!(
+        client
+            .list_tools(/*params*/ None, Some(Duration::from_secs(5)))
+            .await?
+            .tools,
+        Vec::new()
+    );
     Ok(())
 }
 
