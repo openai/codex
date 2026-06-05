@@ -32,6 +32,14 @@ fn resolve_runtime_workspace_roots(
     resolved_roots
 }
 
+fn resolve_request_cwd(cwd: Option<PathBuf>) -> Result<Option<AbsolutePathBuf>, JSONRPCErrorError> {
+    cwd.map(|cwd| {
+        AbsolutePathBuf::relative_to_current_dir(path_utils::normalize_for_native_workdir(cwd))
+            .map_err(|err| invalid_request(format!("invalid cwd: {err}")))
+    })
+    .transpose()
+}
+
 fn map_additional_context(
     additional_context: Option<HashMap<String, AdditionalContextEntry>>,
 ) -> BTreeMap<String, CoreAdditionalContextEntry> {
@@ -57,7 +65,7 @@ fn map_additional_context(
 
 struct ThreadSettingsBuildParams {
     method: &'static str,
-    cwd: Option<PathBuf>,
+    cwd: Option<AbsolutePathBuf>,
     runtime_workspace_roots: Option<Vec<PathBuf>>,
     approval_policy: Option<codex_app_server_protocol::AskForApproval>,
     approvals_reviewer: Option<codex_app_server_protocol::ApprovalsReviewer>,
@@ -419,12 +427,13 @@ impl TurnRequestProcessor {
         let client_user_message_id = params.client_user_message_id;
         let additional_context = map_additional_context(params.additional_context);
         let turn_has_input = !mapped_items.is_empty();
+        let cwd = resolve_request_cwd(params.cwd)?;
         let thread_settings = self
             .build_thread_settings_overrides(
                 thread.as_ref(),
                 ThreadSettingsBuildParams {
                     method: "turn/start",
-                    cwd: params.cwd,
+                    cwd,
                     runtime_workspace_roots: params.runtime_workspace_roots,
                     approval_policy: params.approval_policy,
                     approvals_reviewer: params.approvals_reviewer,
@@ -572,7 +581,7 @@ impl TurnRequestProcessor {
                     )));
                 };
                 let overrides = ConfigOverrides {
-                    cwd: cwd.clone(),
+                    cwd: cwd.as_ref().map(AbsolutePathBuf::to_path_buf),
                     workspace_roots: Some(runtime_workspace_roots_request.clone().unwrap_or_else(
                         || {
                             snapshot
@@ -666,12 +675,13 @@ impl TurnRequestProcessor {
         params: ThreadSettingsUpdateParams,
     ) -> Result<ThreadSettingsUpdateResponse, JSONRPCErrorError> {
         let (_, thread) = self.load_thread(&params.thread_id).await?;
+        let cwd = resolve_request_cwd(params.cwd)?;
         let thread_settings = self
             .build_thread_settings_overrides(
                 thread.as_ref(),
                 ThreadSettingsBuildParams {
                     method: "thread/settings/update",
-                    cwd: params.cwd,
+                    cwd,
                     runtime_workspace_roots: None,
                     approval_policy: params.approval_policy,
                     approvals_reviewer: params.approvals_reviewer,
