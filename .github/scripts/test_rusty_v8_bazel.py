@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import gzip
+import hashlib
+import subprocess
+import sys
 import textwrap
 import unittest
 from os import environ
@@ -14,6 +18,30 @@ import rusty_v8_module_bazel
 
 
 class RustyV8BazelTest(unittest.TestCase):
+    def test_direct_execution_supports_python_safe_path(self) -> None:
+        env = dict(environ)
+        env["PYTHONSAFEPATH"] = "1"
+        env.pop("PYTHONPATH", None)
+
+        with TemporaryDirectory() as cwd:
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(Path(rusty_v8_bazel.__file__).resolve()),
+                    "resolved-v8-crate-version",
+                ],
+                cwd=cwd,
+                env=env,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+
+        self.assertEqual(
+            f"{rusty_v8_bazel.resolved_v8_crate_version()}\n",
+            result.stdout,
+        )
+
     def test_consumer_selectors_track_resolved_crate_version(self) -> None:
         build_bazel = (
             rusty_v8_bazel.ROOT / "third_party" / "v8" / "BUILD.bazel"
@@ -168,7 +196,11 @@ class RustyV8BazelTest(unittest.TestCase):
         )
 
     def test_stage_artifacts(self) -> None:
-        with TemporaryDirectory() as source_dir, TemporaryDirectory() as output_dir:
+        with (
+            TemporaryDirectory() as source_dir,
+            TemporaryDirectory() as output_dir,
+            TemporaryDirectory() as second_output_dir,
+        ):
             source_root = Path(source_dir)
             archive = source_root / "librusty_v8.a"
             binding = source_root / "src_binding.rs"
@@ -182,7 +214,24 @@ class RustyV8BazelTest(unittest.TestCase):
                 Path(output_dir),
                 sandbox=True,
             )
+            rusty_v8_bazel.stage_artifacts(
+                "aarch64-apple-darwin",
+                archive,
+                binding,
+                Path(second_output_dir),
+                sandbox=True,
+            )
 
+            staged_archive = (
+                Path(output_dir)
+                / "librusty_v8_ptrcomp_sandbox_release_aarch64-apple-darwin.a.gz"
+            )
+            second_staged_archive = Path(second_output_dir) / staged_archive.name
+            self.assertEqual(b"archive", gzip.decompress(staged_archive.read_bytes()))
+            self.assertEqual(
+                staged_archive.read_bytes(),
+                second_staged_archive.read_bytes(),
+            )
             self.assertEqual(
                 {
                     "librusty_v8_ptrcomp_sandbox_release_aarch64-apple-darwin.a.gz",
@@ -190,6 +239,55 @@ class RustyV8BazelTest(unittest.TestCase):
                     "rusty_v8_ptrcomp_sandbox_release_aarch64-apple-darwin.sha256",
                 },
                 {path.name for path in Path(output_dir).iterdir()},
+            )
+
+    def test_stage_release_pair_preserves_precompressed_msvc_library(self) -> None:
+        with TemporaryDirectory() as source_dir, TemporaryDirectory() as output_dir:
+            source_root = Path(source_dir)
+            archive = source_root / "rusty_v8.lib.gz"
+            binding = source_root / "src_binding.rs"
+            with archive.open("wb") as raw_archive:
+                with gzip.GzipFile(
+                    filename="upstream.lib",
+                    mode="wb",
+                    fileobj=raw_archive,
+                    mtime=123,
+                ) as compressed_archive:
+                    compressed_archive.write(b"archive")
+            binding.write_text("binding")
+
+            with patch.object(
+                rusty_v8_bazel,
+                "ensure_bazel_output_files",
+                return_value=[archive, binding],
+            ):
+                rusty_v8_bazel.stage_release_pair(
+                    "windows_x86_64",
+                    "x86_64-pc-windows-msvc",
+                    Path(output_dir),
+                )
+
+            staged_archive = (
+                Path(output_dir)
+                / "rusty_v8_release_x86_64-pc-windows-msvc.lib.gz"
+            )
+            staged_binding = (
+                Path(output_dir)
+                / "src_binding_release_x86_64-pc-windows-msvc.rs"
+            )
+            checksums = (
+                Path(output_dir)
+                / "rusty_v8_release_x86_64-pc-windows-msvc.sha256"
+            )
+            self.assertEqual(archive.read_bytes(), staged_archive.read_bytes())
+            self.assertEqual(
+                (
+                    f"{hashlib.sha256(staged_archive.read_bytes()).hexdigest()}  "
+                    f"{staged_archive.name}\n"
+                    f"{hashlib.sha256(staged_binding.read_bytes()).hexdigest()}  "
+                    f"{staged_binding.name}\n"
+                ),
+                checksums.read_text(),
             )
 
     def test_upstream_release_pair_paths(self) -> None:

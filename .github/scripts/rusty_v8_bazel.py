@@ -12,6 +12,10 @@ import sys
 import tomllib
 from pathlib import Path
 
+SCRIPTS_DIR = Path(__file__).resolve().parent
+if str(SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_DIR))
+
 from run_bazel_with_buildbuddy import bazel_command
 from rusty_v8_module_bazel import (
     RustyV8ChecksumError,
@@ -232,15 +236,18 @@ def stage_artifacts(
     )
     staged_binding = output_dir / staged_binding_name(target, artifact_profile)
 
-    with lib_path.open("rb") as src, staged_library.open("wb") as dst:
-        with gzip.GzipFile(
-            filename="",
-            mode="wb",
-            fileobj=dst,
-            compresslevel=6,
-            mtime=0,
-        ) as gz:
-            shutil.copyfileobj(src, gz)
+    if lib_path.suffix == ".gz":
+        shutil.copyfile(lib_path, staged_library)
+    else:
+        with lib_path.open("rb") as src, staged_library.open("wb") as dst:
+            with gzip.GzipFile(
+                filename="",
+                mode="wb",
+                fileobj=dst,
+                compresslevel=6,
+                mtime=0,
+            ) as gz:
+                shutil.copyfileobj(src, gz)
 
     shutil.copyfile(binding_path, staged_binding)
 
@@ -293,7 +300,11 @@ def stage_release_pair(
     )
 
     try:
-        lib_path = next(path for path in outputs if path.suffix in {".a", ".lib"})
+        lib_path = next(
+            path
+            for path in outputs
+            if path.name.endswith((".a", ".lib", ".a.gz", ".lib.gz"))
+        )
     except StopIteration as exc:
         raise SystemExit(f"missing static library output for {target}") from exc
 
