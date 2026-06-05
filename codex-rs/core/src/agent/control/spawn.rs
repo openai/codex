@@ -15,7 +15,7 @@ fn default_agent_nickname_list() -> Vec<&'static str> {
         .collect()
 }
 
-fn agent_nickname_candidates(config: &Config, role_name: Option<&str>) -> Vec<String> {
+pub(super) fn agent_nickname_candidates(config: &Config, role_name: Option<&str>) -> Vec<String> {
     let role_name = role_name.unwrap_or(DEFAULT_ROLE_NAME);
     if let Some(candidates) =
         resolve_role_config(config, role_name).and_then(|role| role.nickname_candidates.clone())
