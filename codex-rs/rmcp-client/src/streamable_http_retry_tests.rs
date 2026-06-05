@@ -29,6 +29,15 @@ fn retryable_initialize_error_includes_initialized_notification_context() {
 fn retryable_streamable_http_error_includes_remote_body_stream_failure() {
     let errors = [
         StreamableHttpError::Client(StreamableHttpClientAdapterError::HttpRequest(
+            ExecServerError::HttpRequest("error sending request for url".to_string()),
+        )),
+        StreamableHttpError::Client(StreamableHttpClientAdapterError::HttpRequest(
+            ExecServerError::Server {
+                code: JSON_RPC_INTERNAL_ERROR_CODE,
+                message: "http/request failed: error sending request for url".to_string(),
+            },
+        )),
+        StreamableHttpError::Client(StreamableHttpClientAdapterError::HttpRequest(
             ExecServerError::Protocol(
                 "http response stream `http-1` failed: exec-server transport disconnected"
                     .to_string(),
@@ -43,7 +52,7 @@ fn retryable_streamable_http_error_includes_remote_body_stream_failure() {
 
     assert_eq!(
         errors.map(|error| RmcpClient::is_retryable_streamable_http_error(&error)),
-        [true, false],
+        [true, true, true, false],
     );
 }
 
@@ -53,9 +62,9 @@ fn retryable_initialize_error(context: &'static str) -> rmcp::service::ClientIni
             "streamable_http",
             TypeId::of::<()>(),
             Box::new(StreamableHttpError::Client(
-                StreamableHttpClientAdapterError::RetryableHttpStatus(
-                    reqwest::StatusCode::SERVICE_UNAVAILABLE.as_u16(),
-                ),
+                StreamableHttpClientAdapterError::HttpRequest(ExecServerError::HttpRequest(
+                    "error sending request for url".to_string(),
+                )),
             )),
         ),
         context: context.into(),

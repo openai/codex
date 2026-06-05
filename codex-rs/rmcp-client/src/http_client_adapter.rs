@@ -29,6 +29,7 @@ use reqwest::header::HeaderMap;
 use reqwest::header::HeaderName;
 use rmcp::model::ClientJsonRpcMessage;
 use rmcp::model::JsonRpcMessage;
+use rmcp::model::ServerJsonRpcMessage;
 use rmcp::transport::streamable_http_client::AuthRequiredError;
 use rmcp::transport::streamable_http_client::InsufficientScopeError;
 use rmcp::transport::streamable_http_client::StreamableHttpClient;
@@ -57,8 +58,6 @@ pub(crate) struct StreamableHttpClientAdapter {
 pub(crate) enum StreamableHttpClientAdapterError {
     #[error("streamable HTTP session expired with 404 Not Found")]
     SessionExpired404,
-    #[error("streamable HTTP request returned retryable HTTP {0}")]
-    RetryableHttpStatus(u16),
     #[error(transparent)]
     HttpRequest(#[from] ExecServerError),
     #[error("invalid HTTP header: {0}")]
@@ -186,32 +185,16 @@ impl StreamableHttpClient for StreamableHttpClientAdapter {
 
         let content_type = response_header(&response.headers, CONTENT_TYPE);
         let session_id = response_header(&response.headers, HEADER_SESSION_ID);
-        if let Some(content_type) = content_type.as_deref()
-            && content_type.starts_with(JSON_MIME_TYPE)
-        {
-            let body = collect_body(&mut body_stream).await?;
-            let message = match serde_json::from_slice(&body) {
-                Ok(message) => message,
-                Err(_error) if is_retryable_http_status(response.status) => {
-                    return Err(StreamableHttpError::Client(
-                        StreamableHttpClientAdapterError::RetryableHttpStatus(response.status),
-                    ));
-                }
-                Err(error) => return Err(StreamableHttpError::Deserialize(error)),
-            };
-            return Ok(StreamableHttpPostResponse::Json(message, session_id));
-        }
-
-        if is_retryable_http_status(response.status) {
-            return Err(StreamableHttpError::Client(
-                StreamableHttpClientAdapterError::RetryableHttpStatus(response.status),
-            ));
-        }
-
         match content_type.as_deref() {
             Some(content_type) if content_type.starts_with(EVENT_STREAM_MIME_TYPE) => {
                 let event_stream = sse_stream_from_body(body_stream);
                 Ok(StreamableHttpPostResponse::Sse(event_stream, session_id))
+            }
+            Some(content_type) if content_type.starts_with(JSON_MIME_TYPE) => {
+                let body = collect_body(&mut body_stream).await?;
+                let message: ServerJsonRpcMessage =
+                    serde_json::from_slice(&body).map_err(StreamableHttpError::Deserialize)?;
+                Ok(StreamableHttpPostResponse::Json(message, session_id))
             }
             _ => {
                 let body = collect_body(&mut body_stream).await?;
@@ -480,10 +463,6 @@ fn status_is_success(status: u16) -> bool {
     StatusCode::from_u16(status).is_ok_and(|status| status.is_success())
 }
 
-fn is_retryable_http_status(status: u16) -> bool {
-    matches!(status, 408 | 429 | 500 | 502 | 503 | 504)
-}
-
 async fn collect_body(
     body_stream: &mut HttpResponseBodyStream,
 ) -> std::result::Result<Vec<u8>, StreamableHttpError<StreamableHttpClientAdapterError>> {
@@ -511,7 +490,3 @@ fn sse_stream_from_body(
     }))
     .boxed()
 }
-
-#[cfg(test)]
-#[path = "http_client_adapter_tests.rs"]
-mod tests;

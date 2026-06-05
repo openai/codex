@@ -49,6 +49,7 @@ use rmcp::transport::auth::AuthClient;
 use rmcp::transport::auth::AuthError;
 use rmcp::transport::auth::OAuthState;
 use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
+use rmcp::transport::streamable_http_client::StreamableHttpError;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
@@ -60,6 +61,7 @@ use tracing::warn;
 
 use crate::elicitation_client_service::ElicitationClientService;
 use crate::http_client_adapter::StreamableHttpClientAdapter;
+use crate::http_client_adapter::StreamableHttpClientAdapterError;
 use crate::in_process_transport::InProcessTransportFactory;
 use crate::load_oauth_tokens;
 use crate::oauth::OAuthPersistor;
@@ -216,6 +218,14 @@ where
             }
         }
     }
+}
+
+#[derive(Debug, thiserror::Error)]
+enum ClientOperationError {
+    #[error(transparent)]
+    Service(#[from] rmcp::service::ServiceError),
+    #[error("timed out awaiting {label} after {duration:?}")]
+    Timeout { label: String, duration: Duration },
 }
 
 pub type Elicitation = CreateElicitationRequestParams;
@@ -857,6 +867,89 @@ impl RmcpClient {
         Ok((Arc::new(service), oauth_persistor))
     }
 
+    async fn run_service_operation<T, F, Fut>(
+        &self,
+        label: &str,
+        timeout: Option<Duration>,
+        operation: F,
+    ) -> Result<T>
+    where
+        F: Fn(Arc<RunningService<RoleClient, ElicitationClientService>>) -> Fut,
+        Fut: std::future::Future<Output = std::result::Result<T, rmcp::service::ServiceError>>,
+    {
+        let service = self.service().await?;
+        match Self::run_service_operation_once(
+            Arc::clone(&service),
+            label,
+            timeout,
+            self.elicitation_pause_state.clone(),
+            &operation,
+        )
+        .await
+        {
+            Ok(result) => Ok(result),
+            Err(error) if Self::is_session_expired_404(&error) => {
+                self.reinitialize_after_session_expiry(&service).await?;
+                let recovered_service = self.service().await?;
+                Self::run_service_operation_once(
+                    recovered_service,
+                    label,
+                    timeout,
+                    self.elicitation_pause_state.clone(),
+                    &operation,
+                )
+                .await
+                .map_err(Into::into)
+            }
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    async fn run_service_operation_once<T, F, Fut>(
+        service: Arc<RunningService<RoleClient, ElicitationClientService>>,
+        label: &str,
+        timeout: Option<Duration>,
+        pause_state: ElicitationPauseState,
+        operation: &F,
+    ) -> std::result::Result<T, ClientOperationError>
+    where
+        F: Fn(Arc<RunningService<RoleClient, ElicitationClientService>>) -> Fut,
+        Fut: std::future::Future<Output = std::result::Result<T, rmcp::service::ServiceError>>,
+    {
+        match timeout {
+            Some(duration) => {
+                active_time_timeout(duration, pause_state.subscribe(), operation(service))
+                    .await
+                    .map_err(|_| ClientOperationError::Timeout {
+                        label: label.to_string(),
+                        duration,
+                    })?
+                    .map_err(ClientOperationError::from)
+            }
+            None => operation(service).await.map_err(ClientOperationError::from),
+        }
+    }
+
+    fn is_session_expired_404(error: &ClientOperationError) -> bool {
+        let ClientOperationError::Service(rmcp::service::ServiceError::TransportSend(error)) =
+            error
+        else {
+            return false;
+        };
+
+        error
+            .error
+            .downcast_ref::<StreamableHttpError<StreamableHttpClientAdapterError>>()
+            .is_some_and(|error| {
+                matches!(
+                    error,
+                    StreamableHttpError::Client(
+                        StreamableHttpClientAdapterError::SessionExpired404
+                    )
+                )
+            })
+    }
+
     async fn reinitialize_after_session_expiry(
         &self,
         failed_service: &Arc<RunningService<RoleClient, ElicitationClientService>>,
@@ -978,5 +1071,30 @@ async fn create_oauth_transport_and_runtime(
 }
 
 #[cfg(test)]
-#[path = "rmcp_client_tests.rs"]
-mod tests;
+mod tests {
+    use std::time::Duration;
+
+    use pretty_assertions::assert_eq;
+    use tokio::time;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn active_time_timeout_pauses_while_elicitation_is_pending() {
+        let pause_state = ElicitationPauseState::new();
+        let pause = pause_state.enter();
+        tokio::spawn(async move {
+            time::sleep(Duration::from_millis(75)).await;
+            drop(pause);
+        });
+
+        let result =
+            active_time_timeout(Duration::from_millis(50), pause_state.subscribe(), async {
+                time::sleep(Duration::from_millis(90)).await;
+                "done"
+            })
+            .await;
+
+        assert_eq!(Ok("done"), result);
+    }
+}

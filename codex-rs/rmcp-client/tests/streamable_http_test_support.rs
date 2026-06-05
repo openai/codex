@@ -44,14 +44,13 @@ use tokio::process::Child;
 use tokio::process::Command;
 use tokio::time::sleep;
 
-const INITIALIZE_FAILURE_CONTROL_PATH: &str = "/test/control/initialize-failure";
 const SESSION_POST_FAILURE_CONTROL_PATH: &str = "/test/control/session-post-failure";
 
 fn streamable_http_server_bin() -> Result<PathBuf, CargoBinError> {
     codex_utils_cargo_bin::cargo_bin("test_streamable_http_server")
 }
 
-pub(crate) fn init_params() -> InitializeRequestParams {
+fn init_params() -> InitializeRequestParams {
     let mut capabilities = ClientCapabilities::default();
     capabilities.elicitation = Some(ElicitationCapability {
         form: Some(FormElicitationCapability {
@@ -185,24 +184,6 @@ pub(crate) async fn arm_session_post_failure(
             "status": status,
             "remaining": remaining,
             "www_authenticate_headers": www_authenticate_headers,
-        }))
-        .send()
-        .await?;
-
-    assert_eq!(response.status(), reqwest::StatusCode::NO_CONTENT);
-    Ok(())
-}
-
-pub(crate) async fn arm_initialize_failure(
-    base_url: &str,
-    status: u16,
-    remaining: usize,
-) -> anyhow::Result<()> {
-    let response = reqwest::Client::new()
-        .post(format!("{base_url}{INITIALIZE_FAILURE_CONTROL_PATH}"))
-        .json(&json!({
-            "status": status,
-            "remaining": remaining,
         }))
         .send()
         .await?;

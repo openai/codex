@@ -1,4 +1,3 @@
-use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
@@ -16,10 +15,8 @@ use crate::elicitation_client_service::ElicitationClientService;
 use crate::http_client_adapter::StreamableHttpClientAdapterError;
 use crate::oauth::OAuthPersistor;
 
-use super::ElicitationPauseState;
 use super::PendingTransport;
 use super::RmcpClient;
-use super::active_time_timeout;
 
 const JSON_RPC_INTERNAL_ERROR_CODE: i64 = -32603;
 const STREAMABLE_HTTP_RETRY_DELAYS_MS: [u64; 2] = [250, 1_000];
@@ -42,14 +39,13 @@ impl RmcpClient {
         let retry_deadline = timeout.map(|duration| Instant::now() + duration);
         let mut pending_transport = Some(initial_transport);
 
-        let retry_schedule = STREAMABLE_HTTP_RETRY_DELAYS_MS
+        for (attempt, retry_delay_ms) in STREAMABLE_HTTP_RETRY_DELAYS_MS
             .iter()
             .copied()
             .map(Some)
-            .chain(std::iter::once(None));
-
-        for (attempt, retry_delay_ms) in retry_schedule.enumerate() {
-            let attempt_count = attempt + 1;
+            .chain(std::iter::once(None))
+            .enumerate()
+        {
             let attempt_timeout =
                 retry_deadline.map(|deadline| deadline.saturating_duration_since(Instant::now()));
             if let Some(remaining) = attempt_timeout
@@ -63,10 +59,7 @@ impl RmcpClient {
 
             let transport = match pending_transport.take() {
                 Some(transport) => transport,
-                None => match Self::create_pending_transport(&self.transport_recipe).await {
-                    Ok(transport) => transport,
-                    Err(error) => return Err(error),
-                },
+                None => Self::create_pending_transport(&self.transport_recipe).await?,
             };
 
             match Self::connect_pending_transport(
@@ -83,7 +76,7 @@ impl RmcpClient {
                     };
                     let delay = Duration::from_millis(retry_delay_ms);
                     warn!(
-                        attempt = attempt_count,
+                        attempt = attempt + 1,
                         max_attempts = STREAMABLE_HTTP_RETRY_DELAYS_MS.len() + 1,
                         delay_ms = delay.as_millis(),
                         error = %error,
@@ -101,147 +94,6 @@ impl RmcpClient {
         }
 
         unreachable!("initialize retry loop should return on success or final error")
-    }
-
-    pub(super) async fn run_service_operation<T, F, Fut>(
-        &self,
-        label: &str,
-        timeout: Option<Duration>,
-        operation: F,
-    ) -> Result<T>
-    where
-        F: Fn(Arc<RunningService<RoleClient, ElicitationClientService>>) -> Fut,
-        Fut: Future<Output = std::result::Result<T, rmcp::service::ServiceError>>,
-    {
-        let mut session_recovery_attempted = false;
-        let mut retry_attempt = 0;
-        let retry_deadline = timeout.map(|duration| Instant::now() + duration);
-
-        loop {
-            let service = self.service().await?;
-            let attempt_timeout =
-                retry_deadline.map(|deadline| deadline.saturating_duration_since(Instant::now()));
-            if let Some(remaining) = attempt_timeout
-                && remaining.is_zero()
-            {
-                let duration = timeout.unwrap_or(remaining);
-                return Err(ClientOperationError::Timeout {
-                    label: label.to_string(),
-                    duration,
-                }
-                .into());
-            }
-
-            match Self::run_service_operation_once(
-                Arc::clone(&service),
-                label,
-                attempt_timeout,
-                self.elicitation_pause_state.clone(),
-                &operation,
-            )
-            .await
-            {
-                Ok(result) => return Ok(result),
-                Err(error)
-                    if !session_recovery_attempted && Self::is_session_expired_404(&error) =>
-                {
-                    session_recovery_attempted = true;
-                    self.reinitialize_after_session_expiry(&service).await?;
-                }
-                Err(error)
-                    if Self::should_retry_tools_list_operation(label, retry_attempt, &error) =>
-                {
-                    let delay =
-                        Duration::from_millis(STREAMABLE_HTTP_RETRY_DELAYS_MS[retry_attempt]);
-                    retry_attempt += 1;
-                    warn!(
-                        label,
-                        attempt = retry_attempt,
-                        max_attempts = STREAMABLE_HTTP_RETRY_DELAYS_MS.len() + 1,
-                        delay_ms = delay.as_millis(),
-                        error = %error,
-                        "MCP service operation failed with a retryable error; retrying"
-                    );
-                    if !sleep_with_retry_deadline(delay, retry_deadline).await {
-                        let duration = timeout.unwrap_or(delay);
-                        return Err(ClientOperationError::Timeout {
-                            label: label.to_string(),
-                            duration,
-                        }
-                        .into());
-                    }
-                }
-                Err(error) => return Err(error.into()),
-            }
-        }
-    }
-
-    async fn run_service_operation_once<T, F, Fut>(
-        service: Arc<RunningService<RoleClient, ElicitationClientService>>,
-        label: &str,
-        timeout: Option<Duration>,
-        pause_state: ElicitationPauseState,
-        operation: &F,
-    ) -> std::result::Result<T, ClientOperationError>
-    where
-        F: Fn(Arc<RunningService<RoleClient, ElicitationClientService>>) -> Fut,
-        Fut: Future<Output = std::result::Result<T, rmcp::service::ServiceError>>,
-    {
-        match timeout {
-            Some(duration) => {
-                active_time_timeout(duration, pause_state.subscribe(), operation(service))
-                    .await
-                    .map_err(|_| ClientOperationError::Timeout {
-                        label: label.to_string(),
-                        duration,
-                    })?
-                    .map_err(ClientOperationError::from)
-            }
-            None => operation(service).await.map_err(ClientOperationError::from),
-        }
-    }
-
-    fn is_session_expired_404(error: &ClientOperationError) -> bool {
-        let ClientOperationError::Service(rmcp::service::ServiceError::TransportSend(error)) =
-            error
-        else {
-            return false;
-        };
-
-        error
-            .error
-            .downcast_ref::<StreamableHttpError<StreamableHttpClientAdapterError>>()
-            .is_some_and(|error| {
-                matches!(
-                    error,
-                    StreamableHttpError::Client(
-                        StreamableHttpClientAdapterError::SessionExpired404
-                    )
-                )
-            })
-    }
-
-    fn should_retry_tools_list_operation(
-        label: &str,
-        retry_attempt: usize,
-        error: &ClientOperationError,
-    ) -> bool {
-        label == "tools/list"
-            && retry_attempt < STREAMABLE_HTTP_RETRY_DELAYS_MS.len()
-            && Self::is_retryable_service_operation_error(error)
-    }
-
-    fn is_retryable_service_operation_error(error: &ClientOperationError) -> bool {
-        let ClientOperationError::Service(rmcp::service::ServiceError::TransportSend(error)) =
-            error
-        else {
-            return false;
-        };
-
-        error
-            .error
-            .downcast_ref::<StreamableHttpError<StreamableHttpClientAdapterError>>()
-            .is_some_and(Self::is_retryable_streamable_http_error)
     }
 
     fn is_retryable_initialize_error(error: &anyhow::Error) -> bool {
@@ -276,10 +128,9 @@ impl RmcpClient {
         error: &StreamableHttpError<StreamableHttpClientAdapterError>,
     ) -> bool {
         match error {
-            StreamableHttpError::Client(
-                StreamableHttpClientAdapterError::RetryableHttpStatus(_)
-                | StreamableHttpClientAdapterError::HttpRequest(ExecServerError::HttpRequest(_)),
-            ) => true,
+            StreamableHttpError::Client(StreamableHttpClientAdapterError::HttpRequest(
+                ExecServerError::HttpRequest(_),
+            )) => true,
             StreamableHttpError::Client(StreamableHttpClientAdapterError::HttpRequest(
                 ExecServerError::Server { code, message },
             )) => {
@@ -304,14 +155,6 @@ async fn sleep_with_retry_deadline(delay: Duration, deadline: Option<Instant>) -
         time::sleep(delay).await;
         true
     }
-}
-
-#[derive(Debug, thiserror::Error)]
-enum ClientOperationError {
-    #[error(transparent)]
-    Service(#[from] rmcp::service::ServiceError),
-    #[error("timed out awaiting {label} after {duration:?}")]
-    Timeout { label: String, duration: Duration },
 }
 
 #[derive(Debug, thiserror::Error)]
