@@ -306,6 +306,7 @@ impl ThreadGoalRequestProcessor {
     ) {
         if let Some(listener_command_tx) = listener_command_tx {
             let command = crate::thread_state::ThreadListenerCommand::EmitThreadGoalUpdated {
+                turn_id: None,
                 goal: goal.clone(),
             };
             if listener_command_tx.send(command).is_ok() {

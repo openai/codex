@@ -244,12 +244,22 @@ pub(super) async fn ensure_listener_task_running(
         if thread_state.listener_matches(&conversation) {
             return Ok(());
         }
-        thread_state.set_listener(
+        let (listener_command_rx, listener_generation) = thread_state.set_listener(
             cancel_tx,
             &conversation,
             watch_registration,
             thread_settings_baseline,
-        )
+        );
+        let Some(listener_command_tx) = thread_state.listener_command_tx() else {
+            tracing::warn!(
+                "thread listener command sender missing immediately after listener registration"
+            );
+            return Ok(());
+        };
+        listener_task_context
+            .thread_state_manager
+            .register_listener_command_tx(conversation_id, listener_command_tx);
+        (listener_command_rx, listener_generation)
     };
     let ListenerTaskContext {
         outgoing,
@@ -378,6 +388,7 @@ pub(super) async fn ensure_listener_task_running(
 
         let mut thread_state = thread_state.lock().await;
         if thread_state.listener_generation == listener_generation {
+            thread_state_manager.unregister_listener_command_tx(conversation_id);
             thread_state.clear_listener();
         }
     });
@@ -471,12 +482,12 @@ pub(super) async fn handle_thread_listener_command(
             )
             .await;
         }
-        ThreadListenerCommand::EmitThreadGoalUpdated { goal } => {
+        ThreadListenerCommand::EmitThreadGoalUpdated { turn_id, goal } => {
             outgoing
                 .send_server_notification(ServerNotification::ThreadGoalUpdated(
                     ThreadGoalUpdatedNotification {
                         thread_id: conversation_id.to_string(),
-                        turn_id: None,
+                        turn_id,
                         goal,
                     },
                 ))
