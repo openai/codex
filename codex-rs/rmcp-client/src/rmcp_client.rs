@@ -277,6 +277,19 @@ where
     }
 }
 
+async fn sleep_with_retry_deadline(delay: Duration, deadline: Option<Instant>) -> bool {
+    if let Some(deadline) = deadline {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return false;
+        }
+        time::timeout(remaining, time::sleep(delay)).await.is_ok()
+    } else {
+        time::sleep(delay).await;
+        true
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 enum ClientOperationError {
     #[error(transparent)]
@@ -942,6 +955,7 @@ impl RmcpClient {
     )> {
         let should_retry = initial_transport.is_streamable_http();
         let metric_transport = initial_transport.metric_transport();
+        let retry_deadline = timeout.map(|duration| Instant::now() + duration);
         let mut pending_transport = Some(initial_transport);
 
         let retry_schedule = STREAMABLE_HTTP_RETRY_DELAYS_MS
@@ -952,6 +966,24 @@ impl RmcpClient {
 
         for (attempt, retry_delay_ms) in retry_schedule.enumerate() {
             let attempt_count = attempt + 1;
+            let attempt_timeout =
+                retry_deadline.map(|deadline| deadline.saturating_duration_since(Instant::now()));
+            if let Some(remaining) = attempt_timeout
+                && remaining.is_zero()
+            {
+                emit_initialize_metric(
+                    metric_transport,
+                    "error",
+                    attempt_count,
+                    /*retry_exhausted*/ false,
+                    "timeout",
+                );
+                let duration = timeout.unwrap_or(remaining);
+                return Err(anyhow!(
+                    "timed out handshaking with MCP server after {duration:?}"
+                ));
+            }
+
             let transport = match pending_transport.take() {
                 Some(transport) => transport,
                 None => match Self::create_pending_transport(&self.transport_recipe).await {
@@ -969,7 +1001,12 @@ impl RmcpClient {
                 },
             };
 
-            match Self::connect_pending_transport(transport, client_service.clone(), timeout).await
+            match Self::connect_pending_transport(
+                transport,
+                client_service.clone(),
+                attempt_timeout,
+            )
+            .await
             {
                 Ok(result) => {
                     emit_initialize_metric(
@@ -1000,7 +1037,19 @@ impl RmcpClient {
                         error = %error,
                         "streamable HTTP MCP initialize failed with a retryable error; retrying"
                     );
-                    time::sleep(delay).await;
+                    if !sleep_with_retry_deadline(delay, retry_deadline).await {
+                        emit_initialize_metric(
+                            metric_transport,
+                            "error",
+                            attempt_count,
+                            /*retry_exhausted*/ false,
+                            "timeout",
+                        );
+                        let duration = timeout.unwrap_or(delay);
+                        return Err(anyhow!(
+                            "timed out handshaking with MCP server after {duration:?}"
+                        ));
+                    }
                 }
                 Err(error) => {
                     emit_initialize_metric(
@@ -1030,13 +1079,27 @@ impl RmcpClient {
     {
         let mut session_recovery_attempted = false;
         let mut retry_attempt = 0;
+        let retry_deadline = timeout.map(|duration| Instant::now() + duration);
 
         loop {
             let service = self.service().await?;
+            let attempt_timeout =
+                retry_deadline.map(|deadline| deadline.saturating_duration_since(Instant::now()));
+            if let Some(remaining) = attempt_timeout
+                && remaining.is_zero()
+            {
+                let duration = timeout.unwrap_or(remaining);
+                return Err(ClientOperationError::Timeout {
+                    label: label.to_string(),
+                    duration,
+                }
+                .into());
+            }
+
             match Self::run_service_operation_once(
                 Arc::clone(&service),
                 label,
-                timeout,
+                attempt_timeout,
                 self.elicitation_pause_state.clone(),
                 &operation,
             )
@@ -1063,7 +1126,14 @@ impl RmcpClient {
                         error = %error,
                         "MCP service operation failed with a retryable error; retrying"
                     );
-                    time::sleep(delay).await;
+                    if !sleep_with_retry_deadline(delay, retry_deadline).await {
+                        let duration = timeout.unwrap_or(delay);
+                        return Err(ClientOperationError::Timeout {
+                            label: label.to_string(),
+                            duration,
+                        }
+                        .into());
+                    }
                 }
                 Err(error) => return Err(error.into()),
             }
@@ -1301,73 +1371,5 @@ async fn create_oauth_transport_and_runtime(
 }
 
 #[cfg(test)]
-mod tests {
-    use std::collections::BTreeMap;
-    use std::time::Duration;
-
-    use pretty_assertions::assert_eq;
-    use tokio::time;
-
-    use super::*;
-
-    fn metric_tags_map(tags: Vec<(&'static str, String)>) -> BTreeMap<&'static str, String> {
-        tags.into_iter().collect()
-    }
-
-    #[tokio::test]
-    async fn active_time_timeout_pauses_while_elicitation_is_pending() {
-        let pause_state = ElicitationPauseState::new();
-        let pause = pause_state.enter();
-        tokio::spawn(async move {
-            time::sleep(Duration::from_millis(75)).await;
-            drop(pause);
-        });
-
-        let result =
-            active_time_timeout(Duration::from_millis(50), pause_state.subscribe(), async {
-                time::sleep(Duration::from_millis(90)).await;
-                "done"
-            })
-            .await;
-
-        assert_eq!(Ok("done"), result);
-    }
-
-    #[test]
-    fn initialize_metric_tags_record_success_after_retry() {
-        let tags = metric_tags_map(initialize_metric_tags(
-            "streamable_http",
-            "success",
-            /*attempts*/ 2,
-            /*retry_exhausted*/ false,
-            "none",
-        ));
-
-        assert_eq!(tags["transport"], "streamable_http");
-        assert_eq!(tags["outcome"], "success");
-        assert_eq!(tags["retried"], "true");
-        assert_eq!(tags["attempts"], "2");
-        assert_eq!(tags["retry_count"], "1");
-        assert_eq!(tags["retry_exhausted"], "false");
-        assert_eq!(tags["failure_kind"], "none");
-    }
-
-    #[test]
-    fn initialize_metric_tags_record_retry_exhaustion() {
-        let tags = metric_tags_map(initialize_metric_tags(
-            "streamable_http",
-            "error",
-            /*attempts*/ 3,
-            /*retry_exhausted*/ true,
-            "retry_exhausted",
-        ));
-
-        assert_eq!(tags["transport"], "streamable_http");
-        assert_eq!(tags["outcome"], "error");
-        assert_eq!(tags["retried"], "true");
-        assert_eq!(tags["attempts"], "3");
-        assert_eq!(tags["retry_count"], "2");
-        assert_eq!(tags["retry_exhausted"], "true");
-        assert_eq!(tags["failure_kind"], "retry_exhausted");
-    }
-}
+#[path = "rmcp_client_tests.rs"]
+mod tests;

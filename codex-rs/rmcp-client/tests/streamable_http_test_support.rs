@@ -51,7 +51,7 @@ fn streamable_http_server_bin() -> Result<PathBuf, CargoBinError> {
     codex_utils_cargo_bin::cargo_bin("test_streamable_http_server")
 }
 
-fn init_params() -> InitializeRequestParams {
+pub(crate) fn init_params() -> InitializeRequestParams {
     let mut capabilities = ClientCapabilities::default();
     capabilities.elicitation = Some(ElicitationCapability {
         form: Some(FormElicitationCapability {

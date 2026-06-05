@@ -4,17 +4,23 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
+use std::time::Instant;
 
+use codex_config::types::OAuthCredentialsStoreMode;
 use codex_exec_server::Environment;
 use codex_exec_server::ExecServerError;
 use codex_exec_server::HttpClient;
 use codex_exec_server::HttpRequestParams;
 use codex_exec_server::HttpRequestResponse;
 use codex_exec_server::HttpResponseBodyStream;
+use codex_rmcp_client::ElicitationAction;
+use codex_rmcp_client::ElicitationResponse;
+use codex_rmcp_client::RmcpClient;
 use futures::FutureExt as _;
 use futures::future::BoxFuture;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
+use serde_json::json;
 
 use streamable_http_test_support::arm_initialize_failure;
 use streamable_http_test_support::arm_session_post_failure;
@@ -22,6 +28,7 @@ use streamable_http_test_support::call_echo_tool;
 use streamable_http_test_support::create_client;
 use streamable_http_test_support::create_client_with_http_client;
 use streamable_http_test_support::expected_echo_result;
+use streamable_http_test_support::init_params;
 use streamable_http_test_support::spawn_streamable_http_server;
 
 const JSON_RPC_INTERNAL_ERROR_CODE: i64 = -32603;
@@ -135,6 +142,57 @@ async fn streamable_http_initialize_retries_retryable_status() -> anyhow::Result
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn streamable_http_initialize_retry_sleep_respects_startup_timeout() -> anyhow::Result<()> {
+    let (_server, base_url) = spawn_streamable_http_server().await?;
+    arm_initialize_failure(&base_url, /*status*/ 503, /*remaining*/ 1).await?;
+
+    let client = RmcpClient::new_streamable_http_client(
+        "test-streamable-http",
+        &format!("{base_url}/mcp"),
+        Some("test-bearer".to_string()),
+        /*http_headers*/ None,
+        /*env_http_headers*/ None,
+        OAuthCredentialsStoreMode::File,
+        Environment::default_for_tests().get_http_client(),
+        /*auth_provider*/ None,
+    )
+    .await?;
+
+    let started = Instant::now();
+    let error = client
+        .initialize(
+            init_params(),
+            Some(Duration::from_millis(100)),
+            Box::new(|_, _| {
+                async {
+                    Ok(ElicitationResponse {
+                        action: ElicitationAction::Accept,
+                        content: Some(json!({})),
+                        meta: None,
+                    })
+                }
+                .boxed()
+            }),
+        )
+        .await
+        .unwrap_err();
+
+    let elapsed = started.elapsed();
+    assert!(
+        elapsed < Duration::from_millis(500),
+        "initialize retry exceeded startup timeout budget: {elapsed:?}"
+    );
+    assert!(
+        error
+            .to_string()
+            .contains("timed out handshaking with MCP server"),
+        "expected handshake timeout, got: {error:#}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn streamable_http_initialize_retries_http_request_error() -> anyhow::Result<()> {
     let (_server, base_url) = spawn_streamable_http_server().await?;
     let http_client = FailFirstMethodHttpClient::new(
@@ -177,6 +235,9 @@ async fn streamable_http_initialize_retries_remote_http_request_error() -> anyho
 async fn streamable_http_tools_list_retries_retryable_status() -> anyhow::Result<()> {
     let (_server, base_url) = spawn_streamable_http_server().await?;
     let client = create_client(&base_url).await?;
+    let expected_tools = client
+        .list_tools(/*params*/ None, Some(Duration::from_secs(5)))
+        .await?;
 
     arm_session_post_failure(
         &base_url,
@@ -190,8 +251,39 @@ async fn streamable_http_tools_list_retries_retryable_status() -> anyhow::Result
         .list_tools(/*params*/ None, Some(Duration::from_secs(5)))
         .await?;
 
-    assert_eq!(tools.tools.len(), 1);
-    assert_eq!(tools.tools[0].name, "echo");
+    assert_eq!(tools, expected_tools);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn streamable_http_tools_list_retry_sleep_respects_operation_timeout() -> anyhow::Result<()> {
+    let (_server, base_url) = spawn_streamable_http_server().await?;
+    let client = create_client(&base_url).await?;
+
+    arm_session_post_failure(
+        &base_url,
+        /*status*/ 503,
+        /*remaining*/ 1,
+        /*www_authenticate_headers*/ &[],
+    )
+    .await?;
+
+    let started = Instant::now();
+    let error = client
+        .list_tools(/*params*/ None, Some(Duration::from_millis(100)))
+        .await
+        .unwrap_err();
+
+    let elapsed = started.elapsed();
+    assert!(
+        elapsed < Duration::from_millis(500),
+        "tools/list retry exceeded operation timeout budget: {elapsed:?}"
+    );
+    assert!(
+        error.to_string().contains("timed out awaiting tools/list"),
+        "expected tools/list timeout, got: {error:#}"
+    );
 
     Ok(())
 }
@@ -199,6 +291,10 @@ async fn streamable_http_tools_list_retries_retryable_status() -> anyhow::Result
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn streamable_http_tools_list_retries_http_request_error() -> anyhow::Result<()> {
     let (_server, base_url) = spawn_streamable_http_server().await?;
+    let baseline_client = create_client(&base_url).await?;
+    let expected_tools = baseline_client
+        .list_tools(/*params*/ None, Some(Duration::from_secs(5)))
+        .await?;
     let http_client = FailFirstMethodHttpClient::new(
         Environment::default_for_tests().get_http_client(),
         "tools/list",
@@ -211,8 +307,7 @@ async fn streamable_http_tools_list_retries_http_request_error() -> anyhow::Resu
         .await?;
 
     assert_eq!(http_client.matching_post_attempts(), 2);
-    assert_eq!(tools.tools.len(), 1);
-    assert_eq!(tools.tools[0].name, "echo");
+    assert_eq!(tools, expected_tools);
 
     Ok(())
 }
@@ -220,6 +315,10 @@ async fn streamable_http_tools_list_retries_http_request_error() -> anyhow::Resu
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn streamable_http_tools_list_retries_remote_http_request_error() -> anyhow::Result<()> {
     let (_server, base_url) = spawn_streamable_http_server().await?;
+    let baseline_client = create_client(&base_url).await?;
+    let expected_tools = baseline_client
+        .list_tools(/*params*/ None, Some(Duration::from_secs(5)))
+        .await?;
     let http_client = FailFirstMethodHttpClient::new(
         Environment::default_for_tests().get_http_client(),
         "tools/list",
@@ -232,8 +331,7 @@ async fn streamable_http_tools_list_retries_remote_http_request_error() -> anyho
         .await?;
 
     assert_eq!(http_client.matching_post_attempts(), 2);
-    assert_eq!(tools.tools.len(), 1);
-    assert_eq!(tools.tools[0].name, "echo");
+    assert_eq!(tools, expected_tools);
 
     Ok(())
 }

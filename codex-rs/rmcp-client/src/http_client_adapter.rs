@@ -184,24 +184,28 @@ impl StreamableHttpClient for StreamableHttpClientAdapter {
         ) {
             return Ok(StreamableHttpPostResponse::Accepted);
         }
+
+        let content_type = response_header(&response.headers, CONTENT_TYPE);
+        let session_id = response_header(&response.headers, HEADER_SESSION_ID);
+        if let Some(content_type) = content_type.as_deref()
+            && content_type.starts_with(JSON_MIME_TYPE)
+        {
+            let body = collect_body(&mut body_stream).await?;
+            let message: ServerJsonRpcMessage =
+                serde_json::from_slice(&body).map_err(StreamableHttpError::Deserialize)?;
+            return Ok(StreamableHttpPostResponse::Json(message, session_id));
+        }
+
         if is_retryable_http_status(response.status) {
             return Err(StreamableHttpError::Client(
                 StreamableHttpClientAdapterError::RetryableHttpStatus(response.status),
             ));
         }
 
-        let content_type = response_header(&response.headers, CONTENT_TYPE);
-        let session_id = response_header(&response.headers, HEADER_SESSION_ID);
         match content_type.as_deref() {
             Some(content_type) if content_type.starts_with(EVENT_STREAM_MIME_TYPE) => {
                 let event_stream = sse_stream_from_body(body_stream);
                 Ok(StreamableHttpPostResponse::Sse(event_stream, session_id))
-            }
-            Some(content_type) if content_type.starts_with(JSON_MIME_TYPE) => {
-                let body = collect_body(&mut body_stream).await?;
-                let message: ServerJsonRpcMessage =
-                    serde_json::from_slice(&body).map_err(StreamableHttpError::Deserialize)?;
-                Ok(StreamableHttpPostResponse::Json(message, session_id))
             }
             _ => {
                 let body = collect_body(&mut body_stream).await?;
@@ -500,4 +504,86 @@ fn sse_stream_from_body(
         }
     }))
     .boxed()
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::Json;
+    use axum::Router;
+    use axum::http::StatusCode;
+    use axum::response::IntoResponse;
+    use axum::routing::post;
+    use codex_exec_server::Environment;
+    use pretty_assertions::assert_eq;
+    use rmcp::model::ClientRequest;
+    use rmcp::model::ErrorData;
+    use rmcp::model::JsonRpcError;
+    use rmcp::model::PingRequest;
+    use rmcp::model::RequestId;
+    use rmcp::transport::streamable_http_client::StreamableHttpPostResponse;
+    use serde_json::json;
+    use tokio::net::TcpListener;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn post_message_parses_json_error_body_before_retryable_status() -> anyhow::Result<()> {
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let address = listener.local_addr()?;
+        let app = Router::new().route("/", post(json_error_response));
+        let server = tokio::spawn(async move { axum::serve(listener, app).await });
+
+        let adapter = StreamableHttpClientAdapter::new(
+            Environment::default_for_tests().get_http_client(),
+            HeaderMap::new(),
+            /*auth_provider*/ None,
+        );
+        let request = ClientJsonRpcMessage::request(
+            ClientRequest::PingRequest(PingRequest::default()),
+            RequestId::Number(1),
+        );
+
+        let response = adapter
+            .post_message(
+                Arc::from(format!("http://{address}/")),
+                request,
+                /*session_id*/ None,
+                /*auth_token*/ None,
+                HashMap::new(),
+            )
+            .await?;
+
+        server.abort();
+
+        let StreamableHttpPostResponse::Json(message, _session_id) = response else {
+            panic!("expected JSON response");
+        };
+        let ServerJsonRpcMessage::Error(error) = message else {
+            panic!("expected JSON-RPC error");
+        };
+        assert_eq!(
+            error,
+            JsonRpcError::new(
+                /*id*/ Some(RequestId::Number(1)),
+                ErrorData::internal_error("transient json error", /*data*/ None),
+            )
+        );
+
+        Ok(())
+    }
+
+    async fn json_error_response() -> impl IntoResponse {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            [(CONTENT_TYPE, JSON_MIME_TYPE)],
+            Json(json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "error": {
+                    "code": -32603,
+                    "message": "transient json error",
+                },
+            })),
+        )
+    }
 }
