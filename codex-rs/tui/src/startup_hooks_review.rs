@@ -338,7 +338,7 @@ mod tests {
                         }
                     })
                     .collect::<String>();
-                format!("{rendered:width$}", width = area.width as usize)
+                rendered.trim_end().to_string()
             })
             .collect::<Vec<_>>()
             .join("\n")
@@ -378,24 +378,6 @@ mod tests {
         let keymap = RuntimeKeymap::defaults();
         let view = selection_view(
             &entry(),
-            Some("Failed to trust hooks: disk full"),
-            /*trusting_all*/ false,
-            AppEventSender::new(tx_raw),
-            &keymap,
-        );
-
-        assert_snapshot!(
-            "startup_hooks_review_prompt_with_trust_error",
-            render_lines(&view, /*width*/ 80)
-        );
-    }
-
-    #[test]
-    fn renders_prompt_with_chained_trust_error() {
-        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
-        let keymap = RuntimeKeymap::defaults();
-        let view = selection_view(
-            &entry(),
             Some(
                 "Failed to trust hooks: config/batchWrite failed in TUI: Invalid configuration: features.fast_mode=true is not supported; allowed set [fast_mode=false]",
             ),
@@ -405,7 +387,7 @@ mod tests {
         );
 
         assert_snapshot!(
-            "startup_hooks_review_prompt_with_chained_trust_error",
+            "startup_hooks_review_prompt_with_trust_error",
             render_lines(&view, /*width*/ 62)
         );
     }

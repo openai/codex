@@ -191,6 +191,18 @@ mod tests {
     use ratatui::Terminal;
     use std::path::PathBuf;
 
+    fn widget(error: Option<String>) -> TrustDirectoryWidget {
+        TrustDirectoryWidget {
+            cwd: PathBuf::from("/workspace/project"),
+            trust_target: PathBuf::from("/workspace/project"),
+            show_windows_create_sandbox_hint: false,
+            should_quit: false,
+            selection: None,
+            highlighted: TrustDirectorySelection::Trust,
+            error,
+        }
+    }
+
     #[test]
     fn release_event_does_not_change_selection() {
         let mut widget = TrustDirectoryWidget {
@@ -217,15 +229,7 @@ mod tests {
 
     #[test]
     fn renders_snapshot_for_git_repo() {
-        let widget = TrustDirectoryWidget {
-            cwd: PathBuf::from("/workspace/project"),
-            trust_target: PathBuf::from("/workspace/project"),
-            show_windows_create_sandbox_hint: false,
-            should_quit: false,
-            selection: None,
-            highlighted: TrustDirectorySelection::Trust,
-            error: None,
-        };
+        let widget = widget(None);
 
         let mut terminal =
             Terminal::new(VT100Backend::new(/*width*/ 70, /*height*/ 14)).expect("terminal");
@@ -238,18 +242,10 @@ mod tests {
 
     #[test]
     fn renders_snapshot_for_trust_error() {
-        let widget = TrustDirectoryWidget {
-            cwd: PathBuf::from("/workspace/project"),
-            trust_target: PathBuf::from("/workspace/project"),
-            show_windows_create_sandbox_hint: false,
-            should_quit: false,
-            selection: None,
-            highlighted: TrustDirectorySelection::Trust,
-            error: Some(
-                "Failed to set trust for /workspace/project: config/batchWrite failed in TUI: Invalid configuration: features.fast_mode=true is not supported; allowed set [fast_mode=false]"
-                    .to_string(),
-            ),
-        };
+        let widget = widget(Some(
+            "Failed to set trust for /workspace/project: config/batchWrite failed in TUI: Invalid configuration: features.fast_mode=true is not supported; allowed set [fast_mode=false]"
+                .to_string(),
+        ));
 
         let mut terminal =
             Terminal::new(VT100Backend::new(/*width*/ 70, /*height*/ 18)).expect("terminal");
