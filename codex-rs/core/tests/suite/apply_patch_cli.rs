@@ -38,7 +38,6 @@ use codex_protocol::user_input::UserInput;
 use codex_sandboxing::landlock::CODEX_LINUX_SANDBOX_ARG0;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use core_test_support::PathBufExt;
-use core_test_support::PathExt;
 use core_test_support::assert_regex_match;
 use core_test_support::get_remote_test_env;
 use core_test_support::responses::ev_assistant_message;
@@ -58,7 +57,6 @@ use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_with_timeout;
 use serde_json::json;
-use tempfile::TempDir;
 use wiremock::Mock;
 use wiremock::Respond;
 use wiremock::ResponseTemplate;
@@ -1577,16 +1575,27 @@ async fn apply_patch_turn_diff_tracks_local_and_remote_environment_paths() -> Re
     let server = start_mock_server().await;
     let mut builder = test_codex();
     let test = builder.build_with_remote_and_local_env(&server).await?;
-    let local_cwd = TempDir::new()?;
     let file_name = "shared-turn-diff.txt";
-    let remote_cwd = PathBuf::from(format!(
+    let shared_cwd = PathBuf::from(format!(
         "/tmp/codex-remote-turn-diff-{}",
         SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis()
     ))
     .abs();
+    let _ = fs::remove_dir_all(shared_cwd.as_path());
+    test.fs()
+        .remove(
+            &shared_cwd,
+            RemoveOptions {
+                recursive: true,
+                force: true,
+            },
+            /*sandbox*/ None,
+        )
+        .await?;
+    fs::create_dir_all(shared_cwd.as_path())?;
     test.fs()
         .create_directory(
-            &remote_cwd,
+            &shared_cwd,
             CreateDirectoryOptions { recursive: true },
             /*sandbox*/ None,
         )
@@ -1631,11 +1640,11 @@ async fn apply_patch_turn_diff_tracks_local_and_remote_environment_paths() -> Re
             environments: Some(vec![
                 TurnEnvironmentSelection {
                     environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
-                    cwd: local_cwd.path().abs(),
+                    cwd: shared_cwd.clone(),
                 },
                 TurnEnvironmentSelection {
                     environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
-                    cwd: remote_cwd.clone(),
+                    cwd: shared_cwd.clone(),
                 },
             ]),
             final_output_json_schema: None,
@@ -1670,24 +1679,37 @@ async fn apply_patch_turn_diff_tracks_local_and_remote_environment_paths() -> Re
     })
     .await;
 
-    assert_eq!(
-        fs::read_to_string(local_cwd.path().join(file_name))?,
-        "local\n"
-    );
+    assert_eq!(fs::read_to_string(shared_cwd.join(file_name))?, "local\n");
     assert_eq!(
         test.fs()
-            .read_file_text(&remote_cwd.join(file_name), /*sandbox*/ None)
+            .read_file_text(&shared_cwd.join(file_name), /*sandbox*/ None)
             .await?,
         "remote\n"
     );
     let diff = last_diff.expect("expected TurnDiff event");
-    assert!(diff.contains("shared-turn-diff.txt"), "{diff}");
-    assert!(diff.contains("+local\n"), "{diff}");
-    assert!(diff.contains("+remote\n"), "{diff}");
+    assert_eq!(
+        diff,
+        r#"diff --git a/local/shared-turn-diff.txt b/local/shared-turn-diff.txt
+new file mode 100644
+index 0000000000000000000000000000000000000000..40830374235df1c19661a2901b7ca73cc9499f3d
+--- /dev/null
++++ b/local/shared-turn-diff.txt
+@@ -0,0 +1 @@
++local
+diff --git a/remote/shared-turn-diff.txt b/remote/shared-turn-diff.txt
+new file mode 100644
+index 0000000000000000000000000000000000000000..9c998f7b995a7327177b38a90d1385170df2b94b
+--- /dev/null
++++ b/remote/shared-turn-diff.txt
+@@ -0,0 +1 @@
++remote
+"#
+    );
 
+    let _ = fs::remove_dir_all(shared_cwd.as_path());
     test.fs()
         .remove(
-            &remote_cwd,
+            &shared_cwd,
             RemoveOptions {
                 recursive: true,
                 force: true,

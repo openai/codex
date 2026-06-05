@@ -114,18 +114,18 @@ async fn tracks_same_absolute_path_across_multiple_environments() {
 
     let right_oid = git_blob_sha1_hex("content\n");
     let expected = format!(
-        r#"diff --git a/shared.txt b/shared.txt
+        r#"diff --git a/local/shared.txt b/local/shared.txt
 new file mode {REGULAR_FILE_MODE}
 index {ZERO_OID}..{right_oid}
 --- {DEV_NULL}
-+++ b/shared.txt
++++ b/local/shared.txt
 @@ -0,0 +1 @@
 +content
-diff --git a/shared.txt b/shared.txt
+diff --git a/remote/shared.txt b/remote/shared.txt
 new file mode {REGULAR_FILE_MODE}
 index {ZERO_OID}..{right_oid}
 --- {DEV_NULL}
-+++ b/shared.txt
++++ b/remote/shared.txt
 @@ -0,0 +1 @@
 +content
 "#,

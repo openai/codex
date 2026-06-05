@@ -315,7 +315,12 @@ impl TurnDiffTracker {
             .get(&path.environment_id)
             .and_then(|root| path.path.strip_prefix(root).ok())
             .unwrap_or(path.path.as_path());
-        display.display().to_string().replace('\\', "/")
+        let display = display.display().to_string().replace('\\', "/");
+        if self.display_roots_by_environment.len() > 1 && !path.environment_id.is_empty() {
+            format!("{}/{display}", path.environment_id)
+        } else {
+            display
+        }
     }
 }
 
