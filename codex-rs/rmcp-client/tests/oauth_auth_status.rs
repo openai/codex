@@ -273,7 +273,7 @@ async fn oauth_auth_status_child() -> anyhow::Result<()> {
                 "",
                 "client-id",
                 Some("refresh-token"),
-                Some(now_ms.saturating_add(31_000)),
+                Some(now_ms.saturating_add(60_000)),
                 McpAuthStatus::NotLoggedIn,
             ),
             "future_without_refresh" => (
