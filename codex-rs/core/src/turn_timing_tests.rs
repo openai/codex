@@ -169,6 +169,9 @@ fn turn_profile_breaks_down_sampling_blocking_and_retry_overhead() {
     );
     state.record_sampling_retry(Duration::from_millis(50));
     state.record_request_user_input_wait(Duration::from_millis(250));
+    state.record_event_dispatch(Duration::from_millis(75));
+    state.record_event_dispatch(Duration::from_millis(25));
+    state.record_final_rollout_flush(Duration::from_millis(40));
     let _ = state.begin_sampling(started_at + Duration::from_millis(1_000));
     state.end_phase(
         started_at + Duration::from_millis(1_200),
@@ -188,6 +191,9 @@ fn turn_profile_breaks_down_sampling_blocking_and_retry_overhead() {
             sampling_retry_delay_ms: 50,
             request_user_input_count: 1,
             request_user_input_wait_ms: 250,
+            event_dispatch_count: 2,
+            event_dispatch_duration_ms: 100,
+            final_rollout_flush_duration_ms: 40,
         }
     );
 }

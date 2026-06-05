@@ -407,7 +407,12 @@ impl Session {
                     )
                     .await;
                 let sess = session_ctx.clone_session();
-                if let Err(err) = sess.flush_rollout().await {
+                let flush_started_at = Instant::now();
+                let flush_result = sess.flush_rollout().await;
+                ctx_for_finish
+                    .turn_timing_state
+                    .record_final_rollout_flush(flush_started_at.elapsed());
+                if let Err(err) = flush_result {
                     warn!("failed to flush rollout before completing turn: {err}");
                     sess.send_event(
                         ctx_for_finish.as_ref(),
@@ -865,7 +870,12 @@ impl Session {
             .await;
             // Ensure the marker is durably visible before emitting TurnAborted: some clients
             // synchronously re-read the rollout on receipt of the abort event.
-            if let Err(err) = self.flush_rollout().await {
+            let flush_started_at = Instant::now();
+            let flush_result = self.flush_rollout().await;
+            task.turn_context
+                .turn_timing_state
+                .record_final_rollout_flush(flush_started_at.elapsed());
+            if let Err(err) = flush_result {
                 warn!("failed to flush interrupted-turn marker before emitting TurnAborted: {err}");
             }
         }

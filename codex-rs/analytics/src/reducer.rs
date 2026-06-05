@@ -2436,6 +2436,9 @@ fn codex_turn_event_params(
         sampling_retry_delay_ms,
         request_user_input_count,
         request_user_input_wait_ms,
+        event_dispatch_count,
+        event_dispatch_duration_ms,
+        final_rollout_flush_duration_ms,
     } = profile;
     let token_usage = turn_state.token_usage.clone();
     let codex_error = turn_state.codex_error.as_ref();
@@ -2509,6 +2512,9 @@ fn codex_turn_event_params(
         sampling_retry_delay_ms,
         request_user_input_count,
         request_user_input_wait_ms,
+        event_dispatch_count,
+        event_dispatch_duration_ms,
+        final_rollout_flush_duration_ms,
         duration_ms: completed.duration_ms,
         started_at,
         completed_at: Some(completed.completed_at),

@@ -69,6 +69,9 @@ struct TurnProfileState {
     sampling_retry_delay: Duration,
     request_user_input_count: u32,
     request_user_input_wait: Duration,
+    event_dispatch_count: u32,
+    event_dispatch_duration: Duration,
+    final_rollout_flush_duration: Duration,
     completed_profile: Option<TurnProfile>,
 }
 
@@ -137,6 +140,14 @@ impl TurnTimingState {
     pub(crate) fn record_request_user_input_wait(&self, duration: Duration) {
         self.profile_state()
             .record_request_user_input_wait(duration);
+    }
+
+    pub(crate) fn record_event_dispatch(&self, duration: Duration) {
+        self.profile_state().record_event_dispatch(duration);
+    }
+
+    pub(crate) fn record_final_rollout_flush(&self, duration: Duration) {
+        self.profile_state().record_final_rollout_flush(duration);
     }
 
     pub(crate) fn begin_tool_blocking(self: &Arc<Self>) -> TurnProfileTimingGuard {
@@ -239,6 +250,19 @@ impl TurnProfileState {
         }
     }
 
+    fn record_event_dispatch(&mut self, duration: Duration) {
+        if self.completed_profile.is_none() && self.started_at.is_some() {
+            self.event_dispatch_count = self.event_dispatch_count.saturating_add(1);
+            self.event_dispatch_duration = self.event_dispatch_duration.saturating_add(duration);
+        }
+    }
+
+    fn record_final_rollout_flush(&mut self, duration: Duration) {
+        if self.completed_profile.is_none() && self.started_at.is_some() {
+            self.final_rollout_flush_duration = duration;
+        }
+    }
+
     fn begin_tool_blocking(&mut self, now: Instant) -> bool {
         if self.completed_profile.is_some()
             || self.started_at.is_none()
@@ -296,6 +320,9 @@ impl TurnProfileState {
             sampling_retry_delay_ms: duration_to_u64_ms(self.sampling_retry_delay),
             request_user_input_count: self.request_user_input_count,
             request_user_input_wait_ms: duration_to_u64_ms(self.request_user_input_wait),
+            event_dispatch_count: self.event_dispatch_count,
+            event_dispatch_duration_ms: duration_to_u64_ms(self.event_dispatch_duration),
+            final_rollout_flush_duration_ms: duration_to_u64_ms(self.final_rollout_flush_duration),
         };
         let total_ms = self
             .started_at
