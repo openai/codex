@@ -10286,6 +10286,12 @@
           "id": {
             "type": "string"
           },
+          "pluginId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "scope": {
             "$ref": "#/definitions/v2/HookScope"
           },

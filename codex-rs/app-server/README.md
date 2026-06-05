@@ -1596,6 +1596,8 @@ Hooks are returned even when disabled so clients can render and re-enable them. 
 
 For unmanaged hooks, `currentHash` and `trustStatus` describe whether the current definition is first-seen, approved, or changed since approval. Only trusted unmanaged hooks become runnable. Hook keys combine the source identity with a trailing event/group/handler selector that is currently positional.
 
+The `hook/started` and `hook/completed` notifications include `pluginId` when the run came from a plugin hook.
+
 ```json
 {
   "method": "hooks/list",

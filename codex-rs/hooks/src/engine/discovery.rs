@@ -532,6 +532,7 @@ fn append_matcher_groups(
                             status_message,
                             source_path: source.path.clone(),
                             source: source.source,
+                            plugin_id: source.plugin_id.clone(),
                             display_order: *display_order,
                             env: source.env.clone(),
                         });
@@ -783,6 +784,7 @@ mod tests {
                 status_message: None,
                 source_path: source_path.clone(),
                 source: hook_source(),
+                plugin_id: None,
                 display_order: 0,
                 env: std::collections::HashMap::new(),
             }]
@@ -818,6 +820,7 @@ mod tests {
                 status_message: None,
                 source_path: source_path.clone(),
                 source: hook_source(),
+                plugin_id: None,
                 display_order: 0,
                 env: std::collections::HashMap::new(),
             }]

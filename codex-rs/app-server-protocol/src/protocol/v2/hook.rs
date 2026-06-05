@@ -106,6 +106,7 @@ pub struct HookRunSummary {
     pub source_path: AbsolutePathBuf,
     #[serde(default = "default_hook_source")]
     pub source: HookSource,
+    pub plugin_id: Option<String>,
     pub display_order: i64,
     pub status: HookRunStatus,
     pub status_message: Option<String>,
@@ -125,6 +126,7 @@ impl From<CoreHookRunSummary> for HookRunSummary {
             scope: value.scope.into(),
             source_path: value.source_path,
             source: value.source.into(),
+            plugin_id: value.plugin_id,
             display_order: value.display_order,
             status: value.status.into(),
             status_message: value.status_message,

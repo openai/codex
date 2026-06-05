@@ -108,6 +108,12 @@
         "id": {
           "type": "string"
         },
+        "pluginId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "scope": {
           "$ref": "#/definitions/HookScope"
         },

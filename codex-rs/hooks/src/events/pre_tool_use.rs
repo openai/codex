@@ -747,6 +747,7 @@ mod tests {
             status_message: None,
             source_path: test_path_buf("/tmp/hooks.json").abs(),
             source: codex_protocol::protocol::HookSource::User,
+            plugin_id: None,
             display_order: 0,
             env: std::collections::HashMap::new(),
         }

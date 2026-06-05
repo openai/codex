@@ -1210,6 +1210,10 @@ print(json.dumps({
     assert_eq!(preview.len(), 1);
     assert_eq!(preview[0].source, HookSource::Plugin);
     assert_eq!(preview[0].source_path, source_path);
+    assert_eq!(
+        preview[0].plugin_id.as_deref(),
+        Some("demo-plugin@test-marketplace")
+    );
     let listed = crate::list_hooks(crate::HooksConfig {
         legacy_notify_argv: None,
         feature_enabled: true,
@@ -1243,6 +1247,10 @@ print(json.dumps({
 
     assert_eq!(outcome.hook_events.len(), 1);
     assert_eq!(outcome.hook_events[0].run.source, HookSource::Plugin);
+    assert_eq!(
+        outcome.hook_events[0].run.plugin_id.as_deref(),
+        Some("demo-plugin@test-marketplace")
+    );
     assert_eq!(
         outcome.hook_events[0].run.status,
         HookRunStatus::Completed,

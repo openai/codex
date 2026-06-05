@@ -1489,6 +1489,7 @@ pub struct HookRunSummary {
     pub source_path: AbsolutePathBuf,
     #[serde(default)]
     pub source: HookSource,
+    pub plugin_id: Option<String>,
     pub display_order: i64,
     pub status: HookRunStatus,
     pub status_message: Option<String>,

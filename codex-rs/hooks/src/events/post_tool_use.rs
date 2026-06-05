@@ -555,6 +555,7 @@ mod tests {
             status_message: Some("running post tool use hook".to_string()),
             source_path: test_path_buf("/tmp/hooks.json").abs(),
             source: codex_protocol::protocol::HookSource::User,
+            plugin_id: None,
             display_order: 0,
             env: std::collections::HashMap::new(),
         }

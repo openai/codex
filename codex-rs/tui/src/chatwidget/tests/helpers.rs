@@ -1483,6 +1483,7 @@ pub(super) fn hook_run(
         scope: codex_app_server_protocol::HookScope::Turn,
         source_path: PathBuf::from(test_path_display("/tmp/hooks.json")).abs(),
         source: codex_app_server_protocol::HookSource::User,
+        plugin_id: None,
         display_order: 0,
         status,
         status_message: Some(status_message.to_string()),
