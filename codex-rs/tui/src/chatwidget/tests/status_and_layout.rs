@@ -1520,6 +1520,48 @@ async fn finalize_turn_persists_structural_plan_tail_as_history_cell() {
 }
 
 #[tokio::test]
+async fn interrupted_stream_tail_is_not_persisted_on_finalize_turn() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.on_task_started();
+    chat.on_agent_message_delta("prefix already emitted\n".to_string());
+    chat.on_agent_message_delta("preview tail should be dropped\n".to_string());
+    chat.on_commit_tick();
+    drain_insert_history(&mut rx);
+
+    let active_before = chat
+        .transcript
+        .active_cell
+        .as_ref()
+        .map(|cell| lines_to_single_string(&cell.display_lines(/*width*/ 80)))
+        .unwrap_or_default();
+    assert!(
+        active_before.contains("preview tail should be dropped"),
+        "expected preview tail before interrupt, got {active_before:?}",
+    );
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+    match op_rx.try_recv() {
+        Ok(Op::Interrupt { .. }) => {}
+        other => panic!("expected Op::Interrupt, got {other:?}"),
+    }
+
+    chat.finalize_turn();
+
+    let inserted = drain_insert_history(&mut rx);
+    let rendered = inserted
+        .iter()
+        .map(|cell| lines_to_single_string(cell))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        !rendered.contains("preview tail should be dropped"),
+        "interrupted preview tail should not be persisted, got {rendered:?}",
+    );
+    assert!(chat.stream_controller.is_none());
+}
+
+#[tokio::test]
 async fn raw_output_toggle_refreshes_active_stream_tail() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 

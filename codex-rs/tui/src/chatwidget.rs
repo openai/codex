@@ -1830,6 +1830,8 @@ impl ChatWidget {
             if let Some(controller) = self.plan_stream_controller.as_mut() {
                 controller.clear_queue();
             }
+            self.stream_controller = None;
+            self.plan_stream_controller = None;
             self.clear_active_stream_tail();
             self.request_redraw();
         }

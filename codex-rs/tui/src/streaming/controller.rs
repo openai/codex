@@ -792,6 +792,29 @@ fn visible_text_source_boundary(source: &str, visible_prefix: &str) -> Option<us
             continue;
         }
 
+        if ch == '&'
+            && let Some((entity_char, entity_end)) = markdown_entity_at(source, idx)
+        {
+            match visible_chars.peek().copied() {
+                Some(expected) if expected == entity_char => {
+                    visible_chars.next();
+                    if visible_chars.peek().is_none() {
+                        return Some(entity_end);
+                    }
+                    while let Some((next_idx, _)) = iter.peek().copied() {
+                        if next_idx < entity_end {
+                            iter.next();
+                        } else {
+                            break;
+                        }
+                    }
+                    at_line_start = false;
+                    continue;
+                }
+                _ => return None,
+            }
+        }
+
         if ch == '[' {
             let mut label_end = None;
             let mut label_chars = Vec::new();
@@ -902,6 +925,21 @@ fn skip_line_marker(
     }
 
     false
+}
+
+fn markdown_entity_at(source: &str, start: usize) -> Option<(char, usize)> {
+    for (entity, ch) in [
+        ("&amp;", '&'),
+        ("&lt;", '<'),
+        ("&gt;", '>'),
+        ("&quot;", '"'),
+        ("&#39;", '\''),
+    ] {
+        if source[start..].starts_with(entity) {
+            return Some((ch, start + entity.len()));
+        }
+    }
+    None
 }
 
 fn skip_link_destination(source: &str, label_end: usize) -> Option<usize> {
@@ -3036,6 +3074,36 @@ mod tests {
         assert!(
             joined.contains("delta") && joined.contains("tail line"),
             "raw suffix should preserve un-emitted escaped-marker text; emitted before toggle: {first_emit:?}, finalized after toggle: {joined:?}",
+        );
+    }
+
+    #[test]
+    fn controller_set_render_mode_raw_suffix_skips_markdown_entity() {
+        let mut ctrl = stream_controller(Some(/*width*/ 9));
+        ctrl.push("alpha &amp; beta gamma delta epsilon zeta eta theta\n");
+        ctrl.push("tail line\n");
+
+        let (first_emit, idle) = ctrl.on_commit_tick();
+        let first_emit = first_emit
+            .expect("expected first rich wrapped entity emission")
+            .transcript_lines(u16::MAX);
+        assert!(!idle, "expected remaining rich content after one tick");
+
+        ctrl.set_render_mode(HistoryRenderMode::Raw);
+
+        let (cell, _source) = ctrl.finalize();
+        let remaining = cell
+            .map(|c| lines_to_plain_strings(&c.transcript_lines(u16::MAX)))
+            .unwrap_or_default();
+        let first_emit = lines_to_plain_strings(&first_emit).join("\n");
+        let joined = remaining.join("\n");
+        assert!(
+            !joined.contains("amp;") && !joined.contains("alpha &amp;"),
+            "raw suffix must not resume inside an already-visible markdown entity; emitted before toggle: {first_emit:?}, finalized after toggle: {joined:?}",
+        );
+        assert!(
+            joined.contains("beta") && joined.contains("tail line"),
+            "raw suffix should preserve text after the markdown entity; emitted before toggle: {first_emit:?}, finalized after toggle: {joined:?}",
         );
     }
 
