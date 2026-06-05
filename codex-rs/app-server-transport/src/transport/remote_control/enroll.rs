@@ -6,6 +6,7 @@ use super::protocol::RefreshRemoteServerRequest;
 use super::protocol::RemoteControlTarget;
 use super::protocol::StartRemoteControlPairingRequest;
 use super::protocol::StartRemoteControlPairingResponse;
+use crate::transport::RemoteControlApnsRegistration;
 use axum::http::HeaderMap;
 use codex_app_server_protocol::RemoteControlPairingStartResponse;
 use codex_login::default_client::build_reqwest_client;
@@ -336,6 +337,7 @@ pub(super) async fn enroll_remote_control_server(
     auth: &RemoteControlConnectionAuth,
     installation_id: &str,
     server_name: &str,
+    apns_registration: Option<&RemoteControlApnsRegistration>,
 ) -> io::Result<RemoteControlEnrollment> {
     let enroll_url = &remote_control_target.enroll_url;
     let request = EnrollRemoteServerRequest {
@@ -344,6 +346,7 @@ pub(super) async fn enroll_remote_control_server(
         arch: std::env::consts::ARCH,
         app_server_version: env!("CARGO_PKG_VERSION"),
         installation_id: installation_id.to_string(),
+        apns_registration: apns_registration.cloned(),
     };
     let enrollment_response = send_remote_control_server_request::<_, EnrollRemoteServerResponse>(
         enroll_url,
@@ -375,12 +378,14 @@ pub(super) async fn enroll_remote_control_server(
 pub(super) async fn refresh_remote_control_server(
     auth: &RemoteControlConnectionAuth,
     installation_id: &str,
+    apns_registration: Option<&RemoteControlApnsRegistration>,
     enrollment: &mut RemoteControlEnrollment,
 ) -> io::Result<()> {
     let refresh_url = enrollment.remote_control_target.refresh_url.clone();
     let request = RefreshRemoteServerRequest {
         server_id: enrollment.server_id.clone(),
         installation_id: installation_id.to_string(),
+        apns_registration: apns_registration.cloned(),
     };
     let refreshed = send_remote_control_server_request::<_, EnrollRemoteServerResponse>(
         &refresh_url,
@@ -744,6 +749,7 @@ mod tests {
             },
             "11111111-1111-4111-8111-111111111111",
             "test-server",
+            /*apns_registration*/ None,
         )
         .await
         .expect_err("invalid response should fail to parse");

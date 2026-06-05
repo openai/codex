@@ -1,4 +1,5 @@
 use crate::outgoing_message::OutgoingMessage;
+use crate::transport::RemoteControlApnsRegistration;
 use codex_app_server_protocol::JSONRPCMessage;
 use serde::Deserialize;
 use serde::Serialize;
@@ -22,6 +23,8 @@ pub(super) struct EnrollRemoteServerRequest {
     pub(super) arch: &'static str,
     pub(super) app_server_version: &'static str,
     pub(super) installation_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) apns_registration: Option<RemoteControlApnsRegistration>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -36,6 +39,8 @@ pub(super) struct EnrollRemoteServerResponse {
 pub(super) struct RefreshRemoteServerRequest {
     pub(super) server_id: String,
     pub(super) installation_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) apns_registration: Option<RemoteControlApnsRegistration>,
 }
 
 #[derive(Debug, Serialize)]

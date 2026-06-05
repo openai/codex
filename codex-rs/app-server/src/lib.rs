@@ -28,6 +28,7 @@ use crate::outgoing_message::OutgoingMessageSender;
 use crate::outgoing_message::QueuedOutgoingMessage;
 use crate::transport::CHANNEL_CAPACITY;
 use crate::transport::ConnectionState;
+use crate::transport::InitializeClientMetadata;
 use crate::transport::OutboundConnectionState;
 use crate::transport::RemoteControlStartConfig;
 use crate::transport::TransportEvent;
@@ -663,16 +664,17 @@ pub async fn run_main_with_transport_options(
     let shutdown_when_no_connections = single_client_mode;
     let graceful_signal_restart_enabled =
         runtime_options.install_shutdown_signal_handler && !single_client_mode;
-    let mut app_server_client_name_rx = None;
+    let mut app_server_client_metadata_rx = None;
 
     match &transport {
         AppServerTransport::Stdio => {
-            let (stdio_client_name_tx, stdio_client_name_rx) = oneshot::channel::<String>();
-            app_server_client_name_rx = Some(stdio_client_name_rx);
+            let (stdio_client_metadata_tx, stdio_client_metadata_rx) =
+                oneshot::channel::<InitializeClientMetadata>();
+            app_server_client_metadata_rx = Some(stdio_client_metadata_rx);
             start_stdio_connection(
                 transport_event_tx.clone(),
                 &mut transport_accept_handles,
-                stdio_client_name_tx,
+                stdio_client_metadata_tx,
             )
             .await?;
         }
@@ -727,7 +729,7 @@ pub async fn run_main_with_transport_options(
         auth_manager.clone(),
         transport_event_tx.clone(),
         transport_shutdown_token.clone(),
-        app_server_client_name_rx,
+        app_server_client_metadata_rx,
         remote_control_enabled,
     )
     .await?;

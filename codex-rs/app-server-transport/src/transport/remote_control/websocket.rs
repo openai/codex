@@ -12,6 +12,8 @@ use super::segment::ClientSegmentObservation;
 use super::segment::ClientSegmentReassembler;
 use super::segment::REMOTE_CONTROL_SEGMENT_MAX_BYTES;
 use super::segment::split_server_envelope_for_transport;
+use crate::transport::InitializeClientMetadata;
+use crate::transport::RemoteControlApnsRegistration;
 use crate::transport::TransportEvent;
 use crate::transport::remote_control::auth::RemoteControlConnectionAuth;
 use crate::transport::remote_control::auth::load_remote_control_auth;
@@ -379,6 +381,7 @@ pub(super) struct RemoteControlConnectOptions<'a> {
     server_name: &'a str,
     subscribe_cursor: Option<&'a str>,
     app_server_client_name: Option<&'a str>,
+    remote_control_apns_registration: Option<&'a RemoteControlApnsRegistration>,
 }
 
 impl RemoteControlWebsocket {
@@ -435,7 +438,7 @@ impl RemoteControlWebsocket {
     )]
     pub(crate) async fn run(
         mut self,
-        app_server_client_name_rx: Option<oneshot::Receiver<String>>,
+        app_server_client_metadata_rx: Option<oneshot::Receiver<InitializeClientMetadata>>,
     ) {
         info!(
             remote_control_url = %self.remote_control_url,
@@ -444,23 +447,26 @@ impl RemoteControlWebsocket {
             initial_enabled = *self.enabled_rx.borrow(),
             "app-server remote control websocket loop started"
         );
-        let app_server_client_name = match self
-            .wait_for_app_server_client_name(app_server_client_name_rx)
+        let app_server_client_metadata = match self
+            .wait_for_app_server_client_metadata(app_server_client_metadata_rx)
             .await
         {
-            Ok(app_server_client_name) => app_server_client_name,
+            Ok(app_server_client_metadata) => app_server_client_metadata,
             Err(_) => {
                 warn!(
                     remote_control_url = %self.remote_control_url,
                     installation_id = %self.installation_id,
                     server_name = %self.server_name,
                     shutdown_requested = self.shutdown_token.is_cancelled(),
-                    "app-server remote control websocket loop stopped before client name was ready"
+                    "app-server remote control websocket loop stopped before client metadata was ready"
                 );
                 self.client_tracker.lock().await.shutdown().await;
                 return;
             }
         };
+        let app_server_client_name = app_server_client_metadata
+            .as_ref()
+            .map(|metadata| metadata.client_name.clone());
         self.pairing_persistence_key
             .send_replace(app_server_client_name.clone());
 
@@ -489,7 +495,7 @@ impl RemoteControlWebsocket {
             );
             let shutdown_token = self.shutdown_token.child_token();
             let websocket_connection = match self
-                .connect(&shutdown_token, app_server_client_name.as_deref())
+                .connect(&shutdown_token, app_server_client_metadata.as_ref())
                 .await
             {
                 ConnectOutcome::Connected(websocket_connection) => *websocket_connection,
@@ -527,16 +533,16 @@ impl RemoteControlWebsocket {
         );
     }
 
-    async fn wait_for_app_server_client_name(
+    async fn wait_for_app_server_client_metadata(
         &self,
-        app_server_client_name_rx: Option<oneshot::Receiver<String>>,
-    ) -> Result<Option<String>, ()> {
-        match app_server_client_name_rx {
-            Some(app_server_client_name_rx) => {
+        app_server_client_metadata_rx: Option<oneshot::Receiver<InitializeClientMetadata>>,
+    ) -> Result<Option<InitializeClientMetadata>, ()> {
+        match app_server_client_metadata_rx {
+            Some(app_server_client_metadata_rx) => {
                 tokio::select! {
                     _ = self.shutdown_token.cancelled() => Err(()),
-                    app_server_client_name = app_server_client_name_rx => match app_server_client_name {
-                        Ok(app_server_client_name) => Ok(Some(app_server_client_name)),
+                    app_server_client_metadata = app_server_client_metadata_rx => match app_server_client_metadata {
+                        Ok(app_server_client_metadata) => Ok(Some(app_server_client_metadata)),
                         Err(_) => Err(()),
                     },
                 }
@@ -555,7 +561,7 @@ impl RemoteControlWebsocket {
     async fn connect(
         &mut self,
         shutdown_token: &CancellationToken,
-        app_server_client_name: Option<&str>,
+        app_server_client_metadata: Option<&InitializeClientMetadata>,
     ) -> ConnectOutcome {
         self.status_publisher
             .publish_status(RemoteControlConnectionStatus::Connecting);
@@ -586,6 +592,10 @@ impl RemoteControlWebsocket {
         loop {
             let subscribe_cursor = self.state.lock().await.subscribe_cursor.clone();
             let enrollment = self.current_enrollment.snapshot();
+            let app_server_client_name =
+                app_server_client_metadata.map(|metadata| metadata.client_name.as_str());
+            let remote_control_apns_registration = app_server_client_metadata
+                .and_then(|metadata| metadata.remote_control_apns_registration.as_ref());
             info!(
                 websocket_url = %remote_control_target.websocket_url,
                 installation_id = %self.installation_id,
@@ -596,6 +606,7 @@ impl RemoteControlWebsocket {
                 environment_id = ?enrollment.as_ref().map(|enrollment| enrollment.environment_id.as_str()),
                 subscribe_cursor_present = subscribe_cursor.is_some(),
                 app_server_client_name = ?app_server_client_name,
+                has_remote_control_apns_registration = remote_control_apns_registration.is_some(),
                 "connecting to app-server remote control websocket"
             );
             let connect_options = RemoteControlConnectOptions {
@@ -603,6 +614,7 @@ impl RemoteControlWebsocket {
                 server_name: &self.server_name,
                 subscribe_cursor: subscribe_cursor.as_deref(),
                 app_server_client_name,
+                remote_control_apns_registration,
             };
             let auth_context = RemoteControlAuthContext {
                 auth_manager: &self.auth_manager,
@@ -1386,8 +1398,13 @@ async fn prepare_remote_control_enrollment(
         let enrollment_ref = enrollment.as_mut().ok_or_else(|| {
             io::Error::other("missing remote control enrollment before server refresh")
         })?;
-        match refresh_remote_control_server(&auth, connect_options.installation_id, enrollment_ref)
-            .await
+        match refresh_remote_control_server(
+            &auth,
+            connect_options.installation_id,
+            connect_options.remote_control_apns_registration,
+            enrollment_ref,
+        )
+        .await
         {
             Ok(()) => {}
             Err(err) if err.kind() == ErrorKind::NotFound => {
@@ -1524,6 +1541,7 @@ async fn enroll_remote_control_server_if_missing(
         auth,
         connect_options.installation_id,
         connect_options.server_name,
+        connect_options.remote_control_apns_registration,
     )
     .await
     {
@@ -1822,6 +1840,7 @@ mod tests {
                 server_name: "test-server",
                 subscribe_cursor: None,
                 app_server_client_name: None,
+                remote_control_apns_registration: None,
             },
             &status_publisher,
         )
@@ -1886,6 +1905,7 @@ mod tests {
                 server_name: "test-server",
                 subscribe_cursor: None,
                 app_server_client_name: None,
+                remote_control_apns_registration: None,
             },
             &status_publisher,
         )
@@ -1968,6 +1988,7 @@ mod tests {
                 server_name: "test-server",
                 subscribe_cursor: None,
                 app_server_client_name: None,
+                remote_control_apns_registration: None,
             },
             &status_publisher,
         )
@@ -2062,6 +2083,7 @@ mod tests {
                 server_name: "test-server",
                 subscribe_cursor: None,
                 app_server_client_name: None,
+                remote_control_apns_registration: None,
             },
             &status_publisher,
         )
@@ -2127,6 +2149,7 @@ mod tests {
                 server_name: "test-server",
                 subscribe_cursor: None,
                 app_server_client_name: None,
+                remote_control_apns_registration: None,
             },
             &status_publisher,
         )
@@ -2177,6 +2200,7 @@ mod tests {
                 server_name: "test-server",
                 subscribe_cursor: None,
                 app_server_client_name: None,
+                remote_control_apns_registration: None,
             },
             &status_publisher,
         )

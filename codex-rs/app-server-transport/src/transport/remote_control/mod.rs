@@ -22,6 +22,7 @@ use self::protocol::ServerEvent;
 use self::protocol::StreamId;
 use self::protocol::normalize_remote_control_url;
 use super::CHANNEL_CAPACITY;
+use super::InitializeClientMetadata;
 use super::TransportEvent;
 use super::next_connection_id;
 use codex_app_server_protocol::RemoteControlClientsListParams;
@@ -445,8 +446,14 @@ async fn enroll_pairing_server(
     installation_id: &str,
     server_name: &str,
 ) -> io::Result<RemoteControlEnrollment> {
-    match enroll_remote_control_server(remote_control_target, auth, installation_id, server_name)
-        .await
+    match enroll_remote_control_server(
+        remote_control_target,
+        auth,
+        installation_id,
+        server_name,
+        /*apns_registration*/ None,
+    )
+    .await
     {
         Ok(enrollment) => return Ok(enrollment),
         Err(err) if err.kind() == io::ErrorKind::PermissionDenied => {
@@ -461,7 +468,14 @@ async fn enroll_pairing_server(
         }
         Err(err) => return Err(err),
     }
-    enroll_remote_control_server(remote_control_target, auth, installation_id, server_name).await
+    enroll_remote_control_server(
+        remote_control_target,
+        auth,
+        installation_id,
+        server_name,
+        /*apns_registration*/ None,
+    )
+    .await
 }
 
 async fn refresh_pairing_enrollment(
@@ -473,7 +487,14 @@ async fn refresh_pairing_enrollment(
     installation_id: &str,
     enrollment: &mut RemoteControlEnrollment,
 ) -> io::Result<()> {
-    if let Err(err) = refresh_remote_control_server(auth, installation_id, enrollment).await {
+    if let Err(err) = refresh_remote_control_server(
+        auth,
+        installation_id,
+        /*apns_registration*/ None,
+        enrollment,
+    )
+    .await
+    {
         if err.kind() != io::ErrorKind::PermissionDenied {
             return handle_pairing_refresh_error(
                 current_enrollment,
@@ -495,7 +516,14 @@ async fn refresh_pairing_enrollment(
         if auth.account_id != enrollment.account_id {
             return Err(pairing_unavailable_error());
         }
-        if let Err(err) = refresh_remote_control_server(auth, installation_id, enrollment).await {
+        if let Err(err) = refresh_remote_control_server(
+            auth,
+            installation_id,
+            /*apns_registration*/ None,
+            enrollment,
+        )
+        .await
+        {
             return handle_pairing_refresh_error(
                 current_enrollment,
                 state_db,
@@ -647,7 +675,7 @@ pub async fn start_remote_control(
     auth_manager: Arc<AuthManager>,
     transport_event_tx: mpsc::Sender<TransportEvent>,
     shutdown_token: CancellationToken,
-    app_server_client_name_rx: Option<oneshot::Receiver<String>>,
+    app_server_client_metadata_rx: Option<oneshot::Receiver<InitializeClientMetadata>>,
     initial_enabled: bool,
 ) -> io::Result<(JoinHandle<()>, RemoteControlHandle)> {
     let state_db_available = state_db.is_some();
@@ -665,7 +693,7 @@ pub async fn start_remote_control(
     let (enabled_tx, enabled_rx) = watch::channel(initial_enabled);
     let current_enrollment = Arc::new(RemoteControlEnrollmentState::new(/*enrollment*/ None));
     let websocket_current_enrollment = current_enrollment.clone();
-    let pairing_persistence_key_required = app_server_client_name_rx.is_some();
+    let pairing_persistence_key_required = app_server_client_metadata_rx.is_some();
     let (pairing_persistence_key, _pairing_persistence_key_rx) = watch::channel(None);
     let websocket_pairing_persistence_key = pairing_persistence_key.clone();
     let handle_auth_manager = auth_manager.clone();
@@ -724,7 +752,7 @@ pub async fn start_remote_control(
             shutdown_token,
             enabled_rx,
         )
-        .run(app_server_client_name_rx);
+        .run(app_server_client_metadata_rx);
         match AssertUnwindSafe(websocket_task).catch_unwind().await {
             Ok(()) => {
                 let shutdown_requested = shutdown_token_for_log.is_cancelled();

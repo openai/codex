@@ -1,5 +1,6 @@
 use super::CHANNEL_CAPACITY;
 use super::ConnectionOrigin;
+use super::InitializeClientMetadata;
 use super::TransportEvent;
 use super::forward_incoming_message;
 use super::next_connection_id;
@@ -24,7 +25,7 @@ use tracing::info;
 pub async fn start_stdio_connection(
     transport_event_tx: mpsc::Sender<TransportEvent>,
     stdio_handles: &mut Vec<JoinHandle<()>>,
-    initialize_client_name_tx: oneshot::Sender<String>,
+    initialize_client_metadata_tx: oneshot::Sender<InitializeClientMetadata>,
 ) -> IoResult<()> {
     let connection_id = next_connection_id();
     let (writer_tx, mut writer_rx) = mpsc::channel::<QueuedOutgoingMessage>(CHANNEL_CAPACITY);
@@ -44,15 +45,16 @@ pub async fn start_stdio_connection(
         let stdin = io::stdin();
         let reader = BufReader::new(stdin);
         let mut lines = reader.lines();
-        let mut initialize_client_name_tx = Some(initialize_client_name_tx);
+        let mut initialize_client_metadata_tx = Some(initialize_client_metadata_tx);
 
         loop {
             match lines.next_line().await {
                 Ok(Some(line)) => {
-                    if let Some(client_name) = stdio_initialize_client_name(&line)
-                        && let Some(initialize_client_name_tx) = initialize_client_name_tx.take()
+                    if let Some(metadata) = stdio_initialize_client_metadata(&line)
+                        && let Some(initialize_client_metadata_tx) =
+                            initialize_client_metadata_tx.take()
                     {
-                        let _ = initialize_client_name_tx.send(client_name);
+                        let _ = initialize_client_metadata_tx.send(metadata);
                     }
                     if !forward_incoming_message(
                         &transport_event_tx_for_reader,
@@ -100,7 +102,7 @@ pub async fn start_stdio_connection(
     Ok(())
 }
 
-fn stdio_initialize_client_name(line: &str) -> Option<String> {
+fn stdio_initialize_client_metadata(line: &str) -> Option<InitializeClientMetadata> {
     let message = serde_json::from_str::<JSONRPCMessage>(line).ok()?;
     let JSONRPCMessage::Request(JSONRPCRequest { method, params, .. }) = message else {
         return None;
@@ -108,6 +110,64 @@ fn stdio_initialize_client_name(line: &str) -> Option<String> {
     if method != "initialize" {
         return None;
     }
-    let params = serde_json::from_value::<InitializeParams>(params?).ok()?;
-    Some(params.client_info.name)
+    let params = params?;
+    let initialize_params = serde_json::from_value::<InitializeParams>(params.clone()).ok()?;
+    let remote_control_apns_registration = params
+        .get("capabilities")
+        .and_then(|capabilities| capabilities.get("extensions"))
+        .and_then(|extensions| extensions.get("com.openai.codex.remote-control"))
+        .and_then(|remote_control| remote_control.get("apns"))
+        .and_then(|apns| serde_json::from_value(apns.clone()).ok());
+    Some(InitializeClientMetadata {
+        client_name: initialize_params.client_info.name,
+        remote_control_apns_registration,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::transport::RemoteControlApnsEnvironment;
+    use crate::transport::RemoteControlApnsRegistration;
+    use pretty_assertions::assert_eq;
+    use serde_json::json;
+
+    #[test]
+    fn extracts_remote_control_apns_registration_from_initialize_extensions() {
+        let line = json!({
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "clientInfo": {
+                    "name": "codex_desktop",
+                    "title": "Codex Desktop",
+                    "version": "1.2.3"
+                },
+                "capabilities": {
+                    "extensions": {
+                        "com.openai.codex.remote-control": {
+                            "apns": {
+                                "deviceToken": "device-token",
+                                "topic": "com.openai.codex.alpha",
+                                "environment": "development"
+                            }
+                        }
+                    }
+                }
+            }
+        })
+        .to_string();
+
+        assert_eq!(
+            stdio_initialize_client_metadata(&line),
+            Some(InitializeClientMetadata {
+                client_name: "codex_desktop".to_string(),
+                remote_control_apns_registration: Some(RemoteControlApnsRegistration {
+                    device_token: "device-token".to_string(),
+                    topic: "com.openai.codex.alpha".to_string(),
+                    environment: RemoteControlApnsEnvironment::Development,
+                }),
+            })
+        );
+    }
 }

@@ -8,6 +8,8 @@ use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_core::config::find_codex_home;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use serde::Deserialize;
+use serde::Serialize;
 use std::net::SocketAddr;
 use std::path::Path;
 use std::str::FromStr;
@@ -22,6 +24,27 @@ use tracing::warn;
 /// is a balance between throughput and memory usage - 128 messages should be
 /// plenty for an interactive CLI.
 pub const CHANNEL_CAPACITY: usize = 128;
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RemoteControlApnsEnvironment {
+    Development,
+    Production,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct RemoteControlApnsRegistration {
+    #[serde(rename(deserialize = "deviceToken", serialize = "device_token"))]
+    pub device_token: String,
+    pub topic: String,
+    pub environment: RemoteControlApnsEnvironment,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct InitializeClientMetadata {
+    pub client_name: String,
+    pub remote_control_apns_registration: Option<RemoteControlApnsRegistration>,
+}
 
 mod remote_control;
 mod stdio;

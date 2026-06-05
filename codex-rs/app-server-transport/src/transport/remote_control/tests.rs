@@ -1132,6 +1132,8 @@ async fn remote_control_http_mode_enrolls_before_connecting() {
     let (transport_event_tx, mut transport_event_rx) =
         mpsc::channel::<TransportEvent>(CHANNEL_CAPACITY);
     let expected_server_name = gethostname().to_string_lossy().trim().to_string();
+    let (app_server_client_metadata_tx, app_server_client_metadata_rx) =
+        oneshot::channel::<InitializeClientMetadata>();
     let shutdown_token = CancellationToken::new();
     let (remote_task, remote_handle) = start_remote_control(
         RemoteControlStartConfig {
@@ -1142,11 +1144,19 @@ async fn remote_control_http_mode_enrolls_before_connecting() {
         remote_control_auth_manager(),
         transport_event_tx,
         shutdown_token.clone(),
-        /*app_server_client_name_rx*/ None,
+        Some(app_server_client_metadata_rx),
         /*initial_enabled*/ true,
     )
     .await
     .expect("remote control should start");
+    let _ = app_server_client_metadata_tx.send(InitializeClientMetadata {
+        client_name: "codex_desktop".to_string(),
+        remote_control_apns_registration: Some(crate::transport::RemoteControlApnsRegistration {
+            device_token: "device-token".to_string(),
+            topic: "com.openai.codex.alpha".to_string(),
+            environment: crate::transport::RemoteControlApnsEnvironment::Development,
+        }),
+    });
     let mut status_rx = remote_handle.status_receiver();
 
     let enroll_request = accept_http_request(&listener).await;
@@ -1177,6 +1187,11 @@ async fn remote_control_http_mode_enrolls_before_connecting() {
             "arch": std::env::consts::ARCH,
             "app_server_version": env!("CARGO_PKG_VERSION"),
             "installation_id": TEST_INSTALLATION_ID,
+            "apns_registration": {
+                "device_token": "device-token",
+                "topic": "com.openai.codex.alpha",
+                "environment": "development",
+            },
         })
     );
     respond_with_json(
@@ -1454,7 +1469,7 @@ async fn remote_control_http_mode_refreshes_persisted_enrollment_before_connecti
 }
 
 #[tokio::test]
-async fn remote_control_stdio_mode_waits_for_client_name_before_connecting() {
+async fn remote_control_stdio_mode_waits_for_client_metadata_before_connecting() {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("listener should bind");
@@ -1485,7 +1500,8 @@ async fn remote_control_stdio_mode_waits_for_client_name_before_connecting() {
 
     let (transport_event_tx, _transport_event_rx) =
         mpsc::channel::<TransportEvent>(CHANNEL_CAPACITY);
-    let (app_server_client_name_tx, app_server_client_name_rx) = oneshot::channel::<String>();
+    let (app_server_client_metadata_tx, app_server_client_metadata_rx) =
+        oneshot::channel::<InitializeClientMetadata>();
     let shutdown_token = CancellationToken::new();
     let (remote_task, _remote_handle) = start_remote_control(
         RemoteControlStartConfig {
@@ -1496,7 +1512,7 @@ async fn remote_control_stdio_mode_waits_for_client_name_before_connecting() {
         remote_control_auth_manager_with_home(&codex_home),
         transport_event_tx,
         shutdown_token.clone(),
-        Some(app_server_client_name_rx),
+        Some(app_server_client_metadata_rx),
         /*initial_enabled*/ true,
     )
     .await
@@ -1504,13 +1520,33 @@ async fn remote_control_stdio_mode_waits_for_client_name_before_connecting() {
 
     timeout(Duration::from_millis(100), listener.accept())
         .await
-        .expect_err("remote control should wait for the stdio client name");
+        .expect_err("remote control should wait for the stdio client metadata");
 
-    let _ = app_server_client_name_tx.send(app_server_client_name.to_string());
+    let _ = app_server_client_metadata_tx.send(InitializeClientMetadata {
+        client_name: app_server_client_name.to_string(),
+        remote_control_apns_registration: Some(crate::transport::RemoteControlApnsRegistration {
+            device_token: "device-token".to_string(),
+            topic: "com.openai.codex.alpha".to_string(),
+            environment: crate::transport::RemoteControlApnsEnvironment::Development,
+        }),
+    });
     let refresh_request = accept_http_request(&listener).await;
     assert_eq!(
         refresh_request.request_line,
         "POST /backend-api/wham/remote/control/server/refresh HTTP/1.1"
+    );
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&refresh_request.body)
+            .expect("refresh body should deserialize"),
+        json!({
+            "server_id": persisted_enrollment.server_id.clone(),
+            "installation_id": TEST_INSTALLATION_ID,
+            "apns_registration": {
+                "device_token": "device-token",
+                "topic": "com.openai.codex.alpha",
+                "environment": "development",
+            },
+        })
     );
     respond_with_json(
         refresh_request.stream,
