@@ -499,7 +499,7 @@ fn expires_in_from_timestamp(expires_at: u64) -> Option<u64> {
     }
 }
 
-fn token_needs_refresh(expires_at: Option<u64>) -> bool {
+pub(crate) fn token_needs_refresh(expires_at: Option<u64>) -> bool {
     let Some(expires_at) = expires_at else {
         return false;
     };

@@ -3,6 +3,8 @@ mod streamable_http_test_support;
 use std::fs;
 use std::net::TcpListener;
 use std::time::Duration;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 use codex_config::types::OAuthCredentialsStoreMode;
 use codex_exec_server::Environment;
@@ -46,7 +48,8 @@ async fn blank_client_ids_are_not_logged_in_without_discovery() -> anyhow::Resul
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
-async fn blank_refresh_tokens_do_not_make_expired_credentials_usable() -> anyhow::Result<()> {
+async fn expired_credentials_require_nonblank_refresh_token() -> anyhow::Result<()> {
+    run_child("expired_without_refresh", "not-a-valid-url").await?;
     run_child("expired_with_empty_refresh", "not-a-valid-url").await?;
     run_child("expired_with_whitespace_refresh", "not-a-valid-url").await
 }
@@ -57,8 +60,19 @@ async fn refreshable_expired_credentials_report_oauth() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn refresh_window_boundary_matches_startup_refresh() -> anyhow::Result<()> {
+    run_child("inside_refresh_window", "not-a-valid-url").await?;
+    run_child("outside_refresh_window", "not-a-valid-url").await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn future_credentials_without_refresh_report_oauth_without_discovery() -> anyhow::Result<()> {
     run_child("future_without_refresh", "not-a-valid-url").await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn legacy_credentials_without_expiry_report_oauth_without_discovery() -> anyhow::Result<()> {
+    run_child("legacy_without_expiry", "not-a-valid-url").await
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
@@ -147,6 +161,35 @@ async fn oauth_auth_status_child() -> anyhow::Result<()> {
         return Ok(());
     }
 
+    if scenario == "legacy_without_expiry" {
+        let response = OAuthTokenResponse::new(
+            AccessToken::new("access-token".to_string()),
+            BasicTokenType::Bearer,
+            VendorExtraTokenFields::default(),
+        );
+        save_oauth_tokens(
+            SERVER_NAME,
+            &StoredOAuthTokens {
+                server_name: SERVER_NAME.to_string(),
+                url: server_url.clone(),
+                client_id: "client-id".to_string(),
+                token_response: WrappedOAuthTokenResponse(response),
+                expires_at: None,
+            },
+            OAuthCredentialsStoreMode::File,
+        )?;
+
+        assert_eq!(
+            determine_auth_status(&server_url).await?,
+            McpAuthStatus::OAuth
+        );
+        return Ok(());
+    }
+
+    let now_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_else(|_| Duration::from_secs(0))
+        .as_millis() as u64;
     let (access_token, client_id, refresh_token, expires_at, expected_status) =
         match scenario.as_str() {
             "empty_access_token" => (
@@ -175,6 +218,13 @@ async fn oauth_auth_status_child() -> anyhow::Result<()> {
                 " \t ",
                 /*refresh_token*/ None,
                 /*expires_at*/ None,
+                McpAuthStatus::NotLoggedIn,
+            ),
+            "expired_without_refresh" => (
+                "expired-access-token",
+                "client-id",
+                /*refresh_token*/ None,
+                Some(0),
                 McpAuthStatus::NotLoggedIn,
             ),
             "expired_with_empty_refresh" => (
@@ -211,6 +261,20 @@ async fn oauth_auth_status_child() -> anyhow::Result<()> {
                 Some("refresh-token"),
                 Some(0),
                 McpAuthStatus::OAuth,
+            ),
+            "inside_refresh_window" => (
+                "",
+                "client-id",
+                Some("refresh-token"),
+                Some(now_ms.saturating_add(29_000)),
+                McpAuthStatus::OAuth,
+            ),
+            "outside_refresh_window" => (
+                "",
+                "client-id",
+                Some("refresh-token"),
+                Some(now_ms.saturating_add(31_000)),
+                McpAuthStatus::NotLoggedIn,
             ),
             "future_without_refresh" => (
                 "access-token",
@@ -251,9 +315,12 @@ async fn oauth_auth_status_child() -> anyhow::Result<()> {
         | "whitespace_access_token"
         | "empty_client_id"
         | "whitespace_client_id"
+        | "expired_without_refresh"
         | "expired_with_empty_refresh"
         | "expired_with_whitespace_refresh"
         | "expired_with_refresh"
+        | "inside_refresh_window"
+        | "outside_refresh_window"
         | "future_without_refresh" => {}
         unexpected => panic!("unexpected child scenario: {unexpected}"),
     }

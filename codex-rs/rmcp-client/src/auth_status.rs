@@ -1,7 +1,5 @@
 use std::collections::HashMap;
 use std::time::Duration;
-use std::time::SystemTime;
-use std::time::UNIX_EPOCH;
 
 use anyhow::Error;
 use anyhow::Result;
@@ -17,6 +15,7 @@ use tracing::debug;
 
 use crate::oauth::StoredOAuthTokens;
 use crate::oauth::load_oauth_tokens;
+use crate::oauth::token_needs_refresh;
 use crate::utils::apply_default_headers;
 use crate::utils::build_default_headers;
 use codex_config::types::OAuthCredentialsStoreMode;
@@ -73,15 +72,7 @@ fn stored_oauth_tokens_are_locally_usable(tokens: &StoredOAuthTokens) -> bool {
         return false;
     }
 
-    let now_ms = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_else(|_| Duration::from_secs(0))
-        .as_millis() as u64;
-    let is_expired = tokens
-        .expires_at
-        .is_some_and(|expires_at| expires_at <= now_ms);
-
-    if is_expired {
+    if token_needs_refresh(tokens.expires_at) {
         return tokens
             .token_response
             .0
