@@ -440,7 +440,6 @@ impl RmcpClient {
         params: Option<PaginatedRequestParams>,
         timeout: Option<Duration>,
     ) -> Result<ListToolsResult> {
-        self.refresh_oauth_if_needed().await;
         let result = self
             .run_service_operation("tools/list", timeout, move |service| {
                 let params = params.clone();
@@ -456,7 +455,6 @@ impl RmcpClient {
         params: Option<PaginatedRequestParams>,
         timeout: Option<Duration>,
     ) -> Result<ListToolsWithConnectorIdResult> {
-        self.refresh_oauth_if_needed().await;
         let result = self
             .run_service_operation("tools/list", timeout, move |service| {
                 let params = params.clone();
@@ -501,7 +499,6 @@ impl RmcpClient {
         params: Option<PaginatedRequestParams>,
         timeout: Option<Duration>,
     ) -> Result<ListResourcesResult> {
-        self.refresh_oauth_if_needed().await;
         let result = self
             .run_service_operation("resources/list", timeout, move |service| {
                 let params = params.clone();
@@ -517,7 +514,6 @@ impl RmcpClient {
         params: Option<PaginatedRequestParams>,
         timeout: Option<Duration>,
     ) -> Result<ListResourceTemplatesResult> {
-        self.refresh_oauth_if_needed().await;
         let result = self
             .run_service_operation("resources/templates/list", timeout, move |service| {
                 let params = params.clone();
@@ -533,7 +529,6 @@ impl RmcpClient {
         params: ReadResourceRequestParams,
         timeout: Option<Duration>,
     ) -> Result<ReadResourceResult> {
-        self.refresh_oauth_if_needed().await;
         let result = self
             .run_service_operation("resources/read", timeout, move |service| {
                 let params = params.clone();
@@ -551,7 +546,6 @@ impl RmcpClient {
         meta: Option<serde_json::Value>,
         timeout: Option<Duration>,
     ) -> Result<CallToolResult> {
-        self.refresh_oauth_if_needed().await;
         let arguments = match arguments {
             Some(Value::Object(map)) => Some(map),
             Some(other) => {
@@ -607,7 +601,6 @@ impl RmcpClient {
         method: &str,
         params: Option<serde_json::Value>,
     ) -> Result<()> {
-        self.refresh_oauth_if_needed().await;
         self.run_service_operation(
             "notifications/custom",
             /*timeout*/ None,
@@ -637,7 +630,6 @@ impl RmcpClient {
         method: &str,
         params: Option<serde_json::Value>,
     ) -> Result<ServerResult> {
-        self.refresh_oauth_if_needed().await;
         let response = self
             .run_service_operation("requests/custom", /*timeout*/ None, move |service| {
                 let params = params.clone();
@@ -698,14 +690,6 @@ impl RmcpClient {
             && let Err(error) = runtime.persist_if_needed().await
         {
             warn!("failed to persist OAuth tokens: {error}");
-        }
-    }
-
-    async fn refresh_oauth_if_needed(&self) {
-        if let Some(runtime) = self.oauth_persistor().await
-            && let Err(error) = runtime.refresh_if_needed().await
-        {
-            warn!("failed to refresh OAuth tokens: {error}");
         }
     }
 
@@ -876,8 +860,10 @@ impl RmcpClient {
         Fut: std::future::Future<Output = std::result::Result<T, rmcp::service::ServiceError>>,
     {
         let service = self.service().await?;
+        let oauth_persistor = self.oauth_persistor().await;
         match Self::run_service_operation_once(
             Arc::clone(&service),
+            oauth_persistor,
             label,
             timeout,
             self.elicitation_pause_state.clone(),
@@ -889,8 +875,10 @@ impl RmcpClient {
             Err(error) if Self::is_session_expired_404(&error) => {
                 self.reinitialize_after_session_expiry(&service).await?;
                 let recovered_service = self.service().await?;
+                let oauth_persistor = self.oauth_persistor().await;
                 Self::run_service_operation_once(
                     recovered_service,
+                    oauth_persistor,
                     label,
                     timeout,
                     self.elicitation_pause_state.clone(),
@@ -905,6 +893,7 @@ impl RmcpClient {
 
     async fn run_service_operation_once<T, F, Fut>(
         service: Arc<RunningService<RoleClient, ElicitationClientService>>,
+        oauth_persistor: Option<OAuthPersistor>,
         label: &str,
         timeout: Option<Duration>,
         pause_state: ElicitationPauseState,
@@ -914,17 +903,25 @@ impl RmcpClient {
         F: Fn(Arc<RunningService<RoleClient, ElicitationClientService>>) -> Fut,
         Fut: std::future::Future<Output = std::result::Result<T, rmcp::service::ServiceError>>,
     {
+        let refresh_and_operation = async move {
+            if let Some(runtime) = oauth_persistor
+                && let Err(error) = runtime.refresh_if_needed().await
+            {
+                warn!("failed to refresh OAuth tokens: {error}");
+            }
+            operation(service).await.map_err(ClientOperationError::from)
+        };
+
         match timeout {
             Some(duration) => {
-                active_time_timeout(duration, pause_state.subscribe(), operation(service))
+                active_time_timeout(duration, pause_state.subscribe(), refresh_and_operation)
                     .await
                     .map_err(|_| ClientOperationError::Timeout {
                         label: label.to_string(),
                         duration,
                     })?
-                    .map_err(ClientOperationError::from)
             }
-            None => operation(service).await.map_err(ClientOperationError::from),
+            None => refresh_and_operation.await,
         }
     }
 

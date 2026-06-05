@@ -531,9 +531,138 @@ fn file_oauth_refresh_lock_path(server_name: &str, url: &str) -> Result<PathBuf>
 
 fn keyring_oauth_refresh_lock_path(server_name: &str, url: &str) -> Result<PathBuf> {
     let lock_id = oauth_refresh_lock_id(server_name, url)?;
-    Ok(std::env::temp_dir().join(format!(
-        "{KEYRING_OAUTH_REFRESH_LOCK_PREFIX}-{lock_id}.lock"
+    let user_namespace = os_user_namespace()?;
+    Ok(os_shared_temp_dir()?.join(format!(
+        "{KEYRING_OAUTH_REFRESH_LOCK_PREFIX}-{user_namespace}-{lock_id}.lock"
     )))
+}
+
+#[cfg(unix)]
+fn os_shared_temp_dir() -> Result<PathBuf> {
+    Ok(PathBuf::from("/tmp"))
+}
+
+#[cfg(unix)]
+fn os_user_namespace() -> Result<String> {
+    // SAFETY: getuid has no preconditions and returns the real UID of this process.
+    Ok(format!("uid-{}", unsafe { libc::getuid() }))
+}
+
+#[cfg(windows)]
+fn os_shared_temp_dir() -> Result<PathBuf> {
+    use std::ffi::OsString;
+    use std::io;
+    use std::os::windows::ffi::OsStringExt;
+    use windows_sys::Win32::System::SystemInformation::GetSystemWindowsDirectoryW;
+
+    let mut buffer = vec![0_u16; 32_768];
+    // SAFETY: buffer is writable for the length passed to GetSystemWindowsDirectoryW.
+    let length = unsafe {
+        GetSystemWindowsDirectoryW(
+            buffer.as_mut_ptr(),
+            u32::try_from(buffer.len()).expect("Windows path buffer length fits in u32"),
+        )
+    };
+    if length == 0 {
+        return Err(io::Error::last_os_error())
+            .context("failed to resolve the system Windows directory");
+    }
+    let length = usize::try_from(length).context("Windows directory length did not fit usize")?;
+    if length >= buffer.len() {
+        return Err(anyhow!(
+            "system Windows directory exceeded the fixed path buffer"
+        ));
+    }
+
+    Ok(PathBuf::from(OsString::from_wide(&buffer[..length])).join("Temp"))
+}
+
+#[cfg(windows)]
+fn os_user_namespace() -> Result<String> {
+    use std::io;
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::Foundation::HANDLE;
+    use windows_sys::Win32::Security::GetLengthSid;
+    use windows_sys::Win32::Security::GetTokenInformation;
+    use windows_sys::Win32::Security::TOKEN_QUERY;
+    use windows_sys::Win32::Security::TOKEN_USER;
+    use windows_sys::Win32::Security::TokenUser;
+    use windows_sys::Win32::System::Threading::GetCurrentProcess;
+    use windows_sys::Win32::System::Threading::OpenProcessToken;
+
+    struct OwnedHandle(HANDLE);
+
+    impl Drop for OwnedHandle {
+        fn drop(&mut self) {
+            if self.0 != 0 {
+                // SAFETY: the handle was returned by OpenProcessToken and is owned here.
+                unsafe {
+                    CloseHandle(self.0);
+                }
+            }
+        }
+    }
+
+    let mut token = 0;
+    // SAFETY: token points to writable storage for the returned process-token handle.
+    if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) } == 0 {
+        return Err(io::Error::last_os_error()).context("failed to open the current process token");
+    }
+    let token = OwnedHandle(token);
+
+    let mut required = 0;
+    // SAFETY: the null-buffer call obtains the required TOKEN_USER buffer length.
+    unsafe {
+        GetTokenInformation(token.0, TokenUser, std::ptr::null_mut(), 0, &mut required);
+    }
+    if required == 0 {
+        return Err(io::Error::last_os_error())
+            .context("failed to size the current process user SID");
+    }
+
+    let mut buffer = vec![0_u8; required as usize];
+    // SAFETY: buffer is writable for required bytes and receives a TOKEN_USER value.
+    if unsafe {
+        GetTokenInformation(
+            token.0,
+            TokenUser,
+            buffer.as_mut_ptr().cast(),
+            required,
+            &mut required,
+        )
+    } == 0
+    {
+        return Err(io::Error::last_os_error())
+            .context("failed to read the current process user SID");
+    }
+
+    // SAFETY: GetTokenInformation initialized the buffer with TOKEN_USER. The
+    // unaligned read avoids assuming Vec<u8> has TOKEN_USER alignment.
+    let token_user = unsafe { std::ptr::read_unaligned(buffer.as_ptr().cast::<TOKEN_USER>()) };
+    // SAFETY: token_user.User.Sid points into buffer and remains valid here.
+    let sid_length = unsafe { GetLengthSid(token_user.User.Sid) };
+    if sid_length == 0 {
+        return Err(io::Error::last_os_error()).context("failed to size the current user SID");
+    }
+    // SAFETY: GetLengthSid returned the byte length of the valid SID in buffer.
+    let sid = unsafe {
+        std::slice::from_raw_parts(token_user.User.Sid.cast::<u8>(), sid_length as usize)
+    };
+    Ok(format!("sid-{}", sha_256_bytes_prefix(sid)))
+}
+
+#[cfg(not(any(unix, windows)))]
+fn os_shared_temp_dir() -> Result<PathBuf> {
+    Err(anyhow!(
+        "keyring OAuth refresh locking is unsupported on this platform"
+    ))
+}
+
+#[cfg(not(any(unix, windows)))]
+fn os_user_namespace() -> Result<String> {
+    Err(anyhow!(
+        "keyring OAuth refresh locking is unsupported on this platform"
+    ))
 }
 
 async fn acquire_oauth_refresh_lock(path: &Path) -> Result<fs::File> {
@@ -844,12 +973,16 @@ fn write_fallback_file(store: &FallbackFile) -> Result<()> {
 fn sha_256_prefix(value: &Value) -> Result<String> {
     let serialized =
         serde_json::to_string(&value).context("failed to serialize MCP OAuth key payload")?;
+    Ok(sha_256_bytes_prefix(serialized.as_bytes()))
+}
+
+fn sha_256_bytes_prefix(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
-    hasher.update(serialized.as_bytes());
+    hasher.update(bytes);
     let digest = hasher.finalize();
     let hex = format!("{digest:x}");
     let truncated = &hex[..16];
-    Ok(truncated.to_string())
+    truncated.to_string()
 }
 
 #[cfg(test)]
@@ -866,6 +999,8 @@ mod tests {
 
     use codex_keyring_store::tests::MockKeyringStore;
 
+    static CODEX_HOME_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
     struct TempCodexHome {
         _guard: MutexGuard<'static, ()>,
         _dir: tempfile::TempDir,
@@ -873,14 +1008,30 @@ mod tests {
 
     impl TempCodexHome {
         fn new() -> Self {
-            static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-            let guard = LOCK
+            let guard = CODEX_HOME_LOCK
                 .get_or_init(Mutex::default)
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner);
             let dir = tempdir().expect("create CODEX_HOME temp dir");
             unsafe {
                 std::env::set_var("CODEX_HOME", dir.path());
+            }
+            Self {
+                _guard: guard,
+                _dir: dir,
+            }
+        }
+
+        fn unusable() -> Self {
+            let guard = CODEX_HOME_LOCK
+                .get_or_init(Mutex::default)
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            let dir = tempdir().expect("create CODEX_HOME parent temp dir");
+            let file = dir.path().join("not-a-directory");
+            fs::write(&file, "not a directory").expect("create unusable CODEX_HOME path");
+            unsafe {
+                std::env::set_var("CODEX_HOME", file);
             }
             Self {
                 _guard: guard,
@@ -904,7 +1055,16 @@ mod tests {
         let other_url = "https://other.example.test/mcp";
 
         let keyring_path = keyring_oauth_refresh_lock_path(&tokens.server_name, &tokens.url)?;
-        assert_eq!(keyring_path.parent(), Some(std::env::temp_dir().as_path()));
+        let shared_temp_dir = os_shared_temp_dir()?;
+        let user_namespace = os_user_namespace()?;
+        assert_eq!(keyring_path.parent(), Some(shared_temp_dir.as_path()));
+        assert!(
+            keyring_path
+                .file_name()
+                .is_some_and(|name| name.to_string_lossy().contains(&user_namespace))
+        );
+        #[cfg(unix)]
+        assert_eq!(shared_temp_dir, PathBuf::from("/tmp"));
         assert_eq!(
             keyring_path,
             keyring_oauth_refresh_lock_path(&tokens.server_name, &tokens.url)?
@@ -917,6 +1077,102 @@ mod tests {
             file_oauth_refresh_lock_path(&tokens.server_name, &tokens.url)?,
             file_oauth_refresh_lock_path(&tokens.server_name, other_url)?
         );
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn keyring_refresh_locking_works_without_codex_home_for_auto_and_keyring() -> Result<()> {
+        let _env = TempCodexHome::unusable();
+        let store = MockKeyringStore::default();
+        let tokens = sample_tokens();
+        let serialized = serde_json::to_string(&tokens)?;
+        let key = compute_store_key(&tokens.server_name, &tokens.url)?;
+        store.save(KEYRING_SERVICE, &key, &serialized)?;
+
+        let held_lock = acquire_oauth_refresh_lock(&keyring_oauth_refresh_lock_path(
+            &tokens.server_name,
+            &tokens.url,
+        )?)
+        .await?;
+        let blocked = tokio::time::timeout(
+            Duration::from_millis(50),
+            lock_and_load_oauth_tokens_with_keyring(
+                &store,
+                &tokens.server_name,
+                &tokens.url,
+                OAuthCredentialsStoreMode::Keyring,
+            ),
+        )
+        .await;
+        assert!(
+            blocked.is_err(),
+            "same keyring credential should wait for its refresh lock"
+        );
+        drop(held_lock);
+
+        for store_mode in [
+            OAuthCredentialsStoreMode::Keyring,
+            OAuthCredentialsStoreMode::Auto,
+        ] {
+            let (locks, loaded) = lock_and_load_oauth_tokens_with_keyring(
+                &store,
+                &tokens.server_name,
+                &tokens.url,
+                store_mode,
+            )
+            .await?;
+            assert_eq!(locks.len(), 1);
+            assert_tokens_match_without_expiry(
+                &loaded.expect("keyring credentials should load"),
+                &tokens,
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn distinct_keyring_credentials_do_not_block_each_other() -> Result<()> {
+        let _env = TempCodexHome::unusable();
+        let store = MockKeyringStore::default();
+        let first = sample_tokens();
+        let mut second = sample_tokens();
+        second.url = "https://other.example.test/mcp".to_string();
+        for tokens in [&first, &second] {
+            let key = compute_store_key(&tokens.server_name, &tokens.url)?;
+            store.save(KEYRING_SERVICE, &key, &serde_json::to_string(tokens)?)?;
+        }
+
+        let held_lock = acquire_oauth_refresh_lock(&keyring_oauth_refresh_lock_path(
+            &first.server_name,
+            &first.url,
+        )?)
+        .await?;
+        for store_mode in [
+            OAuthCredentialsStoreMode::Keyring,
+            OAuthCredentialsStoreMode::Auto,
+        ] {
+            let result = tokio::time::timeout(
+                Duration::from_millis(500),
+                lock_and_load_oauth_tokens_with_keyring(
+                    &store,
+                    &second.server_name,
+                    &second.url,
+                    store_mode,
+                ),
+            )
+            .await;
+            assert!(
+                result.is_ok(),
+                "a distinct keyring credential should not wait for another lock"
+            );
+            let (locks, loaded) = result.expect("timeout checked above")?;
+            assert_eq!(locks.len(), 1);
+            assert_tokens_match_without_expiry(
+                &loaded.expect("second keyring credential should load"),
+                &second,
+            );
+        }
+        drop(held_lock);
         Ok(())
     }
 

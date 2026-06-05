@@ -52,6 +52,7 @@ const NEW_ACCESS_TOKEN: &str = "new-access-token";
 const NEW_REFRESH_TOKEN: &str = "new-one-time-refresh-token";
 const KEYRING_SERVICE: &str = "Codex MCP Credentials";
 const CHILD_WAIT_TIMEOUT: Duration = Duration::from_secs(10);
+const OPERATION_TIMEOUT: Duration = Duration::from_millis(100);
 
 const SERVER_URL_ENV: &str = "MCP_TEST_OAUTH_RACE_SERVER_URL";
 const READY_PATH_ENV: &str = "MCP_TEST_OAUTH_RACE_READY_PATH";
@@ -221,6 +222,168 @@ async fn refresh_lock_wait_uses_startup_timeout_budget() -> anyhow::Result<()> {
         "error:timed out handshaking with MCP server after 5s"
     );
 
+    server.verify().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn refresh_lock_wait_uses_operation_timeout_budget() -> anyhow::Result<()> {
+    let server = MockServer::start().await;
+    mount_oauth_metadata(&server, /*expected_requests*/ 1).await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "access_token": NEW_ACCESS_TOKEN,
+            "token_type": "Bearer",
+            "expires_in": 30,
+            "refresh_token": NEW_REFRESH_TOKEN,
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    mount_mcp_server(&server, /*expected_requests*/ 2).await;
+
+    let codex_home = TempDir::new()?;
+    let control_dir = TempDir::new()?;
+    let server_url = format!("{}/mcp", server.uri());
+    seed_tokens(&codex_home, &server_url, /*expires_at*/ 0).await?;
+
+    let ready_path = control_dir.path().join("client.ready");
+    let go_path = control_dir.path().join("client.go");
+    let result_path = control_dir.path().join("client.result");
+    let child = spawn_operation_timeout_child(
+        &codex_home,
+        &server_url,
+        &ready_path,
+        &go_path,
+        &result_path,
+    )?;
+    wait_for_paths(std::slice::from_ref(&ready_path)).await?;
+
+    let lock_path = file_oauth_refresh_lock_path(&codex_home, &server_url)?;
+    let refresh_lock = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(lock_path)?;
+    refresh_lock.lock()?;
+
+    fs::write(&go_path, "go")?;
+    wait_for_children(vec![child]).await?;
+    assert_eq!(
+        fs::read_to_string(result_path)?,
+        format!("error:timed out awaiting tools/list after {OPERATION_TIMEOUT:?}")
+    );
+
+    drop(refresh_lock);
+    server.verify().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn refresh_provider_call_uses_operation_timeout_budget() -> anyhow::Result<()> {
+    let server = MockServer::start().await;
+    mount_oauth_metadata(&server, /*expected_requests*/ 1).await;
+    let refresh_attempts = Arc::new(AtomicUsize::new(0));
+    let responder_attempts = Arc::clone(&refresh_attempts);
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .respond_with(move |_request: &Request| {
+            let response = ResponseTemplate::new(200).set_body_json(json!({
+                "access_token": NEW_ACCESS_TOKEN,
+                "token_type": "Bearer",
+                "expires_in": 30,
+                "refresh_token": NEW_REFRESH_TOKEN,
+            }));
+            if responder_attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+                response
+            } else {
+                response.set_delay(Duration::from_secs(1))
+            }
+        })
+        .expect(2)
+        .mount(&server)
+        .await;
+    mount_mcp_server(&server, /*expected_requests*/ 2).await;
+
+    let codex_home = TempDir::new()?;
+    let control_dir = TempDir::new()?;
+    let server_url = format!("{}/mcp", server.uri());
+    seed_tokens(&codex_home, &server_url, /*expires_at*/ 0).await?;
+
+    let ready_path = control_dir.path().join("client.ready");
+    let go_path = control_dir.path().join("client.go");
+    let result_path = control_dir.path().join("client.result");
+    let child = spawn_operation_timeout_child(
+        &codex_home,
+        &server_url,
+        &ready_path,
+        &go_path,
+        &result_path,
+    )?;
+    wait_for_paths(std::slice::from_ref(&ready_path)).await?;
+    fs::write(&go_path, "go")?;
+    wait_for_children(vec![child]).await?;
+
+    assert_eq!(
+        fs::read_to_string(result_path)?,
+        format!("error:timed out awaiting tools/list after {OPERATION_TIMEOUT:?}")
+    );
+    assert_eq!(refresh_attempts.load(Ordering::SeqCst), 2);
+
+    server.verify().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn distinct_file_credentials_do_not_block_each_other() -> anyhow::Result<()> {
+    let server = MockServer::start().await;
+    mount_oauth_metadata(&server, /*expected_requests*/ 1).await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "access_token": NEW_ACCESS_TOKEN,
+            "token_type": "Bearer",
+            "expires_in": 7200,
+            "refresh_token": NEW_REFRESH_TOKEN,
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    mount_mcp_server(&server, /*expected_requests*/ 2).await;
+
+    let codex_home = TempDir::new()?;
+    let control_dir = TempDir::new()?;
+    let server_url = format!("{}/mcp", server.uri());
+    seed_tokens(&codex_home, &server_url, /*expires_at*/ 0).await?;
+
+    let unrelated_lock_path =
+        file_oauth_refresh_lock_path(&codex_home, "https://unrelated.example.test/mcp")?;
+    let unrelated_lock = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(unrelated_lock_path)?;
+    unrelated_lock.lock()?;
+
+    let ready_path = control_dir.path().join("client.ready");
+    let go_path = control_dir.path().join("client.go");
+    let result_path = control_dir.path().join("client.result");
+    let child = spawn_client_child(
+        &codex_home,
+        &server_url,
+        &ready_path,
+        &go_path,
+        &result_path,
+    )?;
+    wait_for_paths(std::slice::from_ref(&ready_path)).await?;
+    fs::write(&go_path, "go")?;
+    wait_for_children(vec![child]).await?;
+
+    assert_eq!(fs::read_to_string(result_path)?, "success");
+    drop(unrelated_lock);
     server.verify().await;
     Ok(())
 }
@@ -433,6 +596,36 @@ async fn oauth_refresh_race_client_child() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+#[ignore = "spawned by the OAuth refresh race integration tests"]
+async fn oauth_refresh_operation_timeout_child() -> anyhow::Result<()> {
+    let server_url = std::env::var(SERVER_URL_ENV)?;
+    let ready_path = PathBuf::from(std::env::var(READY_PATH_ENV)?);
+    let go_path = PathBuf::from(std::env::var(GO_PATH_ENV)?);
+    let result_path = PathBuf::from(std::env::var(RESULT_PATH_ENV)?);
+    let client = RmcpClient::new_streamable_http_client(
+        SERVER_NAME,
+        &server_url,
+        /*bearer_token*/ None,
+        /*http_headers*/ None,
+        /*env_http_headers*/ None,
+        OAuthCredentialsStoreMode::File,
+        Environment::default_for_tests().get_http_client(),
+        /*auth_provider*/ None,
+    )
+    .await?;
+    initialize_client(&client).await?;
+
+    fs::write(ready_path, "ready")?;
+    wait_for_paths(std::slice::from_ref(&go_path)).await?;
+    let outcome = match client.list_tools(None, Some(OPERATION_TIMEOUT)).await {
+        Ok(_) => "success".to_string(),
+        Err(error) => format!("error:{error:#}"),
+    };
+    fs::write(result_path, outcome)?;
+    Ok(())
+}
+
 async fn mount_oauth_metadata(server: &MockServer, expected_requests: u64) {
     Mock::given(method("GET"))
         .and(path("/.well-known/oauth-authorization-server/mcp"))
@@ -516,6 +709,30 @@ fn spawn_client_child(
     command
         .args([
             "oauth_refresh_race_client_child",
+            "--exact",
+            "--ignored",
+            "--nocapture",
+        ])
+        .env("CODEX_HOME", codex_home.path())
+        .env(SERVER_URL_ENV, server_url)
+        .env(READY_PATH_ENV, ready_path)
+        .env(GO_PATH_ENV, go_path)
+        .env(RESULT_PATH_ENV, result_path)
+        .kill_on_drop(true);
+    Ok(command.spawn()?)
+}
+
+fn spawn_operation_timeout_child(
+    codex_home: &TempDir,
+    server_url: &str,
+    ready_path: &Path,
+    go_path: &Path,
+    result_path: &Path,
+) -> anyhow::Result<Child> {
+    let mut command = Command::new(std::env::current_exe()?);
+    command
+        .args([
+            "oauth_refresh_operation_timeout_child",
             "--exact",
             "--ignored",
             "--nocapture",
