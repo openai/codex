@@ -7,6 +7,7 @@ use crate::agent::status::is_final;
 use crate::codex_thread::ThreadConfigSnapshot;
 use crate::config::Config;
 use crate::session::emit_subagent_session_started;
+use crate::session::session::Session;
 use crate::session_prefix::format_subagent_context_line;
 use crate::session_prefix::format_subagent_notification_message;
 use crate::shell_snapshot::ShellSnapshot;
@@ -265,6 +266,48 @@ impl AgentControl {
         let state = self.upgrade()?;
         let thread = state.get_thread(agent_id).await?;
         Ok(thread.subscribe_status())
+    }
+
+    pub(crate) async fn reserve_execution_slot_for_pending_turn(
+        &self,
+        session: &Session,
+    ) -> CodexResult<Option<crate::agent::registry::ExecutionReservation>> {
+        if session.multi_agent_version() != Some(MultiAgentVersion::V2) {
+            return Ok(None);
+        }
+        let metadata = self
+            .state
+            .agent_metadata_for_thread(session.thread_id)
+            .ok_or_else(|| {
+                CodexErr::Fatal(format!(
+                    "missing agent metadata for V2 thread {}",
+                    session.thread_id
+                ))
+            })?;
+        if metadata.agent_path.as_ref().is_some_and(AgentPath::is_root) {
+            return Ok(None);
+        }
+        let config = session.get_config().await;
+        let max_threads = config
+            .effective_agent_max_threads(MultiAgentVersion::V2)
+            .unwrap_or_default();
+        self.state
+            .reserve_execution_slot(session.thread_id, max_threads)
+            .map(Some)
+    }
+
+    pub(crate) async fn release_execution_slot_if_idle(&self, session: &Session) {
+        let Some(metadata) = self.state.agent_metadata_for_thread(session.thread_id) else {
+            return;
+        };
+        if metadata.agent_path.as_ref().is_none_or(AgentPath::is_root) {
+            return;
+        }
+        if session.active_turn.lock().await.is_none()
+            && !session.input_queue.has_trigger_turn_mailbox_items().await
+        {
+            self.state.release_execution_slot(session.thread_id);
+        }
     }
 
     pub(crate) async fn format_environment_context_subagents(

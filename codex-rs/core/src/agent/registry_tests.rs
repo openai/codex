@@ -81,7 +81,7 @@ fn reservation_drop_releases_slot() {
 }
 
 #[test]
-fn commit_holds_slot_until_release() {
+fn completion_releases_slot_without_removing_logical_agent() {
     let registry = Arc::new(AgentRegistry::default());
     let reservation = registry.reserve_spawn_slot(Some(1)).expect("reserve slot");
     let thread_id = ThreadId::new();
@@ -96,10 +96,21 @@ fn commit_holds_slot_until_release() {
     };
     assert_eq!(max_threads, 1);
 
-    registry.release_spawned_thread(thread_id);
+    let followup = registry
+        .reserve_execution_slot(thread_id, 1)
+        .expect("running agent should retain its slot");
+    followup.commit();
+    assert!(registry.reserve_spawn_slot(Some(1)).is_err());
+    registry.release_execution_slot(thread_id);
+    assert_eq!(
+        registry
+            .agent_metadata_for_thread(thread_id)
+            .and_then(|metadata| metadata.agent_id),
+        Some(thread_id)
+    );
     let reservation = registry
         .reserve_spawn_slot(Some(1))
-        .expect("slot released after thread removal");
+        .expect("slot released after agent completion");
     drop(reservation);
 }
 
