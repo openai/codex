@@ -174,7 +174,7 @@ fn get_zsh_shell(path: Option<&PathBuf>) -> Option<DetectedShell> {
     })
 }
 
-const BASH_FALLBACK_PATHS: &[&str] = &["/bin/bash"];
+const BASH_FALLBACK_PATHS: &[&str] = &["/bin/bash", "/usr/bin/bash"];
 
 fn get_bash_shell(path: Option<&PathBuf>) -> Option<DetectedShell> {
     let shell_path = get_shell_path(ShellType::Bash, path, "bash", BASH_FALLBACK_PATHS);
@@ -325,6 +325,10 @@ mod tests {
         );
         assert_eq!(
             detect_shell_type(PathBuf::from("/bin/bash")),
+            Some(ShellType::Bash)
+        );
+        assert_eq!(
+            detect_shell_type(PathBuf::from("/usr/bin/bash")),
             Some(ShellType::Bash)
         );
         assert_eq!(
