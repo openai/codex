@@ -40,6 +40,10 @@ app-server-test-client *args:
 fmt:
     {{ python }} ../scripts/format.py
 
+# Format Rust code only.
+fmt-rust:
+    cargo fmt -- --config imports_granularity=Item
+
 # Check formatting without modifying files.
 fmt-check:
     {{ python }} ../scripts/format.py --check
