@@ -8181,7 +8181,7 @@ async fn update_runtime_workspace_persists_resume_and_fork_baseline() {
         )
         .await
         .expect("update runtime workspace");
-    let runtime_workspace = turn_context.runtime_workspace.snapshot().await;
+    let runtime_workspace = session.runtime_workspace_snapshot().await;
     let expected_context_item =
         turn_context.to_turn_context_item_with_runtime_workspace(&runtime_workspace);
 

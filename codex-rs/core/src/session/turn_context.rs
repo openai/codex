@@ -19,7 +19,6 @@ use codex_sandboxing::policy_transforms::effective_file_system_sandbox_policy;
 use codex_sandboxing::policy_transforms::effective_network_sandbox_policy;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
-use tokio::sync::RwLock;
 
 #[derive(Clone, Debug)]
 pub(crate) struct TurnSkillsContext {
@@ -62,29 +61,6 @@ pub(crate) struct RuntimeWorkspaceSnapshot {
     pub(crate) permission_profile: PermissionProfile,
 }
 
-#[derive(Debug)]
-pub(crate) struct RuntimeWorkspaceState {
-    snapshot: RwLock<RuntimeWorkspaceSnapshot>,
-}
-
-impl RuntimeWorkspaceState {
-    fn new(snapshot: RuntimeWorkspaceSnapshot) -> Self {
-        Self {
-            snapshot: RwLock::new(snapshot),
-        }
-    }
-
-    pub(crate) async fn snapshot(&self) -> RuntimeWorkspaceSnapshot {
-        self.snapshot.read().await.clone()
-    }
-
-    // Used by the model workspace-mutation tools introduced in a follow-up layer.
-    #[allow(dead_code)]
-    pub(crate) async fn replace(&self, snapshot: RuntimeWorkspaceSnapshot) {
-        *self.snapshot.write().await = snapshot;
-    }
-}
-
 /// The context needed for a single turn of the thread.
 #[derive(Debug)]
 pub struct TurnContext {
@@ -120,7 +96,6 @@ pub struct TurnContext {
     pub(crate) personality: Option<Personality>,
     pub(crate) approval_policy: Constrained<AskForApproval>,
     pub(crate) permission_profile: PermissionProfile,
-    pub(crate) runtime_workspace: Arc<RuntimeWorkspaceState>,
     pub(crate) network: Option<NetworkProxy>,
     pub(crate) windows_sandbox_level: WindowsSandboxLevel,
     pub(crate) shell_environment_policy: ShellEnvironmentPolicy,
@@ -298,7 +273,6 @@ impl TurnContext {
             personality: self.personality,
             approval_policy: self.approval_policy.clone(),
             permission_profile: self.permission_profile.clone(),
-            runtime_workspace: Arc::clone(&self.runtime_workspace),
             network: self.network.clone(),
             windows_sandbox_level: self.windows_sandbox_level,
             shell_environment_policy: self.shell_environment_policy.clone(),
@@ -605,11 +579,6 @@ impl Session {
         let (current_date, timezone) = local_time_context();
         let extension_data = Arc::new(codex_extension_api::ExtensionData::new(sub_id.clone()));
         extension_data.insert(HostLoadedSkills::new(Arc::clone(&skills_outcome)));
-        let runtime_workspace = Arc::new(RuntimeWorkspaceState::new(RuntimeWorkspaceSnapshot {
-            cwd: cwd.clone(),
-            workspace_roots: session_configuration.workspace_roots.clone(),
-            permission_profile: session_configuration.permission_profile(),
-        }));
         TurnContext {
             sub_id,
             trace_id: current_span_trace_id(),
@@ -643,7 +612,6 @@ impl Session {
             personality: session_configuration.personality,
             approval_policy: session_configuration.approval_policy.clone(),
             permission_profile: session_configuration.permission_profile(),
-            runtime_workspace,
             network,
             windows_sandbox_level: session_configuration.windows_sandbox_level,
             shell_environment_policy: per_turn_config.permissions.shell_environment_policy.clone(),

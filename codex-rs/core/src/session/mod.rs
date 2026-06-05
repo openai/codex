@@ -1493,6 +1493,17 @@ impl Session {
             .map(|configuration| configuration.thread_config_snapshot())
     }
 
+    pub(crate) async fn runtime_workspace_snapshot(
+        &self,
+    ) -> crate::session::turn_context::RuntimeWorkspaceSnapshot {
+        let state = self.state.lock().await;
+        crate::session::turn_context::RuntimeWorkspaceSnapshot {
+            cwd: state.session_configuration.cwd().clone(),
+            workspace_roots: state.session_configuration.workspace_roots.clone(),
+            permission_profile: state.session_configuration.permission_profile(),
+        }
+    }
+
     // Used by the model workspace-mutation tools introduced in a follow-up layer.
     #[allow(dead_code)]
     pub(crate) async fn update_runtime_workspace(
@@ -1530,10 +1541,6 @@ impl Session {
             workspace_roots: snapshot.workspace_roots.clone(),
             permission_profile: snapshot.permission_profile.clone(),
         };
-        turn_context
-            .runtime_workspace
-            .replace(runtime_workspace.clone())
-            .await;
         let turn_context_item =
             turn_context.to_turn_context_item_with_runtime_workspace(&runtime_workspace);
         self.persist_rollout_items(&[RolloutItem::TurnContext(turn_context_item.clone())])

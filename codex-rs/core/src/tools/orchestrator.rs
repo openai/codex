@@ -148,7 +148,7 @@ impl ToolOrchestrator {
         // 1) Approval
         let mut already_approved = false;
 
-        let runtime_workspace = turn_ctx.runtime_workspace.snapshot().await;
+        let runtime_workspace = tool_ctx.session.runtime_workspace_snapshot().await;
         let file_system_sandbox_policy = runtime_workspace
             .permission_profile
             .file_system_sandbox_policy();

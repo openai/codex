@@ -110,7 +110,6 @@ pub const USER_MESSAGE_BEGIN: &str = "## My request for Codex:";
 pub struct TurnEnvironmentSelection {
     pub environment_id: String,
     pub cwd: AbsolutePathBuf,
-    #[serde(default)]
     pub workspace_roots: Vec<AbsolutePathBuf>,
 }
 

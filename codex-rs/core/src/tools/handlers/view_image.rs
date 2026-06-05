@@ -143,7 +143,7 @@ impl ViewImageHandler {
                 "view_image is unavailable in this session".to_string(),
             ));
         };
-        let runtime_workspace = turn.runtime_workspace.snapshot().await;
+        let runtime_workspace = session.runtime_workspace_snapshot().await;
         let cwd = if turn.environments.turn_environments.len() == 1 {
             runtime_workspace.cwd.clone()
         } else {
@@ -398,13 +398,15 @@ mod tests {
         let image_path = image_cwd.join("image.png");
         std::fs::write(image_path.as_path(), b"not a real image").expect("write test image");
         turn.permission_profile = PermissionProfile::Disabled;
-        turn.runtime_workspace
-            .replace(crate::session::turn_context::RuntimeWorkspaceSnapshot {
-                cwd: image_cwd,
-                workspace_roots: Vec::new(),
-                permission_profile: PermissionProfile::Disabled,
+        session
+            .update_settings(crate::session::session::SessionSettingsUpdate {
+                cwd: Some(image_cwd.to_path_buf()),
+                workspace_roots: Some(Vec::new()),
+                permission_profile: Some(PermissionProfile::Disabled),
+                ..Default::default()
             })
-            .await;
+            .await
+            .expect("update runtime workspace for test");
 
         let result = ViewImageHandler::default()
             .handle(ToolInvocation {

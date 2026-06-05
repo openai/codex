@@ -170,7 +170,7 @@ impl ShellCommandHandler {
             )));
         };
 
-        let runtime_workspace = turn.runtime_workspace.snapshot().await;
+        let runtime_workspace = session.runtime_workspace_snapshot().await;
         let cwd = resolve_workdir_base_path(&arguments, &runtime_workspace.cwd)?;
         let params: ShellCommandToolCallParams = parse_arguments_with_base_path(&arguments, &cwd)?;
         let workdir = params.workdir.as_ref().map_or_else(

@@ -70,14 +70,8 @@ where
     }
 }
 
-async fn disable_runtime_workspace_sandbox(turn_context: &mut TurnContext) {
+fn disable_runtime_workspace_sandbox(turn_context: &mut TurnContext) {
     turn_context.permission_profile = codex_protocol::models::PermissionProfile::Disabled;
-    let mut runtime_workspace = turn_context.runtime_workspace.snapshot().await;
-    runtime_workspace.permission_profile = codex_protocol::models::PermissionProfile::Disabled;
-    turn_context
-        .runtime_workspace
-        .replace(runtime_workspace)
-        .await;
 }
 
 #[tokio::test]
@@ -414,7 +408,7 @@ async fn guardian_allows_shell_command_additional_permissions_requests_past_poli
         .features
         .enable(Feature::ExecPermissionApprovals)
         .expect("test setup should allow enabling request permissions");
-    disable_runtime_workspace_sandbox(&mut turn_context_raw).await;
+    disable_runtime_workspace_sandbox(&mut turn_context_raw);
     let mut config = (*turn_context_raw.config).clone();
     config.model_provider.base_url = Some(format!("{}/v1", server.uri()));
     let config = Arc::new(config);
@@ -518,7 +512,7 @@ async fn strict_auto_review_turn_grant_forces_guardian_for_shell_command_policy_
         .approval_policy
         .set(AskForApproval::OnFailure)
         .expect("test setup should allow updating approval policy");
-    disable_runtime_workspace_sandbox(&mut turn_context_raw).await;
+    disable_runtime_workspace_sandbox(&mut turn_context_raw);
     let mut config = (*turn_context_raw.config).clone();
     config.approvals_reviewer = ApprovalsReviewer::User;
     config.model_provider.base_url = Some(format!("{}/v1", server.uri()));

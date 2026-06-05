@@ -78,7 +78,7 @@ async fn run_exec_like(args: RunExecLikeArgs) -> Result<FunctionToolOutput, Func
             "shell is unavailable in this session".to_string(),
         ));
     };
-    let runtime_workspace = turn.runtime_workspace.snapshot().await;
+    let runtime_workspace = session.runtime_workspace_snapshot().await;
     let fs = turn_environment.environment.get_filesystem();
 
     let explicit_env_overrides = turn.shell_environment_policy.r#set.clone();

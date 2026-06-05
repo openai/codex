@@ -122,7 +122,7 @@ impl ExecCommandHandler {
         let manager: &UnifiedExecProcessManager = &session.services.unified_exec_manager;
         let context = UnifiedExecContext::new(session.clone(), turn.clone(), call_id.clone());
         let environment_args: ExecCommandEnvironmentArgs = parse_arguments(&arguments)?;
-        let runtime_workspace = turn.runtime_workspace.snapshot().await;
+        let runtime_workspace = session.runtime_workspace_snapshot().await;
         let Some(turn_environment) =
             resolve_tool_environment(turn.as_ref(), environment_args.environment_id.as_deref())?
         else {

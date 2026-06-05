@@ -358,7 +358,7 @@ impl ApplyPatchHandler {
                 "apply_patch is unavailable in this session".to_string(),
             ));
         };
-        let runtime_workspace = turn.runtime_workspace.snapshot().await;
+        let runtime_workspace = session.runtime_workspace_snapshot().await;
         let cwd = if turn.environments.turn_environments.len() == 1 {
             runtime_workspace.cwd.clone()
         } else {
@@ -531,7 +531,7 @@ pub(crate) async fn intercept_apply_patch(
     call_id: &str,
     tool_name: &str,
 ) -> Result<Option<FunctionToolOutput>, FunctionCallError> {
-    let runtime_workspace = turn.runtime_workspace.snapshot().await;
+    let runtime_workspace = session.runtime_workspace_snapshot().await;
     let sandbox = turn.file_system_sandbox_context_for_permission_profile(
         &runtime_workspace.permission_profile,
         /*additional_permissions*/ None,
