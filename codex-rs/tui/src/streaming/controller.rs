@@ -123,6 +123,7 @@ struct StablePrefixLenCache {
 struct PartialSourceLine {
     source_start: usize,
     source_end: usize,
+    emitted_source_end: usize,
     emitted_prefix: Vec<HyperlinkLine>,
 }
 
@@ -284,7 +285,9 @@ impl StreamCore {
         let had_pending_queue = self.state.queued_len() > 0;
         let had_structural_tail = self.requires_final_scrollback_reflow();
         let partial_line = if had_pending_queue {
-            self.partial_source_line_after_rendered_len(self.emitted_stable_len)
+            self.synthetic_queue_partial
+                .clone()
+                .or_else(|| self.partial_source_line_after_rendered_len(self.emitted_stable_len))
         } else {
             None
         };
@@ -359,7 +362,9 @@ impl StreamCore {
         let had_pending_queue = self.state.queued_len() > 0;
         let had_structural_tail = self.requires_final_scrollback_reflow();
         let partial_line = if had_pending_queue {
-            self.partial_source_line_after_rendered_len(self.emitted_stable_len)
+            self.synthetic_queue_partial
+                .clone()
+                .or_else(|| self.partial_source_line_after_rendered_len(self.emitted_stable_len))
         } else {
             None
         };
@@ -470,10 +475,16 @@ impl StreamCore {
         self.clear_stable_queue();
         self.emitted_stable_len = source_line_start_len;
 
-        let mut queued = trim_rendered_prefix(
-            self.rendered_lines[source_line_start_len..source_line_end_len].to_vec(),
-            &partial_line.emitted_prefix,
-        );
+        let mut queued = if self.render_mode == HistoryRenderMode::Raw {
+            plain_hyperlink_lines(raw_lines_from_source(
+                &self.raw_source[partial_line.emitted_source_end..partial_line.source_end],
+            ))
+        } else {
+            trim_rendered_prefix(
+                self.rendered_lines[source_line_start_len..source_line_end_len].to_vec(),
+                &partial_line.emitted_prefix,
+            )
+        };
         let synthetic_len = queued.len();
         if source_line_end_len < target_stable_len {
             queued.extend(self.rendered_lines[source_line_end_len..target_stable_len].to_vec());
@@ -513,10 +524,26 @@ impl StreamCore {
         let mut ordinary_lines = step.len();
         if self.synthetic_queue_remaining > 0 {
             let synthetic_lines = ordinary_lines.min(self.synthetic_queue_remaining);
+            let mut emitted_prefix = None;
             if let Some(partial_line) = &mut self.synthetic_queue_partial {
                 partial_line
                     .emitted_prefix
                     .extend(step[..synthetic_lines].to_vec());
+                emitted_prefix = Some((
+                    partial_line.source_start,
+                    partial_line.source_end,
+                    partial_line.emitted_prefix.clone(),
+                ));
+            }
+            if let Some((source_start, source_end, emitted_prefix)) = emitted_prefix {
+                let emitted_source_end = self.source_boundary_after_rendered_prefix(
+                    source_start,
+                    source_end,
+                    &emitted_prefix,
+                );
+                if let Some(partial_line) = &mut self.synthetic_queue_partial {
+                    partial_line.emitted_source_end = emitted_source_end;
+                }
             }
             ordinary_lines -= synthetic_lines;
             self.synthetic_queue_remaining -= synthetic_lines;
@@ -664,11 +691,18 @@ impl StreamCore {
                 if rendered_len <= source_start_rendered_len {
                     return None;
                 }
+                let emitted_prefix =
+                    self.rendered_lines[source_start_rendered_len..rendered_len].to_vec();
+                let emitted_source_end = self.source_boundary_after_rendered_prefix(
+                    source_start,
+                    source_end,
+                    &emitted_prefix,
+                );
                 return Some(PartialSourceLine {
                     source_start,
                     source_end,
-                    emitted_prefix: self.rendered_lines[source_start_rendered_len..rendered_len]
-                        .to_vec(),
+                    emitted_source_end,
+                    emitted_prefix,
                 });
             }
             source_start = source_end;
@@ -687,6 +721,54 @@ impl StreamCore {
             boundaries.push(self.raw_source.len());
         }
         boundaries
+    }
+
+    fn source_boundary_after_rendered_prefix(
+        &self,
+        source_start: usize,
+        source_end: usize,
+        emitted_prefix: &[HyperlinkLine],
+    ) -> usize {
+        if emitted_prefix.is_empty() {
+            return source_start;
+        }
+        let emitted_text = emitted_prefix
+            .iter()
+            .map(hyperlink_line_text)
+            .collect::<Vec<_>>();
+        let emitted_visible_text = emitted_text.join(" ");
+        if let Some(boundary) = visible_text_source_boundary(
+            &self.raw_source[source_start..source_end],
+            &emitted_visible_text,
+        ) {
+            return source_start + boundary;
+        }
+
+        let mut boundaries = Vec::new();
+        boundaries.push(source_start);
+        boundaries.extend(
+            self.raw_source[source_start..source_end]
+                .char_indices()
+                .map(|(idx, ch)| source_start + idx + ch.len_utf8()),
+        );
+
+        for boundary in boundaries {
+            let rendered = self.render_source(&self.raw_source[..boundary]);
+            if rendered.len() < emitted_prefix.len() {
+                continue;
+            }
+            let rendered_text = rendered[..emitted_prefix.len()]
+                .iter()
+                .map(hyperlink_line_text)
+                .collect::<Vec<_>>();
+            if rendered_text == emitted_text {
+                return boundary;
+            }
+        }
+
+        self.source_boundary_after_rendered_len(emitted_prefix.len())
+            .min(source_end)
+            .max(source_start)
     }
 
     fn default_tail_budget_lines(&mut self) -> usize {
@@ -714,6 +796,83 @@ impl StreamCore {
         self.render_mode != HistoryRenderMode::Raw
             && !matches!(self.holdback_scanner.state(), TableHoldbackState::None)
     }
+}
+
+fn visible_text_source_boundary(source: &str, visible_prefix: &str) -> Option<usize> {
+    if visible_prefix.is_empty() {
+        return Some(0);
+    }
+
+    let mut visible_chars = visible_prefix.chars().peekable();
+    let mut iter = source.char_indices().peekable();
+    while let Some((idx, ch)) = iter.next() {
+        if visible_chars.peek().is_none() {
+            return Some(idx);
+        }
+
+        if ch == '[' {
+            let mut label_end = None;
+            let mut label_chars = Vec::new();
+            for (label_idx, label_ch) in iter.by_ref() {
+                if label_ch == ']' {
+                    label_end = Some(label_idx + label_ch.len_utf8());
+                    break;
+                }
+                label_chars.push((label_idx, label_ch));
+            }
+            let label_end = label_end?;
+            for (label_idx, label_ch) in label_chars {
+                match visible_chars.peek().copied() {
+                    Some(expected) if expected == label_ch => {
+                        visible_chars.next();
+                        if visible_chars.peek().is_none() {
+                            return Some(
+                                skip_link_destination(source, label_end)
+                                    .unwrap_or(label_idx + label_ch.len_utf8()),
+                            );
+                        }
+                    }
+                    _ => return None,
+                }
+            }
+            if let Some(destination_end) = skip_link_destination(source, label_end) {
+                while let Some((next_idx, _)) = iter.peek().copied() {
+                    if next_idx < destination_end {
+                        iter.next();
+                    } else {
+                        break;
+                    }
+                }
+            }
+            continue;
+        }
+
+        if matches!(ch, '*' | '_' | '`') {
+            continue;
+        }
+
+        match visible_chars.peek().copied() {
+            Some(expected) if expected == ch => {
+                visible_chars.next();
+                if visible_chars.peek().is_none() {
+                    return Some(idx + ch.len_utf8());
+                }
+            }
+            _ => return None,
+        }
+    }
+
+    visible_chars.peek().is_none().then_some(source.len())
+}
+
+fn skip_link_destination(source: &str, label_end: usize) -> Option<usize> {
+    let after_label = source.get(label_end..)?;
+    if !after_label.starts_with('(') {
+        return None;
+    }
+    after_label
+        .find(')')
+        .map(|destination_end| label_end + destination_end + ')'.len_utf8())
 }
 
 fn trim_rendered_prefix(
@@ -1225,6 +1384,31 @@ mod tests {
         snapshots
     }
 
+    fn collect_visible_plan_stream_snapshots(
+        deltas: &[&str],
+        width: Option<usize>,
+    ) -> Vec<Vec<String>> {
+        let mut ctrl = plan_stream_controller(width);
+        let mut committed_lines = Vec::new();
+        let mut snapshots = Vec::new();
+        for delta in deltas {
+            ctrl.push(delta);
+            while let (Some(cell), idle) = ctrl.on_commit_tick() {
+                committed_lines.extend(cell.transcript_lines(u16::MAX));
+                if idle {
+                    break;
+                }
+            }
+
+            let mut visible = lines_to_plain_strings(&committed_lines);
+            visible.extend(hyperlink_lines_to_plain_strings(
+                &ctrl.current_tail_display_lines(),
+            ));
+            snapshots.push(visible);
+        }
+        snapshots
+    }
+
     fn format_stream_snapshots(snapshots: &[Vec<String>]) -> String {
         snapshots
             .iter()
@@ -1412,6 +1596,16 @@ mod tests {
             expected_count, 1,
             "expected plan list continuation to render once, got {lines:?}",
         );
+    }
+
+    #[test]
+    fn plan_controller_streamed_list_continuation_snapshot() {
+        let snapshots = collect_visible_plan_stream_snapshots(
+            HAPPY_PATH_DUPLICATE_REPRO_DELTAS,
+            Some(/*width*/ 80),
+        );
+
+        insta::assert_snapshot!(format_stream_snapshots(&snapshots));
     }
 
     #[test]
@@ -2543,6 +2737,41 @@ mod tests {
     }
 
     #[test]
+    fn controller_set_width_reuses_synthetic_partial_across_repeated_resize() {
+        let mut ctrl = stream_controller(Some(/*width*/ 18));
+        ctrl.push("alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu\n");
+        ctrl.push("tail line\n");
+
+        let (first_emit, idle) = ctrl.on_commit_tick();
+        let first_emit = first_emit
+            .expect("expected first wrapped line emission")
+            .transcript_lines(u16::MAX);
+        assert!(!idle, "expected remaining wrapped content after one tick");
+
+        ctrl.set_width(Some(/*width*/ 80));
+        assert!(
+            ctrl.queued_lines() > 0,
+            "expected synthetic queue after first resize"
+        );
+        ctrl.set_width(Some(/*width*/ 24));
+
+        let (cell, _source) = ctrl.finalize();
+        let remaining = cell
+            .map(|c| lines_to_plain_strings(&c.transcript_lines(u16::MAX)))
+            .unwrap_or_default();
+        let first_emit = lines_to_plain_strings(&first_emit).join("\n");
+        let joined = remaining.join("\n");
+        assert!(
+            !joined.contains("alpha beta"),
+            "finalize must not replay the already-visible prefix after repeated resize; emitted before resize: {first_emit:?}, finalized after resize: {joined:?}",
+        );
+        assert!(
+            joined.contains("lambda mu") && joined.contains("tail line"),
+            "repeated resize must preserve un-emitted suffix and tail; emitted before resize: {first_emit:?}, finalized after resize: {joined:?}",
+        );
+    }
+
+    #[test]
     fn controller_set_render_mode_partial_wrapped_emit_preserves_remaining_content() {
         let mut ctrl = stream_controller(Some(/*width*/ 18));
         ctrl.push("alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu\n");
@@ -2603,6 +2832,38 @@ mod tests {
         assert!(
             joined.contains("**") && joined.contains("tail line"),
             "pending suffix should be rendered from raw mode after toggle, not old rich rows; emitted before toggle: {first_emit:?}, finalized after toggle: {joined:?}",
+        );
+    }
+
+    #[test]
+    fn controller_set_render_mode_raw_suffix_starts_after_rich_link_prefix() {
+        let mut ctrl = stream_controller(Some(/*width*/ 10));
+        ctrl.push(
+            "[alpha beta](https://example.com) gamma delta epsilon zeta eta theta iota kappa lambda mu\n",
+        );
+        ctrl.push("tail line\n");
+
+        let (first_emit, idle) = ctrl.on_commit_tick();
+        let first_emit = first_emit
+            .expect("expected first rich wrapped line emission")
+            .transcript_lines(u16::MAX);
+        assert!(!idle, "expected remaining rich content after one tick");
+
+        ctrl.set_render_mode(HistoryRenderMode::Raw);
+
+        let (cell, _source) = ctrl.finalize();
+        let remaining = cell
+            .map(|c| lines_to_plain_strings(&c.transcript_lines(u16::MAX)))
+            .unwrap_or_default();
+        let first_emit = lines_to_plain_strings(&first_emit).join("\n");
+        let joined = remaining.join("\n");
+        assert!(
+            !joined.contains("https://example.com") && !joined.contains("](https://"),
+            "raw suffix must not start inside already-visible link markup; emitted before toggle: {first_emit:?}, finalized after toggle: {joined:?}",
+        );
+        assert!(
+            joined.contains("gamma") && joined.contains("tail line"),
+            "raw suffix should preserve un-emitted source after the rendered link label; emitted before toggle: {first_emit:?}, finalized after toggle: {joined:?}",
         );
     }
 

@@ -1,0 +1,5 @@
+---
+source: tui/src/chatwidget/tests/status_and_layout.rs
+expression: raw_tail
+---
+  **tail remains visible**

@@ -1484,6 +1484,42 @@ async fn finalize_turn_persists_held_plan_stream_tail() {
 }
 
 #[tokio::test]
+async fn finalize_turn_persists_structural_plan_tail_as_history_cell() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let cwd = chat.config.cwd.to_path_buf();
+
+    let mut controller = crate::streaming::controller::PlanStreamController::new(
+        Some(/*width*/ 80),
+        cwd.as_path(),
+        HistoryRenderMode::Rich,
+    );
+    controller.push("| Step | Owner |\n");
+    controller.push("| --- | --- |\n");
+    controller.push("| Preserve held table tail | Agent |\n");
+    assert!(
+        controller.requires_final_scrollback_reflow(),
+        "expected table plan tail to require consolidation reflow",
+    );
+    chat.plan_stream_controller = Some(controller);
+
+    while rx.try_recv().is_ok() {}
+
+    chat.finalize_turn();
+
+    let inserted = drain_insert_history(&mut rx);
+    let rendered = inserted
+        .iter()
+        .map(|cell| lines_to_single_string(cell))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        rendered.contains("Preserve held table tail"),
+        "expected structural plan tail to be persisted directly, got {rendered:?}",
+    );
+    assert!(chat.plan_stream_controller.is_none());
+}
+
+#[tokio::test]
 async fn raw_output_toggle_refreshes_active_stream_tail() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
@@ -1519,6 +1555,7 @@ async fn raw_output_toggle_refreshes_active_stream_tail() {
         raw_tail.contains("**tail remains visible**"),
         "expected active tail to refresh after raw toggle, got {raw_tail:?}",
     );
+    insta::assert_snapshot!(raw_tail);
 }
 
 #[tokio::test]
