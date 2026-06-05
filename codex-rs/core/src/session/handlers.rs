@@ -26,6 +26,7 @@ use crate::tasks::UserShellCommandMode;
 use crate::tasks::UserShellCommandTask;
 use crate::tasks::execute_user_shell_command;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::CodexErrorInfo;
@@ -138,6 +139,24 @@ async fn thread_settings_update(
         collaboration_mode,
         personality,
     } = thread_settings;
+    let (permission_profile, active_permission_profile) =
+        if let Some(permission_profile) = permission_profile {
+            (Some(permission_profile), active_permission_profile)
+        } else if let Some(sandbox_policy) = sandbox_policy {
+            let state = sess.state.lock().await;
+            let update_cwd = state
+                .session_configuration
+                .resolved_cwd_for_update(cwd.as_ref());
+            (
+                Some(PermissionProfile::from_legacy_sandbox_policy_for_cwd(
+                    &sandbox_policy,
+                    update_cwd.as_path(),
+                )),
+                None,
+            )
+        } else {
+            (None, active_permission_profile)
+        };
     let collaboration_mode = match collaboration_mode {
         Some(collaboration_mode) => collaboration_mode,
         None => {
@@ -156,7 +175,6 @@ async fn thread_settings_update(
         profile_workspace_roots,
         approval_policy,
         approvals_reviewer,
-        sandbox_policy,
         permission_profile,
         active_permission_profile,
         windows_sandbox_level,

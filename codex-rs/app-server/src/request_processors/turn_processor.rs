@@ -524,7 +524,10 @@ impl TurnRequestProcessor {
         // `thread/settings/update` only acknowledges that the update was queued.
         // Clients that send dependent partial updates should wait for
         // `thread/settings/updated` or combine the fields in one request.
-        let snapshot = if permissions.is_some() || runtime_workspace_roots_request.is_some() {
+        let snapshot = if sandbox_policy.is_some()
+            || permissions.is_some()
+            || runtime_workspace_roots_request.is_some()
+        {
             Some(thread.config_snapshot().await)
         } else {
             None
@@ -564,7 +567,7 @@ impl TurnRequestProcessor {
         let approvals_reviewer =
             approvals_reviewer.map(codex_app_server_protocol::ApprovalsReviewer::to_core);
         let sandbox_policy = sandbox_policy.map(|policy| policy.to_core());
-        let (permission_profile, active_permission_profile, profile_workspace_roots) =
+        let (permission_profile, active_permission_profile, profile_workspace_roots) = {
             if let Some(permissions) = permissions {
                 let Some(snapshot) = snapshot.as_ref() else {
                     return Err(internal_error(format!(
@@ -611,9 +614,32 @@ impl TurnRequestProcessor {
                     config.permissions.active_permission_profile(),
                     Some(config.permissions.profile_workspace_roots().to_vec()),
                 )
+            } else if let Some(sandbox_policy) = sandbox_policy.as_ref() {
+                let Some(snapshot) = snapshot.as_ref() else {
+                    return Err(internal_error(format!(
+                        "{method} sandbox policy missing thread snapshot"
+                    )));
+                };
+                let sandbox_cwd = cwd
+                    .as_ref()
+                    .map(|cwd| {
+                        AbsolutePathBuf::resolve_path_against_base(cwd, snapshot.cwd.as_path())
+                    })
+                    .unwrap_or_else(|| snapshot.cwd.clone());
+                (
+                    Some(
+                        codex_protocol::models::PermissionProfile::from_legacy_sandbox_policy_for_cwd(
+                            sandbox_policy,
+                            sandbox_cwd.as_path(),
+                        ),
+                    ),
+                    None,
+                    None,
+                )
             } else {
                 (None, None, None)
-            };
+            }
+        };
         let effort = effort.map(Some);
 
         if has_any_overrides {
@@ -623,7 +649,6 @@ impl TurnRequestProcessor {
                     workspace_roots: runtime_workspace_roots.clone(),
                     approval_policy,
                     approvals_reviewer,
-                    sandbox_policy: sandbox_policy.clone(),
                     permission_profile: permission_profile.clone(),
                     active_permission_profile: active_permission_profile.clone(),
                     profile_workspace_roots: profile_workspace_roots.clone(),
@@ -647,7 +672,7 @@ impl TurnRequestProcessor {
             profile_workspace_roots,
             approval_policy,
             approvals_reviewer,
-            sandbox_policy,
+            sandbox_policy: None,
             permission_profile,
             active_permission_profile,
             windows_sandbox_level: None,
