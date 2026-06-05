@@ -55,7 +55,7 @@ fn disabled_text_turn(test: &TestCodex, text: &str) -> Op {
                 mode: codex_protocol::config_types::ModeKind::Default,
                 settings: codex_protocol::config_types::Settings {
                     model: REQUESTED_MODEL.to_string(),
-                    reasoning_effort: test.config.model_reasoning_effort,
+                    reasoning_effort: test.config.model_reasoning_effort.clone(),
                     developer_instructions: None,
                 },
             }),

@@ -3,6 +3,8 @@ use pretty_assertions::assert_eq;
 use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
+#[cfg(unix)]
+use std::sync::Barrier;
 use tempfile::tempdir;
 use wiremock::Mock;
 use wiremock::MockServer;
@@ -93,6 +95,22 @@ fn write_executable_script(path: &Path, contents: &str) {
         permissions.set_mode(0o755);
         std::fs::set_permissions(path, permissions).expect("chmod");
     }
+}
+
+#[cfg(unix)]
+fn run_git(repo: &Path, args: &[&str]) -> std::process::Output {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(args)
+        .output()
+        .expect("run git");
+    assert!(
+        output.status.success(),
+        "git {args:?} failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    output
 }
 
 async fn mount_github_repo_and_ref(server: &MockServer, sha: &str) {
@@ -253,30 +271,42 @@ fn remove_stale_curated_repo_temp_dirs_removes_only_matching_directories() {
 
 #[cfg(unix)]
 #[test]
-fn sync_openai_plugins_repo_prefers_git_when_available() {
+fn concurrent_syncs_serialize_fetches_without_skipping_remote_checks() {
     let tmp = tempdir().expect("tempdir");
     let bin_dir = tempfile::Builder::new()
         .prefix("fake-git-")
         .tempdir()
         .expect("tempdir");
     let git_path = bin_dir.path().join("git");
+    let invocation_log = bin_dir.path().join("invocations.log");
     let sha = "0123456789abcdef0123456789abcdef01234567";
 
     write_executable_script(
         &git_path,
         &format!(
             r#"#!/bin/sh
+printf '%s\n' "$*" >> '{}'
 if [ "$1" = "ls-remote" ]; then
+  sleep 1
   printf '%s\tHEAD\n' "{sha}"
   exit 0
 fi
-if [ "$1" = "clone" ]; then
-  dest="$5"
-  mkdir -p "$dest/.git" "$dest/.agents/plugins" "$dest/plugins/gmail/.codex-plugin"
-  cat > "$dest/.agents/plugins/marketplace.json" <<'EOF'
+if [ "$1" = "-C" ] && [ "$3" = "init" ]; then
+  mkdir -p "$2/.git"
+  exit 0
+fi
+if [ "$1" = "-C" ] && [ "$3" = "fetch" ]; then
+  exit 0
+fi
+if [ "$1" = "-C" ] && [ "$3" = "reset" ]; then
+  mkdir -p "$2/.agents/plugins" "$2/plugins/gmail/.codex-plugin"
+  cat > "$2/.agents/plugins/marketplace.json" <<'EOF'
 {{"name":"openai-curated","plugins":[{{"name":"gmail","source":{{"source":"local","path":"./plugins/gmail"}}}}]}}
 EOF
-  printf '%s\n' '{{"name":"gmail"}}' > "$dest/plugins/gmail/.codex-plugin/plugin.json"
+  printf '%s\n' '{{"name":"gmail"}}' > "$2/plugins/gmail/.codex-plugin/plugin.json"
+  exit 0
+fi
+if [ "$1" = "-C" ] && [ "$3" = "clean" ]; then
   exit 0
 fi
 if [ "$1" = "-C" ] && [ "$3" = "rev-parse" ] && [ "$4" = "HEAD" ]; then
@@ -285,23 +315,55 @@ if [ "$1" = "-C" ] && [ "$3" = "rev-parse" ] && [ "$4" = "HEAD" ]; then
 fi
 echo "unexpected git invocation: $@" >&2
 exit 1
-"#
+"#,
+            invocation_log.display()
         ),
     );
 
-    let synced_sha = sync_openai_plugins_repo_with_transport_overrides(
-        tmp.path(),
-        git_path.to_str().expect("utf8 path"),
-        "http://127.0.0.1:9",
-        "http://127.0.0.1:9/backend-api/plugins/export/curated",
-    )
-    .expect("git sync should succeed");
+    let barrier = Barrier::new(2);
+    let results = std::thread::scope(|scope| {
+        let run_sync = || {
+            barrier.wait();
+            sync_openai_plugins_repo_with_transport_overrides(
+                tmp.path(),
+                git_path.to_str().expect("utf8 path"),
+                "http://127.0.0.1:9",
+                "http://127.0.0.1:9/backend-api/plugins/export/curated",
+            )
+        };
+        let first = scope.spawn(run_sync);
+        let second = scope.spawn(run_sync);
+        [
+            first.join().expect("first sync thread"),
+            second.join().expect("second sync thread"),
+        ]
+    });
 
-    assert_eq!(synced_sha, sha);
+    assert_eq!(results, [Ok(sha.to_string()), Ok(sha.to_string())]);
     let repo_path = curated_plugins_repo_path(tmp.path());
     assert!(repo_path.join(".git").is_dir());
     assert_curated_gmail_repo(&repo_path);
     assert_eq!(read_curated_plugins_sha(tmp.path()).as_deref(), Some(sha));
+    let invocations = std::fs::read_to_string(invocation_log).expect("read invocation log");
+    assert_eq!(
+        invocations
+            .lines()
+            .filter(|invocation| invocation.starts_with("ls-remote "))
+            .count(),
+        2
+    );
+    assert_eq!(
+        invocations
+            .lines()
+            .filter(|invocation| invocation.contains(" fetch --depth 1 --no-tags "))
+            .count(),
+        1
+    );
+    assert!(
+        !invocations
+            .lines()
+            .any(|invocation| invocation.split_whitespace().any(|arg| arg == "clone"))
+    );
 }
 
 #[cfg(unix)]
@@ -328,36 +390,20 @@ fn sync_openai_plugins_repo_via_git_succeeds_with_local_rewritten_remote() {
     )
     .expect("write plugin manifest");
 
-    let init_status = Command::new("git")
-        .arg("-C")
-        .arg(&work_repo)
-        .arg("init")
-        .status()
-        .expect("run git init");
-    assert!(init_status.success());
-
-    let add_status = Command::new("git")
-        .arg("-C")
-        .arg(&work_repo)
-        .arg("add")
-        .arg(".")
-        .status()
-        .expect("run git add");
-    assert!(add_status.success());
-
-    let commit_status = Command::new("git")
-        .arg("-C")
-        .arg(&work_repo)
-        .arg("-c")
-        .arg("user.name=Codex Test")
-        .arg("-c")
-        .arg("user.email=codex@example.com")
-        .arg("commit")
-        .arg("-m")
-        .arg("init")
-        .status()
-        .expect("run git commit");
-    assert!(commit_status.success());
+    run_git(&work_repo, &["init"]);
+    run_git(&work_repo, &["add", "."]);
+    run_git(
+        &work_repo,
+        &[
+            "-c",
+            "user.name=Codex Test",
+            "-c",
+            "user.email=codex@example.com",
+            "commit",
+            "-m",
+            "init",
+        ],
+    );
 
     std::fs::create_dir_all(remote_repo.parent().expect("remote parent"))
         .expect("create remote parent");
@@ -370,14 +416,7 @@ fn sync_openai_plugins_repo_via_git_succeeds_with_local_rewritten_remote() {
         .expect("run git clone --bare");
     assert!(clone_status.success());
 
-    let sha_output = Command::new("git")
-        .arg("-C")
-        .arg(&work_repo)
-        .arg("rev-parse")
-        .arg("HEAD")
-        .output()
-        .expect("run git rev-parse");
-    assert!(sha_output.status.success());
+    let sha_output = run_git(&work_repo, &["rev-parse", "HEAD"]);
     let sha = String::from_utf8_lossy(&sha_output.stdout)
         .trim()
         .to_string();
@@ -397,10 +436,12 @@ fn sync_openai_plugins_repo_via_git_succeeds_with_local_rewritten_remote() {
         .tempdir()
         .expect("tempdir");
     let git_wrapper = bin_dir.path().join("git");
+    let invocation_log = bin_dir.path().join("invocations.log");
     write_executable_script(
         &git_wrapper,
         &format!(
-            "#!/bin/sh\nGIT_CONFIG_GLOBAL='{}' exec git \"$@\"\n",
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\nGIT_CONFIG_GLOBAL='{}' exec git \"$@\"\n",
+            invocation_log.display(),
             git_config_path.display()
         ),
     );
@@ -416,6 +457,125 @@ fn sync_openai_plugins_repo_via_git_succeeds_with_local_rewritten_remote() {
         Some(sha.as_str())
     );
     assert!(!has_plugins_clone_dirs(tmp.path()));
+
+    let first_sync_invocation_count = std::fs::read_to_string(&invocation_log)
+        .expect("read first sync invocations")
+        .lines()
+        .count();
+    let first_sync_invocations =
+        std::fs::read_to_string(&invocation_log).expect("read first sync invocations");
+    assert!(
+        first_sync_invocations
+            .lines()
+            .any(|invocation| invocation.contains(" fetch --depth 1 --no-tags "))
+    );
+    assert!(
+        !first_sync_invocations
+            .lines()
+            .any(|invocation| invocation.split_whitespace().any(|arg| arg == "clone"))
+    );
+    write_openai_curated_marketplace(&work_repo, &["gmail", "linear"]);
+    run_git(&work_repo, &["add", "."]);
+    run_git(
+        &work_repo,
+        &[
+            "-c",
+            "user.name=Codex Test",
+            "-c",
+            "user.email=codex@example.com",
+            "commit",
+            "-m",
+            "update",
+        ],
+    );
+    let branch_output = run_git(&work_repo, &["symbolic-ref", "--short", "HEAD"]);
+    let branch = String::from_utf8_lossy(&branch_output.stdout)
+        .trim()
+        .to_string();
+    let remote_repo = remote_repo.to_str().expect("utf8 remote repo");
+    let push_ref = format!("HEAD:refs/heads/{branch}");
+    run_git(&work_repo, &["push", remote_repo, &push_ref]);
+    let updated_sha_output = run_git(&work_repo, &["rev-parse", "HEAD"]);
+    let updated_sha = String::from_utf8_lossy(&updated_sha_output.stdout)
+        .trim()
+        .to_string();
+
+    let synced_sha =
+        sync_openai_plugins_repo_via_git(tmp.path(), git_wrapper.to_str().expect("utf8 path"))
+            .expect("incremental git sync should succeed");
+
+    assert_eq!(synced_sha, updated_sha);
+    assert!(
+        curated_plugins_repo_path(tmp.path())
+            .join("plugins/linear/.codex-plugin/plugin.json")
+            .is_file()
+    );
+    assert_eq!(
+        read_curated_plugins_sha(tmp.path()).as_deref(),
+        Some(updated_sha.as_str())
+    );
+    assert!(
+        !curated_plugins_repo_path(tmp.path())
+            .join(".git/objects/info/alternates")
+            .exists()
+    );
+    let invocation_log_contents =
+        std::fs::read_to_string(&invocation_log).expect("read sync invocations");
+    let incremental_sync_invocations = invocation_log_contents
+        .lines()
+        .skip(first_sync_invocation_count)
+        .collect::<Vec<_>>();
+    let curated_repo_path = curated_plugins_repo_path(tmp.path());
+    assert!(incremental_sync_invocations.iter().any(|invocation| {
+        invocation.starts_with(&format!("-C {} fetch ", curated_repo_path.display()))
+            && invocation.contains(" https://github.com/openai/plugins.git ")
+            && invocation.contains(updated_sha.as_str())
+            && invocation.ends_with(CURATED_PLUGINS_FETCH_REF)
+    }));
+    assert!(incremental_sync_invocations.iter().any(|invocation| {
+        invocation.contains(" fetch --depth 1 --no-tags ")
+            && invocation.contains(&format!(" {} ", curated_repo_path.display()))
+            && invocation.ends_with(&format!(
+                "{CURATED_PLUGINS_FETCH_REF}:{CURATED_PLUGINS_FETCH_REF}"
+            ))
+    }));
+    assert!(
+        incremental_sync_invocations
+            .iter()
+            .any(|invocation| invocation.ends_with(" init"))
+    );
+    assert!(
+        !incremental_sync_invocations
+            .iter()
+            .any(|invocation| invocation.split_whitespace().any(|arg| arg == "clone"))
+    );
+    assert!(!incremental_sync_invocations.iter().any(|invocation| {
+        invocation.starts_with(&format!("-C {} reset ", curated_repo_path.display()))
+            || invocation.starts_with(&format!("-C {} clean ", curated_repo_path.display()))
+    }));
+    assert!(!has_plugins_clone_dirs(tmp.path()));
+
+    let unchanged_sync_invocation_count = invocation_log_contents.lines().count();
+    let synced_sha =
+        sync_openai_plugins_repo_via_git(tmp.path(), git_wrapper.to_str().expect("utf8 path"))
+            .expect("unchanged git sync should succeed");
+
+    assert_eq!(synced_sha, updated_sha);
+    let invocation_log = std::fs::read_to_string(&invocation_log).expect("read sync invocations");
+    let unchanged_sync_invocations = invocation_log
+        .lines()
+        .skip(unchanged_sync_invocation_count)
+        .collect::<Vec<_>>();
+    assert!(
+        unchanged_sync_invocations
+            .iter()
+            .any(|invocation| invocation.starts_with("ls-remote "))
+    );
+    assert!(
+        !unchanged_sync_invocations
+            .iter()
+            .any(|invocation| invocation.contains(" fetch "))
+    );
 }
 
 #[tokio::test]
@@ -482,7 +642,7 @@ exit 1
 
 #[cfg(unix)]
 #[test]
-fn sync_openai_plugins_repo_via_git_cleans_up_staged_dir_on_clone_failure() {
+fn sync_openai_plugins_repo_via_git_cleans_up_staged_dir_on_fetch_failure() {
     let tmp = tempdir().expect("tempdir");
     let bin_dir = tempfile::Builder::new()
         .prefix("fake-git-partial-fail-")
@@ -499,9 +659,11 @@ if [ "$1" = "ls-remote" ]; then
   printf '%s\tHEAD\n' "{sha}"
   exit 0
 fi
-if [ "$1" = "clone" ]; then
-  dest="$5"
-  mkdir -p "$dest/.git"
+if [ "$1" = "-C" ] && [ "$3" = "init" ]; then
+  mkdir -p "$2/.git"
+  exit 0
+fi
+if [ "$1" = "-C" ] && [ "$3" = "fetch" ]; then
   echo "fatal: early EOF" >&2
   exit 128
 fi
@@ -515,6 +677,77 @@ exit 1
         .expect_err("git sync should fail");
 
     assert!(err.contains("fatal: early EOF"));
+    assert!(!has_plugins_clone_dirs(tmp.path()));
+}
+
+#[cfg(unix)]
+#[test]
+fn sync_openai_plugins_repo_via_git_preserves_existing_snapshot_on_validation_failure() {
+    let tmp = tempdir().expect("tempdir");
+    let repo_path = curated_plugins_repo_path(tmp.path());
+    write_openai_curated_marketplace(&repo_path, &["gmail"]);
+    std::fs::create_dir_all(repo_path.join(".git")).expect("create git dir");
+    write_curated_plugin_sha(tmp.path());
+
+    let bin_dir = tempfile::Builder::new()
+        .prefix("fake-git-invalid-update-")
+        .tempdir()
+        .expect("tempdir");
+    let git_path = bin_dir.path().join("git");
+    let remote_sha = "fedcba9876543210fedcba9876543210fedcba98";
+
+    write_executable_script(
+        &git_path,
+        &format!(
+            r#"#!/bin/sh
+if [ "$1" = "ls-remote" ]; then
+  printf '%s\tHEAD\n' "{remote_sha}"
+  exit 0
+fi
+if [ "$1" = "-C" ] && [ "$2" = "{}" ] && [ "$3" = "rev-parse" ]; then
+  printf '%s\n' "{TEST_CURATED_PLUGIN_SHA}"
+  exit 0
+fi
+if [ "$1" = "-C" ] && [ "$2" = "{}" ] && [ "$3" = "fetch" ]; then
+  exit 0
+fi
+if [ "$1" = "-C" ] && [ "$3" = "init" ]; then
+  mkdir -p "$2/.git"
+  exit 0
+fi
+if [ "$1" = "-C" ] && [ "$3" = "fetch" ]; then
+  exit 0
+fi
+if [ "$1" = "-C" ] && [ "$3" = "reset" ]; then
+  mkdir -p "$2/plugins/linear/.codex-plugin"
+  printf '%s\n' '{{"name":"linear"}}' > "$2/plugins/linear/.codex-plugin/plugin.json"
+  exit 0
+fi
+if [ "$1" = "-C" ] && [ "$3" = "clean" ]; then
+  exit 0
+fi
+if [ "$1" = "-C" ] && [ "$3" = "rev-parse" ]; then
+  printf '%s\n' "{remote_sha}"
+  exit 0
+fi
+echo "unexpected git invocation: $@" >&2
+exit 1
+"#,
+            repo_path.display(),
+            repo_path.display(),
+        ),
+    );
+
+    let err = sync_openai_plugins_repo_via_git(tmp.path(), git_path.to_str().expect("utf8 path"))
+        .expect_err("invalid staged checkout should fail");
+
+    assert!(err.contains("curated plugins archive missing marketplace manifest"));
+    assert_curated_gmail_repo(&repo_path);
+    assert!(!repo_path.join("plugins/linear").exists());
+    assert_eq!(
+        read_curated_plugins_sha(tmp.path()).as_deref(),
+        Some(TEST_CURATED_PLUGIN_SHA)
+    );
     assert!(!has_plugins_clone_dirs(tmp.path()));
 }
 

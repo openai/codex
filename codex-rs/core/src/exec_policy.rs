@@ -22,7 +22,6 @@ use codex_execpolicy::blocking_append_network_rule;
 use codex_protocol::approvals::ExecPolicyAmendment;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemSandboxKind;
-use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
 use codex_shell_command::is_dangerous_command::command_might_be_dangerous;
 use codex_shell_command::is_safe_command::is_known_safe_command;
@@ -121,7 +120,6 @@ pub(crate) enum ExecPolicyCommandOrigin {
 pub(crate) struct UnmatchedCommandContext<'a> {
     pub(crate) approval_policy: AskForApproval,
     pub(crate) permission_profile: &'a PermissionProfile,
-    pub(crate) file_system_sandbox_policy: &'a FileSystemSandboxPolicy,
     pub(crate) sandbox_cwd: &'a Path,
     pub(crate) sandbox_permissions: SandboxPermissions,
     pub(crate) used_complex_parsing: bool,
@@ -242,7 +240,6 @@ pub(crate) struct ExecApprovalRequest<'a> {
     pub(crate) command: &'a [String],
     pub(crate) approval_policy: AskForApproval,
     pub(crate) permission_profile: PermissionProfile,
-    pub(crate) file_system_sandbox_policy: &'a FileSystemSandboxPolicy,
     pub(crate) sandbox_cwd: &'a Path,
     pub(crate) sandbox_permissions: SandboxPermissions,
     pub(crate) prefix_rule: Option<Vec<String>>,
@@ -277,7 +274,6 @@ impl ExecPolicyManager {
             command,
             approval_policy,
             permission_profile,
-            file_system_sandbox_policy,
             sandbox_cwd,
             sandbox_permissions,
             prefix_rule,
@@ -298,7 +294,6 @@ impl ExecPolicyManager {
                 UnmatchedCommandContext {
                     approval_policy,
                     permission_profile: &permission_profile,
-                    file_system_sandbox_policy,
                     sandbox_cwd,
                     sandbox_permissions,
                     used_complex_parsing,
@@ -636,12 +631,12 @@ pub(crate) fn render_decision_for_unmatched_command(
     let UnmatchedCommandContext {
         approval_policy,
         permission_profile,
-        file_system_sandbox_policy,
         sandbox_cwd,
         sandbox_permissions,
         used_complex_parsing,
         command_origin,
     } = context;
+    let file_system_sandbox_policy = permission_profile.file_system_sandbox_policy();
     let is_known_safe = match command_origin {
         ExecPolicyCommandOrigin::Generic => is_known_safe_command(command),
         #[cfg(windows)]
@@ -652,12 +647,8 @@ pub(crate) fn render_decision_for_unmatched_command(
 
     // On Windows, ReadOnly sandbox is not a real sandbox, so special-case it
     // here.
-    let environment_lacks_sandbox_protections = cfg!(windows)
-        && profile_is_managed_read_only(
-            permission_profile,
-            file_system_sandbox_policy,
-            sandbox_cwd,
-        );
+    let environment_lacks_sandbox_protections =
+        cfg!(windows) && profile_is_managed_read_only(permission_profile, sandbox_cwd);
 
     if is_known_safe
         && !used_complex_parsing
@@ -751,9 +742,9 @@ pub(crate) fn render_decision_for_unmatched_command(
 
 fn profile_is_managed_read_only(
     permission_profile: &PermissionProfile,
-    file_system_sandbox_policy: &FileSystemSandboxPolicy,
     sandbox_cwd: &Path,
 ) -> bool {
+    let file_system_sandbox_policy = permission_profile.file_system_sandbox_policy();
     matches!(permission_profile, PermissionProfile::Managed { .. })
         && matches!(
             file_system_sandbox_policy.kind,

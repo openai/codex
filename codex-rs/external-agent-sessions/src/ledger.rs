@@ -4,12 +4,16 @@ use serde::Deserialize;
 use serde::Serialize;
 use sha2::Digest;
 use sha2::Sha256;
+use std::collections::HashMap;
 use std::fs;
+use std::fs::File;
 use std::io;
+use std::io::Read;
 use std::path::Path;
 use std::path::PathBuf;
 
 const SESSION_IMPORT_LEDGER_FILE: &str = "external_agent_session_imports.json";
+const SESSION_HASH_BUFFER_SIZE: usize = 64 * 1024;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub(super) struct ImportedExternalAgentSessionLedger {
@@ -22,6 +26,14 @@ struct ImportedExternalAgentSessionRecord {
     content_sha256: String,
     imported_thread_id: ThreadId,
     imported_at: i64,
+    #[serde(default)]
+    source_modified_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(super) struct ImportedSourceState {
+    pub source_modified_at: Option<i64>,
+    pub imported_at: i64,
 }
 
 pub fn has_current_session_been_imported(
@@ -39,29 +51,81 @@ pub fn record_imported_session(
     let mut ledger = load_import_ledger(codex_home)?;
     let source_path = canonical_source_path(source_path)?;
     let content_sha256 = session_content_sha256(&source_path)?;
-    if ledger
-        .records
-        .iter()
-        .any(|record| record.source_path == source_path && record.content_sha256 == content_sha256)
-    {
-        return Ok(());
+    let source_modified_at = session_modified_at(&source_path)?;
+    if let Some(index) = ledger.records.iter().rposition(|record| {
+        record.source_path == source_path && record.content_sha256 == content_sha256
+    }) {
+        let mut record = ledger.records.remove(index);
+        record.imported_thread_id = imported_thread_id;
+        record.imported_at = now_unix_seconds();
+        record.source_modified_at = source_modified_at;
+        ledger.records.push(record);
+    } else {
+        ledger.records.push(ImportedExternalAgentSessionRecord {
+            source_path,
+            content_sha256,
+            imported_thread_id,
+            imported_at: now_unix_seconds(),
+            source_modified_at,
+        });
     }
-    ledger.records.push(ImportedExternalAgentSessionRecord {
-        source_path,
-        content_sha256,
-        imported_thread_id,
-        imported_at: now_unix_seconds(),
-    });
     save_import_ledger(codex_home, &ledger)
 }
 
 impl ImportedExternalAgentSessionLedger {
+    pub(super) fn source_states(&self) -> HashMap<&Path, ImportedSourceState> {
+        let mut states = HashMap::new();
+        for record in &self.records {
+            states.insert(
+                record.source_path.as_path(),
+                ImportedSourceState {
+                    source_modified_at: record.source_modified_at,
+                    imported_at: record.imported_at,
+                },
+            );
+        }
+        states
+    }
+
     pub(super) fn contains_current_source(&self, source_path: &Path) -> io::Result<bool> {
         let source_path = canonical_source_path(source_path)?;
+        if !self
+            .records
+            .iter()
+            .any(|record| record.source_path == source_path)
+        {
+            return Ok(false);
+        }
         let content_sha256 = session_content_sha256(&source_path)?;
         Ok(self.records.iter().any(|record| {
             record.source_path == source_path && record.content_sha256 == content_sha256
         }))
+    }
+
+    pub(super) fn refresh_current_source(
+        &mut self,
+        source_path: &Path,
+        source_modified_at: i64,
+    ) -> io::Result<bool> {
+        let source_path = canonical_source_path(source_path)?;
+        if !self
+            .records
+            .iter()
+            .any(|record| record.source_path == source_path)
+        {
+            return Ok(false);
+        }
+        let content_sha256 = session_content_sha256(&source_path)?;
+        let Some(index) = self.records.iter().rposition(|record| {
+            record.source_path == source_path && record.content_sha256 == content_sha256
+        }) else {
+            return Ok(false);
+        };
+        let mut record = self.records.remove(index);
+        record.imported_at = now_unix_seconds();
+        record.source_modified_at = Some(source_modified_at);
+        self.records.push(record);
+        Ok(true)
     }
 }
 
@@ -84,7 +148,7 @@ pub(super) fn load_import_ledger(
     })
 }
 
-fn save_import_ledger(
+pub(super) fn save_import_ledger(
     codex_home: &Path,
     ledger: &ImportedExternalAgentSessionLedger,
 ) -> io::Result<()> {
@@ -103,6 +167,24 @@ fn canonical_source_path(path: &Path) -> io::Result<PathBuf> {
 }
 
 fn session_content_sha256(path: &Path) -> io::Result<String> {
-    let contents = fs::read(path)?;
-    Ok(format!("{:x}", Sha256::digest(contents)))
+    let mut file = File::open(path)?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0; SESSION_HASH_BUFFER_SIZE];
+    loop {
+        let read = file.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    let digest = hasher.finalize();
+    Ok(format!("{digest:x}"))
+}
+
+fn session_modified_at(path: &Path) -> io::Result<Option<i64>> {
+    Ok(fs::metadata(path)?
+        .modified()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .and_then(|duration| i64::try_from(duration.as_nanos()).ok()))
 }

@@ -30,6 +30,8 @@ use codex_app_server_protocol::AdditionalContextKind;
 use codex_app_server_protocol::AppInfo;
 use codex_app_server_protocol::AppListUpdatedNotification;
 use codex_app_server_protocol::AppSummary;
+use codex_app_server_protocol::AppTemplateSummary;
+use codex_app_server_protocol::AppTemplateUnavailableReason;
 use codex_app_server_protocol::AppsListParams;
 use codex_app_server_protocol::AppsListResponse;
 use codex_app_server_protocol::AskForApproval;

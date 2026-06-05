@@ -1268,6 +1268,7 @@ impl AnalyticsReducer {
         let session_id = thread.session_id;
         let thread_id = thread.id;
         let parent_thread_id = thread.parent_thread_id;
+        let forked_from_thread_id = thread.forked_from_id;
         let Some(connection_state) = self.connections.get(&connection_id) else {
             return;
         };
@@ -1299,6 +1300,7 @@ impl AnalyticsReducer {
                     initialization_mode,
                     subagent_source: thread_metadata.subagent_source.clone(),
                     parent_thread_id: thread_metadata.parent_thread_id,
+                    forked_from_thread_id,
                     created_at: u64::try_from(thread.created_at).unwrap_or_default(),
                 },
             },

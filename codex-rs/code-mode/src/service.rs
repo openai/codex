@@ -1564,6 +1564,44 @@ image({
     }
 
     #[tokio::test]
+    async fn generated_image_helper_appends_image_and_output_hint() {
+        let service = CodeModeService::new();
+
+        let response = execute(
+            &service,
+            ExecuteRequest {
+                source: r#"
+generatedImage({
+  image_url: "https://example.com/image.jpg",
+  output_hint: "generated image save hint",
+});
+"#
+                .to_string(),
+                yield_time_ms: None,
+                ..execute_request("")
+            },
+        )
+        .await;
+
+        assert_eq!(
+            response,
+            RuntimeResponse::Result {
+                cell_id: cell_id("1"),
+                content_items: vec![
+                    FunctionCallOutputContentItem::InputImage {
+                        image_url: "https://example.com/image.jpg".to_string(),
+                        detail: Some(crate::DEFAULT_IMAGE_DETAIL),
+                    },
+                    FunctionCallOutputContentItem::InputText {
+                        text: "generated image save hint".to_string(),
+                    },
+                ],
+                error_text: None,
+            }
+        );
+    }
+
+    #[tokio::test]
     async fn image_helper_second_arg_overrides_explicit_object_detail() {
         let service = CodeModeService::new();
 

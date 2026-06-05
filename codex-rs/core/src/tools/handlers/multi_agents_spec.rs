@@ -17,6 +17,7 @@ const SPAWN_AGENT_MODEL_OVERRIDE_DESCRIPTION: &str =
 const SPAWN_AGENT_SERVICE_TIER_OVERRIDE_DESCRIPTION: &str =
     "Service tier override for the new agent. Omit unless explicitly requested.";
 const MAX_MODEL_OVERRIDES_IN_SPAWN_AGENT_DESCRIPTION: usize = 5;
+const MAX_REASONING_EFFORT_CHARS_IN_SPAWN_AGENT_DESCRIPTION: usize = 64;
 
 #[derive(Debug, Clone, Default)]
 pub struct SpawnAgentToolOptions {
@@ -762,13 +763,20 @@ fn spawn_agent_models_description(models: &[ModelPreset]) -> String {
     let model_descriptions = visible_models
         .into_iter()
         .map(|model| {
-            let default_reasoning_effort = model.default_reasoning_effort;
+            let default_reasoning_effort = &model.default_reasoning_effort;
             let efforts = model
                 .supported_reasoning_efforts
                 .iter()
                 .map(|preset| {
-                    let effort = preset.effort;
-                    if effort == default_reasoning_effort {
+                    let effort = preset.effort.as_str();
+                    let effort = match effort
+                        .char_indices()
+                        .nth(MAX_REASONING_EFFORT_CHARS_IN_SPAWN_AGENT_DESCRIPTION)
+                    {
+                        Some((index, _)) => &effort[..index],
+                        None => effort,
+                    };
+                    if &preset.effort == default_reasoning_effort {
                         format!("{effort} (default)")
                     } else {
                         effort.to_string()
