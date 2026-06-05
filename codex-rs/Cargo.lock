@@ -2390,12 +2390,14 @@ dependencies = [
  "rustls-pki-types",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
  "tracing-opentelemetry",
  "tracing-subscriber",
+ "windows-sys 0.52.0",
  "zstd 0.13.3",
 ]
 

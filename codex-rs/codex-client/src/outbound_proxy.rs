@@ -15,9 +15,16 @@ use std::time::Instant;
 
 use crate::custom_ca::BuildCustomCaTransportError;
 use crate::custom_ca::build_reqwest_client_with_custom_ca;
+#[cfg(target_os = "windows")]
+use sha2::Digest;
+#[cfg(target_os = "windows")]
+use sha2::Sha256;
 use thiserror::Error;
 
 const SYSTEM_PROXY_SUCCESS_CACHE_TTL: Duration = Duration::from_secs(60);
+
+#[cfg(target_os = "windows")]
+mod windows;
 
 /// Environment kill switch reserved for system proxy discovery.
 ///
@@ -287,7 +294,7 @@ fn configure_proxy_for_route(
 }
 
 const fn system_proxy_supported() -> bool {
-    false
+    cfg!(target_os = "windows")
 }
 
 fn configure_concrete_proxy(
@@ -366,6 +373,7 @@ fn default_port_for_scheme(scheme: &str) -> Option<u16> {
     }
 }
 
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[allow(dead_code)]
 enum SystemProxyDecision {
@@ -388,6 +396,16 @@ fn resolve_system_proxy(
     decision
 }
 
+#[cfg(target_os = "windows")]
+fn resolve_platform_system_proxy(
+    request_url: &str,
+    origin: &RequestOrigin,
+    include_auto_detect: bool,
+) -> SystemProxyDecision {
+    windows::resolve(request_url, origin, include_auto_detect)
+}
+
+#[cfg(not(target_os = "windows"))]
 fn resolve_platform_system_proxy(
     _request_url: &str,
     _origin: &RequestOrigin,
@@ -446,6 +464,18 @@ fn cache_system_proxy_decision(
 }
 
 fn system_proxy_cache_key(request_url: &str, include_auto_detect: bool) -> String {
+    #[cfg(target_os = "windows")]
+    {
+        // Keep URL-specific PAC decisions without retaining the raw routed URL.
+        let mut hasher = Sha256::new();
+        hasher.update(b"system-proxy-cache-v1\0");
+        hasher.update(request_url.as_bytes());
+        hasher.update(b"\0");
+        hasher.update([u8::from(include_auto_detect)]);
+        format!("{:x}", hasher.finalize())
+    }
+
+    #[cfg(not(target_os = "windows"))]
     format!("{request_url}:auto_detect={include_auto_detect}")
 }
 
@@ -551,9 +581,139 @@ fn wildcard_host_match(pattern: &str, host: &str) -> bool {
     pattern.ends_with('*') || remaining.is_empty()
 }
 
+#[cfg(any(test, target_os = "windows"))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ParsedProxyListDecision {
+    Direct,
+    Proxy(String),
+    UnsupportedScheme,
+    Unavailable,
+}
+
+#[cfg(any(test, target_os = "windows"))]
+fn parse_proxy_list(input: &str, target_scheme: &str) -> ParsedProxyListDecision {
+    let mut saw_unsupported = false;
+    let mut http_fallback = None;
+    for token in input
+        .split(';')
+        .map(str::trim)
+        .filter(|token| !token.is_empty())
+    {
+        if target_scheme == "https"
+            && http_fallback.is_none()
+            && let Some(ParsedProxyListDecision::Proxy(url)) = parse_proxy_key_token(token, "http")
+        {
+            http_fallback = Some(url);
+        }
+        match parse_proxy_token(token, target_scheme) {
+            ParsedProxyListDecision::Direct => return ParsedProxyListDecision::Direct,
+            ParsedProxyListDecision::Proxy(url) => return ParsedProxyListDecision::Proxy(url),
+            ParsedProxyListDecision::UnsupportedScheme => saw_unsupported = true,
+            ParsedProxyListDecision::Unavailable => {}
+        }
+    }
+
+    if let Some(url) = http_fallback {
+        ParsedProxyListDecision::Proxy(url)
+    } else if saw_unsupported {
+        ParsedProxyListDecision::UnsupportedScheme
+    } else {
+        ParsedProxyListDecision::Unavailable
+    }
+}
+
+#[cfg(any(test, target_os = "windows"))]
+fn parse_proxy_token(token: &str, target_scheme: &str) -> ParsedProxyListDecision {
+    if token.eq_ignore_ascii_case("DIRECT") {
+        return ParsedProxyListDecision::Direct;
+    }
+
+    if let Some(decision) = parse_proxy_key_token(token, target_scheme) {
+        return decision;
+    }
+    if token.contains('=') {
+        return ParsedProxyListDecision::Unavailable;
+    }
+
+    if let Some((scheme, hostport)) = token.split_once(' ') {
+        let scheme = scheme.trim().to_ascii_lowercase();
+        let hostport = hostport.trim();
+        return match scheme.as_str() {
+            "proxy" | "http" => proxy_url_from_hostport("http", hostport),
+            "https" => proxy_url_from_hostport("https", hostport),
+            "socks" | "socks4" | "socks5" => ParsedProxyListDecision::UnsupportedScheme,
+            _ => ParsedProxyListDecision::Unavailable,
+        };
+    }
+
+    proxy_url_from_hostport("http", token)
+}
+
+#[cfg(any(test, target_os = "windows"))]
+fn parse_proxy_key_token(token: &str, target_scheme: &str) -> Option<ParsedProxyListDecision> {
+    let (key, value) = token.split_once('=')?;
+    if key.trim().eq_ignore_ascii_case(target_scheme) {
+        Some(proxy_url_from_hostport("http", value.trim()))
+    } else {
+        Some(ParsedProxyListDecision::Unavailable)
+    }
+}
+
+#[cfg(any(test, target_os = "windows"))]
+fn proxy_url_from_hostport(proxy_scheme: &str, hostport: &str) -> ParsedProxyListDecision {
+    if hostport.is_empty() {
+        return ParsedProxyListDecision::Unavailable;
+    }
+    if hostport.contains("://") {
+        return ParsedProxyListDecision::Proxy(hostport.to_string());
+    }
+    ParsedProxyListDecision::Proxy(format!("{proxy_scheme}://{hostport}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn parses_pac_proxy_tokens() {
+        assert_eq!(
+            parse_proxy_list("PROXY proxy.internal:8080; DIRECT", "https"),
+            ParsedProxyListDecision::Proxy("http://proxy.internal:8080".to_string())
+        );
+        assert_eq!(
+            parse_proxy_list("HTTPS proxy.internal:8443", "https"),
+            ParsedProxyListDecision::Proxy("https://proxy.internal:8443".to_string())
+        );
+    }
+
+    #[test]
+    fn parses_static_winhttp_proxy_entries_for_target_scheme() {
+        assert_eq!(
+            parse_proxy_list("http=web-proxy:8080;https=secure-proxy:8443", "https"),
+            ParsedProxyListDecision::Proxy("http://secure-proxy:8443".to_string())
+        );
+        assert_eq!(
+            parse_proxy_list("proxy.internal:8080", "https"),
+            ParsedProxyListDecision::Proxy("http://proxy.internal:8080".to_string())
+        );
+    }
+
+    #[test]
+    fn reports_direct_and_unsupported_proxy_tokens() {
+        assert_eq!(
+            parse_proxy_list("DIRECT; PROXY proxy.internal:8080", "https"),
+            ParsedProxyListDecision::Direct
+        );
+        assert_eq!(
+            parse_proxy_list("DIRECT", "https"),
+            ParsedProxyListDecision::Direct
+        );
+        assert_eq!(
+            parse_proxy_list("SOCKS proxy.internal:1080", "https"),
+            ParsedProxyListDecision::UnsupportedScheme
+        );
+    }
 
     #[test]
     fn no_proxy_matches_exact_suffix_wildcard_and_port() {
@@ -567,5 +727,18 @@ mod tests {
         assert!(no_proxy_matches_origin("*.openai.com", &origin));
         assert!(no_proxy_matches_origin("auth.openai.com:443", &origin));
         assert!(!no_proxy_matches_origin("auth.openai.com:8443", &origin));
+    }
+
+    #[test]
+    fn system_proxy_cache_key_preserves_url_specific_pac_decisions() {
+        let request_url = "https://auth.openai.com/oauth/token?access_token=secret";
+        let cache_key = system_proxy_cache_key(request_url, false);
+
+        assert_ne!(
+            cache_key,
+            system_proxy_cache_key("https://auth.openai.com/oauth/revoke", false)
+        );
+        #[cfg(target_os = "windows")]
+        assert!(!cache_key.contains(request_url));
     }
 }
