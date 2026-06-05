@@ -12,8 +12,8 @@ mod tests;
 
 /// Observes append batches and emits only thread lifecycle mutations.
 pub struct LifecycleProjectionObserver {
-    // TODO(wiltzius): Restore this from persisted lifecycle projection state once stores persist
-    // lifecycle mutations, instead of reconstructing it from only the current process's appends.
+    // TODO(wiltzius): Persist this in a lifecycle projection checkpoint once stores persist
+    // lifecycle mutations, so a resumed observer can restore its prior in-memory state.
     current_turn_id: Option<String>,
 }
 
