@@ -19,6 +19,7 @@
 use anyhow::Context;
 use anyhow::Error;
 use anyhow::Result;
+use anyhow::anyhow;
 use codex_config::types::OAuthCredentialsStoreMode;
 use oauth2::AccessToken;
 use oauth2::RefreshToken;
@@ -52,6 +53,8 @@ use codex_utils_home_dir::find_codex_home;
 
 const KEYRING_SERVICE: &str = "Codex MCP Credentials";
 const REFRESH_SKEW_MILLIS: u64 = 30_000;
+pub(crate) const OAUTH_REQUEST_REFRESH_FAILED_ERROR: &str =
+    "OAuth access token refresh failed before MCP request";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct StoredOAuthTokens {
@@ -362,15 +365,20 @@ impl OAuthPersistor {
         {
             let manager = self.inner.authorization_manager.clone();
             let guard = manager.lock().await;
-            guard.refresh_token().await.with_context(|| {
-                format!(
-                    "failed to refresh OAuth tokens for server {}",
-                    self.inner.server_name
-                )
-            })?;
+            guard
+                .get_access_token()
+                .await
+                .map_err(|_| anyhow!(OAUTH_REQUEST_REFRESH_FAILED_ERROR))?;
         }
 
-        self.persist_if_needed().await
+        if let Err(error) = self.persist_if_needed().await {
+            warn!(
+                "failed to persist refreshed OAuth tokens for server {}; will retry: {error}",
+                self.inner.server_name
+            );
+        }
+
+        Ok(())
     }
 }
 
