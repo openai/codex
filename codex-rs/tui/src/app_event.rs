@@ -13,6 +13,7 @@ use std::path::PathBuf;
 use codex_app_server_protocol::AddCreditsNudgeCreditType;
 use codex_app_server_protocol::AddCreditsNudgeEmailStatus;
 use codex_app_server_protocol::AppInfo;
+use codex_app_server_protocol::GetAccountTokenUsageResponse;
 use codex_app_server_protocol::MarketplaceAddResponse;
 use codex_app_server_protocol::MarketplaceRemoveResponse;
 use codex_app_server_protocol::MarketplaceUpgradeResponse;
@@ -292,6 +293,20 @@ pub(crate) enum AppEvent {
         origin: RateLimitRefreshOrigin,
         result: Result<Vec<RateLimitSnapshot>, String>,
     },
+
+    /// Fetch account-wide token activity for a `/usage` history card.
+    RefreshTokenActivity {
+        request_id: u64,
+    },
+
+    /// Result of fetching account-wide token activity.
+    TokenActivityLoaded {
+        request_id: u64,
+        result: Result<GetAccountTokenUsageResponse, String>,
+    },
+
+    /// Commit a settled token activity card after a stream shutdown barrier.
+    CommitCompletedTokenActivityOutput,
 
     /// Send a user-confirmed request to notify the workspace owner.
     SendAddCreditsNudgeEmail {

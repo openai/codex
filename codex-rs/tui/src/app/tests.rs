@@ -326,6 +326,7 @@ async fn enqueue_primary_thread_session_replays_turns_before_initial_prompt_subm
         ),
         enhanced_keys_supported: false,
         has_chatgpt_account: false,
+        has_codex_backend_auth: false,
         model_catalog: app.model_catalog.clone(),
         feedback: codex_feedback::CodexFeedback::new(),
         is_first_run: false,
@@ -4550,6 +4551,32 @@ async fn height_shrink_schedules_resize_reflow() {
     assert!(app.transcript_reflow.has_pending_reflow());
 }
 
+#[tokio::test]
+async fn disabled_resize_reflow_preserves_pending_history_cell_refresh() {
+    let (mut app, _rx, _op_rx) = make_test_app_with_channels().await;
+    let frame_requester = crate::tui::FrameRequester::test_dummy();
+    app.config
+        .features
+        .set_enabled(Feature::TerminalResizeReflow, /*enabled*/ false)
+        .expect("feature should be configurable");
+    assert!(!app.should_handle_draw_pre_render());
+    app.transcript_reflow.schedule_history_cell_refresh();
+    assert!(app.should_handle_draw_pre_render());
+
+    assert!(!app.handle_draw_size_change(
+        ratatui::layout::Size::new(/*width*/ 118, /*height*/ 35),
+        ratatui::layout::Size::new(/*width*/ 118, /*height*/ 35),
+        &frame_requester,
+    ));
+    assert!(app.handle_draw_size_change(
+        ratatui::layout::Size::new(/*width*/ 119, /*height*/ 35),
+        ratatui::layout::Size::new(/*width*/ 118, /*height*/ 35),
+        &frame_requester,
+    ));
+
+    assert!(app.transcript_reflow.history_cell_refresh_requested());
+}
+
 fn test_turn(turn_id: &str, status: TurnStatus, items: Vec<ThreadItem>) -> Turn {
     Turn {
         id: turn_id.to_string(),
@@ -5335,6 +5362,7 @@ async fn replace_chat_widget_reseeds_collab_agent_metadata_for_replay() {
         initial_user_message: None,
         enhanced_keys_supported: app.enhanced_keys_supported,
         has_chatgpt_account: app.chat_widget.has_chatgpt_account(),
+        has_codex_backend_auth: app.chat_widget.has_codex_backend_auth(),
         model_catalog: app.model_catalog.clone(),
         feedback: app.feedback.clone(),
         is_first_run: false,
@@ -5492,12 +5520,34 @@ async fn queued_rollback_syncs_overlay_and_clears_deferred_history() {
     app.deferred_history_lines = vec![Line::from("stale buffered line").into()];
     app.backtrack.overlay_preview_active = true;
     app.backtrack.nth_user_message = 1;
+    app.chat_widget.update_account_state(
+        /*status_account_display*/ None, /*plan_type*/ None,
+        /*has_chatgpt_account*/ false, /*has_codex_backend_auth*/ true,
+    );
+    app.chat_widget
+        .set_composer_text("/usage".to_string(), Vec::new(), Vec::new());
+    app.chat_widget
+        .handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    app.chat_widget
+        .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    app.chat_widget
+        .handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    let pending_usage = app
+        .chat_widget
+        .active_cell_transcript_lines(/*width*/ 80)
+        .expect("pending usage transcript");
+    assert!(lines_to_single_string(&pending_usage).contains("Token activity\n   Loading..."));
 
     let changed = app.apply_non_pending_thread_rollback(/*num_turns*/ 1);
 
     assert!(changed);
     assert!(app.backtrack_render_pending);
     assert!(app.deferred_history_lines.is_empty());
+    assert!(
+        app.chat_widget
+            .active_cell_transcript_lines(/*width*/ 80)
+            .is_none_or(|lines| !lines_to_single_string(&lines).contains("Token activity"))
+    );
     assert_eq!(app.backtrack.nth_user_message, 0);
     let user_messages: Vec<String> = app
         .transcript_cells
