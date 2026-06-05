@@ -128,7 +128,8 @@ fn read_only_windows_policy_without_sandbox_backend_still_requires_approval() {
                 used_complex_parsing: false,
                 command_origin: ExecPolicyCommandOrigin::Generic,
             },
-        )
+        ),
+        "command is forbidden because approval policy is never and there is no Windows sandbox to rely on"
     );
 }
 

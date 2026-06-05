@@ -1159,7 +1159,9 @@ fn managed_cwd_write_profile_has_filesystem_restrictions() {
         NetworkSandboxPolicy::Restricted,
     );
 
-    assert!(profile_has_managed_filesystem_restrictions(&permission_profile));
+    assert!(profile_has_managed_filesystem_restrictions(
+        &permission_profile
+    ));
 }
 
 #[test]
@@ -1186,7 +1188,9 @@ fn managed_unresolvable_write_profile_has_filesystem_restrictions() {
         NetworkSandboxPolicy::Restricted,
     );
 
-    assert!(profile_has_managed_filesystem_restrictions(&permission_profile));
+    assert!(profile_has_managed_filesystem_restrictions(
+        &permission_profile
+    ));
 }
 
 #[test]

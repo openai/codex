@@ -744,9 +744,7 @@ pub(crate) fn render_decision_for_unmatched_command(
     }
 }
 
-fn profile_has_managed_filesystem_restrictions(
-    permission_profile: &PermissionProfile,
-) -> bool {
+fn profile_has_managed_filesystem_restrictions(permission_profile: &PermissionProfile) -> bool {
     let file_system_sandbox_policy = permission_profile.file_system_sandbox_policy();
     matches!(permission_profile, PermissionProfile::Managed { .. })
         && matches!(
