@@ -181,7 +181,8 @@ fn build_tool_specs_and_registry(
     };
     let mut planned_tools = PlannedTools::default();
     add_tool_sources(&context, &mut planned_tools);
-    append_tool_search_executor(&context, &mut planned_tools);
+    tracing::trace_span!("append_tool_search_executor")
+        .in_scope(|| append_tool_search_executor(&context, &mut planned_tools));
     prepend_code_mode_executors(&context, &mut planned_tools);
     build_model_visible_specs_and_registry(turn_context, planned_tools)
 }
