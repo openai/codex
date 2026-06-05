@@ -15,6 +15,7 @@ use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
+use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
 use codex_protocol::protocol::AskForApproval;
@@ -43,6 +44,7 @@ use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_with_timeout;
+use core_test_support::zsh_fork::build_unified_exec_zsh_fork_test;
 use core_test_support::zsh_fork::build_zsh_fork_test;
 use core_test_support::zsh_fork::restrictive_workspace_write_profile;
 use core_test_support::zsh_fork::zsh_fork_runtime;
@@ -2794,6 +2796,146 @@ async fn matched_prefix_rule_runs_unsandboxed_under_zsh_fork() -> Result<()> {
     assert!(
         outside_path.exists(),
         "expected matched prefix_rule to rerun touch unsandboxed; output: {}",
+        result.stdout
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[cfg(unix)]
+async fn unified_exec_zsh_fork_parent_approval_preserves_denied_reads() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let Some(runtime) = zsh_fork_runtime("unified-exec zsh-fork denied-read approval test")? else {
+        return Ok(());
+    };
+
+    let denied_dir = tempfile::tempdir_in(std::env::current_dir()?)?;
+    let denied_path = denied_dir.path().join("secret.env");
+    let secret = "unified-exec-zsh-fork-denied-read-secret";
+    fs::write(&denied_path, format!("{secret}\n"))?;
+    let file_system_sandbox_policy = FileSystemSandboxPolicy::restricted(vec![
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Special {
+                value: FileSystemSpecialPath::Root,
+            },
+            access: FileSystemAccessMode::Read,
+        },
+        FileSystemSandboxEntry {
+            path: FileSystemPath::GlobPattern {
+                pattern: denied_path.to_string_lossy().to_string(),
+            },
+            access: FileSystemAccessMode::Deny,
+        },
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Special {
+                value: FileSystemSpecialPath::project_roots(/*subpath*/ None),
+            },
+            access: FileSystemAccessMode::Write,
+        },
+    ]);
+    assert!(
+        file_system_sandbox_policy.has_denied_read_restrictions(),
+        "test must exercise a permission profile with denied reads"
+    );
+    let permission_profile = PermissionProfile::from_runtime_permissions(
+        &file_system_sandbox_policy,
+        NetworkSandboxPolicy::Restricted,
+    );
+
+    let approval_policy = AskForApproval::OnRequest;
+    let command = format!("cat {denied_path:?}");
+
+    let server = start_mock_server().await;
+    let test = build_unified_exec_zsh_fork_test(
+        &server,
+        runtime,
+        approval_policy,
+        permission_profile,
+        move |_home| {},
+    )
+    .await?;
+
+    let call_id = "uexec-zsh-fork-parent-approval-denied-read";
+    let event = exec_command_event(
+        call_id,
+        &command,
+        Some(30_000),
+        SandboxPermissions::RequireEscalated,
+        Some("attempt a denied read for the test"),
+    )?;
+    let _ = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-uexec-zsh-fork-denied-read-1"),
+            event,
+            ev_completed("resp-uexec-zsh-fork-denied-read-1"),
+        ]),
+    )
+    .await;
+    let results = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-uexec-zsh-fork-denied-read-1", "done"),
+            ev_completed("resp-uexec-zsh-fork-denied-read-2"),
+        ]),
+    )
+    .await;
+
+    let session_model = test.session_configured.model.clone();
+    let (sandbox_policy, permission_profile) = turn_permission_fields(
+        test.session_configured.permission_profile.clone(),
+        test.cwd.path(),
+    );
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "run approved unified exec denied read through zsh fork".into(),
+                text_elements: Vec::new(),
+            }],
+            environments: None,
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
+                cwd: Some(test.cwd.path().to_path_buf()),
+                approval_policy: Some(approval_policy),
+                approvals_reviewer: Some(ApprovalsReviewer::User),
+                sandbox_policy: Some(sandbox_policy),
+                permission_profile,
+                collaboration_mode: Some(codex_protocol::config_types::CollaborationMode {
+                    mode: codex_protocol::config_types::ModeKind::Default,
+                    settings: codex_protocol::config_types::Settings {
+                        model: session_model,
+                        reasoning_effort: None,
+                        developer_instructions: None,
+                    },
+                }),
+                ..Default::default()
+            },
+        })
+        .await?;
+
+    let approval = expect_exec_approval(&test, &command).await;
+    test.codex
+        .submit(Op::ExecApproval {
+            id: approval.effective_approval_id(),
+            turn_id: None,
+            decision: ReviewDecision::Approved,
+        })
+        .await?;
+    wait_for_completion_without_approval(&test).await;
+
+    let result = parse_result(&results.single_request().function_call_output(call_id));
+    assert_ne!(
+        result.exit_code.unwrap_or(0),
+        0,
+        "denied-read command should stay sandboxed after parent approval"
+    );
+    assert!(
+        !result.stdout.contains(secret),
+        "denied-read command unexpectedly printed the secret: {}",
         result.stdout
     );
 
