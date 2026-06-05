@@ -192,7 +192,7 @@ jobs:
 
           bazel_test_query='tests(//...) except tests(//third_party/v8:all) except attr(tags, "manual", tests(//...))'
           mapfile -t bazel_targets < <(
-            ./.github/scripts/run-bazel-query-ci.sh --output=label -- "${bazel_test_query}" \
+            ./.github/scripts/run_bazel_query_ci.py --output=label -- "${bazel_test_query}" \
               | LC_ALL=C sort
           )
 
