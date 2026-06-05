@@ -10868,7 +10868,6 @@ async fn rejects_escalated_permissions_when_policy_not_on_request() {
     let turn_context_mut = Arc::get_mut(&mut turn_context).expect("unique thread settings Arc");
     turn_context_mut.permission_profile = PermissionProfile::Disabled;
 
-    let file_system_sandbox_policy = turn_context.file_system_sandbox_policy();
     let command = session.user_shell().derive_exec_args(
         command_script,
         turn_context.config.permissions.allow_login_shell,
@@ -10880,7 +10879,6 @@ async fn rejects_escalated_permissions_when_policy_not_on_request() {
             command: &command,
             approval_policy: turn_context.approval_policy.value(),
             permission_profile: turn_context.permission_profile(),
-            file_system_sandbox_policy: &file_system_sandbox_policy,
             #[allow(deprecated)]
             sandbox_cwd: turn_context.cwd.as_path(),
             sandbox_permissions: SandboxPermissions::UseDefault,
