@@ -44,6 +44,7 @@ use codex_api::RawMemory as ApiRawMemory;
 use codex_api::RealtimeCallClient as ApiRealtimeCallClient;
 use codex_api::RealtimeSessionConfig as ApiRealtimeSessionConfig;
 use codex_api::Reasoning;
+use codex_api::ReasoningContext;
 use codex_api::RequestTelemetry;
 use codex_api::ReqwestTransport;
 use codex_api::ResponseCreateWsRequest;
@@ -609,6 +610,7 @@ impl ModelClient {
             reasoning: effort.map(|effort| Reasoning {
                 effort: Some(effort),
                 summary: None,
+                context: None,
             }),
         };
 
@@ -719,6 +721,13 @@ impl ModelClient {
         effort: Option<ReasoningEffortConfig>,
         summary: ReasoningSummaryConfig,
     ) -> Option<Reasoning> {
+        let context = if model_info.use_responses_lite {
+            Some(ReasoningContext::AllTurns)
+        } else {
+            // Omit context so Responses uses the model-configured default, which is currently
+            // `current_turn` for the Codex models supported by this client.
+            None
+        };
         if model_info.supports_reasoning_summaries {
             Some(Reasoning {
                 effort: effort.or_else(|| model_info.default_reasoning_level.clone()),
@@ -727,6 +736,13 @@ impl ModelClient {
                 } else {
                     Some(summary)
                 },
+                context,
+            })
+        } else if context.is_some() {
+            Some(Reasoning {
+                effort: None,
+                summary: None,
+                context,
             })
         } else {
             None
@@ -775,7 +791,7 @@ impl ModelClient {
             input,
             tools,
             tool_choice: "auto".to_string(),
-            parallel_tool_calls: prompt.parallel_tool_calls,
+            parallel_tool_calls: prompt.parallel_tool_calls && !model_info.use_responses_lite,
             reasoning,
             store: provider.is_azure_responses_endpoint(),
             stream: true,
