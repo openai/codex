@@ -22,18 +22,30 @@ pub(crate) const RESOURCES_DIRNAME: &str = "codex-resources";
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum HelperExecutable {
     CommandRunner,
+    Setup,
 }
 
 impl HelperExecutable {
     fn file_name(self) -> &'static str {
         match self {
             Self::CommandRunner => "codex-command-runner.exe",
+            Self::Setup => "codex-windows-sandbox-setup.exe",
         }
     }
 
     fn label(self) -> &'static str {
         match self {
             Self::CommandRunner => "command-runner",
+            Self::Setup => "setup-helper",
+        }
+    }
+
+    fn materialized_stem(self) -> &'static str {
+        match self {
+            Self::CommandRunner => "codex-command-runner",
+            // Avoid persisting the "setup" spelling into user-writable runtime paths because
+            // Windows UAC installer detection can misclassify it there.
+            Self::Setup => "codex-sandbox-helper",
         }
     }
 }
@@ -218,18 +230,13 @@ fn helper_destination_for_source(
 }
 
 fn materialized_file_name(kind: HelperExecutable, suffix: &str) -> String {
-    let source_name = kind.file_name();
-    let path = Path::new(source_name);
-    let stem = path
-        .file_stem()
-        .and_then(|stem| stem.to_str())
-        .unwrap_or(source_name);
+    let path = Path::new(kind.file_name());
     let extension = path
         .extension()
         .and_then(|ext| ext.to_str())
         .map(|ext| format!(".{ext}"))
         .unwrap_or_default();
-    format!("{stem}-{suffix}{extension}")
+    format!("{}-{suffix}{extension}", kind.materialized_stem())
 }
 
 fn helper_version_suffix(source: &Path) -> Result<String> {
@@ -558,5 +565,12 @@ mod tests {
         let file_name = materialized_file_name(HelperExecutable::CommandRunner, "test-suffix");
 
         assert_eq!(file_name, "codex-command-runner-test-suffix.exe");
+    }
+
+    #[test]
+    fn setup_helper_materialization_uses_neutral_file_name() {
+        let file_name = materialized_file_name(HelperExecutable::Setup, "test-suffix");
+
+        assert_eq!(file_name, "codex-sandbox-helper-test-suffix.exe");
     }
 }
