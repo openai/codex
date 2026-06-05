@@ -198,12 +198,16 @@ async fn submit_unified_exec_turn(
                 text: prompt.into(),
                 text_elements: Vec::new(),
             }],
-            environments: None,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                cwd: Some(test.config.cwd.clone()),
+                environment_settings: Some(
+                    codex_protocol::protocol::ThreadEnvironmentSettingsOverride {
+                        cwd: test.config.cwd.clone(),
+                        environments: Vec::new(),
+                    },
+                ),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,
@@ -290,12 +294,16 @@ async fn unified_exec_intercepts_apply_patch_exec_command() -> Result<()> {
                 text: "apply patch via unified exec".into(),
                 text_elements: Vec::new(),
             }],
-            environments: None,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                cwd: Some(cwd),
+                environment_settings: Some(
+                    codex_protocol::protocol::ThreadEnvironmentSettingsOverride {
+                        cwd: cwd,
+                        environments: Vec::new(),
+                    },
+                ),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,
@@ -2146,12 +2154,16 @@ async fn unified_exec_keeps_long_running_session_after_turn_end() -> Result<()> 
                 text: "keep unified exec process after turn end".into(),
                 text_elements: Vec::new(),
             }],
-            environments: None,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                cwd: Some(turn_cwd),
+                environment_settings: Some(
+                    codex_protocol::protocol::ThreadEnvironmentSettingsOverride {
+                        cwd: turn_cwd,
+                        environments: Vec::new(),
+                    },
+                ),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,
@@ -2250,12 +2262,16 @@ async fn unified_exec_interrupt_preserves_long_running_session() -> Result<()> {
                 text: "interrupt long-running unified exec".into(),
                 text_elements: Vec::new(),
             }],
-            environments: None,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                cwd: Some(turn_cwd),
+                environment_settings: Some(
+                    codex_protocol::protocol::ThreadEnvironmentSettingsOverride {
+                        cwd: turn_cwd,
+                        environments: Vec::new(),
+                    },
+                ),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,
@@ -2723,12 +2739,16 @@ async fn unified_exec_runs_under_sandbox() -> Result<()> {
                 text: "summarize large output".into(),
                 text_elements: Vec::new(),
             }],
-            environments: None,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                cwd: Some(turn_cwd),
+                environment_settings: Some(
+                    codex_protocol::protocol::ThreadEnvironmentSettingsOverride {
+                        cwd: turn_cwd,
+                        environments: Vec::new(),
+                    },
+                ),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,
@@ -2846,12 +2866,16 @@ async fn unified_exec_enforces_glob_deny_read_policy() -> Result<()> {
                 text: "read the fixture files".into(),
                 text_elements: Vec::new(),
             }],
-            environments: None,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                cwd: Some(turn_cwd),
+                environment_settings: Some(
+                    codex_protocol::protocol::ThreadEnvironmentSettingsOverride {
+                        cwd: turn_cwd,
+                        environments: Vec::new(),
+                    },
+                ),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,
@@ -2985,12 +3009,16 @@ async fn unified_exec_python_prompt_under_seatbelt() -> Result<()> {
                 text: "start python under seatbelt".into(),
                 text_elements: Vec::new(),
             }],
-            environments: None,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                cwd: Some(turn_cwd),
+                environment_settings: Some(
+                    codex_protocol::protocol::ThreadEnvironmentSettingsOverride {
+                        cwd: turn_cwd,
+                        environments: Vec::new(),
+                    },
+                ),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,

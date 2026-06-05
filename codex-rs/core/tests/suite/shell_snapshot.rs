@@ -164,12 +164,16 @@ async fn run_snapshot_command_with_options(
                 text: "run unified exec with shell snapshot".into(),
                 text_elements: Vec::new(),
             }],
-            environments: None,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                cwd: Some(cwd),
+                environment_settings: Some(
+                    codex_protocol::protocol::ThreadEnvironmentSettingsOverride {
+                        cwd: cwd,
+                        environments: Vec::new(),
+                    },
+                ),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,
@@ -265,12 +269,16 @@ async fn run_shell_command_snapshot_with_options(
                 text: "run shell_command with shell snapshot".into(),
                 text_elements: Vec::new(),
             }],
-            environments: None,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                cwd: Some(cwd),
+                environment_settings: Some(
+                    codex_protocol::protocol::ThreadEnvironmentSettingsOverride {
+                        cwd: cwd,
+                        environments: Vec::new(),
+                    },
+                ),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,
@@ -346,12 +354,16 @@ async fn run_tool_turn_on_harness(
                 text: prompt.into(),
                 text_elements: Vec::new(),
             }],
-            environments: None,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                cwd: Some(cwd),
+                environment_settings: Some(
+                    codex_protocol::protocol::ThreadEnvironmentSettingsOverride {
+                        cwd: cwd,
+                        environments: Vec::new(),
+                    },
+                ),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,
@@ -590,12 +602,16 @@ async fn shell_command_snapshot_still_intercepts_apply_patch() -> Result<()> {
                 text: "apply patch via shell_command with snapshot".into(),
                 text_elements: Vec::new(),
             }],
-            environments: None,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                cwd: Some(cwd.clone()),
+                environment_settings: Some(
+                    codex_protocol::protocol::ThreadEnvironmentSettingsOverride {
+                        cwd: cwd.clone(),
+                        environments: Vec::new(),
+                    },
+                ),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,

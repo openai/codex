@@ -96,7 +96,6 @@ async fn build_codex(server: &StreamingSseServer) -> Arc<CodexThread> {
 async fn submit_user_input(codex: &CodexThread, text: &str) {
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: text.to_string(),
                 text_elements: Vec::new(),
@@ -119,12 +118,16 @@ async fn submit_danger_full_access_user_turn(test: &TestCodex, text: &str) {
                 text: text.to_string(),
                 text_elements: Vec::new(),
             }],
-            environments: None,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                cwd: Some(test.config.cwd.clone()),
+                environment_settings: Some(
+                    codex_protocol::protocol::ThreadEnvironmentSettingsOverride {
+                        cwd: test.config.cwd.clone(),
+                        environments: Vec::new(),
+                    },
+                ),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,
@@ -288,7 +291,6 @@ async fn injected_user_input_triggers_follow_up_request_with_deltas() {
 
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "first prompt".into(),
                 text_elements: Vec::new(),
@@ -308,7 +310,6 @@ async fn injected_user_input_triggers_follow_up_request_with_deltas() {
 
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "second prompt".into(),
                 text_elements: Vec::new(),

@@ -100,12 +100,16 @@ async fn submit_without_wait_with_turn_permissions(
                 text: prompt.into(),
                 text_elements: Vec::new(),
             }],
-            environments: None,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                cwd: Some(harness.cwd_abs()),
+                environment_settings: Some(
+                    codex_protocol::protocol::ThreadEnvironmentSettingsOverride {
+                        cwd: harness.cwd_abs(),
+                        environments: Vec::new(),
+                    },
+                ),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,
@@ -1631,27 +1635,32 @@ async fn apply_patch_turn_diff_tracks_local_and_remote_environment_paths() -> Re
 
     let (sandbox_policy, permission_profile) =
         turn_permission_fields(PermissionProfile::Disabled, test.config.cwd.as_path());
+    let environments = vec![
+        TurnEnvironmentSelection {
+            environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
+            cwd: shared_cwd.clone(),
+        },
+        TurnEnvironmentSelection {
+            environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
+            cwd: shared_cwd.clone(),
+        },
+    ];
     test.codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: "apply matching patches to local and remote environments".into(),
                 text_elements: Vec::new(),
             }],
-            environments: Some(vec![
-                TurnEnvironmentSelection {
-                    environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
-                    cwd: shared_cwd.clone(),
-                },
-                TurnEnvironmentSelection {
-                    environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
-                    cwd: shared_cwd.clone(),
-                },
-            ]),
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                cwd: Some(test.config.cwd.clone()),
+                environment_settings: Some(
+                    codex_protocol::protocol::ThreadEnvironmentSettingsOverride {
+                        cwd: test.config.cwd.clone(),
+                        environments,
+                    },
+                ),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,

@@ -160,12 +160,16 @@ async fn remote_model_override_uses_catalog_model_for_strict_auto_review() -> Re
                 text: "run the Guardian model override check".into(),
                 text_elements: Vec::new(),
             }],
-            environments: None,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                cwd: Some(cwd_path),
+                environment_settings: Some(
+                    codex_protocol::protocol::ThreadEnvironmentSettingsOverride {
+                        cwd: cwd_path,
+                        environments: Vec::new(),
+                    },
+                ),
                 approval_policy: Some(AskForApproval::OnRequest),
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,

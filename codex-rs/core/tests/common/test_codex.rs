@@ -761,18 +761,23 @@ impl TestCodex {
         let (sandbox_policy, permission_profile) =
             turn_permission_fields(permission_profile, self.config.cwd.as_path());
         let session_model = self.session_configured.model.clone();
+        let environment_settings = environments.map(|environments| {
+            codex_protocol::protocol::ThreadEnvironmentSettingsOverride {
+                cwd: self.config.cwd.clone(),
+                environments,
+            }
+        });
         self.codex
             .submit(Op::UserInput {
                 items: vec![UserInput::Text {
                     text: prompt.into(),
                     text_elements: Vec::new(),
                 }],
-                environments,
                 final_output_json_schema: None,
                 responsesapi_client_metadata: None,
                 additional_context: Default::default(),
                 thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                    cwd: Some(self.config.cwd.clone()),
+                    environment_settings,
                     approval_policy: Some(approval_policy),
                     sandbox_policy: Some(sandbox_policy),
                     permission_profile,

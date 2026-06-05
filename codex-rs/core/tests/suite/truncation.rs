@@ -524,12 +524,16 @@ async fn mcp_image_output_preserves_image_and_no_text_summary() -> Result<()> {
                 text: "call the rmcp image tool".into(),
                 text_elements: Vec::new(),
             }],
-            environments: None,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                cwd: Some(fixture.cwd.abs()),
+                environment_settings: Some(
+                    codex_protocol::protocol::ThreadEnvironmentSettingsOverride {
+                        cwd: fixture.cwd.abs(),
+                        environments: Vec::new(),
+                    },
+                ),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile: Some(permission_profile),

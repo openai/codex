@@ -112,6 +112,12 @@ pub struct TurnEnvironmentSelection {
     pub cwd: AbsolutePathBuf,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema)]
+pub struct ThreadEnvironmentSettingsOverride {
+    pub cwd: AbsolutePathBuf,
+    pub environments: Vec<TurnEnvironmentSelection>,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema, TS)]
 #[serde(transparent)]
 #[ts(type = "string")]
@@ -405,9 +411,9 @@ pub struct ConversationTextParams {
 /// on their own.
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, JsonSchema)]
 pub struct ThreadSettingsOverrides {
-    /// Updated `cwd` for sandbox/tool calls.
+    /// Updated `cwd` and environments supplied together as a complete pair.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub cwd: Option<AbsolutePathBuf>,
+    pub environment_settings: Option<ThreadEnvironmentSettingsOverride>,
 
     /// Updated runtime workspace roots used to materialize symbolic
     /// `:workspace_roots` filesystem permissions.
@@ -524,9 +530,6 @@ pub enum Op {
     UserInput {
         /// User input items, see `InputItem`
         items: Vec<UserInput>,
-        /// Optional turn-scoped environments.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        environments: Option<Vec<TurnEnvironmentSelection>>,
         /// Optional JSON Schema used to constrain the final assistant message for this turn.
         #[serde(skip_serializing_if = "Option::is_none")]
         final_output_json_schema: Option<Value>,
@@ -674,7 +677,6 @@ pub enum ThreadMemoryMode {
 impl From<Vec<UserInput>> for Op {
     fn from(value: Vec<UserInput>) -> Self {
         Op::UserInput {
-            environments: None,
             items: value,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
@@ -5143,7 +5145,6 @@ mod tests {
     #[test]
     fn user_input_serialization_omits_final_output_json_schema_when_none() -> Result<()> {
         let op = Op::UserInput {
-            environments: None,
             items: Vec::new(),
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
@@ -5164,7 +5165,6 @@ mod tests {
         assert_eq!(
             op,
             Op::UserInput {
-                environments: None,
                 items: Vec::new(),
                 final_output_json_schema: None,
                 responsesapi_client_metadata: None,
@@ -5187,7 +5187,6 @@ mod tests {
             "additionalProperties": false
         });
         let op = Op::UserInput {
-            environments: None,
             items: Vec::new(),
             final_output_json_schema: Some(schema.clone()),
             responsesapi_client_metadata: None,
@@ -5211,7 +5210,6 @@ mod tests {
     #[test]
     fn user_input_with_responsesapi_client_metadata_round_trips() -> Result<()> {
         let op = Op::UserInput {
-            environments: None,
             items: Vec::new(),
             final_output_json_schema: None,
             responsesapi_client_metadata: Some(HashMap::from([(

@@ -52,6 +52,41 @@ use tokio::sync::watch;
 
 use codex_rollout::state_db::StateDbHandle;
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct TurnEnvironmentSelections {
+    pub legacy_fallback_cwd: AbsolutePathBuf,
+    pub environments: Vec<TurnEnvironmentSelection>,
+}
+
+impl TurnEnvironmentSelections {
+    pub fn new(
+        legacy_fallback_cwd: AbsolutePathBuf,
+        environments: Vec<TurnEnvironmentSelection>,
+    ) -> Self {
+        let mut settings = Self {
+            legacy_fallback_cwd,
+            environments,
+        };
+        settings.sync_primary_environment_cwd();
+        settings
+    }
+
+    pub fn with_legacy_fallback_cwd(&self, legacy_fallback_cwd: AbsolutePathBuf) -> Self {
+        let mut settings = self.clone();
+        settings.legacy_fallback_cwd = legacy_fallback_cwd;
+        settings.sync_primary_environment_cwd();
+        settings
+    }
+
+    fn sync_primary_environment_cwd(&mut self) {
+        if let Some(turn_environment) = self.environments.first_mut()
+            && turn_environment.cwd != self.legacy_fallback_cwd
+        {
+            turn_environment.cwd = self.legacy_fallback_cwd.clone();
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct ThreadConfigSnapshot {
     pub model: String,
@@ -61,7 +96,7 @@ pub struct ThreadConfigSnapshot {
     pub approvals_reviewer: ApprovalsReviewer,
     pub permission_profile: PermissionProfile,
     pub active_permission_profile: Option<ActivePermissionProfile>,
-    pub cwd: AbsolutePathBuf,
+    pub environment_settings: TurnEnvironmentSelections,
     pub workspace_roots: Vec<AbsolutePathBuf>,
     pub profile_workspace_roots: Vec<AbsolutePathBuf>,
     pub ephemeral: bool,
@@ -116,10 +151,18 @@ impl TryStartTurnIfIdleError {
 }
 
 impl ThreadConfigSnapshot {
+    pub fn cwd(&self) -> &AbsolutePathBuf {
+        &self.environment_settings.legacy_fallback_cwd
+    }
+
+    pub fn environment_selections(&self) -> &[TurnEnvironmentSelection] {
+        &self.environment_settings.environments
+    }
+
     pub fn sandbox_policy(&self) -> SandboxPolicy {
         codex_sandboxing::compatibility_sandbox_policy_for_permission_profile(
             &self.permission_profile,
-            self.cwd.as_path(),
+            self.cwd().as_path(),
         )
     }
 }
@@ -391,9 +434,19 @@ impl CodexThread {
                 .await
                 .with_updates(model, effort, /*developer_instructions*/ None)
         };
+        let environments = match cwd {
+            Some(cwd) => {
+                let snapshot = self.codex.thread_config_snapshot().await;
+                Some(TurnEnvironmentSelections::new(
+                    cwd,
+                    snapshot.environment_selections().to_vec(),
+                ))
+            }
+            None => None,
+        };
 
         SessionSettingsUpdate {
-            cwd,
+            environments,
             workspace_roots,
             profile_workspace_roots,
             approval_policy,

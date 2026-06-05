@@ -138,7 +138,6 @@ async fn resume_restores_dynamic_tools_from_rollout_with_sqlite_enabled() -> Res
     started
         .thread
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "persist this thread".to_string(),
                 text_elements: Vec::new(),
@@ -472,12 +471,16 @@ async fn mcp_call_marks_thread_memory_mode_polluted_when_configured() -> Result<
                 text: "call the rmcp echo tool".to_string(),
                 text_elements: Vec::new(),
             }],
-            environments: None,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                cwd: Some(cwd),
+                environment_settings: Some(
+                    codex_protocol::protocol::ThreadEnvironmentSettingsOverride {
+                        cwd: cwd,
+                        environments: Vec::new(),
+                    },
+                ),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,

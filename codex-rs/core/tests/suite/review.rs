@@ -705,7 +705,6 @@ async fn review_history_surfaces_in_parent_session() {
     let followup = "back to parent".to_string();
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: followup.clone(),
                 text_elements: Vec::new(),
@@ -821,7 +820,12 @@ async fn review_uses_overridden_cwd_for_base_branch_merge_base() {
     core_test_support::submit_thread_settings(
         &codex,
         codex_protocol::protocol::ThreadSettingsOverrides {
-            cwd: Some(repo_path.to_path_buf().abs()),
+            environment_settings: Some(
+                codex_protocol::protocol::ThreadEnvironmentSettingsOverride {
+                    cwd: repo_path.to_path_buf().abs(),
+                    environments: Vec::new(),
+                },
+            ),
             ..Default::default()
         },
     )

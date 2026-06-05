@@ -14,6 +14,7 @@ use crate::session::TurnInput;
 use crate::session::session::Session;
 use crate::session::session::SessionSettingsUpdate;
 
+use crate::TurnEnvironmentSelections;
 use crate::config::Config;
 use crate::realtime_context::REALTIME_TURN_TOKEN_BUDGET;
 use crate::realtime_context::truncate_realtime_text_to_token_budget;
@@ -42,6 +43,7 @@ use codex_protocol::protocol::RealtimeVoicesList;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::ThreadEnvironmentSettingsOverride;
 use codex_protocol::protocol::ThreadMemoryMode;
 use codex_protocol::protocol::ThreadRolledBackEvent;
 use codex_protocol::protocol::ThreadSettingsAppliedEvent;
@@ -122,7 +124,7 @@ async fn thread_settings_update(
     thread_settings: ThreadSettingsOverrides,
 ) -> SessionSettingsUpdate {
     let ThreadSettingsOverrides {
-        cwd,
+        environment_settings,
         workspace_roots,
         profile_workspace_roots,
         approval_policy,
@@ -138,6 +140,10 @@ async fn thread_settings_update(
         collaboration_mode,
         personality,
     } = thread_settings;
+    let environments =
+        environment_settings.map(|ThreadEnvironmentSettingsOverride { cwd, environments }| {
+            TurnEnvironmentSelections::new(cwd, environments)
+        });
     let collaboration_mode = match collaboration_mode {
         Some(collaboration_mode) => collaboration_mode,
         None => {
@@ -151,7 +157,7 @@ async fn thread_settings_update(
         }
     };
     SessionSettingsUpdate {
-        cwd,
+        environments,
         workspace_roots,
         profile_workspace_roots,
         approval_policy,
@@ -173,6 +179,7 @@ async fn thread_settings_applied_event(sess: &Session) -> EventMsg {
         let state = sess.state.lock().await;
         state.session_configuration.thread_config_snapshot()
     };
+    let cwd = snapshot.cwd().clone();
     EventMsg::ThreadSettingsApplied(ThreadSettingsAppliedEvent {
         thread_settings: ThreadSettingsSnapshot {
             model: snapshot.model,
@@ -182,7 +189,7 @@ async fn thread_settings_applied_event(sess: &Session) -> EventMsg {
             approvals_reviewer: snapshot.approvals_reviewer,
             permission_profile: snapshot.permission_profile,
             active_permission_profile: snapshot.active_permission_profile,
-            cwd: snapshot.cwd,
+            cwd,
             reasoning_effort: snapshot.reasoning_effort,
             reasoning_summary: snapshot.reasoning_summary,
             personality: snapshot.personality,
@@ -200,7 +207,6 @@ pub(super) async fn user_input_or_turn_inner(
 ) {
     let Op::UserInput {
         items,
-        environments,
         final_output_json_schema,
         responsesapi_client_metadata,
         additional_context,
@@ -216,7 +222,6 @@ pub(super) async fn user_input_or_turn_inner(
         SessionSettingsUpdate::default()
     };
     updates.final_output_json_schema = Some(final_output_json_schema);
-    updates.environments = environments;
 
     let Ok(current_context) = sess.new_turn_with_sub_id(sub_id.clone(), updates).await else {
         // new_turn_with_sub_id already emits the error event.

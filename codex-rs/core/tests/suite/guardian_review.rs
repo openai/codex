@@ -111,7 +111,6 @@ printf '%s\n' "${@: -1}" >> "${payload_path}""#,
 
     test.codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "run a command that requires Guardian review".into(),
                 text_elements: Vec::new(),
@@ -120,7 +119,12 @@ printf '%s\n' "${@: -1}" >> "${payload_path}""#,
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                cwd: Some(test.config.cwd.clone()),
+                environment_settings: Some(
+                    codex_protocol::protocol::ThreadEnvironmentSettingsOverride {
+                        cwd: test.config.cwd.clone(),
+                        environments: Vec::new(),
+                    },
+                ),
                 approval_policy: Some(approval_policy),
                 approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
                 sandbox_policy: Some(sandbox_policy),

@@ -70,18 +70,21 @@ async fn submit_turn_with_approval_and_environments(
     prompt: &str,
     environments: Vec<TurnEnvironmentSelection>,
 ) -> Result<()> {
+    let environment_settings = codex_protocol::protocol::ThreadEnvironmentSettingsOverride {
+        cwd: test.config.cwd.clone(),
+        environments,
+    };
     test.codex
         .submit(Op::UserInput {
             items: vec![UserInput::Text {
                 text: prompt.into(),
                 text_elements: Vec::new(),
             }],
-            environments: Some(environments),
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                cwd: Some(test.config.cwd.clone()),
+                environment_settings: Some(environment_settings),
                 approval_policy: Some(AskForApproval::OnRequest),
                 approvals_reviewer: Some(ApprovalsReviewer::User),
                 sandbox_policy: Some(SandboxPolicy::new_read_only_policy()),

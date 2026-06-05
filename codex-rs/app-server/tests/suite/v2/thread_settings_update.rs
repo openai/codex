@@ -208,6 +208,37 @@ async fn thread_settings_update_null_service_tier_uses_default() -> Result<()> {
 }
 
 #[tokio::test]
+async fn thread_settings_update_cwd_updates_cwd() -> Result<()> {
+    let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+    let updated_cwd = codex_home.path().join("workspace");
+    std::fs::create_dir_all(&updated_cwd)?;
+
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+    let thread = start_thread(&mut mcp).await?.thread;
+
+    send_thread_settings_update(
+        &mut mcp,
+        ThreadSettingsUpdateParams {
+            thread_id: thread.id.clone(),
+            cwd: Some(updated_cwd.clone()),
+            ..Default::default()
+        },
+    )
+    .await?;
+
+    let updated = read_thread_settings_updated(&mut mcp).await?;
+    assert_eq!(updated.thread_id, thread.id.clone());
+    assert_eq!(updated.thread_settings.cwd.as_path(), updated_cwd.as_path());
+
+    let read = read_thread_with_turns(&mut mcp, &thread.id).await?;
+    assert_eq!(read.thread.cwd, updated.thread_settings.cwd);
+    Ok(())
+}
+
+#[tokio::test]
 async fn thread_settings_update_rejects_sandbox_policy_with_permissions() -> Result<()> {
     let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
     let codex_home = TempDir::new()?;

@@ -45,12 +45,16 @@ fn read_only_user_turn(test: &TestCodex, items: Vec<UserInput>, model: String) -
         turn_permission_fields(PermissionProfile::read_only(), test.cwd_path());
     Op::UserInput {
         items,
-        environments: None,
         final_output_json_schema: None,
         responsesapi_client_metadata: None,
         additional_context: Default::default(),
         thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-            cwd: Some(test.config.cwd.clone()),
+            environment_settings: Some(
+                codex_protocol::protocol::ThreadEnvironmentSettingsOverride {
+                    cwd: test.config.cwd.clone(),
+                    environments: Vec::new(),
+                },
+            ),
             approval_policy: Some(AskForApproval::Never),
             sandbox_policy: Some(sandbox_policy),
             permission_profile,

@@ -386,7 +386,6 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
     // 2) Submit new input; the request body must include the prior items, then initial context, then new user input.
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "hello".into(),
                 text_elements: Vec::new(),
@@ -755,7 +754,6 @@ async fn includes_session_id_thread_id_and_model_headers_in_request() {
 
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "hello".into(),
                 text_elements: Vec::new(),
@@ -968,7 +966,6 @@ async fn includes_base_instructions_override_in_request() {
 
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "hello".into(),
                 text_elements: Vec::new(),
@@ -1026,7 +1023,6 @@ async fn chatgpt_auth_sends_correct_request() {
 
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "hello".into(),
                 text_elements: Vec::new(),
@@ -1151,7 +1147,6 @@ async fn prefers_apikey_when_config_prefers_apikey_even_with_chatgpt_tokens() {
 
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "hello".into(),
                 text_elements: Vec::new(),
@@ -1191,7 +1186,6 @@ async fn includes_user_instructions_message_in_request() {
 
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "hello".into(),
                 text_elements: Vec::new(),
@@ -1280,7 +1274,6 @@ async fn includes_apps_guidance_as_developer_message_for_chatgpt_auth() {
 
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "hello".into(),
                 text_elements: Vec::new(),
@@ -1344,7 +1337,6 @@ async fn omits_apps_guidance_for_api_key_auth_even_when_feature_enabled() {
 
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "hello".into(),
                 text_elements: Vec::new(),
@@ -1404,7 +1396,6 @@ async fn omits_apps_guidance_when_configured_off() {
 
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "hello".into(),
                 text_elements: Vec::new(),
@@ -1447,7 +1438,6 @@ async fn omits_environment_context_when_configured_off() {
 
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "hello".into(),
                 text_elements: Vec::new(),
@@ -1505,7 +1495,6 @@ async fn skills_append_to_developer_message() {
 
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "hello".into(),
                 text_elements: Vec::new(),
@@ -1589,7 +1578,6 @@ async fn skills_use_aliases_in_developer_message_under_budget_pressure() {
 
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "hello".into(),
                 text_elements: Vec::new(),
@@ -1651,7 +1639,6 @@ async fn includes_configured_effort_in_request() -> anyhow::Result<()> {
 
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "hello".into(),
                 text_elements: Vec::new(),
@@ -1694,7 +1681,6 @@ async fn includes_no_effort_in_request() -> anyhow::Result<()> {
 
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "hello".into(),
                 text_elements: Vec::new(),
@@ -1738,7 +1724,6 @@ async fn includes_default_reasoning_effort_in_request_when_defined_by_model_info
 
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "hello".into(),
                 text_elements: Vec::new(),
@@ -1794,12 +1779,16 @@ async fn user_turn_collaboration_mode_overrides_model_and_effort() -> anyhow::Re
                 text: "hello".into(),
                 text_elements: Vec::new(),
             }],
-            environments: None,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                cwd: Some(config.cwd.clone()),
+                environment_settings: Some(
+                    codex_protocol::protocol::ThreadEnvironmentSettingsOverride {
+                        cwd: config.cwd.clone(),
+                        environments: Vec::new(),
+                    },
+                ),
                 approval_policy: Some(config.permissions.approval_policy.value()),
                 sandbox_policy: Some(config.legacy_sandbox_policy()),
                 summary: Some(
@@ -1847,7 +1836,6 @@ async fn configured_reasoning_summary_is_sent() -> anyhow::Result<()> {
 
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "hello".into(),
                 text_elements: Vec::new(),
@@ -1914,7 +1902,6 @@ async fn responses_lite_sets_all_turns_context_and_disables_parallel_tool_calls(
 
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "hello".into(),
                 text_elements: Vec::new(),
@@ -1982,12 +1969,16 @@ async fn user_turn_explicit_reasoning_summary_overrides_model_catalog_default() 
                 text: "hello".into(),
                 text_elements: Vec::new(),
             }],
-            environments: None,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                cwd: Some(config.cwd.clone()),
+                environment_settings: Some(
+                    codex_protocol::protocol::ThreadEnvironmentSettingsOverride {
+                        cwd: config.cwd.clone(),
+                        environments: Vec::new(),
+                    },
+                ),
                 approval_policy: Some(config.permissions.approval_policy.value()),
                 sandbox_policy: Some(config.legacy_sandbox_policy()),
                 summary: Some(ReasoningSummary::Concise),
@@ -2039,7 +2030,6 @@ async fn reasoning_summary_is_omitted_when_disabled() -> anyhow::Result<()> {
 
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "hello".into(),
                 text_elements: Vec::new(),
@@ -2099,7 +2089,6 @@ async fn reasoning_summary_none_overrides_model_catalog_default() -> anyhow::Res
 
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "hello".into(),
                 text_elements: Vec::new(),
@@ -2139,7 +2128,6 @@ async fn includes_default_verbosity_in_request() -> anyhow::Result<()> {
 
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "hello".into(),
                 text_elements: Vec::new(),
@@ -2188,7 +2176,6 @@ async fn configured_verbosity_not_sent_for_models_without_support() -> anyhow::R
 
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "hello".into(),
                 text_elements: Vec::new(),
@@ -2236,7 +2223,6 @@ async fn configured_verbosity_is_sent() -> anyhow::Result<()> {
 
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "hello".into(),
                 text_elements: Vec::new(),
@@ -2289,7 +2275,6 @@ async fn includes_developer_instructions_message_in_request() {
 
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "hello".into(),
                 text_elements: Vec::new(),
@@ -2587,7 +2572,6 @@ async fn token_count_includes_rate_limits_snapshot() {
 
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "hello".into(),
                 text_elements: Vec::new(),
@@ -2729,7 +2713,6 @@ async fn usage_limit_error_emits_rate_limit_event() -> anyhow::Result<()> {
 
     let submission_id = codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "hello".into(),
                 text_elements: Vec::new(),
@@ -2807,7 +2790,6 @@ async fn context_window_error_sets_total_tokens_to_model_window() -> anyhow::Res
 
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "seed turn".into(),
                 text_elements: Vec::new(),
@@ -2823,7 +2805,6 @@ async fn context_window_error_sets_total_tokens_to_model_window() -> anyhow::Res
 
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "trigger context window".into(),
                 text_elements: Vec::new(),
@@ -2909,7 +2890,6 @@ async fn incomplete_response_emits_content_filter_error_message() -> anyhow::Res
         .await?;
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "trigger incomplete".into(),
                 text_elements: Vec::new(),
@@ -3021,7 +3001,6 @@ async fn azure_overrides_assign_properties_used_for_responses_url() {
 
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "hello".into(),
                 text_elements: Vec::new(),
@@ -3111,7 +3090,6 @@ async fn env_var_overrides_loaded_auth() {
 
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "hello".into(),
                 text_elements: Vec::new(),
@@ -3169,7 +3147,6 @@ async fn history_dedupes_streamed_and_final_messages_across_turns() {
     // Turn 1: user sends U1; wait for completion.
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "U1".into(),
                 text_elements: Vec::new(),
@@ -3186,7 +3163,6 @@ async fn history_dedupes_streamed_and_final_messages_across_turns() {
     // Turn 2: user sends U2; wait for completion.
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "U2".into(),
                 text_elements: Vec::new(),
@@ -3203,7 +3179,6 @@ async fn history_dedupes_streamed_and_final_messages_across_turns() {
     // Turn 3: user sends U3; wait for completion.
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "U3".into(),
                 text_elements: Vec::new(),

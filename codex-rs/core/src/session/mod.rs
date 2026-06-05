@@ -9,6 +9,7 @@ use std::sync::atomic::AtomicU64;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
+use crate::TurnEnvironmentSelections;
 use crate::agent::AgentControl;
 use crate::agent::AgentStatus;
 use crate::agent::agent_status_from_event;
@@ -602,11 +603,13 @@ impl Codex {
             approvals_reviewer: config.approvals_reviewer,
             permission_profile_state: session_permission_profile_state_from_config(&config)?,
             windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
-            cwd: config.cwd.clone(),
+            environments: TurnEnvironmentSelections::new(
+                config.cwd.clone(),
+                environment_selections.to_selections(),
+            ),
             workspace_roots: config.workspace_roots.clone(),
             codex_home: config.codex_home.clone(),
             thread_name: None,
-            environments: environment_selections.to_selections(),
             original_config_do_not_use: Arc::clone(&config),
             metrics_service_name,
             app_server_client_name: None,
@@ -814,7 +817,10 @@ impl Codex {
 
     pub(crate) async fn thread_environment_selections(&self) -> Vec<TurnEnvironmentSelection> {
         let state = self.session.state.lock().await;
-        state.session_configuration.environments.clone()
+        state
+            .session_configuration
+            .environment_selections()
+            .to_vec()
     }
 
     pub(crate) fn state_db(&self) -> Option<state_db::StateDbHandle> {
@@ -1114,7 +1120,6 @@ impl Session {
             self,
             self.next_internal_sub_id(),
             Op::UserInput {
-                environments: None,
                 items: vec![UserInput::Text {
                     text,
                     text_elements: Vec::new(),
@@ -1414,12 +1419,12 @@ impl Session {
                 .then(|| Self::build_effective_session_config(&state.session_configuration));
             let new_config =
                 notify_config_contributors.then(|| Self::build_effective_session_config(&updated));
-            let previous_cwd = state.session_configuration.cwd.clone();
+            let previous_cwd = state.session_configuration.cwd().clone();
             let previous_permission_profile = state.session_configuration.permission_profile();
             let updated_permission_profile = updated.permission_profile();
             let permission_profile_changed =
                 previous_permission_profile != updated_permission_profile;
-            let next_cwd = updated.cwd.clone();
+            let next_cwd = updated.cwd().clone();
             let codex_home = updated.codex_home.clone();
             let session_source = updated.session_source.clone();
             state.session_configuration = updated;

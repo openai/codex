@@ -2590,7 +2590,6 @@ async fn send_input_accepts_structured_items() {
         .expect("send_input should succeed");
 
     let expected = Op::UserInput {
-        environments: None,
         items: vec![
             UserInput::Mention {
                 name: "drive".to_string(),

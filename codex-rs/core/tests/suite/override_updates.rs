@@ -68,7 +68,12 @@ async fn thread_settings_update_without_user_turn_does_not_record_environment_up
     core_test_support::submit_thread_settings(
         &test.codex,
         codex_protocol::protocol::ThreadSettingsOverrides {
-            cwd: Some(new_cwd.abs()),
+            environment_settings: Some(
+                codex_protocol::protocol::ThreadEnvironmentSettingsOverride {
+                    cwd: new_cwd.abs(),
+                    environments: Vec::new(),
+                },
+            ),
             ..Default::default()
         },
     )
