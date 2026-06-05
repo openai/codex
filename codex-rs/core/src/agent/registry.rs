@@ -149,6 +149,14 @@ impl AgentRegistry {
         })
     }
 
+    pub(crate) fn is_execution_active(&self, thread_id: ThreadId) -> bool {
+        self.active_agents
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .active_thread_ids
+            .contains(&thread_id)
+    }
+
     pub(crate) fn register_root_thread(&self, thread_id: ThreadId) {
         let mut active_agents = self
             .active_agents
@@ -181,20 +189,6 @@ impl AgentRegistry {
             .values()
             .find(|metadata| metadata.agent_id == Some(thread_id))
             .cloned()
-    }
-
-    pub(crate) fn live_agents(&self) -> Vec<AgentMetadata> {
-        self.active_agents
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .agent_tree
-            .values()
-            .filter(|metadata| {
-                metadata.agent_id.is_some()
-                    && !metadata.agent_path.as_ref().is_some_and(AgentPath::is_root)
-            })
-            .cloned()
-            .collect()
     }
 
     pub(crate) fn update_last_task_message(&self, thread_id: ThreadId, last_task_message: String) {

@@ -89,7 +89,7 @@ async fn handle_close_agent(
             return Err(collab_agent_error(agent_id, err));
         }
     };
-    let result = Box::pin(session.services.agent_control.close_agent(agent_id))
+    let result = Box::pin(session.services.agent_control.close_agent_v1(agent_id))
         .await
         .map_err(|err| collab_agent_error(agent_id, err))
         .map(|_| ());

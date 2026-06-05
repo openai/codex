@@ -111,9 +111,7 @@ pub fn create_spawn_agent_tool_v2(options: SpawnAgentToolOptions) -> ToolSpec {
             Some(vec!["task_name".to_string(), "message".to_string()]),
             Some(false.into()),
         ),
-        output_schema: Some(spawn_agent_output_schema_v2(
-            options.hide_agent_type_model_reasoning,
-        )),
+        output_schema: Some(spawn_agent_output_schema_v2()),
     })
 }
 
@@ -207,7 +205,7 @@ pub fn create_followup_task_tool() -> ToolSpec {
 
     ToolSpec::Function(ResponsesApiTool {
         name: "followup_task".to_string(),
-        description: "Send a follow-up task to an existing non-root target agent and trigger a turn if it is idle. If the target is already running, deliver the task promptly at message boundaries while sampling, or after the pending tool call completes."
+        description: "Send a follow-up task to an existing non-root target agent and trigger a turn if it is idle. If the target is already running, deliver the task promptly at message boundaries while sampling, or after the pending tool call completes. Starting an idle agent can fail when the session concurrency limit is full."
             .to_string(),
         strict: false,
         defer_loading: None,
@@ -270,16 +268,15 @@ pub fn create_list_agents_tool() -> ToolSpec {
     let properties = BTreeMap::from([(
         "path_prefix".to_string(),
         JsonSchema::string(Some(
-            "Task-path prefix filter without a trailing slash. Omit to list all live agents."
+            "Task-path prefix filter without a trailing slash. Omit to list all resident agents."
                 .to_string(),
         )),
     )]);
 
     ToolSpec::Function(ResponsesApiTool {
         name: "list_agents".to_string(),
-        description:
-            "List live agents in the current root thread tree. Optionally filter by task-path prefix."
-                .to_string(),
+        description: "List currently resident agents in the root thread tree. Optionally filter by task-path prefix."
+            .to_string(),
         strict: false,
         defer_loading: None,
         parameters: JsonSchema::object(properties, /*required*/ None, Some(false.into())),
@@ -317,7 +314,7 @@ pub fn create_close_agent_tool_v2() -> ToolSpec {
 
     ToolSpec::Function(ResponsesApiTool {
         name: "close_agent".to_string(),
-        description: "Close an agent and any open descendants when they are no longer needed, and return the target agent's previous status before shutdown was requested. Completed agents remain open and count toward the concurrency limit until closed. Don't keep agents open for too long if they are not needed anymore.".to_string(),
+        description: "Close an agent and any open descendants when they are no longer needed, and return the target agent's previous status before shutdown was requested. Idle agents do not count toward the concurrency limit.".to_string(),
         strict: false,
         defer_loading: None,
         parameters: JsonSchema::object(properties, Some(vec!["target".to_string()]), Some(false.into())),
@@ -374,34 +371,16 @@ fn spawn_agent_output_schema_v1() -> Value {
     })
 }
 
-fn spawn_agent_output_schema_v2(hide_agent_metadata: bool) -> Value {
-    if hide_agent_metadata {
-        return json!({
-            "type": "object",
-            "properties": {
-                "task_name": {
-                    "type": "string",
-                    "description": "Canonical task name for the spawned agent."
-                }
-            },
-            "required": ["task_name"],
-            "additionalProperties": false
-        });
-    }
-
+fn spawn_agent_output_schema_v2() -> Value {
     json!({
         "type": "object",
         "properties": {
             "task_name": {
                 "type": "string",
                 "description": "Canonical task name for the spawned agent."
-            },
-            "nickname": {
-                "type": ["string", "null"],
-                "description": "User-facing nickname for the spawned agent when available."
             }
         },
-        "required": ["task_name", "nickname"],
+        "required": ["task_name"],
         "additionalProperties": false
     })
 }
@@ -445,7 +424,7 @@ fn list_agents_output_schema() -> Value {
                     "required": ["agent_name", "agent_status", "last_task_message"],
                     "additionalProperties": false
                 },
-                "description": "Live agents visible in the current root thread tree."
+                "description": "Currently resident agents visible in the root thread tree."
             }
         },
         "required": ["agents"],
@@ -724,8 +703,9 @@ fn spawn_agent_tool_description_v2(
     let inherited_model_guidance = inherited_model_guidance.unwrap_or_default();
     let concurrency_guidance = max_concurrent_threads_per_session
         .map(|limit| {
+            let active_spawned_agent_limit = limit.saturating_sub(1);
             format!(
-                "This session is configured with `max_concurrent_threads_per_session = {limit}` for concurrently open agent threads."
+                "This session is configured with `max_concurrent_threads_per_session = {limit}`, including the root thread, so at most {active_spawned_agent_limit} spawned agent threads can run concurrently. Idle spawned agents do not count toward this limit."
             )
         })
         .unwrap_or_default();

@@ -1681,70 +1681,6 @@ async fn multi_agent_v2_list_agents_filters_by_relative_path_prefix() {
 }
 
 #[tokio::test]
-async fn multi_agent_v2_list_agents_omits_closed_agents() {
-    let (mut session, mut turn) = make_session_and_context().await;
-    let manager = thread_manager();
-    let root = manager
-        .start_thread((*turn.config).clone())
-        .await
-        .expect("root thread should start");
-    session.services.agent_control = manager.agent_control();
-    session.thread_id = root.thread_id;
-    let mut config = (*turn.config).clone();
-    let _ = config.features.enable(Feature::MultiAgentV2);
-    set_turn_config(&mut turn, config);
-
-    let session = Arc::new(session);
-    let turn = Arc::new(turn);
-    let spawn_output = SpawnAgentHandlerV2::default()
-        .handle(invocation(
-            session.clone(),
-            turn.clone(),
-            "spawn_agent",
-            function_payload(json!({
-                "message": "inspect this repo",
-                "task_name": "worker"
-            })),
-        ))
-        .await
-        .expect("spawn_agent should succeed");
-    let _ = expect_text_output(spawn_output);
-
-    let agent_id = session
-        .services
-        .agent_control
-        .resolve_agent_reference(session.thread_id, &turn.session_source, "worker")
-        .await
-        .expect("worker path should resolve");
-    session
-        .services
-        .agent_control
-        .close_agent(agent_id)
-        .await
-        .expect("close_agent should succeed");
-
-    let output = ListAgentsHandlerV2
-        .handle(invocation(
-            session,
-            turn,
-            "list_agents",
-            function_payload(json!({})),
-        ))
-        .await
-        .expect("list_agents should succeed");
-    let (content, _) = expect_text_output(output);
-    let result: ListAgentsResult =
-        serde_json::from_str(&content).expect("list_agents result should be json");
-
-    assert_eq!(result.agents.len(), 1);
-    assert_eq!(result.agents[0].agent_name, "/root");
-    assert_eq!(
-        result.agents[0].last_task_message.as_deref(),
-        Some("Main thread")
-    );
-}
-
-#[tokio::test]
 async fn multi_agent_v2_send_message_rejects_legacy_items_field() {
     let (mut session, mut turn) = make_session_and_context().await;
     let manager = thread_manager();
@@ -2722,7 +2658,7 @@ async fn resume_agent_restores_closed_agent_and_accepts_send_input() {
     let agent_id = thread.thread_id;
     let _ = manager
         .agent_control()
-        .shutdown_live_agent(agent_id)
+        .shutdown_and_forget_agent(agent_id)
         .await
         .expect("shutdown agent");
     assert_eq!(
@@ -2770,7 +2706,7 @@ async fn resume_agent_restores_closed_agent_and_accepts_send_input() {
 
     let _ = manager
         .agent_control()
-        .shutdown_live_agent(agent_id)
+        .shutdown_and_forget_agent(agent_id)
         .await
         .expect("shutdown resumed agent");
 }

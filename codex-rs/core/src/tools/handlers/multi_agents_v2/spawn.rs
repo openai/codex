@@ -188,7 +188,6 @@ async fn handle_spawn_agent(
         .as_ref()
         .and_then(|snapshot| snapshot.reasoning_effort.clone())
         .unwrap_or(args.reasoning_effort.unwrap_or_default());
-    let nickname = new_agent_nickname.clone();
     session
         .send_event(
             &turn,
@@ -220,15 +219,7 @@ async fn handle_spawn_agent(
         )
     })?;
 
-    let hide_agent_metadata = turn.config.multi_agent_v2.hide_spawn_agent_metadata;
-    if hide_agent_metadata {
-        Ok(SpawnAgentResult::HiddenMetadata { task_name })
-    } else {
-        Ok(SpawnAgentResult::WithNickname {
-            task_name,
-            nickname,
-        })
-    }
+    Ok(SpawnAgentResult { task_name })
 }
 
 impl CoreToolRuntime for Handler {
@@ -288,15 +279,8 @@ impl SpawnAgentArgs {
 }
 
 #[derive(Debug, Serialize)]
-#[serde(untagged)]
-pub(crate) enum SpawnAgentResult {
-    WithNickname {
-        task_name: String,
-        nickname: Option<String>,
-    },
-    HiddenMetadata {
-        task_name: String,
-    },
+pub(crate) struct SpawnAgentResult {
+    task_name: String,
 }
 
 impl ToolOutput for SpawnAgentResult {
