@@ -27,14 +27,19 @@ struct TestConfig {
 }
 
 async fn make_config(codex_home: &TempDir) -> TestConfig {
-    make_config_for_cwd(codex_home, codex_home.path().to_path_buf()).await
+    make_config_for_cwd(
+        codex_home,
+        codex_home.path().to_path_buf(),
+        codex_home.path(),
+    )
+    .await
 }
 
 fn config_file(path: PathBuf) -> AbsolutePathBuf {
     path.abs()
 }
 
-fn project_layers_for_cwd(cwd: &Path) -> Vec<ConfigLayerEntry> {
+fn project_layers_for_cwd(cwd: &Path, fixture_root: &Path) -> Vec<ConfigLayerEntry> {
     let cwd_dir = if cwd.is_dir() {
         cwd.to_path_buf()
     } else {
@@ -42,8 +47,15 @@ fn project_layers_for_cwd(cwd: &Path) -> Vec<ConfigLayerEntry> {
             .expect("file cwd should have a parent directory")
             .to_path_buf()
     };
+    assert!(
+        cwd_dir.starts_with(fixture_root),
+        "test cwd {} must be under fixture root {}",
+        cwd_dir.display(),
+        fixture_root.display()
+    );
     let project_root = cwd_dir
         .ancestors()
+        .take_while(|ancestor| ancestor.starts_with(fixture_root))
         .find(|ancestor| ancestor.join(".git").exists())
         .unwrap_or(cwd_dir.as_path())
         .to_path_buf();
@@ -79,7 +91,25 @@ fn project_layers_for_cwd(cwd: &Path) -> Vec<ConfigLayerEntry> {
         .collect()
 }
 
-async fn make_config_for_cwd(codex_home: &TempDir, cwd: PathBuf) -> TestConfig {
+#[test]
+fn project_layers_for_cwd_does_not_search_above_fixture_root() {
+    let enclosing_checkout = tempfile::tempdir().expect("tempdir");
+    mark_as_git_repo(enclosing_checkout.path());
+    fs::create_dir(enclosing_checkout.path().join(REPO_ROOT_CONFIG_DIR_NAME))
+        .expect("create enclosing project config dir");
+
+    let fixture_root = enclosing_checkout.path().join("fixture");
+    let cwd = fixture_root.join("nested");
+    fs::create_dir_all(&cwd).expect("create fixture cwd");
+
+    assert!(project_layers_for_cwd(&cwd, &fixture_root).is_empty());
+}
+
+async fn make_config_for_cwd(
+    codex_home: &TempDir,
+    cwd: PathBuf,
+    fixture_root: &Path,
+) -> TestConfig {
     let user_config_path = codex_home.path().join(CONFIG_TOML_FILE);
     let system_config_path = codex_home.path().join("etc/codex/config.toml");
     fs::create_dir_all(
@@ -104,7 +134,7 @@ async fn make_config_for_cwd(codex_home: &TempDir, cwd: PathBuf) -> TestConfig {
             TomlValue::Table(toml::map::Map::new()),
         ),
     ];
-    layers.extend(project_layers_for_cwd(&cwd));
+    layers.extend(project_layers_for_cwd(&cwd, fixture_root));
 
     let cwd_abs = cwd.abs();
     TestConfig {
@@ -1094,7 +1124,8 @@ async fn loads_skills_via_symlinked_subdir_for_repo_scope() {
     fs::create_dir_all(&repo_skills_root).unwrap();
     symlink_dir(shared.path(), &repo_skills_root.join("shared"));
 
-    let cfg = make_config_for_cwd(&codex_home, repo_dir.path().to_path_buf()).await;
+    let cfg =
+        make_config_for_cwd(&codex_home, repo_dir.path().to_path_buf(), repo_dir.path()).await;
     let outcome = load_skills_for_test(&cfg).await;
 
     assert!(
@@ -1500,7 +1531,8 @@ async fn loads_skills_from_repo_root() {
         .join(REPO_ROOT_CONFIG_DIR_NAME)
         .join(SKILLS_DIR_NAME);
     let skill_path = write_skill_at(&skills_root, "repo", "repo-skill", "from repo");
-    let cfg = make_config_for_cwd(&codex_home, repo_dir.path().to_path_buf()).await;
+    let cfg =
+        make_config_for_cwd(&codex_home, repo_dir.path().to_path_buf(), repo_dir.path()).await;
 
     let outcome = load_skills_for_test(&cfg).await;
     assert!(
@@ -1536,7 +1568,8 @@ async fn loads_skills_from_agents_dir_without_codex_dir() {
         "agents-skill",
         "from agents",
     );
-    let cfg = make_config_for_cwd(&codex_home, repo_dir.path().to_path_buf()).await;
+    let cfg =
+        make_config_for_cwd(&codex_home, repo_dir.path().to_path_buf(), repo_dir.path()).await;
 
     let outcome = load_skills_for_test(&cfg).await;
     assert!(
@@ -1589,7 +1622,7 @@ async fn loads_skills_from_all_codex_dirs_under_project_root() {
         "from nested",
     );
 
-    let cfg = make_config_for_cwd(&codex_home, nested_dir).await;
+    let cfg = make_config_for_cwd(&codex_home, nested_dir, repo_dir.path()).await;
 
     let outcome = load_skills_for_test(&cfg).await;
     assert!(
@@ -1641,7 +1674,8 @@ async fn loads_skills_from_codex_dir_when_not_git_repo() {
         "from cwd",
     );
 
-    let cfg = make_config_for_cwd(&codex_home, work_dir.path().to_path_buf()).await;
+    let cfg =
+        make_config_for_cwd(&codex_home, work_dir.path().to_path_buf(), work_dir.path()).await;
 
     let outcome = load_skills_for_test(&cfg).await;
     assert!(
@@ -1727,7 +1761,8 @@ async fn keeps_duplicate_names_from_repo_and_user() {
         "from repo",
     );
 
-    let cfg = make_config_for_cwd(&codex_home, repo_dir.path().to_path_buf()).await;
+    let cfg =
+        make_config_for_cwd(&codex_home, repo_dir.path().to_path_buf(), repo_dir.path()).await;
 
     let outcome = load_skills_for_test(&cfg).await;
     assert!(
@@ -1793,7 +1828,7 @@ async fn keeps_duplicate_names_from_nested_codex_dirs() {
         "from nested",
     );
 
-    let cfg = make_config_for_cwd(&codex_home, nested_dir).await;
+    let cfg = make_config_for_cwd(&codex_home, nested_dir, repo_dir.path()).await;
     let outcome = load_skills_for_test(&cfg).await;
 
     assert!(
@@ -1856,7 +1891,7 @@ async fn repo_skills_search_does_not_escape_repo_root() {
     );
     mark_as_git_repo(&repo_dir);
 
-    let cfg = make_config_for_cwd(&codex_home, repo_dir).await;
+    let cfg = make_config_for_cwd(&codex_home, repo_dir, outer_dir.path()).await;
 
     let outcome = load_skills_for_test(&cfg).await;
     assert!(
@@ -1885,7 +1920,7 @@ async fn loads_skills_when_cwd_is_file_in_repo() {
     let file_path = repo_dir.path().join("some-file.txt");
     fs::write(&file_path, "contents").unwrap();
 
-    let cfg = make_config_for_cwd(&codex_home, file_path).await;
+    let cfg = make_config_for_cwd(&codex_home, file_path, repo_dir.path()).await;
 
     let outcome = load_skills_for_test(&cfg).await;
     assert!(
@@ -1926,7 +1961,7 @@ async fn non_git_repo_skills_search_does_not_walk_parents() {
         "from outer",
     );
 
-    let cfg = make_config_for_cwd(&codex_home, nested_dir).await;
+    let cfg = make_config_for_cwd(&codex_home, nested_dir, outer_dir.path()).await;
 
     let outcome = load_skills_for_test(&cfg).await;
     assert!(
@@ -1944,7 +1979,8 @@ async fn loads_skills_from_system_cache_when_present() {
 
     let skill_path = write_system_skill(&codex_home, "system", "system-skill", "from system");
 
-    let cfg = make_config_for_cwd(&codex_home, work_dir.path().to_path_buf()).await;
+    let cfg =
+        make_config_for_cwd(&codex_home, work_dir.path().to_path_buf(), work_dir.path()).await;
 
     let outcome = load_skills_for_test(&cfg).await;
     assert!(
