@@ -5,45 +5,14 @@
 # git push origin rust-v0.1.0
 # ```
 #
-# To use external macOS signing, manually dispatch `release_mode=build_unsigned`,
-# sign the unsigned macOS artifacts in a secure enclave, upload the signed handoff
-# archive as a GitHub Release asset, then manually dispatch
-# `release_mode=promote_signed` with `unsigned_run_id` and `signed_macos_asset`.
-# The signed handoff archive should contain target or artifact directories such
-# as `aarch64-apple-darwin/` with signed binaries.
+# Tag releases sign macOS binaries and DMGs through the protected `codesigning`
+# GitHub environment and Azure Key Vault before final verification on macOS.
 
 name: rust-release
 on:
   push:
     tags:
       - "rust-v*.*.*"
-  workflow_dispatch:
-    inputs:
-      release_mode:
-        description: "build_unsigned creates unsigned macOS handoff artifacts; promote_signed finishes a release from signed macOS handoff artifacts."
-        required: false
-        type: choice
-        default: build_unsigned
-        options:
-          - build_unsigned
-          - promote_signed
-      sign_macos:
-        description: "Deprecated compatibility input; use release_mode instead."
-        required: false
-        type: boolean
-        default: false
-      unsigned_run_id:
-        description: "For promote_signed: workflow run id from the build_unsigned run."
-        required: false
-        type: string
-      signed_macos_asset:
-        description: "For promote_signed: exact GitHub Release asset name containing signed macOS handoff artifacts."
-        required: false
-        type: string
-      signed_macos_sha256:
-        description: "For promote_signed: optional SHA-256 of signed_macos_asset."
-        required: false
-        type: string
 
 concurrency:
   group: ${{ github.workflow }}
@@ -59,72 +28,22 @@ jobs:
       - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
       - name: Validate tag matches Cargo.toml version
         shell: bash
-        env:
-          RELEASE_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.release_mode || 'signed' }}
-          REQUESTED_SIGN_MACOS: ${{ inputs.sign_macos }}
-          SIGNED_MACOS_ASSET: ${{ inputs.signed_macos_asset }}
-          UNSIGNED_RUN_ID: ${{ inputs.unsigned_run_id }}
         run: |
           set -euo pipefail
           echo "::group::Tag validation"
 
-          case "${RELEASE_MODE}" in
-            signed)
-              if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
-                echo "❌  Manual rust-release runs must use release_mode=build_unsigned or release_mode=promote_signed"
-                exit 1
-              fi
-              ;;
-            build_unsigned)
-              if [[ "${GITHUB_EVENT_NAME}" != "workflow_dispatch" ]]; then
-                echo "❌  release_mode=build_unsigned is only valid for manual runs"
-                exit 1
-              fi
-              ;;
-            promote_signed)
-              if [[ "${GITHUB_EVENT_NAME}" != "workflow_dispatch" ]]; then
-                echo "❌  release_mode=promote_signed is only valid for manual runs"
-                exit 1
-              fi
-              if [[ ! "${UNSIGNED_RUN_ID}" =~ ^[0-9]+$ ]]; then
-                echo "❌  release_mode=promote_signed requires unsigned_run_id to be a workflow run id"
-                exit 1
-              fi
-              if [[ -z "${SIGNED_MACOS_ASSET}" ]]; then
-                echo "❌  release_mode=promote_signed requires signed_macos_asset"
-                exit 1
-              fi
-              if [[ "${SIGNED_MACOS_ASSET}" == */* || "${SIGNED_MACOS_ASSET}" == *"*"* || "${SIGNED_MACOS_ASSET}" == *"?"* || "${SIGNED_MACOS_ASSET}" == *"["* ]]; then
-                echo "❌  signed_macos_asset must be an exact release asset name, not a path or glob"
-                exit 1
-              fi
-              if [[ "${UNSIGNED_RUN_ID}" == "${GITHUB_RUN_ID}" ]]; then
-                echo "❌  unsigned_run_id must refer to the earlier build_unsigned run, not this run"
-                exit 1
-              fi
-              ;;
-            *)
-              echo "❌  Unknown release_mode '${RELEASE_MODE}'"
-              exit 1
-              ;;
-          esac
-
-          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" && "${REQUESTED_SIGN_MACOS}" == "true" ]]; then
-            echo "::warning title=Deprecated sign_macos input ignored::Use release_mode=build_unsigned or release_mode=promote_signed instead."
-          fi
-
-          # 1. Must be a tag and match the regex
+          # Release runs must come from a tag.
           [[ "${GITHUB_REF_TYPE}" == "tag" ]] \
-            || { echo "❌  Not a tag push"; exit 1; }
+            || { echo "❌  Not a tag ref"; exit 1; }
+
+          # Release tags must match the version in Cargo.toml.
           [[ "${GITHUB_REF_NAME}" =~ ^rust-v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)(\.[0-9]+)?)?$ ]] \
             || { echo "❌  Tag '${GITHUB_REF_NAME}' doesn't match expected format"; exit 1; }
 
-          # 2. Extract versions
           tag_ver="${GITHUB_REF_NAME#rust-v}"
           cargo_ver="$(grep -m1 '^version' codex-rs/Cargo.toml \
                         | sed -E 's/version *= *"([^"]+)".*/\1/')"
 
-          # 3. Compare
           [[ "${tag_ver}" == "${cargo_ver}" ]] \
             || { echo "❌  Tag ${tag_ver} ≠ Cargo.toml ${cargo_ver}"; exit 1; }
 
@@ -132,7 +51,6 @@ jobs:
           echo "::endgroup::"
 
   build:
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.release_mode != 'promote_signed' }}
     needs: tag-check
     name: Build - ${{ matrix.runner }} - ${{ matrix.target }} - ${{ matrix.bundle }}
     runs-on: ${{ matrix.runs_on || matrix.runner }}
@@ -146,15 +64,11 @@ jobs:
       run:
         working-directory: codex-rs
     env:
-      # 2026-03-04: temporarily change releases to use thin LTO because
-      # Ubuntu ARM is timing out at 60 minutes.
-      CARGO_PROFILE_RELEASE_LTO: ${{ contains(github.ref_name, '-alpha') && 'thin' || 'thin' }}
       # Use the git CLI instead of Cargo's libgit2 path for git dependencies.
       # macOS release runners have intermittently failed to fetch nested
       # submodules through SecureTransport/libgit2, especially libwebrtc's
       # libyuv submodule from chromium.googlesource.com.
       CARGO_NET_GIT_FETCH_WITH_CLI: "true"
-      SIGN_MACOS: ${{ github.event_name != 'workflow_dispatch' }}
 
     strategy:
       fail-fast: false
@@ -323,7 +237,6 @@ jobs:
           for binary in ${{ matrix.binaries }}; do
             build_args+=(--bin "$binary")
           done
-          echo "CARGO_PROFILE_RELEASE_LTO: ${CARGO_PROFILE_RELEASE_LTO}"
           cargo build --target "$target" --release --timings "${build_args[@]}"
 
       - name: Upload Cargo timings
@@ -333,7 +246,7 @@ jobs:
           path: codex-rs/target/**/cargo-timings/cargo-timing.html
           if-no-files-found: warn
 
-      - if: ${{ runner.os == 'macOS' && env.SIGN_MACOS != 'true' }}
+      - if: ${{ runner.os == 'macOS' }}
         name: Stage unsigned macOS artifacts
         shell: bash
         run: |
@@ -358,7 +271,7 @@ jobs:
             zstd -T0 -19 --rm "${unsigned_path}"
           done
 
-      - if: ${{ runner.os == 'macOS' && env.SIGN_MACOS != 'true' }}
+      - if: ${{ runner.os == 'macOS' }}
         name: Upload unsigned macOS artifacts
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
@@ -374,75 +287,8 @@ jobs:
           artifacts-dir: ${{ github.workspace }}/codex-rs/target/${{ matrix.target }}/release
           binaries: ${{ matrix.binaries }}
 
-      - if: ${{ runner.os == 'macOS' && env.SIGN_MACOS == 'true' }}
-        name: MacOS code signing (binaries)
-        uses: ./.github/actions/macos-code-sign
-        with:
-          target: ${{ matrix.target }}
-          binaries: ${{ matrix.binaries }}
-          sign-binaries: "true"
-          sign-dmg: "false"
-          apple-certificate: ${{ secrets.APPLE_CERTIFICATE_P12 }}
-          apple-certificate-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          apple-notarization-key-p8: ${{ secrets.APPLE_NOTARIZATION_KEY_P8 }}
-          apple-notarization-key-id: ${{ secrets.APPLE_NOTARIZATION_KEY_ID }}
-          apple-notarization-issuer-id: ${{ secrets.APPLE_NOTARIZATION_ISSUER_ID }}
-
-      - if: ${{ runner.os == 'macOS' && matrix.build_dmg == 'true' && env.SIGN_MACOS == 'true' }}
-        name: Build macOS dmg
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          target="${{ matrix.target }}"
-          release_dir="target/${target}/release"
-          dmg_root="${RUNNER_TEMP}/codex-dmg-root"
-          volname="Codex (${target})"
-          dmg_path="${release_dir}/codex-${target}.dmg"
-
-          # The previous "MacOS code signing (binaries)" step signs + notarizes the
-          # built artifacts in `${release_dir}`. This step packages *those same*
-          # signed binaries into a dmg.
-          rm -rf "$dmg_root"
-          mkdir -p "$dmg_root"
-
-          for binary in ${{ matrix.binaries }}; do
-            binary_path="${release_dir}/${binary}"
-            if [[ ! -f "${binary_path}" ]]; then
-              echo "Binary ${binary_path} not found"
-              exit 1
-            fi
-            ditto "${binary_path}" "${dmg_root}/${binary}"
-          done
-
-          rm -f "$dmg_path"
-          hdiutil create \
-            -volname "$volname" \
-            -srcfolder "$dmg_root" \
-            -format UDZO \
-            -ov \
-            "$dmg_path"
-
-          if [[ ! -f "$dmg_path" ]]; then
-            echo "dmg $dmg_path not found after build"
-            exit 1
-          fi
-
-      - if: ${{ runner.os == 'macOS' && matrix.build_dmg == 'true' && env.SIGN_MACOS == 'true' }}
-        name: MacOS code signing (dmg)
-        uses: ./.github/actions/macos-code-sign
-        with:
-          target: ${{ matrix.target }}
-          sign-binaries: "false"
-          sign-dmg: "true"
-          apple-certificate: ${{ secrets.APPLE_CERTIFICATE_P12 }}
-          apple-certificate-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          apple-notarization-key-p8: ${{ secrets.APPLE_NOTARIZATION_KEY_P8 }}
-          apple-notarization-key-id: ${{ secrets.APPLE_NOTARIZATION_KEY_ID }}
-          apple-notarization-issuer-id: ${{ secrets.APPLE_NOTARIZATION_ISSUER_ID }}
-
       - name: Stage artifacts
-        if: ${{ runner.os != 'macOS' || env.SIGN_MACOS == 'true' }}
+        if: ${{ runner.os != 'macOS' }}
         shell: bash
         run: |
           dest="dist/${{ matrix.target }}"
@@ -472,7 +318,7 @@ jobs:
           fi
 
       - name: Build Codex package archive
-        if: ${{ runner.os != 'macOS' || env.SIGN_MACOS == 'true' }}
+        if: ${{ runner.os != 'macOS' }}
         shell: bash
         env:
           TARGET: ${{ matrix.target }}
@@ -486,7 +332,7 @@ jobs:
             --archive-dir "dist/${TARGET}"
 
       - name: Build Python runtime wheel
-        if: ${{ matrix.bundle == 'primary' && (runner.os != 'macOS' || env.SIGN_MACOS == 'true') }}
+        if: ${{ matrix.bundle == 'primary' && runner.os != 'macOS' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -529,7 +375,7 @@ jobs:
           "${RUNNER_TEMP}/python-runtime-build-venv/bin/python" -m build --wheel --outdir "$wheel_dir" "$stage_dir"
 
       - name: Upload Python runtime wheel
-        if: ${{ matrix.bundle == 'primary' && (runner.os != 'macOS' || env.SIGN_MACOS == 'true') }}
+        if: ${{ matrix.bundle == 'primary' && runner.os != 'macOS' }}
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: python-runtime-wheel-${{ matrix.target }}
@@ -537,7 +383,7 @@ jobs:
           if-no-files-found: error
 
       - name: Compress artifacts
-        if: ${{ runner.os != 'macOS' || env.SIGN_MACOS == 'true' }}
+        if: ${{ runner.os != 'macOS' }}
         shell: bash
         run: |
           # Path that contains the uncompressed binaries for the current
@@ -574,7 +420,7 @@ jobs:
           done
 
       - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
-        if: ${{ runner.os != 'macOS' || env.SIGN_MACOS == 'true' }}
+        if: ${{ runner.os != 'macOS' }}
         with:
           name: ${{ matrix.artifact_name }}
           # Upload the per-binary .zst files, .tar.gz equivalents, and any
@@ -582,12 +428,130 @@ jobs:
           path: |
             codex-rs/dist/${{ matrix.target }}/*
 
-  stage-signed-macos:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.release_mode == 'promote_signed' }}
-    needs: tag-check
-    name: Stage signed macOS handoff - ${{ matrix.target }} - ${{ matrix.bundle }}
+  sign-macos-binaries:
+    needs: build
+    name: Sign macOS binaries - ${{ matrix.target }} - ${{ matrix.bundle }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment:
+      name: codesigning
+      deployment: false
+    permissions:
+      contents: read
+      id-token: write
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            bundle: primary
+            artifact_name: aarch64-apple-darwin
+            binaries: "codex codex-responses-api-proxy"
+          - target: aarch64-apple-darwin
+            bundle: app-server
+            artifact_name: aarch64-apple-darwin-app-server
+            binaries: "codex-app-server"
+          - target: x86_64-apple-darwin
+            bundle: primary
+            artifact_name: x86_64-apple-darwin
+            binaries: "codex codex-responses-api-proxy"
+          - target: x86_64-apple-darwin
+            bundle: app-server
+            artifact_name: x86_64-apple-darwin-app-server
+            binaries: "codex-app-server"
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Download unsigned macOS binaries
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ matrix.artifact_name }}-unsigned
+          path: ${{ runner.temp }}/unsigned-macos
+
+      - name: Set up AKV PKCS11 macOS signing
+        uses: ./.github/actions/setup-akv-pkcs11-codesigning
+        with:
+          rcodesign-blob-uri: ${{ secrets.AKV_CODESIGN_RCODESIGN_BLOB_URI }}
+          rcodesign-sha256: ${{ secrets.AKV_CODESIGN_RCODESIGN_SHA256 }}
+          akv-pkcs11-library-blob-uri: ${{ secrets.AKV_CODESIGN_PKCS11_LIBRARY_BLOB_URI }}
+          akv-pkcs11-library-sha256: ${{ secrets.AKV_CODESIGN_PKCS11_LIBRARY_SHA256 }}
+          azure-client-id: ${{ secrets.AKV_CODESIGN_AZURE_CLIENT_ID }}
+          azure-tenant-id: ${{ secrets.AKV_CODESIGN_TENANT }}
+          azure-subscription-id: ${{ secrets.AKV_CODESIGN_SUBSCRIPTION }}
+          key-vault-name: ${{ secrets.AKV_CODESIGN_KEY_VAULT_NAME }}
+          key-name: ${{ secrets.AKV_CODESIGN_KEY_NAME }}
+          key-version: ${{ secrets.AKV_CODESIGN_KEY_VERSION || '' }}
+          certificate-sha256: ${{ secrets.AKV_CODESIGN_CERTIFICATE_SHA256 || '' }}
+
+      - name: Sign and notarize macOS binaries
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+          BINARIES: ${{ matrix.binaries }}
+          APPLE_NOTARIZATION_KEY_P8: ${{ secrets.APPLE_NOTARIZATION_KEY_P8 }}
+          APPLE_NOTARIZATION_KEY_ID: ${{ secrets.APPLE_NOTARIZATION_KEY_ID }}
+          APPLE_NOTARIZATION_ISSUER_ID: ${{ secrets.APPLE_NOTARIZATION_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+
+          input_dir="${RUNNER_TEMP}/unsigned-macos"
+          output_dir="${GITHUB_WORKSPACE}/signed-macos/${TARGET}"
+          report_dir="${GITHUB_WORKSPACE}/macos-binary-signing-verification/${TARGET}"
+          mkdir -p "$output_dir" "$report_dir"
+
+          for binary in ${BINARIES}; do
+            unsigned_path="${input_dir}/${binary}-${TARGET}-unsigned.zst"
+            signed_path="${output_dir}/${binary}"
+            if [[ ! -f "$unsigned_path" ]]; then
+              echo "Unsigned binary $unsigned_path not found"
+              exit 1
+            fi
+
+            zstd -d --stdout "$unsigned_path" >"$signed_path"
+            chmod 0755 "$signed_path"
+
+            .github/scripts/macos-signing/sign_macos_code.sh \
+              --target "$signed_path" \
+              --identity unused \
+              --deep false \
+              --identifier "$binary" \
+              --options runtime \
+              --timestamp true \
+              --entitlements .github/scripts/macos-signing/codex.entitlements.plist
+
+            mkdir -p "${report_dir}/${binary}"
+            rcodesign print-signature-info "$signed_path" \
+              >"${report_dir}/${binary}/signature-info.yaml"
+
+            .github/scripts/macos-signing/notarize_macos_binary_with_rcodesign.sh \
+              --binary "$signed_path" \
+              --report-dir "${report_dir}/${binary}"
+          done
+
+      - name: Upload signed macOS binaries
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: ${{ matrix.artifact_name }}-signed-binaries
+          path: signed-macos/${{ matrix.target }}/*
+          if-no-files-found: error
+
+      - name: Upload binary signing verification
+        if: ${{ always() }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: ${{ matrix.artifact_name }}-binary-signing-verification
+          path: macos-binary-signing-verification/${{ matrix.target }}/
+          if-no-files-found: warn
+
+  package-macos:
+    needs: sign-macos-binaries
+    name: Package macOS artifacts - ${{ matrix.target }} - ${{ matrix.bundle }}
     runs-on: macos-15-xlarge
-    timeout-minutes: 30
+    timeout-minutes: 45
     permissions:
       contents: read
     defaults:
@@ -602,7 +566,7 @@ jobs:
             bundle: primary
             artifact_name: aarch64-apple-darwin
             binaries: "codex codex-responses-api-proxy"
-            build_dmg: "false"
+            build_dmg: "true"
           - target: aarch64-apple-darwin
             bundle: app-server
             artifact_name: aarch64-apple-darwin-app-server
@@ -612,7 +576,7 @@ jobs:
             bundle: primary
             artifact_name: x86_64-apple-darwin
             binaries: "codex codex-responses-api-proxy"
-            build_dmg: "false"
+            build_dmg: "true"
           - target: x86_64-apple-darwin
             bundle: app-server
             artifact_name: x86_64-apple-darwin-app-server
@@ -624,125 +588,77 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Download signed macOS handoff
+      - name: Download signed macOS binaries
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ matrix.artifact_name }}-signed-binaries
+          path: codex-rs/target/${{ matrix.target }}/release
+
+      - name: Verify signed macOS binaries
         shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          SIGNED_MACOS_ASSET: ${{ inputs.signed_macos_asset }}
-          SIGNED_MACOS_SHA256: ${{ inputs.signed_macos_sha256 }}
         run: |
           set -euo pipefail
+          for binary in ${{ matrix.binaries }}; do
+            binary_path="target/${{ matrix.target }}/release/${binary}"
+            chmod 0755 "$binary_path"
+            codesign --verify --strict --verbose=2 "$binary_path"
+          done
 
-          download_dir="${RUNNER_TEMP}/signed-macos-download"
-          handoff_dir="${RUNNER_TEMP}/signed-macos-handoff"
-          rm -rf "$download_dir" "$handoff_dir"
-          mkdir -p "$download_dir" "$handoff_dir"
-
-          gh release download "$GITHUB_REF_NAME" \
-            --repo "$GITHUB_REPOSITORY" \
-            --pattern "$SIGNED_MACOS_ASSET" \
-            --dir "$download_dir"
-
-          asset_count="$(find "$download_dir" -maxdepth 1 -type f | wc -l | tr -d '[:space:]')"
-          if [[ "$asset_count" != "1" ]]; then
-            echo "Expected exactly one signed macOS handoff asset named ${SIGNED_MACOS_ASSET}; found ${asset_count}"
-            find "$download_dir" -maxdepth 1 -type f -print
-            exit 1
-          fi
-
-          asset_path="$(find "$download_dir" -maxdepth 1 -type f -print -quit)"
-          if [[ -n "${SIGNED_MACOS_SHA256}" ]]; then
-            expected_sha="$(printf '%s' "$SIGNED_MACOS_SHA256" | tr '[:upper:]' '[:lower:]')"
-            actual_sha="$(shasum -a 256 "$asset_path" | awk '{print $1}')"
-            if [[ "$actual_sha" != "$expected_sha" ]]; then
-              echo "signed_macos_sha256 mismatch for ${SIGNED_MACOS_ASSET}"
-              echo "expected: ${expected_sha}"
-              echo "actual:   ${actual_sha}"
-              exit 1
-            fi
-          fi
-
-          asset_name="$(basename "$asset_path")"
-          case "$asset_name" in
-            *.tar.zst)
-              zstd -dc "$asset_path" | tar -C "$handoff_dir" -xf -
-              ;;
-            *.tar.gz|*.tgz)
-              tar -C "$handoff_dir" -xzf "$asset_path"
-              ;;
-            *.zip)
-              ditto -x -k "$asset_path" "$handoff_dir"
-              ;;
-            *)
-              echo "Unsupported signed macOS handoff archive format: ${asset_name}"
-              exit 1
-              ;;
-          esac
-
-          echo "SIGNED_MACOS_HANDOFF_DIR=$handoff_dir" >> "$GITHUB_ENV"
-
-      - name: Stage signed macOS artifacts
+      - name: Build unsigned macOS DMG
+        if: ${{ matrix.build_dmg == 'true' }}
         shell: bash
         run: |
           set -euo pipefail
 
           target="${{ matrix.target }}"
-          artifact_name="${{ matrix.artifact_name }}"
-          source_dir="${SIGNED_MACOS_HANDOFF_DIR}/${artifact_name}"
-          if [[ ! -d "$source_dir" && -d "${SIGNED_MACOS_HANDOFF_DIR}/dist/${artifact_name}" ]]; then
-            source_dir="${SIGNED_MACOS_HANDOFF_DIR}/dist/${artifact_name}"
-          fi
-          if [[ ! -d "$source_dir" && -d "${SIGNED_MACOS_HANDOFF_DIR}/${target}" ]]; then
-            source_dir="${SIGNED_MACOS_HANDOFF_DIR}/${target}"
-          fi
-          if [[ ! -d "$source_dir" && -d "${SIGNED_MACOS_HANDOFF_DIR}/dist/${target}" ]]; then
-            source_dir="${SIGNED_MACOS_HANDOFF_DIR}/dist/${target}"
-          fi
-          if [[ ! -d "$source_dir" ]]; then
-            echo "Signed macOS handoff is missing ${artifact_name}/"
-            echo "Expected either:"
-            echo "  ${SIGNED_MACOS_HANDOFF_DIR}/${artifact_name}"
-            echo "  ${SIGNED_MACOS_HANDOFF_DIR}/dist/${artifact_name}"
-            echo "  ${SIGNED_MACOS_HANDOFF_DIR}/${target}"
-            echo "  ${SIGNED_MACOS_HANDOFF_DIR}/dist/${target}"
-            find "$SIGNED_MACOS_HANDOFF_DIR" -maxdepth 3 -type f -print
+          release_dir="target/${target}/release"
+          dmg_root="${RUNNER_TEMP}/codex-dmg-root-${target}"
+          volname="Codex (${target})"
+          dmg_path="${release_dir}/codex-${target}.dmg"
+
+          rm -rf "$dmg_root"
+          mkdir -p "$dmg_root"
+
+          for binary in ${{ matrix.binaries }}; do
+            binary_path="${release_dir}/${binary}"
+            if [[ ! -f "$binary_path" ]]; then
+              echo "Binary $binary_path not found"
+              exit 1
+            fi
+            ditto "$binary_path" "${dmg_root}/${binary}"
+          done
+
+          rm -f "$dmg_path"
+          hdiutil create \
+            -volname "$volname" \
+            -srcfolder "$dmg_root" \
+            -format UDZO \
+            -ov \
+            "$dmg_path"
+
+          if [[ ! -f "$dmg_path" ]]; then
+            echo "DMG $dmg_path not found after build"
             exit 1
           fi
 
-          dest="dist/${target}"
+      - name: Upload unsigned macOS DMG
+        if: ${{ matrix.build_dmg == 'true' }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: ${{ matrix.artifact_name }}-unsigned-dmg
+          path: codex-rs/target/${{ matrix.target }}/release/codex-${{ matrix.target }}.dmg
+          if-no-files-found: error
+
+      - name: Stage macOS artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          dest="dist/${{ matrix.target }}"
           mkdir -p "$dest"
 
           for binary in ${{ matrix.binaries }}; do
-            source_path="${source_dir}/${binary}"
-            if [[ ! -f "$source_path" ]]; then
-              source_path="${source_dir}/${binary}-${target}"
-            fi
-            if [[ ! -f "$source_path" ]]; then
-              echo "Signed macOS handoff is missing ${binary} for ${artifact_name}"
-              exit 1
-            fi
-
-            release_path="${dest}/${binary}-${target}"
-            ditto "$source_path" "$release_path"
-            chmod 0755 "$release_path"
-            codesign --verify --strict --verbose=2 "$release_path"
+            cp "target/${{ matrix.target }}/release/${binary}" "$dest/${binary}-${{ matrix.target }}"
           done
-
-          # DMG staging is disabled for signed promotion because we no longer
-          # distribute DMGs from this release path. Keep the branch here so the
-          # handoff can opt back in by flipping matrix.build_dmg if needed.
-          if [[ "${{ matrix.build_dmg }}" == "true" ]]; then
-            dmg_name="codex-${target}.dmg"
-            dmg_source="${source_dir}/${dmg_name}"
-            if [[ ! -f "$dmg_source" ]]; then
-              echo "Signed macOS handoff is missing ${dmg_name} for ${artifact_name}"
-              exit 1
-            fi
-
-            codesign --verify --strict --verbose=2 "$dmg_source"
-            xcrun stapler validate "$dmg_source"
-            cp "$dmg_source" "$dest/$dmg_name"
-          fi
 
       - name: Build Codex package archive
         shell: bash
@@ -754,9 +670,8 @@ jobs:
           bash "${GITHUB_WORKSPACE}/.github/scripts/build-codex-package-archive.sh" \
             --target "$TARGET" \
             --bundle "$BUNDLE" \
-            --entrypoint-dir "dist/${TARGET}" \
-            --archive-dir "dist/${TARGET}" \
-            --target-suffixed-entrypoint
+            --entrypoint-dir "target/${TARGET}/release" \
+            --archive-dir "dist/${TARGET}"
 
       - name: Build Python runtime wheel
         if: ${{ matrix.bundle == 'primary' }}
@@ -803,7 +718,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
           dest="dist/${{ matrix.target }}"
           for f in "$dest"/*; do
             base="$(basename "$f")"
@@ -815,22 +729,277 @@ jobs:
             zstd -T0 -19 --rm "$dest/$base"
           done
 
-      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+      - name: Upload packaged macOS artifacts
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: ${{ matrix.artifact_name }}-packaged
+          path: codex-rs/dist/${{ matrix.target }}/*
+          if-no-files-found: error
+
+  sign-macos-dmg:
+    needs: package-macos
+    name: Sign macOS DMG - ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment:
+      name: codesigning
+      deployment: false
+    permissions:
+      contents: read
+      id-token: write
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            artifact_name: aarch64-apple-darwin
+          - target: x86_64-apple-darwin
+            artifact_name: x86_64-apple-darwin
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Download unsigned macOS DMG
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ matrix.artifact_name }}-unsigned-dmg
+          path: ${{ runner.temp }}/unsigned-dmg
+
+      - name: Set up AKV PKCS11 macOS signing
+        uses: ./.github/actions/setup-akv-pkcs11-codesigning
+        with:
+          rcodesign-blob-uri: ${{ secrets.AKV_CODESIGN_RCODESIGN_BLOB_URI }}
+          rcodesign-sha256: ${{ secrets.AKV_CODESIGN_RCODESIGN_SHA256 }}
+          akv-pkcs11-library-blob-uri: ${{ secrets.AKV_CODESIGN_PKCS11_LIBRARY_BLOB_URI }}
+          akv-pkcs11-library-sha256: ${{ secrets.AKV_CODESIGN_PKCS11_LIBRARY_SHA256 }}
+          azure-client-id: ${{ secrets.AKV_CODESIGN_AZURE_CLIENT_ID }}
+          azure-tenant-id: ${{ secrets.AKV_CODESIGN_TENANT }}
+          azure-subscription-id: ${{ secrets.AKV_CODESIGN_SUBSCRIPTION }}
+          key-vault-name: ${{ secrets.AKV_CODESIGN_KEY_VAULT_NAME }}
+          key-name: ${{ secrets.AKV_CODESIGN_KEY_NAME }}
+          key-version: ${{ secrets.AKV_CODESIGN_KEY_VERSION || '' }}
+          certificate-sha256: ${{ secrets.AKV_CODESIGN_CERTIFICATE_SHA256 || '' }}
+
+      - name: Sign, notarize, and staple macOS DMG
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+          APPLE_NOTARIZATION_KEY_P8: ${{ secrets.APPLE_NOTARIZATION_KEY_P8 }}
+          APPLE_NOTARIZATION_KEY_ID: ${{ secrets.APPLE_NOTARIZATION_KEY_ID }}
+          APPLE_NOTARIZATION_ISSUER_ID: ${{ secrets.APPLE_NOTARIZATION_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+
+          dmg_path="${RUNNER_TEMP}/unsigned-dmg/codex-${TARGET}.dmg"
+          report_dir="${GITHUB_WORKSPACE}/macos-dmg-signing-verification/${TARGET}"
+          if [[ ! -f "$dmg_path" ]]; then
+            echo "Unsigned DMG $dmg_path not found"
+            exit 1
+          fi
+
+          .github/scripts/macos-signing/sign_macos_code.sh \
+            --target "$dmg_path" \
+            --identity unused \
+            --deep false \
+            --timestamp true
+
+          mkdir -p "$report_dir"
+          rcodesign print-signature-info "$dmg_path" \
+            >"${report_dir}/signature-info-before-notarization.yaml"
+
+          .github/scripts/macos-signing/notarize_macos_dmg_with_rcodesign.sh \
+            --dmg "$dmg_path" \
+            --report-dir "$report_dir"
+
+          rcodesign print-signature-info "$dmg_path" \
+            >"${report_dir}/signature-info.yaml"
+
+      - name: Upload signed macOS DMG
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: ${{ matrix.artifact_name }}-signed-dmg
+          path: ${{ runner.temp }}/unsigned-dmg/codex-${{ matrix.target }}.dmg
+          if-no-files-found: error
+
+      - name: Upload DMG signing verification
+        if: ${{ always() }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: ${{ matrix.artifact_name }}-dmg-signing-verification
+          path: macos-dmg-signing-verification/${{ matrix.target }}/
+          if-no-files-found: warn
+
+  finalize-macos:
+    needs:
+      - package-macos
+      - sign-macos-dmg
+    name: Verify macOS artifacts - ${{ matrix.target }} - ${{ matrix.bundle }}
+    runs-on: macos-15-xlarge
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: codex-rs
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            bundle: primary
+            artifact_name: aarch64-apple-darwin
+            binaries: "codex codex-responses-api-proxy"
+            verify_dmg: "true"
+          - target: aarch64-apple-darwin
+            bundle: app-server
+            artifact_name: aarch64-apple-darwin-app-server
+            binaries: "codex-app-server"
+            verify_dmg: "false"
+          - target: x86_64-apple-darwin
+            bundle: primary
+            artifact_name: x86_64-apple-darwin
+            binaries: "codex codex-responses-api-proxy"
+            verify_dmg: "true"
+          - target: x86_64-apple-darwin
+            bundle: app-server
+            artifact_name: x86_64-apple-darwin-app-server
+            binaries: "codex-app-server"
+            verify_dmg: "false"
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Download packaged macOS artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ matrix.artifact_name }}-packaged
+          path: codex-rs/dist/${{ matrix.target }}
+
+      - name: Download signed macOS binaries
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ matrix.artifact_name }}-signed-binaries
+          path: ${{ runner.temp }}/signed-binaries
+
+      - name: Download signed macOS DMG
+        if: ${{ matrix.verify_dmg == 'true' }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ matrix.artifact_name }}-signed-dmg
+          path: ${{ runner.temp }}/signed-dmg
+
+      - name: Verify signed macOS artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          target="${{ matrix.target }}"
+          packaged_dir="dist/${target}"
+          expected_entitlements="${GITHUB_WORKSPACE}/.github/scripts/macos-signing/codex.entitlements.plist"
+
+          verify_signed_binary() {
+            local path="$1"
+            local actual_entitlements normalized_actual normalized_expected
+
+            chmod 0755 "$path"
+            codesign --verify --strict --verbose=2 "$path"
+
+            actual_entitlements="$(mktemp)"
+            normalized_actual="$(mktemp)"
+            normalized_expected="$(mktemp)"
+            codesign -d --entitlements :- "$path" >"$actual_entitlements"
+            plutil -convert xml1 -o "$normalized_actual" "$actual_entitlements"
+            plutil -convert xml1 -o "$normalized_expected" "$expected_entitlements"
+            diff -u "$normalized_expected" "$normalized_actual"
+            rm -f "$actual_entitlements" "$normalized_actual" "$normalized_expected"
+          }
+
+          for binary in ${{ matrix.binaries }}; do
+            binary_path="${RUNNER_TEMP}/signed-binaries/${binary}"
+            verify_signed_binary "$binary_path"
+
+            direct_archive_dir="${RUNNER_TEMP}/direct-archive-${binary}-${target}"
+            rm -rf "$direct_archive_dir"
+            mkdir -p "$direct_archive_dir"
+            tar -xzf "${packaged_dir}/${binary}-${target}.tar.gz" -C "$direct_archive_dir"
+            verify_signed_binary "${direct_archive_dir}/${binary}-${target}"
+
+            direct_zstd_path="${RUNNER_TEMP}/${binary}-${target}-from-zstd"
+            zstd -d --stdout "${packaged_dir}/${binary}-${target}.zst" >"$direct_zstd_path"
+            verify_signed_binary "$direct_zstd_path"
+          done
+
+          case "${{ matrix.bundle }}" in
+            primary)
+              package_stem="codex-package"
+              package_entrypoint="codex"
+              ;;
+            app-server)
+              package_stem="codex-app-server-package"
+              package_entrypoint="codex-app-server"
+              ;;
+            *)
+              echo "Unexpected macOS bundle: ${{ matrix.bundle }}"
+              exit 1
+              ;;
+          esac
+
+          package_dir="${RUNNER_TEMP}/${package_stem}-${target}"
+          rm -rf "$package_dir"
+          mkdir -p "$package_dir"
+          tar -xzf "${packaged_dir}/${package_stem}-${target}.tar.gz" -C "$package_dir"
+          verify_signed_binary "${package_dir}/bin/${package_entrypoint}"
+
+          if [[ "${{ matrix.verify_dmg }}" != "true" ]]; then
+            exit 0
+          fi
+
+          dmg_path="${RUNNER_TEMP}/signed-dmg/codex-${target}.dmg"
+          mount_dir="${RUNNER_TEMP}/codex-dmg-mount-${target}"
+          if [[ ! -f "$dmg_path" ]]; then
+            echo "Signed DMG $dmg_path not found"
+            exit 1
+          fi
+
+          hdiutil verify "$dmg_path"
+          codesign --verify --strict --verbose=2 "$dmg_path"
+          xcrun stapler validate "$dmg_path"
+
+          rm -rf "$mount_dir"
+          mkdir -p "$mount_dir"
+          hdiutil attach "$dmg_path" -nobrowse -readonly -mountpoint "$mount_dir"
+          cleanup_mount() {
+            hdiutil detach "$mount_dir" >/dev/null
+          }
+          trap cleanup_mount EXIT
+
+          for binary in ${{ matrix.binaries }}; do
+            verify_signed_binary "${mount_dir}/${binary}"
+          done
+
+          cleanup_mount
+          trap - EXIT
+          cp "$dmg_path" "dist/${target}/codex-${target}.dmg"
+
+      - name: Upload verified macOS artifacts
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: ${{ matrix.artifact_name }}
-          path: |
-            codex-rs/dist/${{ matrix.target }}/*
+          path: codex-rs/dist/${{ matrix.target }}/*
+          if-no-files-found: error
 
   build-windows:
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.release_mode != 'promote_signed' }}
     needs: tag-check
     uses: ./.github/workflows/rust-release-windows.yml
-    with:
-      release-lto: ${{ contains(github.ref_name, '-alpha') && 'thin' || 'fat' }}
     secrets: inherit
 
   argument-comment-lint-release-assets:
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.release_mode != 'promote_signed' }}
     name: argument-comment-lint release assets
     needs: tag-check
     uses: ./.github/workflows/rust-release-argument-comment-lint.yml
@@ -838,7 +1007,6 @@ jobs:
       publish: true
 
   zsh-release-assets:
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.release_mode != 'promote_signed' }}
     name: zsh release assets
     needs: tag-check
     uses: ./.github/workflows/rust-release-zsh.yml
@@ -847,7 +1015,7 @@ jobs:
     needs:
       - tag-check
       - build
-      - stage-signed-macos
+      - finalize-macos
       - build-windows
       - argument-comment-lint-release-assets
       - zsh-release-assets
@@ -855,40 +1023,20 @@ jobs:
       ${{
         always() &&
         needs.tag-check.result == 'success' &&
-        (
-          (
-            github.event_name == 'workflow_dispatch' &&
-            inputs.release_mode == 'promote_signed' &&
-            needs.stage-signed-macos.result == 'success' &&
-            needs.build.result == 'skipped' &&
-            needs.build-windows.result == 'skipped' &&
-            needs.argument-comment-lint-release-assets.result == 'skipped' &&
-            needs.zsh-release-assets.result == 'skipped'
-          ) ||
-          (
-            (github.event_name != 'workflow_dispatch' || inputs.release_mode != 'promote_signed') &&
-            needs.build.result == 'success' &&
-            needs.stage-signed-macos.result == 'skipped' &&
-            needs.build-windows.result == 'success' &&
-            needs.argument-comment-lint-release-assets.result == 'success' &&
-            needs.zsh-release-assets.result == 'success'
-          )
-        )
+        needs.build.result == 'success' &&
+        needs.finalize-macos.result == 'success' &&
+        needs.build-windows.result == 'success' &&
+        needs.argument-comment-lint-release-assets.result == 'success' &&
+        needs.zsh-release-assets.result == 'success'
       }}
     name: release
     runs-on: ubuntu-latest
     permissions:
       contents: write
       actions: read
-    env:
-      RELEASE_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.release_mode || 'signed' }}
-      SIGN_MACOS: ${{ github.event_name != 'workflow_dispatch' || inputs.release_mode == 'promote_signed' }}
-      SIGNED_MACOS_ASSET: ${{ inputs.signed_macos_asset }}
-      UNSIGNED_RUN_ID: ${{ inputs.unsigned_run_id }}
     outputs:
       version: ${{ steps.release_name.outputs.name }}
       tag: ${{ github.ref_name }}
-      sign_macos: ${{ steps.release_mode.outputs.sign_macos }}
       should_publish_npm: ${{ steps.npm_publish_settings.outputs.should_publish }}
       npm_tag: ${{ steps.npm_publish_settings.outputs.npm_tag }}
 
@@ -897,12 +1045,6 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
-
-      - name: Define release mode
-        id: release_mode
-        run: |
-          echo "release_mode=${RELEASE_MODE}" >> "$GITHUB_OUTPUT"
-          echo "sign_macos=${SIGN_MACOS}" >> "$GITHUB_OUTPUT"
 
       - name: Generate release notes from tag commit message
         id: release_notes
@@ -928,124 +1070,19 @@ jobs:
         with:
           path: dist
 
-      - name: Validate unsigned build run
-        if: ${{ env.RELEASE_MODE == 'promote_signed' }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-
-          run_summary="$(gh run view "$UNSIGNED_RUN_ID" \
-            --repo "$GITHUB_REPOSITORY" \
-            --json conclusion,event,headBranch,headSha,status,workflowName,url \
-            --jq '[.workflowName, .event, .headBranch, .headSha, .status, .conclusion, .url] | @tsv')"
-          IFS=$'\t' read -r workflow_name event head_branch head_sha status conclusion run_url <<< "$run_summary"
-          expected_head_sha="$(git rev-parse "${GITHUB_SHA}^{commit}")"
-
-          if [[ "$workflow_name" != "$GITHUB_WORKFLOW" ]]; then
-            echo "unsigned_run_id ${UNSIGNED_RUN_ID} is for workflow '${workflow_name}', expected '${GITHUB_WORKFLOW}'"
-            echo "Run URL: ${run_url}"
-            exit 1
-          fi
-
-          if [[ "$event" != "workflow_dispatch" ]]; then
-            echo "unsigned_run_id ${UNSIGNED_RUN_ID} was triggered by '${event}', expected 'workflow_dispatch'"
-            echo "Run URL: ${run_url}"
-            exit 1
-          fi
-
-          if [[ "$head_branch" != "$GITHUB_REF_NAME" ]]; then
-            echo "unsigned_run_id ${UNSIGNED_RUN_ID} used ref '${head_branch}', expected '${GITHUB_REF_NAME}'"
-            echo "Run URL: ${run_url}"
-            exit 1
-          fi
-
-          if [[ "$head_sha" != "$expected_head_sha" ]]; then
-            echo "unsigned_run_id ${UNSIGNED_RUN_ID} used head SHA '${head_sha}', expected '${expected_head_sha}'"
-            echo "Run URL: ${run_url}"
-            exit 1
-          fi
-
-          if [[ "$status" != "completed" || "$conclusion" != "success" ]]; then
-            echo "unsigned_run_id ${UNSIGNED_RUN_ID} is ${status}/${conclusion}, expected completed/success"
-            echo "Run URL: ${run_url}"
-            exit 1
-          fi
-
-      - name: Download artifacts from unsigned build run
-        if: ${{ env.RELEASE_MODE == 'promote_signed' }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          gh run download "$UNSIGNED_RUN_ID" \
-            --repo "$GITHUB_REPOSITORY" \
-            --dir dist
-
-      - name: Remove unsigned macOS staging artifacts
-        if: ${{ env.RELEASE_MODE == 'promote_signed' }}
-        run: |
-          set -euo pipefail
-          find dist -mindepth 1 -maxdepth 1 -type d \
-            -name '*-apple-darwin*-unsigned' \
-            -exec rm -rf {} +
-
-      - name: Re-upload promoted Linux x64 artifacts
-        if: ${{ env.RELEASE_MODE == 'promote_signed' }}
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
-        with:
-          name: x86_64-unknown-linux-musl
-          path: dist/x86_64-unknown-linux-musl/*
-          if-no-files-found: error
-
-      - name: Re-upload promoted Linux arm64 artifacts
-        if: ${{ env.RELEASE_MODE == 'promote_signed' }}
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
-        with:
-          name: aarch64-unknown-linux-musl
-          path: dist/aarch64-unknown-linux-musl/*
-          if-no-files-found: error
-
-      - name: Re-upload promoted Windows x64 artifacts
-        if: ${{ env.RELEASE_MODE == 'promote_signed' }}
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
-        with:
-          name: x86_64-pc-windows-msvc
-          path: dist/x86_64-pc-windows-msvc/*
-          if-no-files-found: error
-
-      - name: Re-upload promoted Windows arm64 artifacts
-        if: ${{ env.RELEASE_MODE == 'promote_signed' }}
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
-        with:
-          name: aarch64-pc-windows-msvc
-          path: dist/aarch64-pc-windows-msvc/*
-          if-no-files-found: error
-
       - name: List
         run: ls -R dist/
-
-      - name: Prune artifacts excluded from unsigned macOS release
-        if: ${{ env.SIGN_MACOS == 'false' }}
-        run: |
-          find dist -mindepth 1 -maxdepth 1 -type d \
-            ! -name '*-apple-darwin*-unsigned' \
-            ! -name 'aarch64-unknown-linux-musl' \
-            ! -name 'aarch64-unknown-linux-musl-app-server' \
-            ! -name 'x86_64-unknown-linux-musl' \
-            ! -name 'x86_64-unknown-linux-musl-app-server' \
-            ! -name 'aarch64-pc-windows-msvc' \
-            ! -name 'x86_64-pc-windows-msvc' \
-            -exec rm -rf {} +
-
-          if ! find dist -type f -name '*-apple-darwin*-unsigned*' | grep -q .; then
-            echo "No unsigned macOS artifacts found in downloaded workflow artifacts."
-            exit 1
-          fi
 
       - name: Delete entries from dist/ that should not go in the release
         run: |
           rm -rf dist/windows-binaries*
+          rm -rf dist/*-apple-darwin*-signed-binaries
+          rm -rf dist/*-apple-darwin*-packaged
+          rm -rf dist/*-apple-darwin*-unsigned-dmg
+          rm -rf dist/*-apple-darwin*-signed-dmg
+          rm -rf dist/*-apple-darwin*-binary-signing-verification
+          rm -rf dist/*-apple-darwin*-dmg-signing-verification
+          rm -rf dist/*-apple-darwin*-unsigned
           # cargo-timing.html appears under multiple target-specific directories.
           # If included in files: dist/**, release upload races on duplicate
           # asset names and can fail with 404s.
@@ -1097,12 +1134,6 @@ jobs:
           set -euo pipefail
           version="${VERSION}"
 
-          if [[ "${SIGN_MACOS}" != "true" ]]; then
-            echo "should_publish=false" >> "$GITHUB_OUTPUT"
-            echo "npm_tag=" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
           if [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "should_publish=true" >> "$GITHUB_OUTPUT"
             echo "npm_tag=" >> "$GITHUB_OUTPUT"
@@ -1115,23 +1146,19 @@ jobs:
           fi
 
       - name: Setup pnpm
-        if: ${{ env.SIGN_MACOS == 'true' }}
         uses: pnpm/action-setup@a8198c4bff370c8506180b035930dea56dbd5288 # v5
         with:
           run_install: false
 
       - name: Setup Node.js for npm packaging
-        if: ${{ env.SIGN_MACOS == 'true' }}
         uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
         with:
           node-version: 22
 
       - name: Install dependencies
-        if: ${{ env.SIGN_MACOS == 'true' }}
         run: pnpm install --frozen-lockfile
 
       - name: Stage npm packages
-        if: ${{ env.SIGN_MACOS == 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_VERSION: ${{ steps.release_name.outputs.name }}
@@ -1145,7 +1172,6 @@ jobs:
             --package codex-sdk
 
       - name: Stage installer scripts
-        if: ${{ env.SIGN_MACOS == 'true' }}
         run: |
           cp scripts/install/install.sh dist/install.sh
           cp scripts/install/install.ps1 dist/install.ps1
@@ -1158,55 +1184,26 @@ jobs:
           body_path: ${{ steps.release_notes.outputs.path }}
           files: dist/**
           overwrite_files: true
-          make_latest: ${{ env.SIGN_MACOS == 'true' && !contains(steps.release_name.outputs.name, '-') }}
+          make_latest: ${{ !contains(steps.release_name.outputs.name, '-') }}
           # Mark as prerelease only when the version has a suffix after x.y.z
           # (e.g. -alpha, -beta). Otherwise publish a normal release.
           prerelease: ${{ contains(steps.release_name.outputs.name, '-') }}
 
-      - name: Clean up signed promotion handoff assets
-        if: ${{ env.RELEASE_MODE == 'promote_signed' }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-
-          release_id="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${GITHUB_REF_NAME}" --jq '.id')"
-          gh api --paginate "repos/${GITHUB_REPOSITORY}/releases/${release_id}/assets" \
-            --jq '.[] | [.id, .name] | @tsv' |
-            while IFS=$'\t' read -r asset_id asset_name; do
-              if [[ -z "$asset_id" || -z "$asset_name" ]]; then
-                continue
-              fi
-
-              delete_asset=false
-              if [[ "$asset_name" == *unsigned* || "$asset_name" == "$SIGNED_MACOS_ASSET" ]]; then
-                delete_asset=true
-              fi
-
-              if [[ "$delete_asset" == "true" ]]; then
-                echo "Deleting release asset ${asset_name}"
-                gh api -X DELETE "repos/${GITHUB_REPOSITORY}/releases/assets/${asset_id}"
-              fi
-            done
-
-      - if: ${{ env.SIGN_MACOS == 'true' }}
-        uses: facebook/dotslash-publish-release@9c9ec027515c34db9282a09a25a9cab5880b2c52 # v2
+      - uses: facebook/dotslash-publish-release@9c9ec027515c34db9282a09a25a9cab5880b2c52 # v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag: ${{ github.ref_name }}
           config: .github/dotslash-config.json
 
-      - if: ${{ env.SIGN_MACOS == 'true' }}
-        uses: facebook/dotslash-publish-release@9c9ec027515c34db9282a09a25a9cab5880b2c52 # v2
+      - uses: facebook/dotslash-publish-release@9c9ec027515c34db9282a09a25a9cab5880b2c52 # v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag: ${{ github.ref_name }}
           config: .github/dotslash-zsh-config.json
 
-      - if: ${{ env.SIGN_MACOS == 'true' }}
-        uses: facebook/dotslash-publish-release@9c9ec027515c34db9282a09a25a9cab5880b2c52 # v2
+      - uses: facebook/dotslash-publish-release@9c9ec027515c34db9282a09a25a9cab5880b2c52 # v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
@@ -1218,9 +1215,6 @@ jobs:
   # npm docs: https://docs.npmjs.com/trusted-publishers
   publish-npm:
     # Publish to npm for stable releases and alpha pre-releases with numeric suffixes.
-    # promote_signed intentionally skips build jobs that are ancestors of release;
-    # include the !cancelled() status function so Actions does not apply its implicit
-    # success() check to the whole dependency chain before evaluating release outputs.
     if: >-
       ${{
         !cancelled() &&
@@ -1381,13 +1375,12 @@ jobs:
   deploy-dev-website:
     name: Trigger developers.openai.com deploy
     needs: release
-    # Only trigger the deploy for a stable signed release.
+    # Only trigger the deploy for a stable release.
     # The deploy updates developers.openai.com with the new config schema json file.
     if: >-
       ${{
         !cancelled() &&
         needs.release.result == 'success' &&
-        needs.release.outputs.sign_macos == 'true' &&
         !contains(needs.release.outputs.version, '-')
       }}
     runs-on: ubuntu-latest
@@ -1417,7 +1410,6 @@ jobs:
       ${{
         !cancelled() &&
         needs.release.result == 'success' &&
-        needs.release.outputs.sign_macos == 'true' &&
         !contains(needs.release.outputs.version, '-')
       }}
     # This job only invokes a GitHub Action to open/update the winget-pkgs PR;
@@ -1425,6 +1417,9 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    environment:
+      name: mainline-release-winget
+      deployment: false
 
     steps:
       - name: Publish to WinGet
@@ -1442,8 +1437,7 @@ jobs:
     if: >-
       ${{
         !cancelled() &&
-        needs.release.result == 'success' &&
-        needs.release.outputs.sign_macos == 'true'
+        needs.release.result == 'success'
       }}
     permissions:
       contents: write

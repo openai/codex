@@ -69,9 +69,10 @@ async fn codex_returns_json_result(model: String) -> anyhow::Result<()> {
     };
     responses::mount_sse_once_match(&server, match_json_text_param, sse1).await;
 
-    let TestCodex { codex, cwd, .. } = test_codex().build(&server).await?;
+    let TestCodex { codex, config, .. } = test_codex().build(&server).await?;
+    let cwd = config.cwd.clone();
     let (sandbox_policy, permission_profile) =
-        turn_permission_fields(PermissionProfile::Disabled, cwd.path());
+        turn_permission_fields(PermissionProfile::Disabled, cwd.as_path());
 
     // 1) Normal user input – should hit server once.
     codex
@@ -85,7 +86,7 @@ async fn codex_returns_json_result(model: String) -> anyhow::Result<()> {
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                cwd: Some(cwd.path().to_path_buf()),
+                cwd: Some(cwd),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,

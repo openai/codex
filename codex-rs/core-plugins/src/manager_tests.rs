@@ -1301,6 +1301,97 @@ async fn load_plugins_returns_empty_when_feature_disabled() {
 }
 
 #[tokio::test]
+async fn plugin_cache_ignores_unrelated_session_overrides() {
+    let codex_home = TempDir::new().unwrap();
+    let plugin_root = codex_home
+        .path()
+        .join("plugins/cache")
+        .join("test/sample/local");
+    write_plugin(
+        codex_home.path().join("plugins/cache/test").as_path(),
+        "sample/local",
+        "sample",
+    );
+    write_file(
+        &plugin_root.join(".mcp.json"),
+        r#"{
+  "mcpServers": {
+    "sample": {
+      "url": "https://sample.example/mcp"
+    }
+  }
+}"#,
+    );
+
+    let user_file = codex_home.path().join(CONFIG_TOML_FILE).abs();
+    let user_config: toml::Value = toml::from_str(&plugin_config_toml(
+        /*enabled*/ true, /*plugins_feature_enabled*/ true,
+    ))
+    .expect("user config should parse");
+    let stack = |session_config: &str| {
+        ConfigLayerStack::new(
+            vec![
+                ConfigLayerEntry::new(
+                    ConfigLayerSource::User {
+                        file: user_file.clone(),
+                        profile: None,
+                    },
+                    user_config.clone(),
+                ),
+                ConfigLayerEntry::new(
+                    ConfigLayerSource::SessionFlags,
+                    toml::from_str(session_config).expect("session config should parse"),
+                ),
+            ],
+            ConfigRequirements::default(),
+            ConfigRequirementsToml::default(),
+        )
+        .expect("config layer stack should build")
+    };
+    let config = |session_config| {
+        PluginsConfigInput::new(
+            stack(session_config),
+            /*plugins_enabled*/ true,
+            /*remote_plugin_enabled*/ false,
+            "https://chatgpt.com".to_string(),
+        )
+    };
+    let manager = PluginsManager::new(codex_home.path().to_path_buf());
+
+    let first = manager
+        .plugins_for_config(&config(r#"model = "first""#))
+        .await;
+    std::fs::remove_file(plugin_root.join(".mcp.json")).unwrap();
+    let second = manager
+        .plugins_for_config(&config(r#"model = "second""#))
+        .await;
+
+    assert_eq!(second, first);
+    assert_eq!(second.plugins()[0].mcp_servers.len(), 1);
+}
+
+#[test]
+fn plugin_cache_invalidation_rejects_stale_load_completion() {
+    let codex_home = TempDir::new().unwrap();
+    let manager = PluginsManager::new(codex_home.path().to_path_buf());
+    let cache_key = PluginLoadCacheKey {
+        configured_plugins: HashMap::new(),
+        skill_config_rules: SkillConfigRules::default(),
+        remote_plugin_enabled: false,
+    };
+    let stale_generation = manager.enabled_outcome_cache_generation();
+
+    manager.clear_enabled_outcome_cache();
+    manager.cache_enabled_outcome_if_current(
+        stale_generation,
+        cache_key.clone(),
+        PluginLoadOutcome::default(),
+    );
+
+    assert_eq!(manager.cached_enabled_outcome(&cache_key), None);
+}
+
+#[tokio::test]
 async fn load_plugins_rejects_invalid_plugin_keys() {
     let codex_home = TempDir::new().unwrap();
     let plugin_root = codex_home
@@ -3857,4 +3948,51 @@ async fn load_plugins_ignores_project_config_files() {
     .await;
 
     assert_eq!(outcome, PluginLoadOutcome::default());
+}
+
+#[tokio::test]
+async fn plugin_hooks_for_layer_stack_loads_configured_plugin_hooks() {
+    let codex_home = TempDir::new().unwrap();
+    let plugin_root = codex_home
+        .path()
+        .join("plugins/cache")
+        .join("test/sample/local");
+    write_plugin(
+        codex_home.path().join("plugins/cache/test").as_path(),
+        "sample/local",
+        "sample",
+    );
+    write_file(
+        &plugin_root.join("hooks/hooks.json"),
+        r#"{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo startup"
+          }
+        ]
+      }
+    ]
+  }
+}"#,
+    );
+    write_file(
+        &codex_home.path().join(CONFIG_TOML_FILE),
+        &plugin_config_toml(/*enabled*/ true, /*plugins_feature_enabled*/ true),
+    );
+    let config = load_config(codex_home.path(), codex_home.path()).await;
+
+    let outcome = PluginsManager::new(codex_home.path().to_path_buf())
+        .plugin_hooks_for_layer_stack(&config.config_layer_stack, &config)
+        .await;
+
+    assert_eq!(outcome.hook_sources.len(), 1);
+    assert_eq!(
+        outcome.hook_sources[0].source_relative_path,
+        "hooks/hooks.json"
+    );
+    assert_eq!(outcome.hook_load_warnings, Vec::<String>::new());
 }

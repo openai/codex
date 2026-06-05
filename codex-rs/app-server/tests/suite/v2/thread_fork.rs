@@ -490,6 +490,13 @@ async fn thread_fork_tracks_thread_initialized_analytics() -> Result<()> {
         "forked",
         "user",
     );
+    assert_eq!(
+        event["event_params"]["forked_from_thread_id"],
+        thread
+            .forked_from_id
+            .as_deref()
+            .expect("forked thread has a source thread")
+    );
     Ok(())
 }
 

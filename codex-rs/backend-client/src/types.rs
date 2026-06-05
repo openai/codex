@@ -409,6 +409,27 @@ pub struct TurnAttemptsSiblingTurnsResponse {
     pub sibling_turns: Vec<HashMap<String, Value>>,
 }
 
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct TokenUsageProfile {
+    pub stats: TokenUsageProfileStats,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct TokenUsageProfileStats {
+    pub lifetime_tokens: Option<i64>,
+    pub peak_daily_tokens: Option<i64>,
+    pub longest_running_turn_sec: Option<i64>,
+    pub current_streak_days: Option<i64>,
+    pub longest_streak_days: Option<i64>,
+    pub daily_usage_buckets: Option<Vec<TokenUsageProfileDailyBucket>>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct TokenUsageProfileDailyBucket {
+    pub start_date: String,
+    pub tokens: i64,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

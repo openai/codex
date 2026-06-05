@@ -6,7 +6,10 @@ use pretty_assertions::assert_eq;
 #[tokio::test]
 async fn pairing_start_returns_internal_error_when_remote_control_is_unavailable() {
     let err = RemoteControlRequestProcessor::new(/*remote_control_handle*/ None)
-        .pairing_start(RemoteControlPairingStartParams::default())
+        .pairing_start(
+            RemoteControlPairingStartParams::default(),
+            /*app_server_client_name*/ None,
+        )
         .await
         .expect_err("missing remote control should fail pairing");
 
@@ -17,6 +20,59 @@ async fn pairing_start_returns_internal_error_when_remote_control_is_unavailable
             data: None,
             message: "remote control is unavailable for this app-server".to_string(),
         }
+    );
+}
+
+#[tokio::test]
+async fn pairing_status_returns_internal_error_when_remote_control_is_unavailable() {
+    let err = RemoteControlRequestProcessor::new(/*remote_control_handle*/ None)
+        .pairing_status(RemoteControlPairingStatusParams {
+            pairing_code: Some("pairing-code".to_string()),
+            manual_pairing_code: None,
+        })
+        .await
+        .expect_err("missing remote control should fail pairing status");
+
+    assert_eq!(
+        err,
+        JSONRPCErrorError {
+            code: INTERNAL_ERROR_CODE,
+            data: None,
+            message: "remote control is unavailable for this app-server".to_string(),
+        }
+    );
+}
+
+#[test]
+fn pairing_status_rejects_missing_pairing_codes() {
+    assert_eq!(
+        validate_pairing_status_params(&RemoteControlPairingStatusParams {
+            pairing_code: None,
+            manual_pairing_code: None,
+        }),
+        Err(JSONRPCErrorError {
+            code: INVALID_REQUEST_ERROR_CODE,
+            data: None,
+            message: "remoteControl/pairing/status requires pairingCode or manualPairingCode"
+                .to_string(),
+        })
+    );
+}
+
+#[test]
+fn pairing_status_rejects_conflicting_pairing_codes() {
+    assert_eq!(
+        validate_pairing_status_params(&RemoteControlPairingStatusParams {
+            pairing_code: Some("pairing-code".to_string()),
+            manual_pairing_code: Some("ABCD-EFGH".to_string()),
+        }),
+        Err(JSONRPCErrorError {
+            code: INVALID_REQUEST_ERROR_CODE,
+            data: None,
+            message:
+                "remoteControl/pairing/status accepts either pairingCode or manualPairingCode, not both"
+                    .to_string(),
+        })
     );
 }
 

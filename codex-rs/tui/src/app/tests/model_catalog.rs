@@ -297,7 +297,6 @@ async fn model_migration_prompt_skips_when_target_missing_or_hidden() {
         .expect("preset present");
     current.upgrade = Some(ModelUpgrade {
         id: "missing-target".to_string(),
-        reasoning_effort_mapping: None,
         migration_config_key: HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG.to_string(),
         model_link: None,
         upgrade_copy: None,

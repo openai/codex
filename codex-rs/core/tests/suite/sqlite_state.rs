@@ -462,7 +462,7 @@ async fn mcp_call_marks_thread_memory_mode_polluted_when_configured() -> Result<
     wait_for_mcp_server(&test.codex, server_name).await?;
     let db = test.codex.state_db().expect("state db enabled");
     let thread_id = test.session_configured.thread_id;
-    let cwd = test.cwd_path().to_path_buf();
+    let cwd = test.config.cwd.clone();
     let (sandbox_policy, permission_profile) =
         turn_permission_fields(PermissionProfile::read_only(), cwd.as_path());
 

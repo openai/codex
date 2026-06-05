@@ -1,7 +1,5 @@
 use crate::agent::AgentStatus;
 use crate::config::ConstraintResult;
-use crate::goals::ExternalGoalSet;
-use crate::goals::GoalRuntimeEvent;
 use crate::session::Codex;
 use crate::session::SessionSettingsUpdate;
 use crate::session::SteerInputError;
@@ -70,8 +68,49 @@ pub struct ThreadConfigSnapshot {
     pub personality: Option<Personality>,
     pub collaboration_mode: CollaborationMode,
     pub session_source: SessionSource,
+    pub forked_from_thread_id: Option<ThreadId>,
     pub parent_thread_id: Option<ThreadId>,
     pub thread_source: Option<ThreadSource>,
+}
+
+/// Explains why `CodexThread::try_start_turn_if_idle` rejected an automatic
+/// idle turn.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TryStartTurnIfIdleRejectionReason {
+    /// User/client-triggered mailbox work is already queued and must take
+    /// priority over extension-initiated idle work.
+    PendingTriggerTurn,
+    /// The thread is in Plan mode, where automatic idle work must not start a
+    /// new model turn.
+    PlanMode,
+    /// Another turn or task is active, or the idle reservation was lost before
+    /// the automatic turn could start.
+    Busy,
+}
+
+/// Rejection returned when an extension asks to start automatic idle work but
+/// the thread is not eligible to run it.
+#[derive(Debug)]
+pub struct TryStartTurnIfIdleError {
+    reason: TryStartTurnIfIdleRejectionReason,
+    input: Vec<ResponseItem>,
+}
+
+impl TryStartTurnIfIdleError {
+    pub(crate) fn new(reason: TryStartTurnIfIdleRejectionReason, input: Vec<ResponseItem>) -> Self {
+        Self { reason, input }
+    }
+
+    /// Returns the stable reason the automatic idle turn was rejected.
+    pub fn reason(&self) -> TryStartTurnIfIdleRejectionReason {
+        self.reason
+    }
+
+    /// Consumes the rejection and returns the original model-visible input
+    /// unchanged, so callers can retry, drop, or log it explicitly.
+    pub fn into_input(self) -> Vec<ResponseItem> {
+        self.input
+    }
 }
 
 impl ThreadConfigSnapshot {
@@ -86,7 +125,7 @@ impl ThreadConfigSnapshot {
 /// Thread settings overrides that app-server validates before starting a turn.
 #[derive(Clone, Default)]
 pub struct CodexThreadSettingsOverrides {
-    pub cwd: Option<PathBuf>,
+    pub cwd: Option<AbsolutePathBuf>,
     pub workspace_roots: Option<Vec<AbsolutePathBuf>>,
     pub profile_workspace_roots: Option<Vec<AbsolutePathBuf>>,
     pub approval_policy: Option<AskForApproval>,
@@ -164,51 +203,11 @@ impl CodexThread {
         }
     }
 
-    pub async fn apply_goal_resume_runtime_effects(&self) -> anyhow::Result<()> {
+    pub async fn emit_thread_idle_lifecycle_if_idle(&self) {
         self.codex
             .session
-            .goal_runtime_apply(GoalRuntimeEvent::ThreadResumed)
-            .await
-    }
-
-    pub async fn continue_active_goal_if_idle(&self) -> anyhow::Result<()> {
-        self.codex
-            .session
-            .goal_runtime_apply(GoalRuntimeEvent::MaybeContinueIfIdle)
-            .await
-    }
-
-    pub async fn prepare_external_goal_mutation(&self) {
-        if let Err(err) = self
-            .codex
-            .session
-            .goal_runtime_apply(GoalRuntimeEvent::ExternalMutationStarting)
-            .await
-        {
-            tracing::warn!("failed to prepare external goal mutation: {err}");
-        }
-    }
-
-    pub async fn apply_external_goal_set(&self, external_set: ExternalGoalSet) {
-        if let Err(err) = self
-            .codex
-            .session
-            .goal_runtime_apply(GoalRuntimeEvent::ExternalSet { external_set })
-            .await
-        {
-            tracing::warn!("failed to apply external goal status runtime effects: {err}");
-        }
-    }
-
-    pub async fn apply_external_goal_clear(&self) {
-        if let Err(err) = self
-            .codex
-            .session
-            .goal_runtime_apply(GoalRuntimeEvent::ExternalClear)
-            .await
-        {
-            tracing::warn!("failed to apply external goal clear runtime effects: {err}");
-        }
+            .emit_thread_idle_lifecycle_if_idle()
+            .await;
     }
 
     #[doc(hidden)]
@@ -276,11 +275,23 @@ impl CodexThread {
         self.codex.session.inject_if_running(items).await
     }
 
-    /// Starts a regular turn with model-visible items only if the thread is idle.
+    /// Starts an automatic regular turn with model-visible items only when idle
+    /// work is allowed for this thread.
+    ///
+    /// This is the required entry point for extensions that want to launch
+    /// model-visible work from `ThreadLifecycleContributor::on_thread_idle`.
+    /// The call succeeds only if no user/client-triggered turn is queued, no
+    /// task is currently active, and the thread is not in Plan mode. Active
+    /// Review tasks are rejected by the active-task check because Review turns
+    /// are not steerable.
+    ///
+    /// On rejection, the returned error includes a stable reason and carries
+    /// the original `items` unchanged so the caller can decide whether to drop
+    /// them, retry later, or log why no automatic turn was started.
     pub async fn try_start_turn_if_idle(
         &self,
         items: Vec<ResponseItem>,
-    ) -> Result<(), Vec<ResponseItem>> {
+    ) -> Result<(), TryStartTurnIfIdleError> {
         self.codex.session.try_start_turn_if_idle(items).await
     }
 
@@ -494,6 +505,11 @@ impl CodexThread {
 
     pub async fn config_snapshot(&self) -> ThreadConfigSnapshot {
         self.codex.thread_config_snapshot().await
+    }
+
+    /// Returns the files that supplied the thread's loaded model instructions.
+    pub async fn instruction_sources(&self) -> Vec<AbsolutePathBuf> {
+        self.codex.instruction_sources().await
     }
 
     pub async fn config(&self) -> Arc<crate::config::Config> {

@@ -17,6 +17,7 @@ use toml::Table;
 mod feature_configs;
 mod legacy;
 pub use feature_configs::AppsMcpPathOverrideConfigToml;
+pub use feature_configs::CodeModeConfigToml;
 pub use feature_configs::MultiAgentV2ConfigToml;
 pub use feature_configs::NetworkProxyConfigToml;
 pub use feature_configs::NetworkProxyDomainPermissionToml;
@@ -208,8 +209,6 @@ pub enum Feature {
     RealtimeConversation,
     /// Prevent idle system sleep while a turn is actively running.
     PreventIdleSleep,
-    /// Send `response.processed` over Responses API websockets after a turn response is recorded.
-    ResponsesWebsocketResponseProcessed,
     /// Enable remote compaction v2 over the normal Responses API.
     RemoteCompactionV2,
     /// Enable workspace dependency support.
@@ -603,6 +602,8 @@ pub fn is_known_feature_key(key: &str) -> bool {
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
 pub struct FeaturesToml {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code_mode: Option<FeatureToml<CodeModeConfigToml>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub multi_agent_v2: Option<FeatureToml<MultiAgentV2ConfigToml>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub apps_mcp_path_override: Option<FeatureToml<AppsMcpPathOverrideConfigToml>>,
@@ -622,6 +623,9 @@ impl Features {
 impl FeaturesToml {
     pub fn entries(&self) -> BTreeMap<String, bool> {
         let mut entries = self.entries.clone();
+        if let Some(enabled) = self.code_mode.as_ref().and_then(FeatureToml::enabled) {
+            entries.insert(Feature::CodeMode.key().to_string(), enabled);
+        }
         if let Some(enabled) = self.multi_agent_v2.as_ref().and_then(FeatureToml::enabled) {
             entries.insert(Feature::MultiAgentV2.key().to_string(), enabled);
         }
@@ -640,6 +644,7 @@ impl FeaturesToml {
 
     pub fn materialize_resolved_enabled(&mut self, features: &Features) {
         let Self {
+            code_mode,
             multi_agent_v2,
             apps_mcp_path_override,
             network_proxy,
@@ -650,7 +655,9 @@ impl FeaturesToml {
         }
         for spec in FEATURES {
             let enabled = features.enabled(spec.id);
-            if spec.id == Feature::MultiAgentV2 {
+            if spec.id == Feature::CodeMode {
+                materialize_resolved_feature_enabled(code_mode, enabled);
+            } else if spec.id == Feature::MultiAgentV2 {
                 materialize_resolved_feature_enabled(multi_agent_v2, enabled);
             } else if spec.id == Feature::AppsMcpPathOverride {
                 materialize_resolved_feature_enabled(apps_mcp_path_override, enabled);
@@ -1225,12 +1232,6 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::ResponsesWebsocketsV2,
         key: "responses_websockets_v2",
         stage: Stage::Removed,
-        default_enabled: false,
-    },
-    FeatureSpec {
-        id: Feature::ResponsesWebsocketResponseProcessed,
-        key: "responses_websocket_response_processed",
-        stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
     FeatureSpec {

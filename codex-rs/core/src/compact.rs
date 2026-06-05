@@ -146,7 +146,12 @@ async fn run_compact_task_inner(
         PreCompactHookOutcome::Stopped { reason } => {
             let error = reason.unwrap_or_else(|| "PreCompact hook stopped execution".to_string());
             attempt
-                .track(sess.as_ref(), CompactionStatus::Interrupted, Some(error))
+                .track(
+                    sess.as_ref(),
+                    CompactionStatus::Interrupted,
+                    Some(error),
+                    /*active_context_tokens_before*/ None,
+                )
                 .await;
             return Err(CodexErr::TurnAborted);
         }
@@ -164,11 +169,25 @@ async fn run_compact_task_inner(
     if result.is_ok() {
         let post_compact_outcome = run_post_compact_hooks(&sess, &turn_context, trigger).await;
         if let PostCompactHookOutcome::Stopped = post_compact_outcome {
-            attempt.track(sess.as_ref(), status, error).await;
+            attempt
+                .track(
+                    sess.as_ref(),
+                    status,
+                    error,
+                    /*active_context_tokens_before*/ None,
+                )
+                .await;
             return Err(CodexErr::TurnAborted);
         }
     }
-    attempt.track(sess.as_ref(), status, error).await;
+    attempt
+        .track(
+            sess.as_ref(),
+            status,
+            error,
+            /*active_context_tokens_before*/ None,
+        )
+        .await;
     result.map(|_| ())
 }
 
@@ -344,7 +363,10 @@ impl CompactionAnalyticsAttempt {
         sess: &Session,
         status: CompactionStatus,
         error: Option<String>,
+        active_context_tokens_before: Option<i64>,
     ) {
+        let active_context_tokens_before =
+            active_context_tokens_before.unwrap_or(self.active_context_tokens_before);
         let active_context_tokens_after = sess.get_total_token_usage().await;
         sess.services
             .analytics_events_client
@@ -358,7 +380,7 @@ impl CompactionAnalyticsAttempt {
                 strategy: CompactionStrategy::Memento,
                 status,
                 error,
-                active_context_tokens_before: self.active_context_tokens_before,
+                active_context_tokens_before,
                 active_context_tokens_after,
                 started_at: self.started_at,
                 completed_at: now_unix_seconds(),
@@ -551,7 +573,7 @@ async fn drain_to_completed(
             prompt,
             &turn_context.model_info,
             &turn_context.session_telemetry,
-            turn_context.reasoning_effort,
+            turn_context.reasoning_effort.clone(),
             turn_context.reasoning_summary,
             turn_context.config.service_tier.clone(),
             turn_metadata_header,

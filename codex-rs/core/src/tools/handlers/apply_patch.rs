@@ -378,8 +378,11 @@ impl ToolExecutor<ToolInvocation> for ApplyPatchHandler {
                     }
                     InternalApplyPatchInvocation::DelegateToRuntime(apply) => {
                         let changes = convert_apply_patch_to_protocol(&apply.action);
-                        let emitter =
-                            ToolEmitter::apply_patch(changes.clone(), apply.auto_approved);
+                        let emitter = ToolEmitter::apply_patch_for_environment(
+                            changes.clone(),
+                            apply.auto_approved,
+                            turn_environment.environment_id.clone(),
+                        );
                         let event_ctx = ToolEventCtx::new(
                             session.as_ref(),
                             turn.as_ref(),
@@ -537,7 +540,11 @@ pub(crate) async fn intercept_apply_patch(
                 }
                 InternalApplyPatchInvocation::DelegateToRuntime(apply) => {
                     let changes = convert_apply_patch_to_protocol(&apply.action);
-                    let emitter = ToolEmitter::apply_patch(changes.clone(), apply.auto_approved);
+                    let emitter = ToolEmitter::apply_patch_for_environment(
+                        changes.clone(),
+                        apply.auto_approved,
+                        turn_environment.environment_id.clone(),
+                    );
                     let event_ctx = ToolEventCtx::new(
                         session.as_ref(),
                         turn.as_ref(),

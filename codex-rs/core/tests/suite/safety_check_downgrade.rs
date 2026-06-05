@@ -47,7 +47,7 @@ fn disabled_text_turn(test: &TestCodex, text: &str) -> Op {
         responsesapi_client_metadata: None,
         additional_context: Default::default(),
         thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-            cwd: Some(test.cwd_path().to_path_buf()),
+            cwd: Some(test.config.cwd.clone()),
             approval_policy: Some(AskForApproval::Never),
             sandbox_policy: Some(sandbox_policy),
             permission_profile,
@@ -55,7 +55,7 @@ fn disabled_text_turn(test: &TestCodex, text: &str) -> Op {
                 mode: codex_protocol::config_types::ModeKind::Default,
                 settings: codex_protocol::config_types::Settings {
                     model: REQUESTED_MODEL.to_string(),
-                    reasoning_effort: test.config.model_reasoning_effort,
+                    reasoning_effort: test.config.model_reasoning_effort.clone(),
                     developer_instructions: None,
                 },
             }),

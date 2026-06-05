@@ -1926,6 +1926,7 @@ dependencies = [
  "codex-file-search",
  "codex-file-watcher",
  "codex-git-utils",
+ "codex-goal-extension",
  "codex-guardian",
  "codex-hooks",
  "codex-image-generation-extension",
@@ -2145,12 +2146,14 @@ dependencies = [
  "anyhow",
  "codex-apply-patch",
  "codex-exec-server",
+ "codex-install-context",
  "codex-linux-sandbox",
  "codex-sandboxing",
  "codex-shell-escalation",
  "codex-utils-absolute-path",
  "codex-utils-home-dir",
  "dotenvy",
+ "pretty_assertions",
  "tempfile",
  "tokio",
 ]
@@ -2787,6 +2790,7 @@ dependencies = [
  "codex-file-system",
  "codex-protocol",
  "codex-sandboxing",
+ "codex-shell-command",
  "codex-test-binary-support",
  "codex-utils-absolute-path",
  "codex-utils-pty",
@@ -3050,6 +3054,7 @@ dependencies = [
  "codex-model-provider-info",
  "codex-protocol",
  "codex-tools",
+ "codex-utils-absolute-path",
  "http 1.4.0",
  "pretty_assertions",
  "schemars 0.8.22",
@@ -3291,6 +3296,7 @@ name = "codex-message-history"
 version = "0.0.0"
 dependencies = [
  "codex-config",
+ "memchr",
  "pretty_assertions",
  "serde",
  "serde_json",
@@ -3405,6 +3411,7 @@ dependencies = [
  "codex-core",
  "codex-model-provider-info",
  "futures",
+ "memchr",
  "pretty_assertions",
  "reqwest 0.12.28",
  "semver",
@@ -3574,6 +3581,7 @@ dependencies = [
  "codex-utils-pty",
  "futures",
  "keyring",
+ "memchr",
  "oauth2",
  "pretty_assertions",
  "reqwest 0.13.4",
@@ -3591,6 +3599,7 @@ dependencies = [
  "urlencoding",
  "webbrowser",
  "which 8.0.0",
+ "wiremock",
 ]
 
 [[package]]
@@ -3685,6 +3694,7 @@ dependencies = [
  "base64 0.22.1",
  "codex-protocol",
  "codex-utils-absolute-path",
+ "libc",
  "once_cell",
  "pretty_assertions",
  "regex",
