@@ -15,6 +15,8 @@ use crate::metrics::GoalMetrics;
 use crate::steering::continuation_steering_item;
 use crate::steering::objective_updated_steering_item;
 use crate::tool::protocol_goal_from_state;
+use tokio::sync::Semaphore;
+use tokio::sync::SemaphorePermit;
 
 #[derive(Clone)]
 pub struct GoalRuntimeHandle {
@@ -35,6 +37,7 @@ struct GoalRuntimeInner {
     accounting_state: Arc<GoalAccountingState>,
     enabled: AtomicBool,
     tools_available_for_thread: bool,
+    goal_state_lock: Semaphore,
 }
 
 pub(crate) struct AccountedGoalProgress {
@@ -85,6 +88,7 @@ impl GoalRuntimeHandle {
                 accounting_state,
                 enabled: AtomicBool::new(config.enabled),
                 tools_available_for_thread: config.tools_available_for_thread,
+                goal_state_lock: Semaphore::new(/*permits*/ 1),
             }),
         }
     }
@@ -107,6 +111,14 @@ impl GoalRuntimeHandle {
 
     pub(crate) fn accounting_state(&self) -> Arc<GoalAccountingState> {
         Arc::clone(&self.inner.accounting_state)
+    }
+
+    pub(crate) async fn goal_state_permit(&self) -> SemaphorePermit<'_> {
+        self.inner
+            .goal_state_lock
+            .acquire()
+            .await
+            .expect("goal state semaphore is never closed")
     }
 
     pub async fn prepare_external_goal_mutation(&self) -> Result<(), String> {
@@ -280,6 +292,9 @@ impl GoalRuntimeHandle {
             self.inner.accounting_state.clear_active_goal();
             return Ok(());
         }
+        // Hold this through the read/start window so external set/clear cannot
+        // change the goal after we read it but before the continuation launches.
+        let _goal_state_permit = self.goal_state_permit().await;
 
         let Some(thread_manager) = self.inner.thread_manager.upgrade() else {
             tracing::debug!("skipping goal continuation because thread manager is unavailable");
