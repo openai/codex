@@ -33,6 +33,7 @@ use core_test_support::responses::mount_models_once;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::turn_permission_fields;
+use core_test_support::test_path_buf;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
 use std::path::PathBuf;
@@ -3698,7 +3699,7 @@ async fn snapshot_request_shape_pre_turn_compaction_including_incoming_user_mess
     core_test_support::submit_thread_settings(
         &codex,
         codex_protocol::protocol::ThreadSettingsOverrides {
-            cwd: Some(PathBuf::from(PRETURN_CONTEXT_DIFF_CWD).abs()),
+            cwd: Some(test_path_buf(PRETURN_CONTEXT_DIFF_CWD).abs()),
             ..Default::default()
         },
     )
