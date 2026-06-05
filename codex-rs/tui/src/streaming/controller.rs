@@ -89,6 +89,10 @@ struct StreamCore {
     stable_prefix_len_cache: Option<StablePrefixLenCache>,
     /// Incremental holdback scanner state for append-only source updates.
     holdback_scanner: TableHoldbackScanner,
+    /// Number of queued lines that preserve an old render's un-emitted suffix.
+    synthetic_queue_remaining: usize,
+    /// Rendered-line index to use once the synthetic suffix has drained.
+    synthetic_queue_target_emitted_len: Option<usize>,
     /// Number of source lines to keep mutable even when no structural holdback is active.
     ///
     /// CommonMark can reinterpret the newest block after the next line arrives. For example, a
@@ -110,6 +114,12 @@ struct StablePrefixLenCache {
     stable_prefix_len: usize,
 }
 
+struct PartialSourceLine {
+    source_start: usize,
+    source_end: usize,
+    unemitted_suffix: Vec<HyperlinkLine>,
+}
+
 impl StreamCore {
     fn new(
         width: Option<usize>,
@@ -128,6 +138,8 @@ impl StreamCore {
             render_mode,
             stable_prefix_len_cache: None,
             holdback_scanner: TableHoldbackScanner::new(),
+            synthetic_queue_remaining: 0,
+            synthetic_queue_target_emitted_len: None,
             default_tail_lines,
         }
     }
@@ -165,23 +177,24 @@ impl StreamCore {
     /// consolidation, so callers that skip `reset()` can accidentally replay a
     /// finished stream into the next answer.
     fn finalize_remaining(&mut self) -> Vec<HyperlinkLine> {
+        let mut remaining = self.state.drain_n(/*max_lines*/ usize::MAX);
+        self.account_emitted_step(remaining.len());
         let remainder_source = self.state.collector.finalize_and_drain_source();
         if !remainder_source.is_empty() {
             self.raw_source.push_str(&remainder_source);
             self.holdback_scanner.push_source_chunk(&remainder_source);
         }
         let rendered = self.render_source(&self.raw_source);
-        if self.emitted_stable_len >= rendered.len() {
-            Vec::new()
-        } else {
-            rendered[self.emitted_stable_len..].to_vec()
+        if self.emitted_stable_len < rendered.len() {
+            remaining.extend(rendered[self.emitted_stable_len..].to_vec());
         }
+        remaining
     }
 
     /// Step animation: dequeue one line, update the emitted count.
     fn tick(&mut self) -> Vec<HyperlinkLine> {
         let step = self.state.step();
-        self.emitted_stable_len += step.len();
+        self.account_emitted_step(step.len());
         step
     }
 
@@ -194,7 +207,7 @@ impl StreamCore {
         if step.is_empty() {
             return step;
         }
-        self.emitted_stable_len += step.len();
+        self.account_emitted_step(step.len());
         step
     }
 
@@ -250,6 +263,11 @@ impl StreamCore {
         }
         let had_pending_queue = self.state.queued_len() > 0;
         let had_structural_tail = self.requires_final_scrollback_reflow();
+        let partial_line = if had_pending_queue {
+            self.partial_source_line_after_rendered_len(self.emitted_stable_len)
+        } else {
+            None
+        };
         let emitted_source_boundary =
             self.source_boundary_after_rendered_len(self.emitted_stable_len);
         self.width = width;
@@ -259,6 +277,10 @@ impl StreamCore {
         }
 
         self.recompute_streaming_render();
+        if let Some(partial_line) = partial_line {
+            self.rebuild_stable_queue_preserving_partial_source_line(partial_line);
+            return;
+        }
         self.emitted_stable_len = self.rendered_len_for_source_boundary(emitted_source_boundary);
         let target_stable_len = self.compute_target_stable_len();
         if had_pending_queue
@@ -267,7 +289,7 @@ impl StreamCore {
         {
             self.emitted_stable_len = target_stable_len;
         }
-        self.state.clear_queue();
+        self.clear_stable_queue();
         if self.emitted_stable_len > 0 && !had_pending_queue && !had_structural_tail {
             // Avoid replaying already-emitted content after resize when no
             // stable lines were waiting in the queue and there was no mutable
@@ -291,6 +313,7 @@ impl StreamCore {
         self.emitted_stable_len = 0;
         self.stable_prefix_len_cache = None;
         self.holdback_scanner.reset();
+        self.clear_synthetic_queue_accounting();
     }
 
     fn render_source(&self, source: &str) -> Vec<HyperlinkLine> {
@@ -315,6 +338,11 @@ impl StreamCore {
 
         let had_pending_queue = self.state.queued_len() > 0;
         let had_structural_tail = self.requires_final_scrollback_reflow();
+        let partial_line = if had_pending_queue {
+            self.partial_source_line_after_rendered_len(self.emitted_stable_len)
+        } else {
+            None
+        };
         let live_default_tail_source_start = if !had_pending_queue && !had_structural_tail {
             self.live_default_tail_source_start()
         } else {
@@ -329,6 +357,10 @@ impl StreamCore {
         }
 
         self.recompute_streaming_render();
+        if let Some(partial_line) = partial_line {
+            self.rebuild_stable_queue_preserving_partial_source_line(partial_line);
+            return true;
+        }
         self.emitted_stable_len = self.rendered_len_for_source_boundary(emitted_source_boundary);
         let target_stable_len = self.compute_target_stable_len();
         if had_pending_queue
@@ -337,7 +369,7 @@ impl StreamCore {
         {
             self.emitted_stable_len = target_stable_len;
         }
-        self.state.clear_queue();
+        self.clear_stable_queue();
         if self.emitted_stable_len > 0 && !had_pending_queue && !had_structural_tail {
             let target_stable_len = if let Some(source_start) = live_default_tail_source_start {
                 self.stable_prefix_len_for_source_start(source_start)
@@ -371,7 +403,7 @@ impl StreamCore {
         // A structural rewrite moved the stable boundary backward into enqueue-but-unemitted
         // lines. Rebuild queue from the latest snapshot.
         if target_stable_len < self.enqueued_stable_len {
-            self.state.clear_queue();
+            self.clear_stable_queue();
             if self.emitted_stable_len < target_stable_len {
                 self.state.enqueue(
                     self.rendered_lines[self.emitted_stable_len..target_stable_len].to_vec(),
@@ -398,12 +430,64 @@ impl StreamCore {
     /// current render.
     fn rebuild_stable_queue_from_render(&mut self) {
         let target_stable_len = self.compute_target_stable_len();
-        self.state.clear_queue();
+        self.clear_stable_queue();
         if self.emitted_stable_len < target_stable_len {
             self.state
                 .enqueue(self.rendered_lines[self.emitted_stable_len..target_stable_len].to_vec());
         }
         self.enqueued_stable_len = target_stable_len;
+    }
+
+    fn rebuild_stable_queue_preserving_partial_source_line(
+        &mut self,
+        partial_line: PartialSourceLine,
+    ) {
+        let source_line_start_len =
+            self.rendered_len_for_source_boundary(partial_line.source_start);
+        let source_line_end_len = self.rendered_len_for_source_boundary(partial_line.source_end);
+        let target_stable_len = self.compute_target_stable_len();
+
+        self.clear_stable_queue();
+        self.emitted_stable_len = source_line_start_len;
+
+        let mut queued = partial_line.unemitted_suffix;
+        let synthetic_len = queued.len();
+        if source_line_end_len < target_stable_len {
+            queued.extend(self.rendered_lines[source_line_end_len..target_stable_len].to_vec());
+        }
+        if !queued.is_empty() {
+            self.state.enqueue(queued);
+        }
+        self.enqueued_stable_len = source_line_end_len.max(target_stable_len);
+        if synthetic_len > 0 {
+            self.synthetic_queue_remaining = synthetic_len;
+            self.synthetic_queue_target_emitted_len = Some(source_line_end_len);
+        }
+    }
+
+    fn clear_stable_queue(&mut self) {
+        self.state.clear_queue();
+        self.clear_synthetic_queue_accounting();
+    }
+
+    fn clear_synthetic_queue_accounting(&mut self) {
+        self.synthetic_queue_remaining = 0;
+        self.synthetic_queue_target_emitted_len = None;
+    }
+
+    fn account_emitted_step(&mut self, step_len: usize) {
+        let mut ordinary_lines = step_len;
+        if self.synthetic_queue_remaining > 0 {
+            let synthetic_lines = ordinary_lines.min(self.synthetic_queue_remaining);
+            ordinary_lines -= synthetic_lines;
+            self.synthetic_queue_remaining -= synthetic_lines;
+            if self.synthetic_queue_remaining == 0
+                && let Some(target_len) = self.synthetic_queue_target_emitted_len.take()
+            {
+                self.emitted_stable_len = target_len;
+            }
+        }
+        self.emitted_stable_len += ordinary_lines;
     }
 
     /// How many rendered lines to withhold as mutable tail.
@@ -522,6 +606,47 @@ impl StreamCore {
             }
         }
         self.raw_source.len()
+    }
+
+    fn partial_source_line_after_rendered_len(
+        &self,
+        rendered_len: usize,
+    ) -> Option<PartialSourceLine> {
+        if rendered_len == 0 || rendered_len >= self.rendered_lines.len() {
+            return None;
+        }
+
+        let mut source_start = 0;
+        let mut source_start_rendered_len = 0;
+        for source_end in self.source_line_boundaries() {
+            let source_end_rendered_len = self.render_source(&self.raw_source[..source_end]).len();
+            if rendered_len < source_end_rendered_len {
+                if rendered_len <= source_start_rendered_len {
+                    return None;
+                }
+                return Some(PartialSourceLine {
+                    source_start,
+                    source_end,
+                    unemitted_suffix: self.rendered_lines[rendered_len..source_end_rendered_len]
+                        .to_vec(),
+                });
+            }
+            source_start = source_end;
+            source_start_rendered_len = source_end_rendered_len;
+        }
+        None
+    }
+
+    fn source_line_boundaries(&self) -> Vec<usize> {
+        let mut boundaries = self
+            .raw_source
+            .match_indices('\n')
+            .map(|(idx, _)| idx + 1)
+            .collect::<Vec<_>>();
+        if boundaries.last().copied() != Some(self.raw_source.len()) {
+            boundaries.push(self.raw_source.len());
+        }
+        boundaries
     }
 
     fn default_tail_budget_lines(&mut self) -> usize {
@@ -660,7 +785,7 @@ impl StreamController {
     }
 
     pub(crate) fn clear_queue(&mut self) {
-        self.core.state.clear_queue();
+        self.core.clear_stable_queue();
         self.core.enqueued_stable_len = self.core.emitted_stable_len;
     }
 
@@ -790,7 +915,7 @@ impl PlanStreamController {
     }
 
     pub(crate) fn clear_queue(&mut self) {
-        self.core.state.clear_queue();
+        self.core.clear_stable_queue();
         self.core.enqueued_stable_len = self.core.emitted_stable_len;
     }
 
@@ -1191,10 +1316,9 @@ mod tests {
 
         ctrl.set_width(Some(/*width*/ 120));
 
-        assert_eq!(
-            ctrl.queued_lines(),
-            0,
-            "partially emitted source line should not be re-queued after widening"
+        assert!(
+            ctrl.queued_lines() > 0,
+            "un-emitted source-line suffix should remain queued after widening"
         );
 
         let (cell, _source) = ctrl.finalize();
@@ -1206,6 +1330,10 @@ mod tests {
         assert!(
             !finalized_after_resize.contains("AAAA BBBB CCCC"),
             "finalize must not replay the already-visible line prefix; emitted before resize: {emitted_before_resize:?}, finalized after resize: {finalized_after_resize:?}",
+        );
+        assert!(
+            finalized_after_resize.contains("IIII JJJJ"),
+            "finalize must preserve the un-emitted source-line suffix; emitted before resize: {emitted_before_resize:?}, finalized after resize: {finalized_after_resize:?}",
         );
         assert!(
             final_lines.iter().any(|line| line.contains("second line")),
@@ -2198,14 +2326,15 @@ mod tests {
             .map(|line| line.chars().skip(2).collect::<String>())
             .collect::<Vec<_>>();
         assert!(
-            remaining.iter().any(|line| line.contains("tail line")),
+            remaining.iter().any(|line| line.contains("riverbank"))
+                && remaining.iter().any(|line| line.contains("tail line")),
             "un-emitted content should remain after resize remap: {remaining:?}",
         );
     }
 
     #[test]
     fn controller_set_width_partial_wrapped_emit_does_not_replay_prefix() {
-        let mut ctrl = stream_controller(Some(18));
+        let mut ctrl = stream_controller(Some(/*width*/ 18));
         ctrl.push("alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu\n");
         ctrl.push("tail line\n");
 
@@ -2232,8 +2361,46 @@ mod tests {
             "finalize must not replay the already-visible prefix; emitted before resize: {first_emit:?}, finalized after resize: {joined:?}",
         );
         assert!(
+            joined.contains("lambda mu"),
+            "finalize must preserve the un-emitted source-line suffix; emitted before resize: {first_emit:?}, finalized after resize: {joined:?}",
+        );
+        assert!(
             remaining.iter().any(|line| line.contains("tail line")),
             "ordinary mutable tail should flush on finalize; got {remaining:?}",
+        );
+    }
+
+    #[test]
+    fn controller_set_render_mode_partial_wrapped_emit_preserves_remaining_content() {
+        let mut ctrl = stream_controller(Some(/*width*/ 18));
+        ctrl.push("alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu\n");
+        ctrl.push("tail line\n");
+
+        let (first_emit, idle) = ctrl.on_commit_tick();
+        let first_emit = first_emit
+            .expect("expected first wrapped line emission")
+            .transcript_lines(u16::MAX);
+        assert!(!idle, "expected remaining wrapped content after one tick");
+        assert!(
+            ctrl.queued_lines() > 0,
+            "expected queued wrapped remainder before raw toggle"
+        );
+
+        ctrl.set_render_mode(HistoryRenderMode::Raw);
+
+        let (cell, _source) = ctrl.finalize();
+        let remaining = cell
+            .map(|c| lines_to_plain_strings(&c.transcript_lines(u16::MAX)))
+            .unwrap_or_default();
+        let first_emit = lines_to_plain_strings(&first_emit).join("\n");
+        let joined = remaining.join("\n");
+        assert!(
+            !joined.contains("alpha beta"),
+            "finalize must not replay the already-visible prefix after raw toggle; emitted before toggle: {first_emit:?}, finalized after toggle: {joined:?}",
+        );
+        assert!(
+            joined.contains("lambda mu") && joined.contains("tail line"),
+            "finalize must preserve un-emitted content after raw toggle; emitted before toggle: {first_emit:?}, finalized after toggle: {joined:?}",
         );
     }
 }
