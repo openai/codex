@@ -82,37 +82,6 @@ impl AgentControl {
         }
     }
 
-    pub(crate) async fn list_live_agent_subtree_thread_ids(
-        &self,
-        agent_id: ThreadId,
-    ) -> CodexResult<Vec<ThreadId>> {
-        let mut thread_ids = vec![agent_id];
-        thread_ids.extend(self.live_thread_spawn_descendants(agent_id).await?);
-        Ok(thread_ids)
-    }
-
-    pub(crate) async fn format_environment_context_subagents(
-        &self,
-        parent_thread_id: ThreadId,
-    ) -> String {
-        let Ok(agents) = self.open_thread_spawn_children(parent_thread_id).await else {
-            return String::new();
-        };
-
-        agents
-            .into_iter()
-            .map(|(thread_id, metadata)| {
-                let reference = metadata
-                    .agent_path
-                    .as_ref()
-                    .map(|agent_path| agent_path.name().to_string())
-                    .unwrap_or_else(|| thread_id.to_string());
-                format_subagent_context_line(reference.as_str(), metadata.agent_nickname.as_deref())
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
-    }
-
     pub(super) fn maybe_start_completion_watcher(
         &self,
         child_thread_id: ThreadId,
@@ -156,76 +125,5 @@ impl AgentControl {
                 .inject_user_message_without_turn(message)
                 .await;
         });
-    }
-
-    async fn open_thread_spawn_children(
-        &self,
-        parent_thread_id: ThreadId,
-    ) -> CodexResult<Vec<(ThreadId, AgentMetadata)>> {
-        let mut children_by_parent = self.live_thread_spawn_children().await?;
-        Ok(children_by_parent
-            .remove(&parent_thread_id)
-            .unwrap_or_default())
-    }
-
-    async fn live_thread_spawn_children(
-        &self,
-    ) -> CodexResult<HashMap<ThreadId, Vec<(ThreadId, AgentMetadata)>>> {
-        let state = self.upgrade()?;
-        let mut children_by_parent = HashMap::<ThreadId, Vec<(ThreadId, AgentMetadata)>>::new();
-
-        for (parent_thread_id, child_thread_id) in state.list_live_thread_spawn_edges().await {
-            children_by_parent
-                .entry(parent_thread_id)
-                .or_default()
-                .push((
-                    child_thread_id,
-                    self.state
-                        .agent_metadata_for_thread(child_thread_id)
-                        .unwrap_or(AgentMetadata {
-                            agent_id: Some(child_thread_id),
-                            ..Default::default()
-                        }),
-                ));
-        }
-
-        for children in children_by_parent.values_mut() {
-            children.sort_by(|left, right| {
-                left.1
-                    .agent_path
-                    .as_deref()
-                    .unwrap_or_default()
-                    .cmp(right.1.agent_path.as_deref().unwrap_or_default())
-                    .then_with(|| left.0.to_string().cmp(&right.0.to_string()))
-            });
-        }
-
-        Ok(children_by_parent)
-    }
-
-    async fn live_thread_spawn_descendants(
-        &self,
-        root_thread_id: ThreadId,
-    ) -> CodexResult<Vec<ThreadId>> {
-        let mut children_by_parent = self.live_thread_spawn_children().await?;
-        let mut descendants = Vec::new();
-        let mut stack = children_by_parent
-            .remove(&root_thread_id)
-            .unwrap_or_default()
-            .into_iter()
-            .map(|(child_thread_id, _)| child_thread_id)
-            .rev()
-            .collect::<Vec<_>>();
-
-        while let Some(thread_id) = stack.pop() {
-            descendants.push(thread_id);
-            if let Some(children) = children_by_parent.remove(&thread_id) {
-                for (child_thread_id, _) in children.into_iter().rev() {
-                    stack.push(child_thread_id);
-                }
-            }
-        }
-
-        Ok(descendants)
     }
 }

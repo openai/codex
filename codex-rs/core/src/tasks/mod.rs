@@ -469,12 +469,31 @@ impl Session {
                 return;
             }
 
+            let execution_reservation = match self
+                .services
+                .agent_control
+                .reserve_execution_slot_for_pending_turn(self)
+                .await
+            {
+                Ok(reservation) => reservation,
+                Err(err) => {
+                    warn!(
+                        thread_id = %self.thread_id,
+                        "pending agent turn could not reserve an execution slot: {err}"
+                    );
+                    return;
+                }
+            };
+
             {
                 let mut active_turn = self.active_turn.lock().await;
                 if active_turn.is_some() {
                     return;
                 }
                 *active_turn = Some(ActiveTurn::default());
+            }
+            if let Some(execution_reservation) = execution_reservation {
+                execution_reservation.commit();
             }
 
             let turn_context = self.new_default_turn_with_sub_id(sub_id).await;

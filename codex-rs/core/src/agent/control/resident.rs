@@ -12,6 +12,34 @@ fn max_resident_subagents(config: &Config) -> usize {
 }
 
 impl AgentControl {
+    pub(crate) async fn reserve_execution_slot_for_pending_turn(
+        &self,
+        session: &Session,
+    ) -> CodexResult<Option<crate::agent::registry::ExecutionReservation>> {
+        if session.multi_agent_version() != Some(MultiAgentVersion::V2) {
+            return Ok(None);
+        }
+        let metadata = self
+            .state
+            .agent_metadata_for_thread(session.thread_id)
+            .ok_or_else(|| {
+                CodexErr::Fatal(format!(
+                    "missing agent metadata for V2 thread {}",
+                    session.thread_id
+                ))
+            })?;
+        if metadata.agent_path.as_ref().is_some_and(AgentPath::is_root) {
+            return Ok(None);
+        }
+        let config = session.get_config().await;
+        let max_threads = config
+            .effective_agent_max_threads(MultiAgentVersion::V2)
+            .unwrap_or_default();
+        self.state
+            .reserve_execution_slot(session.thread_id, max_threads)
+            .map(Some)
+    }
+
     pub(crate) async fn send_message_to_agent(
         &self,
         config: &Config,
@@ -192,12 +220,20 @@ impl AgentControl {
         };
         thread.ensure_rollout_materialized().await;
         thread.flush_rollout().await?;
+        let mut wait_for_termination = false;
         if !matches!(thread.agent_status().await, AgentStatus::Shutdown) {
-            state.send_op(agent_id, Op::Shutdown {}).await?;
+            match state.send_op(agent_id, Op::Shutdown {}).await {
+                Ok(_) => wait_for_termination = true,
+                Err(CodexErr::ThreadNotFound(_)) | Err(CodexErr::InternalAgentDied) => {}
+                Err(err) => return Err(err),
+            }
         }
-        thread.wait_until_terminated().await;
+        if wait_for_termination {
+            thread.wait_until_terminated().await;
+        }
         let _ = state.remove_thread(&agent_id).await;
         residency.remove(agent_id);
+        self.state.release_execution_slot(agent_id);
         self.state.clear_last_task_message(agent_id);
         Ok(())
     }

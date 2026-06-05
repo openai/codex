@@ -132,6 +132,46 @@ impl AgentControlHarness {
     }
 }
 
+async fn spawn_v2_test_agent(
+    harness: &AgentControlHarness,
+    config: &Config,
+    parent_thread_id: ThreadId,
+    agent_path: AgentPath,
+) -> ThreadId {
+    harness
+        .control
+        .spawn_agent(
+            config.clone(),
+            Op::Interrupt,
+            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id,
+                depth: 1,
+                agent_path: Some(agent_path),
+                agent_nickname: None,
+                agent_role: None,
+            })),
+        )
+        .await
+        .expect("test agent should spawn")
+}
+
+async fn terminate_test_agent(
+    harness: &AgentControlHarness,
+    agent_id: ThreadId,
+) -> Arc<CodexThread> {
+    let agent_thread = harness
+        .manager
+        .get_thread(agent_id)
+        .await
+        .expect("test agent should exist");
+    agent_thread
+        .submit(Op::Shutdown {})
+        .await
+        .expect("test agent shutdown should submit");
+    agent_thread.wait_until_terminated().await;
+    agent_thread
+}
+
 fn has_subagent_notification(history_items: &[ResponseItem]) -> bool {
     history_items.iter().any(|item| {
         let ResponseItem::Message { role, content, .. } = item else {
@@ -1748,6 +1788,261 @@ async fn multi_agent_v2_completion_ignores_dead_direct_parent() {
         )
     ));
     assert!(!has_subagent_notification(&root_history_items));
+}
+
+#[tokio::test]
+async fn multi_agent_v2_direct_trigger_turn_respects_execution_limit() {
+    let harness = AgentControlHarness::new().await;
+    let mut config = harness.config.clone();
+    let _ = config.features.enable(Feature::MultiAgentV2);
+    config.multi_agent_v2.max_concurrent_threads_per_session = 2;
+    let root = harness
+        .manager
+        .start_thread(config.clone())
+        .await
+        .expect("root thread should start");
+    let target_path = AgentPath::root().join("target").expect("target path");
+    let target_thread_id =
+        spawn_v2_test_agent(&harness, &config, root.thread_id, target_path.clone()).await;
+    harness
+        .control
+        .state
+        .release_execution_slot(target_thread_id);
+
+    let blocker_path = AgentPath::root().join("blocker").expect("blocker path");
+    let blocker_thread_id =
+        spawn_v2_test_agent(&harness, &config, root.thread_id, blocker_path).await;
+    let target_thread = harness
+        .manager
+        .get_thread(target_thread_id)
+        .await
+        .expect("target thread should exist");
+    target_thread
+        .submit(Op::InterAgentCommunication {
+            communication: InterAgentCommunication::new(
+                AgentPath::root(),
+                target_path,
+                Vec::new(),
+                "run when capacity is available".to_string(),
+                /*trigger_turn*/ true,
+            ),
+        })
+        .await
+        .expect("direct communication should submit");
+
+    timeout(Duration::from_secs(5), async {
+        while !target_thread
+            .codex
+            .session
+            .input_queue
+            .has_trigger_turn_mailbox_items()
+            .await
+        {
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("target communication should reach the mailbox");
+    assert!(!harness.control.state.is_execution_active(target_thread_id));
+    assert!(
+        target_thread
+            .codex
+            .session
+            .active_turn
+            .lock()
+            .await
+            .is_none()
+    );
+
+    harness
+        .control
+        .state
+        .release_execution_slot(blocker_thread_id);
+    target_thread
+        .codex
+        .session
+        .maybe_start_turn_for_pending_work()
+        .await;
+    assert!(harness.control.state.is_execution_active(target_thread_id));
+
+    harness
+        .control
+        .shutdown_and_forget_agent(target_thread_id)
+        .await
+        .expect("target shutdown should succeed");
+    harness
+        .control
+        .shutdown_and_forget_agent(blocker_thread_id)
+        .await
+        .expect("blocker shutdown should succeed");
+}
+
+#[tokio::test]
+async fn multi_agent_v2_resident_cache_evicts_and_reloads_dead_lru_agent() {
+    let harness = AgentControlHarness::new().await;
+    let mut config = harness.config.clone();
+    let _ = config.features.enable(Feature::MultiAgentV2);
+    let root = harness
+        .manager
+        .start_thread(config.clone())
+        .await
+        .expect("root thread should start");
+    let protected_path = AgentPath::root().join("protected").expect("protected path");
+    let protected_thread_id =
+        spawn_v2_test_agent(&harness, &config, root.thread_id, protected_path.clone()).await;
+    harness
+        .control
+        .state
+        .release_execution_slot(protected_thread_id);
+    let protected_thread = harness
+        .manager
+        .get_thread(protected_thread_id)
+        .await
+        .expect("protected thread should exist");
+    protected_thread
+        .codex
+        .session
+        .input_queue
+        .enqueue_mailbox_communication(InterAgentCommunication::new(
+            AgentPath::root(),
+            protected_path,
+            Vec::new(),
+            "keep this resident".to_string(),
+            /*trigger_turn*/ false,
+        ))
+        .await;
+    let target_path = AgentPath::root().join("target").expect("target path");
+    let target_thread_id =
+        spawn_v2_test_agent(&harness, &config, root.thread_id, target_path.clone()).await;
+    harness
+        .control
+        .state
+        .release_execution_slot(target_thread_id);
+    let target_thread = terminate_test_agent(&harness, target_thread_id).await;
+    // Simulate a stale nonterminal status after the session channel has died.
+    let synthetic_turn = target_thread.codex.session.new_default_turn().await;
+    target_thread
+        .codex
+        .session
+        .send_event(
+            synthetic_turn.as_ref(),
+            EventMsg::TurnStarted(TurnStartedEvent {
+                turn_id: synthetic_turn.sub_id.clone(),
+                trace_id: None,
+                started_at: None,
+                model_context_window: None,
+                collaboration_mode_kind: ModeKind::Default,
+            }),
+        )
+        .await;
+
+    let resident_limit = crate::agent::residency::MIN_RESIDENT_SUBAGENTS.max(
+        config
+            .multi_agent_v2
+            .max_concurrent_threads_per_session
+            .saturating_add(4),
+    );
+    {
+        let mut residency = harness.control.residency.lock().await;
+        for _ in 2..resident_limit {
+            residency.touch(ThreadId::new());
+        }
+        assert_eq!(residency.len(), resident_limit);
+    }
+
+    let newcomer_path = AgentPath::root().join("newcomer").expect("newcomer path");
+    let newcomer_thread_id =
+        spawn_v2_test_agent(&harness, &config, root.thread_id, newcomer_path).await;
+    assert!(harness.manager.get_thread(target_thread_id).await.is_err());
+    assert!(
+        harness
+            .manager
+            .get_thread(protected_thread_id)
+            .await
+            .is_ok()
+    );
+    assert!(
+        harness
+            .control
+            .residency
+            .lock()
+            .await
+            .contains(protected_thread_id)
+    );
+    assert!(
+        !harness
+            .control
+            .residency
+            .lock()
+            .await
+            .contains(target_thread_id)
+    );
+
+    harness
+        .control
+        .send_followup_to_agent(
+            &config,
+            target_thread_id,
+            InterAgentCommunication::new(
+                AgentPath::root(),
+                target_path,
+                Vec::new(),
+                "continue after eviction".to_string(),
+                /*trigger_turn*/ true,
+            ),
+        )
+        .await
+        .expect("follow-up should reload the evicted agent");
+    assert!(harness.manager.get_thread(target_thread_id).await.is_ok());
+    assert!(
+        harness
+            .control
+            .residency
+            .lock()
+            .await
+            .contains(target_thread_id)
+    );
+
+    harness
+        .control
+        .shutdown_and_forget_agent(target_thread_id)
+        .await
+        .expect("target shutdown should succeed");
+    harness
+        .control
+        .shutdown_and_forget_agent(newcomer_thread_id)
+        .await
+        .expect("newcomer shutdown should succeed");
+    harness
+        .control
+        .shutdown_and_forget_agent(protected_thread_id)
+        .await
+        .expect("protected shutdown should succeed");
+}
+
+#[tokio::test]
+async fn interrupt_agent_cleans_up_dead_resident_thread() {
+    let harness = AgentControlHarness::new().await;
+    let mut config = harness.config.clone();
+    let _ = config.features.enable(Feature::MultiAgentV2);
+    let root = harness
+        .manager
+        .start_thread(config.clone())
+        .await
+        .expect("root thread should start");
+    let agent_path = AgentPath::root().join("worker").expect("worker path");
+    let agent_id = spawn_v2_test_agent(&harness, &config, root.thread_id, agent_path).await;
+    terminate_test_agent(&harness, agent_id).await;
+
+    let err = harness
+        .control
+        .interrupt_agent(agent_id)
+        .await
+        .expect_err("interrupting a dead worker should report the dead channel");
+    assert_matches!(err, CodexErr::InternalAgentDied);
+    assert!(harness.manager.get_thread(agent_id).await.is_err());
+    assert!(!harness.control.residency.lock().await.contains(agent_id));
+    assert!(!harness.control.state.is_execution_active(agent_id));
 }
 
 #[tokio::test]
