@@ -2495,6 +2495,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-code-mode-host"
+version = "0.0.0"
+
+[[package]]
 name = "codex-collaboration-mode-templates"
 version = "0.0.0"
 

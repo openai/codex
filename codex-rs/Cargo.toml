@@ -21,6 +21,7 @@ members = [
     "install-context",
     "codex-backend-openapi-models",
     "code-mode",
+    "code-mode-host",
     "cloud-config",
     "cloud-tasks",
     "cloud-tasks-client",
