@@ -26,14 +26,14 @@ use tempfile::NamedTempFile;
 // At least on GitHub CI, the arm64 tests appear to need longer timeouts.
 
 #[cfg(not(target_arch = "aarch64"))]
-const SHORT_TIMEOUT_MS: u64 = 5_000;
+const SHORT_TIMEOUT_MS: u64 = 15_000;
 #[cfg(target_arch = "aarch64")]
-const SHORT_TIMEOUT_MS: u64 = 5_000;
+const SHORT_TIMEOUT_MS: u64 = 15_000;
 
 #[cfg(not(target_arch = "aarch64"))]
-const LONG_TIMEOUT_MS: u64 = 5_000;
+const LONG_TIMEOUT_MS: u64 = 15_000;
 #[cfg(target_arch = "aarch64")]
-const LONG_TIMEOUT_MS: u64 = 5_000;
+const LONG_TIMEOUT_MS: u64 = 15_000;
 
 #[cfg(not(target_arch = "aarch64"))]
 const NETWORK_TIMEOUT_MS: u64 = 10_000;

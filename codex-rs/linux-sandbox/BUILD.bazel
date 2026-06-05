@@ -6,4 +6,5 @@ codex_rust_crate(
     extra_binaries = [
         "//codex-rs/bwrap:bwrap",
     ],
+    integration_test_args = ["--test-threads=1"],
 )
