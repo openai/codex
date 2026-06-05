@@ -622,7 +622,6 @@ impl EscalationPolicy for CoreShellActionProvider {
                 InterceptedExecPolicyContext {
                     approval_policy: self.approval_policy,
                     permission_profile: self.permission_profile.clone(),
-                    file_system_sandbox_policy: &self.file_system_sandbox_policy,
                     sandbox_cwd: self.sandbox_policy_cwd.as_path(),
                     sandbox_permissions: self.approval_sandbox_permissions,
                     enable_shell_wrapper_parsing:
@@ -677,7 +676,6 @@ fn evaluate_intercepted_exec_policy(
     let InterceptedExecPolicyContext {
         approval_policy,
         permission_profile,
-        file_system_sandbox_policy,
         sandbox_cwd,
         sandbox_permissions,
         enable_shell_wrapper_parsing,
@@ -705,7 +703,6 @@ fn evaluate_intercepted_exec_policy(
             crate::exec_policy::UnmatchedCommandContext {
                 approval_policy,
                 permission_profile: &permission_profile,
-                file_system_sandbox_policy,
                 sandbox_cwd,
                 sandbox_permissions,
                 used_complex_parsing,
@@ -727,7 +724,6 @@ fn evaluate_intercepted_exec_policy(
 struct InterceptedExecPolicyContext<'a> {
     approval_policy: AskForApproval,
     permission_profile: PermissionProfile,
-    file_system_sandbox_policy: &'a FileSystemSandboxPolicy,
     sandbox_cwd: &'a Path,
     sandbox_permissions: SandboxPermissions,
     enable_shell_wrapper_parsing: bool,

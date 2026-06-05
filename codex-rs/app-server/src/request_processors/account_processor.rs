@@ -2,6 +2,7 @@ use super::*;
 
 // Duration before a browser ChatGPT login attempt is abandoned.
 const LOGIN_CHATGPT_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+const ACCOUNT_TOKEN_USAGE_FETCH_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 10);
 // The override is intentionally available only in debug builds, matching the login path below.
 #[cfg(debug_assertions)]
 const LOGIN_ISSUER_OVERRIDE_ENV_VAR: &str = "CODEX_APP_SERVER_LOGIN_ISSUER";
@@ -127,6 +128,14 @@ impl AccountRequestProcessor {
         &self,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
         self.get_account_rate_limits_response()
+            .await
+            .map(|response| Some(response.into()))
+    }
+
+    pub(crate) async fn get_account_token_usage(
+        &self,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        self.get_account_token_usage_response()
             .await
             .map(|response| Some(response.into()))
     }
@@ -848,6 +857,55 @@ impl AccountRequestProcessor {
             )
     }
 
+    async fn get_account_token_usage_response(
+        &self,
+    ) -> Result<GetAccountTokenUsageResponse, JSONRPCErrorError> {
+        let Some(auth) = self.auth_manager.auth().await else {
+            return Err(invalid_request(
+                "codex account authentication required to read token usage",
+            ));
+        };
+
+        if !auth.uses_codex_backend() {
+            return Err(invalid_request(
+                "chatgpt authentication required to read token usage",
+            ));
+        }
+
+        let client = BackendClient::from_auth(self.config.chatgpt_base_url.clone(), &auth)
+            .map_err(|err| internal_error(format!("failed to construct backend client: {err}")))?;
+        let profile = tokio::time::timeout(
+            ACCOUNT_TOKEN_USAGE_FETCH_TIMEOUT,
+            client.get_token_usage_profile(),
+        )
+        .await
+        .map_err(|_| internal_error("token usage profile fetch timed out"))?
+        .map_err(|err| internal_error(format!("failed to fetch token usage profile: {err}")))?;
+        Ok(Self::account_token_usage_response(profile))
+    }
+
+    fn account_token_usage_response(profile: TokenUsageProfile) -> GetAccountTokenUsageResponse {
+        let stats = profile.stats;
+        GetAccountTokenUsageResponse {
+            summary: AccountTokenUsageSummary {
+                lifetime_tokens: stats.lifetime_tokens,
+                peak_daily_tokens: stats.peak_daily_tokens,
+                longest_running_turn_sec: stats.longest_running_turn_sec,
+                current_streak_days: stats.current_streak_days,
+                longest_streak_days: stats.longest_streak_days,
+            },
+            daily_usage_buckets: stats.daily_usage_buckets.map(|buckets| {
+                buckets
+                    .into_iter()
+                    .map(|bucket| AccountTokenUsageDailyBucket {
+                        start_date: bucket.start_date,
+                        tokens: bucket.tokens,
+                    })
+                    .collect()
+            }),
+        }
+    }
+
     async fn send_add_credits_nudge_email_response(
         &self,
         params: SendAddCreditsNudgeEmailParams,
@@ -950,5 +1008,47 @@ impl AccountRequestProcessor {
             .unwrap_or_else(|| snapshots[0].clone());
 
         Ok((primary, rate_limits_by_limit_id))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use codex_backend_client::TokenUsageProfileDailyBucket;
+    use codex_backend_client::TokenUsageProfileStats;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn account_token_usage_response_maps_profile_stats_and_daily_buckets() {
+        let response = AccountRequestProcessor::account_token_usage_response(TokenUsageProfile {
+            stats: TokenUsageProfileStats {
+                lifetime_tokens: Some(123),
+                peak_daily_tokens: Some(45),
+                longest_running_turn_sec: Some(67),
+                current_streak_days: Some(8),
+                longest_streak_days: Some(9),
+                daily_usage_buckets: Some(vec![TokenUsageProfileDailyBucket {
+                    start_date: "2026-05-29".to_string(),
+                    tokens: 10,
+                }]),
+            },
+        });
+
+        assert_eq!(
+            response,
+            GetAccountTokenUsageResponse {
+                summary: AccountTokenUsageSummary {
+                    lifetime_tokens: Some(123),
+                    peak_daily_tokens: Some(45),
+                    longest_running_turn_sec: Some(67),
+                    current_streak_days: Some(8),
+                    longest_streak_days: Some(9),
+                },
+                daily_usage_buckets: Some(vec![AccountTokenUsageDailyBucket {
+                    start_date: "2026-05-29".to_string(),
+                    tokens: 10,
+                }]),
+            }
+        );
     }
 }

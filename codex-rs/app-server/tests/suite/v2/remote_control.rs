@@ -194,6 +194,42 @@ async fn remote_control_pairing_start_returns_pairing_artifacts() -> Result<()> 
 }
 
 #[tokio::test]
+async fn remote_control_pairing_start_returns_pairing_artifacts_while_disabled() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let mut backend = PairingRemoteControlBackend::start(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_remote_control_pairing_start_request(RemoteControlPairingStartParams {
+            manual_code: true,
+        })
+        .await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    assert_eq!(
+        timeout(DEFAULT_TIMEOUT, backend.wait_for_enroll_request()).await??,
+        "POST /backend-api/wham/remote/control/server/enroll HTTP/1.1"
+    );
+    assert_eq!(response.result.get("serverId"), None);
+    let received: RemoteControlPairingStartResponse = to_response(response)?;
+
+    assert_eq!(
+        received,
+        RemoteControlPairingStartResponse {
+            pairing_code: "pairing-code".to_string(),
+            manual_pairing_code: Some("ABCD-EFGH".to_string()),
+            environment_id: "environment-id".to_string(),
+            expires_at: 33_336_362_096,
+        }
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn remote_control_client_management_works_while_disabled() -> Result<()> {
     let codex_home = TempDir::new()?;
     let mut backend = ClientManagementRemoteControlBackend::start(codex_home.path()).await?;
@@ -376,8 +412,12 @@ impl PairingRemoteControlBackend {
                 )
                 .await?;
 
-                let _websocket_request = read_http_request(&listener).await?;
-                let pair_http_request = read_http_request(&listener).await?;
+                let request_after_enroll = read_http_request(&listener).await?;
+                let pair_http_request = if request_after_enroll.request_line.starts_with("GET ") {
+                    read_http_request(&listener).await?
+                } else {
+                    request_after_enroll
+                };
                 respond_with_json(
                     pair_http_request.reader.into_inner(),
                     serde_json::json!({

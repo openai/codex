@@ -120,7 +120,7 @@ fn user_turn_with_permission_profile(
     model: String,
     permission_profile: PermissionProfile,
 ) -> Op {
-    let cwd = fixture.cwd.path().to_path_buf();
+    let cwd = fixture.config.cwd.clone();
     let (sandbox_policy, permission_profile) =
         turn_permission_fields(permission_profile, cwd.as_path());
     Op::UserInput {
@@ -1349,6 +1349,7 @@ async fn stdio_image_responses_are_sanitized_for_text_only_model() -> anyhow::Re
                 input_modalities: vec![InputModality::Text],
                 used_fallback_model_metadata: false,
                 supports_search_tool: false,
+                use_responses_lite: false,
                 auto_review_model_override: None,
                 tool_mode: None,
                 multi_agent_version: None,

@@ -186,168 +186,6 @@ async fn responses_websocket_streams_without_feature_flag_when_provider_supports
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn responses_websocket_sends_response_processed_when_feature_enabled() {
-    skip_if_no_network!();
-
-    let server = start_websocket_server(vec![vec![
-        vec![
-            ev_response_created("resp-prewarm"),
-            ev_completed("resp-prewarm"),
-        ],
-        vec![
-            ev_response_created("resp-1"),
-            ev_assistant_message("msg-1", "hi"),
-            ev_completed("resp-1"),
-        ],
-        vec![],
-    ]])
-    .await;
-
-    let mut builder = test_codex().with_config(|config| {
-        config
-            .features
-            .enable(Feature::ResponsesWebsocketResponseProcessed)
-            .expect("test config should allow feature update");
-    });
-    let test = builder
-        .build_with_websocket_server(&server)
-        .await
-        .expect("build websocket codex");
-
-    test.submit_turn("hello")
-        .await
-        .expect("submission should send response.processed after processing");
-
-    let processed = server
-        .wait_for_request(/*connection_index*/ 0, /*request_index*/ 2)
-        .await;
-    assert_eq!(
-        processed.body_json(),
-        json!({
-            "type": "response.processed",
-            "response_id": "resp-1",
-        })
-    );
-
-    let connection = server.single_connection();
-    assert_eq!(connection.len(), 3);
-    assert_eq!(
-        connection[1].body_json()["type"].as_str(),
-        Some("response.create")
-    );
-
-    server.shutdown().await;
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn responses_websocket_sends_response_processed_after_remote_compaction_v2() {
-    skip_if_no_network!();
-
-    let server = start_websocket_server(vec![vec![
-        vec![
-            ev_response_created("resp-prewarm"),
-            ev_completed("resp-prewarm"),
-        ],
-        vec![
-            ev_response_created("resp-1"),
-            ev_assistant_message("msg-1", "hi"),
-            ev_completed("resp-1"),
-        ],
-        vec![],
-        vec![
-            json!({
-                "type": "response.output_item.done",
-                "item": {
-                    "type": "compaction",
-                    "encrypted_content": "ENCRYPTED_CONTEXT_COMPACTION_SUMMARY",
-                }
-            }),
-            ev_completed("resp-compact"),
-        ],
-        vec![],
-    ]])
-    .await;
-
-    let mut builder = test_codex().with_config(|config| {
-        config
-            .features
-            .enable(Feature::RemoteCompactionV2)
-            .expect("test config should allow feature update");
-        config
-            .features
-            .enable(Feature::ResponsesWebsocketResponseProcessed)
-            .expect("test config should allow feature update");
-    });
-    let test = builder
-        .build_with_websocket_server(&server)
-        .await
-        .expect("build websocket codex");
-
-    test.submit_turn("hello")
-        .await
-        .expect("submission should send response.processed after processing");
-
-    test.codex
-        .submit(Op::Compact)
-        .await
-        .expect("compact submission should succeed");
-    wait_for_event(&test.codex, |msg| matches!(msg, EventMsg::TurnComplete(_))).await;
-
-    let compact_processed = server
-        .wait_for_request(/*connection_index*/ 0, /*request_index*/ 4)
-        .await;
-    assert_eq!(
-        compact_processed.body_json(),
-        json!({
-            "type": "response.processed",
-            "response_id": "resp-compact",
-        })
-    );
-
-    let connection = server.single_connection();
-    assert_eq!(connection.len(), 5);
-    assert_eq!(
-        connection[3].body_json()["type"].as_str(),
-        Some("response.create")
-    );
-
-    server.shutdown().await;
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn responses_websocket_omits_response_processed_without_feature() {
-    skip_if_no_network!();
-
-    let server = start_websocket_server(vec![vec![
-        vec![
-            ev_response_created("resp-prewarm"),
-            ev_completed("resp-prewarm"),
-        ],
-        vec![
-            ev_response_created("resp-1"),
-            ev_assistant_message("msg-1", "hi"),
-            ev_completed("resp-1"),
-        ],
-        vec![],
-    ]])
-    .await;
-    let mut builder = test_codex();
-    let test = builder
-        .build_with_websocket_server(&server)
-        .await
-        .expect("build websocket codex");
-
-    test.submit_turn("hello")
-        .await
-        .expect("submission should complete without response.processed");
-
-    let connection = server.single_connection();
-    assert_eq!(connection.len(), 2);
-
-    server.shutdown().await;
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn responses_websocket_reuses_connection_with_per_turn_trace_payloads() {
     skip_if_no_network!();
 
@@ -505,7 +343,7 @@ async fn responses_websocket_request_prewarm_reuses_connection() {
             &prompt,
             &harness.model_info,
             &harness.session_telemetry,
-            harness.effort,
+            harness.effort.clone(),
             harness.summary,
             /*service_tier*/ None,
             /*turn_metadata_header*/ None,
@@ -559,7 +397,7 @@ async fn responses_websocket_request_prewarm_traces_logical_request() {
             &prompt,
             &harness.model_info,
             &harness.session_telemetry,
-            harness.effort,
+            harness.effort.clone(),
             harness.summary,
             /*service_tier*/ None,
             /*turn_metadata_header*/ None,
@@ -604,7 +442,7 @@ async fn responses_websocket_request_prewarm_traces_logical_request() {
             &prompt,
             &harness.model_info,
             &harness.session_telemetry,
-            harness.effort,
+            harness.effort.clone(),
             harness.summary,
             /*service_tier*/ None,
             /*turn_metadata_header*/ None,
@@ -696,7 +534,7 @@ async fn responses_websocket_preconnect_is_reused_even_with_header_changes() {
             &prompt,
             &harness.model_info,
             &harness.session_telemetry,
-            harness.effort,
+            harness.effort.clone(),
             harness.summary,
             /*service_tier*/ None,
             /*turn_metadata_header*/ None,
@@ -735,7 +573,7 @@ async fn responses_websocket_request_prewarm_is_reused_even_with_header_changes(
             &prompt,
             &harness.model_info,
             &harness.session_telemetry,
-            harness.effort,
+            harness.effort.clone(),
             harness.summary,
             /*service_tier*/ None,
             /*turn_metadata_header*/ None,
@@ -747,7 +585,7 @@ async fn responses_websocket_request_prewarm_is_reused_even_with_header_changes(
             &prompt,
             &harness.model_info,
             &harness.session_telemetry,
-            harness.effort,
+            harness.effort.clone(),
             harness.summary,
             /*service_tier*/ None,
             /*turn_metadata_header*/ None,
@@ -801,7 +639,7 @@ async fn responses_websocket_prewarm_uses_v2_when_provider_supports_websockets()
             &prompt,
             &harness.model_info,
             &harness.session_telemetry,
-            harness.effort,
+            harness.effort.clone(),
             harness.summary,
             /*service_tier*/ None,
             /*turn_metadata_header*/ None,
@@ -1150,7 +988,7 @@ async fn responses_websocket_emits_reasoning_included_event() {
             &prompt,
             &harness.model_info,
             &harness.session_telemetry,
-            harness.effort,
+            harness.effort.clone(),
             harness.summary,
             /*service_tier*/ None,
             /*turn_metadata_header*/ None,
@@ -1224,7 +1062,7 @@ async fn responses_websocket_emits_rate_limit_events() {
             &prompt,
             &harness.model_info,
             &harness.session_telemetry,
-            harness.effort,
+            harness.effort.clone(),
             harness.summary,
             /*service_tier*/ None,
             /*turn_metadata_header*/ None,
@@ -1880,7 +1718,7 @@ async fn responses_websocket_v2_after_error_uses_full_create_without_previous_re
             &prompt_two,
             &harness.model_info,
             &harness.session_telemetry,
-            harness.effort,
+            harness.effort.clone(),
             harness.summary,
             /*service_tier*/ None,
             /*turn_metadata_header*/ None,
@@ -1968,7 +1806,7 @@ async fn responses_websocket_v2_surfaces_terminal_error_without_close_handshake(
             &prompt_two,
             &harness.model_info,
             &harness.session_telemetry,
-            harness.effort,
+            harness.effort.clone(),
             harness.summary,
             /*service_tier*/ None,
             /*turn_metadata_header*/ None,
@@ -2235,7 +2073,7 @@ async fn stream_until_complete_with_request_metadata(
             prompt,
             &harness.model_info,
             &harness.session_telemetry,
-            harness.effort,
+            harness.effort.clone(),
             harness.summary,
             service_tier.map(|service_tier| service_tier.request_value().to_string()),
             turn_metadata_header,

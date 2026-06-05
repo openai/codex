@@ -2,6 +2,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::RwLock;
 
+use futures::FutureExt;
+use futures::future::BoxFuture;
+
 use crate::ExecServerError;
 use crate::ExecServerRuntimePaths;
 use crate::ExecutorFileSystem;
@@ -18,8 +21,11 @@ use crate::environment_toml::environment_provider_from_codex_home;
 use crate::local_file_system::LocalFileSystem;
 use crate::local_process::LocalProcess;
 use crate::process::ExecBackend;
+use crate::protocol::EnvironmentInfo;
+use crate::protocol::ShellInfo;
 use crate::remote_file_system::RemoteFileSystem;
 use crate::remote_process::RemoteProcess;
+use codex_shell_command::shell_detect::DetectedShell;
 
 pub const CODEX_EXEC_SERVER_URL_ENV_VAR: &str = "CODEX_EXEC_SERVER_URL";
 
@@ -286,10 +292,40 @@ impl EnvironmentManager {
 pub struct Environment {
     exec_server_url: Option<String>,
     remote_transport: Option<ExecServerTransportParams>,
+    info_provider: Arc<dyn EnvironmentInfoProvider>,
     exec_backend: Arc<dyn ExecBackend>,
     filesystem: Arc<dyn ExecutorFileSystem>,
     http_client: Arc<dyn HttpClient>,
     local_runtime_paths: Option<ExecServerRuntimePaths>,
+}
+
+/// Provides environment metadata from either a local environment or a remote exec-server.
+trait EnvironmentInfoProvider: Send + Sync {
+    fn info(&self) -> BoxFuture<'_, Result<EnvironmentInfo, ExecServerError>>;
+}
+
+struct LocalEnvironmentInfoProvider;
+
+impl EnvironmentInfoProvider for LocalEnvironmentInfoProvider {
+    fn info(&self) -> BoxFuture<'_, Result<EnvironmentInfo, ExecServerError>> {
+        std::future::ready(Ok(EnvironmentInfo::local())).boxed()
+    }
+}
+
+struct RemoteEnvironmentInfoProvider {
+    client: LazyRemoteExecServerClient,
+}
+
+impl RemoteEnvironmentInfoProvider {
+    fn new(client: LazyRemoteExecServerClient) -> Self {
+        Self { client }
+    }
+}
+
+impl EnvironmentInfoProvider for RemoteEnvironmentInfoProvider {
+    fn info(&self) -> BoxFuture<'_, Result<EnvironmentInfo, ExecServerError>> {
+        async move { self.client.environment_info().await }.boxed()
+    }
 }
 
 impl Environment {
@@ -298,6 +334,7 @@ impl Environment {
         Self {
             exec_server_url: None,
             remote_transport: None,
+            info_provider: Arc::new(LocalEnvironmentInfoProvider),
             exec_backend: Arc::new(LocalProcess::default()),
             filesystem: Arc::new(LocalFileSystem::unsandboxed()),
             http_client: Arc::new(ReqwestHttpClient),
@@ -354,6 +391,7 @@ impl Environment {
         Self {
             exec_server_url: None,
             remote_transport: None,
+            info_provider: Arc::new(LocalEnvironmentInfoProvider),
             exec_backend: Arc::new(LocalProcess::default()),
             filesystem: Arc::new(LocalFileSystem::with_runtime_paths(
                 local_runtime_paths.clone(),
@@ -392,6 +430,7 @@ impl Environment {
         Self {
             exec_server_url,
             remote_transport: Some(remote_transport),
+            info_provider: Arc::new(RemoteEnvironmentInfoProvider::new(client.clone())),
             exec_backend,
             filesystem,
             http_client: Arc::new(client),
@@ -412,6 +451,11 @@ impl Environment {
         self.local_runtime_paths.as_ref()
     }
 
+    /// Returns environment information from the selected execution/filesystem environment.
+    pub async fn info(&self) -> Result<EnvironmentInfo, ExecServerError> {
+        self.info_provider.info().await
+    }
+
     pub fn get_exec_backend(&self) -> Arc<dyn ExecBackend> {
         Arc::clone(&self.exec_backend)
     }
@@ -422,6 +466,23 @@ impl Environment {
 
     pub fn get_filesystem(&self) -> Arc<dyn ExecutorFileSystem> {
         Arc::clone(&self.filesystem)
+    }
+}
+
+impl EnvironmentInfo {
+    pub(crate) fn local() -> Self {
+        Self {
+            shell: codex_shell_command::shell_detect::default_user_shell().into(),
+        }
+    }
+}
+
+impl From<DetectedShell> for ShellInfo {
+    fn from(shell: DetectedShell) -> Self {
+        Self {
+            name: shell.name().to_string(),
+            path: shell.shell_path.to_string_lossy().into_owned(),
+        }
     }
 }
 
@@ -458,6 +519,7 @@ mod tests {
 
         assert_eq!(environment.exec_server_url(), None);
         assert!(!environment.is_remote());
+        assert!(environment.info().await.is_ok());
     }
 
     #[tokio::test]
