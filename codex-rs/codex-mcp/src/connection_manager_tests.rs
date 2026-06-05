@@ -1321,15 +1321,34 @@ fn mcp_init_error_display_keeps_transient_oauth_refresh_failure_generic() {
 }
 
 #[test]
-fn mcp_init_error_display_keeps_credential_store_failure_generic() {
+fn mcp_init_error_display_preserves_credential_store_read_cause() {
     let server_name = "example";
-    let err: StartupOutcomeError =
-        anyhow::anyhow!("failed to read OAuth credentials: secure storage is locked").into();
+    let err: StartupOutcomeError = anyhow::anyhow!(
+        "failed to read OAuth credentials for MCP server `example`: failed to read credentials file at /tmp/.credentials.json: Is a directory"
+    )
+    .into();
 
     let display = mcp_init_error_display(server_name, /*entry*/ None, &err);
 
     let expected = format!("MCP client for `{server_name}` failed to start: {err:#}");
     assert_eq!(expected, display);
+    assert!(display.contains("Is a directory"));
+    assert!(!display.contains("codex mcp login"));
+}
+
+#[test]
+fn mcp_init_error_display_preserves_credential_store_write_cause() {
+    let server_name = "example";
+    let err: StartupOutcomeError = anyhow::anyhow!(
+        "failed to write credentials file at /tmp/.credentials.json: Permission denied"
+    )
+    .into();
+
+    let display = mcp_init_error_display(server_name, /*entry*/ None, &err);
+
+    let expected = format!("MCP client for `{server_name}` failed to start: {err:#}");
+    assert_eq!(expected, display);
+    assert!(display.contains("Permission denied"));
     assert!(!display.contains("codex mcp login"));
 }
 

@@ -9,7 +9,6 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
 
-use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
 use codex_api::SharedAuthProvider;
@@ -67,6 +66,7 @@ use crate::in_process_transport::InProcessTransportFactory;
 use crate::load_oauth_tokens;
 use crate::oauth::OAuthPersistor;
 use crate::oauth::StoredOAuthTokens;
+use crate::oauth::format_bounded_oauth_error;
 use crate::stdio_server_launcher::StdioServerCommand;
 use crate::stdio_server_launcher::StdioServerLauncher;
 use crate::stdio_server_launcher::StdioServerProcessHandle;
@@ -738,8 +738,11 @@ impl RmcpClient {
                     && auth_provider.is_none()
                     && !default_headers.contains_key(AUTHORIZATION)
                 {
-                    load_oauth_tokens(server_name, url, *store_mode).with_context(|| {
-                        format!("failed to read OAuth credentials for MCP server `{server_name}`")
+                    load_oauth_tokens(server_name, url, *store_mode).map_err(|error| {
+                        anyhow!(
+                            "failed to read OAuth credentials for MCP server `{server_name}`: {}",
+                            format_bounded_oauth_error(&error)
+                        )
                     })?
                 } else {
                     None
@@ -842,17 +845,23 @@ impl RmcpClient {
             ),
         };
 
-        let service = match timeout {
-            Some(duration) => time::timeout(duration, transport)
+        let connect = async {
+            if let Some(runtime) = oauth_persistor.as_ref() {
+                runtime.refresh_for_startup_if_needed().await?;
+            }
+
+            let service = transport
                 .await
-                .map_err(|_| anyhow!("timed out handshaking with MCP server after {duration:?}"))?
-                .map_err(|err| anyhow!("handshaking with MCP server failed: {err}"))?,
-            None => transport
-                .await
-                .map_err(|err| anyhow!("handshaking with MCP server failed: {err}"))?,
+                .map_err(|err| anyhow!("handshaking with MCP server failed: {err}"))?;
+            Ok((Arc::new(service), oauth_persistor))
         };
 
-        Ok((Arc::new(service), oauth_persistor))
+        match timeout {
+            Some(duration) => time::timeout(duration, connect)
+                .await
+                .map_err(|_| anyhow!("timed out handshaking with MCP server after {duration:?}"))?,
+            None => connect.await,
+        }
     }
 
     async fn run_service_operation<T, F, Fut>(
@@ -1054,8 +1063,6 @@ async fn create_oauth_transport_and_runtime(
         credentials_store,
         Some(initial_tokens),
     );
-
-    runtime.refresh_for_startup_if_needed().await?;
 
     Ok((transport, runtime))
 }

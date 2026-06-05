@@ -39,6 +39,7 @@ use std::fs;
 use std::io::ErrorKind;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::Mutex as StdMutex;
 use std::time::Duration;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
@@ -54,6 +55,9 @@ use codex_utils_home_dir::find_codex_home;
 
 const KEYRING_SERVICE: &str = "Codex MCP Credentials";
 const REFRESH_SKEW_MILLIS: u64 = 30_000;
+const MAX_OAUTH_ERROR_CAUSE_CHARS: usize = 512;
+const MISSING_REFRESH_TOKEN_ERROR: &str = "No refresh token available";
+const OAUTH_SERVER_ERROR_PREFIX: &str = "Server returned error response: ";
 pub const OAUTH_REFRESH_REAUTHENTICATION_REQUIRED_ERROR: &str =
     "OAuth refresh token was rejected; reauthentication required";
 
@@ -197,10 +201,8 @@ fn save_oauth_tokens_with_keyring<K: KeyringStore>(
             Ok(())
         }
         Err(error) => {
-            let message = format!(
-                "failed to write OAuth tokens to keyring: {}",
-                error.message()
-            );
+            let cause = format_bounded_oauth_error_message(&error.message());
+            let message = format!("failed to write OAuth tokens to keyring: {cause}");
             warn!("{message}");
             Err(Error::new(error.into_error()).context(message))
         }
@@ -269,7 +271,12 @@ struct OAuthPersistorInner {
     url: String,
     authorization_manager: Arc<Mutex<AuthorizationManager>>,
     store_mode: OAuthCredentialsStoreMode,
-    last_credentials: Mutex<Option<StoredOAuthTokens>>,
+    credential_state: StdMutex<OAuthCredentialState>,
+}
+
+struct OAuthCredentialState {
+    current: Option<StoredOAuthTokens>,
+    persisted: Option<StoredOAuthTokens>,
 }
 
 impl OAuthPersistor {
@@ -286,7 +293,10 @@ impl OAuthPersistor {
                 url,
                 authorization_manager,
                 store_mode,
-                last_credentials: Mutex::new(initial_credentials),
+                credential_state: StdMutex::new(OAuthCredentialState {
+                    current: initial_credentials.clone(),
+                    persisted: initial_credentials,
+                }),
             }),
         }
     }
@@ -305,34 +315,15 @@ impl OAuthPersistor {
         }?;
 
         match maybe_credentials {
-            Some(credentials) => {
-                let mut last_credentials = self.inner.last_credentials.lock().await;
-                let new_token_response = WrappedOAuthTokenResponse(credentials.clone());
-                let same_token = last_credentials
-                    .as_ref()
-                    .map(|prev| prev.token_response == new_token_response)
-                    .unwrap_or(false);
-                let expires_at = if same_token {
-                    last_credentials.as_ref().and_then(|prev| prev.expires_at)
-                } else {
-                    compute_expires_at_millis(&credentials)
-                };
-                let stored = StoredOAuthTokens {
-                    server_name: self.inner.server_name.clone(),
-                    url: self.inner.url.clone(),
-                    client_id,
-                    token_response: new_token_response,
-                    expires_at,
-                };
-                if last_credentials.as_ref() != Some(&stored) {
-                    // Preserve the refreshed in-memory state even when durable storage fails.
-                    *last_credentials = Some(stored.clone());
-                    save_oauth_tokens(&self.inner.server_name, &stored, self.inner.store_mode)?;
-                }
-            }
+            Some(credentials) => self.persist_credentials(client_id, credentials)?,
             None => {
-                let mut last_serialized = self.inner.last_credentials.lock().await;
-                if last_serialized.take().is_some()
+                let mut state = self
+                    .inner
+                    .credential_state
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                state.current = None;
+                if state.persisted.take().is_some()
                     && let Err(error) = delete_oauth_tokens(
                         &self.inner.server_name,
                         &self.inner.url,
@@ -340,11 +331,99 @@ impl OAuthPersistor {
                     )
                 {
                     warn!(
-                        "failed to remove OAuth tokens for server {}: {error}",
-                        self.inner.server_name
+                        "failed to remove OAuth tokens for server {}: {}",
+                        self.inner.server_name,
+                        format_bounded_oauth_error(&error)
                     );
                 }
             }
+        }
+
+        Ok(())
+    }
+
+    pub(crate) async fn refresh_for_startup_if_needed(&self) -> Result<()> {
+        let current = {
+            let state = self
+                .inner
+                .credential_state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            state.current.clone()
+        };
+        let Some(current) = current else {
+            return Ok(());
+        };
+
+        if !token_needs_refresh(current.expires_at) {
+            return Ok(());
+        }
+
+        let credentials = match self.refresh_authorization_manager().await {
+            Ok(credentials) => credentials,
+            Err(error) if refresh_requires_reauthentication(&error) => {
+                return Err(anyhow!(OAUTH_REFRESH_REAUTHENTICATION_REQUIRED_ERROR));
+            }
+            Err(AuthError::TokenRefreshFailed(message)) => {
+                return Err(anyhow!(
+                    "OAuth token endpoint refresh failed for server {}: {}",
+                    self.inner.server_name,
+                    format_bounded_oauth_error_message(&message)
+                ));
+            }
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!(
+                        "failed to refresh OAuth tokens for server {}",
+                        self.inner.server_name
+                    )
+                });
+            }
+        };
+
+        if let Err(error) = self.persist_credentials(current.client_id, credentials) {
+            warn!(
+                "failed to persist refreshed OAuth tokens before initialize: {}",
+                format_bounded_oauth_error(&error)
+            );
+        }
+
+        Ok(())
+    }
+
+    pub(crate) async fn refresh_if_needed(&self) -> Result<()> {
+        let current = {
+            let state = self
+                .inner
+                .credential_state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            state.current.clone()
+        };
+        let Some(current) = current else {
+            return Ok(());
+        };
+
+        if !token_needs_refresh(current.expires_at) {
+            return Ok(());
+        }
+
+        let credentials = self
+            .refresh_authorization_manager()
+            .await
+            .with_context(|| {
+                format!(
+                    "failed to refresh OAuth tokens for server {}",
+                    self.inner.server_name
+                )
+            })?;
+
+        if let Err(error) = self.persist_credentials(current.client_id, credentials) {
+            warn!(
+                "failed to persist refreshed OAuth tokens for server {}: {}",
+                self.inner.server_name,
+                format_bounded_oauth_error(&error)
+            );
         }
 
         Ok(())
@@ -354,62 +433,48 @@ impl OAuthPersistor {
         clippy::await_holding_invalid_type,
         reason = "AuthorizationManager async access must be serialized through its mutex"
     )]
-    pub(crate) async fn refresh_for_startup_if_needed(&self) -> Result<()> {
-        let expires_at = {
-            let guard = self.inner.last_credentials.lock().await;
-            guard.as_ref().and_then(|tokens| tokens.expires_at)
-        };
-
-        if !token_needs_refresh(expires_at) {
-            return Ok(());
-        }
-
+    async fn refresh_authorization_manager(
+        &self,
+    ) -> std::result::Result<OAuthTokenResponse, AuthError> {
         let manager = self.inner.authorization_manager.clone();
         let guard = manager.lock().await;
-        match guard.refresh_token().await {
-            Ok(_) => Ok(()),
-            Err(AuthError::TokenRefreshFailed(message)) if message.contains("invalid_grant") => {
-                Err(anyhow!(OAUTH_REFRESH_REAUTHENTICATION_REQUIRED_ERROR))
-            }
-            Err(AuthError::TokenRefreshFailed(message)) => Err(anyhow!(
-                "OAuth token endpoint refresh failed for server {}: {message}",
-                self.inner.server_name
-            )),
-            Err(error) => Err(error).with_context(|| {
-                format!(
-                    "failed to refresh OAuth tokens for server {}",
-                    self.inner.server_name
-                )
-            }),
-        }
+        guard.refresh_token().await
     }
 
-    #[expect(
-        clippy::await_holding_invalid_type,
-        reason = "AuthorizationManager async access must be serialized through its mutex"
-    )]
-    pub(crate) async fn refresh_if_needed(&self) -> Result<()> {
-        let expires_at = {
-            let guard = self.inner.last_credentials.lock().await;
-            guard.as_ref().and_then(|tokens| tokens.expires_at)
+    fn persist_credentials(
+        &self,
+        client_id: String,
+        credentials: OAuthTokenResponse,
+    ) -> Result<()> {
+        let mut state = self
+            .inner
+            .credential_state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let new_token_response = WrappedOAuthTokenResponse(credentials.clone());
+        let same_token = state
+            .current
+            .as_ref()
+            .map(|prev| prev.token_response == new_token_response)
+            .unwrap_or(false);
+        let expires_at = if same_token {
+            state.current.as_ref().and_then(|prev| prev.expires_at)
+        } else {
+            compute_expires_at_millis(&credentials)
         };
-
-        if !token_needs_refresh(expires_at) {
-            return Ok(());
+        let stored = StoredOAuthTokens {
+            server_name: self.inner.server_name.clone(),
+            url: self.inner.url.clone(),
+            client_id,
+            token_response: new_token_response,
+            expires_at,
+        };
+        state.current = Some(stored.clone());
+        if state.persisted.as_ref() != Some(&stored) {
+            save_oauth_tokens(&self.inner.server_name, &stored, self.inner.store_mode)?;
+            state.persisted = Some(stored);
         }
-
-        {
-            let manager = self.inner.authorization_manager.clone();
-            let guard = manager.lock().await;
-            guard.refresh_token().await.with_context(|| {
-                format!(
-                    "failed to refresh OAuth tokens for server {}",
-                    self.inner.server_name
-                )
-            })?;
-        }
-
-        self.persist_if_needed().await
+        Ok(())
     }
 }
 
@@ -582,10 +647,11 @@ fn read_fallback_file() -> Result<Option<FallbackFile>> {
         Ok(contents) => contents,
         Err(err) if err.kind() == ErrorKind::NotFound => return Ok(None),
         Err(err) => {
-            return Err(err).context(format!(
-                "failed to read credentials file at {}",
+            let message = format!(
+                "failed to read credentials file at {}: {err}",
                 path.display()
-            ));
+            );
+            return Err(Error::new(err).context(message));
         }
     };
 
@@ -613,8 +679,13 @@ fn write_fallback_file(store: &FallbackFile) -> Result<()> {
     }
 
     let serialized = serde_json::to_string(store)?;
-    fs::write(&path, serialized)
-        .with_context(|| format!("failed to write credentials file at {}", path.display()))?;
+    if let Err(error) = fs::write(&path, serialized) {
+        let message = format!(
+            "failed to write credentials file at {}: {error}",
+            path.display()
+        );
+        return Err(Error::new(error).context(message));
+    }
 
     #[cfg(unix)]
     {
@@ -635,6 +706,63 @@ fn sha_256_prefix(value: &Value) -> Result<String> {
     let hex = format!("{digest:x}");
     let truncated = &hex[..16];
     Ok(truncated.to_string())
+}
+
+pub(crate) fn format_bounded_oauth_error(error: &Error) -> String {
+    let context = error.to_string();
+    let root_cause = error.root_cause().to_string();
+    if context == root_cause {
+        return format_bounded_oauth_error_message(&context);
+    }
+
+    let combined = format!("{context}: {root_cause}");
+    if combined.chars().count() <= MAX_OAUTH_ERROR_CAUSE_CHARS {
+        return combined;
+    }
+
+    let root_budget = MAX_OAUTH_ERROR_CAUSE_CHARS / 2;
+    let context_budget = MAX_OAUTH_ERROR_CAUSE_CHARS
+        .saturating_sub(root_budget)
+        .saturating_sub(2);
+    format!(
+        "{}: {}",
+        format_bounded_oauth_error_message_with_limit(&context, context_budget),
+        format_bounded_oauth_error_message_with_limit(&root_cause, root_budget)
+    )
+}
+
+fn format_bounded_oauth_error_message(message: &str) -> String {
+    format_bounded_oauth_error_message_with_limit(message, MAX_OAUTH_ERROR_CAUSE_CHARS)
+}
+
+fn format_bounded_oauth_error_message_with_limit(message: &str, limit: usize) -> String {
+    if message.chars().count() <= limit {
+        return message.to_string();
+    }
+
+    let prefix = message
+        .chars()
+        .take(limit.saturating_sub(3))
+        .collect::<String>();
+    format!("{prefix}...")
+}
+
+fn refresh_requires_reauthentication(error: &AuthError) -> bool {
+    match error {
+        AuthError::AuthorizationRequired => true,
+        AuthError::TokenRefreshFailed(message) => {
+            if message == MISSING_REFRESH_TOKEN_ERROR {
+                return true;
+            }
+            message
+                .strip_prefix(OAUTH_SERVER_ERROR_PREFIX)
+                .is_some_and(|response| {
+                    let error_code_end = response.find([':', ' ']).unwrap_or(response.len());
+                    &response[..error_code_end] == "invalid_grant"
+                })
+        }
+        _ => false,
+    }
 }
 
 #[cfg(test)]
@@ -831,6 +959,106 @@ mod tests {
             Some(injected_cause)
         );
         Ok(())
+    }
+
+    #[test]
+    fn save_oauth_tokens_to_file_preserves_write_cause() -> Result<()> {
+        let _env = TempCodexHome::new();
+        let tokens = sample_tokens();
+        super::save_oauth_tokens_to_file(&tokens)?;
+        let path = super::fallback_file_path()?;
+        let original_permissions = fs::metadata(&path)?.permissions();
+        let mut readonly_permissions = original_permissions.clone();
+        readonly_permissions.set_readonly(true);
+        fs::set_permissions(&path, readonly_permissions)?;
+
+        let write_cause = fs::write(&path, "blocked")
+            .expect_err("read-only credentials file should reject writes")
+            .to_string();
+        let mut updated_tokens = tokens;
+        updated_tokens.client_id = "updated-client-id".to_string();
+        let error = super::save_oauth_tokens_to_file(&updated_tokens)
+            .expect_err("production credential write should fail");
+
+        fs::set_permissions(&path, original_permissions)?;
+        assert!(
+            error.to_string().contains(&write_cause),
+            "credential write cause was not preserved: {error:#}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn startup_refresh_reauthentication_classification_is_bounded_to_error_code() {
+        let cases = [
+            (
+                AuthError::AuthorizationRequired,
+                true,
+                "authorization required",
+            ),
+            (
+                AuthError::TokenRefreshFailed(MISSING_REFRESH_TOKEN_ERROR.to_string()),
+                true,
+                "missing refresh token",
+            ),
+            (
+                AuthError::TokenRefreshFailed(
+                    "Server returned error response: invalid_grant: revoked".to_string(),
+                ),
+                true,
+                "invalid_grant error code",
+            ),
+            (
+                AuthError::TokenRefreshFailed(
+                    "Server returned error response: invalid_grant (see https://example.test/error)"
+                        .to_string(),
+                ),
+                true,
+                "invalid_grant error code with URI",
+            ),
+            (
+                AuthError::TokenRefreshFailed(
+                    "Server returned error response: invalid_request: invalid_grant is only description text"
+                        .to_string(),
+                ),
+                false,
+                "invalid_grant description text",
+            ),
+            (
+                AuthError::TokenRefreshFailed(
+                    "network response mentioned invalid_grant".to_string(),
+                ),
+                false,
+                "unstructured invalid_grant text",
+            ),
+        ];
+
+        assert_eq!(
+            cases
+                .iter()
+                .map(|(error, _, label)| {
+                    (*label, super::refresh_requires_reauthentication(error))
+                })
+                .collect::<Vec<_>>(),
+            cases
+                .iter()
+                .map(|(_, expected, label)| (*label, *expected))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn oauth_error_cause_formatting_is_bounded() {
+        let cause = "x".repeat(MAX_OAUTH_ERROR_CAUSE_CHARS + 100);
+        let formatted = super::format_bounded_oauth_error_message(&cause);
+
+        assert_eq!(formatted.chars().count(), MAX_OAUTH_ERROR_CAUSE_CHARS);
+        assert!(formatted.ends_with("..."));
+
+        let error = anyhow!("actionable root cause").context("x".repeat(600));
+        let formatted_chain = super::format_bounded_oauth_error(&error);
+        assert!(formatted_chain.chars().count() <= MAX_OAUTH_ERROR_CAUSE_CHARS);
+        assert!(formatted_chain.contains("actionable root cause"));
     }
 
     #[test]
