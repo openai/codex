@@ -20,7 +20,6 @@ codex-client = { workspace = true }
 codex-config = { workspace = true }
 codex-exec-server = { workspace = true }
 codex-keyring-store = { workspace = true }
-codex-otel = { workspace = true }
 codex-protocol = { workspace = true }
 codex-utils-pty = { workspace = true }
 codex-utils-home-dir = { workspace = true }

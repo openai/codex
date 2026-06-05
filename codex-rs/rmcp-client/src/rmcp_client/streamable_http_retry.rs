@@ -21,7 +21,6 @@ use super::PendingTransport;
 use super::RmcpClient;
 use super::active_time_timeout;
 
-const MCP_CLIENT_INITIALIZE_METRIC: &str = "codex.mcp.client.initialize";
 const JSON_RPC_INTERNAL_ERROR_CODE: i64 = -32603;
 const STREAMABLE_HTTP_RETRY_DELAYS_MS: [u64; 2] = [250, 1_000];
 
@@ -35,11 +34,10 @@ impl RmcpClient {
         Arc<RunningService<RoleClient, ElicitationClientService>>,
         Option<OAuthPersistor>,
     )> {
-        let (should_retry, metric_transport) = match &initial_transport {
-            PendingTransport::InProcess { .. } => (false, "in_process"),
-            PendingTransport::Stdio { .. } => (false, "stdio"),
+        let should_retry = match &initial_transport {
+            PendingTransport::InProcess { .. } | PendingTransport::Stdio { .. } => false,
             PendingTransport::StreamableHttp { .. }
-            | PendingTransport::StreamableHttpWithOAuth { .. } => (true, "streamable_http"),
+            | PendingTransport::StreamableHttpWithOAuth { .. } => true,
         };
         let retry_deadline = timeout.map(|duration| Instant::now() + duration);
         let mut pending_transport = Some(initial_transport);
@@ -57,13 +55,6 @@ impl RmcpClient {
             if let Some(remaining) = attempt_timeout
                 && remaining.is_zero()
             {
-                emit_initialize_metric(
-                    metric_transport,
-                    "error",
-                    attempt_count,
-                    /*retry_exhausted*/ false,
-                    "timeout",
-                );
                 let duration = timeout.unwrap_or(remaining);
                 return Err(anyhow!(
                     "timed out handshaking with MCP server after {duration:?}"
@@ -74,16 +65,7 @@ impl RmcpClient {
                 Some(transport) => transport,
                 None => match Self::create_pending_transport(&self.transport_recipe).await {
                     Ok(transport) => transport,
-                    Err(error) => {
-                        emit_initialize_metric(
-                            metric_transport,
-                            "error",
-                            attempt_count,
-                            /*retry_exhausted*/ false,
-                            "transport_create",
-                        );
-                        return Err(error);
-                    }
+                    Err(error) => return Err(error),
                 },
             };
 
@@ -94,25 +76,9 @@ impl RmcpClient {
             )
             .await
             {
-                Ok(result) => {
-                    emit_initialize_metric(
-                        metric_transport,
-                        "success",
-                        attempt_count,
-                        /*retry_exhausted*/ false,
-                        "none",
-                    );
-                    return Ok(result);
-                }
+                Ok(result) => return Ok(result),
                 Err(error) if should_retry && Self::is_retryable_initialize_error(&error) => {
                     let Some(retry_delay_ms) = retry_delay_ms else {
-                        emit_initialize_metric(
-                            metric_transport,
-                            "error",
-                            attempt_count,
-                            /*retry_exhausted*/ true,
-                            "retry_exhausted",
-                        );
                         return Err(error);
                     };
                     let delay = Duration::from_millis(retry_delay_ms);
@@ -124,29 +90,13 @@ impl RmcpClient {
                         "streamable HTTP MCP initialize failed with a retryable error; retrying"
                     );
                     if !sleep_with_retry_deadline(delay, retry_deadline).await {
-                        emit_initialize_metric(
-                            metric_transport,
-                            "error",
-                            attempt_count,
-                            /*retry_exhausted*/ false,
-                            "timeout",
-                        );
                         let duration = timeout.unwrap_or(delay);
                         return Err(anyhow!(
                             "timed out handshaking with MCP server after {duration:?}"
                         ));
                     }
                 }
-                Err(error) => {
-                    emit_initialize_metric(
-                        metric_transport,
-                        "error",
-                        attempt_count,
-                        /*retry_exhausted*/ false,
-                        "non_retryable",
-                    );
-                    return Err(error);
-                }
+                Err(error) => return Err(error),
             }
         }
 
@@ -335,6 +285,9 @@ impl RmcpClient {
             )) => {
                 *code == JSON_RPC_INTERNAL_ERROR_CODE && message.starts_with("http/request failed:")
             }
+            StreamableHttpError::Client(StreamableHttpClientAdapterError::HttpRequest(
+                ExecServerError::Protocol(message),
+            )) => message.starts_with("http response stream `") && message.contains("` failed:"),
             _ => false,
         }
     }
@@ -351,44 +304,6 @@ async fn sleep_with_retry_deadline(delay: Duration, deadline: Option<Instant>) -
         time::sleep(delay).await;
         true
     }
-}
-
-fn initialize_metric_tags(
-    transport: &'static str,
-    outcome: &'static str,
-    attempts: usize,
-    retry_exhausted: bool,
-    failure_kind: &'static str,
-) -> Vec<(&'static str, String)> {
-    let attempts = attempts.max(1);
-    vec![
-        ("transport", transport.to_string()),
-        ("outcome", outcome.to_string()),
-        ("retried", (attempts > 1).to_string()),
-        ("attempts", attempts.to_string()),
-        ("retry_count", attempts.saturating_sub(1).to_string()),
-        ("retry_exhausted", retry_exhausted.to_string()),
-        ("failure_kind", failure_kind.to_string()),
-    ]
-}
-
-fn emit_initialize_metric(
-    transport: &'static str,
-    outcome: &'static str,
-    attempts: usize,
-    retry_exhausted: bool,
-    failure_kind: &'static str,
-) {
-    let Some(metrics) = codex_otel::global() else {
-        return;
-    };
-
-    let tags = initialize_metric_tags(transport, outcome, attempts, retry_exhausted, failure_kind);
-    let tag_refs: Vec<(&str, &str)> = tags
-        .iter()
-        .map(|(key, value)| (*key, value.as_str()))
-        .collect();
-    let _ = metrics.counter(MCP_CLIENT_INITIALIZE_METRIC, /*inc*/ 1, &tag_refs);
 }
 
 #[derive(Debug, thiserror::Error)]
