@@ -273,6 +273,61 @@ async fn fallback_read_lock_wait_uses_startup_timeout_budget() -> anyhow::Result
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn fallback_write_lock_wait_uses_startup_timeout_budget() -> anyhow::Result<()> {
+    let server = MockServer::start().await;
+    mount_oauth_metadata(&server, /*expected_requests*/ 1).await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "access_token": NEW_ACCESS_TOKEN,
+            "token_type": "Bearer",
+            "expires_in": 7200,
+            "refresh_token": NEW_REFRESH_TOKEN,
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    mount_mcp_server(&server, /*expected_requests*/ 0).await;
+
+    let codex_home = TempDir::new()?;
+    let control_dir = TempDir::new()?;
+    let server_url = format!("{}/mcp", server.uri());
+    seed_tokens(&codex_home, &server_url, /*expires_at*/ 0).await?;
+
+    let (lock_path, _) = fallback_lock_path_and_user_namespace(&codex_home)?;
+    let fallback_lock = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(lock_path)?;
+    fallback_lock.lock_shared()?;
+
+    let ready_path = control_dir.path().join("client.ready");
+    let go_path = control_dir.path().join("client.go");
+    let result_path = control_dir.path().join("client.result");
+    let child = spawn_client_child(
+        &codex_home,
+        &server_url,
+        &ready_path,
+        &go_path,
+        &result_path,
+    )?;
+    wait_for_paths(std::slice::from_ref(&ready_path)).await?;
+    fs::write(&go_path, "go")?;
+    wait_for_paths(std::slice::from_ref(&result_path)).await?;
+    assert_eq!(
+        fs::read_to_string(&result_path)?,
+        "error:timed out handshaking with MCP server after 5s"
+    );
+
+    drop(fallback_lock);
+    wait_for_children(vec![child]).await?;
+    server.verify().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn fallback_read_lock_wait_uses_operation_timeout_budget() -> anyhow::Result<()> {
     let server = MockServer::start().await;
     mount_oauth_metadata(&server, /*expected_requests*/ 1).await;
@@ -315,6 +370,62 @@ async fn fallback_read_lock_wait_uses_operation_timeout_budget() -> anyhow::Resu
         .truncate(false)
         .open(lock_path)?;
     fallback_lock.lock()?;
+
+    fs::write(&go_path, "go")?;
+    wait_for_children(vec![child]).await?;
+    assert_eq!(
+        fs::read_to_string(result_path)?,
+        format!("error:timed out awaiting tools/list after {OPERATION_TIMEOUT:?}")
+    );
+
+    drop(fallback_lock);
+    server.verify().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn fallback_write_lock_wait_uses_operation_timeout_budget() -> anyhow::Result<()> {
+    let server = MockServer::start().await;
+    mount_oauth_metadata(&server, /*expected_requests*/ 1).await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "access_token": NEW_ACCESS_TOKEN,
+            "token_type": "Bearer",
+            "expires_in": 31,
+            "refresh_token": NEW_REFRESH_TOKEN,
+        })))
+        .expect(2)
+        .mount(&server)
+        .await;
+    mount_mcp_server(&server, /*expected_requests*/ 2).await;
+
+    let codex_home = TempDir::new()?;
+    let control_dir = TempDir::new()?;
+    let server_url = format!("{}/mcp", server.uri());
+    seed_tokens(&codex_home, &server_url, /*expires_at*/ 0).await?;
+
+    let ready_path = control_dir.path().join("client.ready");
+    let go_path = control_dir.path().join("client.go");
+    let result_path = control_dir.path().join("client.result");
+    let child = spawn_operation_timeout_child(
+        &codex_home,
+        &server_url,
+        &ready_path,
+        &go_path,
+        &result_path,
+    )?;
+    wait_for_paths(std::slice::from_ref(&ready_path)).await?;
+    sleep(Duration::from_secs(2)).await;
+
+    let (lock_path, _) = fallback_lock_path_and_user_namespace(&codex_home)?;
+    let fallback_lock = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(lock_path)?;
+    fallback_lock.lock_shared()?;
 
     fs::write(&go_path, "go")?;
     wait_for_children(vec![child]).await?;

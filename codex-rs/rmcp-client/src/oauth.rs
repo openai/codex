@@ -247,16 +247,23 @@ fn save_oauth_tokens_with_keyring<K: KeyringStore>(
     server_name: &str,
     tokens: &StoredOAuthTokens,
 ) -> Result<()> {
+    let key = save_oauth_tokens_to_keyring(keyring_store, server_name, tokens)?;
+    if let Err(error) = delete_oauth_tokens_from_file(&key) {
+        warn!("failed to remove OAuth tokens from fallback storage: {error:?}");
+    }
+    Ok(())
+}
+
+fn save_oauth_tokens_to_keyring<K: KeyringStore>(
+    keyring_store: &K,
+    server_name: &str,
+    tokens: &StoredOAuthTokens,
+) -> Result<String> {
     let serialized = serde_json::to_string(tokens).context("failed to serialize OAuth tokens")?;
 
     let key = compute_store_key(server_name, &tokens.url)?;
     match keyring_store.save(KEYRING_SERVICE, &key, &serialized) {
-        Ok(()) => {
-            if let Err(error) = delete_oauth_tokens_from_file(&key) {
-                warn!("failed to remove OAuth tokens from fallback storage: {error:?}");
-            }
-            Ok(())
-        }
+        Ok(()) => Ok(key),
         Err(error) => {
             let message = format!(
                 "failed to write OAuth tokens to keyring: {}",
@@ -284,6 +291,46 @@ fn save_oauth_tokens_with_keyring_with_fallback_to_file<K: KeyringStore>(
     }
 }
 
+async fn save_oauth_tokens_for_runtime(
+    server_name: &str,
+    tokens: &StoredOAuthTokens,
+    store_mode: OAuthCredentialsStoreMode,
+) -> Result<()> {
+    let keyring_store = DefaultKeyringStore;
+    match store_mode {
+        OAuthCredentialsStoreMode::Auto => {
+            match save_oauth_tokens_with_keyring_async(&keyring_store, server_name, tokens).await {
+                Ok(()) => Ok(()),
+                Err(error) => {
+                    let message = error.to_string();
+                    warn!("falling back to file storage for OAuth tokens: {message}");
+                    save_oauth_tokens_to_file_async(tokens)
+                        .await
+                        .with_context(|| {
+                            format!("failed to write OAuth tokens to keyring: {message}")
+                        })
+                }
+            }
+        }
+        OAuthCredentialsStoreMode::File => save_oauth_tokens_to_file_async(tokens).await,
+        OAuthCredentialsStoreMode::Keyring => {
+            save_oauth_tokens_with_keyring_async(&keyring_store, server_name, tokens).await
+        }
+    }
+}
+
+async fn save_oauth_tokens_with_keyring_async<K: KeyringStore>(
+    keyring_store: &K,
+    server_name: &str,
+    tokens: &StoredOAuthTokens,
+) -> Result<()> {
+    let key = save_oauth_tokens_to_keyring(keyring_store, server_name, tokens)?;
+    if let Err(error) = delete_oauth_tokens_from_file_async(&key).await {
+        warn!("failed to remove OAuth tokens from fallback storage: {error:?}");
+    }
+    Ok(())
+}
+
 pub fn delete_oauth_tokens(
     server_name: &str,
     url: &str,
@@ -300,7 +347,29 @@ fn delete_oauth_tokens_from_keyring_and_file<K: KeyringStore>(
     url: &str,
 ) -> Result<bool> {
     let key = compute_store_key(server_name, url)?;
-    let keyring_result = keyring_store.delete(KEYRING_SERVICE, &key);
+    let keyring_removed = delete_oauth_tokens_from_keyring(keyring_store, store_mode, &key)?;
+    let file_removed = delete_oauth_tokens_from_file(&key)?;
+    Ok(keyring_removed || file_removed)
+}
+
+async fn delete_oauth_tokens_for_runtime(
+    server_name: &str,
+    url: &str,
+    store_mode: OAuthCredentialsStoreMode,
+) -> Result<bool> {
+    let keyring_store = DefaultKeyringStore;
+    let key = compute_store_key(server_name, url)?;
+    let keyring_removed = delete_oauth_tokens_from_keyring(&keyring_store, store_mode, &key)?;
+    let file_removed = delete_oauth_tokens_from_file_async(&key).await?;
+    Ok(keyring_removed || file_removed)
+}
+
+fn delete_oauth_tokens_from_keyring<K: KeyringStore>(
+    keyring_store: &K,
+    store_mode: OAuthCredentialsStoreMode,
+    key: &str,
+) -> Result<bool> {
+    let keyring_result = keyring_store.delete(KEYRING_SERVICE, key);
     let keyring_removed = match keyring_result {
         Ok(removed) => removed,
         Err(error) => {
@@ -315,9 +384,7 @@ fn delete_oauth_tokens_from_keyring_and_file<K: KeyringStore>(
             }
         }
     };
-
-    let file_removed = delete_oauth_tokens_from_file(&key)?;
-    Ok(keyring_removed || file_removed)
+    Ok(keyring_removed)
 }
 
 #[derive(Clone)]
@@ -389,18 +456,24 @@ impl OAuthPersistor {
                     expires_at,
                 };
                 if last_credentials.as_ref() != Some(&stored) {
-                    save_oauth_tokens(&self.inner.server_name, &stored, self.inner.store_mode)?;
+                    save_oauth_tokens_for_runtime(
+                        &self.inner.server_name,
+                        &stored,
+                        self.inner.store_mode,
+                    )
+                    .await?;
                     *last_credentials = Some(stored);
                 }
             }
             None => {
                 let mut last_serialized = self.inner.last_credentials.lock().await;
                 if last_serialized.take().is_some()
-                    && let Err(error) = delete_oauth_tokens(
+                    && let Err(error) = delete_oauth_tokens_for_runtime(
                         &self.inner.server_name,
                         &self.inner.url,
                         self.inner.store_mode,
                     )
+                    .await
                 {
                     warn!(
                         "failed to remove OAuth tokens for server {}: {error}",
@@ -744,6 +817,27 @@ fn acquire_fallback_write_lock() -> Result<fs::File> {
     Ok(file)
 }
 
+async fn acquire_fallback_write_lock_async() -> Result<fs::File> {
+    let path = fallback_lock_path()?;
+    let file = open_oauth_lock_file(&path)?;
+    loop {
+        match file.try_lock() {
+            Ok(()) => return Ok(file),
+            Err(fs::TryLockError::WouldBlock) => {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!(
+                        "failed to acquire OAuth fallback write lock at {}",
+                        path.display()
+                    )
+                });
+            }
+        }
+    }
+}
+
 fn acquire_fallback_read_lock() -> Result<fs::File> {
     let path = fallback_lock_path()?;
     let file = open_oauth_lock_file(&path)?;
@@ -931,6 +1025,15 @@ fn load_oauth_tokens_from_file_unlocked(
 
 fn save_oauth_tokens_to_file(tokens: &StoredOAuthTokens) -> Result<()> {
     let _write_lock = acquire_fallback_write_lock()?;
+    save_oauth_tokens_to_file_unlocked(tokens)
+}
+
+async fn save_oauth_tokens_to_file_async(tokens: &StoredOAuthTokens) -> Result<()> {
+    let _write_lock = acquire_fallback_write_lock_async().await?;
+    save_oauth_tokens_to_file_unlocked(tokens)
+}
+
+fn save_oauth_tokens_to_file_unlocked(tokens: &StoredOAuthTokens) -> Result<()> {
     let key = compute_store_key(&tokens.server_name, &tokens.url)?;
     let mut store = read_fallback_file_unlocked()?.unwrap_or_default();
 
@@ -961,6 +1064,11 @@ fn save_oauth_tokens_to_file(tokens: &StoredOAuthTokens) -> Result<()> {
 
 fn delete_oauth_tokens_from_file(key: &str) -> Result<bool> {
     let _write_lock = acquire_fallback_write_lock()?;
+    delete_oauth_tokens_from_file_unlocked(key)
+}
+
+async fn delete_oauth_tokens_from_file_async(key: &str) -> Result<bool> {
+    let _write_lock = acquire_fallback_write_lock_async().await?;
     delete_oauth_tokens_from_file_unlocked(key)
 }
 
