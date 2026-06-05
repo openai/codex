@@ -106,13 +106,13 @@ pub const REALTIME_CONVERSATION_OPEN_TAG: &str = "<realtime_conversation>";
 pub const REALTIME_CONVERSATION_CLOSE_TAG: &str = "</realtime_conversation>";
 pub const USER_MESSAGE_BEGIN: &str = "## My request for Codex:";
 
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TurnEnvironmentSelection {
     pub environment_id: String,
     pub cwd: AbsolutePathBuf,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ThreadEnvironmentSettingsOverride {
     pub cwd: AbsolutePathBuf,
     pub environments: Vec<TurnEnvironmentSelection>,
@@ -130,17 +130,15 @@ impl GitSha {
 }
 
 /// Submission Queue Entry - requests from user
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+#[derive(Debug, Clone)]
 pub struct Submission {
     /// Unique id for this Submission to correlate with Events
     pub id: String,
     /// Payload
     pub op: Op,
     /// Client-provided id for the user message represented by `Op::UserInput`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub client_user_message_id: Option<String>,
     /// Optional W3C trace carrier propagated across async submission handoffs.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trace: Option<W3cTraceContext>,
 }
 
@@ -155,34 +153,23 @@ pub struct W3cTraceContext {
 }
 
 /// Config payload for refreshing MCP servers.
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct McpServerRefreshConfig {
     pub mcp_servers: Value,
     pub mcp_oauth_credentials_store_mode: Value,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ConversationStartParams {
     /// Selects whether the realtime session should produce text or audio output.
     pub output_modality: RealtimeOutputModality,
-    #[serde(
-        default,
-        deserialize_with = "conversation_start_prompt_serde::deserialize",
-        serialize_with = "conversation_start_prompt_serde::serialize",
-        skip_serializing_if = "Option::is_none"
-    )]
     pub prompt: Option<Option<String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub realtime_session_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub transport: Option<ConversationStartTransport>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub voice: Option<RealtimeVoice>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
-#[serde(tag = "type", rename_all = "snake_case")]
-#[ts(tag = "type")]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ConversationStartTransport {
     Websocket,
     Webrtc { sdp: String },
@@ -193,28 +180,6 @@ pub enum ConversationStartTransport {
 pub enum RealtimeOutputModality {
     Text,
     Audio,
-}
-
-mod conversation_start_prompt_serde {
-    use serde::Deserializer;
-    use serde::Serializer;
-
-    pub(crate) fn deserialize<'de, D>(deserializer: D) -> Result<Option<Option<String>>, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        serde_with::rust::double_option::deserialize(deserializer)
-    }
-
-    pub(crate) fn serialize<S>(
-        value: &Option<Option<String>>,
-        serializer: S,
-    ) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        serde_with::rust::double_option::serialize(value, serializer)
-    }
 }
 
 #[derive(
@@ -397,109 +362,92 @@ pub enum RealtimeEvent {
     Error(String),
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ConversationAudioParams {
     pub frame: RealtimeAudioFrame,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ConversationTextParams {
     pub text: String,
 }
 
 /// Persistent thread-settings overrides that can be applied before user input or
 /// on their own.
-#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, JsonSchema)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct ThreadSettingsOverrides {
     /// Updated `cwd` and environments supplied together as a complete pair.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub environment_settings: Option<ThreadEnvironmentSettingsOverride>,
 
     /// Updated runtime workspace roots used to materialize symbolic
     /// `:workspace_roots` filesystem permissions.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub workspace_roots: Option<Vec<AbsolutePathBuf>>,
 
     /// Updated profile-defined workspace roots for status summaries and
     /// per-turn config reconstruction.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub profile_workspace_roots: Option<Vec<AbsolutePathBuf>>,
 
     /// Updated command approval policy.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub approval_policy: Option<AskForApproval>,
 
     /// Updated approval reviewer for future approval prompts.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub approvals_reviewer: Option<ApprovalsReviewer>,
 
     /// Updated sandbox policy for tool calls.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub sandbox_policy: Option<SandboxPolicy>,
 
     /// Updated permissions profile for tool calls.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub permission_profile: Option<PermissionProfile>,
 
     /// Named or built-in profile that produced `permission_profile`, if the
     /// update selected a profile rather than supplying raw permissions.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub active_permission_profile: Option<ActivePermissionProfile>,
 
     /// Updated Windows sandbox mode for tool execution.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub windows_sandbox_level: Option<WindowsSandboxLevel>,
 
     /// Updated model slug. When set, the model info is derived automatically.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
 
     /// Updated reasoning effort (honored only for reasoning-capable models).
     ///
     /// Use `Some(Some(_))` to set a specific effort, `Some(None)` to clear the
     /// effort, or `None` to leave the existing value unchanged.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub effort: Option<Option<ReasoningEffortConfig>>,
 
     /// Updated reasoning summary preference (honored only for reasoning-capable models).
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub summary: Option<ReasoningSummaryConfig>,
 
     /// Updated service tier preference for future turns.
     ///
     /// Use `Some(Some(_))` to set a specific tier, `Some(None)` to clear the
     /// preference, or `None` to leave the existing value unchanged.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub service_tier: Option<Option<String>>,
 
     /// EXPERIMENTAL - set a pre-set collaboration mode.
     /// Takes precedence over model, effort, and developer instructions if set.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub collaboration_mode: Option<CollaborationMode>,
 
     /// Updated personality preference.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub personality: Option<Personality>,
 }
 
 /// Source classification for client-supplied context.
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AdditionalContextKind {
     Untrusted,
     Application,
 }
 
 /// Client-supplied context keyed by an opaque source identifier.
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AdditionalContextEntry {
     pub value: String,
     pub kind: AdditionalContextKind,
 }
 
 /// Submission operation
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[derive(Debug, Clone, PartialEq)]
 #[allow(clippy::large_enum_variant)]
 #[non_exhaustive]
 pub enum Op {
@@ -531,17 +479,13 @@ pub enum Op {
         /// User input items, see `InputItem`
         items: Vec<UserInput>,
         /// Optional JSON Schema used to constrain the final assistant message for this turn.
-        #[serde(skip_serializing_if = "Option::is_none")]
         final_output_json_schema: Option<Value>,
         /// Optional turn-scoped Responses API `client_metadata`.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
         responsesapi_client_metadata: Option<HashMap<String, String>>,
         /// Client-supplied context fragments keyed by an opaque source identifier.
-        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
         additional_context: BTreeMap<String, AdditionalContextEntry>,
 
         /// Persistent thread-settings overrides to apply before the input.
-        #[serde(default, flatten)]
         thread_settings: ThreadSettingsOverrides,
     },
 
@@ -551,7 +495,6 @@ pub enum Op {
     /// preserve caller order between both kinds of mutation.
     ThreadSettings {
         /// Persistent thread-settings overrides to apply.
-        #[serde(flatten)]
         thread_settings: ThreadSettingsOverrides,
     },
 
@@ -566,7 +509,6 @@ pub enum Op {
         /// The id of the submission we are approving
         id: String,
         /// Turn id associated with the approval event, when available.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
         turn_id: Option<String>,
         /// The user's decision in response to the request.
         decision: ReviewDecision,
@@ -589,15 +531,12 @@ pub enum Op {
         /// User's decision for the request.
         decision: ElicitationAction,
         /// Structured user input supplied for accepted elicitations.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
         content: Option<Value>,
         /// Optional client metadata associated with the elicitation response.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
         meta: Option<Value>,
     },
 
     /// Resolve a request_user_input tool call.
-    #[serde(rename = "user_input_answer", alias = "request_user_input_response")]
     UserInputAnswer {
         /// Turn id for the in-flight request.
         id: String,
@@ -4953,146 +4892,6 @@ mod tests {
     }
 
     #[test]
-    fn conversation_op_serializes_as_unnested_variants() {
-        let audio = Op::RealtimeConversationAudio(ConversationAudioParams {
-            frame: RealtimeAudioFrame {
-                data: "AQID".to_string(),
-                sample_rate: 24_000,
-                num_channels: 1,
-                samples_per_channel: Some(480),
-                item_id: None,
-            },
-        });
-        let start = Op::RealtimeConversationStart(ConversationStartParams {
-            output_modality: RealtimeOutputModality::Audio,
-            prompt: Some(Some("be helpful".to_string())),
-            realtime_session_id: Some("conv_1".to_string()),
-            transport: None,
-            voice: None,
-        });
-        let webrtc_start = Op::RealtimeConversationStart(ConversationStartParams {
-            output_modality: RealtimeOutputModality::Audio,
-            prompt: Some(Some("be helpful".to_string())),
-            realtime_session_id: Some("conv_1".to_string()),
-            transport: Some(ConversationStartTransport::Webrtc {
-                sdp: "v=offer\r\n".to_string(),
-            }),
-            voice: Some(RealtimeVoice::Cove),
-        });
-        let text = Op::RealtimeConversationText(ConversationTextParams {
-            text: "hello".to_string(),
-        });
-        let close = Op::RealtimeConversationClose;
-        let default_prompt_start = Op::RealtimeConversationStart(ConversationStartParams {
-            output_modality: RealtimeOutputModality::Audio,
-            prompt: None,
-            realtime_session_id: None,
-            transport: None,
-            voice: None,
-        });
-        let null_prompt_start = Op::RealtimeConversationStart(ConversationStartParams {
-            output_modality: RealtimeOutputModality::Audio,
-            prompt: Some(None),
-            realtime_session_id: None,
-            transport: None,
-            voice: None,
-        });
-        let list_voices = Op::RealtimeConversationListVoices;
-
-        assert_eq!(
-            serde_json::to_value(&start).unwrap(),
-            json!({
-                "type": "realtime_conversation_start",
-                "output_modality": "audio",
-                "prompt": "be helpful",
-                "realtime_session_id": "conv_1"
-            })
-        );
-        assert_eq!(
-            serde_json::to_value(&default_prompt_start).unwrap(),
-            json!({
-                "type": "realtime_conversation_start",
-                "output_modality": "audio"
-            })
-        );
-        assert_eq!(
-            serde_json::to_value(&null_prompt_start).unwrap(),
-            json!({
-                "type": "realtime_conversation_start",
-                "output_modality": "audio",
-                "prompt": null
-            })
-        );
-        assert_eq!(
-            serde_json::from_value::<Op>(json!({
-                "type": "realtime_conversation_start",
-                "output_modality": "audio"
-            }))
-            .unwrap(),
-            default_prompt_start
-        );
-        assert_eq!(
-            serde_json::from_value::<Op>(json!({
-                "type": "realtime_conversation_start",
-                "output_modality": "audio",
-                "prompt": null
-            }))
-            .unwrap(),
-            null_prompt_start
-        );
-        assert_eq!(
-            serde_json::to_value(&audio).unwrap(),
-            json!({
-                "type": "realtime_conversation_audio",
-                "frame": {
-                    "data": "AQID",
-                    "sample_rate": 24000,
-                    "num_channels": 1,
-                    "samples_per_channel": 480
-                }
-            })
-        );
-        assert_eq!(
-            serde_json::from_value::<Op>(serde_json::to_value(&text).unwrap()).unwrap(),
-            text
-        );
-        assert_eq!(
-            serde_json::to_value(&close).unwrap(),
-            json!({
-                "type": "realtime_conversation_close"
-            })
-        );
-        assert_eq!(
-            serde_json::from_value::<Op>(serde_json::to_value(&close).unwrap()).unwrap(),
-            close
-        );
-        assert_eq!(
-            serde_json::to_value(&list_voices).unwrap(),
-            json!({
-                "type": "realtime_conversation_list_voices"
-            })
-        );
-        assert_eq!(
-            serde_json::from_value::<Op>(serde_json::to_value(&list_voices).unwrap()).unwrap(),
-            list_voices
-        );
-        assert_eq!(
-            serde_json::to_value(&webrtc_start).unwrap(),
-            json!({
-                "type": "realtime_conversation_start",
-                "output_modality": "audio",
-                "prompt": "be helpful",
-                "realtime_session_id": "conv_1",
-                "transport": {
-                    "type": "webrtc",
-                    "sdp": "v=offer\r\n"
-                },
-                "voice": "cove"
-            })
-        );
-    }
-
-    #[test]
     fn realtime_conversation_started_event_uses_realtime_session_id() {
         let event = RealtimeConversationStartedEvent {
             realtime_session_id: Some("conv_1".to_string()),
@@ -5142,101 +4941,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn user_input_serialization_omits_final_output_json_schema_when_none() -> Result<()> {
-        let op = Op::UserInput {
-            items: Vec::new(),
-            final_output_json_schema: None,
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
-            thread_settings: Default::default(),
-        };
-
-        let json_op = serde_json::to_value(op)?;
-        assert_eq!(json_op, json!({ "type": "user_input", "items": [] }));
-
-        Ok(())
-    }
-
-    #[test]
-    fn user_input_deserializes_without_final_output_json_schema_field() -> Result<()> {
-        let op: Op = serde_json::from_value(json!({ "type": "user_input", "items": [] }))?;
-
-        assert_eq!(
-            op,
-            Op::UserInput {
-                items: Vec::new(),
-                final_output_json_schema: None,
-                responsesapi_client_metadata: None,
-                additional_context: Default::default(),
-                thread_settings: Default::default(),
-            }
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn user_input_serialization_includes_final_output_json_schema_when_some() -> Result<()> {
-        let schema = json!({
-            "type": "object",
-            "properties": {
-                "answer": { "type": "string" }
-            },
-            "required": ["answer"],
-            "additionalProperties": false
-        });
-        let op = Op::UserInput {
-            items: Vec::new(),
-            final_output_json_schema: Some(schema.clone()),
-            responsesapi_client_metadata: None,
-            additional_context: Default::default(),
-            thread_settings: Default::default(),
-        };
-
-        let json_op = serde_json::to_value(op)?;
-        assert_eq!(
-            json_op,
-            json!({
-                "type": "user_input",
-                "items": [],
-                "final_output_json_schema": schema,
-            })
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn user_input_with_responsesapi_client_metadata_round_trips() -> Result<()> {
-        let op = Op::UserInput {
-            items: Vec::new(),
-            final_output_json_schema: None,
-            responsesapi_client_metadata: Some(HashMap::from([(
-                "fiber_run_id".to_string(),
-                "fiber-123".to_string(),
-            )])),
-            additional_context: Default::default(),
-            thread_settings: Default::default(),
-        };
-
-        let json_op = serde_json::to_value(&op)?;
-        assert_eq!(
-            json_op,
-            json!({
-                "type": "user_input",
-                "items": [],
-                "responsesapi_client_metadata": {
-                    "fiber_run_id": "fiber-123",
-                }
-            })
-        );
-        assert_eq!(serde_json::from_value::<Op>(json_op)?, op);
-
-        Ok(())
-    }
-
-    #[test]
     fn user_input_text_serializes_empty_text_elements() -> Result<()> {
         let input = UserInput::Text {
             text: "hello".to_string(),
