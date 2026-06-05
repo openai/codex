@@ -700,6 +700,21 @@ mod tests {
     }
 
     #[test]
+    fn load_oauth_tokens_from_keyring_propagates_errors() -> Result<()> {
+        let _env = TempCodexHome::new();
+        let store = MockKeyringStore::default();
+        let tokens = sample_tokens();
+        let key = super::compute_store_key(&tokens.server_name, &tokens.url)?;
+        store.set_error(&key, KeyringError::Invalid("error".into(), "load".into()));
+
+        let error = super::load_oauth_tokens_from_keyring(&store, &tokens.server_name, &tokens.url)
+            .expect_err("explicit keyring reads should propagate keyring failures");
+
+        assert!(error.to_string().contains("error"));
+        Ok(())
+    }
+
+    #[test]
     fn save_oauth_tokens_prefers_keyring_when_available() -> Result<()> {
         let _env = TempCodexHome::new();
         let store = MockKeyringStore::default();
@@ -748,6 +763,25 @@ mod tests {
             tokens.token_response.0.access_token().secret().as_str()
         );
         assert!(store.saved_value(&key).is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn save_oauth_tokens_to_keyring_propagates_errors() -> Result<()> {
+        let _env = TempCodexHome::new();
+        let store = MockKeyringStore::default();
+        let tokens = sample_tokens();
+        let key = super::compute_store_key(&tokens.server_name, &tokens.url)?;
+        store.set_error(&key, KeyringError::Invalid("error".into(), "save".into()));
+
+        let error = super::save_oauth_tokens_with_keyring(&store, &tokens.server_name, &tokens)
+            .expect_err("explicit keyring writes should propagate keyring failures");
+
+        assert!(
+            error
+                .to_string()
+                .contains("failed to write OAuth tokens to keyring")
+        );
         Ok(())
     }
 

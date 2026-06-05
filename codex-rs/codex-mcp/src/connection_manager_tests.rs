@@ -1279,7 +1279,9 @@ fn mcp_init_error_display_prompts_for_github_pat() {
 #[test]
 fn mcp_init_error_display_prompts_for_login_when_auth_required() {
     let server_name = "example";
-    let err: StartupOutcomeError = anyhow::anyhow!("Auth required for server").into();
+    let err: StartupOutcomeError =
+        anyhow::anyhow!("handshaking with MCP server failed: transport error: Auth required")
+            .into();
 
     let display = mcp_init_error_display(server_name, /*entry*/ None, &err);
 
@@ -1288,6 +1290,21 @@ fn mcp_init_error_display_prompts_for_login_when_auth_required() {
     );
 
     assert_eq!(expected, display);
+}
+
+#[test]
+fn mcp_init_error_display_keeps_oauth_refresh_authorization_required_generic() {
+    let server_name = "example";
+    let err: StartupOutcomeError = anyhow::anyhow!(
+        "handshaking with MCP server failed: transport error: Auth error: OAuth authorization required"
+    )
+    .into();
+
+    let display = mcp_init_error_display(server_name, /*entry*/ None, &err);
+
+    let expected = format!("MCP client for `{server_name}` failed to start: {err:#}");
+    assert_eq!(expected, display);
+    assert!(!display.contains("codex mcp login"));
 }
 
 #[test]
