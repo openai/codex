@@ -22,18 +22,29 @@ pub(crate) const RESOURCES_DIRNAME: &str = "codex-resources";
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum HelperExecutable {
     CommandRunner,
+    SandboxSetup,
 }
 
 impl HelperExecutable {
     fn file_name(self) -> &'static str {
         match self {
             Self::CommandRunner => "codex-command-runner.exe",
+            Self::SandboxSetup => "codex-windows-sandbox-setup.exe",
         }
     }
 
     fn label(self) -> &'static str {
         match self {
             Self::CommandRunner => "command-runner",
+            Self::SandboxSetup => "sandbox-setup",
+        }
+    }
+
+    fn materialized_file_name(self) -> &'static str {
+        match self {
+            Self::CommandRunner => "codex-command-runner.exe",
+            // Avoid relaunching the packaged `...setup.exe` name from user-writable cache paths.
+            Self::SandboxSetup => "codex-windows-sandbox-bootstrap.exe",
         }
     }
 }
@@ -213,12 +224,11 @@ fn helper_destination_for_source(
     source: &Path,
 ) -> Result<PathBuf> {
     let suffix = helper_version_suffix(source)?;
-    let file_name = materialized_file_name(kind, &suffix);
+    let file_name = materialized_file_name(kind.materialized_file_name(), &suffix);
     Ok(helper_bin_dir(codex_home).join(file_name))
 }
 
-fn materialized_file_name(kind: HelperExecutable, suffix: &str) -> String {
-    let source_name = kind.file_name();
+fn materialized_file_name(source_name: &str, suffix: &str) -> String {
     let path = Path::new(source_name);
     let stem = path
         .file_stem()
@@ -444,7 +454,7 @@ mod tests {
         fs::write(&runner_source, b"runner").expect("runner");
         let runner_suffix = helper_version_suffix(&runner_source).expect("runner suffix");
         let runner_destination = helper_bin_dir(&codex_home).join(materialized_file_name(
-            HelperExecutable::CommandRunner,
+            HelperExecutable::CommandRunner.materialized_file_name(),
             &runner_suffix,
         ));
 
@@ -555,8 +565,21 @@ mod tests {
 
     #[test]
     fn materialized_file_name_adds_suffix_before_extension() {
-        let file_name = materialized_file_name(HelperExecutable::CommandRunner, "test-suffix");
+        let file_name = materialized_file_name(
+            HelperExecutable::CommandRunner.materialized_file_name(),
+            "test-suffix",
+        );
 
         assert_eq!(file_name, "codex-command-runner-test-suffix.exe");
+    }
+
+    #[test]
+    fn sandbox_setup_materialization_uses_bootstrap_alias() {
+        let file_name = materialized_file_name(
+            HelperExecutable::SandboxSetup.materialized_file_name(),
+            "test-suffix",
+        );
+
+        assert_eq!(file_name, "codex-windows-sandbox-bootstrap-test-suffix.exe");
     }
 }
