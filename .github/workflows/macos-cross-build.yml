@@ -1,0 +1,56 @@
+name: macOS cross-build
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/macos-cross-build.yml"
+      - "MODULE.bazel"
+      - "MODULE.bazel.lock"
+      - "patches/llvm_*.patch"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/macos-cross-build.yml"
+      - "MODULE.bazel"
+      - "MODULE.bazel.lock"
+      - "patches/llvm_*.patch"
+  schedule:
+    - cron: "17 9 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}::${{ github.event.pull_request.number > 0 && format('pr-{0}', github.event.pull_request.number) || github.ref_name }}
+  cancel-in-progress: ${{ github.ref_name != 'main' }}
+
+jobs:
+  build:
+    name: Cross-build macOS binaries
+    runs-on: macos-15-xlarge
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Set up Bazel
+        uses: ./.github/actions/setup-bazel-ci
+        with:
+          target: macos-cross
+
+      - name: Cross-build file search
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          repository_cache="${RUNNER_TEMP}/macos-cross-repository-cache"
+          mkdir -p "${repository_cache}"
+
+          for platform in macos_amd64 macos_arm64; do
+            bazel build \
+              "--repository_cache=${repository_cache}" \
+              "--platforms=@llvm//platforms:${platform}" \
+              //codex-rs/file-search:codex-file-search
+          done

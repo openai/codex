@@ -29,11 +29,11 @@ register_toolchains("@llvm//toolchain:all")
 
 osx = use_extension("@llvm//extensions:osx.bzl", "osx")
 osx.from_archive(
-    sha256 = "1bde70c0b1c2ab89ff454acbebf6741390d7b7eb149ca2a3ca24cc9203a408b7",
-    strip_prefix = "Payload/Library/Developer/CommandLineTools/SDKs/MacOSX26.4.sdk",
+    sha256 = "5f044578cd78a3a9b9c965a42d56bad609ee5d252e1d4e6aa7c42fc3f35fee7b",
+    strip_prefix = "Payload/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk",
     type = "pkg",
     urls = [
-        "https://swcdn.apple.com/content/downloads/32/53/047-96692-A_OAHIHT53YB/ybtshxmrcju8m2qvw3w5elr4rajtg1x3y3/CLTools_macOSNMOS_SDK.pkg",
+        "https://swcdn.apple.com/content/downloads/09/08/047-91568-A_Y1CFZWQCD4/4xekpyz43i26dbp4enxfro8eb1q7wiujh5/CLTools_macOSNMOS_SDK.pkg",
     ],
 )
 osx.frameworks(names = [
