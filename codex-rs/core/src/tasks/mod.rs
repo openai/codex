@@ -460,27 +460,48 @@ impl Session {
     ///
     /// The turn is created only when there is mailbox mail marked with `trigger_turn`, and only
     /// if the session is currently idle.
-    pub(crate) async fn maybe_start_turn_for_pending_work_with_sub_id(
+    pub(crate) fn maybe_start_turn_for_pending_work_with_sub_id(
         self: &Arc<Self>,
         sub_id: String,
-    ) {
-        if !self.input_queue.has_trigger_turn_mailbox_items().await {
-            return;
-        }
-
-        {
-            let mut active_turn = self.active_turn.lock().await;
-            if active_turn.is_some() {
+    ) -> BoxFuture<'_, ()> {
+        Box::pin(async move {
+            if !self.input_queue.has_trigger_turn_mailbox_items().await {
                 return;
             }
-            *active_turn = Some(ActiveTurn::default());
-        }
 
-        let turn_context = self.new_default_turn_with_sub_id(sub_id).await;
-        self.maybe_emit_unknown_model_warning_for_turn(turn_context.as_ref())
-            .await;
-        self.start_task(turn_context, Vec::new(), RegularTask::new())
-            .await;
+            let execution_reservation = match self
+                .services
+                .agent_control
+                .reserve_execution_slot_for_pending_turn(self)
+                .await
+            {
+                Ok(reservation) => reservation,
+                Err(err) => {
+                    warn!(
+                        thread_id = %self.thread_id,
+                        "pending agent turn could not reserve an execution slot: {err}"
+                    );
+                    return;
+                }
+            };
+
+            {
+                let mut active_turn = self.active_turn.lock().await;
+                if active_turn.is_some() {
+                    return;
+                }
+                *active_turn = Some(ActiveTurn::default());
+            }
+            if let Some(execution_reservation) = execution_reservation {
+                execution_reservation.commit();
+            }
+
+            let turn_context = self.new_default_turn_with_sub_id(sub_id).await;
+            self.maybe_emit_unknown_model_warning_for_turn(turn_context.as_ref())
+                .await;
+            self.start_task(turn_context, Vec::new(), RegularTask::new())
+                .await;
+        })
     }
 
     pub async fn abort_all_tasks(self: &Arc<Self>, reason: TurnAbortReason) {
@@ -519,6 +540,7 @@ impl Session {
         }
         if reason == TurnAbortReason::Interrupted && aborted_turn {
             self.maybe_start_turn_for_pending_work().await;
+            self.emit_thread_idle_lifecycle_if_idle().await;
         }
     }
 
@@ -566,6 +588,7 @@ impl Session {
 
         if reason == TurnAbortReason::Interrupted {
             self.maybe_start_turn_for_pending_work().await;
+            self.emit_thread_idle_lifecycle_if_idle().await;
         }
 
         true
@@ -797,6 +820,7 @@ impl Session {
         {
             warn!("failed to apply goal runtime maybe-continue event: {err}");
         }
+        self.maybe_start_turn_for_pending_work().await;
         self.emit_thread_idle_lifecycle_if_idle().await;
     }
 
