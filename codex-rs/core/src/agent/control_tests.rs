@@ -581,6 +581,10 @@ async fn ensure_v2_agent_loaded_reloads_registered_unloaded_agent() {
         )])
         .await
         .expect("child rollout should persist with v2 metadata");
+    child_thread
+        .shutdown_and_wait()
+        .await
+        .expect("child thread should shut down");
 
     assert!(
         harness
