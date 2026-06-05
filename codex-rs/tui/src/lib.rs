@@ -746,14 +746,17 @@ async fn lookup_latest_session_target_with_app_server(
     cwd_filter: Option<&Path>,
     include_non_interactive: bool,
 ) -> color_eyre::Result<Option<resume_picker::SessionTarget>> {
-    let uses_remote_workspace = app_server.uses_remote_workspace();
+    let initial_lookup_mode = if app_server.uses_remote_workspace() {
+        LatestSessionLookupMode::Remote
+    } else {
+        LatestSessionLookupMode::LocalStateDbOnly
+    };
     for lookup_mode in [
-        LatestSessionLookupMode::StateDbOnly,
-        LatestSessionLookupMode::ScanAndRepair,
+        initial_lookup_mode,
+        LatestSessionLookupMode::LocalScanAndRepair,
     ] {
         let response = app_server
             .thread_list(latest_session_lookup_params(
-                uses_remote_workspace,
                 config,
                 cwd_filter,
                 include_non_interactive,
@@ -764,9 +767,11 @@ async fn lookup_latest_session_target_with_app_server(
             .data
             .into_iter()
             .find_map(session_target_from_app_server_thread);
-        if target.as_ref().is_some_and(|target| {
-            uses_remote_workspace || target.path.as_deref().is_some_and(std::path::Path::exists)
-        }) {
+        if lookup_mode == LatestSessionLookupMode::Remote
+            || target
+                .as_ref()
+                .is_some_and(|target| target.path.as_deref().is_some_and(std::path::Path::exists))
+        {
             return Ok(target);
         }
     }
@@ -775,12 +780,12 @@ async fn lookup_latest_session_target_with_app_server(
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum LatestSessionLookupMode {
-    StateDbOnly,
-    ScanAndRepair,
+    LocalStateDbOnly,
+    LocalScanAndRepair,
+    Remote,
 }
 
 fn latest_session_lookup_params(
-    uses_remote_workspace: bool,
     config: &Config,
     cwd_filter: Option<&Path>,
     include_non_interactive: bool,
@@ -791,17 +796,19 @@ fn latest_session_lookup_params(
         limit: Some(1),
         sort_key: Some(AppServerThreadSortKey::UpdatedAt),
         sort_direction: None,
-        model_providers: if uses_remote_workspace {
-            None
-        } else {
-            Some(vec![config.model_provider_id.clone()])
+        model_providers: match lookup_mode {
+            LatestSessionLookupMode::LocalStateDbOnly
+            | LatestSessionLookupMode::LocalScanAndRepair => {
+                Some(vec![config.model_provider_id.clone()])
+            }
+            LatestSessionLookupMode::Remote => None,
         },
         source_kinds: Some(resume_source_kinds(include_non_interactive)),
         archived: Some(false),
         cwd: cwd_filter.map(|cwd| ThreadListCwdFilter::One(cwd.to_string_lossy().to_string())),
         use_state_db_only: match lookup_mode {
-            LatestSessionLookupMode::StateDbOnly => true,
-            LatestSessionLookupMode::ScanAndRepair => false,
+            LatestSessionLookupMode::LocalStateDbOnly => true,
+            LatestSessionLookupMode::LocalScanAndRepair | LatestSessionLookupMode::Remote => false,
         },
         search_term: None,
     }
@@ -2452,11 +2459,10 @@ mod tests {
         let cwd = temp_dir.path().join("project");
 
         let params = latest_session_lookup_params(
-            /*uses_remote_workspace*/ false,
             &config,
             Some(cwd.as_path()),
             /*include_non_interactive*/ false,
-            LatestSessionLookupMode::StateDbOnly,
+            LatestSessionLookupMode::LocalStateDbOnly,
         );
 
         assert_eq!(
@@ -2470,11 +2476,10 @@ mod tests {
         assert!(params.use_state_db_only);
 
         let scan_params = latest_session_lookup_params(
-            /*uses_remote_workspace*/ false,
             &config,
             Some(cwd.as_path()),
             /*include_non_interactive*/ false,
-            LatestSessionLookupMode::ScanAndRepair,
+            LatestSessionLookupMode::LocalScanAndRepair,
         );
         assert!(!scan_params.use_state_db_only);
         Ok(())
@@ -2491,13 +2496,17 @@ mod tests {
                 socket_path: AbsolutePathBuf::relative_to_current_dir("codex.sock")?,
             },
         };
+        let lookup_mode = if target.uses_remote_workspace() {
+            LatestSessionLookupMode::Remote
+        } else {
+            LatestSessionLookupMode::LocalStateDbOnly
+        };
 
         let params = latest_session_lookup_params(
-            target.uses_remote_workspace(),
             &config,
             Some(cwd.as_path()),
             /*include_non_interactive*/ false,
-            LatestSessionLookupMode::StateDbOnly,
+            lookup_mode,
         );
 
         assert_eq!(params.model_providers, Some(vec![config.model_provider_id]));
@@ -2515,15 +2524,15 @@ mod tests {
         let config = build_config(&temp_dir).await?;
 
         let params = latest_session_lookup_params(
-            /*uses_remote_workspace*/ true,
             &config,
             /*cwd_filter*/ None,
             /*include_non_interactive*/ false,
-            LatestSessionLookupMode::StateDbOnly,
+            LatestSessionLookupMode::Remote,
         );
 
         assert_eq!(params.model_providers, None);
         assert_eq!(params.cwd, None);
+        assert!(!params.use_state_db_only);
         Ok(())
     }
 
@@ -2534,11 +2543,10 @@ mod tests {
         let config = build_config(&temp_dir).await?;
 
         let params = latest_session_lookup_params(
-            /*uses_remote_workspace*/ true,
             &config,
             /*cwd_filter*/ None,
             /*include_non_interactive*/ true,
-            LatestSessionLookupMode::StateDbOnly,
+            LatestSessionLookupMode::Remote,
         );
 
         assert_eq!(
@@ -2561,11 +2569,10 @@ mod tests {
         let cwd = Path::new("repo/on/server");
 
         let params = latest_session_lookup_params(
-            /*uses_remote_workspace*/ true,
             &config,
             Some(cwd),
             /*include_non_interactive*/ false,
-            LatestSessionLookupMode::StateDbOnly,
+            LatestSessionLookupMode::Remote,
         );
 
         assert_eq!(params.model_providers, None);
