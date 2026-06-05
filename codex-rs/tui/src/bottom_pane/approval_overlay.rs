@@ -265,7 +265,14 @@ impl ApprovalOverlay {
             ApprovalRequest::Permissions {
                 workspace_mutation, ..
             } => (
-                permissions_options(approval_keymap, workspace_mutation.is_some()),
+                permissions_options(
+                    approval_keymap,
+                    if workspace_mutation.is_some() {
+                        PermissionsApprovalMode::SessionOnly
+                    } else {
+                        PermissionsApprovalMode::AnyScope
+                    },
+                ),
                 workspace_mutation.as_ref().map_or_else(
                     || "Would you like to grant these permissions?".to_string(),
                     |workspace_mutation| match workspace_mutation.operation {
@@ -1079,7 +1086,16 @@ fn patch_options(keymap: &ApprovalKeymap) -> Vec<ApprovalOption> {
     ]
 }
 
-fn permissions_options(keymap: &ApprovalKeymap, session_scope_only: bool) -> Vec<ApprovalOption> {
+#[derive(Clone, Copy)]
+enum PermissionsApprovalMode {
+    AnyScope,
+    SessionOnly,
+}
+
+fn permissions_options(
+    keymap: &ApprovalKeymap,
+    mode: PermissionsApprovalMode,
+) -> Vec<ApprovalOption> {
     let deny_shortcuts = keymap
         .deny
         .iter()
@@ -1087,7 +1103,7 @@ fn permissions_options(keymap: &ApprovalKeymap, session_scope_only: bool) -> Vec
         .filter(|shortcut| shortcut.parts() != (KeyCode::Esc, KeyModifiers::NONE))
         .collect();
 
-    if session_scope_only {
+    if matches!(mode, PermissionsApprovalMode::SessionOnly) {
         let mut approve_shortcuts = keymap.approve.clone();
         for shortcut in &keymap.approve_for_session {
             if !approve_shortcuts.contains(shortcut) {
@@ -1870,7 +1886,7 @@ mod tests {
     fn permissions_options_use_expected_labels() {
         let keymap = crate::keymap::RuntimeKeymap::defaults();
         let labels: Vec<String> =
-            permissions_options(&keymap.approval, /*session_scope_only*/ false)
+            permissions_options(&keymap.approval, PermissionsApprovalMode::AnyScope)
                 .into_iter()
                 .map(|option| option.label)
                 .collect();
@@ -1889,7 +1905,7 @@ mod tests {
     fn workspace_mutation_permissions_options_only_offer_session_scope_or_deny() {
         let keymap = crate::keymap::RuntimeKeymap::defaults();
         let labels: Vec<String> =
-            permissions_options(&keymap.approval, /*session_scope_only*/ true)
+            permissions_options(&keymap.approval, PermissionsApprovalMode::SessionOnly)
                 .into_iter()
                 .map(|option| option.label)
                 .collect();
