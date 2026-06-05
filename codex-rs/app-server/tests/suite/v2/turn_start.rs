@@ -910,17 +910,18 @@ async fn turn_start_tracks_turn_event_analytics() -> Result<()> {
     assert_eq!(event["event_params"]["reasoning_output_tokens"], 0);
     assert_eq!(event["event_params"]["total_tokens"], 0);
     let params = &event["event_params"];
+    let timings_are_numbers = [
+        "before_first_sampling_ms",
+        "sampling_ms",
+        "between_sampling_overhead_ms",
+        "tool_blocking_ms",
+        "after_last_sampling_ms",
+    ]
+    .into_iter()
+    .all(|field| params[field].as_u64().is_some());
     assert_eq!(
         json!({
-            "timingsAreNumbers": [
-                "before_first_sampling_ms",
-                "sampling_ms",
-                "between_sampling_overhead_ms",
-                "tool_blocking_ms",
-                "after_last_sampling_ms",
-            ]
-            .into_iter()
-            .all(|field| params[field].as_u64().is_some()),
+            "timingsAreNumbers": timings_are_numbers,
             "toolBlockingMs": params["tool_blocking_ms"],
             "samplingRequestCount": params["sampling_request_count"],
             "samplingRetryCount": params["sampling_retry_count"],

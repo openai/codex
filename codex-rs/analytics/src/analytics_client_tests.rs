@@ -593,6 +593,37 @@ async fn ingest_turn_prerequisites(
     include_started: bool,
     include_token_usage: bool,
 ) {
+    ingest_turn_prerequisites_without_profile(
+        reducer,
+        out,
+        include_initialize,
+        include_resolved_config,
+        include_started,
+        include_token_usage,
+    )
+    .await;
+
+    reducer
+        .ingest(
+            AnalyticsFact::Custom(CustomAnalyticsFact::TurnProfile(Box::new(
+                TurnProfileFact {
+                    turn_id: "turn-2".to_string(),
+                    profile: sample_turn_profile(),
+                },
+            ))),
+            out,
+        )
+        .await;
+}
+
+async fn ingest_turn_prerequisites_without_profile(
+    reducer: &mut AnalyticsReducer,
+    out: &mut Vec<TrackEventRequest>,
+    include_initialize: bool,
+    include_resolved_config: bool,
+    include_started: bool,
+    include_token_usage: bool,
+) {
     if include_initialize {
         ingest_initialize(reducer, out).await;
         reducer
@@ -663,18 +694,6 @@ async fn ingest_turn_prerequisites(
             )
             .await;
     }
-
-    reducer
-        .ingest(
-            AnalyticsFact::Custom(CustomAnalyticsFact::TurnProfile(Box::new(
-                TurnProfileFact {
-                    turn_id: "turn-2".to_string(),
-                    profile: sample_turn_profile(),
-                },
-            ))),
-            out,
-        )
-        .await;
 }
 
 async fn ingest_review_prerequisites(
@@ -4042,6 +4061,55 @@ async fn turn_does_not_emit_without_required_prerequisites() {
         )
         .await;
     assert!(out.is_empty());
+}
+
+#[tokio::test]
+async fn turn_emits_with_zero_timings_when_profile_is_missing() {
+    let mut reducer = AnalyticsReducer::default();
+    let mut out = Vec::new();
+
+    ingest_turn_prerequisites_without_profile(
+        &mut reducer,
+        &mut out,
+        /*include_initialize*/ true,
+        /*include_resolved_config*/ true,
+        /*include_started*/ true,
+        /*include_token_usage*/ false,
+    )
+    .await;
+    reducer
+        .ingest(
+            AnalyticsFact::Notification(Box::new(sample_turn_completed_notification(
+                "thread-2",
+                "turn-2",
+                AppServerTurnStatus::Completed,
+                /*codex_error_info*/ None,
+            ))),
+            &mut out,
+        )
+        .await;
+
+    let payload = serde_json::to_value(&out[0]).expect("serialize turn event");
+    assert_eq!(
+        json!({
+            "before_first_sampling_ms": payload["event_params"]["before_first_sampling_ms"],
+            "sampling_ms": payload["event_params"]["sampling_ms"],
+            "between_sampling_overhead_ms": payload["event_params"]["between_sampling_overhead_ms"],
+            "tool_blocking_ms": payload["event_params"]["tool_blocking_ms"],
+            "after_last_sampling_ms": payload["event_params"]["after_last_sampling_ms"],
+            "sampling_request_count": payload["event_params"]["sampling_request_count"],
+            "sampling_retry_count": payload["event_params"]["sampling_retry_count"],
+        }),
+        json!({
+            "before_first_sampling_ms": 0,
+            "sampling_ms": 0,
+            "between_sampling_overhead_ms": 0,
+            "tool_blocking_ms": 0,
+            "after_last_sampling_ms": 0,
+            "sampling_request_count": 0,
+            "sampling_retry_count": 0,
+        })
+    );
 }
 
 #[tokio::test]
