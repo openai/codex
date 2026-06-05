@@ -160,7 +160,6 @@ async fn run_exec_like(args: RunExecLikeArgs) -> Result<FunctionToolOutput, Func
     );
     emitter.begin(event_ctx).await;
 
-    let file_system_sandbox_policy = turn.file_system_sandbox_policy();
     let exec_approval_requirement = session
         .services
         .exec_policy
@@ -168,7 +167,6 @@ async fn run_exec_like(args: RunExecLikeArgs) -> Result<FunctionToolOutput, Func
             command: &exec_params.command,
             approval_policy: turn.approval_policy.value(),
             permission_profile: turn.permission_profile(),
-            file_system_sandbox_policy: &file_system_sandbox_policy,
             #[allow(deprecated)]
             sandbox_cwd: turn.cwd.as_path(),
             sandbox_permissions: if effective_additional_permissions.permissions_preapproved {
