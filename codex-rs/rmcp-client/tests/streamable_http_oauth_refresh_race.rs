@@ -28,6 +28,8 @@ use rmcp::transport::auth::VendorExtraTokenFields;
 use serde::Deserialize;
 use serde_json::Value;
 use serde_json::json;
+use sha2::Digest;
+use sha2::Sha256;
 use tempfile::TempDir;
 use tokio::process::Child;
 use tokio::process::Command;
@@ -48,7 +50,8 @@ const OLD_ACCESS_TOKEN: &str = "old-access-token";
 const OLD_REFRESH_TOKEN: &str = "old-one-time-refresh-token";
 const NEW_ACCESS_TOKEN: &str = "new-access-token";
 const NEW_REFRESH_TOKEN: &str = "new-one-time-refresh-token";
-const FILE_OAUTH_REFRESH_LOCK_FILENAME: &str = ".credentials.json.refresh.lock";
+const KEYRING_SERVICE: &str = "Codex MCP Credentials";
+const CHILD_WAIT_TIMEOUT: Duration = Duration::from_secs(10);
 
 const SERVER_URL_ENV: &str = "MCP_TEST_OAUTH_RACE_SERVER_URL";
 const READY_PATH_ENV: &str = "MCP_TEST_OAUTH_RACE_READY_PATH";
@@ -188,7 +191,7 @@ async fn refresh_lock_wait_uses_startup_timeout_budget() -> anyhow::Result<()> {
     let server_url = format!("{}/mcp", server.uri());
     seed_tokens(&codex_home, &server_url, /*expires_at*/ 0).await?;
 
-    let lock_path = codex_home.path().join(FILE_OAUTH_REFRESH_LOCK_FILENAME);
+    let lock_path = file_oauth_refresh_lock_path(&codex_home, &server_url)?;
     let refresh_lock = OpenOptions::new()
         .read(true)
         .write(true)
@@ -216,6 +219,49 @@ async fn refresh_lock_wait_uses_startup_timeout_budget() -> anyhow::Result<()> {
     assert_eq!(
         fs::read_to_string(result_path)?,
         "error:timed out handshaking with MCP server after 5s"
+    );
+
+    server.verify().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn rejected_refresh_requires_login_without_reaching_mcp() -> anyhow::Result<()> {
+    let server = MockServer::start().await;
+    mount_oauth_metadata(&server, /*expected_requests*/ 1).await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .respond_with(ResponseTemplate::new(400).set_body_json(json!({
+            "error": "invalid_grant",
+            "error_description": "refresh token revoked",
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    mount_mcp_server(&server, /*expected_requests*/ 0).await;
+
+    let codex_home = TempDir::new()?;
+    let control_dir = TempDir::new()?;
+    let server_url = format!("{}/mcp", server.uri());
+    seed_tokens(&codex_home, &server_url, /*expires_at*/ 0).await?;
+
+    let ready_path = control_dir.path().join("client.ready");
+    let go_path = control_dir.path().join("client.go");
+    let result_path = control_dir.path().join("client.result");
+    let child = spawn_client_child(
+        &codex_home,
+        &server_url,
+        &ready_path,
+        &go_path,
+        &result_path,
+    )?;
+    wait_for_paths(std::slice::from_ref(&ready_path)).await?;
+    fs::write(&go_path, "go")?;
+    wait_for_children(vec![child]).await?;
+
+    assert_eq!(
+        fs::read_to_string(result_path)?,
+        "error:Auth required: OAuth refresh token was rejected; reauthentication required"
     );
 
     server.verify().await;
@@ -438,7 +484,8 @@ async fn seed_tokens(
     server_url: &str,
     expires_at: u64,
 ) -> anyhow::Result<()> {
-    let status = Command::new(std::env::current_exe()?)
+    let mut command = Command::new(std::env::current_exe()?);
+    command
         .args([
             "oauth_refresh_race_seed_child",
             "--exact",
@@ -450,8 +497,10 @@ async fn seed_tokens(
         .env(ACCESS_TOKEN_ENV, OLD_ACCESS_TOKEN)
         .env(REFRESH_TOKEN_ENV, OLD_REFRESH_TOKEN)
         .env(EXPIRES_AT_ENV, expires_at.to_string())
-        .status()
-        .await?;
+        .kill_on_drop(true);
+    let status = timeout(CHILD_WAIT_TIMEOUT, command.status())
+        .await
+        .context("timed out waiting for OAuth token seed child")??;
     anyhow::ensure!(status.success(), "OAuth token seed child failed: {status}");
     Ok(())
 }
@@ -482,7 +531,9 @@ fn spawn_client_child(
 
 async fn wait_for_children(children: Vec<Child>) -> anyhow::Result<()> {
     for mut child in children {
-        let status = child.wait().await?;
+        let status = timeout(CHILD_WAIT_TIMEOUT, child.wait())
+            .await
+            .context("timed out waiting for OAuth client child")??;
         anyhow::ensure!(status.success(), "OAuth client child failed: {status}");
     }
     Ok(())
@@ -515,6 +566,27 @@ fn request_bodies(requests: &[Request], request_path: &str) -> Vec<String> {
         .filter(|request| request.method.as_str() == "POST" && request.url.path() == request_path)
         .map(|request| String::from_utf8_lossy(&request.body).to_string())
         .collect()
+}
+
+fn file_oauth_refresh_lock_path(codex_home: &TempDir, server_url: &str) -> anyhow::Result<PathBuf> {
+    let store_key_payload = json!({
+        "type": "http",
+        "url": server_url,
+        "headers": {},
+    });
+    let account = format!("{SERVER_NAME}|{}", sha_256_prefix(&store_key_payload)?);
+    let lock_id = sha_256_prefix(&Value::String(format!("{KEYRING_SERVICE}:{account}")))?;
+    Ok(codex_home
+        .path()
+        .join(format!(".credentials.{lock_id}.refresh.lock")))
+}
+
+fn sha_256_prefix(value: &Value) -> anyhow::Result<String> {
+    let serialized = serde_json::to_string(value)?;
+    let mut hasher = Sha256::new();
+    hasher.update(serialized.as_bytes());
+    let digest = hasher.finalize();
+    Ok(format!("{digest:x}")[..16].to_string())
 }
 
 #[derive(Debug, Deserialize)]

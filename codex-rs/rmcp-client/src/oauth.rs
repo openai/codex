@@ -19,6 +19,7 @@
 use anyhow::Context;
 use anyhow::Error;
 use anyhow::Result;
+use anyhow::anyhow;
 use codex_config::types::OAuthCredentialsStoreMode;
 use oauth2::AccessToken;
 use oauth2::RefreshToken;
@@ -47,6 +48,7 @@ use tracing::warn;
 
 use codex_keyring_store::DefaultKeyringStore;
 use codex_keyring_store::KeyringStore;
+use rmcp::transport::auth::AuthError;
 use rmcp::transport::auth::AuthorizationManager;
 use rmcp::transport::auth::CredentialStore;
 use rmcp::transport::auth::InMemoryCredentialStore;
@@ -56,9 +58,14 @@ use tokio::sync::Mutex;
 use codex_utils_home_dir::find_codex_home;
 
 const KEYRING_SERVICE: &str = "Codex MCP Credentials";
-const FILE_OAUTH_REFRESH_LOCK_FILENAME: &str = ".credentials.json.refresh.lock";
+const FALLBACK_WRITE_LOCK_FILENAME: &str = ".credentials.json.lock";
+const FILE_OAUTH_REFRESH_LOCK_PREFIX: &str = ".credentials";
 const KEYRING_OAUTH_REFRESH_LOCK_PREFIX: &str = "codex-mcp-oauth-refresh";
+const MISSING_REFRESH_TOKEN_ERROR: &str = "No refresh token available";
+const OAUTH_SERVER_ERROR_PREFIX: &str = "Server returned error response: ";
 const REFRESH_SKEW_MILLIS: u64 = 30_000;
+pub const OAUTH_REFRESH_REAUTHENTICATION_REQUIRED_ERROR: &str =
+    "OAuth refresh token was rejected; reauthentication required";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct StoredOAuthTokens {
@@ -423,12 +430,22 @@ impl OAuthPersistor {
         {
             let manager = self.inner.authorization_manager.clone();
             let guard = manager.lock().await;
-            guard.refresh_token().await.with_context(|| {
-                format!(
-                    "failed to refresh OAuth tokens for server {}",
-                    self.inner.server_name
-                )
-            })?;
+            match guard.refresh_token().await {
+                Ok(_) => {}
+                Err(error) if refresh_requires_reauthentication(&error) => {
+                    return Err(anyhow!(
+                        "Auth required: {OAUTH_REFRESH_REAUTHENTICATION_REQUIRED_ERROR}"
+                    ));
+                }
+                Err(error) => {
+                    return Err(error).with_context(|| {
+                        format!(
+                            "failed to refresh OAuth tokens for server {}",
+                            self.inner.server_name
+                        )
+                    });
+                }
+            }
         }
 
         self.persist_if_needed().await
@@ -441,22 +458,38 @@ async fn lock_and_load_oauth_tokens(
     store_mode: OAuthCredentialsStoreMode,
 ) -> Result<(Vec<fs::File>, Option<StoredOAuthTokens>)> {
     let keyring_store = DefaultKeyringStore;
+    lock_and_load_oauth_tokens_with_keyring(&keyring_store, server_name, url, store_mode).await
+}
+
+async fn lock_and_load_oauth_tokens_with_keyring<K: KeyringStore>(
+    keyring_store: &K,
+    server_name: &str,
+    url: &str,
+    store_mode: OAuthCredentialsStoreMode,
+) -> Result<(Vec<fs::File>, Option<StoredOAuthTokens>)> {
     match store_mode {
         OAuthCredentialsStoreMode::Auto => {
             let keyring_lock =
-                acquire_oauth_refresh_lock(&keyring_oauth_refresh_lock_path()?).await?;
-            match load_oauth_tokens_from_keyring(&keyring_store, server_name, url) {
+                acquire_oauth_refresh_lock(&keyring_oauth_refresh_lock_path(server_name, url)?)
+                    .await?;
+            match load_oauth_tokens_from_keyring(keyring_store, server_name, url) {
                 Ok(Some(tokens)) => Ok((vec![keyring_lock], Some(tokens))),
                 Ok(None) => {
-                    let file_lock =
-                        acquire_oauth_refresh_lock(&file_oauth_refresh_lock_path()?).await?;
+                    let file_lock = acquire_oauth_refresh_lock(&file_oauth_refresh_lock_path(
+                        server_name,
+                        url,
+                    )?)
+                    .await?;
                     let tokens = load_oauth_tokens_from_file(server_name, url)?;
                     Ok((vec![keyring_lock, file_lock], tokens))
                 }
                 Err(error) => {
                     warn!("failed to read OAuth tokens from keyring: {error}");
-                    let file_lock =
-                        acquire_oauth_refresh_lock(&file_oauth_refresh_lock_path()?).await?;
+                    let file_lock = acquire_oauth_refresh_lock(&file_oauth_refresh_lock_path(
+                        server_name,
+                        url,
+                    )?)
+                    .await?;
                     let tokens =
                         load_oauth_tokens_from_file(server_name, url).with_context(|| {
                             format!("failed to read OAuth tokens from keyring: {error}")
@@ -466,52 +499,45 @@ async fn lock_and_load_oauth_tokens(
             }
         }
         OAuthCredentialsStoreMode::File => {
-            let lock = acquire_oauth_refresh_lock(&file_oauth_refresh_lock_path()?).await?;
+            let lock = acquire_oauth_refresh_lock(&file_oauth_refresh_lock_path(server_name, url)?)
+                .await?;
             let tokens = load_oauth_tokens_from_file(server_name, url)?;
             Ok((vec![lock], tokens))
         }
         OAuthCredentialsStoreMode::Keyring => {
-            let lock = acquire_oauth_refresh_lock(&keyring_oauth_refresh_lock_path()?).await?;
-            let tokens = load_oauth_tokens_from_keyring(&keyring_store, server_name, url)
+            let lock =
+                acquire_oauth_refresh_lock(&keyring_oauth_refresh_lock_path(server_name, url)?)
+                    .await?;
+            let tokens = load_oauth_tokens_from_keyring(keyring_store, server_name, url)
                 .with_context(|| "failed to read OAuth tokens from keyring".to_string())?;
             Ok((vec![lock], tokens))
         }
     }
 }
 
-fn file_oauth_refresh_lock_path() -> Result<PathBuf> {
+fn oauth_refresh_lock_id(server_name: &str, url: &str) -> Result<String> {
+    let account = compute_store_key(server_name, url)?;
+    sha_256_prefix(&Value::String(format!("{KEYRING_SERVICE}:{account}")))
+}
+
+fn file_oauth_refresh_lock_path(server_name: &str, url: &str) -> Result<PathBuf> {
+    let lock_id = oauth_refresh_lock_id(server_name, url)?;
     Ok(find_codex_home()?
-        .join(FILE_OAUTH_REFRESH_LOCK_FILENAME)
+        .join(format!(
+            "{FILE_OAUTH_REFRESH_LOCK_PREFIX}.{lock_id}.refresh.lock"
+        ))
         .to_path_buf())
 }
 
-fn keyring_oauth_refresh_lock_path() -> Result<PathBuf> {
-    let user_namespace = ["HOME", "USERPROFILE", "USER", "USERNAME"]
-        .into_iter()
-        .find_map(std::env::var_os)
-        .unwrap_or_default();
-    let lock_id = sha_256_prefix(&Value::String(
-        user_namespace.to_string_lossy().into_owned(),
-    ))?;
+fn keyring_oauth_refresh_lock_path(server_name: &str, url: &str) -> Result<PathBuf> {
+    let lock_id = oauth_refresh_lock_id(server_name, url)?;
     Ok(std::env::temp_dir().join(format!(
         "{KEYRING_OAUTH_REFRESH_LOCK_PREFIX}-{lock_id}.lock"
     )))
 }
 
 async fn acquire_oauth_refresh_lock(path: &Path) -> Result<fs::File> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    let mut options = OpenOptions::new();
-    options.read(true).write(true).create(true).truncate(false);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let file = options
-        .open(path)
-        .with_context(|| format!("failed to open OAuth refresh lock at {}", path.display()))?;
+    let file = open_oauth_lock_file(path)?;
     loop {
         match file.try_lock() {
             Ok(()) => return Ok(file),
@@ -524,6 +550,68 @@ async fn acquire_oauth_refresh_lock(path: &Path) -> Result<fs::File> {
                 });
             }
         }
+    }
+}
+
+fn acquire_fallback_write_lock() -> Result<fs::File> {
+    let path = find_codex_home()?
+        .join(FALLBACK_WRITE_LOCK_FILENAME)
+        .to_path_buf();
+    let file = open_oauth_lock_file(&path)?;
+    file.lock().with_context(|| {
+        format!(
+            "failed to acquire OAuth fallback write lock at {}",
+            path.display()
+        )
+    })?;
+    Ok(file)
+}
+
+fn acquire_fallback_read_lock() -> Result<fs::File> {
+    let path = find_codex_home()?
+        .join(FALLBACK_WRITE_LOCK_FILENAME)
+        .to_path_buf();
+    let file = open_oauth_lock_file(&path)?;
+    file.lock_shared().with_context(|| {
+        format!(
+            "failed to acquire OAuth fallback read lock at {}",
+            path.display()
+        )
+    })?;
+    Ok(file)
+}
+
+fn open_oauth_lock_file(path: &Path) -> Result<fs::File> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let mut options = OpenOptions::new();
+    options.read(true).write(true).create(true).truncate(false);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    options
+        .open(path)
+        .with_context(|| format!("failed to open OAuth lock at {}", path.display()))
+}
+
+fn refresh_requires_reauthentication(error: &AuthError) -> bool {
+    match error {
+        AuthError::AuthorizationRequired => true,
+        AuthError::TokenRefreshFailed(message) => {
+            if message == MISSING_REFRESH_TOKEN_ERROR {
+                return true;
+            }
+            message
+                .strip_prefix(OAUTH_SERVER_ERROR_PREFIX)
+                .is_some_and(|response| {
+                    let error_code_end = response.find([':', ' ']).unwrap_or(response.len());
+                    &response[..error_code_end] == "invalid_grant"
+                })
+        }
+        _ => false,
     }
 }
 
@@ -547,7 +635,15 @@ struct FallbackTokenEntry {
 }
 
 fn load_oauth_tokens_from_file(server_name: &str, url: &str) -> Result<Option<StoredOAuthTokens>> {
-    let Some(store) = read_fallback_file()? else {
+    let _read_lock = acquire_fallback_read_lock()?;
+    load_oauth_tokens_from_file_unlocked(server_name, url)
+}
+
+fn load_oauth_tokens_from_file_unlocked(
+    server_name: &str,
+    url: &str,
+) -> Result<Option<StoredOAuthTokens>> {
+    let Some(store) = read_fallback_file_unlocked()? else {
         return Ok(None);
     };
 
@@ -590,8 +686,9 @@ fn load_oauth_tokens_from_file(server_name: &str, url: &str) -> Result<Option<St
 }
 
 fn save_oauth_tokens_to_file(tokens: &StoredOAuthTokens) -> Result<()> {
+    let _write_lock = acquire_fallback_write_lock()?;
     let key = compute_store_key(&tokens.server_name, &tokens.url)?;
-    let mut store = read_fallback_file()?.unwrap_or_default();
+    let mut store = read_fallback_file_unlocked()?.unwrap_or_default();
 
     let token_response = &tokens.token_response.0;
     let expires_at = tokens
@@ -691,6 +788,11 @@ fn fallback_file_path() -> Result<PathBuf> {
 }
 
 fn read_fallback_file() -> Result<Option<FallbackFile>> {
+    let _read_lock = acquire_fallback_read_lock()?;
+    read_fallback_file_unlocked()
+}
+
+fn read_fallback_file_unlocked() -> Result<Option<FallbackFile>> {
     let path = fallback_file_path()?;
     let contents = match fs::read_to_string(&path) {
         Ok(contents) => contents,
@@ -796,10 +898,101 @@ mod tests {
     }
 
     #[test]
-    fn keyring_refresh_lock_does_not_use_codex_home() -> Result<()> {
-        let lock_path = keyring_oauth_refresh_lock_path()?;
-        assert_eq!(lock_path.parent(), Some(std::env::temp_dir().as_path()));
+    fn refresh_lock_identity_is_credential_specific_and_home_independent() -> Result<()> {
+        let _env = TempCodexHome::new();
+        let tokens = sample_tokens();
+        let other_url = "https://other.example.test/mcp";
+
+        let keyring_path = keyring_oauth_refresh_lock_path(&tokens.server_name, &tokens.url)?;
+        assert_eq!(keyring_path.parent(), Some(std::env::temp_dir().as_path()));
+        assert_eq!(
+            keyring_path,
+            keyring_oauth_refresh_lock_path(&tokens.server_name, &tokens.url)?
+        );
+        assert_ne!(
+            keyring_path,
+            keyring_oauth_refresh_lock_path(&tokens.server_name, other_url)?
+        );
+        assert_ne!(
+            file_oauth_refresh_lock_path(&tokens.server_name, &tokens.url)?,
+            file_oauth_refresh_lock_path(&tokens.server_name, other_url)?
+        );
         Ok(())
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn refresh_lock_loading_covers_keyring_and_auto_branches() -> Result<()> {
+        let _env = TempCodexHome::new();
+        let store = MockKeyringStore::default();
+        let tokens = sample_tokens();
+        let serialized = serde_json::to_string(&tokens)?;
+        let key = compute_store_key(&tokens.server_name, &tokens.url)?;
+        store.save(KEYRING_SERVICE, &key, &serialized)?;
+
+        let (locks, loaded) = lock_and_load_oauth_tokens_with_keyring(
+            &store,
+            &tokens.server_name,
+            &tokens.url,
+            OAuthCredentialsStoreMode::Keyring,
+        )
+        .await?;
+        assert_eq!(locks.len(), 1);
+        assert_tokens_match_without_expiry(
+            &loaded.expect("keyring credentials should load"),
+            &tokens,
+        );
+        drop(locks);
+
+        let (locks, loaded) = lock_and_load_oauth_tokens_with_keyring(
+            &store,
+            &tokens.server_name,
+            &tokens.url,
+            OAuthCredentialsStoreMode::Auto,
+        )
+        .await?;
+        assert_eq!(locks.len(), 1);
+        assert_tokens_match_without_expiry(
+            &loaded.expect("auto mode should prefer keyring credentials"),
+            &tokens,
+        );
+        drop(locks);
+
+        store.delete(KEYRING_SERVICE, &key)?;
+        save_oauth_tokens_to_file(&tokens)?;
+        let (locks, loaded) = lock_and_load_oauth_tokens_with_keyring(
+            &store,
+            &tokens.server_name,
+            &tokens.url,
+            OAuthCredentialsStoreMode::Auto,
+        )
+        .await?;
+        assert_eq!(locks.len(), 2);
+        assert_tokens_match_without_expiry(
+            &loaded.expect("auto mode should load fallback file credentials"),
+            &tokens,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn refresh_reauthentication_classification_is_narrow() {
+        assert!(refresh_requires_reauthentication(
+            &AuthError::AuthorizationRequired
+        ));
+        assert!(refresh_requires_reauthentication(
+            &AuthError::TokenRefreshFailed(MISSING_REFRESH_TOKEN_ERROR.to_string())
+        ));
+        assert!(refresh_requires_reauthentication(
+            &AuthError::TokenRefreshFailed(
+                "Server returned error response: invalid_grant: revoked".to_string()
+            )
+        ));
+        assert!(!refresh_requires_reauthentication(
+            &AuthError::TokenRefreshFailed(
+                "Server returned error response: invalid_request: invalid_grant in description"
+                    .to_string()
+            )
+        ));
     }
 
     #[test]
