@@ -1,4 +1,5 @@
 load("@apple_support//xcode:xcode_config.bzl", "xcode_config")
+load("//:windows_platform_test.bzl", "windows_platform_declarations_test")
 
 xcode_config(name = "disable_xcode")
 
@@ -17,6 +18,7 @@ platform(
 platform(
     name = "local_windows",
     constraint_values = [
+        "@llvm//constraints/windows_abi:gnullvm",
         "@rules_rs//rs/experimental/platforms/constraints:windows_gnullvm",
     ],
     parents = ["@platforms//host"],
@@ -25,14 +27,19 @@ platform(
 platform(
     name = "local_windows_msvc",
     constraint_values = [
+        "@llvm//constraints/windows_abi:msvc",
         "@rules_rs//rs/experimental/platforms/constraints:windows_msvc",
     ],
     parents = ["@platforms//host"],
 )
 
+# The hermetic LLVM Windows toolchain is llvm-mingw and therefore gnullvm.
+# MSVC targets intentionally resolve only on Windows hosts with an installed
+# MSVC toolchain and Windows SDK.
 platform(
     name = "windows_x86_64_gnullvm",
     constraint_values = [
+        "@llvm//constraints/windows_abi:gnullvm",
         "@platforms//cpu:x86_64",
         "@platforms//os:windows",
         "@rules_rs//rs/experimental/platforms/constraints:windows_gnullvm",
@@ -42,6 +49,7 @@ platform(
 platform(
     name = "windows_x86_64_msvc",
     constraint_values = [
+        "@llvm//constraints/windows_abi:msvc",
         "@platforms//cpu:x86_64",
         "@platforms//os:windows",
         "@rules_rs//rs/experimental/platforms/constraints:windows_msvc",
@@ -62,6 +70,17 @@ toolchain(
     ],
     toolchain = "@bazel_tools//tools/test:empty_toolchain",
     toolchain_type = "@bazel_tools//tools/test:default_test_toolchain_type",
+)
+
+windows_platform_declarations_test(
+    name = "windows_platform_declarations_test",
+    data = [
+        "BUILD.bazel",
+        "MODULE.bazel",
+        "//patches:llvm_windows_gnullvm_abi.patch",
+    ],
+    script = "windows_platform_test.sh",
+    target_compatible_with = ["@platforms//os:linux"],
 )
 
 alias(

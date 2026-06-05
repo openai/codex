@@ -1,0 +1,55 @@
+# What: mark hermetic LLVM's Windows targets as gnullvm-only.
+# Why: the toolchain uses *-w64-windows-gnu triples and MinGW runtimes; it does
+# not contain the licensed MSVC linker libraries or Windows SDK.
+
+diff --git a/constraints/windows_abi/BUILD.bazel b/constraints/windows_abi/BUILD.bazel
+new file mode 100644
+index 0000000..42aa1aa
+--- /dev/null
++++ b/constraints/windows_abi/BUILD.bazel
+@@ -0,0 +1,15 @@
++package(default_visibility = ["//visibility:public"])
++
++constraint_setting(
++    name = "windows_abi",
++)
++
++constraint_value(
++    name = "gnullvm",
++    constraint_setting = ":windows_abi",
++)
++
++constraint_value(
++    name = "msvc",
++    constraint_setting = ":windows_abi",
++)
+diff --git a/toolchain/bootstrap/declare_toolchains.bzl b/toolchain/bootstrap/declare_toolchains.bzl
+index 906ba7e..608ec56 100644
+--- a/toolchain/bootstrap/declare_toolchains.bzl
++++ b/toolchain/bootstrap/declare_toolchains.bzl
+@@ -260,7 +260,9 @@ def declare_toolchains(
+                 target_compatible_with = [
+                     "@platforms//cpu:{}".format(target_cpu),
+                     "@platforms//os:{}".format(target_os),
+-                ],
++                ] + ([
++                    "@llvm//constraints/windows_abi:gnullvm",
++                ] if target_os == "windows" else []),
+                 target_settings = [
+                     "@llvm//toolchain:bootstrapped_toolchain",
+                 ],
+diff --git a/toolchain/declare_toolchains.bzl b/toolchain/declare_toolchains.bzl
+index 9870bdd..5d06829 100644
+--- a/toolchain/declare_toolchains.bzl
++++ b/toolchain/declare_toolchains.bzl
+@@ -34,7 +34,9 @@ def declare_toolchains(*, execs = SUPPORTED_EXECS, targets = SUPPORTED_TARGETS):
+                 target_compatible_with = [
+                     "@platforms//cpu:{}".format(target_cpu),
+                     "@platforms//os:{}".format(target_os),
+-                ],
++                ] + ([
++                    "@llvm//constraints/windows_abi:gnullvm",
++                ] if target_os == "windows" else []),
+                 target_settings = [
+                     "@llvm//toolchain:prebuilt_toolchain",
+                 ],
