@@ -1296,7 +1296,6 @@ impl BottomPaneView for RequestUserInputOverlay {
     }
 
     fn tab_status_detail(&self) -> Option<String> {
-        // No concise per-request summary available; use a generic label.
         Some("Tool input request".to_string())
     }
 

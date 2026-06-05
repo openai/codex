@@ -24,7 +24,8 @@ fn activity_rolls_forward_and_resets_for_a_new_turn() {
 fn throttle_defers_detail_changes_but_not_status_changes() {
     let mut state = TabStatusState::new();
     let started_at = Instant::now();
-    state.refresh((TabStatus::Working, Some("first".to_string())), started_at);
+    let desired = (TabStatus::Working, Some("first".to_string()));
+    state.refresh(desired.clone(), started_at);
 
     assert_eq!(
         state.refresh_delay(
@@ -40,17 +41,8 @@ fn throttle_defers_detail_changes_but_not_status_changes() {
         ),
         None
     );
-}
-
-#[test]
-fn equal_refresh_does_not_rearm_the_detail_throttle() {
-    let mut state = TabStatusState::new();
-    let started_at = Instant::now();
     let unchanged_at = started_at + Duration::from_millis(/*millis*/ 300);
-    let desired = (TabStatus::Working, Some("cargo test".to_string()));
-    state.refresh(desired.clone(), started_at);
     state.refresh(desired, unchanged_at);
-
     assert_eq!(
         state.refresh_delay(
             TabStatus::Working,

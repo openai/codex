@@ -110,8 +110,6 @@ impl ApprovalRequest {
     pub(crate) fn tab_status_summary(&self) -> Option<String> {
         match self {
             ApprovalRequest::Exec { command, .. } => {
-                // Parse like the visible history cells so the detail reads
-                // "Run python3 …" / "Read foo.rs", not a raw shell line.
                 let parsed = codex_shell_command::parse_command::parse_command(command);
                 Some(
                     crate::tab_status::format_parsed_command_for_tab_status(&parsed)
@@ -135,7 +133,10 @@ impl ApprovalRequest {
                 server_name,
                 message,
                 ..
-            } => Some(format!("Elicitation from {server_name}: {message}")),
+            } => Some(format!(
+                "Elicitation from {server_name}: {}",
+                crate::tab_status::oneline_truncated(message)
+            )),
         }
     }
 

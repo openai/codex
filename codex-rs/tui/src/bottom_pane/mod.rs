@@ -788,7 +788,6 @@ impl BottomPane {
         self.composer.sync_popups();
         self.maybe_show_delayed_approval_requests_at(now);
         self.schedule_active_view_frame();
-        // Poll every frame to catch view-stack transitions and changing detail.
         self.refresh_tab_status_at(now);
     }
 
@@ -1014,7 +1013,6 @@ impl BottomPane {
         self.status.is_some()
     }
 
-    /// Test-only view of the last OSC 21337 status and detail we wrote.
     #[cfg(test)]
     pub(crate) fn last_tab_status_for_test(&self) -> Option<(TabStatus, Option<String>)> {
         self.tab_status.last_status()
@@ -2013,6 +2011,10 @@ mod tests {
         Some((status, None))
     }
 
+    fn last_tab_class(pane: &BottomPane) -> Option<TabStatus> {
+        pane.last_tab_status_for_test().map(|(status, _)| status)
+    }
+
     #[test]
     fn tab_status_disabled_suppresses_emission() {
         // Refresh must honor the `tui.tab_status = false` opt-out: nothing
@@ -2035,22 +2037,13 @@ mod tests {
         assert_eq!(pane.last_tab_status_for_test(), tab_status(TabStatus::Idle));
 
         pane.set_task_running(/*running*/ true);
-        assert_eq!(
-            pane.last_tab_status_for_test().map(|(status, _)| status),
-            Some(TabStatus::Working)
-        );
+        assert_eq!(last_tab_class(&pane), Some(TabStatus::Working));
 
         pane.push_approval_request(exec_request(), &features);
-        assert_eq!(
-            pane.last_tab_status_for_test().map(|(status, _)| status),
-            Some(TabStatus::Waiting)
-        );
+        assert_eq!(last_tab_class(&pane), Some(TabStatus::Waiting));
 
         let _ = pane.on_ctrl_c();
-        assert_eq!(
-            pane.last_tab_status_for_test().map(|(status, _)| status),
-            Some(TabStatus::Working)
-        );
+        assert_eq!(last_tab_class(&pane), Some(TabStatus::Working));
 
         pane.set_task_running(/*running*/ false);
         assert_eq!(pane.last_tab_status_for_test(), tab_status(TabStatus::Idle));
@@ -2115,18 +2108,12 @@ mod tests {
         let mut pane = fresh_pane();
         pane.set_task_running(/*running*/ true);
         pane.push_approval_request(exec_request(), &features);
-        assert_eq!(
-            pane.last_tab_status_for_test().map(|(status, _)| status),
-            Some(TabStatus::Waiting)
-        );
+        assert_eq!(last_tab_class(&pane), Some(TabStatus::Waiting));
 
         // Simulate handle_paste's view-complete branch: clear then complete.
         pane.view_stack.clear();
         pane.on_active_view_complete();
-        assert_eq!(
-            pane.last_tab_status_for_test().map(|(status, _)| status),
-            Some(TabStatus::Working)
-        );
+        assert_eq!(last_tab_class(&pane), Some(TabStatus::Working));
     }
 
     #[test]
@@ -2142,23 +2129,20 @@ mod tests {
         pane.show_view(Box::new(DismissibleView::default()));
         pane.set_task_running(/*running*/ true);
         assert_eq!(
-            pane.last_tab_status_for_test().map(|(status, _)| status),
+            last_tab_class(&pane),
             Some(TabStatus::Working),
             "non-action underlay shouldn't move us off Working",
         );
 
         pane.push_approval_request(exec_request(), &features);
-        assert_eq!(
-            pane.last_tab_status_for_test().map(|(status, _)| status),
-            Some(TabStatus::Waiting)
-        );
+        assert_eq!(last_tab_class(&pane), Some(TabStatus::Waiting));
 
         // Cancel: DismissibleView remains underneath, so on_active_view_complete
         // does not fire and only the per-frame poll catches the transition.
         let _ = pane.on_ctrl_c();
         pane.pre_draw_tick();
         assert_eq!(
-            pane.last_tab_status_for_test().map(|(status, _)| status),
+            last_tab_class(&pane),
             Some(TabStatus::Working),
             "pre_draw_tick must drop the tab out of Waiting once the \
              top of the stack is no longer action-required",
