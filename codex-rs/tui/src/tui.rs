@@ -59,7 +59,11 @@ mod frame_requester;
 #[cfg(unix)]
 mod job_control;
 mod keyboard_modes;
+mod replay_clear;
 mod terminal_stderr;
+
+use self::replay_clear::ReplayClearState;
+use self::replay_clear::run_synchronized_draw;
 
 /// Target frame interval for UI redraw scheduling.
 pub(crate) const TARGET_FRAME_INTERVAL: Duration = frame_rate_limiter::MIN_FRAME_INTERVAL;
@@ -84,16 +88,6 @@ fn should_emit_notification(condition: NotificationCondition, terminal_focused: 
     }
 }
 
-fn run_synchronized_draw<W, T>(
-    writer: &mut W,
-    operations: impl FnOnce(&mut W) -> Result<T>,
-) -> Result<T>
-where
-    W: Write,
-{
-    writer.sync_update(operations)?
-}
-
 impl Drop for Tui {
     fn drop(&mut self) {
         if let Err(err) = self.clear_ambient_pet_image() {
@@ -107,12 +101,10 @@ mod tests {
     use std::io::Write as _;
 
     use super::clear_for_viewport_change;
-    use super::run_synchronized_draw;
     use super::should_emit_notification;
     use crate::custom_terminal::Terminal as CustomTerminal;
     use crate::test_backend::VT100Backend;
     use codex_config::types::NotificationCondition;
-    use pretty_assertions::assert_eq;
     use ratatui::layout::Position;
     use ratatui::layout::Rect;
 
@@ -179,79 +171,6 @@ mod tests {
             !rows.iter().skip(1).any(|row| row.contains("stale")),
             "expected stale cells inside the new viewport to be cleared, rows: {rows:?}"
         );
-    }
-
-    #[test]
-    fn synchronized_draw_wraps_replay_clear_and_repaint() {
-        let mut output = Vec::new();
-        let mut replay_clear_pending = true;
-        let replay_clear_requested = replay_clear_pending;
-
-        let value = run_synchronized_draw(&mut output, |writer| {
-            assert!(replay_clear_requested);
-            writer.write_all(b"clear")?;
-            writer.write_all(b"replay")?;
-            replay_clear_pending = false;
-            Ok(42)
-        })
-        .expect("synchronized draw");
-
-        assert_eq!(value, 42);
-        assert!(!replay_clear_pending);
-        assert_eq!(output, b"\x1b[?2026hclearreplay\x1b[?2026l");
-    }
-
-    #[test]
-    fn synchronized_draw_retries_replay_clear_after_render_error() {
-        let mut output = Vec::new();
-        let replay_clear_pending = true;
-        let replay_clear_requested = replay_clear_pending;
-
-        let error = run_synchronized_draw(&mut output, |writer| {
-            assert!(replay_clear_requested);
-            writer.write_all(b"clear")?;
-            Err::<(), _>(std::io::Error::other("render failed"))
-        })
-        .expect_err("draw should fail");
-
-        assert_eq!(error.kind(), std::io::ErrorKind::Other);
-        assert!(replay_clear_pending);
-        assert_eq!(output, b"\x1b[?2026hclear\x1b[?2026l");
-    }
-
-    #[test]
-    fn synchronized_draw_does_not_retry_clear_after_replay_is_committed() {
-        struct FailOnFlush {
-            output: Vec<u8>,
-        }
-
-        impl std::io::Write for FailOnFlush {
-            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-                self.output.extend_from_slice(buf);
-                Ok(buf.len())
-            }
-
-            fn flush(&mut self) -> std::io::Result<()> {
-                Err(std::io::Error::other("flush failed"))
-            }
-        }
-
-        let mut writer = FailOnFlush { output: Vec::new() };
-        let mut replay_clear_pending = true;
-        let replay_clear_requested = replay_clear_pending;
-
-        let error = run_synchronized_draw(&mut writer, |writer| {
-            assert!(replay_clear_requested);
-            writer.write_all(b"clear")?;
-            writer.write_all(b"replay")?;
-            replay_clear_pending = false;
-            Ok(())
-        })
-        .expect_err("sync flush should fail");
-
-        assert_eq!(error.kind(), std::io::ErrorKind::Other);
-        assert!(!replay_clear_pending);
-        assert_eq!(writer.output, b"\x1b[?2026hclearreplay\x1b[?2026l");
     }
 }
 
@@ -584,7 +503,7 @@ pub struct Tui {
     // True when overlay alt-screen UI is active
     alt_screen_active: Arc<AtomicBool>,
     // Rebuilds clear the terminal inside the next synchronized draw before replaying history.
-    terminal_replay_clear_pending: bool,
+    replay_clear: ReplayClearState,
     // True when terminal/tab is focused; updated internally from crossterm events
     terminal_focused: Arc<AtomicBool>,
     enhanced_keys_supported: bool,
@@ -641,7 +560,7 @@ impl Tui {
             #[cfg(unix)]
             suspend_context: SuspendContext::new(),
             alt_screen_active: Arc::new(AtomicBool::new(false)),
-            terminal_replay_clear_pending: false,
+            replay_clear: ReplayClearState::default(),
             terminal_focused: Arc::new(AtomicBool::new(true)),
             enhanced_keys_supported,
             notification_backend: Some(detect_backend(NotificationMethod::default())),
@@ -679,7 +598,7 @@ impl Tui {
     }
 
     pub(crate) fn request_terminal_replay_clear(&mut self) {
-        self.terminal_replay_clear_pending = true;
+        self.replay_clear.request();
     }
 
     // Drop crossterm EventStream to avoid stdin conflicts with other processes.
@@ -958,7 +877,7 @@ impl Tui {
 
         // Precompute any viewport updates that need a cursor-position query before entering
         // the synchronized update, to avoid racing with the event reader.
-        let mut pending_viewport_area = if self.terminal_replay_clear_pending {
+        let mut pending_viewport_area = if self.replay_clear.is_pending() {
             None
         } else {
             self.pending_viewport_area()?
@@ -966,15 +885,14 @@ impl Tui {
 
         ensure_virtual_terminal_processing()?;
 
-        let mut replay_clear_pending = self.terminal_replay_clear_pending;
-        let replay_clear_requested = replay_clear_pending;
+        let mut replay_clear = self.replay_clear.begin_draw();
         let result = run_synchronized_draw(&mut stdout(), |_| {
             #[cfg(unix)]
             if let Some(prepared) = prepared_resume.take() {
                 prepared.apply(&mut self.terminal)?;
             }
 
-            if replay_clear_requested {
+            if replay_clear.requested() {
                 self.clear_terminal_for_replay()?;
             }
 
@@ -1008,9 +926,7 @@ impl Tui {
                 &mut self.pending_history_lines,
                 self.is_zellij,
             )?;
-            if replay_clear_requested {
-                replay_clear_pending = false;
-            }
+            replay_clear.commit_replay();
 
             // Update the y position for suspending so Ctrl-Z can place the cursor correctly.
             #[cfg(unix)]
@@ -1030,7 +946,7 @@ impl Tui {
                 draw_fn(frame);
             })
         });
-        self.terminal_replay_clear_pending = replay_clear_pending;
+        self.replay_clear.finish_draw(replay_clear);
         result
     }
 
@@ -1109,15 +1025,14 @@ impl Tui {
 
         ensure_virtual_terminal_processing()?;
 
-        let mut replay_clear_pending = self.terminal_replay_clear_pending;
-        let replay_clear_requested = replay_clear_pending;
+        let mut replay_clear = self.replay_clear.begin_draw();
         let result = run_synchronized_draw(&mut stdout(), |_| {
             #[cfg(unix)]
             if let Some(prepared) = prepared_resume.take() {
                 prepared.apply(&mut self.terminal)?;
             }
 
-            if replay_clear_requested {
+            if replay_clear.requested() {
                 self.clear_terminal_for_replay()?;
             }
 
@@ -1129,9 +1044,7 @@ impl Tui {
                 &mut self.pending_history_lines,
                 self.is_zellij,
             )?;
-            if replay_clear_requested {
-                replay_clear_pending = false;
-            }
+            replay_clear.commit_replay();
 
             if needs_full_repaint {
                 terminal.invalidate_viewport();
@@ -1155,7 +1068,7 @@ impl Tui {
                 draw_fn(frame);
             })
         });
-        self.terminal_replay_clear_pending = replay_clear_pending;
+        self.replay_clear.finish_draw(replay_clear);
         result
     }
 

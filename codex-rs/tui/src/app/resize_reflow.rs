@@ -472,7 +472,7 @@ impl App {
             });
         }
 
-        let mut has_emitted_history_lines = false;
+        let mut has_emitted_history_lines = source_start > 0;
         let mut reflowed_lines = Vec::new();
         for display in cell_displays {
             if !display.lines.is_empty() && !display.is_stream_continuation {

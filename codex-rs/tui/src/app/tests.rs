@@ -4074,6 +4074,29 @@ async fn capped_history_replay_excludes_preserved_header_from_source_render() {
 }
 
 #[tokio::test]
+async fn history_replay_preserves_separator_after_session_header_snapshot() {
+    let (mut app, _rx, _op_rx) = make_test_app_with_channels().await;
+    app.config.terminal_resize_reflow.max_rows = TerminalResizeReflowMaxRows::Disabled;
+    app.transcript_cells = vec![
+        plain_line_cell("session header"),
+        plain_line_cell("first message"),
+        plain_line_cell("second message"),
+    ];
+
+    let replayed =
+        app.render_history_replay_lines(/*source_start*/ 1, /*terminal_width*/ 80);
+    let rendered = std::iter::once("session header".to_string())
+        .chain(replayed.iter().map(rendered_line_text))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert_app_snapshot!(
+        "history_replay_preserves_separator_after_session_header",
+        rendered,
+    );
+}
+
+#[tokio::test]
 async fn history_replay_uses_pet_reserved_width() {
     let (mut app, _rx, _op_rx) = make_test_app_with_channels().await;
     app.chat_widget
