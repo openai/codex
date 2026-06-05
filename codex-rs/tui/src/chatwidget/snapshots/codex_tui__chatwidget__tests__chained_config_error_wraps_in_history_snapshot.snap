@@ -1,0 +1,7 @@
+---
+source: tui/src/chatwidget/tests/config_errors.rs
+expression: normalize_snapshot_paths(term.backend().vt100().screen().contents())
+---
+■ Failed to save default model: config/batchWrite failed
+in TUI: Invalid configuration: features.fast_mode=true
+is not supported; allowed set [fast_mode=false]

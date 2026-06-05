@@ -5,7 +5,9 @@ use ratatui::layout::Rect;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::widgets::Clear;
+use ratatui::widgets::Paragraph;
 use ratatui::widgets::WidgetRef;
+use ratatui::widgets::Wrap;
 use tokio::sync::mpsc::unbounded_channel;
 use tokio_stream::StreamExt;
 
@@ -202,7 +204,7 @@ fn selection_view_params(
         "Hooks can run outside the sandbox after you trust them.".dim(),
     ));
     if let Some(error) = trust_all_error {
-        header.push(Line::from(error.to_string()).red());
+        header.push(Paragraph::new(Line::from(error.to_string()).red()).wrap(Wrap { trim: false }));
     } else if trusting_all {
         header.push(Line::from("Trusting hooks...".dim()));
     }
@@ -385,6 +387,26 @@ mod tests {
         assert_snapshot!(
             "startup_hooks_review_prompt_with_trust_error",
             render_lines(&view, /*width*/ 80)
+        );
+    }
+
+    #[test]
+    fn renders_prompt_with_chained_trust_error() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let keymap = RuntimeKeymap::defaults();
+        let view = selection_view(
+            &entry(),
+            Some(
+                "Failed to trust hooks: config/batchWrite failed in TUI: Invalid configuration: features.fast_mode=true is not supported; allowed set [fast_mode=false]",
+            ),
+            /*trusting_all*/ false,
+            AppEventSender::new(tx_raw),
+            &keymap,
+        );
+
+        assert_snapshot!(
+            "startup_hooks_review_prompt_with_chained_trust_error",
+            render_lines(&view, /*width*/ 62)
         );
     }
 }
