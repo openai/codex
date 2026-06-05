@@ -19,7 +19,7 @@ impl ChatWidget {
     pub(super) fn flush_answer_stream_with_separator(&mut self) {
         let had_stream_controller = self.stream_controller.is_some();
         if let Some(mut controller) = self.stream_controller.take() {
-            let scrollback_reflow = if controller.has_live_tail() {
+            let scrollback_reflow = if controller.requires_final_scrollback_reflow() {
                 crate::app_event::ConsolidationScrollbackReflow::Required
             } else {
                 crate::app_event::ConsolidationScrollbackReflow::IfResizeReflowRan
@@ -158,10 +158,10 @@ impl ChatWidget {
         self.transcript.saw_plan_item_this_turn = true;
         let (finalized_streamed_cell, consolidated_plan_source) =
             if let Some(mut controller) = self.plan_stream_controller.take() {
-                let had_live_tail = controller.has_live_tail();
+                let requires_scrollback_reflow = controller.requires_final_scrollback_reflow();
                 self.clear_active_stream_tail();
                 let (cell, source) = controller.finalize();
-                if had_live_tail {
+                if requires_scrollback_reflow {
                     (None, source)
                 } else {
                     (cell, source)

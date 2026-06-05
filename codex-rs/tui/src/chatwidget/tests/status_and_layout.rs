@@ -259,7 +259,10 @@ async fn flush_answer_stream_keeps_default_reflow_for_plain_text_tail() {
         cwd.as_path(),
         HistoryRenderMode::Rich,
     );
-    assert!(controller.push("plain response line\n"));
+    assert!(
+        !controller.push("plain response line\n"),
+        "short prose should stay in the ordinary mutable tail until finalization",
+    );
     chat.stream_controller = Some(controller);
 
     while rx.try_recv().is_ok() {}

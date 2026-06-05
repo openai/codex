@@ -89,6 +89,13 @@ struct StreamCore {
     stable_prefix_len_cache: Option<StablePrefixLenCache>,
     /// Incremental holdback scanner state for append-only source updates.
     holdback_scanner: TableHoldbackScanner,
+    /// Number of source lines to keep mutable even when no structural holdback is active.
+    ///
+    /// CommonMark can reinterpret the newest block after the next line arrives. For example, a
+    /// paragraph after a fenced code block inside a list can shift when the following blank/list
+    /// marker is parsed. Holding a small source suffix keeps that boundary out of scrollback until
+    /// it is stable.
+    default_tail_lines: usize,
 }
 
 struct StablePrefixLenCache {
@@ -104,7 +111,12 @@ struct StablePrefixLenCache {
 }
 
 impl StreamCore {
-    fn new(width: Option<usize>, cwd: &Path, render_mode: HistoryRenderMode) -> Self {
+    fn new(
+        width: Option<usize>,
+        cwd: &Path,
+        render_mode: HistoryRenderMode,
+        default_tail_lines: usize,
+    ) -> Self {
         Self {
             state: StreamState::new(width, cwd),
             width,
@@ -116,6 +128,7 @@ impl StreamCore {
             render_mode,
             stable_prefix_len_cache: None,
             holdback_scanner: TableHoldbackScanner::new(),
+            default_tail_lines,
         }
     }
 
@@ -216,6 +229,7 @@ impl StreamCore {
         self.rendered_lines[start..].to_vec()
     }
 
+    #[cfg(test)]
     #[inline]
     fn has_tail(&self) -> bool {
         self.enqueued_stable_len < self.rendered_lines.len()
@@ -235,7 +249,7 @@ impl StreamCore {
             return;
         }
         let had_pending_queue = self.state.queued_len() > 0;
-        let had_live_tail = self.has_tail();
+        let had_structural_tail = self.requires_final_scrollback_reflow();
         self.width = width;
         self.state.collector.set_width(width);
         if self.raw_source.is_empty() {
@@ -244,21 +258,25 @@ impl StreamCore {
 
         self.recompute_streaming_render();
         self.emitted_stable_len = self.emitted_stable_len.min(self.rendered_lines.len());
+        let target_stable_len = self.compute_target_stable_len();
         if had_pending_queue
-            && self.emitted_stable_len == self.rendered_lines.len()
-            && self.emitted_stable_len > 0
+            && self.emitted_stable_len >= target_stable_len
+            && target_stable_len > 0
         {
             // If wrapped remainder compresses into fewer lines at the new width,
             // keep at least one line un-emitted so pre-resize pending content is
             // not skipped permanently.
-            self.emitted_stable_len -= 1;
+            self.emitted_stable_len = target_stable_len - 1;
         }
         self.state.clear_queue();
-        if self.emitted_stable_len > 0 && !had_pending_queue && !had_live_tail {
+        if self.emitted_stable_len > 0 && !had_pending_queue && !had_structural_tail {
             // Avoid replaying already-emitted content after resize when no
             // stable lines were waiting in the queue and there was no mutable
-            // tail to preserve.
-            self.enqueued_stable_len = self.rendered_lines.len();
+            // structural tail to preserve. Ordinary source-line tails are
+            // remapped to the new render suffix and stay mutable.
+            let target_stable_len = self.compute_target_stable_len();
+            self.emitted_stable_len = target_stable_len;
+            self.enqueued_stable_len = target_stable_len;
             return;
         }
         self.rebuild_stable_queue_from_render();
@@ -296,7 +314,7 @@ impl StreamCore {
         }
 
         let had_pending_queue = self.state.queued_len() > 0;
-        let had_live_tail = self.has_tail();
+        let had_structural_tail = self.requires_final_scrollback_reflow();
         self.render_mode = render_mode;
         if self.raw_source.is_empty() {
             return;
@@ -304,15 +322,18 @@ impl StreamCore {
 
         self.recompute_streaming_render();
         self.emitted_stable_len = self.emitted_stable_len.min(self.rendered_lines.len());
+        let target_stable_len = self.compute_target_stable_len();
         if had_pending_queue
-            && self.emitted_stable_len == self.rendered_lines.len()
-            && self.emitted_stable_len > 0
+            && self.emitted_stable_len >= target_stable_len
+            && target_stable_len > 0
         {
-            self.emitted_stable_len -= 1;
+            self.emitted_stable_len = target_stable_len - 1;
         }
         self.state.clear_queue();
-        if self.emitted_stable_len > 0 && !had_pending_queue && !had_live_tail {
-            self.enqueued_stable_len = self.rendered_lines.len();
+        if self.emitted_stable_len > 0 && !had_pending_queue && !had_structural_tail {
+            let target_stable_len = self.compute_target_stable_len();
+            self.emitted_stable_len = target_stable_len;
+            self.enqueued_stable_len = target_stable_len;
             return;
         }
         self.rebuild_stable_queue_from_render();
@@ -389,7 +410,7 @@ impl StreamCore {
             | TableHoldbackState::PendingHeader {
                 header_start: start,
             } => self.tail_budget_from_source_start(start),
-            TableHoldbackState::None => 0,
+            TableHoldbackState::None => self.default_tail_budget_lines(),
         };
         tracing::trace!(
             state = ?holdback_state,
@@ -454,6 +475,44 @@ impl StreamCore {
         });
         stable_prefix_len
     }
+
+    fn default_tail_budget_lines(&mut self) -> usize {
+        if self.default_tail_lines == 0 || self.rendered_lines.is_empty() {
+            return 0;
+        }
+        let Some(source_start) = tail_source_start(&self.raw_source, self.default_tail_lines)
+        else {
+            return 0;
+        };
+        self.tail_budget_from_source_start(source_start)
+    }
+
+    fn requires_final_scrollback_reflow(&self) -> bool {
+        self.render_mode != HistoryRenderMode::Raw
+            && !matches!(self.holdback_scanner.state(), TableHoldbackState::None)
+    }
+}
+
+fn tail_source_start(source: &str, tail_lines: usize) -> Option<usize> {
+    if source.is_empty() || tail_lines == 0 {
+        return None;
+    }
+
+    let mut end = source.len();
+    if source.as_bytes().last() == Some(&b'\n') {
+        end = end.saturating_sub(1);
+    }
+    let content_end = end;
+
+    let mut start = 0;
+    for _ in 0..tail_lines {
+        start = source[..end].rfind('\n').map(|idx| idx + 1).unwrap_or(0);
+        end = start.saturating_sub(1);
+    }
+    if start == content_end && start > 0 {
+        start = source[..end].rfind('\n').map(|idx| idx + 1).unwrap_or(0);
+    }
+    Some(start)
 }
 
 /// Controller for streaming agent message content with table-aware holdback.
@@ -472,7 +531,7 @@ impl StreamController {
     /// the old viewport until app-level reflow repairs the finalized transcript.
     pub(crate) fn new(width: Option<usize>, cwd: &Path, render_mode: HistoryRenderMode) -> Self {
         Self {
-            core: StreamCore::new(width, cwd, render_mode),
+            core: StreamCore::new(width, cwd, render_mode, /*default_tail_lines*/ 1),
             header_emitted: false,
         }
     }
@@ -532,9 +591,14 @@ impl StreamController {
         !self.header_emitted && self.core.enqueued_stable_len == 0
     }
 
+    #[cfg(test)]
     #[inline]
     pub(crate) fn has_live_tail(&self) -> bool {
         self.core.has_tail()
+    }
+
+    pub(crate) fn requires_final_scrollback_reflow(&self) -> bool {
+        self.core.requires_final_scrollback_reflow()
     }
 
     pub(crate) fn clear_queue(&mut self) {
@@ -585,7 +649,7 @@ impl PlanStreamController {
     /// callers must update it when the terminal width changes.
     pub(crate) fn new(width: Option<usize>, cwd: &Path, render_mode: HistoryRenderMode) -> Self {
         Self {
-            core: StreamCore::new(width, cwd, render_mode),
+            core: StreamCore::new(width, cwd, render_mode, /*default_tail_lines*/ 0),
             header_emitted: false,
             top_padding_emitted: false,
         }
@@ -635,9 +699,14 @@ impl PlanStreamController {
         self.core.queued_lines()
     }
 
+    #[cfg(test)]
     #[inline]
     pub(crate) fn has_live_tail(&self) -> bool {
         self.core.has_tail()
+    }
+
+    pub(crate) fn requires_final_scrollback_reflow(&self) -> bool {
+        self.core.requires_final_scrollback_reflow()
     }
 
     #[inline]
@@ -808,7 +877,8 @@ mod tests {
     fn controller_set_width_rebuilds_queued_lines() {
         let mut ctrl = stream_controller(Some(120));
         let delta = "This is a long line that should wrap into multiple rows when resized.\n";
-        assert!(ctrl.push(delta));
+        assert!(!ctrl.push(delta));
+        assert!(ctrl.push("tail line\n"));
         assert_eq!(ctrl.queued_lines(), 1);
 
         ctrl.set_width(Some(24));
@@ -832,6 +902,7 @@ mod tests {
         let line =
             "This is a long line that definitely wraps when the terminal shrinks to 24 columns.\n";
         ctrl.push(line);
+        ctrl.push("tail line\n");
         let (cell, _) = ctrl.on_commit_tick_batch(usize::MAX);
         assert!(cell.is_some(), "expected emitted cell");
         assert_eq!(ctrl.queued_lines(), 0);
@@ -848,7 +919,8 @@ mod tests {
     #[test]
     fn controller_tick_batch_zero_is_noop() {
         let mut ctrl = stream_controller(Some(80));
-        assert!(ctrl.push("line one\n"));
+        assert!(!ctrl.push("line one\n"));
+        assert!(ctrl.push("line two\n"));
         assert_eq!(ctrl.queued_lines(), 1);
 
         let (cell, idle) = ctrl.on_commit_tick_batch(/*max_lines*/ 0);
@@ -911,6 +983,33 @@ mod tests {
             "expected no live tail outside table holdback state",
         );
         assert!(!ctrl.has_live_tail());
+    }
+
+    #[test]
+    fn controller_does_not_duplicate_list_continuation_after_fenced_code() {
+        let lines = collect_streamed_lines(
+            &[
+                "**Happy Path**\n",
+                "\n",
+                "1. In the second terminal, make the smoke home non-writable:\n",
+                "   ```fish\n",
+                "   chmod a-w $CODEX_SMOKE_HOME\n",
+                "   ```\n",
+                "   Expected: the running TUI stays open.\n",
+                "\n",
+                "2. In the TUI, type `/model` and press Enter.\n",
+            ],
+            Some(/*width*/ 80),
+        );
+
+        let expected_count = lines
+            .iter()
+            .filter(|line| line.trim() == "Expected: the running TUI stays open.")
+            .count();
+        assert_eq!(
+            expected_count, 1,
+            "expected list continuation to render once, got {lines:?}",
+        );
     }
 
     #[test]
@@ -997,8 +1096,17 @@ mod tests {
         }
 
         assert!(
-            drained.iter().any(|l| l.contains("second line")),
-            "pending lines should continue draining after resize; got {drained:?}",
+            drained.iter().any(|l| l.contains("IIII JJJJ")),
+            "pending wrapped lines should continue draining after resize; got {drained:?}",
+        );
+
+        let (cell, _source) = ctrl.finalize();
+        let final_lines = cell
+            .map(|cell| lines_to_plain_strings(&cell.transcript_lines(u16::MAX)))
+            .unwrap_or_default();
+        assert!(
+            final_lines.iter().any(|line| line.contains("second line")),
+            "ordinary mutable tail should flush on finalize; got {final_lines:?}",
         );
     }
 
@@ -1028,6 +1136,8 @@ mod tests {
         assert_eq!(ctrl.queued_lines(), 0, "expected empty queue before table");
 
         ctrl.push("| A | B |\n");
+        let (_cell, idle) = ctrl.on_commit_tick();
+        assert!(idle, "pre-table intro should drain before resize");
         assert_eq!(
             ctrl.queued_lines(),
             0,
@@ -1247,7 +1357,7 @@ mod tests {
         let mut ctrl = stream_controller(Some(80));
 
         ctrl.push("Intro line before table.\n");
-        assert_eq!(ctrl.queued_lines(), 1);
+        assert_eq!(ctrl.queued_lines(), 0);
 
         ctrl.push("| Key | Value |\n");
         ctrl.push("| --- | --- |\n");
@@ -1898,6 +2008,7 @@ mod tests {
     fn controller_set_width_partial_wrapped_emit_keeps_wrapped_remainder() {
         let mut ctrl = stream_controller(Some(18));
         ctrl.push("alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu\n");
+        ctrl.push("tail line\n");
 
         let (first_emit, idle) = ctrl.on_commit_tick();
         assert!(first_emit.is_some(), "expected first wrapped line emission");
