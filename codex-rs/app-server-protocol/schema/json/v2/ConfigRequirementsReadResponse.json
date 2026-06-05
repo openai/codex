@@ -94,12 +94,21 @@
             "null"
           ]
         },
-        "allowedPermissions": {
+        "allowedPermissionProfiles": {
           "additionalProperties": {
             "type": "boolean"
           },
           "type": [
             "object",
+            "null"
+          ]
+        },
+        "allowedPermissions": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
             "null"
           ]
         },

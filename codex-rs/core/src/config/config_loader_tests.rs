@@ -1377,7 +1377,7 @@ default_permissions = "managed-standard"
         r#"
 default_permissions = "managed-standard"
 
-[allowed_permissions]
+[allowed_permission_profiles]
 managed-standard = true
 
 [permissions.managed-standard]
@@ -1400,7 +1400,7 @@ extends = ":workspace"
         config
             .config_layer_stack
             .requirements_toml()
-            .allowed_permissions,
+            .allowed_permission_profiles,
         Some(BTreeMap::from([("managed-standard".to_string(), true)]))
     );
     assert_eq!(
@@ -1435,7 +1435,7 @@ async fn system_allowed_permissions_select_managed_default_without_explicit_loca
             r#"
 default_permissions = "managed-standard"
 
-[allowed_permissions]
+[allowed_permission_profiles]
 managed-build = true
 managed-standard = true
 
@@ -1488,7 +1488,7 @@ async fn system_allowed_permissions_require_managed_default() -> anyhow::Result<
 [permissions.managed-standard]
 extends = ":read-only"
 
-[allowed_permissions]
+[allowed_permission_profiles]
 managed-standard = true
 "#,
     )
@@ -1502,11 +1502,12 @@ managed-standard = true
         .loader_overrides(overrides)
         .build()
         .await
-        .expect_err("allowed_permissions without default_permissions should fail");
+        .expect_err("allowed_permission_profiles without default_permissions should fail");
 
     assert!(
-        err.to_string()
-            .contains("default_permissions must be set unless allowed_permissions allows both"),
+        err.to_string().contains(
+            "default_permissions must be set unless allowed_permission_profiles allows both"
+        ),
         "{err}"
     );
     Ok(())
@@ -1522,7 +1523,7 @@ async fn system_allowed_permissions_standard_pair_implicitly_defaults_to_workspa
     tokio::fs::write(
         &requirements_path,
         r#"
-[allowed_permissions]
+[allowed_permission_profiles]
 ":read-only" = true
 ":workspace" = true
 "#,
@@ -1549,6 +1550,59 @@ async fn system_allowed_permissions_standard_pair_implicitly_defaults_to_workspa
 }
 
 #[tokio::test]
+async fn system_legacy_allowed_permissions_use_first_profile_as_default() -> anyhow::Result<()> {
+    let tmp = tempdir()?;
+    let codex_home = tmp.path().join("home");
+    tokio::fs::create_dir_all(&codex_home).await?;
+    let requirements_path = tmp.path().join("requirements.toml");
+    tokio::fs::write(
+        &requirements_path,
+        r#"
+allowed_permissions = ["managed-standard", ":workspace"]
+
+[permissions.managed-standard]
+extends = ":read-only"
+"#,
+    )
+    .await?;
+
+    let mut overrides = LoaderOverrides::without_managed_config_for_tests();
+    overrides.system_requirements_path = Some(requirements_path);
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home)
+        .fallback_cwd(Some(tmp.path().to_path_buf()))
+        .loader_overrides(overrides)
+        .build()
+        .await?;
+
+    assert_eq!(
+        config
+            .permissions
+            .active_permission_profile()
+            .map(|profile| profile.id),
+        Some("managed-standard".to_string())
+    );
+    assert_eq!(
+        config
+            .config_layer_stack
+            .requirements_toml()
+            .allowed_permission_profiles,
+        Some(BTreeMap::from([
+            (":workspace".to_string(), true),
+            ("managed-standard".to_string(), true),
+        ]))
+    );
+    assert_eq!(
+        config
+            .config_layer_stack
+            .requirements_toml()
+            .default_permissions,
+        Some("managed-standard".to_string())
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn system_managed_default_must_be_allowed() -> anyhow::Result<()> {
     let tmp = tempdir()?;
     let codex_home = tmp.path().join("home");
@@ -1559,7 +1613,7 @@ async fn system_managed_default_must_be_allowed() -> anyhow::Result<()> {
         r#"
 default_permissions = "managed-build"
 
-[allowed_permissions]
+[allowed_permission_profiles]
 managed-standard = true
 
 [permissions.managed-standard]
@@ -1579,18 +1633,19 @@ extends = ":workspace"
         .loader_overrides(overrides)
         .build()
         .await
-        .expect_err("managed default outside allowed_permissions should fail");
+        .expect_err("managed default outside allowed_permission_profiles should fail");
 
     assert!(
-        err.to_string()
-            .contains("default_permissions `managed-build` must be allowed by allowed_permissions"),
+        err.to_string().contains(
+            "default_permissions `managed-build` must be allowed by allowed_permission_profiles"
+        ),
         "{err}"
     );
     Ok(())
 }
 
 #[tokio::test]
-async fn system_managed_default_requires_allowed_permissions() -> anyhow::Result<()> {
+async fn system_managed_default_requires_allowed_permission_profiles() -> anyhow::Result<()> {
     let tmp = tempdir()?;
     let codex_home = tmp.path().join("home");
     tokio::fs::create_dir_all(&codex_home).await?;
@@ -1611,11 +1666,11 @@ default_permissions = ":read-only"
         .loader_overrides(overrides)
         .build()
         .await
-        .expect_err("managed default without allowed_permissions should fail");
+        .expect_err("managed default without allowed_permission_profiles should fail");
 
     assert!(
         err.to_string()
-            .contains("default_permissions requires allowed_permissions"),
+            .contains("default_permissions requires allowed_permission_profiles"),
         "{err}"
     );
     Ok(())
@@ -1642,7 +1697,7 @@ default_permissions = "{BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS}"
         r#"
 default_permissions = "managed-standard"
 
-[allowed_permissions]
+[allowed_permission_profiles]
 managed-standard = true
 
 [permissions.managed-standard.filesystem]
@@ -1695,7 +1750,7 @@ default_permissions = ":workspace"
         r#"
 default_permissions = "managed-standard"
 
-[allowed_permissions]
+[allowed_permission_profiles]
 managed-standard = true
 
 [permissions.managed-standard.filesystem]
@@ -1749,7 +1804,7 @@ default_permissions = "managed-build"
         r#"
 default_permissions = "managed-standard"
 
-[allowed_permissions]
+[allowed_permission_profiles]
 managed-build = true
 managed-standard = true
 
@@ -1794,7 +1849,7 @@ async fn system_requirements_warn_for_disallowed_explicit_permission_override() 
         r#"
 default_permissions = "managed-standard"
 
-[allowed_permissions]
+[allowed_permission_profiles]
 managed-standard = true
 
 [permissions.managed-standard]

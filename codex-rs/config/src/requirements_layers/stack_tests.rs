@@ -64,7 +64,7 @@ allowed_approval_policies = ["on-request"]
 allowed_sandbox_modes = ["workspace-write"]
 default_permissions = ":workspace"
 
-[allowed_permissions]
+[allowed_permission_profiles]
 ":read-only" = true
 ":workspace" = true
 "#,
@@ -77,7 +77,7 @@ allowed_approval_policies = ["never"]
 allowed_sandbox_modes = ["read-only"]
 default_permissions = ":read-only"
 
-[allowed_permissions]
+[allowed_permission_profiles]
 ":danger-full-access" = false
 ":workspace" = false
 "#,
@@ -94,12 +94,90 @@ allowed_approval_policies = ["never"]
 allowed_sandbox_modes = ["read-only"]
 default_permissions = ":read-only"
 
-[allowed_permissions]
+[allowed_permission_profiles]
 ":danger-full-access" = false
 ":read-only" = true
 ":workspace" = false
 "#
         )
+    );
+}
+
+#[test]
+fn legacy_allowed_permissions_normalize_to_profile_map_and_default() {
+    let composed = compose(vec![layer(
+        "req_legacy",
+        "Legacy",
+        r#"
+allowed_permissions = [":read-only", ":workspace"]
+"#,
+    )])
+    .expect("compose legacy requirements")
+    .expect("requirements present");
+
+    assert_eq!(
+        composed,
+        expected_requirements(
+            r#"
+default_permissions = ":read-only"
+
+[allowed_permission_profiles]
+":read-only" = true
+":workspace" = true
+"#
+        )
+    );
+}
+
+#[test]
+fn matching_legacy_and_map_allowlists_compose() {
+    let composed = compose(vec![layer(
+        "req_dual",
+        "Dual",
+        r#"
+allowed_permissions = [":workspace"]
+
+[allowed_permission_profiles]
+":read-only" = false
+":workspace" = true
+"#,
+    )])
+    .expect("compose dual requirements")
+    .expect("requirements present");
+
+    assert_eq!(
+        composed,
+        expected_requirements(
+            r#"
+default_permissions = ":workspace"
+
+[allowed_permission_profiles]
+":read-only" = false
+":workspace" = true
+"#
+        )
+    );
+}
+
+#[test]
+fn conflicting_legacy_and_map_allowlists_fail() {
+    let err = compose(vec![layer(
+        "req_conflict",
+        "Conflict",
+        r#"
+allowed_permissions = [":read-only"]
+
+[allowed_permission_profiles]
+":workspace" = true
+"#,
+    )])
+    .expect_err("conflicting allowlists should fail");
+
+    assert!(
+        err.to_string().contains(
+            "allowed_permissions must match the profiles set to true in allowed_permission_profiles"
+        ),
+        "{err}"
     );
 }
 

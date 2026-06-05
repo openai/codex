@@ -70,6 +70,13 @@ impl ComposableRequirementsLayer {
             (regular_toml, requirements)
         };
 
+        requirements
+            .normalize_permission_allowlist()
+            .map_err(|message| RequirementsCompositionError::Parse {
+                layer_source: source.clone(),
+                message,
+            })?;
+        materialize_permission_allowlist(&mut regular_toml, &requirements)?;
         requirements.apply_remote_sandbox_config(hostname);
         materialize_remote_sandbox_config(&mut regular_toml, &requirements)?;
         strip_special_fields(&mut regular_toml);
@@ -132,6 +139,30 @@ fn parse_layer_requirements(
             })
         }
     }
+}
+
+fn materialize_permission_allowlist(
+    layer_toml: &mut TomlValue,
+    requirements: &ConfigRequirementsToml,
+) -> Result<(), RequirementsCompositionError> {
+    remove_top_level_field(layer_toml, "allowed_permissions");
+    remove_top_level_field(layer_toml, "allowed_permission_profiles");
+    let Some(table) = layer_toml.as_table_mut() else {
+        return Ok(());
+    };
+    if let Some(allowed_permission_profiles) = requirements.allowed_permission_profiles.as_ref() {
+        table.insert(
+            "allowed_permission_profiles".to_string(),
+            toml_value_from_serializable(allowed_permission_profiles)?,
+        );
+    }
+    if let Some(default_permissions) = requirements.default_permissions.as_ref() {
+        table.insert(
+            "default_permissions".to_string(),
+            TomlValue::String(default_permissions.clone()),
+        );
+    }
+    Ok(())
 }
 
 fn materialize_remote_sandbox_config(

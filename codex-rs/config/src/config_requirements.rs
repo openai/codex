@@ -822,7 +822,8 @@ pub struct ConfigRequirementsToml {
     pub allowed_approval_policies: Option<Vec<AskForApproval>>,
     pub allowed_approvals_reviewers: Option<Vec<ApprovalsReviewer>>,
     pub allowed_sandbox_modes: Option<Vec<SandboxModeRequirement>>,
-    pub allowed_permissions: Option<BTreeMap<String, bool>>,
+    pub allowed_permissions: Option<Vec<String>>,
+    pub allowed_permission_profiles: Option<BTreeMap<String, bool>>,
     pub default_permissions: Option<String>,
     pub remote_sandbox_config: Option<Vec<RemoteSandboxConfigToml>>,
     pub allowed_web_search_modes: Option<Vec<WebSearchModeRequirement>>,
@@ -877,7 +878,8 @@ pub struct ConfigRequirementsWithSources {
     pub allowed_approval_policies: Option<Sourced<Vec<AskForApproval>>>,
     pub allowed_approvals_reviewers: Option<Sourced<Vec<ApprovalsReviewer>>>,
     pub allowed_sandbox_modes: Option<Sourced<Vec<SandboxModeRequirement>>>,
-    pub allowed_permissions: Option<Sourced<BTreeMap<String, bool>>>,
+    pub allowed_permissions: Option<Sourced<Vec<String>>>,
+    pub allowed_permission_profiles: Option<Sourced<BTreeMap<String, bool>>>,
     pub default_permissions: Option<Sourced<String>>,
     pub allowed_web_search_modes: Option<Sourced<Vec<WebSearchModeRequirement>>>,
     pub allow_managed_hooks_only: Option<Sourced<bool>>,
@@ -919,6 +921,7 @@ impl ConfigRequirementsWithSources {
             allowed_approvals_reviewers: _,
             allowed_sandbox_modes: _,
             allowed_permissions: _,
+            allowed_permission_profiles: _,
             default_permissions: _,
             remote_sandbox_config: _,
             allowed_web_search_modes: _,
@@ -955,6 +958,7 @@ impl ConfigRequirementsWithSources {
                 allowed_approvals_reviewers,
                 allowed_sandbox_modes,
                 allowed_permissions,
+                allowed_permission_profiles,
                 default_permissions,
                 allowed_web_search_modes,
                 allow_managed_hooks_only,
@@ -988,6 +992,7 @@ impl ConfigRequirementsWithSources {
             allowed_approvals_reviewers,
             allowed_sandbox_modes,
             allowed_permissions,
+            allowed_permission_profiles,
             default_permissions,
             allowed_web_search_modes,
             allow_managed_hooks_only,
@@ -1010,6 +1015,7 @@ impl ConfigRequirementsWithSources {
             allowed_approvals_reviewers: allowed_approvals_reviewers.map(|sourced| sourced.value),
             allowed_sandbox_modes: allowed_sandbox_modes.map(|sourced| sourced.value),
             allowed_permissions: allowed_permissions.map(|sourced| sourced.value),
+            allowed_permission_profiles: allowed_permission_profiles.map(|sourced| sourced.value),
             default_permissions: default_permissions.map(|sourced| sourced.value),
             remote_sandbox_config: None,
             allowed_web_search_modes: allowed_web_search_modes.map(|sourced| sourced.value),
@@ -1078,6 +1084,45 @@ pub enum ResidencyRequirement {
 }
 
 impl ConfigRequirementsToml {
+    pub(crate) fn normalize_permission_allowlist(&mut self) -> Result<(), String> {
+        let legacy_profiles = self.allowed_permissions.as_ref().map(|profiles| {
+            profiles
+                .iter()
+                .cloned()
+                .map(|profile| (profile, true))
+                .collect::<BTreeMap<_, _>>()
+        });
+
+        if let (Some(legacy_profiles), Some(profile_map)) =
+            (&legacy_profiles, &self.allowed_permission_profiles)
+        {
+            let allowed_profiles = profile_map
+                .iter()
+                .filter(|(_, allowed)| **allowed)
+                .map(|(profile, _)| (profile.clone(), true))
+                .collect::<BTreeMap<_, _>>();
+            if legacy_profiles != &allowed_profiles {
+                return Err(
+                    "allowed_permissions must match the profiles set to true in allowed_permission_profiles"
+                        .to_string(),
+                );
+            }
+        }
+
+        if self.allowed_permission_profiles.is_none() {
+            self.allowed_permission_profiles = legacy_profiles;
+        }
+        if self.default_permissions.is_none() {
+            self.default_permissions = self
+                .allowed_permissions
+                .as_ref()
+                .and_then(|profiles| profiles.first())
+                .cloned();
+        }
+
+        Ok(())
+    }
+
     pub fn apply_remote_sandbox_config(&mut self, hostname: Option<&str>) {
         let Some(remote_sandbox_config) = self.remote_sandbox_config.as_ref() else {
             return;
@@ -1099,6 +1144,7 @@ impl ConfigRequirementsToml {
             && self.allowed_approvals_reviewers.is_none()
             && self.allowed_sandbox_modes.is_none()
             && self.allowed_permissions.is_none()
+            && self.allowed_permission_profiles.is_none()
             && self.default_permissions.is_none()
             && self.remote_sandbox_config.is_none()
             && self.allowed_web_search_modes.is_none()
@@ -1152,6 +1198,7 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             allowed_approvals_reviewers,
             allowed_sandbox_modes,
             allowed_permissions: _,
+            allowed_permission_profiles: _,
             default_permissions: _,
             allowed_web_search_modes,
             allow_managed_hooks_only,
@@ -1520,6 +1567,7 @@ mod tests {
             allowed_approvals_reviewers,
             allowed_sandbox_modes,
             allowed_permissions,
+            allowed_permission_profiles,
             default_permissions,
             remote_sandbox_config: _,
             allowed_web_search_modes,
@@ -1546,6 +1594,8 @@ mod tests {
             allowed_sandbox_modes: allowed_sandbox_modes
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
             allowed_permissions: allowed_permissions
+                .map(|value| Sourced::new(value, RequirementSource::Unknown)),
+            allowed_permission_profiles: allowed_permission_profiles
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
             default_permissions: default_permissions
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
@@ -1605,7 +1655,7 @@ mod tests {
             r#"
                 default_permissions = "managed-standard"
 
-                [allowed_permissions]
+                [allowed_permission_profiles]
                 managed-standard = true
                 managed-build = true
 
@@ -1618,7 +1668,7 @@ mod tests {
         )?;
 
         assert_eq!(
-            requirements.allowed_permissions,
+            requirements.allowed_permission_profiles,
             Some(BTreeMap::from([
                 ("managed-build".to_string(), true),
                 ("managed-standard".to_string(), true),
@@ -1739,7 +1789,8 @@ mod tests {
             allowed_approval_policies: Some(allowed_approval_policies.clone()),
             allowed_approvals_reviewers: Some(allowed_approvals_reviewers.clone()),
             allowed_sandbox_modes: Some(allowed_sandbox_modes.clone()),
-            allowed_permissions: Some(BTreeMap::from([("managed".to_string(), true)])),
+            allowed_permissions: Some(vec!["managed".to_string()]),
+            allowed_permission_profiles: Some(BTreeMap::from([("managed".to_string(), true)])),
             default_permissions: Some("managed".to_string()),
             remote_sandbox_config: None,
             allowed_web_search_modes: Some(allowed_web_search_modes.clone()),
@@ -1774,6 +1825,10 @@ mod tests {
                 )),
                 allowed_sandbox_modes: Some(Sourced::new(allowed_sandbox_modes, source.clone(),)),
                 allowed_permissions: Some(Sourced::new(
+                    vec!["managed".to_string()],
+                    source.clone(),
+                )),
+                allowed_permission_profiles: Some(Sourced::new(
                     BTreeMap::from([("managed".to_string(), true)]),
                     source.clone(),
                 )),
@@ -1831,6 +1886,7 @@ mod tests {
                 allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
                 allowed_permissions: None,
+                allowed_permission_profiles: None,
                 default_permissions: None,
                 allowed_web_search_modes: None,
                 allow_managed_hooks_only: None,
@@ -1884,6 +1940,7 @@ mod tests {
                 allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
                 allowed_permissions: None,
+                allowed_permission_profiles: None,
                 default_permissions: None,
                 allowed_web_search_modes: None,
                 allow_managed_hooks_only: None,
