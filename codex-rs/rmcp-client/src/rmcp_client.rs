@@ -66,6 +66,7 @@ use crate::in_process_transport::InProcessTransportFactory;
 use crate::load_oauth_tokens;
 use crate::oauth::OAuthPersistor;
 use crate::oauth::StoredOAuthTokens;
+use crate::refresh_token_store::RefreshTokenStore;
 use crate::stdio_server_launcher::StdioServerCommand;
 use crate::stdio_server_launcher::StdioServerLauncher;
 use crate::stdio_server_launcher::StdioServerProcessHandle;
@@ -1023,6 +1024,13 @@ async fn create_oauth_transport_and_runtime(
     // reqwest metadata client here.
     let mut oauth_state =
         OAuthState::new(url.to_string(), Some(oauth_metadata_client.clone())).await?;
+
+    match &mut oauth_state {
+        OAuthState::Unauthorized(manager) => {
+            manager.set_credential_store(RefreshTokenStore::default());
+        }
+        _ => return Err(anyhow!("unexpected OAuth state during client setup")),
+    }
 
     oauth_state
         .set_credentials(

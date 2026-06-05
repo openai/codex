@@ -1,5 +1,8 @@
 mod streamable_http_test_support;
 
+use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use codex_config::types::OAuthCredentialsStoreMode;
@@ -33,6 +36,8 @@ const SERVER_NAME: &str = "test-streamable-http-oauth-startup";
 const EXPIRED_ACCESS_TOKEN: &str = "expired-access-token";
 const REFRESH_TOKEN: &str = "valid-refresh-token";
 const REFRESHED_ACCESS_TOKEN: &str = "refreshed-access-token";
+const SECOND_REFRESHED_ACCESS_TOKEN: &str = "second-refreshed-access-token";
+const REPLACEMENT_REFRESH_TOKEN: &str = "replacement-refresh-token";
 const CHILD_SERVER_URL_ENV: &str = "MCP_TEST_OAUTH_STARTUP_SERVER_URL";
 const OMITTED_REFRESH_TOKEN_CHILD_SERVER_URL_ENV: &str =
     "MCP_TEST_OAUTH_OMITTED_REFRESH_TOKEN_SERVER_URL";
@@ -158,7 +163,31 @@ async fn oauth_startup_child() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
-async fn omitted_refresh_token_is_dropped_and_next_refresh_fails() -> anyhow::Result<()> {
+async fn omitted_refresh_token_preserves_previous_for_next_refresh() -> anyhow::Result<()> {
+    fn respond_to_initialize(request: &Request) -> ResponseTemplate {
+        let body: Value = request.body_json().expect("valid JSON-RPC request");
+        match body.get("method").and_then(Value::as_str) {
+            Some("initialize") => ResponseTemplate::new(200).set_body_json(json!({
+                "jsonrpc": "2.0",
+                "id": body.get("id").cloned().unwrap_or(Value::Null),
+                "result": {
+                    "protocolVersion": body
+                        .pointer("/params/protocolVersion")
+                        .cloned()
+                        .unwrap_or_else(|| json!("2025-06-18")),
+                    "capabilities": {},
+                    "serverInfo": {
+                        "name": "oauth-omitted-refresh-token-test",
+                        "version": "0.0.0-test",
+                    },
+                },
+            })),
+            Some("notifications/initialized") => ResponseTemplate::new(202),
+            method => ResponseTemplate::new(400)
+                .set_body_string(format!("unexpected JSON-RPC method: {method:?}")),
+        }
+    }
+
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/.well-known/oauth-authorization-server/mcp"))
@@ -170,18 +199,32 @@ async fn omitted_refresh_token_is_dropped_and_next_refresh_fails() -> anyhow::Re
         .expect(2)
         .mount(&server)
         .await;
+    let refresh_count = Arc::new(AtomicUsize::new(0));
+    let refresh_count_for_responder = Arc::clone(&refresh_count);
     Mock::given(method("POST"))
         .and(path("/oauth/token"))
         .and(body_string_contains("grant_type=refresh_token"))
         .and(body_string_contains(format!(
             "refresh_token={REFRESH_TOKEN}"
         )))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "access_token": REFRESHED_ACCESS_TOKEN,
-            "token_type": "Bearer",
-            "expires_in": 7200,
-        })))
-        .expect(1)
+        .respond_with(move |_request: &Request| {
+            match refresh_count_for_responder.fetch_add(1, Ordering::SeqCst) {
+                0 => ResponseTemplate::new(200).set_body_json(json!({
+                    "access_token": REFRESHED_ACCESS_TOKEN,
+                    "token_type": "Bearer",
+                    "expires_in": 7200,
+                })),
+                1 => ResponseTemplate::new(200).set_body_json(json!({
+                    "access_token": SECOND_REFRESHED_ACCESS_TOKEN,
+                    "token_type": "Bearer",
+                    "expires_in": 7200,
+                    "refresh_token": REPLACEMENT_REFRESH_TOKEN,
+                })),
+                request_count => ResponseTemplate::new(500)
+                    .set_body_string(format!("unexpected refresh request {request_count}")),
+            }
+        })
+        .expect(2)
         .mount(&server)
         .await;
     Mock::given(method("POST"))
@@ -190,29 +233,17 @@ async fn omitted_refresh_token_is_dropped_and_next_refresh_fails() -> anyhow::Re
             "authorization",
             format!("Bearer {REFRESHED_ACCESS_TOKEN}"),
         ))
-        .respond_with(|request: &Request| {
-            let body: Value = request.body_json().expect("valid JSON-RPC request");
-            match body.get("method").and_then(Value::as_str) {
-                Some("initialize") => ResponseTemplate::new(200).set_body_json(json!({
-                    "jsonrpc": "2.0",
-                    "id": body.get("id").cloned().unwrap_or(Value::Null),
-                    "result": {
-                        "protocolVersion": body
-                            .pointer("/params/protocolVersion")
-                            .cloned()
-                            .unwrap_or_else(|| json!("2025-06-18")),
-                        "capabilities": {},
-                        "serverInfo": {
-                            "name": "oauth-omitted-refresh-token-test",
-                            "version": "0.0.0-test",
-                        },
-                    },
-                })),
-                Some("notifications/initialized") => ResponseTemplate::new(202),
-                method => ResponseTemplate::new(400)
-                    .set_body_string(format!("unexpected JSON-RPC method: {method:?}")),
-            }
-        })
+        .respond_with(respond_to_initialize)
+        .expect(2)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/mcp"))
+        .and(header(
+            "authorization",
+            format!("Bearer {SECOND_REFRESHED_ACCESS_TOKEN}"),
+        ))
+        .respond_with(respond_to_initialize)
         .expect(2)
         .mount(&server)
         .await;
@@ -221,7 +252,7 @@ async fn omitted_refresh_token_is_dropped_and_next_refresh_fails() -> anyhow::Re
     let server_url = format!("{}/mcp", server.uri());
     let status = Command::new(std::env::current_exe()?)
         .args([
-            "oauth_omitted_refresh_token_child",
+            "oauth_preserved_refresh_token_child",
             "--exact",
             "--ignored",
             "--nocapture",
@@ -232,15 +263,16 @@ async fn omitted_refresh_token_is_dropped_and_next_refresh_fails() -> anyhow::Re
         .await?;
     assert!(
         status.success(),
-        "OAuth omitted refresh token child failed: {status}"
+        "OAuth preserved refresh token child failed: {status}"
     );
+    assert_eq!(refresh_count.load(Ordering::SeqCst), 2);
     server.verify().await;
     Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
-#[ignore = "spawned by omitted_refresh_token_is_dropped_and_next_refresh_fails"]
-async fn oauth_omitted_refresh_token_child() -> anyhow::Result<()> {
+#[ignore = "spawned by omitted_refresh_token_preserves_previous_for_next_refresh"]
+async fn oauth_preserved_refresh_token_child() -> anyhow::Result<()> {
     let server_url = std::env::var(OMITTED_REFRESH_TOKEN_CHILD_SERVER_URL_ENV)?;
     let codex_home = std::env::var("CODEX_HOME")?;
 
@@ -298,7 +330,10 @@ async fn oauth_omitted_refresh_token_child() -> anyhow::Result<()> {
         persisted_entry.get("access_token"),
         Some(&json!(REFRESHED_ACCESS_TOKEN))
     );
-    assert_eq!(persisted_entry.get("refresh_token"), Some(&Value::Null));
+    assert_eq!(
+        persisted_entry.get("refresh_token"),
+        Some(&json!(REFRESH_TOKEN))
+    );
     assert_eq!(persisted_entry.get("scopes"), Some(&json!([])));
     assert!(
         persisted_entry
@@ -329,13 +364,22 @@ async fn oauth_omitted_refresh_token_child() -> anyhow::Result<()> {
         /*auth_provider*/ None,
     )
     .await?;
-    assert!(initialize_client(&second_client).await.is_err());
+    initialize_client(&second_client).await?;
+    second_client.shutdown().await;
 
     let persisted_after_second_refresh: Value =
         serde_json::from_str(&std::fs::read_to_string(credentials_path)?)?;
+    let persisted_entry = persisted_after_second_refresh
+        .as_object()
+        .and_then(|entries| entries.values().next())
+        .expect("one persisted OAuth credential entry");
     assert_eq!(
-        persisted_after_second_refresh,
-        expired_persisted_credentials
+        persisted_entry.get("access_token"),
+        Some(&json!(SECOND_REFRESHED_ACCESS_TOKEN))
+    );
+    assert_eq!(
+        persisted_entry.get("refresh_token"),
+        Some(&json!(REPLACEMENT_REFRESH_TOKEN))
     );
     Ok(())
 }
