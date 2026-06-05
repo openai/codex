@@ -148,6 +148,23 @@ pub(super) async fn make_chatwidget_manual(
     tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
     tokio::sync::mpsc::UnboundedReceiver<Op>,
 ) {
+    make_chatwidget_manual_with_auth(
+        model_override,
+        /*has_chatgpt_account*/ false,
+        /*has_codex_backend_auth*/ false,
+    )
+    .await
+}
+
+pub(super) async fn make_chatwidget_manual_with_auth(
+    model_override: Option<&str>,
+    has_chatgpt_account: bool,
+    has_codex_backend_auth: bool,
+) -> (
+    ChatWidget,
+    tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
+    tokio::sync::mpsc::UnboundedReceiver<Op>,
+) {
     let (tx_raw, rx) = unbounded_channel::<AppEvent>();
     let app_event_tx = AppEventSender::new(tx_raw);
     let (op_tx, op_rx) = unbounded_channel::<Op>();
@@ -167,7 +184,8 @@ pub(super) async fn make_chatwidget_manual(
         workspace_command_runner: None,
         initial_user_message: None,
         enhanced_keys_supported: false,
-        has_chatgpt_account: false,
+        has_chatgpt_account,
+        has_codex_backend_auth,
         model_catalog,
         feedback: codex_feedback::CodexFeedback::new(),
         is_first_run: true,

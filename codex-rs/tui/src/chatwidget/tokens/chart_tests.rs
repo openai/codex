@@ -112,6 +112,96 @@ fn daily_graph_snapshot_stays_left_aligned_in_wide_terminal() {
 }
 
 #[test]
+fn weekly_graph_snapshot_renders_bar_chart_and_caption() {
+    let today =
+        NaiveDate::from_ymd_opt(/*year*/ 2026, /*month*/ 5, /*day*/ 29).expect("valid date");
+    let buckets = vec![
+        AccountTokenUsageDailyBucket {
+            start_date: "2026-05-11".to_string(),
+            tokens: 3,
+        },
+        AccountTokenUsageDailyBucket {
+            start_date: "2026-05-18".to_string(),
+            tokens: 6,
+        },
+        AccountTokenUsageDailyBucket {
+            start_date: "2026-05-25".to_string(),
+            tokens: 9,
+        },
+    ];
+
+    let rendered = chart_lines(
+        TokenActivityView::Weekly,
+        &buckets,
+        today,
+        /*width*/ 22,
+    )
+    .into_iter()
+    .map(|line| line.to_string().trim_end().to_string())
+    .collect::<Vec<_>>()
+    .join("\n");
+
+    assert_snapshot!(rendered, @"
+          Apr     May
+    max                 █
+                        █
+                      █ █
+                      █ █
+                    █ █ █
+                    █ █ █
+      0             █ █ █
+
+       Each column = 1 week · tallest 9
+       daily · weekly · cumulative
+    ");
+}
+
+#[test]
+fn cumulative_graph_snapshot_renders_running_total_bar_chart_and_caption() {
+    let today =
+        NaiveDate::from_ymd_opt(/*year*/ 2026, /*month*/ 5, /*day*/ 29).expect("valid date");
+    let buckets = vec![
+        AccountTokenUsageDailyBucket {
+            start_date: "2026-05-11".to_string(),
+            tokens: 3,
+        },
+        AccountTokenUsageDailyBucket {
+            start_date: "2026-05-18".to_string(),
+            tokens: 6,
+        },
+        AccountTokenUsageDailyBucket {
+            start_date: "2026-05-25".to_string(),
+            tokens: 9,
+        },
+    ];
+
+    let rendered = chart_lines(
+        TokenActivityView::Cumulative,
+        &buckets,
+        today,
+        /*width*/ 22,
+    )
+    .into_iter()
+    .map(|line| line.to_string().trim_end().to_string())
+    .collect::<Vec<_>>()
+    .join("\n");
+
+    assert_snapshot!(rendered, @"
+          Apr     May
+    max                 █
+                        █
+                        █
+                      █ █
+                      █ █
+                    █ █ █
+      0             █ █ █
+
+       Running total · top 18
+       daily · weekly · cumulative
+    ");
+}
+
+#[test]
 fn summary_snapshot_left_aligns_and_splits_when_needed() {
     let response = GetAccountTokenUsageResponse {
         summary: AccountTokenUsageSummary {

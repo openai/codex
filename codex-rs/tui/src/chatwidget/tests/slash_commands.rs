@@ -1204,6 +1204,21 @@ async fn usage_command_runs_with_backend_auth_without_chatgpt_account_flag() {
 }
 
 #[tokio::test]
+async fn usage_command_runs_with_backend_auth_from_widget_init() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual_with_auth(
+        /*model_override*/ None, /*has_chatgpt_account*/ false,
+        /*has_codex_backend_auth*/ true,
+    )
+    .await;
+
+    chat.dispatch_command(SlashCommand::Usage);
+
+    assert_matches!(rx.try_recv(), Ok(AppEvent::RefreshTokenActivity { .. }));
+    assert!(!chat.has_chatgpt_account());
+    assert!(chat.has_codex_backend_auth());
+}
+
+#[tokio::test]
 async fn clearing_pending_token_activity_refreshes_discards_late_result() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     set_chatgpt_auth(&mut chat);
@@ -1222,6 +1237,33 @@ async fn clearing_pending_token_activity_refreshes_discards_late_result() {
 
     chat.clear_pending_token_activity_refreshes();
 
+    assert!(
+        !chat.finish_token_activity_refresh(
+            request_id,
+            Err("stale token activity result".to_string()),
+        )
+    );
+}
+
+#[tokio::test]
+async fn account_state_change_discards_pending_token_activity_refresh() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    set_chatgpt_auth(&mut chat);
+
+    let request_id = dispatch_usage_and_expect_refresh(&mut chat, &mut rx);
+    assert!(chat.pending_token_activity_output().is_some());
+
+    chat.update_account_state(
+        Some(crate::status::StatusAccountDisplay::ChatGpt {
+            email: Some("new-account@example.com".to_string()),
+            plan: None,
+        }),
+        /*plan_type*/ None,
+        /*has_chatgpt_account*/ true,
+        /*has_codex_backend_auth*/ true,
+    );
+
+    assert!(chat.pending_token_activity_output().is_none());
     assert!(
         !chat.finish_token_activity_refresh(
             request_id,

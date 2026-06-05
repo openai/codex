@@ -222,6 +222,10 @@ impl ChatWidget {
         self.has_chatgpt_account
     }
 
+    pub(crate) fn has_codex_backend_auth(&self) -> bool {
+        self.has_codex_backend_auth
+    }
+
     pub(crate) fn update_account_state(
         &mut self,
         status_account_display: Option<StatusAccountDisplay>,
@@ -229,6 +233,12 @@ impl ChatWidget {
         has_chatgpt_account: bool,
         has_codex_backend_auth: bool,
     ) {
+        let account_state_changed = self.status_account_display != status_account_display
+            || self.has_chatgpt_account != has_chatgpt_account
+            || self.has_codex_backend_auth != has_codex_backend_auth;
+        if account_state_changed {
+            self.clear_pending_token_activity_refreshes();
+        }
         self.status_account_display = status_account_display;
         self.plan_type = plan_type;
         self.has_chatgpt_account = has_chatgpt_account;
