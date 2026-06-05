@@ -113,12 +113,12 @@ impl GoalRuntimeHandle {
         Arc::clone(&self.inner.accounting_state)
     }
 
-    pub(crate) async fn goal_state_permit(&self) -> SemaphorePermit<'_> {
+    pub(crate) async fn goal_state_permit(&self) -> Result<SemaphorePermit<'_>, String> {
         self.inner
             .goal_state_lock
             .acquire()
             .await
-            .expect("goal state semaphore is never closed")
+            .map_err(|err| err.to_string())
     }
 
     pub async fn prepare_external_goal_mutation(&self) -> Result<(), String> {
@@ -294,7 +294,7 @@ impl GoalRuntimeHandle {
         }
         // Hold this through the read/start window so external set/clear cannot
         // change the goal after we read it but before the continuation launches.
-        let _goal_state_permit = self.goal_state_permit().await;
+        let _goal_state_permit = self.goal_state_permit().await?;
 
         let Some(thread_manager) = self.inner.thread_manager.upgrade() else {
             tracing::debug!("skipping goal continuation because thread manager is unavailable");

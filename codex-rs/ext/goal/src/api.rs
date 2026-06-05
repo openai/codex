@@ -128,7 +128,12 @@ impl GoalService {
         // Hold this through the prepare/write window so idle continuation cannot
         // launch from goal state that this external mutation is about to change.
         let _goal_state_permit = match runtime.as_ref() {
-            Some(runtime) => Some(runtime.goal_state_permit().await),
+            Some(runtime) => Some(
+                runtime
+                    .goal_state_permit()
+                    .await
+                    .map_err(GoalServiceError::Internal)?,
+            ),
             None => None,
         };
         if let Some(runtime) = runtime.as_ref()
@@ -240,7 +245,12 @@ impl GoalService {
         // Hold this through the prepare/write window so idle continuation cannot
         // launch from goal state that this external mutation is about to change.
         let goal_state_permit = match runtime.as_ref() {
-            Some(runtime) => Some(runtime.goal_state_permit().await),
+            Some(runtime) => Some(
+                runtime
+                    .goal_state_permit()
+                    .await
+                    .map_err(GoalServiceError::Internal)?,
+            ),
             None => None,
         };
         if let Some(runtime) = runtime.as_ref()
