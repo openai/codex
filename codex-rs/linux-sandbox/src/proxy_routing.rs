@@ -281,8 +281,9 @@ fn rewrite_proxy_env_value(proxy_url: &str, local_port: u16) -> Option<String> {
 fn create_proxy_socket_dir() -> io::Result<PathBuf> {
     let temp_dir = proxy_socket_parent_dir();
     let pid = std::process::id();
+    let uid = unsafe { libc::geteuid() };
     for attempt in 0..128 {
-        let candidate = temp_dir.join(format!("{PROXY_SOCKET_DIR_PREFIX}{pid}-{attempt}"));
+        let candidate = temp_dir.join(format!("{PROXY_SOCKET_DIR_PREFIX}{pid}-{uid}-{attempt}"));
         // The bridge UDS paths live under a shared temp root, so the per-run
         // directory should not be traversable by other processes.
         let mut dir_builder = DirBuilder::new();
@@ -321,7 +322,11 @@ fn proxy_socket_parent_dir() -> PathBuf {
 
 fn proxy_socket_paths_fit(parent: &Path) -> bool {
     let socket_path = parent
-        .join(format!("{PROXY_SOCKET_DIR_PREFIX}{}-127", u32::MAX))
+        .join(format!(
+            "{PROXY_SOCKET_DIR_PREFIX}{}-{}-127",
+            u32::MAX,
+            libc::uid_t::MAX
+        ))
         .join(format!("proxy-route-{}.sock", usize::MAX));
     socket_path.as_os_str().as_bytes().len() <= UNIX_SOCKET_PATH_MAX_BYTES
 }
@@ -798,6 +803,10 @@ mod tests {
     fn parse_proxy_socket_dir_owner_pid_reads_owner_pid() {
         assert_eq!(
             parse_proxy_socket_dir_owner_pid("codex-linux-sandbox-proxy-1234-0"),
+            Some(1234)
+        );
+        assert_eq!(
+            parse_proxy_socket_dir_owner_pid("codex-linux-sandbox-proxy-1234-1000-0"),
             Some(1234)
         );
         assert_eq!(
