@@ -42,6 +42,7 @@ use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
+use core_test_support::test_codex::local;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event_with_timeout;
@@ -460,10 +461,7 @@ async fn view_image_routes_to_selected_local_environment() -> anyhow::Result<()>
 
     test.submit_turn_with_environments(
         "route local view image",
-        Some(vec![TurnEnvironmentSelection {
-            environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
-            cwd: test.config.cwd.clone(),
-        }]),
+        Some(vec![local(test.config.cwd.clone())]),
     )
     .await?;
 
@@ -576,10 +574,7 @@ async fn view_image_routes_to_selected_remote_environment() -> anyhow::Result<()
     let test = builder.build_with_remote_and_local_env(&server).await?;
     let local_cwd = TempDir::new()?;
     fs::write(local_cwd.path().join("remote.png"), b"not a remote image")?;
-    let local_selection = TurnEnvironmentSelection {
-        environment_id: LOCAL_ENVIRONMENT_ID.to_string(),
-        cwd: local_cwd.path().abs(),
-    };
+    let local_selection = local(local_cwd.path().abs());
     let remote_cwd = PathBuf::from(format!(
         "/tmp/codex-view-image-routing-{}",
         SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis()

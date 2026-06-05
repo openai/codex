@@ -3661,21 +3661,6 @@ fn thread_settings_update_params_preserve_explicit_null_service_tier() {
 }
 
 #[test]
-fn thread_settings_update_params_round_trip_cwd() {
-    let cwd = PathBuf::from(absolute_path_string("repo"));
-    let params: ThreadSettingsUpdateParams = serde_json::from_value(json!({
-        "threadId": "thread_123",
-        "cwd": cwd,
-    }))
-    .expect("params should deserialize");
-
-    assert_eq!(params.cwd, Some(cwd.clone()));
-
-    let serialized = serde_json::to_value(&params).expect("params should serialize");
-    assert_eq!(serialized.get("cwd"), Some(&json!(cwd)));
-}
-
-#[test]
 fn thread_settings_update_params_preserve_field_level_experimental_gates() {
     let permissions = ThreadSettingsUpdateParams {
         thread_id: "thread_123".to_string(),

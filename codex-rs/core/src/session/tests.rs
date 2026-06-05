@@ -157,6 +157,7 @@ use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
+use core_test_support::test_codex::local;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_path_buf;
 use core_test_support::tracing::install_test_tracing;
@@ -4560,10 +4561,7 @@ async fn cwd_update_rewrites_sticky_environment_cwd() {
         let mut state = session.state.lock().await;
         let original_cwd = state.session_configuration.cwd().clone();
         let environment_cwd = original_cwd.join("environment");
-        let environments = vec![TurnEnvironmentSelection {
-            environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
-            cwd: environment_cwd.clone(),
-        }];
+        let environments = vec![local(environment_cwd.clone())];
         state.session_configuration.environments.environments = environments.clone();
         (original_cwd, environment_cwd, environments)
     };
@@ -4605,10 +4603,7 @@ async fn absolute_cwd_update_with_turn_environment_is_allowed() {
             SessionSettingsUpdate {
                 environments: Some(TurnEnvironmentSelections::new(
                     absolute_cwd.clone(),
-                    vec![TurnEnvironmentSelection {
-                        environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
-                        cwd: absolute_cwd.clone(),
-                    }],
+                    vec![local(absolute_cwd.clone())],
                 )),
                 ..Default::default()
             },
@@ -4757,10 +4752,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
             developer_instructions: None,
         },
     };
-    let default_environments = vec![TurnEnvironmentSelection {
-        environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
-        cwd: config.cwd.clone(),
-    }];
+    let default_environments = vec![local(config.cwd.clone())];
     let session_configuration = SessionConfiguration {
         provider: config.model_provider.clone(),
         collaboration_mode,
@@ -4994,10 +4986,7 @@ async fn make_session_with_config_and_rx(
             developer_instructions: None,
         },
     };
-    let default_environments = vec![TurnEnvironmentSelection {
-        environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
-        cwd: config.cwd.clone(),
-    }];
+    let default_environments = vec![local(config.cwd.clone())];
     let session_configuration = SessionConfiguration {
         provider: config.model_provider.clone(),
         collaboration_mode,
@@ -5098,10 +5087,7 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
             developer_instructions: None,
         },
     };
-    let default_environments = vec![TurnEnvironmentSelection {
-        environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
-        cwd: config.cwd.clone(),
-    }];
+    let default_environments = vec![local(config.cwd.clone())];
     let session_configuration = SessionConfiguration {
         provider: config.model_provider.clone(),
         collaboration_mode,
@@ -6062,10 +6048,7 @@ async fn turn_environments_set_primary_environment() {
             SessionSettingsUpdate {
                 environments: Some(TurnEnvironmentSelections::new(
                     selected_cwd.clone(),
-                    vec![TurnEnvironmentSelection {
-                        environment_id: "local".to_string(),
-                        cwd: selected_cwd.clone(),
-                    }],
+                    vec![local(selected_cwd.clone())],
                 )),
                 ..Default::default()
             },
@@ -6099,10 +6082,7 @@ async fn default_turn_does_not_overlay_legacy_fallback_cwd_onto_stored_thread_en
 
     {
         let mut state = session.state.lock().await;
-        state.session_configuration.environments.environments = vec![TurnEnvironmentSelection {
-            environment_id: "local".to_string(),
-            cwd: selected_cwd.clone(),
-        }];
+        state.session_configuration.environments.environments = vec![local(selected_cwd.clone())];
     }
 
     let turn_context = session.new_default_turn().await;
@@ -6264,14 +6244,8 @@ async fn duplicate_turn_environment_returns_error_without_mutating_session() {
                 environments: Some(TurnEnvironmentSelections::new(
                     original_configuration.cwd().clone(),
                     vec![
-                        TurnEnvironmentSelection {
-                            environment_id: "local".to_string(),
-                            cwd: original_configuration.cwd().clone(),
-                        },
-                        TurnEnvironmentSelection {
-                            environment_id: "local".to_string(),
-                            cwd: original_configuration.cwd().join("second"),
-                        },
+                        local(original_configuration.cwd().clone()),
+                        local(original_configuration.cwd().join("second")),
                     ],
                 )),
                 ..Default::default()
@@ -6859,10 +6833,7 @@ where
             developer_instructions: None,
         },
     };
-    let default_environments = vec![TurnEnvironmentSelection {
-        environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
-        cwd: config.cwd.clone(),
-    }];
+    let default_environments = vec![local(config.cwd.clone())];
     let session_configuration = SessionConfiguration {
         provider: config.model_provider.clone(),
         collaboration_mode,
