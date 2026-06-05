@@ -91,9 +91,12 @@ fn stage_windows_sandbox_helpers() -> anyhow::Result<()> {
                 .with_context(|| format!("create resources dir {}", resources_dir.display()));
         }
     }
-    for helper_name in ["codex-windows-sandbox-setup", "codex-command-runner"] {
-        let helper = codex_utils_cargo_bin::cargo_bin(helper_name)?;
-        let file_name = Path::new(helper_name).with_extension("exe");
+    for (cargo_bin_name, file_name) in [
+        ("codex-windows-sandbox-setup", "codex-windows-sandbox-helper.exe"),
+        ("codex-command-runner", "codex-command-runner.exe"),
+    ] {
+        let helper = codex_utils_cargo_bin::cargo_bin(cargo_bin_name)?;
+        let file_name = Path::new(file_name);
         let destination = resources_dir.join(file_name);
         if let Err(err) = std::fs::copy(&helper, &destination) {
             // A sandbox helper can briefly remain alive after the sandboxed

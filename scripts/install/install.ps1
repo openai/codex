@@ -304,7 +304,7 @@ function Test-OldStandaloneBinLayout {
         "rg.exe",
         "codex-command-runner.exe",
         "codex-windows-sandbox.exe",
-        "codex-windows-sandbox-setup.exe"
+        "codex-windows-sandbox-helper.exe"
     )
     foreach ($child in Get-ChildItem -LiteralPath $VisibleBinDir -Force) {
         if ($child.PSIsContainer) {
@@ -539,7 +539,7 @@ function Test-PackageContentsAreComplete {
         "bin\codex.exe",
         "codex-path\rg.exe",
         "codex-resources\codex-command-runner.exe",
-        "codex-resources\codex-windows-sandbox-setup.exe"
+        "codex-resources\codex-windows-sandbox-helper.exe"
     )
     foreach ($name in $expectedFiles) {
         if (-not (Test-Path -LiteralPath (Join-Path $PackageDir $name) -PathType Leaf)) {
@@ -562,7 +562,7 @@ function Test-LegacyPlatformNpmContentsAreComplete {
     $expectedFiles = @(
         "codex.exe",
         "codex-resources\codex-command-runner.exe",
-        "codex-resources\codex-windows-sandbox-setup.exe",
+        "codex-resources\codex-windows-sandbox-helper.exe",
         "codex-resources\rg.exe"
     )
     foreach ($name in $expectedFiles) {
@@ -826,7 +826,7 @@ try {
                 $copyMap = @{
                     "codex/codex.exe" = "codex.exe"
                     "codex/codex-command-runner.exe" = "codex-resources\codex-command-runner.exe"
-                    "codex/codex-windows-sandbox-setup.exe" = "codex-resources\codex-windows-sandbox-setup.exe"
+                    "codex/codex-windows-sandbox-setup.exe" = "codex-resources\codex-windows-sandbox-helper.exe"
                     "path/rg.exe" = "codex-resources\rg.exe"
                 }
 

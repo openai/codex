@@ -46,7 +46,10 @@ pub const ONLINE_USERNAME: &str = "CodexSandboxOnline";
 const ERROR_CANCELLED: u32 = 1223;
 const SECURITY_BUILTIN_DOMAIN_RID: u32 = 0x0000_0020;
 const DOMAIN_ALIAS_RID_ADMINS: u32 = 0x0000_0220;
-const SETUP_EXE_FILENAME: &str = "codex-windows-sandbox-setup.exe";
+// Avoid "setup.exe" on disk because Windows installer detection can flag that
+// filename in per-user caches and force an elevation prompt.
+const SETUP_EXE_FILENAME: &str = "codex-windows-sandbox-helper.exe";
+const LEGACY_SETUP_EXE_FILENAME: &str = "codex-windows-sandbox-setup.exe";
 const USERPROFILE_ROOT_EXCLUSIONS: &[&str] = &[
     ".ssh",
     ".tsh",
@@ -673,6 +676,7 @@ fn find_setup_exe() -> PathBuf {
 
 fn find_setup_exe_for_current_exe(exe: &Path) -> Option<PathBuf> {
     bundled_executable_path_for_exe(exe, SETUP_EXE_FILENAME)
+        .or_else(|| bundled_executable_path_for_exe(exe, LEGACY_SETUP_EXE_FILENAME))
 }
 
 fn report_helper_failure(
@@ -1290,7 +1294,7 @@ mod tests {
         fs::create_dir_all(&bin_dir).expect("create bin dir");
         fs::create_dir_all(&resources_dir).expect("create resources dir");
         let exe = bin_dir.join("codex.exe");
-        let setup_exe = resources_dir.join("codex-windows-sandbox-setup.exe");
+        let setup_exe = resources_dir.join("codex-windows-sandbox-helper.exe");
         fs::write(&exe, b"codex").expect("write exe");
         fs::write(&setup_exe, b"setup").expect("write setup");
 

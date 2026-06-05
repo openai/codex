@@ -15,7 +15,7 @@ The builder creates a canonical Codex package directory:
 │   ├── bwrap                             # Linux only
 │   ├── zsh/bin/zsh                       # supported Unix targets only
 │   ├── codex-command-runner.exe          # Windows only
-│   └── codex-windows-sandbox-setup.exe   # Windows only
+│   └── codex-windows-sandbox-helper.exe  # Windows only
 └── codex-path
     └── rg[.exe]
 ```
