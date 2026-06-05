@@ -281,6 +281,15 @@ impl GoalRuntimeHandle {
             return Ok(());
         }
 
+        let Some(thread_manager) = self.inner.thread_manager.upgrade() else {
+            tracing::debug!("skipping goal continuation because thread manager is unavailable");
+            return Ok(());
+        };
+        let Ok(thread) = thread_manager.get_thread(self.inner.thread_id).await else {
+            tracing::debug!("skipping goal continuation because live thread is unavailable");
+            return Ok(());
+        };
+
         let Some(goal) = self
             .inner
             .state_dbs
@@ -296,16 +305,7 @@ impl GoalRuntimeHandle {
             self.inner.accounting_state.clear_active_goal();
             return Ok(());
         }
-
         let item = continuation_steering_item(&protocol_goal_from_state(goal));
-        let Some(thread_manager) = self.inner.thread_manager.upgrade() else {
-            tracing::debug!("skipping goal continuation because thread manager is unavailable");
-            return Ok(());
-        };
-        let Ok(thread) = thread_manager.get_thread(self.inner.thread_id).await else {
-            tracing::debug!("skipping goal continuation because live thread is unavailable");
-            return Ok(());
-        };
 
         if let Err(err) = thread.try_start_turn_if_idle(vec![item]).await {
             let reason = err.reason();
