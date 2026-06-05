@@ -424,11 +424,28 @@ impl OAuthPersistor {
 
     /// Persists the latest stored credentials if they have changed.
     /// Deletes the credentials if they are no longer present.
+    pub(crate) async fn persist_if_needed(&self) -> Result<()> {
+        self.persist_if_needed_with_refresh_locks(Vec::new()).await
+    }
+
+    async fn persist_if_needed_with_refresh_locks(
+        &self,
+        refresh_locks: Vec<fs::File>,
+    ) -> Result<()> {
+        let persistor = self.clone();
+        tokio::spawn(async move {
+            let _refresh_locks = refresh_locks;
+            persistor.persist_if_needed_inner().await
+        })
+        .await
+        .context("OAuth token persistence task failed")?
+    }
+
     #[expect(
         clippy::await_holding_invalid_type,
         reason = "AuthorizationManager async access must be serialized through its mutex"
     )]
-    pub(crate) async fn persist_if_needed(&self) -> Result<()> {
+    async fn persist_if_needed_inner(&self) -> Result<()> {
         let (client_id, maybe_credentials) = {
             let manager = self.inner.authorization_manager.clone();
             let guard = manager.lock().await;
@@ -502,7 +519,7 @@ impl OAuthPersistor {
 
         // A different process may have rotated the one-time refresh token.
         // Reload its durable result while all refreshers share the same lock.
-        let (_refresh_locks, stored) = lock_and_load_oauth_tokens(
+        let (refresh_locks, stored) = lock_and_load_oauth_tokens(
             &self.inner.server_name,
             &self.inner.url,
             self.inner.store_mode,
@@ -572,7 +589,8 @@ impl OAuthPersistor {
             }
         }
 
-        self.persist_if_needed().await
+        self.persist_if_needed_with_refresh_locks(refresh_locks)
+            .await
     }
 }
 

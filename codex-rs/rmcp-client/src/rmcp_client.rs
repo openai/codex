@@ -432,12 +432,6 @@ impl RmcpClient {
             };
         }
 
-        if let Some(runtime) = oauth_persistor
-            && let Err(error) = runtime.persist_if_needed().await
-        {
-            warn!("failed to persist OAuth tokens after initialize: {error}");
-        }
-
         Ok(initialize_result)
     }
 
@@ -452,7 +446,6 @@ impl RmcpClient {
                 async move { service.list_tools(params).await }.boxed()
             })
             .await?;
-        self.persist_oauth_tokens().await;
         Ok(result)
     }
 
@@ -485,7 +478,6 @@ impl RmcpClient {
                 })
             })
             .collect::<Result<Vec<_>>>()?;
-        self.persist_oauth_tokens().await;
         Ok(ListToolsWithConnectorIdResult {
             next_cursor: result.next_cursor,
             tools,
@@ -511,7 +503,6 @@ impl RmcpClient {
                 async move { service.list_resources(params).await }.boxed()
             })
             .await?;
-        self.persist_oauth_tokens().await;
         Ok(result)
     }
 
@@ -526,7 +517,6 @@ impl RmcpClient {
                 async move { service.list_resource_templates(params).await }.boxed()
             })
             .await?;
-        self.persist_oauth_tokens().await;
         Ok(result)
     }
 
@@ -541,7 +531,6 @@ impl RmcpClient {
                 async move { service.read_resource(params).await }.boxed()
             })
             .await?;
-        self.persist_oauth_tokens().await;
         Ok(result)
     }
 
@@ -598,7 +587,6 @@ impl RmcpClient {
                 .boxed()
             })
             .await?;
-        self.persist_oauth_tokens().await;
         Ok(result)
     }
 
@@ -627,7 +615,6 @@ impl RmcpClient {
             },
         )
         .await?;
-        self.persist_oauth_tokens().await;
         Ok(())
     }
 
@@ -649,7 +636,6 @@ impl RmcpClient {
                 .boxed()
             })
             .await?;
-        self.persist_oauth_tokens().await;
         Ok(response)
     }
 
@@ -687,16 +673,6 @@ impl RmcpClient {
         }
 
         drop(previous_state);
-    }
-
-    /// This should be called after every tool call so that if a given tool call triggered
-    /// a refresh of the OAuth tokens, they are persisted.
-    async fn persist_oauth_tokens(&self) {
-        if let Some(runtime) = self.oauth_persistor().await
-            && let Err(error) = runtime.persist_if_needed().await
-        {
-            warn!("failed to persist OAuth tokens: {error}");
-        }
     }
 
     async fn create_pending_transport(
@@ -887,6 +863,11 @@ impl RmcpClient {
             let service = transport
                 .await
                 .map_err(|err| anyhow!("handshaking with MCP server failed: {err}"))?;
+            if let Some(runtime) = &oauth_persistor
+                && let Err(error) = runtime.persist_if_needed().await
+            {
+                warn!("failed to persist OAuth tokens after initialize: {error}");
+            }
             Ok((Arc::new(service), oauth_persistor))
         };
 
@@ -953,12 +934,20 @@ impl RmcpClient {
         Fut: std::future::Future<Output = std::result::Result<T, rmcp::service::ServiceError>>,
     {
         let refresh_and_operation = async move {
-            if let Some(runtime) = oauth_persistor
+            if let Some(runtime) = &oauth_persistor
                 && let Err(error) = runtime.refresh_if_needed().await
             {
                 warn!("failed to refresh OAuth tokens: {error}");
             }
-            operation(service).await.map_err(ClientOperationError::from)
+            let result = operation(service)
+                .await
+                .map_err(ClientOperationError::from)?;
+            if let Some(runtime) = oauth_persistor
+                && let Err(error) = runtime.persist_if_needed().await
+            {
+                warn!("failed to persist OAuth tokens: {error}");
+            }
+            Ok(result)
         };
 
         match timeout {
@@ -1043,12 +1032,6 @@ impl RmcpClient {
                 service,
                 oauth: oauth_persistor.clone(),
             };
-        }
-
-        if let Some(runtime) = oauth_persistor
-            && let Err(error) = runtime.persist_if_needed().await
-        {
-            warn!("failed to persist OAuth tokens after session recovery: {error}");
         }
 
         Ok(())
