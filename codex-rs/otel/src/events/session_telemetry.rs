@@ -102,6 +102,7 @@ pub struct SessionTelemetryMetadata {
 #[derive(Debug, Clone)]
 pub struct SessionTelemetry {
     pub(crate) metadata: SessionTelemetryMetadata,
+    metric_app_version: String,
     pub(crate) metrics: Option<MetricsClient>,
     pub(crate) metrics_use_metadata_tags: bool,
 }
@@ -359,7 +360,7 @@ impl SessionTelemetry {
             originator: self.metadata.originator.as_str(),
             service_name: self.metadata.service_name.as_deref(),
             model: self.metadata.model.as_str(),
-            app_version: self.metadata.app_version,
+            app_version: self.metric_app_version.as_str(),
         }
         .into_tags()
     }
@@ -377,6 +378,7 @@ impl SessionTelemetry {
         terminal_type: String,
         session_source: SessionSource,
     ) -> SessionTelemetry {
+        let app_version = env!("CARGO_PKG_VERSION");
         Self {
             metadata: SessionTelemetryMetadata {
                 conversation_id,
@@ -390,9 +392,10 @@ impl SessionTelemetry {
                 model: model.to_owned(),
                 slug: slug.to_owned(),
                 log_user_prompts,
-                app_version: env!("CARGO_PKG_VERSION"),
+                app_version,
                 terminal_type,
             },
+            metric_app_version: sanitize_metric_tag_value(app_version),
             metrics: crate::metrics::global(),
             metrics_use_metadata_tags: true,
         }
@@ -1249,3 +1252,7 @@ fn duration_from_ms_value(value: Option<&serde_json::Value>) -> Option<Duration>
     let clamped = ms.min(u64::MAX as f64);
     Some(Duration::from_millis(clamped.round() as u64))
 }
+
+#[cfg(test)]
+#[path = "session_telemetry_tests.rs"]
+mod tests;
