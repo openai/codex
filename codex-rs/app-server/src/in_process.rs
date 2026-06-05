@@ -763,9 +763,10 @@ mod tests {
     ) -> InProcessClientHandle {
         let codex_home = TempDir::new().expect("temp dir");
         let config = Arc::new(build_test_config(codex_home.path()).await);
-        let state_db = codex_rollout::state_db::try_init(config.as_ref())
-            .await
-            .expect("state db should initialize for in-process test");
+        let state_db =
+            codex_rollout::state_db::try_init(config.as_ref(), config.sqlite_journal_mode)
+                .await
+                .expect("state db should initialize for in-process test");
         let args = InProcessStartArgs {
             arg0_paths: Arg0DispatchPaths::default(),
             config,

@@ -253,15 +253,6 @@ fn resolve_sqlite_home_env(resolved_cwd: &Path) -> Option<PathBuf> {
     }
 }
 
-fn resolve_sqlite_journal_mode(
-    mode: SqliteJournalModeToml,
-) -> codex_state::RuntimeSqliteJournalMode {
-    match mode {
-        SqliteJournalModeToml::Wal => codex_state::RuntimeSqliteJournalMode::Wal,
-        SqliteJournalModeToml::Delete => codex_state::RuntimeSqliteJournalMode::Delete,
-    }
-}
-
 fn resolve_cli_auth_credentials_store_mode(
     configured: AuthCredentialsStoreMode,
     package_version: &str,
@@ -3293,7 +3284,10 @@ impl Config {
             .sqlite
             .as_ref()
             .and_then(|sqlite| sqlite.journal_mode)
-            .map(resolve_sqlite_journal_mode)
+            .map(|mode| match mode {
+                SqliteJournalModeToml::Wal => codex_state::RuntimeSqliteJournalMode::Wal,
+                SqliteJournalModeToml::Delete => codex_state::RuntimeSqliteJournalMode::Delete,
+            })
             .unwrap_or_default();
         let original_permission_profile = permission_profile.clone();
         apply_requirement_constrained_value(

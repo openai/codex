@@ -531,7 +531,7 @@ pub async fn run_main_with_transport_options(
         }
         _ => None,
     };
-    let state_db = match rollout_state_db::try_init(&config).await {
+    let state_db = match rollout_state_db::try_init(&config, config.sqlite_journal_mode).await {
         Ok(state_db) => Some(state_db),
         Err(err) => {
             return Err(std::io::Error::other(format!(

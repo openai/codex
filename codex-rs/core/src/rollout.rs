@@ -32,10 +32,6 @@ impl codex_rollout::RolloutConfigView for Config {
         self.sqlite_home.as_path()
     }
 
-    fn sqlite_journal_mode(&self) -> codex_state::RuntimeSqliteJournalMode {
-        self.sqlite_journal_mode
-    }
-
     fn cwd(&self) -> &std::path::Path {
         self.cwd.as_path()
     }

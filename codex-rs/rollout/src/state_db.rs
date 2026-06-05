@@ -38,11 +38,14 @@ const STARTUP_BACKFILL_WAIT_TIMEOUT: Duration = Duration::from_secs(2);
 /// This is the process entry point for local state: it opens the SQLite-backed
 /// runtime, applies rollout metadata backfills as needed, and returns the
 /// initialized handle.
-pub async fn init(config: &impl RolloutConfigView) -> Option<StateDbHandle> {
+pub async fn init(
+    config: &impl RolloutConfigView,
+    sqlite_journal_mode: codex_state::RuntimeSqliteJournalMode,
+) -> Option<StateDbHandle> {
     match try_init_with_roots(
         config.codex_home().to_path_buf(),
         config.sqlite_home().to_path_buf(),
-        config.sqlite_journal_mode(),
+        sqlite_journal_mode,
         config.model_provider_id().to_string(),
     )
     .await
@@ -59,11 +62,14 @@ pub async fn init(config: &impl RolloutConfigView) -> Option<StateDbHandle> {
 ///
 /// Prefer [`init`] unless the caller needs to surface the exact failure after
 /// tracing or UI setup has completed.
-pub async fn try_init(config: &impl RolloutConfigView) -> anyhow::Result<StateDbHandle> {
+pub async fn try_init(
+    config: &impl RolloutConfigView,
+    sqlite_journal_mode: codex_state::RuntimeSqliteJournalMode,
+) -> anyhow::Result<StateDbHandle> {
     try_init_with_roots(
         config.codex_home().to_path_buf(),
         config.sqlite_home().to_path_buf(),
-        config.sqlite_journal_mode(),
+        sqlite_journal_mode,
         config.model_provider_id().to_string(),
     )
     .await
@@ -217,7 +223,10 @@ fn emit_startup_warning(message: &str) {
 ///
 /// Unlike [`init`], this helper does not run rollout backfill. It is for
 /// optional local reads from non-owning contexts such as remote app-server mode.
-pub async fn get_state_db(config: &impl RolloutConfigView) -> Option<StateDbHandle> {
+pub async fn get_state_db(
+    config: &impl RolloutConfigView,
+    sqlite_journal_mode: codex_state::RuntimeSqliteJournalMode,
+) -> Option<StateDbHandle> {
     let state_path = codex_state::state_db_path(config.sqlite_home());
     if !tokio::fs::try_exists(&state_path).await.unwrap_or(false) {
         codex_state::record_fallback(
@@ -230,7 +239,7 @@ pub async fn get_state_db(config: &impl RolloutConfigView) -> Option<StateDbHand
     let runtime = match codex_state::StateRuntime::init_with_journal_mode(
         config.sqlite_home().to_path_buf(),
         config.model_provider_id().to_string(),
-        config.sqlite_journal_mode(),
+        sqlite_journal_mode,
     )
     .await
     {

@@ -127,7 +127,8 @@ async fn state_db_init_backfills_before_returning() -> anyhow::Result<()> {
         .join("\n");
     fs::write(&rollout_path, format!("{jsonl}\n"))?;
 
-    let runtime = crate::state_db::init(&test_config(home.path()))
+    let config = test_config(home.path());
+    let runtime = crate::state_db::init(&config, codex_state::RuntimeSqliteJournalMode::default())
         .await
         .expect("state db should initialize");
 

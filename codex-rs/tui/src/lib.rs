@@ -346,14 +346,17 @@ async fn init_state_db_for_app_server_target(
     app_server_target: &AppServerTarget,
 ) -> std::io::Result<Option<StateDbHandle>> {
     match app_server_target {
-        AppServerTarget::Embedded => state_db::try_init(config).await.map(Some).map_err(|err| {
-            std::io::Error::other(LocalStateDbStartupError::new(
-                codex_state::state_db_path(config.sqlite_home.as_path()),
-                err.to_string(),
-            ))
-        }),
+        AppServerTarget::Embedded => state_db::try_init(config, config.sqlite_journal_mode)
+            .await
+            .map(Some)
+            .map_err(|err| {
+                std::io::Error::other(LocalStateDbStartupError::new(
+                    codex_state::state_db_path(config.sqlite_home.as_path()),
+                    err.to_string(),
+                ))
+            }),
         AppServerTarget::LocalDaemon { .. } | AppServerTarget::Remote { .. } => {
-            Ok(state_db::get_state_db(config).await)
+            Ok(state_db::get_state_db(config, config.sqlite_journal_mode).await)
         }
     }
 }

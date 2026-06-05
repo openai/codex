@@ -93,15 +93,6 @@ pub enum RuntimeSqliteJournalMode {
     Delete,
 }
 
-impl RuntimeSqliteJournalMode {
-    fn to_sqlx(self) -> SqlxSqliteJournalMode {
-        match self {
-            Self::Wal => SqlxSqliteJournalMode::Wal,
-            Self::Delete => SqlxSqliteJournalMode::Delete,
-        }
-    }
-}
-
 #[derive(Clone, Copy)]
 struct RuntimeDbSpec {
     label: &'static str,
@@ -373,11 +364,17 @@ fn base_sqlite_options(
     path: &Path,
     journal_mode: RuntimeSqliteJournalMode,
 ) -> SqliteConnectOptions {
+    let (journal_mode, synchronous) = match journal_mode {
+        RuntimeSqliteJournalMode::Wal => (SqlxSqliteJournalMode::Wal, SqliteSynchronous::Normal),
+        RuntimeSqliteJournalMode::Delete => {
+            (SqlxSqliteJournalMode::Delete, SqliteSynchronous::Full)
+        }
+    };
     SqliteConnectOptions::new()
         .filename(path)
         .create_if_missing(true)
-        .journal_mode(journal_mode.to_sqlx())
-        .synchronous(SqliteSynchronous::Normal)
+        .journal_mode(journal_mode)
+        .synchronous(synchronous)
         .busy_timeout(Duration::from_secs(5))
         .log_statements(LevelFilter::Off)
 }
@@ -706,7 +703,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn open_state_sqlite_honors_delete_journal_mode() {
+    async fn open_state_sqlite_honors_delete_journal_policy() {
         let codex_home = unique_temp_dir();
         tokio::fs::create_dir_all(&codex_home)
             .await
@@ -726,8 +723,12 @@ mod tests {
             .fetch_one(&pool)
             .await
             .expect("query journal mode");
+        let synchronous: i64 = sqlx::query_scalar("PRAGMA synchronous")
+            .fetch_one(&pool)
+            .await
+            .expect("query synchronous mode");
 
-        assert_eq!(journal_mode, "delete");
+        assert_eq!((journal_mode, synchronous), ("delete".to_string(), 2));
 
         pool.close().await;
         let _ = tokio::fs::remove_dir_all(codex_home).await;
