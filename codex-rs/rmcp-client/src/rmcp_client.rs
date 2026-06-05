@@ -9,7 +9,6 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
 
-use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
 use codex_api::SharedAuthProvider;
@@ -419,13 +418,14 @@ impl RmcpClient {
             )
             .await
             {
-                Err(error) if oauth_invalid_token::rejected_initialize_request(&error) => {
+                Err(error) => {
                     let Some(oauth_persistor) = startup_oauth_persistor else {
                         return Err(error);
                     };
-                    oauth_persistor.force_refresh().await.with_context(
-                        || "failed to refresh MCP OAuth access token after invalid_token",
-                    )?;
+                    if !oauth_invalid_token::rejected_initialize_request(&error) {
+                        return Err(error);
+                    }
+                    oauth_persistor.force_refresh().await?;
                     let retry_transport =
                         Self::create_pending_transport(&self.transport_recipe).await?;
                     Self::connect_pending_transport(
@@ -644,16 +644,16 @@ impl RmcpClient {
             .await;
         let result = match result {
             Ok(result) => result,
-            Err(error) if Self::is_invalid_token_operation_error(&error) => {
+            Err(error) => {
                 let Some(oauth_persistor) = self.oauth_persistor().await else {
                     return Err(error);
                 };
-                oauth_persistor.force_refresh().await.with_context(
-                    || "failed to refresh MCP OAuth access token after invalid_token",
-                )?;
+                if !Self::is_invalid_token_operation_error(&error) {
+                    return Err(error);
+                }
+                oauth_persistor.force_refresh().await?;
                 return Err(oauth_invalid_token::RetryRequired.into());
             }
-            Err(error) => return Err(error),
         };
         self.persist_oauth_tokens().await;
         Ok(result)

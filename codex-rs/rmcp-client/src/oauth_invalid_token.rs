@@ -4,6 +4,7 @@ use rmcp::transport::DynamicTransportError;
 use rmcp::transport::streamable_http_client::StreamableHttpError;
 
 use crate::http_client_adapter::StreamableHttpClientAdapterError;
+use crate::http_client_adapter::is_bearer_invalid_token_challenge;
 
 #[derive(Debug, thiserror::Error)]
 #[error("MCP OAuth access token was rejected; credentials refreshed, retry the request")]
@@ -27,7 +28,8 @@ pub(crate) fn rejected_transport(error: &DynamicTransportError) -> bool {
         .is_some_and(|error| {
             matches!(
                 error,
-                StreamableHttpError::Client(StreamableHttpClientAdapterError::OAuthInvalidToken)
+                StreamableHttpError::AuthRequired(auth)
+                    if is_bearer_invalid_token_challenge(&auth.www_authenticate_header)
             )
         })
 }

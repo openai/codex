@@ -84,13 +84,10 @@ pub(super) fn insufficient_scope_challenge(
         })
 }
 
-/// Returns whether any `WWW-Authenticate` response header field value contains
-/// a Bearer challenge with an `invalid_token` error.
-pub(super) fn has_bearer_invalid_token_challenge(headers: &[HttpHeader]) -> bool {
-    headers
-        .iter()
-        .filter(|header| header.name.eq_ignore_ascii_case(WWW_AUTHENTICATE.as_str()))
-        .any(|header| parse_bearer_challenge(&header.value, "invalid_token").is_some())
+/// Returns whether a `WWW-Authenticate` field value contains a Bearer
+/// challenge with an `invalid_token` error.
+pub(crate) fn is_bearer_invalid_token_challenge(header: &str) -> bool {
+    parse_bearer_challenge(header, "invalid_token").is_some()
 }
 
 /// Parses a Bearer `WWW-Authenticate` challenge with an `insufficient_scope`

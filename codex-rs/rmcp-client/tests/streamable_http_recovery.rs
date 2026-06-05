@@ -58,6 +58,32 @@ async fn streamable_http_401_does_not_trigger_recovery() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn static_bearer_invalid_token_retains_auth_required_semantics() -> anyhow::Result<()> {
+    let (_server, base_url) = spawn_streamable_http_server().await?;
+    let client = create_client(&base_url).await?;
+
+    arm_session_post_failure(
+        &base_url,
+        /*status*/ 401,
+        /*remaining*/ 1,
+        /*www_authenticate_headers*/ &[r#"Bearer error="invalid_token""#],
+    )
+    .await?;
+
+    let error = call_echo_tool(&client, "unauthorized").await.unwrap_err();
+    assert!(
+        error
+            .chain()
+            .any(|source| source.to_string().ends_with("Auth required")),
+        "static bearer invalid_token should remain AuthRequired: {error:#}"
+    );
+
+    let subsequent = call_echo_tool(&client, "subsequent").await?;
+    assert_eq!(subsequent, expected_echo_result("subsequent"));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn streamable_http_403_scope_challenge_returns_insufficient_scope() -> anyhow::Result<()> {
     let (_server, base_url) = spawn_streamable_http_server().await?;
     let client = create_client(&base_url).await?;

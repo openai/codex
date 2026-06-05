@@ -19,6 +19,7 @@
 use anyhow::Context;
 use anyhow::Error;
 use anyhow::Result;
+use anyhow::anyhow;
 use codex_config::types::OAuthCredentialsStoreMode;
 use oauth2::AccessToken;
 use oauth2::RefreshToken;
@@ -45,6 +46,7 @@ use tracing::warn;
 
 use codex_keyring_store::DefaultKeyringStore;
 use codex_keyring_store::KeyringStore;
+use rmcp::transport::auth::AuthError;
 use rmcp::transport::auth::AuthorizationManager;
 use tokio::sync::Mutex;
 
@@ -52,6 +54,9 @@ use codex_utils_home_dir::find_codex_home;
 
 const KEYRING_SERVICE: &str = "Codex MCP Credentials";
 const REFRESH_SKEW_MILLIS: u64 = 30_000;
+const MISSING_REFRESH_TOKEN_ERROR: &str = "No refresh token available";
+pub const OAUTH_REFRESH_REAUTHENTICATION_REQUIRED_ERROR: &str =
+    "OAuth refresh token was rejected; reauthentication required";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct StoredOAuthTokens {
@@ -370,15 +375,25 @@ impl OAuthPersistor {
         {
             let manager = self.inner.authorization_manager.clone();
             let guard = manager.lock().await;
-            guard.refresh_token().await.with_context(|| {
-                format!(
-                    "failed to refresh OAuth tokens for server {}",
-                    self.inner.server_name
-                )
-            })?;
+            if let Err(error) = guard.refresh_token().await {
+                return Err(refresh_error(error, &self.inner.server_name));
+            }
         }
 
         self.persist_if_needed().await
+    }
+}
+
+fn refresh_error(error: AuthError, server_name: &str) -> Error {
+    match error {
+        AuthError::TokenRefreshFailed(message)
+            if message == MISSING_REFRESH_TOKEN_ERROR || message.contains("invalid_grant") =>
+        {
+            anyhow!(OAUTH_REFRESH_REAUTHENTICATION_REQUIRED_ERROR)
+        }
+        error => Error::new(error).context(format!(
+            "failed to refresh OAuth tokens for server {server_name}"
+        )),
     }
 }
 

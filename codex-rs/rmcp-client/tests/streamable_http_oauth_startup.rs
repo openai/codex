@@ -1,11 +1,13 @@
 mod streamable_http_test_support;
 
+use std::fs;
 use std::time::Duration;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
 use codex_config::types::OAuthCredentialsStoreMode;
 use codex_exec_server::Environment;
+use codex_rmcp_client::OAUTH_REFRESH_REAUTHENTICATION_REQUIRED_ERROR;
 use codex_rmcp_client::RmcpClient;
 use codex_rmcp_client::StoredOAuthTokens;
 use codex_rmcp_client::WrappedOAuthTokenResponse;
@@ -38,6 +40,7 @@ const EXPIRED_ACCESS_TOKEN: &str = "expired-access-token";
 const REVOKED_ACCESS_TOKEN: &str = "revoked-access-token";
 const REFRESH_TOKEN: &str = "valid-refresh-token";
 const REFRESHED_ACCESS_TOKEN: &str = "refreshed-access-token";
+const ROTATED_REFRESH_TOKEN: &str = "rotated-refresh-token";
 const CHILD_SERVER_URL_ENV: &str = "MCP_TEST_OAUTH_STARTUP_SERVER_URL";
 const CHILD_SCENARIO_ENV: &str = "MCP_TEST_OAUTH_STARTUP_SCENARIO";
 const INVALID_TOKEN_CHALLENGE: &str = r#"Bearer error="invalid_token""#;
@@ -46,7 +49,10 @@ const RETRY_REQUIRED_ERROR: &str =
 
 const SCENARIO_INITIALIZE_SUCCEEDS: &str = "initialize_succeeds";
 const SCENARIO_INITIALIZE_FAILS: &str = "initialize_fails";
+const SCENARIO_INITIALIZE_REAUTH_REQUIRED: &str = "initialize_reauth_required";
 const SCENARIO_INITIALIZE_TIMES_OUT: &str = "initialize_times_out";
+const SCENARIO_TOOL_CALL_FAILS: &str = "tool_call_fails";
+const SCENARIO_TOOL_CALL_REAUTH_REQUIRED: &str = "tool_call_reauth_required";
 const SCENARIO_TOOL_CALL_RECOVERS: &str = "tool_call_recovers";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
@@ -97,7 +103,7 @@ async fn initialize_invalid_token_retry_uses_original_timeout() -> anyhow::Resul
     mount_invalid_token_initialize(&server, REVOKED_ACCESS_TOKEN).await;
     mount_refresh(
         &server,
-        successful_refresh_response().set_delay(Duration::from_secs(1)),
+        successful_refresh_response(REFRESH_TOKEN).set_delay(Duration::from_secs(1)),
     )
     .await;
     Mock::given(method("POST"))
@@ -141,30 +147,26 @@ async fn initialize_generic_401_does_not_refresh_or_retry() -> anyhow::Result<()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
-async fn initialized_notification_invalid_token_does_not_refresh_or_retry() -> anyhow::Result<()> {
+async fn initialize_invalid_token_rejected_refresh_requires_reauthentication() -> anyhow::Result<()>
+{
     let server = MockServer::start().await;
     mount_oauth_metadata(&server).await;
-    mount_unexpected_refresh(&server).await;
+    mount_invalid_token_initialize(&server, REVOKED_ACCESS_TOKEN).await;
     Mock::given(method("POST"))
-        .and(path("/mcp"))
-        .and(header(
-            "authorization",
-            format!("Bearer {REVOKED_ACCESS_TOKEN}"),
-        ))
-        .respond_with(|request: &Request| {
-            let body = request_body(request);
-            match body.get("method").and_then(Value::as_str) {
-                Some("initialize") => initialize_response(&body),
-                Some("notifications/initialized") => ResponseTemplate::new(401)
-                    .insert_header("www-authenticate", INVALID_TOKEN_CHALLENGE),
-                method => unexpected_method(method),
-            }
-        })
-        .expect(2)
+        .and(path("/oauth/token"))
+        .and(body_string_contains("grant_type=refresh_token"))
+        .and(body_string_contains(format!(
+            "refresh_token={REFRESH_TOKEN}"
+        )))
+        .respond_with(ResponseTemplate::new(400).set_body_json(json!({
+            "error": "invalid_grant",
+            "error_description": "refresh token revoked",
+        })))
+        .expect(1)
         .mount(&server)
         .await;
 
-    run_scenario_child(&server, SCENARIO_INITIALIZE_FAILS).await?;
+    run_scenario_child(&server, SCENARIO_INITIALIZE_REAUTH_REQUIRED).await?;
     server.verify().await;
     Ok(())
 }
@@ -174,7 +176,7 @@ async fn tool_call_invalid_token_refreshes_without_replay_and_next_call_succeeds
 -> anyhow::Result<()> {
     let server = MockServer::start().await;
     mount_oauth_metadata(&server).await;
-    mount_successful_refresh(&server).await;
+    mount_successful_refresh_with_token(&server, ROTATED_REFRESH_TOKEN).await;
     Mock::given(method("POST"))
         .and(path("/mcp"))
         .and(header(
@@ -215,7 +217,34 @@ async fn tool_call_invalid_token_refreshes_without_replay_and_next_call_succeeds
         .mount(&server)
         .await;
 
-    run_scenario_child(&server, SCENARIO_TOOL_CALL_RECOVERS).await?;
+    let codex_home = TempDir::new()?;
+    run_scenario_child_in_home(&server, SCENARIO_TOOL_CALL_RECOVERS, &codex_home).await?;
+    assert_persisted_refresh_token(&codex_home, ROTATED_REFRESH_TOKEN)?;
+    server.verify().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn tool_call_invalid_token_without_refresh_token_requires_reauthentication()
+-> anyhow::Result<()> {
+    let server = MockServer::start().await;
+    mount_oauth_metadata(&server).await;
+    mount_unexpected_refresh(&server).await;
+    mount_tool_call_failure(&server, INVALID_TOKEN_CHALLENGE).await;
+
+    run_scenario_child(&server, SCENARIO_TOOL_CALL_REAUTH_REQUIRED).await?;
+    server.verify().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn tool_call_generic_401_does_not_refresh_or_replay() -> anyhow::Result<()> {
+    let server = MockServer::start().await;
+    mount_oauth_metadata(&server).await;
+    mount_unexpected_refresh(&server).await;
+    mount_tool_call_failure(&server, r#"Bearer realm="example""#).await;
+
+    run_scenario_child(&server, SCENARIO_TOOL_CALL_FAILS).await?;
     server.verify().await;
     Ok(())
 }
@@ -236,13 +265,28 @@ async fn oauth_startup_child() -> anyhow::Result<()> {
 async fn oauth_invalid_token_child() -> anyhow::Result<()> {
     let server_url = std::env::var(CHILD_SERVER_URL_ENV)?;
     let scenario = std::env::var(CHILD_SCENARIO_ENV)?;
-    save_test_oauth_tokens(&server_url, REVOKED_ACCESS_TOKEN, future_expiry())?;
+    if scenario == SCENARIO_TOOL_CALL_REAUTH_REQUIRED {
+        save_test_oauth_tokens_without_refresh_token(
+            &server_url,
+            REVOKED_ACCESS_TOKEN,
+            future_expiry(),
+        )?;
+    } else {
+        save_test_oauth_tokens(&server_url, REVOKED_ACCESS_TOKEN, future_expiry())?;
+    }
 
     let client = new_oauth_client(&server_url).await?;
     match scenario.as_str() {
         SCENARIO_INITIALIZE_SUCCEEDS => initialize_client(&client).await?,
         SCENARIO_INITIALIZE_FAILS => {
             initialize_client(&client).await.unwrap_err();
+        }
+        SCENARIO_INITIALIZE_REAUTH_REQUIRED => {
+            let error = initialize_client(&client).await.unwrap_err();
+            assert_eq!(
+                error.to_string(),
+                OAUTH_REFRESH_REAUTHENTICATION_REQUIRED_ERROR
+            );
         }
         SCENARIO_INITIALIZE_TIMES_OUT => {
             let error = initialize_client_with_timeout(&client, Duration::from_millis(500))
@@ -251,6 +295,22 @@ async fn oauth_invalid_token_child() -> anyhow::Result<()> {
             assert_eq!(
                 error.to_string(),
                 "timed out handshaking with MCP server after 500ms"
+            );
+        }
+        SCENARIO_TOOL_CALL_FAILS => {
+            initialize_client(&client).await?;
+            call_echo_tool(&client, "must not be replayed")
+                .await
+                .unwrap_err();
+        }
+        SCENARIO_TOOL_CALL_REAUTH_REQUIRED => {
+            initialize_client(&client).await?;
+            let error = call_echo_tool(&client, "must not be replayed")
+                .await
+                .unwrap_err();
+            assert_eq!(
+                error.to_string(),
+                OAUTH_REFRESH_REAUTHENTICATION_REQUIRED_ERROR
             );
         }
         SCENARIO_TOOL_CALL_RECOVERS => {
@@ -270,6 +330,14 @@ async fn oauth_invalid_token_child() -> anyhow::Result<()> {
 
 async fn run_scenario_child(server: &MockServer, scenario: &str) -> anyhow::Result<()> {
     let codex_home = TempDir::new()?;
+    run_scenario_child_in_home(server, scenario, &codex_home).await
+}
+
+async fn run_scenario_child_in_home(
+    server: &MockServer,
+    scenario: &str,
+    codex_home: &TempDir,
+) -> anyhow::Result<()> {
     let server_url = format!("{}/mcp", server.uri());
     let status = Command::new(std::env::current_exe()?)
         .args([
@@ -304,7 +372,11 @@ async fn mount_oauth_metadata(server: &MockServer) {
 }
 
 async fn mount_successful_refresh(server: &MockServer) {
-    mount_refresh(server, successful_refresh_response()).await;
+    mount_successful_refresh_with_token(server, REFRESH_TOKEN).await;
+}
+
+async fn mount_successful_refresh_with_token(server: &MockServer, refresh_token: &str) {
+    mount_refresh(server, successful_refresh_response(refresh_token)).await;
 }
 
 async fn mount_refresh(server: &MockServer, response: ResponseTemplate) {
@@ -320,12 +392,12 @@ async fn mount_refresh(server: &MockServer, response: ResponseTemplate) {
         .await;
 }
 
-fn successful_refresh_response() -> ResponseTemplate {
+fn successful_refresh_response(refresh_token: &str) -> ResponseTemplate {
     ResponseTemplate::new(200).set_body_json(json!({
         "access_token": REFRESHED_ACCESS_TOKEN,
         "token_type": "Bearer",
         "expires_in": 7200,
-        "refresh_token": REFRESH_TOKEN,
+        "refresh_token": refresh_token,
     }))
 }
 
@@ -346,6 +418,29 @@ async fn mount_invalid_token_initialize(server: &MockServer, access_token: &str)
             ResponseTemplate::new(401).insert_header("www-authenticate", INVALID_TOKEN_CHALLENGE),
         )
         .expect(1)
+        .mount(server)
+        .await;
+}
+
+async fn mount_tool_call_failure(server: &MockServer, challenge: &'static str) {
+    Mock::given(method("POST"))
+        .and(path("/mcp"))
+        .and(header(
+            "authorization",
+            format!("Bearer {REVOKED_ACCESS_TOKEN}"),
+        ))
+        .respond_with(move |request: &Request| {
+            let body = request_body(request);
+            match body.get("method").and_then(Value::as_str) {
+                Some("initialize") => initialize_response(&body),
+                Some("notifications/initialized") => ResponseTemplate::new(202),
+                Some("tools/call") => {
+                    ResponseTemplate::new(401).insert_header("www-authenticate", challenge)
+                }
+                method => unexpected_method(method),
+            }
+        })
+        .expect(3)
         .mount(server)
         .await;
 }
@@ -414,12 +509,39 @@ fn save_test_oauth_tokens(
     access_token: &str,
     expires_at: u64,
 ) -> anyhow::Result<()> {
+    save_test_oauth_tokens_with_refresh_token(
+        server_url,
+        access_token,
+        expires_at,
+        /*refresh_token*/ Some(REFRESH_TOKEN),
+    )
+}
+
+fn save_test_oauth_tokens_without_refresh_token(
+    server_url: &str,
+    access_token: &str,
+    expires_at: u64,
+) -> anyhow::Result<()> {
+    save_test_oauth_tokens_with_refresh_token(
+        server_url,
+        access_token,
+        expires_at,
+        /*refresh_token*/ None,
+    )
+}
+
+fn save_test_oauth_tokens_with_refresh_token(
+    server_url: &str,
+    access_token: &str,
+    expires_at: u64,
+    refresh_token: Option<&str>,
+) -> anyhow::Result<()> {
     let mut response = OAuthTokenResponse::new(
         AccessToken::new(access_token.to_string()),
         BasicTokenType::Bearer,
         VendorExtraTokenFields::default(),
     );
-    response.set_refresh_token(Some(RefreshToken::new(REFRESH_TOKEN.to_string())));
+    response.set_refresh_token(refresh_token.map(|token| RefreshToken::new(token.to_string())));
     response.set_expires_in(Some(&Duration::from_secs(7200)));
     let tokens = StoredOAuthTokens {
         server_name: SERVER_NAME.to_string(),
@@ -429,6 +551,28 @@ fn save_test_oauth_tokens(
         expires_at: Some(expires_at),
     };
     save_oauth_tokens(SERVER_NAME, &tokens, OAuthCredentialsStoreMode::File)?;
+    Ok(())
+}
+
+fn assert_persisted_refresh_token(
+    codex_home: &TempDir,
+    expected_refresh_token: &str,
+) -> anyhow::Result<()> {
+    let credentials: Value = serde_json::from_str(&fs::read_to_string(
+        codex_home.path().join(".credentials.json"),
+    )?)?;
+    let entries = credentials
+        .as_object()
+        .ok_or_else(|| anyhow::anyhow!("persisted OAuth credentials must be an object"))?;
+    assert_eq!(entries.len(), 1);
+    let entry = entries
+        .values()
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("persisted OAuth credentials must contain one entry"))?;
+    assert_eq!(
+        entry.get("refresh_token"),
+        Some(&json!(expected_refresh_token))
+    );
     Ok(())
 }
 
