@@ -283,8 +283,14 @@ const ILLEGAL_ENV_VAR_PREFIX: &str = "CODEX_";
 /// Security: Do not allow `.env` files to create or modify any variables
 /// with names starting with `CODEX_`.
 fn load_dotenv() {
-    if let Ok(codex_home) = find_codex_home()
-        && let Ok(iter) = dotenvy::from_path_iter(codex_home.join(".env"))
+    if let Ok(codex_home) = find_codex_home() {
+        load_dotenv_file(&codex_home.join(".env"));
+    }
+}
+
+fn load_dotenv_file(path: &Path) {
+    if path.is_file()
+        && let Ok(iter) = dotenvy::from_path_iter(path)
     {
         set_filtered(iter);
     }
@@ -295,7 +301,12 @@ fn set_filtered<I>(iter: I)
 where
     I: IntoIterator<Item = Result<(String, String), dotenvy::Error>>,
 {
-    for (key, value) in iter.into_iter().flatten() {
+    for item in iter {
+        let (key, value) = match item {
+            Ok(entry) => entry,
+            Err(dotenvy::Error::Io(_)) => break,
+            Err(_) => continue,
+        };
         if !key.to_ascii_uppercase().starts_with(ILLEGAL_ENV_VAR_PREFIX) {
             // It is safe to call set_var() because our process is
             // single-threaded at this point in its execution.
@@ -511,8 +522,10 @@ mod tests {
     use super::LOCK_FILENAME;
     use super::janitor_cleanup;
     use super::linux_sandbox_exe_path;
+    use super::load_dotenv_file;
     #[cfg(unix)]
     use super::run_main_with_arg0_guard;
+    use super::set_filtered;
     #[cfg(unix)]
     use anyhow::ensure;
     use codex_install_context::CodexPackageLayout;
@@ -573,6 +586,34 @@ mod tests {
             install_context,
             path_dir,
         })
+    }
+
+    #[test]
+    fn set_filtered_stops_after_first_dotenv_error() {
+        let calls = std::cell::Cell::new(0);
+        let iter = std::iter::from_fn(|| {
+            calls.set(calls.get() + 1);
+            (calls.get() < 3).then(|| {
+                Err::<(String, String), _>(dotenvy::Error::Io(std::io::Error::other(
+                    "failed to read dotenv file",
+                )))
+            })
+        });
+
+        set_filtered(iter);
+
+        assert_eq!(calls.get(), 1);
+    }
+
+    #[test]
+    fn load_dotenv_file_ignores_directory() -> std::io::Result<()> {
+        let temp_dir = TempDir::new()?;
+        let dotenv_path = temp_dir.path().join(".env");
+        fs::create_dir(&dotenv_path)?;
+
+        load_dotenv_file(&dotenv_path);
+
+        Ok(())
     }
 
     #[test]
