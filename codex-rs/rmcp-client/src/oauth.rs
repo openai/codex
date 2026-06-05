@@ -94,14 +94,6 @@ pub(crate) fn load_oauth_tokens(
     }
 }
 
-pub(crate) fn has_oauth_tokens(
-    server_name: &str,
-    url: &str,
-    store_mode: OAuthCredentialsStoreMode,
-) -> Result<bool> {
-    Ok(load_oauth_tokens(server_name, url, store_mode)?.is_some())
-}
-
 fn refresh_expires_in_from_timestamp(tokens: &mut StoredOAuthTokens) {
     let Some(expires_at) = tokens.expires_at else {
         return;

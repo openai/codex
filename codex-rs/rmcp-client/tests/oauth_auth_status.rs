@@ -34,7 +34,7 @@ const CHILD_SCENARIO_ENV: &str = "MCP_TEST_AUTH_STATUS_SCENARIO";
 const CHILD_SERVER_URL_ENV: &str = "MCP_TEST_AUTH_STATUS_SERVER_URL";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
-async fn oauth_status_does_not_prove_stored_credentials_are_usable() -> anyhow::Result<()> {
+async fn locally_unusable_credentials_are_not_logged_in() -> anyhow::Result<()> {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/.well-known/oauth-authorization-server/mcp"))
@@ -43,6 +43,32 @@ async fn oauth_status_does_not_prove_stored_credentials_are_usable() -> anyhow::
             "token_endpoint": format!("{}/oauth/token", server.uri()),
         })))
         .expect(2)
+        .mount(&server)
+        .await;
+
+    let server_url = format!("{}/mcp", server.uri());
+    run_child("expired_without_refresh", &server_url).await?;
+    run_child("empty_fields", &server_url).await?;
+
+    server.verify().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn refreshable_expired_credentials_report_oauth() -> anyhow::Result<()> {
+    run_child("expired_with_refresh", "not-a-valid-url").await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn server_rejected_credentials_still_report_oauth() -> anyhow::Result<()> {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/.well-known/oauth-authorization-server/mcp"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "authorization_endpoint": format!("{}/oauth/authorize", server.uri()),
+            "token_endpoint": format!("{}/oauth/token", server.uri()),
+        })))
+        .expect(1)
         .mount(&server)
         .await;
     Mock::given(method("POST"))
@@ -57,7 +83,6 @@ async fn oauth_status_does_not_prove_stored_credentials_are_usable() -> anyhow::
         .await;
 
     let server_url = format!("{}/mcp", server.uri());
-    run_child("expired_without_refresh", &server_url).await?;
     run_child("server_rejected", &server_url).await?;
 
     server.verify().await;
@@ -65,9 +90,7 @@ async fn oauth_status_does_not_prove_stored_credentials_are_usable() -> anyhow::
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
-async fn oauth_status_only_requires_a_loadable_matching_store_entry() -> anyhow::Result<()> {
-    run_child("empty_fields", "not-a-valid-url").await?;
-
+async fn unreachable_server_with_credentials_still_reports_oauth() -> anyhow::Result<()> {
     let listener = TcpListener::bind("127.0.0.1:0")?;
     let unreachable_url = format!("http://{}/mcp", listener.local_addr()?);
     drop(listener);
@@ -122,28 +145,45 @@ async fn oauth_auth_status_child() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    let (access_token, client_id, refresh_token, expires_at) = match scenario.as_str() {
-        "expired_without_refresh" => (
-            "expired-access-token",
-            "client-id",
-            /*refresh_token*/ None,
-            Some(0),
-        ),
-        "server_rejected" => (
-            "server-rejected-access-token",
-            "client-id",
-            /*refresh_token*/ None,
-            /*expires_at*/ None,
-        ),
-        "empty_fields" => ("", "", Some(""), /*expires_at*/ None),
-        "unreachable_server" => (
-            "access-token",
-            "client-id",
-            /*refresh_token*/ None,
-            /*expires_at*/ None,
-        ),
-        unexpected => panic!("unexpected child scenario: {unexpected}"),
-    };
+    let (access_token, client_id, refresh_token, expires_at, expected_status) =
+        match scenario.as_str() {
+            "expired_without_refresh" => (
+                "expired-access-token",
+                "client-id",
+                /*refresh_token*/ None,
+                Some(0),
+                McpAuthStatus::NotLoggedIn,
+            ),
+            "server_rejected" => (
+                "server-rejected-access-token",
+                "client-id",
+                /*refresh_token*/ None,
+                /*expires_at*/ None,
+                McpAuthStatus::OAuth,
+            ),
+            "empty_fields" => (
+                "",
+                "",
+                Some(""),
+                /*expires_at*/ None,
+                McpAuthStatus::NotLoggedIn,
+            ),
+            "unreachable_server" => (
+                "access-token",
+                "client-id",
+                /*refresh_token*/ None,
+                /*expires_at*/ None,
+                McpAuthStatus::OAuth,
+            ),
+            "expired_with_refresh" => (
+                "expired-access-token",
+                "client-id",
+                Some("refresh-token"),
+                Some(0),
+                McpAuthStatus::OAuth,
+            ),
+            unexpected => panic!("unexpected child scenario: {unexpected}"),
+        };
     save_tokens(
         &server_url,
         access_token,
@@ -152,13 +192,10 @@ async fn oauth_auth_status_child() -> anyhow::Result<()> {
         expires_at,
     )?;
 
-    assert_eq!(
-        determine_auth_status(&server_url).await?,
-        McpAuthStatus::OAuth
-    );
+    assert_eq!(determine_auth_status(&server_url).await?, expected_status);
 
     match scenario.as_str() {
-        "expired_without_refresh" | "server_rejected" => {
+        "server_rejected" => {
             let client = new_client(&server_url).await?;
             assert!(
                 initialize_client(&client).await.is_err(),
@@ -173,7 +210,7 @@ async fn oauth_auth_status_child() -> anyhow::Result<()> {
                 );
             }
         }
-        "empty_fields" => {}
+        "expired_without_refresh" | "empty_fields" | "expired_with_refresh" => {}
         unexpected => panic!("unexpected child scenario: {unexpected}"),
     }
 

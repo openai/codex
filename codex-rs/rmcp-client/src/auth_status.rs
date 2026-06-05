@@ -1,9 +1,12 @@
 use std::collections::HashMap;
 use std::time::Duration;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 use anyhow::Error;
 use anyhow::Result;
 use codex_protocol::protocol::McpAuthStatus;
+use oauth2::TokenResponse;
 use reqwest::Client;
 use reqwest::StatusCode;
 use reqwest::Url;
@@ -12,7 +15,8 @@ use reqwest::header::HeaderMap;
 use serde::Deserialize;
 use tracing::debug;
 
-use crate::oauth::has_oauth_tokens;
+use crate::oauth::StoredOAuthTokens;
+use crate::oauth::load_oauth_tokens;
 use crate::utils::apply_default_headers;
 use crate::utils::build_default_headers;
 use codex_config::types::OAuthCredentialsStoreMode;
@@ -44,7 +48,10 @@ pub async fn determine_streamable_http_auth_status(
         return Ok(McpAuthStatus::BearerToken);
     }
 
-    if has_oauth_tokens(server_name, url, store_mode)? {
+    if load_oauth_tokens(server_name, url, store_mode)?
+        .as_ref()
+        .is_some_and(stored_oauth_tokens_are_locally_usable)
+    {
         return Ok(McpAuthStatus::OAuth);
     }
 
@@ -58,6 +65,36 @@ pub async fn determine_streamable_http_auth_status(
             Ok(McpAuthStatus::Unsupported)
         }
     }
+}
+
+fn stored_oauth_tokens_are_locally_usable(tokens: &StoredOAuthTokens) -> bool {
+    if tokens.client_id.trim().is_empty() {
+        return false;
+    }
+
+    let now_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_else(|_| Duration::from_secs(0))
+        .as_millis() as u64;
+    let is_expired = tokens
+        .expires_at
+        .is_some_and(|expires_at| expires_at <= now_ms);
+
+    if is_expired {
+        return tokens
+            .token_response
+            .0
+            .refresh_token()
+            .is_some_and(|token| !token.secret().trim().is_empty());
+    }
+
+    !tokens
+        .token_response
+        .0
+        .access_token()
+        .secret()
+        .trim()
+        .is_empty()
 }
 
 /// Attempt to determine whether a streamable HTTP MCP server advertises OAuth login.
