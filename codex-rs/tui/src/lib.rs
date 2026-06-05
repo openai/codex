@@ -164,6 +164,7 @@ mod notifications;
 #[cfg(any(not(debug_assertions), test))]
 mod npm_registry;
 pub(crate) mod onboarding;
+mod osc_text;
 mod oss_selection;
 mod pager_overlay;
 mod permission_compat;

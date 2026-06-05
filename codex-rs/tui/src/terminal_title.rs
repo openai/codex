@@ -121,7 +121,7 @@ fn sanitize_terminal_title(title: &str) -> String {
             continue;
         }
 
-        if is_disallowed_terminal_title_char(ch) {
+        if crate::osc_text::is_disallowed_osc_text_char(ch) {
             continue;
         }
 
@@ -143,37 +143,6 @@ fn sanitize_terminal_title(title: &str) -> String {
     }
 
     sanitized
-}
-
-/// Returns whether `ch` should be dropped from terminal-title output.
-///
-/// This includes both plain control characters and a curated set of invisible
-/// formatting codepoints. The bidi entries here cover the Trojan-Source-style
-/// text-reordering controls that can make a title render misleadingly relative
-/// to its underlying byte sequence.
-fn is_disallowed_terminal_title_char(ch: char) -> bool {
-    if ch.is_control() {
-        return true;
-    }
-
-    // Strip Trojan-Source-related bidi controls plus common non-rendering
-    // formatting characters so title text cannot smuggle terminal control
-    // semantics or visually misleading content.
-    matches!(
-        ch,
-        '\u{00AD}'
-            | '\u{034F}'
-            | '\u{061C}'
-            | '\u{180E}'
-            | '\u{200B}'..='\u{200F}'
-            | '\u{202A}'..='\u{202E}'
-            | '\u{2060}'..='\u{206F}'
-            | '\u{FE00}'..='\u{FE0F}'
-            | '\u{FEFF}'
-            | '\u{FFF9}'..='\u{FFFB}'
-            | '\u{1BCA0}'..='\u{1BCA3}'
-            | '\u{E0100}'..='\u{E01EF}'
-    )
 }
 
 #[cfg(test)]
