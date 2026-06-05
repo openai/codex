@@ -500,7 +500,15 @@ impl App {
         match op {
             AppCommand::Interrupt { .. } => {
                 if let Some(turn_id) = self.active_turn_id_for_thread(thread_id).await {
-                    app_server.turn_interrupt(thread_id, turn_id).await?;
+                    let interrupt = app_server.spawn_turn_interrupt(thread_id, turn_id);
+                    let app_event_tx = self.app_event_tx.clone();
+                    tokio::spawn(async move {
+                        let result = match interrupt.await {
+                            Ok(result) => result.map_err(|err| err.to_string()),
+                            Err(err) => Err(format!("turn/interrupt task failed: {err}")),
+                        };
+                        app_event_tx.send(AppEvent::TurnInterruptCompleted { thread_id, result });
+                    });
                 } else {
                     app_server.startup_interrupt(thread_id).await?;
                 }

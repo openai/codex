@@ -737,18 +737,20 @@ impl AppServerSession {
         turn_id: String,
     ) -> Result<()> {
         let request_id = self.next_request_id();
-        let _: TurnInterruptResponse = self
-            .client
-            .request_typed(ClientRequest::TurnInterrupt {
-                request_id,
-                params: TurnInterruptParams {
-                    thread_id: thread_id.to_string(),
-                    turn_id,
-                },
-            })
-            .await
-            .wrap_err("turn/interrupt failed in TUI")?;
-        Ok(())
+        let request_handle = self.request_handle();
+        send_turn_interrupt_request(request_handle, request_id, thread_id, turn_id).await
+    }
+
+    pub(crate) fn spawn_turn_interrupt(
+        &mut self,
+        thread_id: ThreadId,
+        turn_id: String,
+    ) -> tokio::task::JoinHandle<Result<()>> {
+        let request_id = self.next_request_id();
+        let request_handle = self.request_handle();
+        tokio::spawn(async move {
+            send_turn_interrupt_request(request_handle, request_id, thread_id, turn_id).await
+        })
     }
 
     pub(crate) async fn startup_interrupt(&mut self, thread_id: ThreadId) -> Result<()> {
@@ -1132,6 +1134,25 @@ impl AppServerSession {
         self.next_request_id += 1;
         RequestId::Integer(request_id)
     }
+}
+
+async fn send_turn_interrupt_request(
+    request_handle: AppServerRequestHandle,
+    request_id: RequestId,
+    thread_id: ThreadId,
+    turn_id: String,
+) -> Result<()> {
+    let _: TurnInterruptResponse = request_handle
+        .request_typed(ClientRequest::TurnInterrupt {
+            request_id,
+            params: TurnInterruptParams {
+                thread_id: thread_id.to_string(),
+                turn_id,
+            },
+        })
+        .await
+        .wrap_err("turn/interrupt failed in TUI")?;
+    Ok(())
 }
 
 pub(crate) async fn start_thread_with_request_handle(

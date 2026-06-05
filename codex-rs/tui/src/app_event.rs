@@ -234,6 +234,12 @@ pub(crate) enum AppEvent {
     /// bubbling channels through layers of widgets.
     CodexOp(AppCommand),
 
+    /// Result of a background turn interrupt request.
+    TurnInterruptCompleted {
+        thread_id: ThreadId,
+        result: Result<(), String>,
+    },
+
     /// Restore an output-free interrupted turn into the composer and roll it back.
     RestoreCancelledTurn(UserMessage),
 

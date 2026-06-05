@@ -5228,6 +5228,60 @@ async fn interrupt_without_active_turn_is_treated_as_handled() {
 }
 
 #[tokio::test]
+async fn active_turn_interrupt_request_does_not_block_app_loop() {
+    Box::pin(async {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let mut app_server = Box::pin(crate::start_embedded_app_server_for_picker(
+            app.chat_widget.config_ref(),
+        ))
+        .await
+        .expect("embedded app server");
+        let started = app_server
+            .start_thread(app.chat_widget.config_ref())
+            .await
+            .expect("thread/start should succeed");
+        let thread_id = started.session.thread_id;
+        app.enqueue_primary_thread_session(started.session, started.turns)
+            .await
+            .expect("primary thread should be registered");
+        while app_event_rx.try_recv().is_ok() {}
+        {
+            let channel = app
+                .thread_event_channels
+                .get(&thread_id)
+                .expect("primary thread event channel");
+            let mut store = channel.store.lock().await;
+            store.active_turn_id = Some("turn-pending".to_string());
+        }
+        let op = AppCommand::interrupt();
+
+        let handled = time::timeout(
+            std::time::Duration::from_millis(100),
+            app.try_submit_active_thread_op_via_app_server(&mut app_server, thread_id, &op),
+        )
+        .await
+        .expect("interrupt submission should not wait for RPC completion")
+        .expect("interrupt submission should not fail");
+
+        assert_eq!(handled, true);
+        let event = time::timeout(std::time::Duration::from_secs(1), app_event_rx.recv())
+            .await
+            .expect("background interrupt should report completion")
+            .expect("app event channel should remain open");
+        let AppEvent::TurnInterruptCompleted {
+            thread_id: observed,
+            result,
+        } = event
+        else {
+            panic!("expected TurnInterruptCompleted, got {event:?}");
+        };
+        assert_eq!(observed, thread_id);
+        assert!(result.is_err());
+    })
+    .await;
+}
+
+#[tokio::test]
 async fn override_turn_context_sends_thread_settings_update() {
     Box::pin(async {
         let mut app = make_test_app().await;

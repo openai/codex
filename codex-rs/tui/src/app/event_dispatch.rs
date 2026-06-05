@@ -327,6 +327,15 @@ impl App {
                 self.chat_widget.prepare_local_op_submission(&op);
                 self.submit_active_thread_op(app_server, op).await?;
             }
+            AppEvent::TurnInterruptCompleted { thread_id, result } => {
+                if let Err(err) = result {
+                    tracing::warn!(%thread_id, "turn interrupt request failed: {err}");
+                    if self.active_thread_id == Some(thread_id) {
+                        self.chat_widget
+                            .add_error_message(format!("Interrupt failed: {err}"));
+                    }
+                }
+            }
             AppEvent::RestoreCancelledTurn(prompt) => {
                 self.apply_cancelled_turn_edit(prompt);
             }
