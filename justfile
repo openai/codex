@@ -1,12 +1,10 @@
 set working-directory := "codex-rs"
-set positional-arguments := true
-
+set positional-arguments
 export JUST_SHELL := justfile_directory() / "scripts/just-shell.py"
-
 set shell := ["python3", "-c", 'import os, runpy; runpy.run_path(os.environ["JUST_SHELL"], run_name="__main__")']
 set windows-shell := ["python", "-c", 'import os, runpy; runpy.run_path(os.environ["JUST_SHELL"], run_name="__main__")']
 
-rust_min_stack := "8388608"
+rust_min_stack := "8388608" # 8 MiB
 python := if os_family() == "windows" { "python" } else { "python3" }
 
 # Display help
@@ -14,9 +12,7 @@ help:
     just -l
 
 # `codex`
-
 alias c := codex
-
 codex *args:
     cargo run --bin codex -- {args}
 
@@ -76,7 +72,6 @@ install:
 #
 # Run `cargo install --locked cargo-nextest` if you don't have it installed.
 # Prefer this for routine local runs. Workspace crate features are banned, so
-
 # there should be no need to add `--all-features`.
 [unix]
 test *args:
@@ -89,7 +84,6 @@ test *args:
     just bench-smoke
 
 # Run from the repository root so scripts that resolve paths from `cwd` see
-
 # the same layout they use in GitHub Actions.
 [no-cd]
 test-github-scripts:
@@ -105,7 +99,6 @@ bench-smoke:
 
 # Build and run Codex from source using Bazel.
 # On Unix, use `[no-cd]` and `--run_under="cd $PWD &&"` to ensure Bazel runs
-
 # the command in the current working directory.
 [no-cd]
 [unix]
