@@ -2,6 +2,7 @@ mod streamable_http_test_support;
 
 use std::collections::BTreeMap;
 use std::fs;
+use std::fs::OpenOptions;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -47,6 +48,7 @@ const OLD_ACCESS_TOKEN: &str = "old-access-token";
 const OLD_REFRESH_TOKEN: &str = "old-one-time-refresh-token";
 const NEW_ACCESS_TOKEN: &str = "new-access-token";
 const NEW_REFRESH_TOKEN: &str = "new-one-time-refresh-token";
+const FILE_OAUTH_REFRESH_LOCK_FILENAME: &str = ".credentials.json.refresh.lock";
 
 const SERVER_URL_ENV: &str = "MCP_TEST_OAUTH_RACE_SERVER_URL";
 const READY_PATH_ENV: &str = "MCP_TEST_OAUTH_RACE_READY_PATH";
@@ -68,12 +70,14 @@ async fn concurrent_processes_coordinate_one_time_refresh_and_reload_rotated_tok
         .and(path("/oauth/token"))
         .respond_with(move |_request: &Request| {
             if responder_attempts.fetch_add(1, Ordering::SeqCst) == 0 {
-                ResponseTemplate::new(200).set_body_json(json!({
-                    "access_token": NEW_ACCESS_TOKEN,
-                    "token_type": "Bearer",
-                    "expires_in": 7200,
-                    "refresh_token": NEW_REFRESH_TOKEN,
-                }))
+                ResponseTemplate::new(200)
+                    .set_delay(Duration::from_secs(1))
+                    .set_body_json(json!({
+                        "access_token": NEW_ACCESS_TOKEN,
+                        "token_type": "Bearer",
+                        "expires_in": 7200,
+                        "refresh_token": NEW_REFRESH_TOKEN,
+                    }))
             } else {
                 ResponseTemplate::new(400).set_body_json(json!({
                     "error": "invalid_grant",
@@ -91,7 +95,10 @@ async fn concurrent_processes_coordinate_one_time_refresh_and_reload_rotated_tok
     let server_url = format!("{}/mcp", server.uri());
     seed_tokens(&codex_home, &server_url, /*expires_at*/ 0).await?;
 
-    let go_path = control_dir.path().join("go");
+    let go_paths = [
+        control_dir.path().join("client-a.go"),
+        control_dir.path().join("client-b.go"),
+    ];
     let ready_paths = [
         control_dir.path().join("client-a.ready"),
         control_dir.path().join("client-b.ready"),
@@ -101,18 +108,30 @@ async fn concurrent_processes_coordinate_one_time_refresh_and_reload_rotated_tok
         control_dir.path().join("client-b.result"),
     ];
     let mut children = Vec::new();
-    for (ready_path, result_path) in ready_paths.iter().zip(result_paths.iter()) {
+    for ((ready_path, go_path), result_path) in ready_paths
+        .iter()
+        .zip(go_paths.iter())
+        .zip(result_paths.iter())
+    {
         children.push(spawn_client_child(
             &codex_home,
             &server_url,
             ready_path,
-            &go_path,
+            go_path,
             result_path,
         )?);
     }
 
     wait_for_paths(&ready_paths).await?;
-    fs::write(&go_path, "go")?;
+    fs::write(&go_paths[0], "go")?;
+    timeout(Duration::from_secs(5), async {
+        while refresh_attempts.load(Ordering::SeqCst) == 0 {
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .context("timed out waiting for the first process to hold the refresh lock")?;
+    fs::write(&go_paths[1], "go")?;
     wait_for_children(children).await?;
 
     let outcomes = read_outcomes(&result_paths)?;
@@ -130,12 +149,73 @@ async fn concurrent_processes_coordinate_one_time_refresh_and_reload_rotated_tok
             .iter()
             .all(|body| body.contains(&format!("refresh_token={OLD_REFRESH_TOKEN}")))
     );
+    let authorization_headers = requests
+        .iter()
+        .filter(|request| request.method.as_str() == "POST" && request.url.path() == "/mcp")
+        .map(|request| {
+            request
+                .headers
+                .get("authorization")
+                .expect("authorization header")
+                .to_str()
+                .expect("ASCII authorization header")
+                .to_string()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        authorization_headers,
+        vec![format!("Bearer {NEW_ACCESS_TOKEN}"); 4]
+    );
     assert_eq!(
         persisted_token_snapshot(&codex_home)?,
         PersistedTokenSnapshot {
             access_token: NEW_ACCESS_TOKEN.to_string(),
             refresh_token: Some(NEW_REFRESH_TOKEN.to_string()),
         }
+    );
+
+    server.verify().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn refresh_lock_wait_uses_startup_timeout_budget() -> anyhow::Result<()> {
+    let server = MockServer::start().await;
+    mount_oauth_metadata(&server, /*expected_requests*/ 1).await;
+
+    let codex_home = TempDir::new()?;
+    let control_dir = TempDir::new()?;
+    let server_url = format!("{}/mcp", server.uri());
+    seed_tokens(&codex_home, &server_url, /*expires_at*/ 0).await?;
+
+    let lock_path = codex_home.path().join(FILE_OAUTH_REFRESH_LOCK_FILENAME);
+    let refresh_lock = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(lock_path)?;
+    refresh_lock.lock()?;
+
+    let ready_path = control_dir.path().join("client.ready");
+    let go_path = control_dir.path().join("client.go");
+    let result_path = control_dir.path().join("client.result");
+    let child = spawn_client_child(
+        &codex_home,
+        &server_url,
+        &ready_path,
+        &go_path,
+        &result_path,
+    )?;
+    wait_for_paths(std::slice::from_ref(&ready_path)).await?;
+    fs::write(&go_path, "go")?;
+    timeout(Duration::from_secs(7), wait_for_children(vec![child]))
+        .await
+        .context("startup did not time out while waiting for the refresh lock")??;
+
+    assert_eq!(
+        fs::read_to_string(result_path)?,
+        "error:timed out handshaking with MCP server after 5s"
     );
 
     server.verify().await;

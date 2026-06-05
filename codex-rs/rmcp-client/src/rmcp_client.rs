@@ -824,42 +824,45 @@ impl RmcpClient {
         Arc<RunningService<RoleClient, ElicitationClientService>>,
         Option<OAuthPersistor>,
     )> {
-        let (transport, oauth_persistor) = match pending_transport {
-            PendingTransport::InProcess { transport } => (
-                service::serve_client(client_service, transport).boxed(),
-                None,
-            ),
-            PendingTransport::Stdio { transport } => (
-                service::serve_client(client_service, transport).boxed(),
-                None,
-            ),
-            PendingTransport::StreamableHttp { transport } => (
-                service::serve_client(client_service, transport).boxed(),
-                None,
-            ),
-            PendingTransport::StreamableHttpWithOAuth {
-                transport,
-                oauth_persistor,
-            } => {
-                oauth_persistor.refresh_if_needed().await?;
-                (
+        let connect = async move {
+            let (transport, oauth_persistor) = match pending_transport {
+                PendingTransport::InProcess { transport } => (
+                    service::serve_client(client_service, transport).boxed(),
+                    None,
+                ),
+                PendingTransport::Stdio { transport } => (
+                    service::serve_client(client_service, transport).boxed(),
+                    None,
+                ),
+                PendingTransport::StreamableHttp { transport } => (
+                    service::serve_client(client_service, transport).boxed(),
+                    None,
+                ),
+                PendingTransport::StreamableHttpWithOAuth {
+                    transport,
+                    oauth_persistor,
+                } => (
                     service::serve_client(client_service, transport).boxed(),
                     Some(oauth_persistor),
-                )
+                ),
+            };
+
+            if let Some(runtime) = &oauth_persistor {
+                runtime.refresh_if_needed().await?;
             }
+
+            let service = transport
+                .await
+                .map_err(|err| anyhow!("handshaking with MCP server failed: {err}"))?;
+            Ok((Arc::new(service), oauth_persistor))
         };
 
-        let service = match timeout {
-            Some(duration) => time::timeout(duration, transport)
+        match timeout {
+            Some(duration) => time::timeout(duration, connect)
                 .await
-                .map_err(|_| anyhow!("timed out handshaking with MCP server after {duration:?}"))?
-                .map_err(|err| anyhow!("handshaking with MCP server failed: {err}"))?,
-            None => transport
-                .await
-                .map_err(|err| anyhow!("handshaking with MCP server failed: {err}"))?,
-        };
-
-        Ok((Arc::new(service), oauth_persistor))
+                .map_err(|_| anyhow!("timed out handshaking with MCP server after {duration:?}"))?,
+            None => connect.await,
+        }
     }
 
     async fn run_service_operation<T, F, Fut>(

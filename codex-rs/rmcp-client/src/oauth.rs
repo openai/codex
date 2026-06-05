@@ -37,6 +37,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::fs::OpenOptions;
 use std::io::ErrorKind;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -55,7 +56,8 @@ use tokio::sync::Mutex;
 use codex_utils_home_dir::find_codex_home;
 
 const KEYRING_SERVICE: &str = "Codex MCP Credentials";
-const OAUTH_REFRESH_LOCK_FILENAME: &str = ".credentials.json.refresh.lock";
+const FILE_OAUTH_REFRESH_LOCK_FILENAME: &str = ".credentials.json.refresh.lock";
+const KEYRING_OAUTH_REFRESH_LOCK_PREFIX: &str = "codex-mcp-oauth-refresh";
 const REFRESH_SKEW_MILLIS: u64 = 30_000;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -369,13 +371,14 @@ impl OAuthPersistor {
 
         // A different process may have rotated the one-time refresh token.
         // Reload its durable result while all refreshers share the same lock.
-        let _refresh_lock = acquire_oauth_refresh_lock().await?;
-
-        if let Some(stored) = load_oauth_tokens(
+        let (_refresh_locks, stored) = lock_and_load_oauth_tokens(
             &self.inner.server_name,
             &self.inner.url,
             self.inner.store_mode,
-        )? {
+        )
+        .await?;
+
+        if let Some(stored) = stored {
             let credentials_changed = {
                 let last_credentials = self.inner.last_credentials.lock().await;
                 last_credentials.as_ref() != Some(&stored)
@@ -432,27 +435,96 @@ impl OAuthPersistor {
     }
 }
 
-async fn acquire_oauth_refresh_lock() -> Result<fs::File> {
-    let path = find_codex_home()?.join(OAUTH_REFRESH_LOCK_FILENAME);
+async fn lock_and_load_oauth_tokens(
+    server_name: &str,
+    url: &str,
+    store_mode: OAuthCredentialsStoreMode,
+) -> Result<(Vec<fs::File>, Option<StoredOAuthTokens>)> {
+    let keyring_store = DefaultKeyringStore;
+    match store_mode {
+        OAuthCredentialsStoreMode::Auto => {
+            let keyring_lock =
+                acquire_oauth_refresh_lock(&keyring_oauth_refresh_lock_path()?).await?;
+            match load_oauth_tokens_from_keyring(&keyring_store, server_name, url) {
+                Ok(Some(tokens)) => Ok((vec![keyring_lock], Some(tokens))),
+                Ok(None) => {
+                    let file_lock =
+                        acquire_oauth_refresh_lock(&file_oauth_refresh_lock_path()?).await?;
+                    let tokens = load_oauth_tokens_from_file(server_name, url)?;
+                    Ok((vec![keyring_lock, file_lock], tokens))
+                }
+                Err(error) => {
+                    warn!("failed to read OAuth tokens from keyring: {error}");
+                    let file_lock =
+                        acquire_oauth_refresh_lock(&file_oauth_refresh_lock_path()?).await?;
+                    let tokens =
+                        load_oauth_tokens_from_file(server_name, url).with_context(|| {
+                            format!("failed to read OAuth tokens from keyring: {error}")
+                        })?;
+                    Ok((vec![keyring_lock, file_lock], tokens))
+                }
+            }
+        }
+        OAuthCredentialsStoreMode::File => {
+            let lock = acquire_oauth_refresh_lock(&file_oauth_refresh_lock_path()?).await?;
+            let tokens = load_oauth_tokens_from_file(server_name, url)?;
+            Ok((vec![lock], tokens))
+        }
+        OAuthCredentialsStoreMode::Keyring => {
+            let lock = acquire_oauth_refresh_lock(&keyring_oauth_refresh_lock_path()?).await?;
+            let tokens = load_oauth_tokens_from_keyring(&keyring_store, server_name, url)
+                .with_context(|| "failed to read OAuth tokens from keyring".to_string())?;
+            Ok((vec![lock], tokens))
+        }
+    }
+}
+
+fn file_oauth_refresh_lock_path() -> Result<PathBuf> {
+    Ok(find_codex_home()?
+        .join(FILE_OAUTH_REFRESH_LOCK_FILENAME)
+        .to_path_buf())
+}
+
+fn keyring_oauth_refresh_lock_path() -> Result<PathBuf> {
+    let user_namespace = ["HOME", "USERPROFILE", "USER", "USERNAME"]
+        .into_iter()
+        .find_map(std::env::var_os)
+        .unwrap_or_default();
+    let lock_id = sha_256_prefix(&Value::String(
+        user_namespace.to_string_lossy().into_owned(),
+    ))?;
+    Ok(std::env::temp_dir().join(format!(
+        "{KEYRING_OAUTH_REFRESH_LOCK_PREFIX}-{lock_id}.lock"
+    )))
+}
+
+async fn acquire_oauth_refresh_lock(path: &Path) -> Result<fs::File> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    let file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(&path)
+    let mut options = OpenOptions::new();
+    options.read(true).write(true).create(true).truncate(false);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let file = options
+        .open(path)
         .with_context(|| format!("failed to open OAuth refresh lock at {}", path.display()))?;
-
-    tokio::task::spawn_blocking(move || {
-        file.lock().with_context(|| {
-            format!("failed to acquire OAuth refresh lock at {}", path.display())
-        })?;
-        Ok(file)
-    })
-    .await
-    .context("failed to join OAuth refresh lock task")?
+    loop {
+        match file.try_lock() {
+            Ok(()) => return Ok(file),
+            Err(fs::TryLockError::WouldBlock) => {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!("failed to acquire OAuth refresh lock at {}", path.display())
+                });
+            }
+        }
+    }
 }
 
 const FALLBACK_FILENAME: &str = ".credentials.json";
@@ -721,6 +793,13 @@ mod tests {
                 std::env::remove_var("CODEX_HOME");
             }
         }
+    }
+
+    #[test]
+    fn keyring_refresh_lock_does_not_use_codex_home() -> Result<()> {
+        let lock_path = keyring_oauth_refresh_lock_path()?;
+        assert_eq!(lock_path.parent(), Some(std::env::temp_dir().as_path()));
+        Ok(())
     }
 
     #[test]
