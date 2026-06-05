@@ -1,12 +1,12 @@
 [package]
 edition.workspace = true
 license.workspace = true
-name = "codex-agents-md"
+name = "codex-home-loader"
 version.workspace = true
 
 [lib]
 doctest = false
-name = "codex_agents_md"
+name = "codex_home_loader"
 path = "src/lib.rs"
 test = false
 

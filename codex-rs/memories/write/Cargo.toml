@@ -15,7 +15,7 @@ workspace = true
 [dependencies]
 anyhow = { workspace = true }
 chrono = { workspace = true }
-codex-agents-md = { workspace = true }
+codex-home-loader = { workspace = true }
 codex-backend-client = { workspace = true }
 codex-config = { workspace = true }
 codex-core = { workspace = true }

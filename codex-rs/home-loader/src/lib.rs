@@ -1,4 +1,4 @@
-//! Loads AGENTS.md instructions for callers constructing Codex threads.
+//! Loads Codex home state needed by callers constructing Codex threads.
 
 #![deny(private_bounds, private_interfaces, unreachable_pub)]
 

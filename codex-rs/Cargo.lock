@@ -1833,15 +1833,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "codex-agents-md"
-version = "0.0.0"
-dependencies = [
- "codex-core",
- "codex-exec-server",
- "codex-protocol",
-]
-
-[[package]]
 name = "codex-analytics"
 version = "0.0.0"
 dependencies = [
@@ -1916,7 +1907,6 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "clap",
- "codex-agents-md",
  "codex-analytics",
  "codex-app-server-protocol",
  "codex-app-server-transport",
@@ -1937,6 +1927,7 @@ dependencies = [
  "codex-file-watcher",
  "codex-git-utils",
  "codex-guardian",
+ "codex-home-loader",
  "codex-hooks",
  "codex-image-generation-extension",
  "codex-login",
@@ -2259,7 +2250,6 @@ dependencies = [
  "assert_matches",
  "clap",
  "clap_complete",
- "codex-agents-md",
  "codex-api",
  "codex-app-server",
  "codex-app-server-daemon",
@@ -2276,6 +2266,7 @@ dependencies = [
  "codex-execpolicy",
  "codex-features",
  "codex-git-utils",
+ "codex-home-loader",
  "codex-install-context",
  "codex-login",
  "codex-mcp",
@@ -2651,7 +2642,6 @@ dependencies = [
 name = "codex-core-api"
 version = "0.0.0"
 dependencies = [
- "codex-agents-md",
  "codex-analytics",
  "codex-app-server-protocol",
  "codex-arg0",
@@ -2660,6 +2650,7 @@ dependencies = [
  "codex-exec-server",
  "codex-extension-api",
  "codex-features",
+ "codex-home-loader",
  "codex-login",
  "codex-model-provider-info",
  "codex-models-manager",
@@ -3029,6 +3020,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-home-loader"
+version = "0.0.0"
+dependencies = [
+ "codex-core",
+ "codex-exec-server",
+ "codex-protocol",
+]
+
+[[package]]
 name = "codex-hooks"
 version = "0.0.0"
 dependencies = [
@@ -3208,12 +3208,12 @@ name = "codex-mcp-server"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "codex-agents-md",
  "codex-arg0",
  "codex-config",
  "codex-core",
  "codex-exec-server",
  "codex-extension-api",
+ "codex-home-loader",
  "codex-login",
  "codex-protocol",
  "codex-shell-command",
@@ -3274,12 +3274,12 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "chrono",
- "codex-agents-md",
  "codex-backend-client",
  "codex-config",
  "codex-core",
  "codex-features",
  "codex-git-utils",
+ "codex-home-loader",
  "codex-login",
  "codex-models-manager",
  "codex-otel",

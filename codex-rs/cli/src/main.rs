@@ -1871,7 +1871,7 @@ async fn run_debug_prompt_input_command(
         )
         .into_iter()
         .collect::<Vec<_>>();
-    codex_agents_md::load_thread_user_instructions(
+    codex_home_loader::load_thread_user_instructions(
         &mut config,
         &environment_manager,
         &environments,

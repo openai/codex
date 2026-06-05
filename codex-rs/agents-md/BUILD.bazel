@@ -1,6 +1,0 @@
-load("//:defs.bzl", "codex_rust_crate")
-
-codex_rust_crate(
-    name = "agents-md",
-    crate_name = "codex_agents_md",
-)

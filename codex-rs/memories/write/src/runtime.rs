@@ -1,4 +1,3 @@
-use codex_agents_md::load_thread_user_instructions;
 use codex_core::CodexThread;
 use codex_core::ModelClient;
 use codex_core::NewThread;
@@ -10,6 +9,7 @@ use codex_core::config::Config;
 use codex_core::content_items_to_text;
 use codex_core::resolve_installation_id;
 use codex_features::Feature;
+use codex_home_loader::load_thread_user_instructions;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_login::auth_env_telemetry::collect_auth_env_telemetry;

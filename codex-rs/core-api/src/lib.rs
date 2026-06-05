@@ -2,7 +2,6 @@
 
 #![deny(private_bounds, private_interfaces, unreachable_pub)]
 
-pub use codex_agents_md::load_thread_user_instructions;
 pub use codex_analytics::AnalyticsEventsClient;
 pub use codex_app_server_protocol::ServerNotification;
 pub use codex_app_server_protocol::item_event_to_server_notification;
@@ -51,6 +50,7 @@ pub use codex_exec_server::ExecServerRuntimePaths;
 pub use codex_extension_api::empty_extension_registry;
 pub use codex_features::Feature;
 pub use codex_features::Features;
+pub use codex_home_loader::load_thread_user_instructions;
 pub use codex_login::AuthManager;
 pub use codex_login::default_client::set_default_originator;
 pub use codex_model_provider_info::OPENAI_PROVIDER_ID;
