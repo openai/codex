@@ -1,4 +1,5 @@
 use super::*;
+use codex_protocol::protocol::AgentMessageEvent;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::TurnCompleteEvent;
@@ -8,7 +9,7 @@ use pretty_assertions::assert_eq;
 use serde_json::json;
 
 #[test]
-fn ignores_item_only_events_between_turn_summary_updates() {
+fn emits_turn_summary_mutations_with_summary_items() {
     let mut observer = TurnSummaryProjectionObserver::new();
     let persisted_rollout_items = vec![
         RolloutItem::EventMsg(EventMsg::TurnStarted(TurnStartedEvent {
@@ -25,6 +26,16 @@ fn ignores_item_only_events_between_turn_summary_updates() {
             text_elements: Vec::new(),
             local_images: Vec::new(),
             ..Default::default()
+        })),
+        RolloutItem::EventMsg(EventMsg::AgentMessage(AgentMessageEvent {
+            message: "first answer".into(),
+            phase: None,
+            memory_citation: None,
+        })),
+        RolloutItem::EventMsg(EventMsg::AgentMessage(AgentMessageEvent {
+            message: "final answer".into(),
+            phase: None,
+            memory_citation: None,
         })),
         RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
             turn_id: "turn-a".into(),
@@ -46,6 +57,90 @@ fn ignores_item_only_events_between_turn_summary_updates() {
                     "startedAt": 10,
                     "completedAt": null,
                     "durationMs": null,
+                    "summaryItems": [],
+                },
+            }),
+            json!({
+                "turnId": "turn-a",
+                "mutation": {
+                    "status": "inProgress",
+                    "startedAt": 10,
+                    "completedAt": null,
+                    "durationMs": null,
+                    "summaryItems": [
+                        {
+                            "type": "userMessage",
+                            "id": "item-1",
+                            "clientId": null,
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": "hello",
+                                    "text_elements": [],
+                                },
+                            ],
+                        },
+                    ],
+                },
+            }),
+            json!({
+                "turnId": "turn-a",
+                "mutation": {
+                    "status": "inProgress",
+                    "startedAt": 10,
+                    "completedAt": null,
+                    "durationMs": null,
+                    "summaryItems": [
+                        {
+                            "type": "userMessage",
+                            "id": "item-1",
+                            "clientId": null,
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": "hello",
+                                    "text_elements": [],
+                                },
+                            ],
+                        },
+                        {
+                            "type": "agentMessage",
+                            "id": "item-2",
+                            "text": "first answer",
+                            "phase": null,
+                            "memoryCitation": null,
+                        },
+                    ],
+                },
+            }),
+            json!({
+                "turnId": "turn-a",
+                "mutation": {
+                    "status": "inProgress",
+                    "startedAt": 10,
+                    "completedAt": null,
+                    "durationMs": null,
+                    "summaryItems": [
+                        {
+                            "type": "userMessage",
+                            "id": "item-1",
+                            "clientId": null,
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": "hello",
+                                    "text_elements": [],
+                                },
+                            ],
+                        },
+                        {
+                            "type": "agentMessage",
+                            "id": "item-3",
+                            "text": "final answer",
+                            "phase": null,
+                            "memoryCitation": null,
+                        },
+                    ],
                 },
             }),
             json!({
@@ -55,6 +150,27 @@ fn ignores_item_only_events_between_turn_summary_updates() {
                     "startedAt": 10,
                     "completedAt": 11,
                     "durationMs": 1_000,
+                    "summaryItems": [
+                        {
+                            "type": "userMessage",
+                            "id": "item-1",
+                            "clientId": null,
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": "hello",
+                                    "text_elements": [],
+                                },
+                            ],
+                        },
+                        {
+                            "type": "agentMessage",
+                            "id": "item-3",
+                            "text": "final answer",
+                            "phase": null,
+                            "memoryCitation": null,
+                        },
+                    ],
                 },
             }),
         ]
