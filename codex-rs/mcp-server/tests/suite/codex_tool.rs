@@ -351,17 +351,17 @@ async fn patch_approval_triggers_elicitation() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn test_codex_tool_passes_base_instructions() {
+async fn test_codex_tool_passes_base_and_user_instructions() {
     skip_if_no_network!();
 
     // Apparently `#[tokio::test]` must return `()`, so we create a helper
     // function that returns `Result` so we can use `?` in favor of `unwrap`.
-    if let Err(err) = codex_tool_passes_base_instructions().await {
+    if let Err(err) = codex_tool_passes_base_and_user_instructions().await {
         panic!("failure: {err}");
     }
 }
 
-async fn codex_tool_passes_base_instructions() -> anyhow::Result<()> {
+async fn codex_tool_passes_base_and_user_instructions() -> anyhow::Result<()> {
     #![expect(clippy::expect_used, clippy::unwrap_used)]
 
     let server =
@@ -373,10 +373,16 @@ async fn codex_tool_passes_base_instructions() -> anyhow::Result<()> {
     create_config_toml(codex_home.path(), &server.uri())?;
     let mut mcp_process = McpProcess::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp_process.initialize()).await??;
+    let workspace = TempDir::new()?;
+    std::fs::write(
+        workspace.path().join("AGENTS.md"),
+        "Follow the project instructions.",
+    )?;
 
     // Send a "codex" tool request, which should hit the responses endpoint.
     let codex_request_id = mcp_process
         .send_codex_tool_call(CodexToolCallParam {
+            cwd: Some(workspace.path().to_string_lossy().to_string()),
             prompt: "How are you?".to_string(),
             base_instructions: Some("You are a helpful assistant.".to_string()),
             developer_instructions: Some("Foreshadow upcoming tool calls.".to_string()),
@@ -441,6 +447,13 @@ async fn codex_tool_passes_base_instructions() -> anyhow::Result<()> {
     assert!(
         developer_contents.contains(&"Foreshadow upcoming tool calls."),
         "expected developer instructions in developer messages, got {developer_contents:?}"
+    );
+    assert!(
+        request["input"]
+            .to_string()
+            .contains("Follow the project instructions."),
+        "expected AGENTS.md instructions in model input, got {}",
+        request["input"]
     );
 
     Ok(())

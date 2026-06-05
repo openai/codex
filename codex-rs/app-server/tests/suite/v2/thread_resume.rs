@@ -333,6 +333,63 @@ async fn thread_resume_running_thread_uses_cached_instruction_sources() -> Resul
 }
 
 #[tokio::test]
+async fn thread_resume_cold_thread_loads_instruction_sources() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+    let workspace = TempDir::new()?;
+    let project_agents = workspace.path().join("AGENTS.md");
+    std::fs::write(&project_agents, "project instructions")?;
+
+    let conversation_id = create_fake_rollout(
+        codex_home.path(),
+        "2025-01-05T12-00-00",
+        "2025-01-05T12:00:00Z",
+        "Saved user message",
+        Some("mock_provider"),
+        /*git_info*/ None,
+    )?;
+    let rollout_file = rollout_path(codex_home.path(), "2025-01-05T12-00-00", &conversation_id);
+    let contents = std::fs::read_to_string(&rollout_file)?;
+    let mut lines = contents.lines();
+    let session_meta = lines
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("fake rollout missing session meta"))?;
+    let mut session_meta: serde_json::Value = serde_json::from_str(session_meta)?;
+    session_meta["payload"]["cwd"] = json!(workspace.path());
+    let remaining = lines.collect::<Vec<_>>().join("\n");
+    std::fs::write(&rollout_file, format!("{session_meta}\n{remaining}\n"))?;
+
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let resume_id = mcp
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: conversation_id,
+            ..Default::default()
+        })
+        .await?;
+    let resume_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(resume_id)),
+    )
+    .await??;
+    let ThreadResumeResponse {
+        instruction_sources,
+        ..
+    } = to_response::<ThreadResumeResponse>(resume_resp)?;
+
+    assert_eq!(
+        instruction_sources,
+        vec![AbsolutePathBuf::try_from(std::fs::canonicalize(
+            project_agents
+        )?)?]
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn turn_start_updates_runtime_workspace_roots_for_loaded_thread() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;

@@ -36,6 +36,7 @@ use codex_protocol::protocol::RolloutItem;
 use codex_rollout::append_rollout_item_to_path;
 use codex_rollout::append_thread_name;
 use codex_rollout::read_session_meta_line;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
@@ -245,6 +246,65 @@ async fn thread_fork_creates_new_thread_and_emits_started() -> Result<()> {
     let mut expected_started_thread = thread;
     expected_started_thread.turns.clear();
     assert_eq!(started.thread, expected_started_thread);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_fork_loads_instruction_sources() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+    let workspace = TempDir::new()?;
+    let project_agents = workspace.path().join("AGENTS.md");
+    std::fs::write(&project_agents, "project instructions")?;
+
+    let conversation_id = create_fake_rollout(
+        codex_home.path(),
+        "2025-01-05T12-00-00",
+        "2025-01-05T12:00:00Z",
+        "Saved user message",
+        Some("mock_provider"),
+        /*git_info*/ None,
+    )?;
+    let original_path = codex_home
+        .path()
+        .join("sessions")
+        .join("2025")
+        .join("01")
+        .join("05")
+        .join(format!(
+            "rollout-2025-01-05T12-00-00-{conversation_id}.jsonl"
+        ));
+    let mut session_meta = read_session_meta_line(&original_path).await?;
+    session_meta.meta.cwd = workspace.path().to_path_buf();
+    append_rollout_item_to_path(&original_path, &RolloutItem::SessionMeta(session_meta)).await?;
+
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let fork_id = mcp
+        .send_thread_fork_request(ThreadForkParams {
+            thread_id: conversation_id,
+            ..Default::default()
+        })
+        .await?;
+    let fork_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(fork_id)),
+    )
+    .await??;
+    let ThreadForkResponse {
+        instruction_sources,
+        ..
+    } = to_response::<ThreadForkResponse>(fork_resp)?;
+
+    assert_eq!(
+        instruction_sources,
+        vec![AbsolutePathBuf::try_from(std::fs::canonicalize(
+            project_agents
+        )?)?]
+    );
 
     Ok(())
 }
