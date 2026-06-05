@@ -16,6 +16,7 @@ use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::ReviewTarget;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
+use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::user_input::UserInput;
 use core_test_support::PathBufExt;
 use core_test_support::responses;
@@ -821,7 +822,11 @@ async fn review_uses_overridden_cwd_for_base_branch_merge_base() {
     core_test_support::submit_thread_settings(
         &codex,
         codex_protocol::protocol::ThreadSettingsOverrides {
-            cwd: Some(repo_path.to_path_buf()),
+            cwd: Some(repo_path.to_path_buf().abs()),
+            environments: Some(vec![TurnEnvironmentSelection {
+                environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
+                cwd: repo_path.to_path_buf().abs(),
+            }]),
             ..Default::default()
         },
     )

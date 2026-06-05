@@ -3079,7 +3079,7 @@ text(
     )
     .await;
 
-    let cwd = test.cwd.path().to_path_buf();
+    let cwd = test.config.cwd.clone();
     let (sandbox_policy, permission_profile) =
         turn_permission_fields(PermissionProfile::Disabled, cwd.as_path());
 

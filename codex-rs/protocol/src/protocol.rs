@@ -406,7 +406,7 @@ pub struct ConversationTextParams {
 pub struct ThreadSettingsOverrides {
     /// Updated `cwd` for sandbox/tool calls.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub cwd: Option<PathBuf>,
+    pub cwd: Option<AbsolutePathBuf>,
 
     /// Updated runtime workspace roots used to materialize symbolic
     /// `:workspace_roots` filesystem permissions.

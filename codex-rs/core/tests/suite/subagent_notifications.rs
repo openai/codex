@@ -772,7 +772,7 @@ async fn subagent_stop_replaces_stop_and_skips_internal_subagents() -> Result<()
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                cwd: Some(test.config.cwd.to_path_buf()),
+                cwd: Some(test.config.cwd.clone()),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,

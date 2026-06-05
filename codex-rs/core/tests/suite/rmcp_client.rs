@@ -120,7 +120,7 @@ fn user_turn_with_permission_profile(
     model: String,
     permission_profile: PermissionProfile,
 ) -> Op {
-    let cwd = fixture.cwd.path().to_path_buf();
+    let cwd = fixture.config.cwd.clone();
     let (sandbox_policy, permission_profile) =
         turn_permission_fields(permission_profile, cwd.as_path());
     Op::UserInput {
