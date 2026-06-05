@@ -19,6 +19,7 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 pub use codex_utils_absolute_path::test_support::PathBufExt;
 pub use codex_utils_absolute_path::test_support::PathExt;
 use regex_lite::Regex;
+use std::path::Path;
 use std::path::PathBuf;
 
 pub mod apps_test_server;
@@ -108,6 +109,20 @@ pub fn test_absolute_path_with_windows(
 
 pub fn test_absolute_path(unix_path: &str) -> AbsolutePathBuf {
     test_absolute_path_with_windows(unix_path, /*windows_path*/ None)
+}
+
+#[cfg(unix)]
+#[allow(clippy::expect_used)]
+pub fn create_directory_symlink(source: &Path, link: &Path) {
+    std::os::unix::fs::symlink(source, link).expect("create directory symlink");
+}
+
+#[cfg(windows)]
+#[allow(clippy::expect_used)]
+pub fn create_directory_symlink(source: &Path, link: &Path) {
+    // Running this test locally may require Windows Developer Mode or an elevated process.
+    std::os::windows::fs::symlink_dir(source, link)
+        .expect("create directory symlink; enable Developer Mode or run the test elevated");
 }
 
 pub trait TempDirExt {

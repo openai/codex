@@ -3052,6 +3052,7 @@ dependencies = [
  "codex-model-provider-info",
  "codex-protocol",
  "codex-tools",
+ "codex-utils-absolute-path",
  "http 1.4.0",
  "pretty_assertions",
  "schemars 0.8.22",
@@ -3596,6 +3597,7 @@ dependencies = [
  "urlencoding",
  "webbrowser",
  "which 8.0.0",
+ "wiremock",
 ]
 
 [[package]]

@@ -147,22 +147,6 @@ fn remote_compaction_v2_is_under_development() {
 }
 
 #[test]
-fn responses_websocket_response_processed_is_under_development() {
-    assert_eq!(
-        Feature::ResponsesWebsocketResponseProcessed.stage(),
-        Stage::UnderDevelopment
-    );
-    assert_eq!(
-        Feature::ResponsesWebsocketResponseProcessed.default_enabled(),
-        false
-    );
-    assert_eq!(
-        feature_for_key("responses_websocket_response_processed"),
-        Some(Feature::ResponsesWebsocketResponseProcessed)
-    );
-}
-
-#[test]
 fn terminal_resize_reflow_is_experimental_and_enabled_by_default() {
     assert_eq!(
         feature_for_key("terminal_resize_reflow"),

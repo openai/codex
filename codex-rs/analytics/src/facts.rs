@@ -348,6 +348,7 @@ pub struct SubAgentThreadStartedInput {
     pub session_id: String,
     pub thread_id: String,
     pub parent_thread_id: Option<String>,
+    pub forked_from_thread_id: Option<String>,
     pub product_client_id: String,
     pub client_name: String,
     pub client_version: String,

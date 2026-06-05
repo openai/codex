@@ -106,6 +106,55 @@ index 9648e4a..88efd41 100644
          }) + select({
              ":should_add_rdynamic": ["-rdynamic"],
              "//conditions:default": [],
+@@ -459,6 +488,11 @@
+ def _mksnapshot(ctx):
+     prefix = ctx.attr.prefix
+     suffix = ctx.attr.suffix
++    # Windows cross-builds use Linux for the exec configuration, but the
++    # snapshot generator must match the target ABI and run on the Windows
++    # runner. Action strategies only choose where an action runs; they cannot
++    # change this executable from the exec to the target configuration.
++    tool = ctx.executable.target_tool if ctx.attr.target_os == "win" else ctx.executable.tool
+     outs = [
+         ctx.actions.declare_file(prefix + "/snapshot" + suffix + ".cc"),
+         ctx.actions.declare_file(prefix + "/embedded" + suffix + ".S"),
+@@ -476,7 +510,7 @@
+             outs[1].path,
+         ] + ctx.attr.args,
+-        executable = ctx.executable.tool,
++        executable = tool,
+         progress_message = "Running mksnapshot",
+     )
+     return [DefaultInfo(files = depset(outs))]
+@@ -491,6 +525,12 @@
+             executable = True,
+             cfg = "exec",
+         ),
++        "target_tool": attr.label(
++            mandatory = True,
++            allow_files = True,
++            executable = True,
++            cfg = "target",
++        ),
+         "target_os": attr.string(mandatory = True),
+         "prefix": attr.string(mandatory = True),
+         "suffix": attr.string(mandatory = True),
+@@ -504,6 +544,7 @@
+         args = args,
+         prefix = "noicu",
+         tool = ":noicu/mksnapshot" + suffix,
++        target_tool = ":noicu/mksnapshot" + suffix,
+         suffix = suffix,
+         target_os = select({
+             "@v8//bazel/config:is_macos": "mac",
+@@ -516,6 +557,7 @@
+         args = args,
+         prefix = "icu",
+         tool = ":icu/mksnapshot" + suffix,
++        target_tool = ":icu/mksnapshot" + suffix,
+         suffix = suffix,
+         target_os = select({
+             "@v8//bazel/config:is_macos": "mac",
 diff --git a/orig/v8-14.6.202.11/BUILD.bazel b/mod/v8-14.6.202.11/BUILD.bazel
 index 421ebcd..52283ea 100644
 --- a/orig/v8-14.6.202.11/BUILD.bazel
@@ -309,7 +358,7 @@ index 421ebcd..52283ea 100644
      ],
  )
  
-@@ -4772,9 +4784,15 @@ v8_binary(
+@@ -4772,9 +4784,20 @@ v8_binary(
          ":icu/generated_torque_initializers",
          ":icu/v8_initializers_files",
      ],
@@ -317,11 +366,16 @@ index 421ebcd..52283ea 100644
 +    # external-reference helpers together while producing the snapshot, the
 +    # final embedder binary may not fold the same pair and startup
 +    # deserialization will reject the snapshot.
++    # GN also increases the x64 Windows stack reserve because constructing the
++    # snapshot overflows the linker's 1 MiB default.
      linkopts = select({
          "@v8//bazel/config:is_android": ["-llog"],
 -        "//conditions:default": [],
 +        "@v8//bazel/config:is_macos": ["-Wl,-no_deduplicate"],
-+        "@v8//bazel/config:is_windows": ["/OPT:NOICF"],
++        "@v8//bazel/config:is_windows": [
++            "-Wl,/OPT:NOICF",
++            "-Wl,/STACK:2097152",
++        ],
 +        "//conditions:default": ["-Wl,--icf=none"],
      }),
      noicu_deps = [":v8_libshared_noicu"],
