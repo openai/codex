@@ -54,7 +54,7 @@ impl TabStatus {
 }
 
 pub(crate) fn format_command_for_tab_status(argv: &[String]) -> String {
-    crate::exec_command::strip_bash_lc_and_escape(argv)
+    crate::exec_command::strip_shell_wrapper_for_display(argv)
 }
 
 pub(crate) fn format_parsed_command_for_tab_status(parsed: &[ParsedCommand]) -> Option<String> {
