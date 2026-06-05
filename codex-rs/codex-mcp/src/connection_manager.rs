@@ -112,6 +112,57 @@ pub struct McpConnectionManager {
     startup_cancellation_token: CancellationToken,
 }
 
+/// An owned view of the MCP state needed to list tools.
+///
+/// Taking a snapshot allows callers to release synchronization around the
+/// connection manager before waiting for MCP clients to finish starting.
+pub struct McpToolListSnapshot {
+    clients: HashMap<String, AsyncManagedClient>,
+    server_metadata: HashMap<String, McpServerMetadata>,
+    prefix_mcp_tool_names: bool,
+}
+
+impl McpToolListSnapshot {
+    /// Returns all tools in this snapshot with model-visible names normalized.
+    #[instrument(level = "trace", skip_all, fields(mcp_server_count = self.clients.len()))]
+    pub async fn list_all_tools(self) -> Vec<ToolInfo> {
+        let mut tools = Vec::new();
+        for (server_name, managed_client) in self.clients {
+            let has_cached_tool_info_snapshot = managed_client.cached_tool_info_snapshot.is_some();
+            let startup_complete = managed_client
+                .startup_complete
+                .load(std::sync::atomic::Ordering::Acquire);
+            trace!(
+                server_name = %server_name,
+                has_cached_tool_info_snapshot,
+                startup_complete,
+                "waiting for MCP server tools while building tool list"
+            );
+            let Some(server_tools) = managed_client
+                .listed_tools()
+                .instrument(trace_span!(
+                    "list_tools_for_server",
+                    server_name = %server_name,
+                    has_cached_tool_info_snapshot,
+                    startup_complete
+                ))
+                .await
+            else {
+                continue;
+            };
+            trace!(
+                server_name = %server_name,
+                tool_count = server_tools.len(),
+                "listed MCP server tools while building tool list"
+            );
+            tools.extend(server_tools.into_iter().map(|tool| {
+                McpConnectionManager::with_server_metadata(&self.server_metadata, tool)
+            }));
+        }
+        normalize_tools_for_model_with_prefix(tools, self.prefix_mcp_tool_names)
+    }
+}
+
 impl McpConnectionManager {
     pub fn new_uninitialized(
         approval_policy: &Constrained<AskForApproval>,
@@ -411,45 +462,18 @@ impl McpConnectionManager {
         failures
     }
 
-    /// Returns all tools with model-visible names normalized.
-    #[instrument(level = "trace", skip_all, fields(mcp_server_count = self.clients.len()))]
-    pub async fn list_all_tools(&self) -> Vec<ToolInfo> {
-        let mut tools = Vec::new();
-        for (server_name, managed_client) in &self.clients {
-            let has_cached_tool_info_snapshot = managed_client.cached_tool_info_snapshot.is_some();
-            let startup_complete = managed_client
-                .startup_complete
-                .load(std::sync::atomic::Ordering::Acquire);
-            trace!(
-                server_name = %server_name,
-                has_cached_tool_info_snapshot,
-                startup_complete,
-                "waiting for MCP server tools while building tool list"
-            );
-            let Some(server_tools) = managed_client
-                .listed_tools()
-                .instrument(trace_span!(
-                    "list_tools_for_server",
-                    server_name = %server_name,
-                    has_cached_tool_info_snapshot,
-                    startup_complete
-                ))
-                .await
-            else {
-                continue;
-            };
-            trace!(
-                server_name = %server_name,
-                tool_count = server_tools.len(),
-                "listed MCP server tools while building tool list"
-            );
-            tools.extend(
-                server_tools
-                    .into_iter()
-                    .map(|tool| self.with_server_metadata(tool)),
-            );
+    /// Captures the state needed to list tools without retaining access to the manager.
+    pub fn tool_list_snapshot(&self) -> McpToolListSnapshot {
+        McpToolListSnapshot {
+            clients: self.clients.clone(),
+            server_metadata: self.server_metadata.clone(),
+            prefix_mcp_tool_names: self.prefix_mcp_tool_names,
         }
-        normalize_tools_for_model_with_prefix(tools, self.prefix_mcp_tool_names)
+    }
+
+    /// Returns all tools with model-visible names normalized.
+    pub async fn list_all_tools(&self) -> Vec<ToolInfo> {
+        self.tool_list_snapshot().list_all_tools().await
     }
 
     /// Returns presentation metadata without waiting for uncached clients still initializing.
@@ -524,7 +548,7 @@ impl McpConnectionManager {
             .into_iter()
             .map(|mut tool| {
                 tool.tool = tool_with_model_visible_input_schema(&tool.tool);
-                self.with_server_metadata(tool)
+                Self::with_server_metadata(&self.server_metadata, tool)
             });
         Ok(normalize_tools_for_model_with_prefix(
             tools,
@@ -532,8 +556,11 @@ impl McpConnectionManager {
         ))
     }
 
-    fn with_server_metadata(&self, mut tool: ToolInfo) -> ToolInfo {
-        let Some(metadata) = self.server_metadata.get(&tool.server_name) else {
+    fn with_server_metadata(
+        server_metadata: &HashMap<String, McpServerMetadata>,
+        mut tool: ToolInfo,
+    ) -> ToolInfo {
+        let Some(metadata) = server_metadata.get(&tool.server_name) else {
             tool.supports_parallel_tool_calls = false;
             tool.server_origin = None;
             return tool;

@@ -981,6 +981,51 @@ async fn list_all_tools_blocks_while_client_is_pending_without_cached_tool_info_
 }
 
 #[tokio::test]
+async fn list_all_tools_does_not_retain_manager_read_lock() {
+    let pending_client = futures::future::pending::<Result<ManagedClient, StartupOutcomeError>>()
+        .boxed()
+        .shared();
+    let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
+    let permission_profile = Constrained::allow_any(PermissionProfile::default());
+    let mut manager = McpConnectionManager::new_uninitialized(
+        &approval_policy,
+        &permission_profile,
+        /*prefix_mcp_tool_names*/ true,
+    );
+    manager.clients.insert(
+        CODEX_APPS_MCP_SERVER_NAME.to_string(),
+        AsyncManagedClient {
+            client: pending_client,
+            cached_tool_info_snapshot: None,
+            cached_server_info: None,
+            startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
+            cancel_token: CancellationToken::new(),
+        },
+    );
+    let manager = Arc::new(tokio::sync::RwLock::new(manager));
+    let list_task = {
+        let manager = manager.read().await;
+        tokio::spawn(manager.tool_list_snapshot().list_all_tools())
+    };
+
+    tokio::task::yield_now().await;
+    {
+        let _write_guard = tokio::time::timeout(Duration::from_millis(10), manager.write())
+            .await
+            .expect("tool listing should not retain the manager read lock");
+    }
+
+    list_task.abort();
+    assert!(
+        list_task
+            .await
+            .expect_err("pending tool listing should abort")
+            .is_cancelled()
+    );
+}
+
+#[tokio::test]
 async fn list_all_tools_does_not_block_when_cached_tool_info_snapshot_is_empty() {
     let pending_client = futures::future::pending::<Result<ManagedClient, StartupOutcomeError>>()
         .boxed()
