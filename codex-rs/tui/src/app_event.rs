@@ -265,15 +265,6 @@ pub(crate) enum AppEvent {
         path: String,
     },
 
-    /// Show the authoritative runtime cwd and workspace roots.
-    ReadThreadWorkspace,
-
-    /// Read the authoritative runtime workspace before rendering `/status`.
-    ReadThreadWorkspaceForStatus {
-        refreshing_rate_limits: bool,
-        request_id: Option<u64>,
-    },
-
     /// Approve one retry of a recent auto-review denial selected in the TUI.
     ApproveRecentAutoReviewDenial {
         thread_id: ThreadId,

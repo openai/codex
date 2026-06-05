@@ -13,6 +13,10 @@ use crate::bottom_pane::slash_commands::ServiceTierCommand;
 use crate::bottom_pane::slash_commands::SlashCommandItem;
 use crate::bottom_pane::slash_commands::find_slash_command;
 use crate::goal_display::GOAL_USAGE;
+use crate::render::highlight::foreground_style_for_scopes;
+use crate::style::accent_style;
+use crate::style::table_separator_style;
+use ratatui::style::Styled;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SlashCommandDispatchSource {
@@ -300,7 +304,37 @@ impl ChatWidget {
                 }
             }
             SlashCommand::Cwd => {
-                self.app_event_tx.send(AppEvent::ReadThreadWorkspace);
+                let accent_style = accent_style();
+                let label_style =
+                    foreground_style_for_scopes(&["entity.name.type", "support.type", "variable"])
+                        .unwrap_or(accent_style);
+                let separator_style = table_separator_style();
+                let mut lines: Vec<Line<'static>> = vec![
+                    vec![
+                        "• ".set_style(separator_style),
+                        "Workspace".set_style(accent_style),
+                    ]
+                    .into(),
+                    vec![
+                        "  cwd    ".set_style(label_style),
+                        self.config.cwd.as_path().display().to_string().into(),
+                    ]
+                    .into(),
+                ];
+                let mut roots = self.config.workspace_roots.iter();
+                let first_root = roots
+                    .next()
+                    .map(|root| root.as_path().display().to_string())
+                    .unwrap_or_else(|| "(none)".to_string());
+                lines.push(vec!["  roots  ".set_style(label_style), first_root.into()].into());
+                lines.extend(roots.map(|root| {
+                    vec![
+                        "         ".set_style(separator_style),
+                        root.as_path().display().to_string().into(),
+                    ]
+                    .into()
+                }));
+                self.add_plain_history_lines(lines);
             }
             SlashCommand::AddDir => {
                 self.add_error_message(ADD_DIR_USAGE.to_string());
@@ -447,11 +481,7 @@ impl ChatWidget {
                 } else {
                     (false, None)
                 };
-                self.app_event_tx
-                    .send(AppEvent::ReadThreadWorkspaceForStatus {
-                        refreshing_rate_limits,
-                        request_id,
-                    });
+                self.add_status_output(refreshing_rate_limits, request_id);
                 if let Some(request_id) = request_id {
                     self.app_event_tx.send(AppEvent::RefreshRateLimits {
                         origin: RateLimitRefreshOrigin::StatusCommand { request_id },

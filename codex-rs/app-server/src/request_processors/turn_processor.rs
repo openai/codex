@@ -140,15 +140,6 @@ impl TurnRequestProcessor {
             .map(|response| Some(response.into()))
     }
 
-    pub(crate) async fn thread_workspace_read(
-        &self,
-        params: ThreadWorkspaceReadParams,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.thread_workspace_read_inner(params)
-            .await
-            .map(|response| Some(response.into()))
-    }
-
     pub(crate) async fn turn_steer(
         &self,
         request_id: &ConnectionRequestId,
@@ -765,18 +756,6 @@ impl TurnRequestProcessor {
             changed: response.changed,
             cwd: response.cwd,
             runtime_workspace_roots: response.workspace_roots,
-        })
-    }
-
-    async fn thread_workspace_read_inner(
-        &self,
-        params: ThreadWorkspaceReadParams,
-    ) -> Result<ThreadWorkspaceReadResponse, JSONRPCErrorError> {
-        let (_, thread) = self.load_thread(&params.thread_id).await?;
-        let snapshot = thread.config_snapshot().await;
-        Ok(ThreadWorkspaceReadResponse {
-            cwd: snapshot.cwd,
-            runtime_workspace_roots: snapshot.workspace_roots,
         })
     }
 

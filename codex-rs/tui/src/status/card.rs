@@ -108,7 +108,6 @@ struct StatusHistoryCell {
     model_details: Vec<String>,
     directory: PathBuf,
     workspace_roots: Vec<AbsolutePathBuf>,
-    workspace_state_stale: bool,
     permissions: String,
     agents_summary: Arc<RwLock<String>>,
     collaboration_mode: Option<String>,
@@ -194,7 +193,6 @@ pub(crate) fn new_status_output_with_rate_limits(
         collaboration_mode,
         reasoning_effort_override,
         "<none>".to_string(),
-        /*workspace_state_stale*/ false,
         refreshing_rate_limits,
     )
     .0
@@ -218,7 +216,6 @@ pub(crate) fn new_status_output_with_rate_limits_handle(
     collaboration_mode: Option<&str>,
     reasoning_effort_override: Option<Option<ReasoningEffort>>,
     agents_summary: String,
-    workspace_state_stale: bool,
     refreshing_rate_limits: bool,
 ) -> (CompositeHistoryCell, StatusHistoryHandle) {
     let command = PlainHistoryCell::new(vec!["/status".magenta().into()]);
@@ -239,7 +236,6 @@ pub(crate) fn new_status_output_with_rate_limits_handle(
         collaboration_mode,
         reasoning_effort_override,
         agents_summary,
-        workspace_state_stale,
         refreshing_rate_limits,
     );
 
@@ -268,7 +264,6 @@ impl StatusHistoryCell {
         collaboration_mode: Option<&str>,
         reasoning_effort_override: Option<Option<ReasoningEffort>>,
         agents_summary: String,
-        workspace_state_stale: bool,
         refreshing_rate_limits: bool,
     ) -> (Self, StatusHistoryHandle) {
         let approval_policy = AskForApproval::from(config.permissions.approval_policy.value());
@@ -361,7 +356,6 @@ impl StatusHistoryCell {
                 model_details,
                 directory: config.cwd.to_path_buf(),
                 workspace_roots: config.workspace_roots.clone(),
-                workspace_state_stale,
                 permissions,
                 collaboration_mode: collaboration_mode.map(ToString::to_string),
                 model_provider,
@@ -745,9 +739,6 @@ impl HistoryCell for StatusHistoryCell {
         if !additional_workspace_roots.is_empty() {
             push_label(&mut labels, &mut seen, "Workspace roots");
         }
-        if self.workspace_state_stale {
-            push_label(&mut labels, &mut seen, "Warning");
-        }
         push_label(&mut labels, &mut seen, "Token usage");
         if self.token_usage.context_window.is_some() {
             push_label(&mut labels, &mut seen, "Context window");
@@ -827,12 +818,6 @@ impl HistoryCell for StatusHistoryCell {
         }
         lines.push(formatter.line("Permissions", vec![Span::from(self.permissions.clone())]));
         lines.push(formatter.line("Agents.md", vec![Span::from(agents_summary)]));
-        if self.workspace_state_stale {
-            lines.push(formatter.line(
-                "Warning",
-                vec![Span::from("workspace state may be stale").dim()],
-            ));
-        }
 
         if let Some(account_value) = account_value {
             lines.push(formatter.line("Account", vec![Span::from(account_value)]));

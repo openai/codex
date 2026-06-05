@@ -7,52 +7,11 @@ use super::resize_reflow::trailing_run_start;
 use super::*;
 use crate::config_update::format_config_error;
 use crate::external_agent_config_migration_flow::ExternalAgentConfigMigrationFlowOutcome;
-use crate::render::highlight::foreground_style_for_scopes;
-use crate::style::accent_style;
-use crate::style::table_separator_style;
-use codex_app_server_protocol::ThreadWorkspaceReadResponse;
 use codex_app_server_protocol::WorkspaceMutationOperation;
 #[cfg(target_os = "windows")]
 use codex_config::types::WindowsSandboxModeToml;
-use ratatui::style::Styled;
-use ratatui::text::Line;
 
 const SHUTDOWN_FIRST_EXIT_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 2);
-
-fn thread_workspace_lines(response: &ThreadWorkspaceReadResponse) -> Vec<Line<'static>> {
-    let accent_style = accent_style();
-    let label_style =
-        foreground_style_for_scopes(&["entity.name.type", "support.type", "variable"])
-            .unwrap_or(accent_style);
-    let separator_style = table_separator_style();
-    let mut lines = vec![
-        vec![
-            "• ".set_style(separator_style),
-            "Workspace".set_style(accent_style),
-        ]
-        .into(),
-        vec![
-            "  cwd    ".set_style(label_style),
-            response.cwd.as_path().display().to_string().into(),
-        ]
-        .into(),
-    ];
-
-    let mut roots = response.runtime_workspace_roots.iter();
-    let first_root = roots
-        .next()
-        .map(|root| root.as_path().display().to_string())
-        .unwrap_or_else(|| "(none)".to_string());
-    lines.push(vec!["  roots  ".set_style(label_style), first_root.into()].into());
-    lines.extend(roots.map(|root| {
-        vec![
-            "         ".set_style(separator_style),
-            root.as_path().display().to_string().into(),
-        ]
-        .into()
-    }));
-    lines
-}
 
 impl App {
     pub(super) async fn handle_event(
@@ -414,21 +373,6 @@ impl App {
                     .await
                 {
                     Ok(response) => {
-                        self.config.cwd = response.cwd.clone();
-                        self.config.workspace_roots = response.runtime_workspace_roots.clone();
-                        self.config
-                            .permissions
-                            .set_workspace_roots(self.config.workspace_roots.clone());
-                        self.chat_widget.apply_runtime_workspace(
-                            response.cwd.clone(),
-                            response.runtime_workspace_roots.clone(),
-                        );
-                        self.apply_workspace_to_cached_session(
-                            thread_id,
-                            &response.cwd,
-                            &response.runtime_workspace_roots,
-                        )
-                        .await;
                         let message = match (operation, response.changed) {
                             (
                                 WorkspaceMutationOperation::SetWorkingDirectory,
@@ -456,43 +400,6 @@ impl App {
                         .chat_widget
                         .add_error_message(format!("Failed to update workspace: {err}")),
                 }
-            }
-            AppEvent::ReadThreadWorkspace => {
-                let Some(thread_id) = self.active_thread_id else {
-                    self.chat_widget.add_error_message(
-                        "Workspace commands are unavailable before the session starts.".to_string(),
-                    );
-                    return Ok(AppRunControl::Continue);
-                };
-                match app_server.thread_workspace_read(thread_id).await {
-                    Ok(response) => self
-                        .chat_widget
-                        .add_plain_history_lines(thread_workspace_lines(&response)),
-                    Err(err) => self
-                        .chat_widget
-                        .add_error_message(format!("Failed to read workspace: {err}")),
-                }
-            }
-            AppEvent::ReadThreadWorkspaceForStatus {
-                refreshing_rate_limits,
-                request_id,
-            } => {
-                let workspace = match self.active_thread_id {
-                    Some(thread_id) => match app_server.thread_workspace_read(thread_id).await {
-                        Ok(response) => Some(response),
-                        Err(err) => {
-                            tracing::warn!("failed to read workspace for /status: {err}");
-                            None
-                        }
-                    },
-                    None => None,
-                };
-                self.chat_widget.add_status_output_with_workspace(
-                    refreshing_rate_limits,
-                    request_id,
-                    workspace.as_ref(),
-                    /*workspace_state_stale*/ workspace.is_none(),
-                );
             }
             AppEvent::AppendMessageHistoryEntry { thread_id, text } => {
                 self.append_message_history_entry(thread_id, text);
@@ -2432,48 +2339,5 @@ impl App {
                 AppRunControl::Continue
             }
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::test_support::test_path_display;
-    use codex_utils_absolute_path::test_support::PathBufExt;
-    use codex_utils_absolute_path::test_support::test_path_buf;
-    use pretty_assertions::assert_eq;
-
-    #[test]
-    fn thread_workspace_lines_list_cwd_and_roots_snapshot() {
-        let response = ThreadWorkspaceReadResponse {
-            cwd: test_path_buf("/tmp/current").abs(),
-            runtime_workspace_roots: vec![
-                test_path_buf("/tmp/current").abs(),
-                test_path_buf("/tmp/shared").abs(),
-            ],
-        };
-
-        let lines = thread_workspace_lines(&response);
-        assert_eq!(lines[0].spans[1].style, accent_style());
-        assert_eq!(
-            lines[1].spans[0].style,
-            foreground_style_for_scopes(&["entity.name.type", "support.type", "variable"])
-                .unwrap_or_else(accent_style)
-        );
-        assert_eq!(lines[0].spans[0].style, table_separator_style());
-
-        let text = lines
-            .into_iter()
-            .map(|line| line.to_string())
-            .collect::<Vec<_>>()
-            .join("\n")
-            .replace(&test_path_display("/tmp/current"), "/tmp/current")
-            .replace(&test_path_display("/tmp/shared"), "/tmp/shared");
-        insta::assert_snapshot!(text, @r"
-        • Workspace
-          cwd    /tmp/current
-          roots  /tmp/current
-                 /tmp/shared
-        ");
     }
 }

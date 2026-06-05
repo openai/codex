@@ -88,12 +88,24 @@ fn next_add_to_history_event(rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEv
 }
 
 #[tokio::test]
-async fn slash_cwd_without_path_requests_workspace_read() {
+async fn slash_cwd_without_path_renders_current_workspace() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
+    chat.config.workspace_roots = vec![
+        chat.config.cwd.clone(),
+        test_path_buf("/workspace/shared").abs(),
+    ];
 
     chat.dispatch_command(SlashCommand::Cwd);
 
-    assert_matches!(rx.try_recv(), Ok(AppEvent::ReadThreadWorkspace));
+    let rendered = match rx.try_recv() {
+        Ok(AppEvent::InsertHistoryCell(cell)) => {
+            lines_to_single_string(&cell.display_lines(/*width*/ 120))
+        }
+        other => panic!("expected workspace output, got {other:?}"),
+    };
+    assert!(rendered.contains("Workspace"));
+    assert!(rendered.contains(&chat.config.cwd.display().to_string()));
+    assert!(rendered.contains("/workspace/shared"));
 }
 
 #[tokio::test]

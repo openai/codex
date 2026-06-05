@@ -3737,21 +3737,6 @@ fn thread_workspace_update_params_round_trip() {
 }
 
 #[test]
-fn thread_workspace_read_params_round_trip() {
-    let params = ThreadWorkspaceReadParams {
-        thread_id: "thread_123".to_string(),
-    };
-
-    let serialized = serde_json::to_value(&params).expect("params should serialize");
-    assert_eq!(serialized, json!({ "threadId": "thread_123" }));
-    assert_eq!(
-        serde_json::from_value::<ThreadWorkspaceReadParams>(serialized)
-            .expect("params should deserialize"),
-        params
-    );
-}
-
-#[test]
 fn thread_settings_update_params_preserve_field_level_experimental_gates() {
     let permissions = ThreadSettingsUpdateParams {
         thread_id: "thread_123".to_string(),
