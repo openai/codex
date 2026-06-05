@@ -56,17 +56,7 @@ fn collect_resume_override_mismatches(
         }
     }
     if let Some(requested_runtime_workspace_roots) = request.runtime_workspace_roots.as_ref() {
-        let base_cwd = request
-            .cwd
-            .as_deref()
-            .map(|cwd| {
-                AbsolutePathBuf::resolve_path_against_base(cwd, config_snapshot.cwd.as_path())
-            })
-            .unwrap_or_else(|| config_snapshot.cwd.clone());
-        let requested_runtime_workspace_roots = requested_runtime_workspace_roots
-            .iter()
-            .map(|path| AbsolutePathBuf::resolve_path_against_base(path, base_cwd.as_path()))
-            .collect::<Vec<_>>();
+        let requested_runtime_workspace_roots = requested_runtime_workspace_roots.to_vec();
         if requested_runtime_workspace_roots != config_snapshot.workspace_roots {
             mismatch_details.push(format!(
                 "runtime_workspace_roots requested={requested_runtime_workspace_roots:?} active={:?}",
@@ -158,7 +148,7 @@ fn merge_persisted_resume_metadata(
     typesafe_overrides.model = persisted_metadata.model.clone();
     typesafe_overrides.model_provider = Some(persisted_metadata.model_provider.clone());
 
-    if let Some(reasoning_effort) = persisted_metadata.reasoning_effort {
+    if let Some(reasoning_effort) = persisted_metadata.reasoning_effort.as_ref() {
         request_overrides.get_or_insert_with(HashMap::new).insert(
             "model_reasoning_effort".to_string(),
             serde_json::Value::String(reasoning_effort.to_string()),
@@ -659,12 +649,6 @@ impl ThreadRequestProcessor {
             .map(|response| Some(response.into()))
     }
 
-    async fn instruction_sources_from_config(config: &Config) -> Vec<AbsolutePathBuf> {
-        codex_core::AgentsMdManager::new(config)
-            .instruction_sources(LOCAL_FS.as_ref())
-            .await
-    }
-
     async fn load_thread(
         &self,
         thread_id: &str,
@@ -852,6 +836,7 @@ impl ThreadRequestProcessor {
             ));
         }
         let environment_selections = self.parse_environment_selections(environments)?;
+        let runtime_workspace_roots = runtime_workspace_roots.map(resolve_runtime_workspace_roots);
         let mut typesafe_overrides = self.build_thread_config_overrides(
             model,
             model_provider,
@@ -1043,7 +1028,6 @@ impl ThreadRequestProcessor {
                 .map_err(|err| config_load_error(&err))?;
         }
 
-        let instruction_sources = Self::instruction_sources_from_config(&config).await;
         let environments = environments.unwrap_or_else(|| {
             listener_task_context
                 .thread_manager
@@ -1113,6 +1097,7 @@ impl ThreadRequestProcessor {
         )
         .await?;
 
+        let instruction_sources = thread.instruction_sources().await;
         let config_snapshot = thread
             .config_snapshot()
             .instrument(tracing::info_span!(
@@ -1221,7 +1206,7 @@ impl ThreadRequestProcessor {
         model_provider: Option<String>,
         service_tier: Option<Option<String>>,
         cwd: Option<String>,
-        runtime_workspace_roots: Option<Vec<PathBuf>>,
+        runtime_workspace_roots: Option<Vec<AbsolutePathBuf>>,
         approval_policy: Option<codex_app_server_protocol::AskForApproval>,
         approvals_reviewer: Option<codex_app_server_protocol::ApprovalsReviewer>,
         sandbox: Option<SandboxMode>,
@@ -2489,6 +2474,7 @@ impl ThreadRequestProcessor {
         };
 
         let history_cwd = thread_history.session_cwd();
+        let runtime_workspace_roots = runtime_workspace_roots.map(resolve_runtime_workspace_roots);
         let mut typesafe_overrides = self.build_thread_config_overrides(
             model,
             model_provider,
@@ -2524,13 +2510,12 @@ impl ThreadRequestProcessor {
             }
         };
 
-        let instruction_sources = Self::instruction_sources_from_config(&config).await;
         let response_history = thread_history.clone();
 
         match self
             .thread_manager
             .resume_thread_with_history(
-                config.clone(),
+                config,
                 thread_history,
                 self.auth_manager.clone(),
                 self.request_trace_context(&request_id).await,
@@ -2553,6 +2538,7 @@ impl ThreadRequestProcessor {
                     self.outgoing.send_error(request_id, err).await;
                     return Ok(());
                 }
+                let instruction_sources = codex_thread.instruction_sources().await;
                 let SessionConfiguredEvent { rollout_path, .. } = session_configured;
                 let Some(rollout_path) = rollout_path else {
                     let error =
@@ -2853,10 +2839,7 @@ impl ThreadRequestProcessor {
                 /*include_turns*/ false,
             );
             thread_summary.session_id = existing_thread.session_configured().session_id.to_string();
-            let mut config_for_instruction_sources = self.config.as_ref().clone();
-            config_for_instruction_sources.cwd = config_snapshot.cwd.clone();
-            let instruction_sources =
-                Self::instruction_sources_from_config(&config_for_instruction_sources).await;
+            let instruction_sources = existing_thread.instruction_sources().await;
 
             let listener_command_tx = {
                 let thread_state = thread_state.lock().await;
@@ -3210,6 +3193,7 @@ impl ThreadRequestProcessor {
         } else {
             Some(cli_overrides)
         };
+        let runtime_workspace_roots = runtime_workspace_roots.map(resolve_runtime_workspace_roots);
         let mut typesafe_overrides = self.build_thread_config_overrides(
             model,
             model_provider,
@@ -3233,7 +3217,6 @@ impl ThreadRequestProcessor {
             .map_err(|err| config_load_error(&err))?;
 
         let fallback_model_provider = config.model_provider_id.clone();
-        let instruction_sources = Self::instruction_sources_from_config(&config).await;
 
         let NewThread {
             thread_id,
@@ -3283,6 +3266,8 @@ impl ThreadRequestProcessor {
                 .await
                 .map_err(|err| core_thread_write_error("inherit source thread name", err))?;
         }
+
+        let instruction_sources = forked_thread.instruction_sources().await;
 
         // Auto-attach a conversation listener when forking a thread.
         log_listener_attach_result(

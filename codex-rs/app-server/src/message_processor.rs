@@ -455,14 +455,13 @@ impl MessageProcessor {
                 .plugins_manager()
                 .maybe_start_plugin_startup_tasks_for_config(
                     &config.plugins_config_input(),
-                    auth_manager.clone(),
+                    auth_manager,
                     Some(on_effective_plugins_changed),
                 );
         }
         let config_processor = ConfigRequestProcessor::new(
             outgoing.clone(),
             config_manager.clone(),
-            auth_manager,
             thread_manager.clone(),
             analytics_events_client,
         );
@@ -920,7 +919,12 @@ impl MessageProcessor {
                 .map(|response| Some(response.into())),
             ClientRequest::RemoteControlPairingStart { params, .. } => self
                 .remote_control_processor
-                .pairing_start(params)
+                .pairing_start(params, app_server_client_name.as_deref())
+                .await
+                .map(|response| Some(response.into())),
+            ClientRequest::RemoteControlPairingStatus { params, .. } => self
+                .remote_control_processor
+                .pairing_status(params)
                 .await
                 .map(|response| Some(response.into())),
             ClientRequest::RemoteControlClientsList { params, .. } => self
@@ -1295,6 +1299,9 @@ impl MessageProcessor {
             }
             ClientRequest::GetAccountRateLimits { .. } => {
                 self.account_processor.get_account_rate_limits().await
+            }
+            ClientRequest::GetAccountTokenUsage { .. } => {
+                self.account_processor.get_account_token_usage().await
             }
             ClientRequest::SendAddCreditsNudgeEmail { params, .. } => {
                 self.account_processor

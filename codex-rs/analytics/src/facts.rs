@@ -104,6 +104,23 @@ pub struct TurnTokenUsageFact {
     pub token_usage: TokenUsage,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct TurnProfile {
+    pub before_first_sampling_ms: u64,
+    pub sampling_ms: u64,
+    pub between_sampling_overhead_ms: u64,
+    pub tool_blocking_ms: u64,
+    pub after_last_sampling_ms: u64,
+    pub sampling_request_count: u32,
+    pub sampling_retry_count: u32,
+}
+
+#[derive(Clone)]
+pub struct TurnProfileFact {
+    pub turn_id: String,
+    pub profile: TurnProfile,
+}
+
 #[derive(Clone)]
 pub struct TurnCodexErrorFact {
     pub(crate) turn_id: String,
@@ -476,6 +493,7 @@ pub(crate) enum CustomAnalyticsFact {
     GuardianReview(Box<GuardianReviewEventParams>),
     TurnResolvedConfig(Box<TurnResolvedConfigFact>),
     TurnTokenUsage(Box<TurnTokenUsageFact>),
+    TurnProfile(Box<TurnProfileFact>),
     TurnCodexError(Box<TurnCodexErrorFact>),
     SkillInvoked(SkillInvokedInput),
     AppMentioned(AppMentionedInput),

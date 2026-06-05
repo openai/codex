@@ -2559,7 +2559,7 @@ async fn record_initial_history_forked_hydrates_previous_turn_settings() {
         collaboration_mode: Some(turn_context.collaboration_mode.clone()),
         multi_agent_version: None,
         realtime_active: Some(turn_context.realtime_active),
-        effort: turn_context.reasoning_effort,
+        effort: turn_context.reasoning_effort.clone(),
         summary: codex_protocol::config_types::ReasoningSummary::Auto,
     };
     let turn_id = previous_context_item
@@ -3146,7 +3146,7 @@ async fn set_rate_limits_retains_previous_credits() {
     let model = get_model_offline_for_tests(config.model.as_deref());
     let model_info =
         construct_model_info_offline_for_tests(model.as_str(), &config.to_models_manager_config());
-    let reasoning_effort = config.model_reasoning_effort;
+    let reasoning_effort = config.model_reasoning_effort.clone();
     let collaboration_mode = CollaborationMode {
         mode: ModeKind::Default,
         settings: Settings {
@@ -3254,7 +3254,7 @@ async fn set_rate_limits_updates_plan_type_when_present() {
     let model = get_model_offline_for_tests(config.model.as_deref());
     let model_info =
         construct_model_info_offline_for_tests(model.as_str(), &config.to_models_manager_config());
-    let reasoning_effort = config.model_reasoning_effort;
+    let reasoning_effort = config.model_reasoning_effort.clone();
     let collaboration_mode = CollaborationMode {
         mode: ModeKind::Default,
         settings: Settings {
@@ -3785,7 +3785,7 @@ pub(crate) async fn make_session_configuration_for_tests() -> SessionConfigurati
     let model = get_model_offline_for_tests(config.model.as_deref());
     let model_info =
         construct_model_info_offline_for_tests(model.as_str(), &config.to_models_manager_config());
-    let reasoning_effort = config.model_reasoning_effort;
+    let reasoning_effort = config.model_reasoning_effort.clone();
     let collaboration_mode = CollaborationMode {
         mode: ModeKind::Default,
         settings: Settings {
@@ -3932,6 +3932,7 @@ async fn session_configuration_apply_preserves_profile_file_system_policy_on_cwd
     let original_cwd = project_root.join("subdir");
     let docs_dir = original_cwd.join("docs");
     std::fs::create_dir_all(&docs_dir).expect("create docs dir");
+    let project_root = project_root.abs();
     let docs_dir = docs_dir.abs();
 
     session_configuration.cwd = original_cwd.abs();
@@ -4152,7 +4153,7 @@ async fn session_configuration_apply_retargets_implicit_workspace_root_on_cwd_up
 
     let updated = session_configuration
         .apply(&SessionSettingsUpdate {
-            cwd: Some(new_root.to_path_buf()),
+            cwd: Some(new_root.clone()),
             ..Default::default()
         })
         .expect("cwd-only update should succeed");
@@ -4391,7 +4392,7 @@ async fn session_configuration_apply_retargets_legacy_workspace_root_on_cwd_upda
 
     let updated = session_configuration
         .apply(&SessionSettingsUpdate {
-            cwd: Some(project_root.to_path_buf()),
+            cwd: Some(project_root.clone()),
             ..Default::default()
         })
         .expect("cwd-only update should succeed");
@@ -4420,6 +4421,7 @@ async fn session_configuration_apply_preserves_absolute_cwd_write_root_on_cwd_up
     std::fs::create_dir_all(&original_cwd).expect("create original cwd");
     std::fs::create_dir_all(&next_cwd).expect("create next cwd");
     let original_cwd = original_cwd.abs();
+    let next_cwd = next_cwd.abs();
 
     session_configuration.cwd = original_cwd.clone();
     let file_system_sandbox_policy = FileSystemSandboxPolicy::restricted(vec![
@@ -4480,7 +4482,7 @@ async fn session_update_settings_does_not_rewrite_sticky_environment_cwds() {
 
     session
         .update_settings(SessionSettingsUpdate {
-            cwd: Some(PathBuf::from("project")),
+            cwd: Some(updated_cwd.clone()),
             ..Default::default()
         })
         .await
@@ -4516,7 +4518,7 @@ async fn relative_cwd_update_without_environments_resolves_under_session_cwd() {
 
     session
         .update_settings(SessionSettingsUpdate {
-            cwd: Some(PathBuf::from("project")),
+            cwd: Some(updated_cwd.clone()),
             ..Default::default()
         })
         .await
@@ -4545,7 +4547,7 @@ async fn cwd_update_does_not_rewrite_sticky_environment_cwd() {
 
     session
         .update_settings(SessionSettingsUpdate {
-            cwd: Some(PathBuf::from("project")),
+            cwd: Some(updated_cwd.clone()),
             ..Default::default()
         })
         .await
@@ -4572,7 +4574,7 @@ async fn absolute_cwd_update_with_turn_environment_is_allowed() {
         .new_turn_with_sub_id(
             "sub-1".to_string(),
             SessionSettingsUpdate {
-                cwd: Some(absolute_cwd.to_path_buf()),
+                cwd: Some(absolute_cwd.clone()),
                 environments: Some(vec![TurnEnvironmentSelection {
                     environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
                     cwd: absolute_cwd.clone(),
@@ -4614,7 +4616,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_packaged_zsh() {
         mode: ModeKind::Default,
         settings: Settings {
             model,
-            reasoning_effort: config.model_reasoning_effort,
+            reasoning_effort: config.model_reasoning_effort.clone(),
             developer_instructions: None,
         },
     };
@@ -4716,7 +4718,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
     let model = get_model_offline_for_tests(config.model.as_deref());
     let model_info =
         construct_model_info_offline_for_tests(model.as_str(), &config.to_models_manager_config());
-    let reasoning_effort = config.model_reasoning_effort;
+    let reasoning_effort = config.model_reasoning_effort.clone();
     let collaboration_mode = CollaborationMode {
         mode: ModeKind::Default,
         settings: Settings {
@@ -4959,7 +4961,7 @@ async fn make_session_with_config_and_rx(
         mode: ModeKind::Default,
         settings: Settings {
             model,
-            reasoning_effort: config.model_reasoning_effort,
+            reasoning_effort: config.model_reasoning_effort.clone(),
             developer_instructions: None,
         },
     };
@@ -5064,7 +5066,7 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
         mode: ModeKind::Default,
         settings: Settings {
             model,
-            reasoning_effort: config.model_reasoning_effort,
+            reasoning_effort: config.model_reasoning_effort.clone(),
             developer_instructions: None,
         },
     };
@@ -5989,7 +5991,7 @@ async fn user_turn_updates_approvals_reviewer() {
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                cwd: Some(config.cwd.to_path_buf()),
+                cwd: Some(config.cwd.clone()),
                 approval_policy: Some(config.permissions.approval_policy.value()),
                 approvals_reviewer: Some(codex_config::types::ApprovalsReviewer::AutoReview),
                 sandbox_policy: Some(config.legacy_sandbox_policy()),
@@ -5999,7 +6001,7 @@ async fn user_turn_updates_approvals_reviewer() {
                     mode: codex_protocol::config_types::ModeKind::Default,
                     settings: codex_protocol::config_types::Settings {
                         model: turn_context.model_info.slug.clone(),
-                        reasoning_effort: config.model_reasoning_effort,
+                        reasoning_effort: config.model_reasoning_effort.clone(),
                         developer_instructions: None,
                     },
                 }),
@@ -6806,7 +6808,7 @@ where
     let model = get_model_offline_for_tests(config.model.as_deref());
     let model_info =
         construct_model_info_offline_for_tests(model.as_str(), &config.to_models_manager_config());
-    let reasoning_effort = config.model_reasoning_effort;
+    let reasoning_effort = config.model_reasoning_effort.clone();
     let collaboration_mode = CollaborationMode {
         mode: ModeKind::Default,
         settings: Settings {
@@ -10868,7 +10870,6 @@ async fn rejects_escalated_permissions_when_policy_not_on_request() {
     let turn_context_mut = Arc::get_mut(&mut turn_context).expect("unique thread settings Arc");
     turn_context_mut.permission_profile = PermissionProfile::Disabled;
 
-    let file_system_sandbox_policy = turn_context.file_system_sandbox_policy();
     let command = session.user_shell().derive_exec_args(
         command_script,
         turn_context.config.permissions.allow_login_shell,
@@ -10880,9 +10881,7 @@ async fn rejects_escalated_permissions_when_policy_not_on_request() {
             command: &command,
             approval_policy: turn_context.approval_policy.value(),
             permission_profile: turn_context.permission_profile(),
-            file_system_sandbox_policy: &file_system_sandbox_policy,
-            #[allow(deprecated)]
-            sandbox_cwd: turn_context.cwd.as_path(),
+            windows_sandbox_level: turn_context.windows_sandbox_level,
             sandbox_permissions: SandboxPermissions::UseDefault,
             prefix_rule: None,
         })

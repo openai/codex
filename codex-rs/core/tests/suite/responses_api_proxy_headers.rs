@@ -141,7 +141,7 @@ async fn responses_api_parent_and_subagent_requests_include_identity_headers() -
 
 async fn submit_turn_with_timeout(test: &TestCodex, prompt: &str) -> Result<()> {
     let session_model = test.session_configured.model.clone();
-    let cwd = test.config.cwd.to_path_buf();
+    let cwd = test.config.cwd.clone();
     let (sandbox_policy, permission_profile) =
         turn_permission_fields(PermissionProfile::workspace_write(), cwd.as_path());
     test.codex

@@ -26,7 +26,6 @@ use codex_analytics::CompactionImplementation;
 use codex_analytics::CompactionPhase;
 use codex_analytics::CompactionReason;
 use codex_analytics::CompactionTrigger;
-use codex_features::Feature;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::items::ContextCompactionItem;
@@ -281,7 +280,6 @@ async fn run_remote_compact_task_inner_impl(
     );
     let RemoteCompactionV2Output {
         compaction_output,
-        response_id,
         token_usage,
     } = compaction_output_result?;
     if let Some(token_usage) = token_usage {
@@ -314,18 +312,11 @@ async fn run_remote_compact_task_inner_impl(
 
     sess.emit_turn_item_completed(turn_context, compaction_item)
         .await;
-    if turn_context
-        .features
-        .enabled(Feature::ResponsesWebsocketResponseProcessed)
-    {
-        client_session.send_response_processed(&response_id).await;
-    }
     Ok(())
 }
 
 struct RemoteCompactionV2Output {
     compaction_output: ResponseItem,
-    response_id: String,
     token_usage: Option<TokenUsage>,
 }
 
@@ -348,7 +339,7 @@ async fn run_remote_compaction_request_v2(
                 prompt,
                 &turn_context.model_info,
                 &turn_context.session_telemetry,
-                turn_context.reasoning_effort,
+                turn_context.reasoning_effort.clone(),
                 turn_context.reasoning_summary,
                 turn_context.config.service_tier.clone(),
                 turn_metadata_header,
@@ -409,7 +400,7 @@ async fn collect_compaction_output(
     let mut output_item_count = 0usize;
     let mut compaction_count = 0usize;
     let mut compaction_output = None;
-    let mut completed_response_id = None;
+    let mut saw_completed = false;
     let mut completed_token_usage = None;
     while let Some(event) = stream.next().await {
         match event? {
@@ -422,12 +413,8 @@ async fn collect_compaction_output(
                     }
                 }
             }
-            ResponseEvent::Completed {
-                response_id,
-                token_usage,
-                ..
-            } => {
-                completed_response_id = Some(response_id);
+            ResponseEvent::Completed { token_usage, .. } => {
+                saw_completed = true;
                 completed_token_usage = token_usage;
                 break;
             }
@@ -435,12 +422,12 @@ async fn collect_compaction_output(
         }
     }
 
-    let Some(response_id) = completed_response_id else {
+    if !saw_completed {
         return Err(CodexErr::Stream(
             "remote compaction v2 stream closed before response.completed".to_string(),
             None,
         ));
-    };
+    }
 
     if compaction_count != 1 {
         return Err(CodexErr::Fatal(format!(
@@ -453,7 +440,6 @@ async fn collect_compaction_output(
     };
     Ok(RemoteCompactionV2Output {
         compaction_output,
-        response_id,
         token_usage: completed_token_usage,
     })
 }
@@ -804,7 +790,6 @@ mod tests {
             .expect("compaction should be collected");
 
         assert_eq!(output.compaction_output, compaction);
-        assert_eq!(output.response_id, "resp-compact");
         assert_eq!(
             output.token_usage,
             Some(TokenUsage {

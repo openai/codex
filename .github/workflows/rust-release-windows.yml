@@ -2,10 +2,6 @@ name: rust-release-windows
 
 on:
   workflow_call:
-    inputs:
-      release-lto:
-        required: true
-        type: string
 
 # Cargo's libgit2 transport has been flaky when fetching git dependencies with
 # nested submodules. Prefer the system git CLI across every Cargo invocation.
@@ -16,17 +12,14 @@ jobs:
   build-windows-binaries:
     name: Build Windows binaries - ${{ matrix.runner }} - ${{ matrix.target }} - ${{ matrix.bundle }}
     runs-on: ${{ matrix.runs_on }}
-    # Windows release builds can exceed an hour on fat-LTO mainline releases,
-    # so keep the timeout aligned with the top-level release build headroom.
+    # Windows release builds can exceed an hour, so keep the timeout aligned
+    # with the top-level release build headroom.
     timeout-minutes: 90
     permissions:
       contents: read
     defaults:
       run:
         working-directory: codex-rs
-    env:
-      CARGO_PROFILE_RELEASE_LTO: ${{ inputs.release-lto }}
-
     strategy:
       fail-fast: false
       matrix:

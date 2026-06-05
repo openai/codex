@@ -5,7 +5,9 @@ use ratatui::layout::Rect;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::widgets::Clear;
+use ratatui::widgets::Paragraph;
 use ratatui::widgets::WidgetRef;
+use ratatui::widgets::Wrap;
 use tokio::sync::mpsc::unbounded_channel;
 use tokio_stream::StreamExt;
 
@@ -17,6 +19,7 @@ use crate::bottom_pane::ListSelectionView;
 use crate::bottom_pane::SelectionItem;
 use crate::bottom_pane::SelectionViewParams;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line_for_keymap;
+use crate::config_update::format_config_error;
 use crate::hooks_rpc::HookTrustUpdate;
 use crate::hooks_rpc::fetch_hooks_list;
 use crate::hooks_rpc::hook_needs_review;
@@ -130,7 +133,9 @@ async fn run_startup_hooks_review_app(
                         )
                         .await
                         .map(|_| ())
-                        .map_err(|err| format!("Failed to trust hooks: {err}"));
+                        .map_err(|err| {
+                            format!("Failed to trust hooks: {}", format_config_error(&err))
+                        });
                         match result {
                             Ok(()) => return Ok(StartupHooksReviewOutcome::Continue),
                             Err(err) => {
@@ -199,7 +204,7 @@ fn selection_view_params(
         "Hooks can run outside the sandbox after you trust them.".dim(),
     ));
     if let Some(error) = trust_all_error {
-        header.push(Line::from(error.to_string()).red());
+        header.push(Paragraph::new(Line::from(error.to_string()).red()).wrap(Wrap { trim: false }));
     } else if trusting_all {
         header.push(Line::from("Trusting hooks...".dim()));
     }
@@ -333,7 +338,7 @@ mod tests {
                         }
                     })
                     .collect::<String>();
-                format!("{rendered:width$}", width = area.width as usize)
+                rendered.trim_end().to_string()
             })
             .collect::<Vec<_>>()
             .join("\n")
@@ -373,7 +378,9 @@ mod tests {
         let keymap = RuntimeKeymap::defaults();
         let view = selection_view(
             &entry(),
-            Some("Failed to trust hooks: disk full"),
+            Some(
+                "Failed to trust hooks: config/batchWrite failed in TUI: Invalid configuration: features.fast_mode=true is not supported; allowed set [fast_mode=false]",
+            ),
             /*trusting_all*/ false,
             AppEventSender::new(tx_raw),
             &keymap,
@@ -381,7 +388,7 @@ mod tests {
 
         assert_snapshot!(
             "startup_hooks_review_prompt_with_trust_error",
-            render_lines(&view, /*width*/ 80)
+            render_lines(&view, /*width*/ 62)
         );
     }
 }

@@ -242,6 +242,7 @@ fn edit_images(history: &[ResponseItem]) -> Vec<ImageUrl> {
                 ));
             }
             ResponseItem::Message { .. }
+            | ResponseItem::AgentMessage { .. }
             | ResponseItem::Reasoning { .. }
             | ResponseItem::LocalShellCall { .. }
             | ResponseItem::FunctionCall { .. }

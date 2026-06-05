@@ -33,6 +33,7 @@ use crate::mcp::CallToolResult;
 use crate::mcp::RequestId;
 use crate::memory_citation::MemoryCitation;
 use crate::models::ActivePermissionProfile;
+use crate::models::AgentMessageInputContent;
 use crate::models::BaseInstructions;
 use crate::models::ContentItem;
 use crate::models::ImageDetail;
@@ -406,7 +407,7 @@ pub struct ConversationTextParams {
 pub struct ThreadSettingsOverrides {
     /// Updated `cwd` for sandbox/tool calls.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub cwd: Option<PathBuf>,
+    pub cwd: Option<AbsolutePathBuf>,
 
     /// Updated runtime workspace roots used to materialize symbolic
     /// `:workspace_roots` filesystem permissions.
@@ -690,6 +691,9 @@ pub struct InterAgentCommunication {
     #[serde(default)]
     pub other_recipients: Vec<AgentPath>,
     pub content: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub encrypted_content: Option<String>,
     pub trigger_turn: bool,
 }
 
@@ -706,6 +710,24 @@ impl InterAgentCommunication {
             recipient,
             other_recipients,
             content,
+            encrypted_content: None,
+            trigger_turn,
+        }
+    }
+
+    pub fn new_encrypted(
+        author: AgentPath,
+        recipient: AgentPath,
+        other_recipients: Vec<AgentPath>,
+        encrypted_content: String,
+        trigger_turn: bool,
+    ) -> Self {
+        Self {
+            author,
+            recipient,
+            other_recipients,
+            content: String::new(),
+            encrypted_content: Some(encrypted_content),
             trigger_turn,
         }
     }
@@ -717,6 +739,19 @@ impl InterAgentCommunication {
                 text: serde_json::to_string(self).unwrap_or_default(),
             }],
             phase: Some(MessagePhase::Commentary),
+        }
+    }
+
+    pub fn to_model_input_item(&self) -> ResponseItem {
+        match &self.encrypted_content {
+            Some(encrypted_content) => ResponseItem::AgentMessage {
+                author: self.author.to_string(),
+                recipient: self.recipient.to_string(),
+                content: vec![AgentMessageInputContent::EncryptedContent {
+                    encrypted_content: encrypted_content.clone(),
+                }],
+            },
+            None => self.to_response_input_item().into(),
         }
     }
 
@@ -1185,6 +1220,9 @@ pub enum EventMsg {
 
     /// Backend recommends additional account verification for this turn.
     ModelVerification(ModelVerificationEvent),
+
+    /// Backend moderation metadata intended for first-party turn presentation.
+    TurnModerationMetadata(TurnModerationMetadataEvent),
 
     /// Conversation history was compacted (either automatically or manually).
     ContextCompacted(ContextCompactedEvent),
@@ -1848,6 +1886,11 @@ pub enum ModelVerification {
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
 pub struct ModelVerificationEvent {
     pub verifications: Vec<ModelVerification>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
+pub struct TurnModerationMetadataEvent {
+    pub metadata: Value,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
@@ -4063,6 +4106,7 @@ mod tests {
             recipient: AgentPath::root().join("reviewer").expect("recipient path"),
             other_recipients: vec![AgentPath::root().join("worker").expect("recipient path")],
             content: "review the diff".to_string(),
+            encrypted_content: None,
             trigger_turn: true,
         };
 
