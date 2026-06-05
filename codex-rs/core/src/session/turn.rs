@@ -148,18 +148,7 @@ pub(crate) async fn run_turn(
     // diffs/full reinjection + user input) and trigger compaction preemptively
     // when they would push the thread over the compaction threshold.
     if let Err(err) = run_pre_sampling_compact(&sess, &turn_context, &mut client_session).await {
-        let error = err.to_codex_protocol_error();
-        sess.emit_turn_error_lifecycle(turn_context.as_ref(), error.clone())
-            .await;
-        if error == CodexErrorInfo::UsageLimitExceeded
-            && let Err(err) = sess
-                .goal_runtime_apply(GoalRuntimeEvent::UsageLimitReached {
-                    turn_context: turn_context.as_ref(),
-                })
-                .await
-        {
-            warn!("failed to usage-limit active goal after usage-limit error: {err}");
-        }
+        emit_turn_error_and_apply_goal_runtime(&sess, &turn_context, &err).await;
         error!("Failed to run pre-sampling compact");
         return None;
     }
@@ -301,20 +290,7 @@ pub(crate) async fn run_turn(
                     )
                     .await
                     {
-                        let error = err.to_codex_protocol_error();
-                        sess.emit_turn_error_lifecycle(turn_context.as_ref(), error.clone())
-                            .await;
-                        if error == CodexErrorInfo::UsageLimitExceeded
-                            && let Err(err) = sess
-                                .goal_runtime_apply(GoalRuntimeEvent::UsageLimitReached {
-                                    turn_context: turn_context.as_ref(),
-                                })
-                                .await
-                        {
-                            warn!(
-                                "failed to usage-limit active goal after usage-limit error: {err}"
-                            );
-                        }
+                        emit_turn_error_and_apply_goal_runtime(&sess, &turn_context, &err).await;
                         return None;
                     }
                     can_drain_pending_input = !model_needs_follow_up;
@@ -387,6 +363,7 @@ pub(crate) async fn run_turn(
                 let error = CodexErrorInfo::BadRequest;
                 sess.emit_turn_error_lifecycle(turn_context.as_ref(), error.clone())
                     .await;
+                apply_goal_runtime_turn_error(&sess, &turn_context, &codex_error).await;
                 let event = EventMsg::Error(ErrorEvent {
                     message: "Invalid image in your last message. Please remove it and try again."
                         .to_string(),
@@ -397,18 +374,7 @@ pub(crate) async fn run_turn(
             }
             Err(e) => {
                 info!("Turn error: {e:#}");
-                let error = e.to_codex_protocol_error();
-                sess.emit_turn_error_lifecycle(turn_context.as_ref(), error.clone())
-                    .await;
-                if error == CodexErrorInfo::UsageLimitExceeded
-                    && let Err(err) = sess
-                        .goal_runtime_apply(GoalRuntimeEvent::UsageLimitReached {
-                            turn_context: turn_context.as_ref(),
-                        })
-                        .await
-                {
-                    warn!("failed to usage-limit active goal after usage-limit error: {err}");
-                }
+                emit_turn_error_and_apply_goal_runtime(&sess, &turn_context, &e).await;
                 sess.track_turn_codex_error(turn_context.as_ref(), &e);
                 let event = EventMsg::Error(e.to_error_event(/*message_prefix*/ None));
                 sess.send_event(&turn_context, event).await;
@@ -419,6 +385,32 @@ pub(crate) async fn run_turn(
     }
 
     last_agent_message
+}
+
+async fn emit_turn_error_and_apply_goal_runtime(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    error: &CodexErr,
+) {
+    sess.emit_turn_error_lifecycle(turn_context.as_ref(), error.to_codex_protocol_error())
+        .await;
+    apply_goal_runtime_turn_error(sess, turn_context, error).await;
+}
+
+async fn apply_goal_runtime_turn_error(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    error: &CodexErr,
+) {
+    if let Err(err) = sess
+        .goal_runtime_apply(GoalRuntimeEvent::TurnErrored {
+            turn_context: turn_context.as_ref(),
+            error,
+        })
+        .await
+    {
+        warn!("failed to apply goal runtime turn-error event: {err}");
+    }
 }
 
 async fn run_hooks_and_record_inputs(

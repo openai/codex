@@ -30,7 +30,9 @@ use codex_prompts::continuation_prompt;
 use codex_prompts::objective_updated_prompt;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ModeKind;
+use codex_protocol::error::CodexErr;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ThreadGoal;
 use codex_protocol::protocol::ThreadGoalStatus;
@@ -129,12 +131,13 @@ pub(crate) enum GoalRuntimeEvent<'a> {
         turn_context: &'a TurnContext,
         turn_completed: bool,
     },
+    TurnErrored {
+        turn_context: &'a TurnContext,
+        error: &'a CodexErr,
+    },
     MaybeContinueIfIdle,
     TaskAborted {
         turn_context: Option<&'a TurnContext>,
-    },
-    UsageLimitReached {
-        turn_context: &'a TurnContext,
     },
     ExternalMutationStarting,
     ExternalSet {
@@ -142,6 +145,12 @@ pub(crate) enum GoalRuntimeEvent<'a> {
     },
     ExternalClear,
     ThreadResumed,
+}
+
+#[derive(Clone, Copy)]
+enum TerminalGoalErrorStatus {
+    Paused,
+    UsageLimited,
 }
 
 pub(crate) struct GoalRuntimeState {
@@ -359,17 +368,20 @@ impl Session {
                     .await;
                 Ok(())
             }),
+            GoalRuntimeEvent::TurnErrored {
+                turn_context,
+                error,
+            } => Box::pin(async move {
+                self.handle_thread_goal_turn_error(turn_context, error)
+                    .await?;
+                Ok(())
+            }),
             GoalRuntimeEvent::MaybeContinueIfIdle => Box::pin(async move {
                 self.maybe_continue_goal_if_idle_runtime().await;
                 Ok(())
             }),
             GoalRuntimeEvent::TaskAborted { turn_context } => Box::pin(async move {
                 self.handle_thread_goal_task_abort(turn_context).await;
-                Ok(())
-            }),
-            GoalRuntimeEvent::UsageLimitReached { turn_context } => Box::pin(async move {
-                self.usage_limit_active_thread_goal_for_turn(turn_context)
-                    .await?;
                 Ok(())
             }),
             GoalRuntimeEvent::ExternalMutationStarting => Box::pin(async move {
@@ -1138,14 +1150,41 @@ impl Session {
         }
     }
 
-    async fn usage_limit_active_thread_goal_for_turn(
+    async fn handle_thread_goal_turn_error(
         &self,
         turn_context: &TurnContext,
+        error: &CodexErr,
+    ) -> anyhow::Result<()> {
+        if error.to_codex_protocol_error() == CodexErrorInfo::UsageLimitExceeded {
+            return self
+                .finish_active_thread_goal_after_terminal_error(
+                    turn_context,
+                    TerminalGoalErrorStatus::UsageLimited,
+                )
+                .await;
+        }
+
+        if matches!(error, CodexErr::TurnAborted | CodexErr::Interrupted) {
+            return Ok(());
+        }
+
+        // This is a terminal turn error. Leave request-local retry decisions to
+        // the turn; pause the goal so idle continuation does not replay it.
+        self.finish_active_thread_goal_after_terminal_error(
+            turn_context,
+            TerminalGoalErrorStatus::Paused,
+        )
+        .await
+    }
+
+    async fn finish_active_thread_goal_after_terminal_error(
+        &self,
+        turn_context: &TurnContext,
+        status: TerminalGoalErrorStatus,
     ) -> anyhow::Result<()> {
         if should_ignore_goal_for_mode(turn_context.collaboration_mode.mode) {
             return Ok(());
         }
-
         if !self.enabled(Feature::Goals) {
             return Ok(());
         }
@@ -1159,6 +1198,7 @@ impl Session {
         let Some(state_db) = self.state_db_for_thread_goals().await? else {
             return Ok(());
         };
+
         self.account_thread_goal_progress(
             turn_context,
             BudgetLimitSteering::Suppressed,
@@ -1168,11 +1208,21 @@ impl Session {
         let previous_status = self
             .current_goal_status_for_metrics(&state_db, /*expected_goal_id*/ None)
             .await?;
-        let Some(goal) = state_db
-            .thread_goals()
-            .usage_limit_active_thread_goal(self.thread_id)
-            .await?
-        else {
+        let goal = match status {
+            TerminalGoalErrorStatus::UsageLimited => {
+                state_db
+                    .thread_goals()
+                    .usage_limit_active_thread_goal(self.thread_id)
+                    .await?
+            }
+            TerminalGoalErrorStatus::Paused => {
+                state_db
+                    .thread_goals()
+                    .pause_active_thread_goal(self.thread_id)
+                    .await?
+            }
+        };
+        let Some(goal) = goal else {
             return Ok(());
         };
         self.emit_goal_terminal_metrics_if_status_changed(previous_status, &goal);

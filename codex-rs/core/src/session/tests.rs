@@ -9628,8 +9628,10 @@ async fn usage_limit_runtime_stops_active_goal_and_prevents_idle_continuation() 
     .await;
     set_total_token_usage(&sess, post_goal_token_usage()).await;
 
-    sess.goal_runtime_apply(GoalRuntimeEvent::UsageLimitReached {
+    let error = CodexErr::QuotaExceeded;
+    sess.goal_runtime_apply(GoalRuntimeEvent::TurnErrored {
         turn_context: tc.as_ref(),
+        error: &error,
     })
     .await?;
 
@@ -9640,6 +9642,58 @@ async fn usage_limit_runtime_stops_active_goal_and_prevents_idle_continuation() 
         .await?
         .expect("goal should remain persisted after usage limiting");
     assert_eq!(codex_state::ThreadGoalStatus::UsageLimited, goal.status);
+    assert_eq!(70, goal.tokens_used);
+
+    sess.abort_all_tasks(TurnAbortReason::Replaced).await;
+    sess.goal_runtime_apply(GoalRuntimeEvent::MaybeContinueIfIdle)
+        .await?;
+    assert!(sess.active_turn.lock().await.is_none());
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn turn_error_pauses_active_goal_and_prevents_idle_continuation() -> anyhow::Result<()> {
+    let (sess, tc, _rx, _codex_home) = make_goal_session_and_context_with_rx().await;
+    sess.set_thread_goal(
+        tc.as_ref(),
+        SetGoalRequest {
+            objective: Some("Keep improving the benchmark".to_string()),
+            status: None,
+            token_budget: Some(Some(500)),
+        },
+    )
+    .await?;
+    sess.goal_runtime_apply(GoalRuntimeEvent::TurnStarted {
+        turn_context: tc.as_ref(),
+        token_usage: TokenUsage::default(),
+    })
+    .await?;
+    sess.spawn_task(
+        Arc::clone(&tc),
+        Vec::new(),
+        NeverEndingTask {
+            kind: TaskKind::Regular,
+            listen_to_cancellation_token: false,
+        },
+    )
+    .await;
+    set_total_token_usage(&sess, post_goal_token_usage()).await;
+
+    let error = CodexErr::InvalidRequest("bad compaction request".to_string());
+    sess.goal_runtime_apply(GoalRuntimeEvent::TurnErrored {
+        turn_context: tc.as_ref(),
+        error: &error,
+    })
+    .await?;
+
+    let state_db = goal_test_state_db(sess.as_ref()).await?;
+    let goal = state_db
+        .thread_goals()
+        .get_thread_goal(sess.thread_id)
+        .await?
+        .expect("goal should remain persisted after turn error");
+    assert_eq!(codex_state::ThreadGoalStatus::Paused, goal.status);
     assert_eq!(70, goal.tokens_used);
 
     sess.abort_all_tasks(TurnAbortReason::Replaced).await;
