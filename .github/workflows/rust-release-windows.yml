@@ -20,11 +20,6 @@ jobs:
     defaults:
       run:
         working-directory: codex-rs
-    env:
-      # Line tables keep release stack traces symbolicateable without the
-      # compile-time and memory cost of full debuginfo.
-      CARGO_PROFILE_RELEASE_DEBUG: line-tables-only
-      CARGO_PROFILE_RELEASE_STRIP: "false"
     strategy:
       fail-fast: false
       matrix:

@@ -149,11 +149,8 @@ jobs:
       run:
         working-directory: codex-rs
     env:
-      # Line tables keep release stack traces symbolicateable without the
-      # compile-time and memory cost of full debuginfo.
-      CARGO_PROFILE_RELEASE_DEBUG: line-tables-only
+      # macOS release packages archive packed dSYM bundles before stripping.
       CARGO_PROFILE_RELEASE_SPLIT_DEBUGINFO: ${{ contains(matrix.target, 'apple-darwin') && 'packed' || 'off' }}
-      CARGO_PROFILE_RELEASE_STRIP: "false"
       # Use the git CLI instead of Cargo's libgit2 path for git dependencies.
       # macOS release runners have intermittently failed to fetch nested
       # submodules through SecureTransport/libgit2, especially libwebrtc's
