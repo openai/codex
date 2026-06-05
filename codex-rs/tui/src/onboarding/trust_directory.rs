@@ -229,7 +229,7 @@ mod tests {
 
     #[test]
     fn renders_snapshot_for_git_repo() {
-        let widget = widget(None);
+        let widget = widget(/*error*/ None);
 
         let mut terminal =
             Terminal::new(VT100Backend::new(/*width*/ 70, /*height*/ 14)).expect("terminal");
