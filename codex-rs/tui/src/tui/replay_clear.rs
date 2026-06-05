@@ -1,3 +1,9 @@
+//! Coordinates clearing and replaying terminal history inside one synchronized draw.
+//!
+//! A requested clear remains pending until buffered history has been written successfully. Once
+//! replay is committed, later draw or terminal-flush failures must not retry the clear because the
+//! buffered lines have already been consumed.
+
 use std::io::Result;
 use std::io::Write;
 
