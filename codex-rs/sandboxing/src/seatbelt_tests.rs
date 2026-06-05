@@ -109,6 +109,16 @@ fn base_policy_allows_node_cpu_sysctls() {
 }
 
 #[test]
+fn base_policy_allows_bin_ps_without_sandboxing() {
+    let expected = r#"(allow process-exec (path "/bin/ps") (with no-sandbox))"#;
+
+    assert!(
+        MACOS_SEATBELT_BASE_POLICY.contains(expected),
+        "base policy must allow /bin/ps to run without sandboxing:\n{MACOS_SEATBELT_BASE_POLICY}"
+    );
+}
+
+#[test]
 fn base_policy_allows_kmp_registration_shm_read_create_and_unlink() {
     let expected = r##"(allow ipc-posix-shm-read-data
   ipc-posix-shm-write-create

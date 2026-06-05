@@ -274,6 +274,51 @@ async fn python_getpwuid_works_under_sandbox() {
     assert!(status.success(), "python exited with {status:?}");
 }
 
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn bin_ps_runs_under_workspace_write_sandbox() {
+    core_test_support::skip_if_sandbox!();
+
+    let permission_profile = PermissionProfile::workspace_write_with(
+        &[],
+        NetworkSandboxPolicy::Restricted,
+        /*exclude_tmpdir_env_var*/ true,
+        /*exclude_slash_tmp*/ true,
+    );
+    let command_cwd = AbsolutePathBuf::current_dir().expect("should be able to get current dir");
+    let sandbox_cwd = command_cwd.clone();
+
+    let child = spawn_command_under_sandbox(
+        vec![
+            "/bin/ps".to_string(),
+            "-p".to_string(),
+            std::process::id().to_string(),
+        ],
+        command_cwd,
+        &permission_profile,
+        &sandbox_cwd,
+        StdioPolicy::RedirectForShellTool,
+        HashMap::new(),
+    )
+    .await
+    .expect("should be able to spawn /bin/ps under sandbox");
+
+    let output = child
+        .wait_with_output()
+        .await
+        .expect("should be able to wait for /bin/ps child");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "/bin/ps under sandbox exited with {:?}, stderr: {stderr}",
+        output.status
+    );
+    assert!(
+        !stderr.contains("Operation not permitted"),
+        "/bin/ps under sandbox should not hit permission errors, stderr: {stderr}"
+    );
+}
+
 #[tokio::test]
 async fn sandbox_distinguishes_command_and_policy_cwds() {
     core_test_support::skip_if_sandbox!();
