@@ -566,7 +566,6 @@ mod imp {
     use windows_sys::Win32::Foundation::WAIT_TIMEOUT;
     use windows_sys::Win32::Storage::FileSystem::ReadFile;
     use windows_sys::Win32::Storage::FileSystem::WriteFile;
-    use windows_sys::Win32::System::Console::COMMON_LVB_REVERSE_VIDEO;
     use windows_sys::Win32::System::Console::CONSOLE_SCREEN_BUFFER_INFOEX;
     use windows_sys::Win32::System::Console::ENABLE_VIRTUAL_TERMINAL_INPUT;
     use windows_sys::Win32::System::Console::GetConsoleMode;
@@ -621,14 +620,12 @@ mod imp {
     fn decode_console_default_colors(attributes: u16, color_table: &[u32; 16]) -> DefaultColors {
         let fg_index = (attributes & 0x0f) as usize;
         let bg_index = ((attributes >> 4) & 0x0f) as usize;
-        let mut fg = decode_color_ref(color_table[fg_index]);
-        let mut bg = decode_color_ref(color_table[bg_index]);
-
-        if attributes & COMMON_LVB_REVERSE_VIDEO != 0 {
-            std::mem::swap(&mut fg, &mut bg);
+        // COMMON_LVB_REVERSE_VIDEO changes how cells render, but this probe is discovering the
+        // configured default colors for palette blending. Keep the attribute fg/bg indices as-is.
+        DefaultColors {
+            fg: decode_color_ref(color_table[fg_index]),
+            bg: decode_color_ref(color_table[bg_index]),
         }
-
-        DefaultColors { fg, bg }
     }
 
     fn decode_color_ref(color_ref: u32) -> (u8, u8, u8) {
@@ -753,6 +750,7 @@ mod imp {
     mod tests {
         use super::*;
         use pretty_assertions::assert_eq;
+        use windows_sys::Win32::System::Console::COMMON_LVB_REVERSE_VIDEO;
 
         fn color_table() -> [u32; 16] {
             [
@@ -800,15 +798,15 @@ mod imp {
         }
 
         #[test]
-        fn swaps_console_colors_when_reverse_video_is_set() {
+        fn ignores_reverse_video_when_decoding_default_colors() {
             assert_eq!(
                 decode_console_default_colors(
                     /*attributes*/ COMMON_LVB_REVERSE_VIDEO | 0x21,
                     &color_table(),
                 ),
                 DefaultColors {
-                    fg: (0, 128, 0),
-                    bg: (128, 0, 0),
+                    fg: (128, 0, 0),
+                    bg: (0, 128, 0),
                 }
             );
         }
