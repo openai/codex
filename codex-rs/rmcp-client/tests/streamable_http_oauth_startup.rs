@@ -1,6 +1,7 @@
 mod streamable_http_test_support;
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 use std::time::Duration;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
@@ -28,28 +29,218 @@ use wiremock::MockServer;
 use wiremock::Request;
 use wiremock::ResponseTemplate;
 use wiremock::matchers::body_string_contains;
+use wiremock::matchers::header;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
 
 use streamable_http_test_support::initialize_client;
 
 const SERVER_NAME: &str = "test-streamable-http-oauth-startup";
+const STARTUP_REFRESH_CHILD_SERVER_URL_ENV: &str = "MCP_TEST_OAUTH_STARTUP_REFRESH_SERVER_URL";
 const EXTERNAL_UPDATE_CHILD_SERVER_URL_ENV: &str = "MCP_TEST_OAUTH_EXTERNAL_UPDATE_SERVER_URL";
+const OPERATION_TIMEOUT_CHILD_SERVER_URL_ENV: &str = "MCP_TEST_OAUTH_TIMEOUT_SERVER_URL";
+const OPERATION_TIMEOUT_REFRESH_STARTED_ENV: &str = "MCP_TEST_OAUTH_TIMEOUT_REFRESH_STARTED";
 const REFRESH_CONTENTION_SERVER_URL_ENV: &str = "MCP_TEST_OAUTH_REFRESH_CONTENTION_SERVER_URL";
 const REFRESH_CONTENTION_ATTEMPT_ENV: &str = "MCP_TEST_OAUTH_REFRESH_CONTENTION_ATTEMPT";
 const REFRESH_CONTENTION_DONE_ENV: &str = "MCP_TEST_OAUTH_REFRESH_CONTENTION_DONE";
+const EXPIRED_ACCESS_TOKEN: &str = "expired-access-token";
+const VALID_REFRESH_TOKEN: &str = "valid-refresh-token";
+const REFRESHED_ACCESS_TOKEN: &str = "refreshed-access-token";
 const OLD_ACCESS_TOKEN: &str = "old-access-token";
 const OLD_REFRESH_TOKEN: &str = "old-refresh-token";
 const EXTERNAL_ACCESS_TOKEN: &str = "external-access-token";
 const EXTERNAL_REFRESH_TOKEN: &str = "external-refresh-token";
 const EXTERNAL_EXPIRES_AT: u64 = u64::MAX;
+const TIMEOUT_REFRESHED_ACCESS_TOKEN: &str = "timeout-refreshed-access-token";
 const STALE_REFRESHED_ACCESS_TOKEN: &str = "stale-refreshed-access-token";
 const STALE_ROTATED_REFRESH_TOKEN: &str = "stale-rotated-refresh-token";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn refreshes_expired_persisted_token_before_initialize() -> anyhow::Result<()> {
+    let server = MockServer::start().await;
+    mount_oauth_metadata(&server, /*expected_calls*/ 1).await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .and(body_string_contains("grant_type=refresh_token"))
+        .and(body_string_contains(format!(
+            "refresh_token={VALID_REFRESH_TOKEN}"
+        )))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "access_token": REFRESHED_ACCESS_TOKEN,
+            "token_type": "Bearer",
+            "expires_in": 7200,
+            "refresh_token": VALID_REFRESH_TOKEN,
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/mcp"))
+        .and(header(
+            "authorization",
+            format!("Bearer {REFRESHED_ACCESS_TOKEN}"),
+        ))
+        .respond_with(|request: &Request| oauth_mcp_response(request, REFRESHED_ACCESS_TOKEN))
+        .expect(2)
+        .mount(&server)
+        .await;
+
+    let codex_home = TempDir::new()?;
+    let server_url = format!("{}/mcp", server.uri());
+    let status = Command::new(std::env::current_exe()?)
+        .args([
+            "oauth_startup_refresh_child",
+            "--exact",
+            "--ignored",
+            "--nocapture",
+        ])
+        .env("CODEX_HOME", codex_home.path())
+        .env(STARTUP_REFRESH_CHILD_SERVER_URL_ENV, server_url)
+        .status()
+        .await?;
+    assert!(status.success(), "OAuth startup child failed: {status}");
+    server.verify().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+#[ignore = "spawned by refreshes_expired_persisted_token_before_initialize"]
+async fn oauth_startup_refresh_child() -> anyhow::Result<()> {
+    let server_url = std::env::var(STARTUP_REFRESH_CHILD_SERVER_URL_ENV)?;
+    save_test_tokens(
+        &server_url,
+        EXPIRED_ACCESS_TOKEN,
+        VALID_REFRESH_TOKEN,
+        /*expires_at*/ 0,
+    )?;
+    initialized_oauth_client(&server_url).await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn operation_timeout_includes_oauth_generation_lock_wait() -> anyhow::Result<()> {
+    let server = MockServer::start().await;
+    mount_oauth_metadata(&server, /*expected_calls*/ 3).await;
+    let codex_home = TempDir::new()?;
+    let refresh_started = codex_home.path().join("refresh-started");
+    let refresh_started_for_mock = refresh_started.clone();
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .and(body_string_contains("grant_type=refresh_token"))
+        .and(body_string_contains(format!(
+            "refresh_token={EXTERNAL_REFRESH_TOKEN}"
+        )))
+        .respond_with(move |_request: &Request| {
+            std::fs::write(&refresh_started_for_mock, b"started").expect("write refresh marker");
+            ResponseTemplate::new(200)
+                .set_delay(Duration::from_secs(1))
+                .set_body_json(json!({
+                    "access_token": TIMEOUT_REFRESHED_ACCESS_TOKEN,
+                    "token_type": "Bearer",
+                    "expires_in": 7200,
+                    "refresh_token": EXTERNAL_REFRESH_TOKEN,
+                }))
+        })
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/mcp"))
+        .respond_with(|request: &Request| {
+            let Ok(body) = request.body_json::<Value>() else {
+                return ResponseTemplate::new(400);
+            };
+            let expected_access_token = match (
+                body.get("method").and_then(Value::as_str),
+                body.pointer("/params/name").and_then(Value::as_str),
+            ) {
+                (Some("tools/call"), Some("hold-generation-lock")) => {
+                    TIMEOUT_REFRESHED_ACCESS_TOKEN
+                }
+                _ => OLD_ACCESS_TOKEN,
+            };
+            oauth_mcp_response(request, expected_access_token)
+        })
+        .expect(5)
+        .mount(&server)
+        .await;
+
+    let server_url = format!("{}/mcp", server.uri());
+    let status = Command::new(std::env::current_exe()?)
+        .args([
+            "oauth_operation_timeout_child",
+            "--exact",
+            "--ignored",
+            "--nocapture",
+        ])
+        .env("CODEX_HOME", codex_home.path())
+        .env(OPERATION_TIMEOUT_CHILD_SERVER_URL_ENV, server_url)
+        .env(OPERATION_TIMEOUT_REFRESH_STARTED_ENV, refresh_started)
+        .status()
+        .await?;
+    assert!(
+        status.success(),
+        "OAuth operation timeout child failed: {status}"
+    );
+    server.verify().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+#[ignore = "spawned by operation_timeout_includes_oauth_generation_lock_wait"]
+async fn oauth_operation_timeout_child() -> anyhow::Result<()> {
+    let server_url = std::env::var(OPERATION_TIMEOUT_CHILD_SERVER_URL_ENV)?;
+    let refresh_started =
+        std::path::PathBuf::from(std::env::var(OPERATION_TIMEOUT_REFRESH_STARTED_ENV)?);
+    save_test_tokens(
+        &server_url,
+        OLD_ACCESS_TOKEN,
+        OLD_REFRESH_TOKEN,
+        future_expiry()?,
+    )?;
+    let lock_holder = Arc::new(initialized_oauth_client(&server_url).await?);
+    let timed_client = initialized_oauth_client(&server_url).await?;
+    save_test_tokens(
+        &server_url,
+        EXTERNAL_ACCESS_TOKEN,
+        EXTERNAL_REFRESH_TOKEN,
+        /*expires_at*/ 0,
+    )?;
+
+    let lock_holder_call = tokio::spawn(async move {
+        lock_holder
+            .call_tool(
+                "hold-generation-lock".to_string(),
+                /*arguments*/ None,
+                /*meta*/ None,
+                Some(Duration::from_secs(5)),
+            )
+            .await
+    });
+    wait_for_path(&refresh_started).await?;
+    let error = timed_client
+        .call_tool(
+            "must-time-out-on-generation-lock".to_string(),
+            /*arguments*/ None,
+            /*meta*/ None,
+            Some(Duration::from_millis(100)),
+        )
+        .await
+        .expect_err("generation lock wait must consume the operation timeout");
+    assert!(
+        error
+            .to_string()
+            .contains("timed out awaiting tools/call after 100ms"),
+        "unexpected timeout error: {error}"
+    );
+    lock_holder_call.await??;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn running_client_adopts_external_oauth_update_and_deletion() -> anyhow::Result<()> {
     let server = MockServer::start().await;
-    mount_oauth_metadata(&server).await;
+    mount_oauth_metadata(&server, /*expected_calls*/ 2).await;
 
     Mock::given(method("POST"))
         .and(path("/mcp"))
@@ -168,7 +359,7 @@ async fn oauth_external_delete_writer_child() -> anyhow::Result<()> {
 async fn refresh_holds_generation_lock_against_external_oauth_update() -> anyhow::Result<()> {
     let server = MockServer::start().await;
     let server_url = format!("{}/mcp", server.uri());
-    mount_oauth_metadata(&server).await;
+    mount_oauth_metadata(&server, /*expected_calls*/ 3).await;
     Mock::given(method("POST"))
         .and(path("/oauth/token"))
         .and(body_string_contains("grant_type=refresh_token"))
@@ -322,7 +513,7 @@ async fn oauth_external_update_writer_child() -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn mount_oauth_metadata(server: &MockServer) {
+async fn mount_oauth_metadata(server: &MockServer, expected_calls: u64) {
     Mock::given(method("GET"))
         .and(path("/.well-known/oauth-authorization-server/mcp"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
@@ -330,7 +521,7 @@ async fn mount_oauth_metadata(server: &MockServer) {
             "token_endpoint": format!("{}/oauth/token", server.uri()),
             "scopes_supported": [""],
         })))
-        .expect(1)
+        .expect(expected_calls)
         .mount(server)
         .await;
 }

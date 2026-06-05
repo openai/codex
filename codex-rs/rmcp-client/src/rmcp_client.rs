@@ -47,7 +47,6 @@ use rmcp::service::{self};
 use rmcp::transport::StreamableHttpClientTransport;
 use rmcp::transport::auth::AuthClient;
 use rmcp::transport::auth::AuthError;
-use rmcp::transport::auth::OAuthState;
 use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
 use rmcp::transport::streamable_http_client::StreamableHttpError;
 use serde::Deserialize;
@@ -66,6 +65,7 @@ use crate::in_process_transport::InProcessTransportFactory;
 use crate::load_oauth_tokens;
 use crate::oauth::OAuthPersistor;
 use crate::oauth::StoredOAuthTokens;
+use crate::oauth::authorization_manager_from_tokens;
 use crate::stdio_server_launcher::StdioServerCommand;
 use crate::stdio_server_launcher::StdioServerLauncher;
 use crate::stdio_server_launcher::StdioServerProcessHandle;
@@ -439,7 +439,6 @@ impl RmcpClient {
         params: Option<PaginatedRequestParams>,
         timeout: Option<Duration>,
     ) -> Result<ListToolsResult> {
-        self.refresh_oauth_if_needed().await;
         let result = self
             .run_service_operation("tools/list", timeout, move |service| {
                 let params = params.clone();
@@ -455,7 +454,6 @@ impl RmcpClient {
         params: Option<PaginatedRequestParams>,
         timeout: Option<Duration>,
     ) -> Result<ListToolsWithConnectorIdResult> {
-        self.refresh_oauth_if_needed().await;
         let result = self
             .run_service_operation("tools/list", timeout, move |service| {
                 let params = params.clone();
@@ -500,7 +498,6 @@ impl RmcpClient {
         params: Option<PaginatedRequestParams>,
         timeout: Option<Duration>,
     ) -> Result<ListResourcesResult> {
-        self.refresh_oauth_if_needed().await;
         let result = self
             .run_service_operation("resources/list", timeout, move |service| {
                 let params = params.clone();
@@ -516,7 +513,6 @@ impl RmcpClient {
         params: Option<PaginatedRequestParams>,
         timeout: Option<Duration>,
     ) -> Result<ListResourceTemplatesResult> {
-        self.refresh_oauth_if_needed().await;
         let result = self
             .run_service_operation("resources/templates/list", timeout, move |service| {
                 let params = params.clone();
@@ -532,7 +528,6 @@ impl RmcpClient {
         params: ReadResourceRequestParams,
         timeout: Option<Duration>,
     ) -> Result<ReadResourceResult> {
-        self.refresh_oauth_if_needed().await;
         let result = self
             .run_service_operation("resources/read", timeout, move |service| {
                 let params = params.clone();
@@ -550,7 +545,6 @@ impl RmcpClient {
         meta: Option<serde_json::Value>,
         timeout: Option<Duration>,
     ) -> Result<CallToolResult> {
-        self.refresh_oauth_if_needed().await;
         let arguments = match arguments {
             Some(Value::Object(map)) => Some(map),
             Some(other) => {
@@ -606,7 +600,6 @@ impl RmcpClient {
         method: &str,
         params: Option<serde_json::Value>,
     ) -> Result<()> {
-        self.refresh_oauth_if_needed().await;
         self.run_service_operation(
             "notifications/custom",
             /*timeout*/ None,
@@ -636,7 +629,6 @@ impl RmcpClient {
         method: &str,
         params: Option<serde_json::Value>,
     ) -> Result<ServerResult> {
-        self.refresh_oauth_if_needed().await;
         let response = self
             .run_service_operation("requests/custom", /*timeout*/ None, move |service| {
                 let params = params.clone();
@@ -869,20 +861,21 @@ impl RmcpClient {
         Fut: std::future::Future<Output = std::result::Result<T, rmcp::service::ServiceError>>,
     {
         let service = self.service().await?;
-        match Self::run_service_operation_once(
-            Arc::clone(&service),
-            label,
-            timeout,
-            self.elicitation_pause_state.clone(),
-            &operation,
-        )
-        .await
+        match self
+            .run_service_operation_once(
+                Arc::clone(&service),
+                label,
+                timeout,
+                self.elicitation_pause_state.clone(),
+                &operation,
+            )
+            .await
         {
             Ok(result) => Ok(result),
             Err(error) if Self::is_session_expired_404(&error) => {
                 self.reinitialize_after_session_expiry(&service).await?;
                 let recovered_service = self.service().await?;
-                Self::run_service_operation_once(
+                self.run_service_operation_once(
                     recovered_service,
                     label,
                     timeout,
@@ -897,6 +890,7 @@ impl RmcpClient {
     }
 
     async fn run_service_operation_once<T, F, Fut>(
+        &self,
         service: Arc<RunningService<RoleClient, ElicitationClientService>>,
         label: &str,
         timeout: Option<Duration>,
@@ -907,17 +901,19 @@ impl RmcpClient {
         F: Fn(Arc<RunningService<RoleClient, ElicitationClientService>>) -> Fut,
         Fut: std::future::Future<Output = std::result::Result<T, rmcp::service::ServiceError>>,
     {
+        let operation = async {
+            self.refresh_oauth_if_needed().await;
+            operation(service).await
+        };
         match timeout {
-            Some(duration) => {
-                active_time_timeout(duration, pause_state.subscribe(), operation(service))
-                    .await
-                    .map_err(|_| ClientOperationError::Timeout {
-                        label: label.to_string(),
-                        duration,
-                    })?
-                    .map_err(ClientOperationError::from)
-            }
-            None => operation(service).await.map_err(ClientOperationError::from),
+            Some(duration) => active_time_timeout(duration, pause_state.subscribe(), operation)
+                .await
+                .map_err(|_| ClientOperationError::Timeout {
+                    label: label.to_string(),
+                    duration,
+                })?
+                .map_err(ClientOperationError::from),
+            None => operation.await.map_err(ClientOperationError::from),
         }
     }
 
@@ -1021,23 +1017,9 @@ async fn create_oauth_transport_and_runtime(
     // TODO(aibrahim): teach OAuth bootstrap and refresh to use the same
     // shared HTTP client abstraction instead of always creating the local
     // reqwest metadata client here.
-    let mut oauth_state =
-        OAuthState::new(url.to_string(), Some(oauth_metadata_client.clone())).await?;
-
-    oauth_state
-        .set_credentials(
-            &initial_tokens.client_id,
-            initial_tokens.token_response.0.clone(),
-        )
-        .await?;
-
-    let manager = match oauth_state {
-        OAuthState::Authorized(manager) => manager,
-        OAuthState::Unauthorized(manager) => manager,
-        _ => {
-            return Err(anyhow!("unexpected OAuth state during client setup"));
-        }
-    };
+    let manager =
+        authorization_manager_from_tokens(url, oauth_metadata_client.clone(), &initial_tokens)
+            .await?;
 
     let auth_client = AuthClient::new(
         StreamableHttpClientAdapter::new(http_client, default_headers, /*auth_provider*/ None),
@@ -1054,6 +1036,7 @@ async fn create_oauth_transport_and_runtime(
         server_name.to_string(),
         url.to_string(),
         auth_manager,
+        oauth_metadata_client,
         credentials_store,
         Some(initial_tokens),
     );

@@ -48,9 +48,8 @@ use tracing::warn;
 use codex_keyring_store::DefaultKeyringStore;
 use codex_keyring_store::KeyringStore;
 use rmcp::transport::auth::AuthorizationManager;
-use rmcp::transport::auth::CredentialStore;
 use rmcp::transport::auth::InMemoryCredentialStore;
-use rmcp::transport::auth::StoredCredentials;
+use rmcp::transport::auth::OAuthState;
 use tokio::sync::Mutex;
 use tokio::sync::OwnedMutexGuard;
 
@@ -140,8 +139,14 @@ fn load_oauth_tokens_from_keyring_with_fallback_to_file<K: KeyringStore>(
         Ok(None) => load_oauth_tokens_from_file(server_name, url),
         Err(error) => {
             warn!("failed to read OAuth tokens from keyring: {error}");
-            load_oauth_tokens_from_file(server_name, url)
-                .with_context(|| format!("failed to read OAuth tokens from keyring: {error}"))
+            match load_oauth_tokens_from_file(server_name, url) {
+                Ok(Some(tokens)) => Ok(Some(tokens)),
+                Ok(None) => Err(error).context(
+                    "failed to read OAuth tokens from keyring and no fallback credentials exist",
+                ),
+                Err(file_error) => Err(file_error)
+                    .with_context(|| format!("failed to read OAuth tokens from keyring: {error}")),
+            }
         }
     }
 }
@@ -297,6 +302,7 @@ struct OAuthPersistorInner {
     server_name: String,
     url: String,
     authorization_manager: Arc<Mutex<AuthorizationManager>>,
+    oauth_metadata_client: reqwest::Client,
     store_mode: OAuthCredentialsStoreMode,
     last_credentials: Mutex<Option<StoredOAuthTokens>>,
 }
@@ -307,11 +313,30 @@ enum CredentialReload {
     Removed,
 }
 
+pub(crate) async fn authorization_manager_from_tokens(
+    url: &str,
+    oauth_metadata_client: reqwest::Client,
+    tokens: &StoredOAuthTokens,
+) -> Result<AuthorizationManager> {
+    let mut oauth_state = OAuthState::new(url.to_string(), Some(oauth_metadata_client)).await?;
+    oauth_state
+        .set_credentials(&tokens.client_id, tokens.token_response.0.clone())
+        .await?;
+
+    match oauth_state {
+        OAuthState::Authorized(manager) | OAuthState::Unauthorized(manager) => Ok(manager),
+        _ => Err(anyhow::anyhow!(
+            "unexpected OAuth state while replacing credentials"
+        )),
+    }
+}
+
 impl OAuthPersistor {
     pub(crate) fn new(
         server_name: String,
         url: String,
         authorization_manager: Arc<Mutex<AuthorizationManager>>,
+        oauth_metadata_client: reqwest::Client,
         store_mode: OAuthCredentialsStoreMode,
         initial_credentials: Option<StoredOAuthTokens>,
     ) -> Self {
@@ -320,6 +345,7 @@ impl OAuthPersistor {
                 server_name,
                 url,
                 authorization_manager,
+                oauth_metadata_client,
                 store_mode,
                 last_credentials: Mutex::new(initial_credentials),
             }),
@@ -481,29 +507,15 @@ impl OAuthPersistor {
     }
 
     async fn replace_manager_credentials(&self, tokens: &StoredOAuthTokens) -> Result<()> {
-        let token_response = tokens.token_response.0.clone();
-        let store = InMemoryCredentialStore::new();
-        store
-            .save(StoredCredentials::new(
-                tokens.client_id.clone(),
-                Some(token_response.clone()),
-                token_response
-                    .scopes()
-                    .map(|scopes| scopes.iter().map(|scope| scope.to_string()).collect())
-                    .unwrap_or_default(),
-                Some(
-                    SystemTime::now()
-                        .duration_since(UNIX_EPOCH)
-                        .unwrap_or_else(|_| Duration::from_secs(0))
-                        .as_secs(),
-                ),
-            ))
-            .await?;
-
+        let replacement = authorization_manager_from_tokens(
+            &self.inner.url,
+            self.inner.oauth_metadata_client.clone(),
+            tokens,
+        )
+        .await?;
         let manager = self.inner.authorization_manager.clone();
         let mut guard = manager.lock().await;
-        guard.configure_client_id(&tokens.client_id)?;
-        guard.set_credential_store(store);
+        *guard = replacement;
         Ok(())
     }
 
@@ -944,16 +956,27 @@ mod tests {
     use keyring::Error as KeyringError;
     use pretty_assertions::assert_eq;
     use std::ffi::OsString;
-    use std::sync::Barrier;
+    use std::process::Child;
+    use std::process::Command;
     use std::sync::Mutex;
     use std::sync::MutexGuard;
     use std::sync::OnceLock;
     use std::sync::PoisonError;
-    use std::sync::mpsc;
     use std::thread;
+    use std::time::Instant;
     use tempfile::tempdir;
+    use wiremock::Mock;
+    use wiremock::MockServer;
+    use wiremock::ResponseTemplate;
+    use wiremock::matchers::body_string_contains;
+    use wiremock::matchers::method;
+    use wiremock::matchers::path;
 
     use codex_keyring_store::tests::MockKeyringStore;
+
+    const FALLBACK_WRITER_VARIANT_ENV: &str = "CODEX_TEST_FALLBACK_WRITER_VARIANT";
+    const FALLBACK_WRITER_ATTEMPT_ENV: &str = "CODEX_TEST_FALLBACK_WRITER_ATTEMPT";
+    const FALLBACK_WRITER_DONE_ENV: &str = "CODEX_TEST_FALLBACK_WRITER_DONE";
 
     struct TempCodexHome {
         _guard: MutexGuard<'static, ()>,
@@ -1068,6 +1091,99 @@ mod tests {
         )?
         .expect("tokens should load from fallback");
         assert_tokens_match_without_expiry(&loaded, &expected);
+        Ok(())
+    }
+
+    #[test]
+    fn load_oauth_tokens_preserves_keyring_error_without_fallback() -> Result<()> {
+        let _env = TempCodexHome::new();
+        let store = MockKeyringStore::default();
+        let tokens = sample_tokens();
+        let key = super::compute_store_key(&tokens.server_name, &tokens.url)?;
+        store.set_error(&key, KeyringError::Invalid("error".into(), "load".into()));
+
+        let error = super::load_oauth_tokens_from_keyring_with_fallback_to_file(
+            &store,
+            &tokens.server_name,
+            &tokens.url,
+        )
+        .expect_err("missing fallback must not turn a keyring failure into logout");
+
+        assert!(error.to_string().contains(
+            "failed to read OAuth tokens from keyring and no fallback credentials exist"
+        ));
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "the test must inspect and refresh the same authorization manager instance"
+    )]
+    async fn replacement_updates_current_scopes_used_by_scope_less_refresh() -> Result<()> {
+        let server = MockServer::start().await;
+        let server_url = format!("{}/mcp", server.uri());
+        Mock::given(method("GET"))
+            .and(path("/.well-known/oauth-authorization-server/mcp"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "authorization_endpoint": format!("{}/oauth/authorize", server.uri()),
+                "token_endpoint": format!("{}/oauth/token", server.uri()),
+                "scopes_supported": ["external-scope"],
+            })))
+            .expect(2)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/oauth/token"))
+            .and(body_string_contains("refresh_token=refresh-token"))
+            .and(body_string_contains("scope=external-scope"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "access_token": "refreshed-access-token",
+                "token_type": "Bearer",
+                "expires_in": 7200,
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let mut initial = sample_tokens();
+        initial.url = server_url.clone();
+        let oauth_metadata_client = reqwest::Client::new();
+        let manager = Arc::new(tokio::sync::Mutex::new(
+            super::authorization_manager_from_tokens(
+                &server_url,
+                oauth_metadata_client.clone(),
+                &initial,
+            )
+            .await?,
+        ));
+        let runtime = OAuthPersistor::new(
+            initial.server_name.clone(),
+            server_url,
+            Arc::clone(&manager),
+            oauth_metadata_client,
+            OAuthCredentialsStoreMode::File,
+            Some(initial.clone()),
+        );
+        let mut replacement = initial;
+        replacement
+            .token_response
+            .0
+            .set_scopes(Some(vec![Scope::new("external-scope".to_string())]));
+
+        runtime.replace_manager_credentials(&replacement).await?;
+        let guard = manager.lock().await;
+        assert_eq!(
+            guard.get_current_scopes().await,
+            vec!["external-scope".to_string()]
+        );
+        guard.refresh_token().await?;
+        assert_eq!(
+            guard.get_current_scopes().await,
+            vec!["external-scope".to_string()]
+        );
+        drop(guard);
+        server.verify().await;
         Ok(())
     }
 
@@ -1319,7 +1435,7 @@ mod tests {
     }
 
     #[test]
-    fn fallback_store_serializes_writes_for_different_servers() -> Result<()> {
+    fn fallback_store_serializes_cross_process_writes_for_different_servers() -> Result<()> {
         let _env = TempCodexHome::new();
         let first = sample_tokens();
         let mut second = sample_tokens();
@@ -1332,32 +1448,45 @@ mod tests {
         );
 
         let fallback_lock = super::acquire_fallback_store_lock()?;
-        let barrier = Arc::new(Barrier::new(3));
-        let (tx, rx) = mpsc::channel();
-        let handles = [first.clone(), second.clone()]
+        let codex_home = find_codex_home()?;
+        let markers = tempdir()?;
+        let mut writers = ["first", "second"]
             .into_iter()
-            .map(|tokens| {
-                let barrier = Arc::clone(&barrier);
-                let tx = tx.clone();
-                thread::spawn(move || {
-                    barrier.wait();
-                    tx.send(super::save_oauth_tokens_to_file(&tokens))
-                        .expect("send save result");
-                })
+            .map(|variant| {
+                let attempt = markers.path().join(format!("{variant}-attempt"));
+                let done = markers.path().join(format!("{variant}-done"));
+                let child = Command::new(std::env::current_exe()?)
+                    .args(["fallback_store_writer_child", "--ignored", "--nocapture"])
+                    .env("CODEX_HOME", codex_home.as_path())
+                    .env(FALLBACK_WRITER_VARIANT_ENV, variant)
+                    .env(FALLBACK_WRITER_ATTEMPT_ENV, &attempt)
+                    .env(FALLBACK_WRITER_DONE_ENV, &done)
+                    .spawn()?;
+                Ok((child, attempt, done))
             })
-            .collect::<Vec<_>>();
-        drop(tx);
-
-        barrier.wait();
-        thread::sleep(Duration::from_millis(50));
-        assert!(matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+            .collect::<Result<Vec<_>>>()?;
+        wait_for_paths(
+            &writers
+                .iter()
+                .map(|(_, attempt, _)| attempt.clone())
+                .collect::<Vec<_>>(),
+            Duration::from_secs(5),
+        )?;
+        thread::sleep(Duration::from_millis(100));
+        for (child, _, done) in &mut writers {
+            assert!(
+                child.try_wait()?.is_none(),
+                "fallback writer should block on the cross-process file lock"
+            );
+            assert!(
+                !done.exists(),
+                "fallback writer completed while another process held the file lock"
+            );
+        }
 
         drop(fallback_lock);
-        for _ in 0..2 {
-            rx.recv_timeout(Duration::from_secs(5))??;
-        }
-        for handle in handles {
-            handle.join().expect("fallback writer should not panic");
+        for (child, _, _) in &mut writers {
+            wait_for_child_success(child, Duration::from_secs(5))?;
         }
 
         let store = super::read_fallback_file()?.expect("fallback file should load");
@@ -1370,6 +1499,38 @@ mod tests {
                 .collect::<std::collections::BTreeSet<_>>(),
             [first_key, second_key].into_iter().collect()
         );
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "spawned by fallback_store_serializes_cross_process_writes_for_different_servers"]
+    fn fallback_store_writer_child() -> Result<()> {
+        let mut tokens = sample_tokens();
+        match std::env::var(FALLBACK_WRITER_VARIANT_ENV)?.as_str() {
+            "first" => {}
+            "second" => {
+                tokens.server_name = "other-server".to_string();
+                tokens.url = "https://other.example.test".to_string();
+                tokens.token_response.0 = OAuthTokenResponse::new(
+                    AccessToken::new("other-access-token".to_string()),
+                    BasicTokenType::Bearer,
+                    VendorExtraTokenFields::default(),
+                );
+            }
+            variant => anyhow::bail!("unexpected fallback writer variant: {variant}"),
+        }
+
+        let attempt = PathBuf::from(
+            std::env::var_os(FALLBACK_WRITER_ATTEMPT_ENV)
+                .context("fallback writer attempt path should be set")?,
+        );
+        let done = PathBuf::from(
+            std::env::var_os(FALLBACK_WRITER_DONE_ENV)
+                .context("fallback writer done path should be set")?,
+        );
+        fs::write(attempt, b"attempting")?;
+        super::save_oauth_tokens_to_file(&tokens)?;
+        fs::write(done, b"done")?;
         Ok(())
     }
 
@@ -1458,6 +1619,31 @@ mod tests {
             actual_response.expires_in().is_some(),
             expected_response.expires_in().is_some()
         );
+    }
+
+    fn wait_for_paths(paths: &[PathBuf], timeout: Duration) -> Result<()> {
+        let deadline = Instant::now() + timeout;
+        while !paths.iter().all(|path| path.exists()) {
+            if Instant::now() >= deadline {
+                anyhow::bail!("timed out waiting for fallback writer readiness");
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        Ok(())
+    }
+
+    fn wait_for_child_success(child: &mut Child, timeout: Duration) -> Result<()> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            if let Some(status) = child.try_wait()? {
+                anyhow::ensure!(status.success(), "fallback writer failed: {status}");
+                return Ok(());
+            }
+            if Instant::now() >= deadline {
+                anyhow::bail!("timed out waiting for fallback writer");
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
     }
 
     fn sample_tokens() -> StoredOAuthTokens {
