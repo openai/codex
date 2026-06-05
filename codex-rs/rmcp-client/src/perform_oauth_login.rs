@@ -26,7 +26,7 @@ use urlencoding::decode;
 use crate::StoredOAuthTokens;
 use crate::WrappedOAuthTokenResponse;
 use crate::oauth::compute_expires_at_millis;
-use crate::save_oauth_tokens;
+use crate::oauth::save_oauth_tokens_async;
 use crate::utils::apply_default_headers;
 use crate::utils::build_default_headers;
 use codex_config::types::OAuthCredentialsStoreMode;
@@ -571,7 +571,7 @@ impl OauthLoginFlow {
                 token_response: WrappedOAuthTokenResponse(credentials),
                 expires_at,
             };
-            save_oauth_tokens(&self.server_name, &stored, self.store_mode)?;
+            save_oauth_tokens_async(&self.server_name, &stored, self.store_mode).await?;
 
             Ok(())
         }

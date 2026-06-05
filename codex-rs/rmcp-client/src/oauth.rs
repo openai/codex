@@ -39,6 +39,7 @@ use std::fs::OpenOptions;
 use std::io::ErrorKind;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::OnceLock;
 use std::time::Duration;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
@@ -51,7 +52,7 @@ use rmcp::transport::auth::CredentialStore;
 use rmcp::transport::auth::InMemoryCredentialStore;
 use rmcp::transport::auth::StoredCredentials;
 use tokio::sync::Mutex;
-use tokio::sync::Semaphore;
+use tokio::sync::OwnedMutexGuard;
 
 use codex_utils_home_dir::find_codex_home;
 
@@ -172,6 +173,15 @@ pub fn save_oauth_tokens(
     save_oauth_tokens_locked(server_name, tokens, store_mode)
 }
 
+pub(crate) async fn save_oauth_tokens_async(
+    server_name: &str,
+    tokens: &StoredOAuthTokens,
+    store_mode: OAuthCredentialsStoreMode,
+) -> Result<()> {
+    let _lock = acquire_oauth_server_lock_async(server_name, &tokens.url).await?;
+    save_oauth_tokens_locked(server_name, tokens, store_mode)
+}
+
 fn save_oauth_tokens_locked(
     server_name: &str,
     tokens: &StoredOAuthTokens,
@@ -238,6 +248,15 @@ pub fn delete_oauth_tokens(
     url: &str,
     store_mode: OAuthCredentialsStoreMode,
 ) -> Result<bool> {
+    let _lock = acquire_oauth_server_lock(server_name, url)?;
+    delete_oauth_tokens_locked(server_name, url, store_mode)
+}
+
+fn delete_oauth_tokens_locked(
+    server_name: &str,
+    url: &str,
+    store_mode: OAuthCredentialsStoreMode,
+) -> Result<bool> {
     let keyring_store = DefaultKeyringStore;
     delete_oauth_tokens_from_keyring_and_file(&keyring_store, store_mode, server_name, url)
 }
@@ -280,7 +299,12 @@ struct OAuthPersistorInner {
     authorization_manager: Arc<Mutex<AuthorizationManager>>,
     store_mode: OAuthCredentialsStoreMode,
     last_credentials: Mutex<Option<StoredOAuthTokens>>,
-    update_lock: Semaphore,
+}
+
+enum CredentialReload {
+    Unchanged,
+    Replaced,
+    Removed,
 }
 
 impl OAuthPersistor {
@@ -298,7 +322,6 @@ impl OAuthPersistor {
                 authorization_manager,
                 store_mode,
                 last_credentials: Mutex::new(initial_credentials),
-                update_lock: Semaphore::new(1),
             }),
         }
     }
@@ -306,7 +329,14 @@ impl OAuthPersistor {
     /// Persists the latest stored credentials if they have changed.
     /// Deletes the credentials if they are no longer present.
     pub(crate) async fn persist_if_needed(&self) -> Result<()> {
-        let _permit = self.inner.update_lock.acquire().await?;
+        let _server_lock =
+            acquire_oauth_server_lock_async(&self.inner.server_name, &self.inner.url).await?;
+        if !matches!(
+            self.reload_persisted_credentials_locked().await?,
+            CredentialReload::Unchanged
+        ) {
+            return Ok(());
+        }
         self.persist_if_needed_locked().await
     }
 
@@ -341,36 +371,22 @@ impl OAuthPersistor {
                     token_response: new_token_response,
                     expires_at,
                 };
-                if last_credentials
+                if !last_credentials
                     .as_ref()
                     .is_some_and(|previous| same_persisted_generation(previous, &stored))
                 {
-                    return Ok(());
+                    save_oauth_tokens_locked(
+                        &self.inner.server_name,
+                        &stored,
+                        self.inner.store_mode,
+                    )?;
+                    *self.inner.last_credentials.lock().await = Some(stored);
                 }
-
-                let _server_lock =
-                    acquire_oauth_server_lock_async(&self.inner.server_name, &self.inner.url)
-                        .await?;
-                if let Some(persisted) = load_oauth_tokens(
-                    &self.inner.server_name,
-                    &self.inner.url,
-                    self.inner.store_mode,
-                )? && !last_credentials
-                    .as_ref()
-                    .is_some_and(|previous| same_persisted_generation(previous, &persisted))
-                {
-                    self.replace_manager_credentials(&persisted).await?;
-                    *self.inner.last_credentials.lock().await = Some(persisted);
-                    return Ok(());
-                }
-
-                save_oauth_tokens_locked(&self.inner.server_name, &stored, self.inner.store_mode)?;
-                *self.inner.last_credentials.lock().await = Some(stored);
             }
             None => {
                 let mut last_serialized = self.inner.last_credentials.lock().await;
                 if last_serialized.take().is_some()
-                    && let Err(error) = delete_oauth_tokens(
+                    && let Err(error) = delete_oauth_tokens_locked(
                         &self.inner.server_name,
                         &self.inner.url,
                         self.inner.store_mode,
@@ -389,11 +405,20 @@ impl OAuthPersistor {
 
     #[expect(
         clippy::await_holding_invalid_type,
-        reason = "AuthorizationManager async access and persisted credential adoption must be serialized"
+        reason = "the server credential lock must span reload, refresh, and persistence"
     )]
     pub(crate) async fn refresh_if_needed(&self) -> Result<()> {
-        let _permit = self.inner.update_lock.acquire().await?;
-        self.adopt_persisted_credentials_if_changed().await?;
+        let _server_lock =
+            acquire_oauth_server_lock_async(&self.inner.server_name, &self.inner.url).await?;
+        if matches!(
+            self.reload_persisted_credentials_locked().await?,
+            CredentialReload::Removed
+        ) {
+            return Err(anyhow::anyhow!(
+                "OAuth credentials were removed for server {}",
+                self.inner.server_name
+            ));
+        }
 
         let expires_at = {
             let guard = self.inner.last_credentials.lock().await;
@@ -418,29 +443,41 @@ impl OAuthPersistor {
         self.persist_if_needed_locked().await
     }
 
-    async fn adopt_persisted_credentials_if_changed(&self) -> Result<()> {
-        let _server_lock =
-            acquire_oauth_server_lock_async(&self.inner.server_name, &self.inner.url).await?;
-        let Some(persisted) = load_oauth_tokens(
+    async fn reload_persisted_credentials_locked(&self) -> Result<CredentialReload> {
+        let loaded = load_oauth_tokens(
             &self.inner.server_name,
             &self.inner.url,
             self.inner.store_mode,
-        )?
-        else {
-            return Ok(());
-        };
+        )
+        .with_context(|| {
+            format!(
+                "failed to reload OAuth tokens for server {}",
+                self.inner.server_name
+            )
+        })?;
 
         let last_credentials = self.inner.last_credentials.lock().await.clone();
-        if last_credentials
-            .as_ref()
-            .is_some_and(|previous| same_persisted_generation(previous, &persisted))
-        {
-            return Ok(());
+        let unchanged = match (&loaded, &last_credentials) {
+            (Some(loaded), Some(previous)) => same_persisted_generation(loaded, previous),
+            (None, None) => true,
+            _ => false,
+        };
+        if unchanged {
+            return Ok(CredentialReload::Unchanged);
         }
 
-        self.replace_manager_credentials(&persisted).await?;
-        *self.inner.last_credentials.lock().await = Some(persisted);
-        Ok(())
+        match loaded {
+            Some(tokens) => {
+                self.replace_manager_credentials(&tokens).await?;
+                *self.inner.last_credentials.lock().await = Some(tokens);
+                Ok(CredentialReload::Replaced)
+            }
+            None => {
+                self.clear_manager_credentials().await;
+                *self.inner.last_credentials.lock().await = None;
+                Ok(CredentialReload::Removed)
+            }
+        }
     }
 
     async fn replace_manager_credentials(&self, tokens: &StoredOAuthTokens) -> Result<()> {
@@ -469,33 +506,112 @@ impl OAuthPersistor {
         guard.set_credential_store(store);
         Ok(())
     }
+
+    async fn clear_manager_credentials(&self) {
+        let manager = self.inner.authorization_manager.clone();
+        let mut guard = manager.lock().await;
+        guard.set_credential_store(InMemoryCredentialStore::new());
+    }
+}
+
+fn oauth_server_lock_for(server_name: &str, url: &str) -> Arc<Mutex<()>> {
+    static OAUTH_SERVER_LOCKS: OnceLock<std::sync::Mutex<BTreeMap<String, Arc<Mutex<()>>>>> =
+        OnceLock::new();
+
+    let mut locks = OAUTH_SERVER_LOCKS
+        .get_or_init(std::sync::Mutex::default)
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    locks
+        .entry(format!("{server_name}\n{url}"))
+        .or_insert_with(|| Arc::new(Mutex::new(())))
+        .clone()
 }
 
 struct OAuthServerLock {
     _file: fs::File,
+    _in_process_guard: Option<OwnedMutexGuard<()>>,
 }
 
 fn acquire_oauth_server_lock(server_name: &str, url: &str) -> Result<OAuthServerLock> {
-    let digest = sha_256_prefix(&Value::String(format!("{server_name}\n{url}")))?;
-    let path = find_codex_home()?.join(format!(".mcp-oauth-{digest}.lock"));
-    let file = OpenOptions::new()
+    let path = oauth_server_lock_path(server_name, url)?;
+    let file = open_oauth_lock_file(&path)?;
+    file.lock()
+        .with_context(|| format!("failed to lock OAuth credentials at {}", path.display()))?;
+    Ok(OAuthServerLock {
+        _file: file,
+        _in_process_guard: None,
+    })
+}
+
+async fn acquire_oauth_server_lock_async(server_name: &str, url: &str) -> Result<OAuthServerLock> {
+    let in_process_guard = oauth_server_lock_for(server_name, url).lock_owned().await;
+    let path = oauth_server_lock_path(server_name, url)?;
+    let file = tokio::task::spawn_blocking({
+        let path = path.clone();
+        move || {
+            let file = open_oauth_lock_file(&path)?;
+            file.lock().with_context(|| {
+                format!("failed to lock OAuth credentials at {}", path.display())
+            })?;
+            Ok::<_, anyhow::Error>(file)
+        }
+    })
+    .await
+    .context("OAuth credential lock task failed")??;
+    Ok(OAuthServerLock {
+        _file: file,
+        _in_process_guard: Some(in_process_guard),
+    })
+}
+
+struct FallbackStoreLock {
+    _in_process_guard: std::sync::MutexGuard<'static, ()>,
+    _file: fs::File,
+}
+
+fn acquire_fallback_store_lock() -> Result<FallbackStoreLock> {
+    static FALLBACK_STORE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    let in_process_guard = FALLBACK_STORE_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let path = find_codex_home()?.join(".mcp-oauth-locks/fallback-store.lock");
+    let file = open_oauth_lock_file(&path)?;
+    file.lock().with_context(|| {
+        format!(
+            "failed to lock fallback OAuth credentials at {}",
+            path.display()
+        )
+    })?;
+    Ok(FallbackStoreLock {
+        _in_process_guard: in_process_guard,
+        _file: file,
+    })
+}
+
+fn open_oauth_lock_file(path: &std::path::Path) -> Result<fs::File> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    OpenOptions::new()
         .read(true)
         .write(true)
         .create(true)
         .truncate(false)
-        .open(&path)
-        .with_context(|| format!("failed to open OAuth credential lock at {}", path.display()))?;
-    file.lock()
-        .with_context(|| format!("failed to lock OAuth credentials at {}", path.display()))?;
-    Ok(OAuthServerLock { _file: file })
+        .open(path)
+        .with_context(|| format!("failed to open OAuth credential lock at {}", path.display()))
 }
 
-async fn acquire_oauth_server_lock_async(server_name: &str, url: &str) -> Result<OAuthServerLock> {
-    let server_name = server_name.to_string();
-    let url = url.to_string();
-    tokio::task::spawn_blocking(move || acquire_oauth_server_lock(&server_name, &url))
-        .await
-        .context("OAuth credential lock task failed")?
+fn oauth_server_lock_path(server_name: &str, url: &str) -> Result<PathBuf> {
+    let server_digest = sha_256_prefix(&Value::String(format!("{server_name}\n{url}")))?;
+    let user_identity = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .unwrap_or_else(|| std::env::temp_dir().into_os_string());
+    let user_digest = sha_256_prefix(&Value::String(user_identity.to_string_lossy().into_owned()))?;
+    Ok(std::env::temp_dir()
+        .join(format!("codex-mcp-oauth-{user_digest}"))
+        .join(format!("server-{server_digest}.lock")))
 }
 
 fn same_persisted_generation(left: &StoredOAuthTokens, right: &StoredOAuthTokens) -> bool {
@@ -507,16 +623,15 @@ fn same_persisted_generation(left: &StoredOAuthTokens, right: &StoredOAuthTokens
         return false;
     }
 
-    let normalize = |response: &WrappedOAuthTokenResponse| {
-        let mut value = serde_json::to_value(response).ok()?;
-        value.as_object_mut()?.remove("expires_in");
-        Some(value)
-    };
+    let mut left_response = left.token_response.0.clone();
+    let mut right_response = right.token_response.0.clone();
+    left_response.set_expires_in(None);
+    right_response.set_expires_in(None);
     match (
-        normalize(&left.token_response),
-        normalize(&right.token_response),
+        serde_json::to_string(&left_response),
+        serde_json::to_string(&right_response),
     ) {
-        (Some(left), Some(right)) => left == right,
+        (Ok(left), Ok(right)) => left == right,
         _ => false,
     }
 }
@@ -541,6 +656,7 @@ struct FallbackTokenEntry {
 }
 
 fn load_oauth_tokens_from_file(server_name: &str, url: &str) -> Result<Option<StoredOAuthTokens>> {
+    let _lock = acquire_fallback_store_lock()?;
     let Some(store) = read_fallback_file()? else {
         return Ok(None);
     };
@@ -584,6 +700,7 @@ fn load_oauth_tokens_from_file(server_name: &str, url: &str) -> Result<Option<St
 }
 
 fn save_oauth_tokens_to_file(tokens: &StoredOAuthTokens) -> Result<()> {
+    let _lock = acquire_fallback_store_lock()?;
     let key = compute_store_key(&tokens.server_name, &tokens.url)?;
     let mut store = read_fallback_file()?.unwrap_or_default();
 
@@ -613,6 +730,7 @@ fn save_oauth_tokens_to_file(tokens: &StoredOAuthTokens) -> Result<()> {
 }
 
 fn delete_oauth_tokens_from_file(key: &str) -> Result<bool> {
+    let _lock = acquire_fallback_store_lock()?;
     let mut store = match read_fallback_file()? {
         Some(store) => store,
         None => return Ok(false),
@@ -750,10 +868,13 @@ mod tests {
     use anyhow::Result;
     use keyring::Error as KeyringError;
     use pretty_assertions::assert_eq;
+    use std::sync::Barrier;
     use std::sync::Mutex;
     use std::sync::MutexGuard;
     use std::sync::OnceLock;
     use std::sync::PoisonError;
+    use std::sync::mpsc;
+    use std::thread;
     use tempfile::tempdir;
 
     use codex_keyring_store::tests::MockKeyringStore;
@@ -997,6 +1118,97 @@ mod tests {
         super::refresh_expires_in_from_timestamp(&mut tokens);
 
         assert_eq!(tokens.token_response.0.expires_in(), Some(Duration::ZERO));
+    }
+
+    #[test]
+    fn persisted_generation_ignores_reload_expires_in_drift() -> Result<()> {
+        let _env = TempCodexHome::new();
+        let mut tokens = sample_tokens();
+        tokens
+            .token_response
+            .0
+            .set_expires_in(Some(&Duration::from_secs(7200)));
+
+        super::save_oauth_tokens_to_file(&tokens)?;
+        let loaded = super::load_oauth_tokens_from_file(&tokens.server_name, &tokens.url)?
+            .expect("saved tokens should reload");
+
+        assert_ne!(
+            loaded.token_response.0.expires_in(),
+            tokens.token_response.0.expires_in()
+        );
+        assert_ne!(loaded, tokens);
+        assert!(super::same_persisted_generation(&loaded, &tokens));
+        Ok(())
+    }
+
+    #[test]
+    fn fallback_store_serializes_writes_for_different_servers() -> Result<()> {
+        let _env = TempCodexHome::new();
+        let first = sample_tokens();
+        let mut second = sample_tokens();
+        second.server_name = "other-server".to_string();
+        second.url = "https://other.example.test".to_string();
+        second.token_response.0 = OAuthTokenResponse::new(
+            AccessToken::new("other-access-token".to_string()),
+            BasicTokenType::Bearer,
+            VendorExtraTokenFields::default(),
+        );
+
+        let fallback_lock = super::acquire_fallback_store_lock()?;
+        let barrier = Arc::new(Barrier::new(3));
+        let (tx, rx) = mpsc::channel();
+        let handles = [first.clone(), second.clone()]
+            .into_iter()
+            .map(|tokens| {
+                let barrier = Arc::clone(&barrier);
+                let tx = tx.clone();
+                thread::spawn(move || {
+                    barrier.wait();
+                    tx.send(super::save_oauth_tokens_to_file(&tokens))
+                        .expect("send save result");
+                })
+            })
+            .collect::<Vec<_>>();
+        drop(tx);
+
+        barrier.wait();
+        thread::sleep(Duration::from_millis(50));
+        assert!(matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+
+        drop(fallback_lock);
+        for _ in 0..2 {
+            rx.recv_timeout(Duration::from_secs(5))??;
+        }
+        for handle in handles {
+            handle.join().expect("fallback writer should not panic");
+        }
+
+        let store = super::read_fallback_file()?.expect("fallback file should load");
+        let first_key = super::compute_store_key(&first.server_name, &first.url)?;
+        let second_key = super::compute_store_key(&second.server_name, &second.url)?;
+        assert_eq!(
+            store
+                .keys()
+                .cloned()
+                .collect::<std::collections::BTreeSet<_>>(),
+            [first_key, second_key].into_iter().collect()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn server_generation_lock_is_shared_across_codex_homes() -> Result<()> {
+        let _env = TempCodexHome::new();
+        let first = super::oauth_server_lock_path("server", "https://example.test")?;
+        let other_codex_home = tempdir()?;
+        unsafe {
+            std::env::set_var("CODEX_HOME", other_codex_home.path());
+        }
+        let second = super::oauth_server_lock_path("server", "https://example.test")?;
+
+        assert_eq!(first, second);
+        Ok(())
     }
 
     fn assert_tokens_match_without_expiry(
