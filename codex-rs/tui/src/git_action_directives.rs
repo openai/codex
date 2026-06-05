@@ -1,5 +1,6 @@
 //! Codex App directives embedded in assistant markdown.
 
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::Path;
 
@@ -57,8 +58,10 @@ pub(crate) fn parse_assistant_markdown(markdown: &str, cwd: &Path) -> ParsedAssi
     let mut visible_lines = Vec::new();
 
     for line in markdown.lines() {
-        let rewritten = rewrite_code_comment_line(line, cwd);
-        let line = rewritten.as_deref().unwrap_or(line);
+        if let Some(rewritten) = rewrite_code_comment_line(line, cwd) {
+            visible_lines.push(rewritten.trim_end().to_string());
+            continue;
+        }
         let (visible_line, line_actions) = strip_line_directives(line);
         for action in line_actions {
             if seen.insert(action.clone()) {
@@ -91,21 +94,22 @@ fn rewrite_code_comment_line(line: &str, cwd: &Path) -> Option<String> {
 
     let directive = content[marker_length..].strip_prefix("code-comment{")?;
     let (attributes, suffix) = directive.rsplit_once('}')?;
-    let title = code_comment_attribute(attributes, "title")?;
-    let body = code_comment_attribute(attributes, "body")?;
-    let file = code_comment_attribute(attributes, "file")?;
+    let attributes = parse_code_comment_attributes(attributes)?;
+    let title = attributes.get("title")?;
+    let body = attributes.get("body")?;
+    let file = attributes.get("file")?;
     let title = title.trim();
     let body = body.trim();
     let file = file.trim();
     (!title.is_empty() && !body.is_empty() && !file.is_empty()).then_some(())?;
 
-    let start = directive_integer(attributes, "start").unwrap_or(1).max(1);
-    let end = directive_integer(attributes, "end")
+    let start = directive_integer(&attributes, "start").unwrap_or(1).max(1);
+    let end = directive_integer(&attributes, "end")
         .unwrap_or(start)
         .max(start);
     let title = if title_has_priority(title) {
         title.to_string()
-    } else if let Some(priority @ 0..=3) = directive_integer(attributes, "priority") {
+    } else if let Some(priority @ 0..=3) = directive_integer(&attributes, "priority") {
         format!("[P{priority}] {title}")
     } else {
         title.to_string()
@@ -155,8 +159,9 @@ fn strip_line_directives(line: &str) -> (String, Vec<GitActionDirective>) {
     (visible, actions)
 }
 
-fn directive_integer(attributes: &str, name: &str) -> Option<i64> {
-    code_comment_attribute(attributes, name)?
+fn directive_integer(attributes: &HashMap<String, String>, name: &str) -> Option<i64> {
+    attributes
+        .get(name)?
         .trim()
         .trim_start_matches(['P', 'p'])
         .parse()
@@ -172,17 +177,26 @@ fn title_has_priority(title: &str) -> bool {
         && bytes[3] == b']'
 }
 
-fn code_comment_attribute(attributes: &str, name: &str) -> Option<String> {
-    let marker = format!("{name}=");
-    let start = attributes.match_indices(&marker).find_map(|(index, _)| {
-        (index == 0 || attributes.as_bytes()[index - 1].is_ascii_whitespace()).then_some(index)
-    })?;
-    let value = &attributes[start + marker.len()..];
-    if let Some(value) = value.strip_prefix('"') {
-        parse_quoted_value(value).map(|(value, _)| value)
-    } else {
-        Some(value.split_whitespace().next()?.to_string())
+fn parse_code_comment_attributes(input: &str) -> Option<HashMap<String, String>> {
+    let mut attributes = HashMap::new();
+    let mut rest = input.trim();
+    while !rest.is_empty() {
+        let equals = rest.find('=')?;
+        let name = rest[..equals].trim();
+        if name.is_empty() {
+            return None;
+        }
+        rest = rest[equals + 1..].trim_start();
+        let (value, next) = if let Some(quoted) = rest.strip_prefix('"') {
+            parse_quoted_value(quoted)?
+        } else {
+            let end = rest.find(char::is_whitespace).unwrap_or(rest.len());
+            (rest[..end].to_string(), &rest[end..])
+        };
+        attributes.insert(name.to_string(), value);
+        rest = next.trim_start();
     }
+    Some(attributes)
 }
 
 fn parse_git_action(name: &str, attributes: &str) -> Option<GitActionDirective> {
@@ -293,7 +307,12 @@ mod tests {
     #[test]
     fn renders_code_comment_directives_as_markdown() {
         let parsed = parse_assistant_markdown(
-            "Found two issues.\n\n::code-comment{title=\"Preserve state\" body=\"This changes role=\\\"tab\\\" and the `${value}` lookup.\" file=\"/repo/src/app.ts\" start=10 end=12 priority=\"P2\"}\n\n:::code-comment{title=\"[P1] Clamp the range\" body=\"The line range should match the App.\" file=\"codex/src/range.ts\" start=8 end=2 priority=3}",
+            concat!(
+                "Found two issues.\n\n",
+                r#"::code-comment{title="Fix body= parsing" body="Keep role=\"tab\", ::git-stage{cwd=/tmp}, file=, and \n literal." file="/repo/src/app.ts" start=10 end=12 priority="P2"}"#,
+                "\n\n",
+                r#":::code-comment{title="[P1] Clamp the range" body="The line range should match the App." file="codex/src/range.ts" start=8 end=2 priority=3}"#,
+            ),
             Path::new("/repo"),
         );
 
