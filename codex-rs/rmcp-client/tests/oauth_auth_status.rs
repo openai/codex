@@ -40,6 +40,12 @@ async fn blank_access_tokens_are_not_logged_in_without_discovery() -> anyhow::Re
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn blank_client_ids_are_not_logged_in_without_discovery() -> anyhow::Result<()> {
+    run_child("empty_client_id", "not-a-valid-url").await?;
+    run_child("whitespace_client_id", "not-a-valid-url").await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn blank_refresh_tokens_do_not_make_expired_credentials_usable() -> anyhow::Result<()> {
     run_child("expired_with_empty_refresh", "not-a-valid-url").await?;
     run_child("expired_with_whitespace_refresh", "not-a-valid-url").await
@@ -157,6 +163,20 @@ async fn oauth_auth_status_child() -> anyhow::Result<()> {
                 /*expires_at*/ None,
                 McpAuthStatus::NotLoggedIn,
             ),
+            "empty_client_id" => (
+                "access-token",
+                "",
+                /*refresh_token*/ None,
+                /*expires_at*/ None,
+                McpAuthStatus::NotLoggedIn,
+            ),
+            "whitespace_client_id" => (
+                "access-token",
+                " \t ",
+                /*refresh_token*/ None,
+                /*expires_at*/ None,
+                McpAuthStatus::NotLoggedIn,
+            ),
             "expired_with_empty_refresh" => (
                 "expired-access-token",
                 "client-id",
@@ -229,6 +249,8 @@ async fn oauth_auth_status_child() -> anyhow::Result<()> {
         }
         "empty_access_token"
         | "whitespace_access_token"
+        | "empty_client_id"
+        | "whitespace_client_id"
         | "expired_with_empty_refresh"
         | "expired_with_whitespace_refresh"
         | "expired_with_refresh"
