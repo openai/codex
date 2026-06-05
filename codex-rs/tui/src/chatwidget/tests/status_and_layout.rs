@@ -1447,6 +1447,43 @@ async fn finalize_turn_persists_held_stream_tail() {
 }
 
 #[tokio::test]
+async fn finalize_turn_persists_held_plan_stream_tail() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let cwd = chat.config.cwd.to_path_buf();
+
+    let mut controller = crate::streaming::controller::PlanStreamController::new(
+        Some(/*width*/ 80),
+        cwd.as_path(),
+        HistoryRenderMode::Rich,
+    );
+    controller.push("1. prefix already emitted\n");
+    controller.push("tail remains visible\n");
+    let (_cell, idle) = controller.on_commit_tick_batch(/*max_lines*/ usize::MAX);
+    assert!(idle, "stable plan prefix should drain before termination");
+    assert!(
+        controller.has_live_tail(),
+        "expected plan tail to remain mutable before termination",
+    );
+    chat.plan_stream_controller = Some(controller);
+
+    while rx.try_recv().is_ok() {}
+
+    chat.finalize_turn();
+
+    let mut consolidated_plan = String::new();
+    while let Ok(event) = rx.try_recv() {
+        if let AppEvent::ConsolidateProposedPlan(source) = event {
+            consolidated_plan = source;
+        }
+    }
+    assert!(
+        consolidated_plan.contains("tail remains visible"),
+        "expected held plan tail to be persisted on termination, got {consolidated_plan:?}",
+    );
+    assert!(chat.plan_stream_controller.is_none());
+}
+
+#[tokio::test]
 async fn raw_output_toggle_refreshes_active_stream_tail() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 

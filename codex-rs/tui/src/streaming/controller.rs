@@ -42,14 +42,17 @@ use crate::history_cell::{self};
 use crate::markdown::render_markdown_agent_with_links_and_cwd;
 use crate::style::proposed_plan_style;
 use crate::terminal_hyperlinks::HyperlinkLine;
+use crate::terminal_hyperlinks::TerminalHyperlink;
 use crate::terminal_hyperlinks::plain_hyperlink_lines;
 use crate::terminal_hyperlinks::prefix_hyperlink_lines;
 use ratatui::prelude::Stylize;
 use ratatui::text::Line;
+use ratatui::text::Span;
 use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
 use std::time::Instant;
+use unicode_width::UnicodeWidthStr;
 
 use super::StreamState;
 use super::table_holdback::TableHoldbackScanner;
@@ -93,6 +96,8 @@ struct StreamCore {
     synthetic_queue_remaining: usize,
     /// Rendered-line index to use once the synthetic suffix has drained.
     synthetic_queue_target_emitted_len: Option<usize>,
+    /// Source-line prefix already visible when a synthetic queue is rebuilt.
+    synthetic_queue_partial: Option<PartialSourceLine>,
     /// Number of source lines to keep mutable even when no structural holdback is active.
     ///
     /// CommonMark can reinterpret the newest block after the next line arrives. For example, a
@@ -114,6 +119,7 @@ struct StablePrefixLenCache {
     stable_prefix_len: usize,
 }
 
+#[derive(Clone)]
 struct PartialSourceLine {
     source_start: usize,
     source_end: usize,
@@ -140,6 +146,7 @@ impl StreamCore {
             holdback_scanner: TableHoldbackScanner::new(),
             synthetic_queue_remaining: 0,
             synthetic_queue_target_emitted_len: None,
+            synthetic_queue_partial: None,
             default_tail_lines,
         }
     }
@@ -178,15 +185,28 @@ impl StreamCore {
     /// finished stream into the next answer.
     fn finalize_remaining(&mut self) -> Vec<HyperlinkLine> {
         let mut remaining = self.state.drain_n(/*max_lines*/ usize::MAX);
-        self.account_emitted_step(remaining.len());
+        self.account_emitted_step(&remaining);
         let remainder_source = self.state.collector.finalize_and_drain_source();
         if !remainder_source.is_empty() {
             self.raw_source.push_str(&remainder_source);
             self.holdback_scanner.push_source_chunk(&remainder_source);
         }
         let rendered = self.render_source(&self.raw_source);
-        if self.emitted_stable_len < rendered.len() {
-            remaining.extend(rendered[self.emitted_stable_len..].to_vec());
+        self.rendered_lines = rendered;
+        if let Some(partial_line) = self.synthetic_queue_partial.take() {
+            let source_line_start_len =
+                self.rendered_len_for_source_boundary(partial_line.source_start);
+            let source_line_end_len =
+                self.rendered_len_for_source_boundary(partial_line.source_end);
+            remaining.extend(trim_rendered_prefix(
+                self.rendered_lines[source_line_start_len..source_line_end_len].to_vec(),
+                &partial_line.emitted_prefix,
+            ));
+            if source_line_end_len < self.rendered_lines.len() {
+                remaining.extend(self.rendered_lines[source_line_end_len..].to_vec());
+            }
+        } else if self.emitted_stable_len < self.rendered_lines.len() {
+            remaining.extend(self.rendered_lines[self.emitted_stable_len..].to_vec());
         }
         remaining
     }
@@ -194,7 +214,7 @@ impl StreamCore {
     /// Step animation: dequeue one line, update the emitted count.
     fn tick(&mut self) -> Vec<HyperlinkLine> {
         let step = self.state.step();
-        self.account_emitted_step(step.len());
+        self.account_emitted_step(&step);
         step
     }
 
@@ -207,7 +227,7 @@ impl StreamCore {
         if step.is_empty() {
             return step;
         }
-        self.account_emitted_step(step.len());
+        self.account_emitted_step(&step);
         step
     }
 
@@ -465,38 +485,46 @@ impl StreamCore {
         if synthetic_len > 0 {
             self.synthetic_queue_remaining = synthetic_len;
             self.synthetic_queue_target_emitted_len = Some(source_line_end_len);
+            self.synthetic_queue_partial = Some(partial_line);
         }
     }
 
     fn clear_stable_queue(&mut self) {
-        self.advance_synthetic_queue_accounting_to_target();
         self.state.clear_queue();
         self.clear_synthetic_queue_accounting();
-    }
-
-    fn advance_synthetic_queue_accounting_to_target(&mut self) {
-        if self.synthetic_queue_remaining > 0
-            && let Some(target_len) = self.synthetic_queue_target_emitted_len
-        {
-            self.emitted_stable_len = target_len;
-        }
     }
 
     fn clear_synthetic_queue_accounting(&mut self) {
         self.synthetic_queue_remaining = 0;
         self.synthetic_queue_target_emitted_len = None;
+        self.synthetic_queue_partial = None;
     }
 
-    fn account_emitted_step(&mut self, step_len: usize) {
-        let mut ordinary_lines = step_len;
+    fn clear_queue_for_interruption(&mut self) {
+        self.state.clear_queue();
+        if self.synthetic_queue_remaining == 0 {
+            self.synthetic_queue_partial = None;
+        }
+        self.synthetic_queue_remaining = 0;
+        self.synthetic_queue_target_emitted_len = None;
+    }
+
+    fn account_emitted_step(&mut self, step: &[HyperlinkLine]) {
+        let mut ordinary_lines = step.len();
         if self.synthetic_queue_remaining > 0 {
             let synthetic_lines = ordinary_lines.min(self.synthetic_queue_remaining);
+            if let Some(partial_line) = &mut self.synthetic_queue_partial {
+                partial_line
+                    .emitted_prefix
+                    .extend(step[..synthetic_lines].to_vec());
+            }
             ordinary_lines -= synthetic_lines;
             self.synthetic_queue_remaining -= synthetic_lines;
             if self.synthetic_queue_remaining == 0
                 && let Some(target_len) = self.synthetic_queue_target_emitted_len.take()
             {
                 self.emitted_stable_len = target_len;
+                self.synthetic_queue_partial = None;
             }
         }
         self.emitted_stable_len += ordinary_lines;
@@ -721,21 +749,75 @@ fn trim_rendered_prefix(
             continue;
         }
         if prefix_chars > 0 {
-            let suffix = text
-                .chars()
-                .skip(chars_to_skip.unwrap_or(prefix_chars))
-                .collect::<String>()
-                .trim_start()
-                .to_string();
+            let chars_to_skip = chars_to_skip.unwrap_or(prefix_chars);
             prefix_chars = 0;
-            if !suffix.is_empty() {
-                out.push(HyperlinkLine::new(Line::from(suffix)));
+            if let Some(trimmed_line) = trim_hyperlink_line_prefix(line, chars_to_skip) {
+                out.push(trimmed_line);
             }
         } else {
             out.push(line);
         }
     }
     out
+}
+
+fn trim_hyperlink_line_prefix(line: HyperlinkLine, chars_to_skip: usize) -> Option<HyperlinkLine> {
+    let text = hyperlink_line_text(&line);
+    let leading_whitespace = text
+        .chars()
+        .skip(chars_to_skip)
+        .take_while(|ch| ch.is_whitespace())
+        .count();
+    let total_chars_to_skip = chars_to_skip + leading_whitespace;
+    if total_chars_to_skip >= text.chars().count() {
+        return None;
+    }
+
+    let skipped_text = text.chars().take(total_chars_to_skip).collect::<String>();
+    let skipped_columns = skipped_text.width();
+    let mut remaining_chars_to_skip = total_chars_to_skip;
+    let mut spans = Vec::with_capacity(line.line.spans.len());
+    for span in line.line.spans {
+        let span_chars = span.content.chars().count();
+        if remaining_chars_to_skip >= span_chars {
+            remaining_chars_to_skip -= span_chars;
+            continue;
+        }
+        if remaining_chars_to_skip > 0 {
+            let suffix = span
+                .content
+                .chars()
+                .skip(remaining_chars_to_skip)
+                .collect::<String>();
+            spans.push(Span {
+                content: suffix.into(),
+                style: span.style,
+            });
+            remaining_chars_to_skip = 0;
+        } else {
+            spans.push(span);
+        }
+    }
+
+    let hyperlinks = line
+        .hyperlinks
+        .into_iter()
+        .filter_map(|link| {
+            if link.columns.end <= skipped_columns {
+                None
+            } else {
+                Some(TerminalHyperlink {
+                    columns: link.columns.start.saturating_sub(skipped_columns)
+                        ..link.columns.end.saturating_sub(skipped_columns),
+                    destination: link.destination,
+                })
+            }
+        })
+        .collect::<Vec<_>>();
+    Some(HyperlinkLine {
+        line: Line::from(spans).style(line.line.style),
+        hyperlinks,
+    })
 }
 
 fn hyperlink_line_text(line: &HyperlinkLine) -> String {
@@ -855,7 +937,7 @@ impl StreamController {
     }
 
     pub(crate) fn clear_queue(&mut self) {
-        self.core.clear_stable_queue();
+        self.core.clear_queue_for_interruption();
         self.core.enqueued_stable_len = self.core.emitted_stable_len;
     }
 
@@ -902,7 +984,7 @@ impl PlanStreamController {
     /// callers must update it when the terminal width changes.
     pub(crate) fn new(width: Option<usize>, cwd: &Path, render_mode: HistoryRenderMode) -> Self {
         Self {
-            core: StreamCore::new(width, cwd, render_mode, /*default_tail_lines*/ 0),
+            core: StreamCore::new(width, cwd, render_mode, /*default_tail_lines*/ 1),
             header_emitted: false,
             top_padding_emitted: false,
         }
@@ -985,7 +1067,7 @@ impl PlanStreamController {
     }
 
     pub(crate) fn clear_queue(&mut self) {
-        self.core.clear_stable_queue();
+        self.core.clear_queue_for_interruption();
         self.core.enqueued_stable_len = self.core.emitted_stable_len;
     }
 
@@ -1315,6 +1397,21 @@ mod tests {
             collect_visible_stream_snapshots(HAPPY_PATH_DUPLICATE_REPRO_DELTAS, Some(/*width*/ 80));
 
         insta::assert_snapshot!(format_stream_snapshots(&snapshots));
+    }
+
+    #[test]
+    fn plan_controller_does_not_duplicate_list_continuation_after_fenced_code() {
+        let lines =
+            collect_plan_streamed_lines(HAPPY_PATH_DUPLICATE_REPRO_DELTAS, Some(/*width*/ 80));
+
+        let expected_count = lines
+            .iter()
+            .filter(|line| line.trim() == "Expected: the running TUI stays open.")
+            .count();
+        assert_eq!(
+            expected_count, 1,
+            "expected plan list continuation to render once, got {lines:?}",
+        );
     }
 
     #[test]
@@ -2534,8 +2631,39 @@ mod tests {
             "finalize must not replay the already-visible prefix after clear_queue; emitted before clear: {first_emit:?}, finalized after clear: {joined:?}",
         );
         assert!(
+            joined.contains("lambda mu"),
+            "finalize must preserve the un-emitted source-line suffix after clear_queue; emitted before clear: {first_emit:?}, finalized after clear: {joined:?}",
+        );
+        assert!(
             remaining.iter().any(|line| line.contains("tail line")),
             "ordinary mutable tail should still flush on finalize after clear_queue; got {remaining:?}",
+        );
+    }
+
+    #[test]
+    fn trim_rendered_prefix_preserves_suffix_metadata() {
+        let line = HyperlinkLine {
+            line: vec!["alpha ".into(), "beta".bold(), " gamma".into()].into(),
+            hyperlinks: vec![TerminalHyperlink {
+                columns: 6..10,
+                destination: "https://example.com".to_string(),
+            }],
+        };
+
+        let trimmed = trim_rendered_prefix(vec![line], &[HyperlinkLine::from("alpha ")]);
+
+        assert_eq!(
+            hyperlink_lines_to_plain_strings(&trimmed),
+            vec!["beta gamma"]
+        );
+        assert_eq!(trimmed[0].hyperlinks[0].columns, 0..4);
+        assert_eq!(trimmed[0].hyperlinks[0].destination, "https://example.com");
+        assert!(
+            trimmed[0].line.spans[0]
+                .style
+                .add_modifier
+                .contains(ratatui::style::Modifier::BOLD),
+            "expected trimmed suffix to preserve span styling",
         );
     }
 }
