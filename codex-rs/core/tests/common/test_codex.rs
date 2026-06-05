@@ -23,6 +23,7 @@ use codex_core::thread_store_from_config;
 use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::RemoveOptions;
+use codex_extension_api::ExtensionRegistry;
 use codex_extension_api::empty_extension_registry;
 use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderInfo;
@@ -216,6 +217,7 @@ pub struct TestCodexBuilder {
     cloud_config_bundle: Option<CloudConfigBundleLoader>,
     user_shell_override: Option<Shell>,
     exec_server_url: Option<String>,
+    extensions: Arc<ExtensionRegistry<Config>>,
 }
 
 impl TestCodexBuilder {
@@ -277,6 +279,11 @@ impl TestCodexBuilder {
 
     pub fn with_exec_server_url(mut self, exec_server_url: impl Into<String>) -> Self {
         self.exec_server_url = Some(exec_server_url.into());
+        self
+    }
+
+    pub fn with_extensions(mut self, extensions: Arc<ExtensionRegistry<Config>>) -> Self {
+        self.extensions = extensions;
         self
     }
 
@@ -473,7 +480,7 @@ impl TestCodexBuilder {
             codex_core::test_support::auth_manager_from_auth(auth.clone()),
             SessionSource::Exec,
             Arc::clone(&environment_manager),
-            empty_extension_registry(),
+            Arc::clone(&self.extensions),
             /*analytics_events_client*/ None,
             thread_store,
             state_db.clone(),
@@ -1037,6 +1044,7 @@ pub fn test_codex() -> TestCodexBuilder {
         cloud_config_bundle: None,
         user_shell_override: None,
         exec_server_url: None,
+        extensions: empty_extension_registry(),
     }
 }
 

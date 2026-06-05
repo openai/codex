@@ -45,7 +45,6 @@ mod remote_control;
 mod remote_thread_store;
 mod request_permissions;
 mod request_user_input;
-mod responses_lite;
 mod review;
 mod safety_check_downgrade;
 mod skills_list;
