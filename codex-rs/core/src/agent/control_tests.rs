@@ -583,10 +583,11 @@ async fn ensure_v2_agent_loaded_reloads_registered_unloaded_agent() {
             .await
             .is_some()
     );
-    assert_matches!(
-        harness.manager.get_thread(spawned_agent.thread_id).await,
-        Err(CodexErr::ThreadNotFound(id)) if id == spawned_agent.thread_id
-    );
+    match harness.manager.get_thread(spawned_agent.thread_id).await {
+        Err(CodexErr::ThreadNotFound(id)) => assert_eq!(id, spawned_agent.thread_id),
+        Err(err) => panic!("expected ThreadNotFound, got {err:?}"),
+        Ok(_) => panic!("expected thread to be removed"),
+    }
 
     harness
         .control
