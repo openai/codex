@@ -4,21 +4,17 @@ This directory wires the `v8` crate to exact-version Bazel inputs.
 Bazel consumer builds use:
 
 - upstream `denoland/rusty_v8` release archives on Windows MSVC
-- sandbox-enabled `openai/codex` release assets on Darwin, GNU Linux, and musl
-  Linux
-- source-built V8 archives on Windows GNU
+- source-built V8 archives on Darwin, GNU Linux, musl Linux, and Windows GNU
 
 Local Cargo builds still use upstream prebuilt `rusty_v8` archives by default.
 Selected Cargo CI, release, and package builds override
 `RUSTY_V8_ARCHIVE`/`RUSTY_V8_SRC_BINDING_PATH` with Codex release assets. Bazel
-sets the same overrides in `MODULE.bazel` to select the matching release archive
-and binding for its consumer builds.
+sets those variables independently in `MODULE.bazel` to select source-built
+local archives and bindings for its consumer builds.
 
 The Bazel `v8` crate feature selection enables V8's in-process sandbox for
-Darwin, Linux, and Windows GNU. Darwin and Linux consume the matching published
-sandbox artifacts. Windows GNU continues to build from source because the
-release workflow does not publish Windows GNU artifacts. Windows MSVC remains
-on upstream non-sandboxed prebuilts.
+Darwin, Linux, and Windows GNU. Windows MSVC remains on upstream non-sandboxed
+prebuilts.
 
 Current pinned versions:
 
@@ -37,8 +33,8 @@ Use this as the maintainer flow for a version bump:
 5. Once the release build completes, rerun the build on the candidate branch
    and verify that the final artifact builds and tests pass.
 
-When changing `rusty_v8` `http_file` inputs, keep the checked-in checksum
-manifest and `MODULE.bazel` in sync:
+When changing the remaining prebuilt `rusty_v8` `http_file` inputs, keep the
+checked-in checksum manifest and `MODULE.bazel` in sync:
 
 ```bash
 python3 .github/scripts/rusty_v8_bazel.py update-module-bazel
@@ -101,9 +97,9 @@ used by `rusty_v8 v149.2.0`, compiles published artifact targets with
 the final static archive so consumers can link it with the `v8` crate's default
 `use_custom_libcxx` feature. The config keeps the object files and the bundled
 runtime on Chromium's `std::__Cr` ABI namespace instead of mixing those objects
-with the toolchain libc++ default namespace. The source-built targets remain in
-the graph as the producers for future release tags; the consumer selectors use
-the immutable assets from the current tag.
+with the toolchain libc++ default namespace. Bazel consumers use these
+source-built targets directly; Cargo release and package builds use the
+published copies.
 
 MSVC is not part of the Bazel-produced matrix yet. The repository's current
 hermetic Windows C++ platform is `windows-gnullvm`/`x86_64-w64-windows-gnu`, so
