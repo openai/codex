@@ -24,6 +24,7 @@ const CURATED_PLUGINS_BACKUP_ARCHIVE_API_URL: &str =
 const OPENAI_PLUGINS_OWNER: &str = "openai";
 const OPENAI_PLUGINS_REPO: &str = "plugins";
 const OPENAI_PLUGINS_GIT_URL: &str = "https://github.com/openai/plugins.git";
+const CURATED_PLUGINS_FETCH_REF: &str = "refs/codex/curated-sync";
 const CURATED_PLUGINS_RELATIVE_DIR: &str = ".tmp/plugins";
 const CURATED_PLUGINS_SHA_FILE: &str = ".tmp/plugins.sha";
 const CURATED_PLUGINS_SYNC_LOCK_FILE: &str = ".tmp/plugins.sync.lock";
@@ -166,31 +167,36 @@ fn sync_openai_plugins_repo_via_git(codex_home: &Path, git_binary: &str) -> Resu
         return Ok(remote_sha);
     }
 
+    let staged_repo_dir = prepare_curated_repo_parent_and_temp_dir(&repo_path)?;
+    run_git_in_repo(
+        staged_repo_dir.path(),
+        git_binary,
+        &["init"],
+        "git init curated plugins repo",
+    )?;
+
     if repo_path.join(".git").is_dir() {
         fetch_curated_plugins_commit(&repo_path, &remote_sha, git_binary)?;
-        reset_curated_plugins_checkout(&repo_path, git_binary)?;
-        ensure_marketplace_manifest_exists(&repo_path)?;
-    } else {
-        let staged_repo_dir = prepare_curated_repo_parent_and_temp_dir(&repo_path)?;
-        run_git_in_repo(
+        fetch_curated_plugins_commit_from_source(
             staged_repo_dir.path(),
+            &repo_path,
+            CURATED_PLUGINS_FETCH_REF,
             git_binary,
-            &["init"],
-            "git init curated plugins repo",
         )?;
+    } else {
         fetch_curated_plugins_commit(staged_repo_dir.path(), &remote_sha, git_binary)?;
-        reset_curated_plugins_checkout(staged_repo_dir.path(), git_binary)?;
-        ensure_marketplace_manifest_exists(staged_repo_dir.path())?;
-        activate_curated_repo(&repo_path, staged_repo_dir)?;
     }
 
-    let fetched_sha = git_head_sha(&repo_path, git_binary)?;
+    reset_curated_plugins_checkout(staged_repo_dir.path(), git_binary)?;
+    let fetched_sha = git_head_sha(staged_repo_dir.path(), git_binary)?;
     if fetched_sha != remote_sha {
         return Err(format!(
             "curated plugins fetch HEAD mismatch: expected {remote_sha}, got {fetched_sha}"
         ));
     }
 
+    ensure_marketplace_manifest_exists(staged_repo_dir.path())?;
+    activate_curated_repo(&repo_path, staged_repo_dir)?;
     write_curated_plugins_sha(&sha_path, &remote_sha)?;
     Ok(remote_sha)
 }
@@ -200,26 +206,57 @@ fn fetch_curated_plugins_commit(
     remote_sha: &str,
     git_binary: &str,
 ) -> Result<(), String> {
-    run_git_in_repo(
+    fetch_curated_plugins_commit_from(
         repo_path,
+        OPENAI_PLUGINS_GIT_URL.as_ref(),
+        remote_sha,
         git_binary,
-        &[
-            "fetch",
-            "--depth",
-            "1",
-            "--no-tags",
-            OPENAI_PLUGINS_GIT_URL,
-            remote_sha,
-        ],
         "git fetch curated plugins repo",
     )
+}
+
+fn fetch_curated_plugins_commit_from_source(
+    repo_path: &Path,
+    source_repo_path: &Path,
+    remote_sha: &str,
+    git_binary: &str,
+) -> Result<(), String> {
+    fetch_curated_plugins_commit_from(
+        repo_path,
+        source_repo_path,
+        remote_sha,
+        git_binary,
+        "git copy fetched curated plugins commit",
+    )
+}
+
+fn fetch_curated_plugins_commit_from(
+    repo_path: &Path,
+    source: &Path,
+    source_revision: &str,
+    git_binary: &str,
+    context: &str,
+) -> Result<(), String> {
+    let fetch_refspec = format!("+{source_revision}:{CURATED_PLUGINS_FETCH_REF}");
+    let output = run_git_command_with_timeout(
+        Command::new(git_binary)
+            .env("GIT_OPTIONAL_LOCKS", "0")
+            .arg("-C")
+            .arg(repo_path)
+            .args(["fetch", "--depth", "1", "--no-tags"])
+            .arg(source)
+            .arg(fetch_refspec),
+        context,
+        CURATED_PLUGINS_GIT_TIMEOUT,
+    )?;
+    ensure_git_success(&output, context)
 }
 
 fn reset_curated_plugins_checkout(repo_path: &Path, git_binary: &str) -> Result<(), String> {
     run_git_in_repo(
         repo_path,
         git_binary,
-        &["reset", "--hard", "FETCH_HEAD"],
+        &["reset", "--hard", CURATED_PLUGINS_FETCH_REF],
         "git reset curated plugins repo",
     )?;
     run_git_in_repo(

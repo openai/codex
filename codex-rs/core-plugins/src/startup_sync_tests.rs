@@ -525,17 +525,22 @@ fn sync_openai_plugins_repo_via_git_succeeds_with_local_rewritten_remote() {
         .lines()
         .skip(first_sync_invocation_count)
         .collect::<Vec<_>>();
+    let curated_repo_path = curated_plugins_repo_path(tmp.path());
     assert!(incremental_sync_invocations.iter().any(|invocation| {
-        invocation.contains(" fetch --depth 1 --no-tags https://github.com/openai/plugins.git ")
-            && invocation.ends_with(updated_sha.as_str())
+        invocation.starts_with(&format!("-C {} fetch ", curated_repo_path.display()))
+            && invocation.contains(" https://github.com/openai/plugins.git ")
+            && invocation.contains(updated_sha.as_str())
+            && invocation.ends_with(CURATED_PLUGINS_FETCH_REF)
+    }));
+    assert!(incremental_sync_invocations.iter().any(|invocation| {
+        invocation.contains(" fetch --depth 1 --no-tags ")
+            && invocation.contains(&format!(" {} ", curated_repo_path.display()))
+            && invocation.ends_with(&format!(
+                "{CURATED_PLUGINS_FETCH_REF}:{CURATED_PLUGINS_FETCH_REF}"
+            ))
     }));
     assert!(
         incremental_sync_invocations
-            .iter()
-            .any(|invocation| invocation.ends_with(" reset --hard FETCH_HEAD"))
-    );
-    assert!(
-        !incremental_sync_invocations
             .iter()
             .any(|invocation| invocation.ends_with(" init"))
     );
@@ -544,6 +549,10 @@ fn sync_openai_plugins_repo_via_git_succeeds_with_local_rewritten_remote() {
             .iter()
             .any(|invocation| invocation.split_whitespace().any(|arg| arg == "clone"))
     );
+    assert!(!incremental_sync_invocations.iter().any(|invocation| {
+        invocation.starts_with(&format!("-C {} reset ", curated_repo_path.display()))
+            || invocation.starts_with(&format!("-C {} clean ", curated_repo_path.display()))
+    }));
     assert!(!has_plugins_clone_dirs(tmp.path()));
 
     let unchanged_sync_invocation_count = invocation_log_contents.lines().count();
@@ -668,6 +677,77 @@ exit 1
         .expect_err("git sync should fail");
 
     assert!(err.contains("fatal: early EOF"));
+    assert!(!has_plugins_clone_dirs(tmp.path()));
+}
+
+#[cfg(unix)]
+#[test]
+fn sync_openai_plugins_repo_via_git_preserves_existing_snapshot_on_validation_failure() {
+    let tmp = tempdir().expect("tempdir");
+    let repo_path = curated_plugins_repo_path(tmp.path());
+    write_openai_curated_marketplace(&repo_path, &["gmail"]);
+    std::fs::create_dir_all(repo_path.join(".git")).expect("create git dir");
+    write_curated_plugin_sha(tmp.path());
+
+    let bin_dir = tempfile::Builder::new()
+        .prefix("fake-git-invalid-update-")
+        .tempdir()
+        .expect("tempdir");
+    let git_path = bin_dir.path().join("git");
+    let remote_sha = "fedcba9876543210fedcba9876543210fedcba98";
+
+    write_executable_script(
+        &git_path,
+        &format!(
+            r#"#!/bin/sh
+if [ "$1" = "ls-remote" ]; then
+  printf '%s\tHEAD\n' "{remote_sha}"
+  exit 0
+fi
+if [ "$1" = "-C" ] && [ "$2" = "{}" ] && [ "$3" = "rev-parse" ]; then
+  printf '%s\n' "{TEST_CURATED_PLUGIN_SHA}"
+  exit 0
+fi
+if [ "$1" = "-C" ] && [ "$2" = "{}" ] && [ "$3" = "fetch" ]; then
+  exit 0
+fi
+if [ "$1" = "-C" ] && [ "$3" = "init" ]; then
+  mkdir -p "$2/.git"
+  exit 0
+fi
+if [ "$1" = "-C" ] && [ "$3" = "fetch" ]; then
+  exit 0
+fi
+if [ "$1" = "-C" ] && [ "$3" = "reset" ]; then
+  mkdir -p "$2/plugins/linear/.codex-plugin"
+  printf '%s\n' '{{"name":"linear"}}' > "$2/plugins/linear/.codex-plugin/plugin.json"
+  exit 0
+fi
+if [ "$1" = "-C" ] && [ "$3" = "clean" ]; then
+  exit 0
+fi
+if [ "$1" = "-C" ] && [ "$3" = "rev-parse" ]; then
+  printf '%s\n' "{remote_sha}"
+  exit 0
+fi
+echo "unexpected git invocation: $@" >&2
+exit 1
+"#,
+            repo_path.display(),
+            repo_path.display(),
+        ),
+    );
+
+    let err = sync_openai_plugins_repo_via_git(tmp.path(), git_path.to_str().expect("utf8 path"))
+        .expect_err("invalid staged checkout should fail");
+
+    assert!(err.contains("curated plugins archive missing marketplace manifest"));
+    assert_curated_gmail_repo(&repo_path);
+    assert!(!repo_path.join("plugins/linear").exists());
+    assert_eq!(
+        read_curated_plugins_sha(tmp.path()).as_deref(),
+        Some(TEST_CURATED_PLUGIN_SHA)
+    );
     assert!(!has_plugins_clone_dirs(tmp.path()));
 }
 
