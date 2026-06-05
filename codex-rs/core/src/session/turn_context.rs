@@ -595,8 +595,6 @@ impl Session {
             let mut state = self.state.lock().await;
             match state.session_configuration.clone().apply(&updates) {
                 Ok(next) => {
-                    // Validate before committing sticky environments to session state.
-                    self.resolve_turn_environments(&next.environments)?;
                     let previous_cwd = state.session_configuration.cwd.clone();
                     let previous_permission_profile =
                         state.session_configuration.permission_profile();

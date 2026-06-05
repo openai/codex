@@ -21,6 +21,7 @@ use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
 use core_test_support::context_snapshot;
@@ -552,6 +553,10 @@ async fn snapshot_rollback_followup_turn_trims_context_updates() -> Result<()> {
         &conversation,
         codex_protocol::protocol::ThreadSettingsOverrides {
             cwd: Some(override_cwd.clone()),
+            environments: Some(vec![TurnEnvironmentSelection {
+                environment_id: codex_exec_server::LOCAL_ENVIRONMENT_ID.to_string(),
+                cwd: override_cwd.clone(),
+            }]),
             collaboration_mode: Some(CollaborationMode {
                 mode: ModeKind::Default,
                 settings: Settings {
