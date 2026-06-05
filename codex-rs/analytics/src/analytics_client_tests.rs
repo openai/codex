@@ -1347,6 +1347,7 @@ fn thread_initialized_event_serializes_expected_shape() {
             initialization_mode: ThreadInitializationMode::New,
             subagent_source: None,
             parent_thread_id: None,
+            forked_from_thread_id: None,
             created_at: 1,
         },
     });
@@ -1379,6 +1380,7 @@ fn thread_initialized_event_serializes_expected_shape() {
                 "initialization_mode": "new",
                 "subagent_source": null,
                 "parent_thread_id": null,
+                "forked_from_thread_id": null,
                 "created_at": 1
             }
         })
@@ -2429,6 +2431,7 @@ fn subagent_thread_started_review_serializes_expected_shape() {
             session_id: "session-root".to_string(),
             thread_id: "thread-review".to_string(),
             parent_thread_id: None,
+            forked_from_thread_id: None,
             product_client_id: "codex-tui".to_string(),
             client_name: "codex-tui".to_string(),
             client_version: "1.0.0".to_string(),
@@ -2461,18 +2464,26 @@ fn subagent_thread_started_review_serializes_expected_shape() {
     assert_eq!(payload["event_params"]["initialization_mode"], "new");
     assert_eq!(payload["event_params"]["subagent_source"], "review");
     assert_eq!(payload["event_params"]["parent_thread_id"], json!(null));
+    assert_eq!(
+        payload["event_params"]["forked_from_thread_id"],
+        json!(null)
+    );
 }
 
 #[test]
-fn subagent_thread_started_thread_spawn_serializes_parent_thread_id() {
+fn subagent_thread_started_thread_spawn_serializes_thread_lineage() {
     let parent_thread_id =
         codex_protocol::ThreadId::from_string("11111111-1111-1111-1111-111111111111")
+            .expect("valid thread id");
+    let forked_from_thread_id =
+        codex_protocol::ThreadId::from_string("22222222-2222-4222-8222-222222222222")
             .expect("valid thread id");
     let event = TrackEventRequest::ThreadInitialized(subagent_thread_started_event_request(
         SubAgentThreadStartedInput {
             session_id: "session-root".to_string(),
             thread_id: "thread-spawn".to_string(),
             parent_thread_id: Some(parent_thread_id.to_string()),
+            forked_from_thread_id: Some(forked_from_thread_id.to_string()),
             product_client_id: "codex-tui".to_string(),
             client_name: "codex-tui".to_string(),
             client_version: "1.0.0".to_string(),
@@ -2497,6 +2508,10 @@ fn subagent_thread_started_thread_spawn_serializes_parent_thread_id() {
         payload["event_params"]["parent_thread_id"],
         "11111111-1111-1111-1111-111111111111"
     );
+    assert_eq!(
+        payload["event_params"]["forked_from_thread_id"],
+        "22222222-2222-4222-8222-222222222222"
+    );
     assert_eq!(payload["event_params"]["session_id"], "session-root");
 }
 
@@ -2507,6 +2522,7 @@ fn subagent_thread_started_memory_consolidation_serializes_expected_shape() {
             session_id: "session-root".to_string(),
             thread_id: "thread-memory".to_string(),
             parent_thread_id: None,
+            forked_from_thread_id: None,
             product_client_id: "codex-tui".to_string(),
             client_name: "codex-tui".to_string(),
             client_version: "1.0.0".to_string(),
@@ -2533,6 +2549,7 @@ fn subagent_thread_started_other_serializes_expected_shape() {
             session_id: "session-root".to_string(),
             thread_id: "thread-guardian".to_string(),
             parent_thread_id: None,
+            forked_from_thread_id: None,
             product_client_id: "codex-tui".to_string(),
             client_name: "codex-tui".to_string(),
             client_version: "1.0.0".to_string(),
@@ -2558,6 +2575,7 @@ fn subagent_thread_started_other_serializes_explicit_parent_thread_id() {
             session_id: "session-root".to_string(),
             thread_id: "thread-guardian".to_string(),
             parent_thread_id: Some(parent_thread_id.to_string()),
+            forked_from_thread_id: None,
             product_client_id: "codex-tui".to_string(),
             client_name: "codex-tui".to_string(),
             client_version: "1.0.0".to_string(),
@@ -2588,6 +2606,7 @@ async fn subagent_thread_started_publishes_without_initialize() {
                     session_id: "session-root".to_string(),
                     thread_id: "thread-review".to_string(),
                     parent_thread_id: None,
+                    forked_from_thread_id: None,
                     product_client_id: "codex-tui".to_string(),
                     client_name: "codex-tui".to_string(),
                     client_version: "1.0.0".to_string(),
@@ -2662,6 +2681,7 @@ async fn subagent_thread_started_inherits_parent_connection_for_new_thread() {
                     session_id: "session-root".to_string(),
                     thread_id: "thread-review".to_string(),
                     parent_thread_id: Some(parent_thread_id.to_string()),
+                    forked_from_thread_id: None,
                     product_client_id: "parent-client".to_string(),
                     client_name: "parent-client".to_string(),
                     client_version: "1.0.0".to_string(),
@@ -2732,6 +2752,7 @@ async fn subagent_tool_items_inherit_parent_connection_metadata() {
                     session_id: "session-root".to_string(),
                     thread_id: "thread-subagent".to_string(),
                     parent_thread_id: Some("thread-1".to_string()),
+                    forked_from_thread_id: None,
                     product_client_id: "codex-tui".to_string(),
                     client_name: "codex-tui".to_string(),
                     client_version: "1.0.0".to_string(),
@@ -2828,6 +2849,7 @@ fn plugin_used_event_serializes_expected_shape() {
                 "mcp_server_count": 2,
                 "connector_ids": ["calendar", "drive"],
                 "product_client_id": originator().value,
+                "mcp_server_names": ["mcp-1", "mcp-2"],
                 "thread_id": "thread-3",
                 "turn_id": "turn-3",
                 "model_slug": "gpt-5"

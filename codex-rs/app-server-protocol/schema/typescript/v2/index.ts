@@ -21,6 +21,8 @@ export type { AppMetadata } from "./AppMetadata";
 export type { AppReview } from "./AppReview";
 export type { AppScreenshot } from "./AppScreenshot";
 export type { AppSummary } from "./AppSummary";
+export type { AppTemplateSummary } from "./AppTemplateSummary";
+export type { AppTemplateUnavailableReason } from "./AppTemplateUnavailableReason";
 export type { AppToolApproval } from "./AppToolApproval";
 export type { AppToolsConfig } from "./AppToolsConfig";
 export type { ApprovalsReviewer } from "./ApprovalsReviewer";

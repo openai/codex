@@ -62,10 +62,10 @@ fn reasoning_efforts_from_preset(
     efforts: Vec<ReasoningEffortPreset>,
 ) -> Vec<ReasoningEffortOption> {
     efforts
-        .iter()
+        .into_iter()
         .map(|preset| ReasoningEffortOption {
             reasoning_effort: preset.effort,
-            description: preset.description.to_string(),
+            description: preset.description,
         })
         .collect()
 }

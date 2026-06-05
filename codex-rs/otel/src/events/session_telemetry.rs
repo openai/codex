@@ -458,7 +458,7 @@ impl SessionTelemetry {
                 auth.env_provider_key_name = self.metadata.auth_env.provider_env_key_name.as_deref(),
                 auth.env_provider_key_present = self.metadata.auth_env.provider_env_key_present,
                 auth.env_refresh_token_url_override_present = self.metadata.auth_env.refresh_token_url_override_present,
-                reasoning_effort = reasoning_effort.map(|e| e.to_string()),
+                reasoning_effort = reasoning_effort.as_ref().map(ToString::to_string),
                 reasoning_summary = %reasoning_summary,
                 context_window = context_window,
                 auto_compact_token_limit = auto_compact_token_limit,
@@ -995,6 +995,37 @@ impl SessionTelemetry {
             call_id = %call_id,
             decision = %decision.clone().to_string().to_lowercase(),
             source = %source.to_string(),
+        );
+    }
+
+    pub fn sandbox_outcome(
+        &self,
+        tool_name: &str,
+        call_id: &str,
+        outcome: &str,
+        initial_duration: Duration,
+        escalated_duration: Option<Duration>,
+    ) {
+        let initial_duration_ms = initial_duration.as_millis().min(i64::MAX as u128) as i64;
+        let escalated_duration_ms =
+            escalated_duration.map(|duration| duration.as_millis().min(i64::MAX as u128) as i64);
+        log_event!(
+            self,
+            event.name = "codex.sandbox_outcome",
+            tool_name = %tool_name,
+            call_id = %call_id,
+            outcome = %outcome,
+            initial_duration_ms = initial_duration_ms,
+            escalated_duration_ms = escalated_duration_ms,
+        );
+        trace_event!(
+            self,
+            event.name = "codex.sandbox_outcome",
+            tool_name = %tool_name,
+            call_id = %call_id,
+            outcome = %outcome,
+            initial_duration_ms = initial_duration_ms,
+            escalated_duration_ms = escalated_duration_ms,
         );
     }
 

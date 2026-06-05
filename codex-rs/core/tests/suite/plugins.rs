@@ -389,6 +389,10 @@ async fn explicit_plugin_mentions_track_plugin_used_analytics() -> Result<()> {
     assert_eq!(event["event_params"]["has_skills"], true);
     assert_eq!(event["event_params"]["mcp_server_count"], 0);
     assert_eq!(
+        event["event_params"]["mcp_server_names"],
+        serde_json::json!([])
+    );
+    assert_eq!(
         event["event_params"]["connector_ids"],
         serde_json::json!([])
     );

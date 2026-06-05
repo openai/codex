@@ -1,4 +1,5 @@
 use super::*;
+use crate::LoadedAgentsMd;
 use crate::ThreadManager;
 use crate::config::AgentRoleConfig;
 use crate::config::DEFAULT_AGENT_MAX_DEPTH;
@@ -4373,7 +4374,7 @@ async fn build_agent_spawn_config_uses_turn_context_values() {
     expected.base_instructions = Some(base_instructions.text);
     expected.model = Some(turn.model_info.slug.clone());
     expected.model_provider = turn.provider.info().clone();
-    expected.model_reasoning_effort = turn.reasoning_effort;
+    expected.model_reasoning_effort = turn.reasoning_effort.clone();
     expected.model_reasoning_summary = Some(turn.reasoning_summary);
     expected.developer_instructions = turn.developer_instructions.clone();
     expected.compact_prompt = turn.compact_prompt.clone();
@@ -4399,7 +4400,10 @@ async fn build_agent_spawn_config_uses_turn_context_values() {
 async fn build_agent_spawn_config_preserves_base_user_instructions() {
     let (_session, mut turn) = make_session_and_context().await;
     let mut base_config = (*turn.config).clone();
-    base_config.user_instructions = Some("base-user".to_string());
+    base_config.user_instructions = Some(LoadedAgentsMd::new_user(
+        "base-user".to_string(),
+        base_config.codex_home.join("AGENTS.md"),
+    ));
     turn.user_instructions = Some("resolved-user".to_string());
     turn.config = Arc::new(base_config.clone());
     let base_instructions = BaseInstructions {
@@ -4427,7 +4431,7 @@ async fn build_agent_resume_config_clears_base_instructions() {
     expected.base_instructions = None;
     expected.model = Some(turn.model_info.slug.clone());
     expected.model_provider = turn.provider.info().clone();
-    expected.model_reasoning_effort = turn.reasoning_effort;
+    expected.model_reasoning_effort = turn.reasoning_effort.clone();
     expected.model_reasoning_summary = Some(turn.reasoning_summary);
     expected.developer_instructions = turn.developer_instructions.clone();
     expected.compact_prompt = turn.compact_prompt.clone();

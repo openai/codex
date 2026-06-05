@@ -1,4 +1,5 @@
 use crate::agents_md::AgentsMdManager;
+pub use crate::agents_md::LoadedAgentsMd;
 use crate::config::edit::ConfigEdit;
 use crate::config::edit::ConfigEditsBuilder;
 use crate::path_utils::normalize_for_native_workdir;
@@ -58,6 +59,7 @@ use codex_core_plugins::PluginsConfigInput;
 use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::LOCAL_FS;
 use codex_features::AppsMcpPathOverrideConfigToml;
+use codex_features::CodeModeConfigToml;
 use codex_features::Feature;
 use codex_features::FeatureConfigSource;
 use codex_features::FeatureOverrides;
@@ -199,6 +201,7 @@ All agents in the team, including the agents that you can assign tasks to, are e
 You can use `spawn_agent` to create a new agent, `followup_task` to give an existing agent a new task and trigger a turn, and `send_message` to pass a message to a running agent without triggering a turn.
 Child agents can also spawn their own sub-agents.
 You can decide how much context you want to propagate to your sub-agents with the `fork_turns` parameter.
+Use multi-agent capabilities only when there is a real reason to split the work; handle trivial or simple tasks directly.
 
 You will receive messages in the analysis channel in the form:
 ```
@@ -215,6 +218,7 @@ You can spawn sub-agents to handle subtasks, and those sub-agents can spawn thei
 
 You can use `spawn_agent` to create a new agent, `followup_task` to give an existing agent a new task and trigger a turn, and `send_message` to pass a message to a running agent.
 Child agents can also spawn their own sub-agents.
+Use multi-agent capabilities only when there is a real reason to split the work; handle trivial or simple tasks directly.
 
 When you provide a response in the final channel, that content is immediately delivered back to your parent agent.
 
@@ -642,7 +646,7 @@ pub struct Config {
     pub show_raw_agent_reasoning: bool,
 
     /// User-provided instructions from AGENTS.md.
-    pub user_instructions: Option<String>,
+    pub user_instructions: Option<LoadedAgentsMd>,
 
     /// Base instructions override.
     pub base_instructions: Option<String>,
@@ -975,6 +979,9 @@ pub struct Config {
     /// Whether to register the experimental request_user_input tool.
     pub experimental_request_user_input_enabled: bool,
 
+    /// Configuration for the experimental code-mode tool surface.
+    pub code_mode: CodeModeConfig,
+
     /// If set to `true`, used only the experimental unified exec tool.
     pub use_experimental_unified_exec_tool: bool,
 
@@ -1025,6 +1032,11 @@ pub struct Config {
 
     /// OTEL configuration (exporter type, endpoint, headers, etc.).
     pub otel: codex_config::types::OtelConfig,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct CodeModeConfig {
+    pub excluded_tool_namespaces: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -1286,26 +1298,29 @@ impl Config {
         }
     }
 
+    pub(crate) fn validate_multi_agent_v2_config(&self) -> std::io::Result<()> {
+        if self.features.enabled(Feature::MultiAgentV2) && self.agent_max_threads.is_some() {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "agents.max_threads cannot be set when features.multi_agent_v2 is enabled",
+            ))
+        } else {
+            Ok(())
+        }
+    }
+
     pub(crate) fn effective_agent_max_threads(
         &self,
         multi_agent_version: MultiAgentVersion,
-    ) -> std::io::Result<Option<usize>> {
+    ) -> Option<usize> {
         match multi_agent_version {
-            MultiAgentVersion::V2 => {
-                if self.agent_max_threads.is_some() {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::InvalidInput,
-                        "agents.max_threads cannot be set when the multi-agent runtime is v2",
-                    ));
-                }
-                Ok(Some(
-                    self.multi_agent_v2
-                        .max_concurrent_threads_per_session
-                        .saturating_sub(1),
-                ))
-            }
+            MultiAgentVersion::V2 => Some(
+                self.multi_agent_v2
+                    .max_concurrent_threads_per_session
+                    .saturating_sub(1),
+            ),
             MultiAgentVersion::Disabled | MultiAgentVersion::V1 => {
-                Ok(self.agent_max_threads.or(DEFAULT_AGENT_MAX_THREADS))
+                self.agent_max_threads.or(DEFAULT_AGENT_MAX_THREADS)
             }
         }
     }
@@ -2285,6 +2300,17 @@ fn resolve_experimental_request_user_input_enabled(config_toml: &ConfigToml) -> 
         .is_none_or(|config| config.enabled)
 }
 
+fn resolve_code_mode_config(config_toml: &ConfigToml) -> CodeModeConfig {
+    let base = code_mode_toml_config(config_toml.features.as_ref());
+
+    CodeModeConfig {
+        excluded_tool_namespaces: base
+            .and_then(|config| config.excluded_tool_namespaces.as_ref())
+            .cloned()
+            .unwrap_or_default(),
+    }
+}
+
 fn resolve_multi_agent_v2_config(config_toml: &ConfigToml) -> MultiAgentV2Config {
     let base = multi_agent_v2_toml_config(config_toml.features.as_ref());
     let default = MultiAgentV2Config::default();
@@ -2364,6 +2390,13 @@ fn resolve_optional_prompt_text(
         Some(Some(value)) if value.is_empty() => None,
         Some(Some(value)) => Some(value.clone()),
         Some(None) | None => default,
+    }
+}
+
+fn code_mode_toml_config(features: Option<&FeaturesToml>) -> Option<&CodeModeConfigToml> {
+    match features?.code_mode.as_ref()? {
+        FeatureToml::Enabled(_) => None,
+        FeatureToml::Config(config) => Some(config),
     }
 }
 
@@ -2573,8 +2606,7 @@ impl Config {
             Some(&codex_home),
             &mut startup_warnings,
         )
-        .await
-        .map(|loaded| loaded.contents);
+        .await;
 
         // Destructure ConfigOverrides fully to ensure all overrides are applied.
         let ConfigOverrides {
@@ -3008,6 +3040,7 @@ impl Config {
         let web_search_config = resolve_web_search_config(&cfg);
         let experimental_request_user_input_enabled =
             resolve_experimental_request_user_input_enabled(&cfg);
+        let code_mode = resolve_code_mode_config(&cfg);
         let multi_agent_v2 = resolve_multi_agent_v2_config(&cfg);
         let apps_mcp_path_override = if features.enabled(Feature::AppsMcpPathOverride) {
             let base = apps_mcp_path_override_toml_config(cfg.features.as_ref());
@@ -3549,6 +3582,7 @@ impl Config {
             web_search_mode: constrained_web_search_mode.value,
             web_search_config,
             experimental_request_user_input_enabled,
+            code_mode,
             use_experimental_unified_exec_tool,
             background_terminal_max_timeout,
             ghost_snapshot,

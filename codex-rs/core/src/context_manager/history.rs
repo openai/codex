@@ -174,16 +174,6 @@ impl ContextManager {
         }
     }
 
-    pub(crate) fn remove_last_item(&mut self) -> bool {
-        if let Some(removed) = self.items.pop() {
-            normalize::remove_corresponding_for(&mut self.items, &removed);
-            self.history_version = self.history_version.saturating_add(1);
-            true
-        } else {
-            false
-        }
-    }
-
     pub(crate) fn replace(&mut self, items: Vec<ResponseItem>) {
         self.items = items;
         self.history_version = self.history_version.saturating_add(1);
@@ -732,15 +722,6 @@ fn is_model_generated_item(item: &ResponseItem) -> bool {
         | ResponseItem::CustomToolCallOutput { .. }
         | ResponseItem::Other => false,
     }
-}
-
-pub(crate) fn is_codex_generated_item(item: &ResponseItem) -> bool {
-    matches!(
-        item,
-        ResponseItem::FunctionCallOutput { .. }
-            | ResponseItem::ToolSearchOutput { .. }
-            | ResponseItem::CustomToolCallOutput { .. }
-    ) || matches!(item, ResponseItem::Message { role, .. } if role == "developer")
 }
 
 pub(crate) fn is_user_turn_boundary(item: &ResponseItem) -> bool {

@@ -70,6 +70,8 @@ mod sandbox_users;
 mod setup_runtime_bin;
 use read_acl_mutex::acquire_read_acl_mutex;
 use read_acl_mutex::read_acl_mutex_exists;
+use sandbox_users::commit_setup_marker;
+use sandbox_users::prepare_setup_marker;
 use sandbox_users::provision_sandbox_users;
 use sandbox_users::resolve_sandbox_users_group_sid;
 use sandbox_users::resolve_sid;
@@ -475,11 +477,25 @@ fn real_main() -> Result<()> {
 }
 
 fn run_setup(payload: &Payload, log: &mut dyn Write, sbx_dir: &Path) -> Result<()> {
+    let writes_setup_marker = !payload.refresh_only && payload.mode != SetupMode::ReadAclsOnly;
+    if writes_setup_marker {
+        prepare_setup_marker(&payload.codex_home, &payload.real_user)?;
+    }
     match payload.mode {
         SetupMode::ReadAclsOnly => run_read_acl_only(payload, log),
         SetupMode::ProvisionOnly => run_provision_only(payload, log, sbx_dir),
         SetupMode::Full => run_setup_full(payload, log, sbx_dir),
+    }?;
+    if writes_setup_marker {
+        commit_setup_marker(
+            &payload.codex_home,
+            &payload.offline_username,
+            &payload.online_username,
+            &payload.proxy_ports,
+            payload.allow_local_binding,
+        )?;
     }
+    Ok(())
 }
 
 fn run_read_acl_only(payload: &Payload, log: &mut dyn Write) -> Result<()> {
@@ -554,8 +570,6 @@ fn provision_and_hide_sandbox_users(
         &payload.codex_home,
         &payload.offline_username,
         &payload.online_username,
-        &payload.proxy_ports,
-        payload.allow_local_binding,
         log,
     );
     if let Err(err) = provision_result {
