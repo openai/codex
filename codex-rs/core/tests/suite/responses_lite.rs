@@ -14,7 +14,10 @@ use codex_web_search_extension::install as install_web_search_extension;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
+use pretty_assertions::assert_eq;
 use serde_json::Value;
+
+const RESPONSES_LITE_HEADER: &str = "x-openai-internal-codex-responses-lite";
 
 fn responses_extensions(auth: &CodexAuth) -> Arc<ExtensionRegistry<Config>> {
     let auth_manager = codex_core::test_support::auth_manager_from_auth(auth.clone());
@@ -76,6 +79,10 @@ async fn responses_lite_uses_standalone_web_search_and_image_generation() -> Res
     test.submit_turn("Use standalone tools").await?;
 
     let request = response_mock.single_request();
+    assert_eq!(
+        request.header(RESPONSES_LITE_HEADER).as_deref(),
+        Some("true")
+    );
     request
         .tool_by_name("web", "run")
         .context("Responses Lite should expose standalone web search")?;
@@ -154,6 +161,7 @@ async fn non_lite_uses_hosted_tools_when_standalone_features_are_disabled() -> R
     test.submit_turn("Use hosted tools").await?;
 
     let request = response_mock.single_request();
+    assert_eq!(request.header(RESPONSES_LITE_HEADER), None);
     assert!(request.tool_by_name("web", "run").is_none());
     assert!(request.tool_by_name("image_gen", "imagegen").is_none());
     let body = request.body_json();

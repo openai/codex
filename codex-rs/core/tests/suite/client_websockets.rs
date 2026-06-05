@@ -62,6 +62,7 @@ const OPENAI_BETA_HEADER: &str = "OpenAI-Beta";
 const USER_AGENT_HEADER: &str = "user-agent";
 const WS_V2_BETA_HEADER_VALUE: &str = "responses_websockets=2026-02-06";
 const X_CLIENT_REQUEST_ID_HEADER: &str = "x-client-request-id";
+const RESPONSES_LITE_HEADER: &str = "x-openai-internal-codex-responses-lite";
 const TEST_INSTALLATION_ID: &str = "11111111-1111-4111-8111-111111111111";
 const X_CODEX_WS_STREAM_REQUEST_START_MS_CLIENT_METADATA_KEY: &str =
     "x-codex-ws-stream-request-start-ms";
@@ -508,6 +509,102 @@ async fn responses_websocket_reuses_connection_after_session_drop() {
 
     assert_eq!(server.handshakes().len(), 1);
     assert_eq!(server.single_connection().len(), 2);
+
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn responses_websocket_reconnects_when_responses_lite_mode_changes() {
+    skip_if_no_network!();
+
+    let server = start_websocket_server(vec![
+        vec![
+            vec![ev_response_created("lite-1"), ev_completed("lite-1")],
+            vec![ev_response_created("lite-2"), ev_completed("lite-2")],
+            vec![ev_response_created("unused-1"), ev_completed("unused-1")],
+        ],
+        vec![
+            vec![ev_response_created("normal-1"), ev_completed("normal-1")],
+            vec![ev_response_created("unused-2"), ev_completed("unused-2")],
+        ],
+        vec![vec![ev_response_created("lite-3"), ev_completed("lite-3")]],
+    ])
+    .await;
+
+    let harness = websocket_harness(&server).await;
+    let mut lite_model_info = harness.model_info.clone();
+    lite_model_info.use_responses_lite = true;
+    let normal_model_info = harness.model_info.clone();
+
+    {
+        let mut session = harness.client.new_session();
+        session
+            .preconnect_websocket(&harness.session_telemetry, &lite_model_info)
+            .await
+            .expect("Responses Lite websocket preconnect failed");
+        stream_until_complete_with_model_info(
+            &mut session,
+            &harness,
+            &prompt_with_input(vec![message_item("lite one")]),
+            &lite_model_info,
+            "lite-1",
+        )
+        .await;
+    }
+    {
+        let mut session = harness.client.new_session();
+        stream_until_complete_with_model_info(
+            &mut session,
+            &harness,
+            &prompt_with_input(vec![message_item("lite two")]),
+            &lite_model_info,
+            "lite-2",
+        )
+        .await;
+    }
+    {
+        let mut session = harness.client.new_session();
+        stream_until_complete_with_model_info(
+            &mut session,
+            &harness,
+            &prompt_with_input(vec![message_item("normal one")]),
+            &normal_model_info,
+            "normal-1",
+        )
+        .await;
+    }
+    {
+        let mut session = harness.client.new_session();
+        session
+            .preconnect_websocket(&harness.session_telemetry, &lite_model_info)
+            .await
+            .expect("Responses Lite websocket reconnect failed");
+        stream_until_complete_with_model_info(
+            &mut session,
+            &harness,
+            &prompt_with_input(vec![message_item("lite three")]),
+            &lite_model_info,
+            "lite-3",
+        )
+        .await;
+    }
+
+    assert_eq!(
+        server
+            .handshakes()
+            .iter()
+            .map(|handshake| handshake.header(RESPONSES_LITE_HEADER))
+            .collect::<Vec<_>>(),
+        vec![Some("true".to_string()), None, Some("true".to_string())]
+    );
+    assert_eq!(
+        server
+            .connections()
+            .iter()
+            .map(Vec::len)
+            .collect::<Vec<_>>(),
+        vec![2, 1, 1]
+    );
 
     server.shutdown().await;
 }
@@ -2026,6 +2123,40 @@ async fn stream_until_complete(
         /*service_tier*/ None,
     )
     .await;
+}
+
+async fn stream_until_complete_with_model_info(
+    client_session: &mut ModelClientSession,
+    harness: &WebsocketTestHarness,
+    prompt: &Prompt,
+    model_info: &ModelInfo,
+    expected_response_id: &str,
+) {
+    let mut stream = client_session
+        .stream(
+            prompt,
+            model_info,
+            &harness.session_telemetry,
+            harness.effort.clone(),
+            harness.summary,
+            /*service_tier*/ None,
+            /*turn_metadata_header*/ None,
+            &codex_rollout_trace::InferenceTraceContext::disabled(),
+        )
+        .await
+        .expect("websocket stream failed");
+
+    while let Some(event) = stream.next().await {
+        match event {
+            Ok(ResponseEvent::Completed { response_id, .. }) => {
+                assert_eq!(response_id, expected_response_id);
+                return;
+            }
+            Ok(_) => {}
+            Err(err) => panic!("websocket stream failed: {err}"),
+        }
+    }
+    panic!("websocket stream ended before completion");
 }
 
 async fn stream_until_complete_with_service_tier(
