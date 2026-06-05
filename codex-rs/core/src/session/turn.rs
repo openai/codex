@@ -141,6 +141,13 @@ pub(crate) async fn run_turn(
     prewarmed_client_session: Option<ModelClientSession>,
     cancellation_token: CancellationToken,
 ) -> Option<String> {
+    if let Err(err) = sess
+        .goal_runtime_apply(GoalRuntimeEvent::TurnAttemptStarted)
+        .await
+    {
+        warn!("failed to apply goal runtime turn-attempt-started event: {err}");
+    }
+
     let mut client_session =
         prewarmed_client_session.unwrap_or_else(|| sess.services.model_client.new_session());
     // TODO(ccunningham): Pre-turn compaction runs before context updates and the

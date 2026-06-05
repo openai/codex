@@ -43,6 +43,8 @@ use codex_rollout::state_db::reconcile_rollout;
 use codex_thread_store::LocalThreadStore;
 use futures::future::BoxFuture;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
 use tokio::sync::Mutex;
@@ -116,6 +118,7 @@ pub struct ExternalGoalSet {
 /// Callers report the session event they observed; this module owns the policy
 /// for how that event changes goal runtime state.
 pub(crate) enum GoalRuntimeEvent<'a> {
+    TurnAttemptStarted,
     TurnStarted {
         turn_context: &'a TurnContext,
         token_usage: TokenUsage,
@@ -147,15 +150,10 @@ pub(crate) enum GoalRuntimeEvent<'a> {
     ThreadResumed,
 }
 
-#[derive(Clone, Copy)]
-enum TerminalGoalErrorStatus {
-    Paused,
-    UsageLimited,
-}
-
 pub(crate) struct GoalRuntimeState {
     pub(crate) state_db: Mutex<Option<StateDbHandle>>,
     pub(crate) budget_limit_reported_goal_id: Mutex<Option<String>>,
+    suppress_next_idle_continuation: AtomicBool,
     accounting_lock: Semaphore,
     accounting: Mutex<GoalAccountingSnapshot>,
     pub(crate) continuation_lock: Semaphore,
@@ -171,6 +169,7 @@ impl GoalRuntimeState {
         Self {
             state_db: Mutex::new(None),
             budget_limit_reported_goal_id: Mutex::new(None),
+            suppress_next_idle_continuation: AtomicBool::new(false),
             accounting_lock: Semaphore::new(/*permits*/ 1),
             accounting: Mutex::new(GoalAccountingSnapshot::new()),
             continuation_lock: Semaphore::new(/*permits*/ 1),
@@ -329,6 +328,12 @@ impl Session {
         event: GoalRuntimeEvent<'a>,
     ) -> BoxFuture<'a, anyhow::Result<()>> {
         match event {
+            GoalRuntimeEvent::TurnAttemptStarted => Box::pin(async move {
+                self.goal_runtime
+                    .suppress_next_idle_continuation
+                    .store(false, Ordering::Release);
+                Ok(())
+            }),
             GoalRuntimeEvent::TurnStarted {
                 turn_context,
                 token_usage,
@@ -377,6 +382,13 @@ impl Session {
                 Ok(())
             }),
             GoalRuntimeEvent::MaybeContinueIfIdle => Box::pin(async move {
+                if self
+                    .goal_runtime
+                    .suppress_next_idle_continuation
+                    .swap(false, Ordering::AcqRel)
+                {
+                    return Ok(());
+                }
                 self.maybe_continue_goal_if_idle_runtime().await;
                 Ok(())
             }),
@@ -1157,30 +1169,30 @@ impl Session {
     ) -> anyhow::Result<()> {
         if error.to_codex_protocol_error() == CodexErrorInfo::UsageLimitExceeded {
             return self
-                .finish_active_thread_goal_after_terminal_error(
-                    turn_context,
-                    TerminalGoalErrorStatus::UsageLimited,
-                )
+                .usage_limit_active_thread_goal_for_turn(turn_context)
                 .await;
         }
 
-        if matches!(error, CodexErr::TurnAborted | CodexErr::Interrupted) {
+        if matches!(
+            error,
+            CodexErr::ContextWindowExceeded | CodexErr::Interrupted
+        ) {
             return Ok(());
         }
 
-        // This is a terminal turn error. Leave request-local retry decisions to
-        // the turn; pause the goal so idle continuation does not replay it.
-        self.finish_active_thread_goal_after_terminal_error(
-            turn_context,
-            TerminalGoalErrorStatus::Paused,
-        )
-        .await
+        if self.enabled(Feature::Goals)
+            && !should_ignore_goal_for_mode(turn_context.collaboration_mode.mode)
+        {
+            self.goal_runtime
+                .suppress_next_idle_continuation
+                .store(true, Ordering::Release);
+        }
+        Ok(())
     }
 
-    async fn finish_active_thread_goal_after_terminal_error(
+    async fn usage_limit_active_thread_goal_for_turn(
         &self,
         turn_context: &TurnContext,
-        status: TerminalGoalErrorStatus,
     ) -> anyhow::Result<()> {
         if should_ignore_goal_for_mode(turn_context.collaboration_mode.mode) {
             return Ok(());
@@ -1198,7 +1210,6 @@ impl Session {
         let Some(state_db) = self.state_db_for_thread_goals().await? else {
             return Ok(());
         };
-
         self.account_thread_goal_progress(
             turn_context,
             BudgetLimitSteering::Suppressed,
@@ -1208,21 +1219,11 @@ impl Session {
         let previous_status = self
             .current_goal_status_for_metrics(&state_db, /*expected_goal_id*/ None)
             .await?;
-        let goal = match status {
-            TerminalGoalErrorStatus::UsageLimited => {
-                state_db
-                    .thread_goals()
-                    .usage_limit_active_thread_goal(self.thread_id)
-                    .await?
-            }
-            TerminalGoalErrorStatus::Paused => {
-                state_db
-                    .thread_goals()
-                    .pause_active_thread_goal(self.thread_id)
-                    .await?
-            }
-        };
-        let Some(goal) = goal else {
+        let Some(goal) = state_db
+            .thread_goals()
+            .usage_limit_active_thread_goal(self.thread_id)
+            .await?
+        else {
             return Ok(());
         };
         self.emit_goal_terminal_metrics_if_status_changed(previous_status, &goal);

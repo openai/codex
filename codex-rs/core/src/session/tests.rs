@@ -9653,7 +9653,7 @@ async fn usage_limit_runtime_stops_active_goal_and_prevents_idle_continuation() 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn turn_error_pauses_active_goal_and_prevents_idle_continuation() -> anyhow::Result<()> {
+async fn turn_error_suppresses_next_idle_goal_continuation() -> anyhow::Result<()> {
     let (sess, tc, _rx, _codex_home) = make_goal_session_and_context_with_rx().await;
     sess.set_thread_goal(
         tc.as_ref(),
@@ -9693,8 +9693,7 @@ async fn turn_error_pauses_active_goal_and_prevents_idle_continuation() -> anyho
         .get_thread_goal(sess.thread_id)
         .await?
         .expect("goal should remain persisted after turn error");
-    assert_eq!(codex_state::ThreadGoalStatus::Paused, goal.status);
-    assert_eq!(70, goal.tokens_used);
+    assert_eq!(codex_state::ThreadGoalStatus::Active, goal.status);
 
     sess.abort_all_tasks(TurnAbortReason::Replaced).await;
     sess.goal_runtime_apply(GoalRuntimeEvent::MaybeContinueIfIdle)
