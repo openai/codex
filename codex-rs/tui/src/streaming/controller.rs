@@ -117,7 +117,7 @@ struct StablePrefixLenCache {
 struct PartialSourceLine {
     source_start: usize,
     source_end: usize,
-    unemitted_suffix: Vec<HyperlinkLine>,
+    emitted_prefix: Vec<HyperlinkLine>,
 }
 
 impl StreamCore {
@@ -450,7 +450,10 @@ impl StreamCore {
         self.clear_stable_queue();
         self.emitted_stable_len = source_line_start_len;
 
-        let mut queued = partial_line.unemitted_suffix;
+        let mut queued = trim_rendered_prefix(
+            self.rendered_lines[source_line_start_len..source_line_end_len].to_vec(),
+            &partial_line.emitted_prefix,
+        );
         let synthetic_len = queued.len();
         if source_line_end_len < target_stable_len {
             queued.extend(self.rendered_lines[source_line_end_len..target_stable_len].to_vec());
@@ -466,8 +469,17 @@ impl StreamCore {
     }
 
     fn clear_stable_queue(&mut self) {
+        self.advance_synthetic_queue_accounting_to_target();
         self.state.clear_queue();
         self.clear_synthetic_queue_accounting();
+    }
+
+    fn advance_synthetic_queue_accounting_to_target(&mut self) {
+        if self.synthetic_queue_remaining > 0
+            && let Some(target_len) = self.synthetic_queue_target_emitted_len
+        {
+            self.emitted_stable_len = target_len;
+        }
     }
 
     fn clear_synthetic_queue_accounting(&mut self) {
@@ -627,7 +639,7 @@ impl StreamCore {
                 return Some(PartialSourceLine {
                     source_start,
                     source_end,
-                    unemitted_suffix: self.rendered_lines[rendered_len..source_end_rendered_len]
+                    emitted_prefix: self.rendered_lines[source_start_rendered_len..rendered_len]
                         .to_vec(),
                 });
             }
@@ -674,6 +686,64 @@ impl StreamCore {
         self.render_mode != HistoryRenderMode::Raw
             && !matches!(self.holdback_scanner.state(), TableHoldbackState::None)
     }
+}
+
+fn trim_rendered_prefix(
+    lines: Vec<HyperlinkLine>,
+    emitted_prefix: &[HyperlinkLine],
+) -> Vec<HyperlinkLine> {
+    let prefix_text = emitted_prefix
+        .iter()
+        .map(hyperlink_line_text)
+        .collect::<Vec<_>>()
+        .join(" ");
+    let mut prefix_chars = emitted_prefix
+        .iter()
+        .map(hyperlink_line_text)
+        .map(|text| text.chars().count())
+        .sum::<usize>();
+    if prefix_chars == 0 {
+        return lines;
+    }
+
+    let mut out = Vec::with_capacity(lines.len());
+    for line in lines {
+        let text = hyperlink_line_text(&line);
+        let line_chars = text.chars().count();
+        let chars_to_skip = if !prefix_text.is_empty() {
+            text.find(&prefix_text)
+                .map(|start| text[..start].chars().count() + prefix_text.chars().count())
+        } else {
+            None
+        };
+        if prefix_chars >= line_chars {
+            prefix_chars -= line_chars;
+            continue;
+        }
+        if prefix_chars > 0 {
+            let suffix = text
+                .chars()
+                .skip(chars_to_skip.unwrap_or(prefix_chars))
+                .collect::<String>()
+                .trim_start()
+                .to_string();
+            prefix_chars = 0;
+            if !suffix.is_empty() {
+                out.push(HyperlinkLine::new(Line::from(suffix)));
+            }
+        } else {
+            out.push(line);
+        }
+    }
+    out
+}
+
+fn hyperlink_line_text(line: &HyperlinkLine) -> String {
+    line.line
+        .spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect()
 }
 
 fn tail_source_start(source: &str, tail_lines: usize) -> Option<usize> {
@@ -2401,6 +2471,71 @@ mod tests {
         assert!(
             joined.contains("lambda mu") && joined.contains("tail line"),
             "finalize must preserve un-emitted content after raw toggle; emitted before toggle: {first_emit:?}, finalized after toggle: {joined:?}",
+        );
+    }
+
+    #[test]
+    fn controller_set_render_mode_rerenders_partial_suffix_in_raw_mode() {
+        let mut ctrl = stream_controller(Some(/*width*/ 18));
+        ctrl.push("**alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu**\n");
+        ctrl.push("tail line\n");
+
+        let (first_emit, idle) = ctrl.on_commit_tick();
+        let first_emit = first_emit
+            .expect("expected first rich wrapped line emission")
+            .transcript_lines(u16::MAX);
+        assert!(!idle, "expected remaining rich content after one tick");
+
+        ctrl.set_render_mode(HistoryRenderMode::Raw);
+
+        let (cell, _source) = ctrl.finalize();
+        let remaining = cell
+            .map(|c| lines_to_plain_strings(&c.transcript_lines(u16::MAX)))
+            .unwrap_or_default();
+        let first_emit = lines_to_plain_strings(&first_emit).join("\n");
+        let joined = remaining.join("\n");
+        assert!(
+            !joined.contains("alpha beta"),
+            "finalize must not replay the already-visible rich prefix after raw toggle; emitted before toggle: {first_emit:?}, finalized after toggle: {joined:?}",
+        );
+        assert!(
+            joined.contains("**") && joined.contains("tail line"),
+            "pending suffix should be rendered from raw mode after toggle, not old rich rows; emitted before toggle: {first_emit:?}, finalized after toggle: {joined:?}",
+        );
+    }
+
+    #[test]
+    fn controller_clear_queue_advances_synthetic_accounting_before_finalize() {
+        let mut ctrl = stream_controller(Some(/*width*/ 18));
+        ctrl.push("alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu\n");
+        ctrl.push("tail line\n");
+
+        let (first_emit, idle) = ctrl.on_commit_tick();
+        let first_emit = first_emit
+            .expect("expected first wrapped line emission")
+            .transcript_lines(u16::MAX);
+        assert!(!idle, "expected remaining wrapped content after one tick");
+
+        ctrl.set_width(Some(/*width*/ 80));
+        assert!(
+            ctrl.queued_lines() > 0,
+            "expected synthetic queue after resizing a partially emitted source line",
+        );
+
+        ctrl.clear_queue();
+        let (cell, _source) = ctrl.finalize();
+        let remaining = cell
+            .map(|c| lines_to_plain_strings(&c.transcript_lines(u16::MAX)))
+            .unwrap_or_default();
+        let first_emit = lines_to_plain_strings(&first_emit).join("\n");
+        let joined = remaining.join("\n");
+        assert!(
+            !joined.contains("alpha beta"),
+            "finalize must not replay the already-visible prefix after clear_queue; emitted before clear: {first_emit:?}, finalized after clear: {joined:?}",
+        );
+        assert!(
+            remaining.iter().any(|line| line.contains("tail line")),
+            "ordinary mutable tail should still flush on finalize after clear_queue; got {remaining:?}",
         );
     }
 }
