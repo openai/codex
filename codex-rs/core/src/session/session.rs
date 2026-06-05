@@ -1033,6 +1033,7 @@ impl Session {
                     ),
                 ),
                 code_mode_service: crate::tools::code_mode::CodeModeService::new(),
+                tool_search_handler_cache: Default::default(),
                 environment_manager,
             };
             let (out_of_band_elicitation_paused, _out_of_band_elicitation_paused_rx) =
