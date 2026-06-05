@@ -108,6 +108,57 @@ pub(crate) fn load_oauth_tokens(
     }
 }
 
+pub(crate) async fn load_oauth_tokens_for_runtime(
+    server_name: &str,
+    url: &str,
+    store_mode: OAuthCredentialsStoreMode,
+    fallback_lock_mode: FallbackLockMode,
+) -> Result<RuntimeOAuthTokenLoad> {
+    let keyring_store = DefaultKeyringStore;
+    match store_mode {
+        OAuthCredentialsStoreMode::Auto => {
+            match load_oauth_tokens_from_keyring(&keyring_store, server_name, url) {
+                Ok(Some(tokens)) => Ok(RuntimeOAuthTokenLoad::Loaded(Box::new(tokens))),
+                Ok(None) => {
+                    load_oauth_tokens_from_file_for_runtime(server_name, url, fallback_lock_mode)
+                        .await
+                }
+                Err(error) => {
+                    warn!("failed to read OAuth tokens from keyring: {error}");
+                    load_oauth_tokens_from_file_for_runtime(server_name, url, fallback_lock_mode)
+                        .await
+                        .with_context(|| {
+                            format!("failed to read OAuth tokens from keyring: {error}")
+                        })
+                }
+            }
+        }
+        OAuthCredentialsStoreMode::File => {
+            load_oauth_tokens_from_file_for_runtime(server_name, url, fallback_lock_mode).await
+        }
+        OAuthCredentialsStoreMode::Keyring => {
+            match load_oauth_tokens_from_keyring(&keyring_store, server_name, url)
+                .with_context(|| "failed to read OAuth tokens from keyring".to_string())?
+            {
+                Some(tokens) => Ok(RuntimeOAuthTokenLoad::Loaded(Box::new(tokens))),
+                None => Ok(RuntimeOAuthTokenLoad::Missing),
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum FallbackLockMode {
+    DeferIfContended,
+    Wait,
+}
+
+pub(crate) enum RuntimeOAuthTokenLoad {
+    Loaded(Box<StoredOAuthTokens>),
+    Missing,
+    FallbackLockContended,
+}
+
 pub(crate) fn has_oauth_tokens(
     server_name: &str,
     url: &str,
@@ -480,7 +531,7 @@ async fn lock_and_load_oauth_tokens_with_keyring<K: KeyringStore>(
                         url,
                     )?)
                     .await?;
-                    let tokens = load_oauth_tokens_from_file(server_name, url)?;
+                    let tokens = load_oauth_tokens_from_file_async(server_name, url).await?;
                     Ok((vec![keyring_lock, file_lock], tokens))
                 }
                 Err(error) => {
@@ -490,8 +541,9 @@ async fn lock_and_load_oauth_tokens_with_keyring<K: KeyringStore>(
                         url,
                     )?)
                     .await?;
-                    let tokens =
-                        load_oauth_tokens_from_file(server_name, url).with_context(|| {
+                    let tokens = load_oauth_tokens_from_file_async(server_name, url)
+                        .await
+                        .with_context(|| {
                             format!("failed to read OAuth tokens from keyring: {error}")
                         })?;
                     Ok((vec![keyring_lock, file_lock], tokens))
@@ -501,7 +553,7 @@ async fn lock_and_load_oauth_tokens_with_keyring<K: KeyringStore>(
         OAuthCredentialsStoreMode::File => {
             let lock = acquire_oauth_refresh_lock(&file_oauth_refresh_lock_path(server_name, url)?)
                 .await?;
-            let tokens = load_oauth_tokens_from_file(server_name, url)?;
+            let tokens = load_oauth_tokens_from_file_async(server_name, url).await?;
             Ok((vec![lock], tokens))
         }
         OAuthCredentialsStoreMode::Keyring => {
@@ -704,6 +756,27 @@ fn acquire_fallback_read_lock() -> Result<fs::File> {
     Ok(file)
 }
 
+async fn acquire_fallback_read_lock_async() -> Result<fs::File> {
+    let path = fallback_lock_path()?;
+    let file = open_oauth_lock_file(&path)?;
+    loop {
+        match file.try_lock_shared() {
+            Ok(()) => return Ok(file),
+            Err(fs::TryLockError::WouldBlock) => {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!(
+                        "failed to acquire OAuth fallback read lock at {}",
+                        path.display()
+                    )
+                });
+            }
+        }
+    }
+}
+
 fn fallback_lock_path() -> Result<PathBuf> {
     let codex_home = find_codex_home()?;
     let codex_home_id = sha_256_bytes_prefix(codex_home.as_os_str().to_string_lossy().as_bytes());
@@ -766,6 +839,48 @@ struct FallbackTokenEntry {
 fn load_oauth_tokens_from_file(server_name: &str, url: &str) -> Result<Option<StoredOAuthTokens>> {
     let _read_lock = acquire_fallback_read_lock()?;
     load_oauth_tokens_from_file_unlocked(server_name, url)
+}
+
+async fn load_oauth_tokens_from_file_async(
+    server_name: &str,
+    url: &str,
+) -> Result<Option<StoredOAuthTokens>> {
+    let _read_lock = acquire_fallback_read_lock_async().await?;
+    load_oauth_tokens_from_file_unlocked(server_name, url)
+}
+
+async fn load_oauth_tokens_from_file_for_runtime(
+    server_name: &str,
+    url: &str,
+    fallback_lock_mode: FallbackLockMode,
+) -> Result<RuntimeOAuthTokenLoad> {
+    let read_lock = match fallback_lock_mode {
+        FallbackLockMode::DeferIfContended => {
+            let path = fallback_lock_path()?;
+            let file = open_oauth_lock_file(&path)?;
+            match file.try_lock_shared() {
+                Ok(()) => file,
+                Err(fs::TryLockError::WouldBlock) => {
+                    return Ok(RuntimeOAuthTokenLoad::FallbackLockContended);
+                }
+                Err(error) => {
+                    return Err(error).with_context(|| {
+                        format!(
+                            "failed to acquire OAuth fallback read lock at {}",
+                            path.display()
+                        )
+                    });
+                }
+            }
+        }
+        FallbackLockMode::Wait => acquire_fallback_read_lock_async().await?,
+    };
+    let tokens = load_oauth_tokens_from_file_unlocked(server_name, url)?;
+    drop(read_lock);
+    Ok(match tokens {
+        Some(tokens) => RuntimeOAuthTokenLoad::Loaded(Box::new(tokens)),
+        None => RuntimeOAuthTokenLoad::Missing,
+    })
 }
 
 fn load_oauth_tokens_from_file_unlocked(
@@ -1492,9 +1607,10 @@ mod tests {
         super::save_oauth_tokens_to_file(&target)?;
         super::save_oauth_tokens_to_file(&unrelated)?;
 
-        let held_read_lock = super::acquire_fallback_read_lock()?;
+        let held_write_lock = super::acquire_fallback_write_lock()?;
         let (started_tx, started_rx) = mpsc::channel();
         let (delete_done_tx, delete_done_rx) = mpsc::channel();
+        let (save_done_tx, save_done_rx) = mpsc::channel();
 
         let delete_started_tx = started_tx.clone();
         let delete_thread = thread::spawn(move || {
@@ -1505,7 +1621,9 @@ mod tests {
         });
         let save_thread = thread::spawn(move || {
             let _ = started_tx.send(());
-            super::save_oauth_tokens_to_file(&new_tokens)
+            let result = super::save_oauth_tokens_to_file(&new_tokens);
+            let _ = save_done_tx.send(());
+            result
         });
 
         for _ in 0..2 {
@@ -1513,9 +1631,10 @@ mod tests {
                 .recv_timeout(Duration::from_secs(1))
                 .context("timed out waiting for fallback mutation thread")?;
         }
-        let delete_completed_while_read_locked =
-            delete_done_rx.recv_timeout(Duration::from_secs(1)).is_ok();
-        drop(held_read_lock);
+        let save_completed_while_write_locked =
+            save_done_rx.recv_timeout(Duration::from_secs(1)).is_ok();
+        let delete_completed_while_write_locked = delete_done_rx.try_recv().is_ok();
+        drop(held_write_lock);
 
         let removed = delete_thread
             .join()
@@ -1525,8 +1644,12 @@ mod tests {
             .map_err(|_| anyhow!("fallback save thread panicked"))??;
 
         assert!(
-            !delete_completed_while_read_locked,
-            "fallback deletion escaped the shared lock before its write"
+            !save_completed_while_write_locked,
+            "fallback save escaped the competing exclusive lock"
+        );
+        assert!(
+            !delete_completed_while_write_locked,
+            "fallback deletion escaped the competing exclusive lock"
         );
         assert!(removed);
         assert!(super::load_oauth_tokens_from_file(&target.server_name, &target.url)?.is_none());

@@ -64,9 +64,11 @@ use crate::elicitation_client_service::ElicitationClientService;
 use crate::http_client_adapter::StreamableHttpClientAdapter;
 use crate::http_client_adapter::StreamableHttpClientAdapterError;
 use crate::in_process_transport::InProcessTransportFactory;
-use crate::load_oauth_tokens;
+use crate::oauth::FallbackLockMode;
 use crate::oauth::OAuthPersistor;
+use crate::oauth::RuntimeOAuthTokenLoad;
 use crate::oauth::StoredOAuthTokens;
+use crate::oauth::load_oauth_tokens_for_runtime;
 use crate::stdio_server_launcher::StdioServerCommand;
 use crate::stdio_server_launcher::StdioServerLauncher;
 use crate::stdio_server_launcher::StdioServerProcessHandle;
@@ -76,6 +78,9 @@ use crate::utils::build_default_headers;
 use codex_config::types::OAuthCredentialsStoreMode;
 
 enum PendingTransport {
+    DeferredStreamableHttp {
+        recipe: TransportRecipe,
+    },
     InProcess {
         transport: tokio::io::DuplexStream,
     },
@@ -321,7 +326,8 @@ impl RmcpClient {
             .map_err(io::Error::other)?;
         let stdio_process = match &transport {
             PendingTransport::Stdio { transport } => Some(transport.process_handle()),
-            PendingTransport::InProcess { .. }
+            PendingTransport::DeferredStreamableHttp { .. }
+            | PendingTransport::InProcess { .. }
             | PendingTransport::StreamableHttp { .. }
             | PendingTransport::StreamableHttpWithOAuth { .. } => None,
         };
@@ -696,6 +702,27 @@ impl RmcpClient {
     async fn create_pending_transport(
         transport_recipe: &TransportRecipe,
     ) -> Result<PendingTransport> {
+        Self::create_pending_transport_with_fallback_lock_mode(
+            transport_recipe,
+            FallbackLockMode::DeferIfContended,
+        )
+        .await
+    }
+
+    async fn create_pending_transport_now(
+        transport_recipe: &TransportRecipe,
+    ) -> Result<PendingTransport> {
+        Self::create_pending_transport_with_fallback_lock_mode(
+            transport_recipe,
+            FallbackLockMode::Wait,
+        )
+        .await
+    }
+
+    async fn create_pending_transport_with_fallback_lock_mode(
+        transport_recipe: &TransportRecipe,
+        fallback_lock_mode: FallbackLockMode,
+    ) -> Result<PendingTransport> {
         match transport_recipe {
             TransportRecipe::InProcess { factory } => {
                 let transport = factory.open().await?;
@@ -722,8 +749,21 @@ impl RmcpClient {
                     && auth_provider.is_none()
                     && !default_headers.contains_key(AUTHORIZATION)
                 {
-                    match load_oauth_tokens(server_name, url, *store_mode) {
-                        Ok(tokens) => tokens,
+                    match load_oauth_tokens_for_runtime(
+                        server_name,
+                        url,
+                        *store_mode,
+                        fallback_lock_mode,
+                    )
+                    .await
+                    {
+                        Ok(RuntimeOAuthTokenLoad::Loaded(tokens)) => Some(*tokens),
+                        Ok(RuntimeOAuthTokenLoad::Missing) => None,
+                        Ok(RuntimeOAuthTokenLoad::FallbackLockContended) => {
+                            return Ok(PendingTransport::DeferredStreamableHttp {
+                                recipe: transport_recipe.clone(),
+                            });
+                        }
                         Err(err) => {
                             warn!("failed to read tokens for server `{server_name}`: {err}");
                             None
@@ -809,7 +849,16 @@ impl RmcpClient {
         Option<OAuthPersistor>,
     )> {
         let connect = async move {
+            let pending_transport = match pending_transport {
+                PendingTransport::DeferredStreamableHttp { recipe } => {
+                    Self::create_pending_transport_now(&recipe).await?
+                }
+                pending_transport => pending_transport,
+            };
             let (transport, oauth_persistor) = match pending_transport {
+                PendingTransport::DeferredStreamableHttp { .. } => {
+                    unreachable!("deferred streamable HTTP transport resolved above")
+                }
                 PendingTransport::InProcess { transport } => (
                     service::serve_client(client_service, transport).boxed(),
                     None,

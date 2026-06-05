@@ -230,7 +230,50 @@ async fn refresh_lock_wait_uses_startup_timeout_budget() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
-async fn refresh_lock_wait_uses_operation_timeout_budget() -> anyhow::Result<()> {
+async fn fallback_read_lock_wait_uses_startup_timeout_budget() -> anyhow::Result<()> {
+    let server = MockServer::start().await;
+    mount_oauth_metadata(&server, /*expected_requests*/ 0).await;
+
+    let codex_home = TempDir::new()?;
+    let control_dir = TempDir::new()?;
+    let server_url = format!("{}/mcp", server.uri());
+    seed_tokens(&codex_home, &server_url, /*expires_at*/ 0).await?;
+
+    let (lock_path, _) = fallback_lock_path_and_user_namespace(&codex_home)?;
+    let fallback_lock = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(lock_path)?;
+    fallback_lock.lock()?;
+
+    let ready_path = control_dir.path().join("client.ready");
+    let go_path = control_dir.path().join("client.go");
+    let result_path = control_dir.path().join("client.result");
+    let child = spawn_client_child(
+        &codex_home,
+        &server_url,
+        &ready_path,
+        &go_path,
+        &result_path,
+    )?;
+    wait_for_paths(std::slice::from_ref(&ready_path)).await?;
+    fs::write(&go_path, "go")?;
+    wait_for_paths(std::slice::from_ref(&result_path)).await?;
+    assert_eq!(
+        fs::read_to_string(&result_path)?,
+        "error:timed out handshaking with MCP server after 5s"
+    );
+
+    drop(fallback_lock);
+    wait_for_children(vec![child]).await?;
+    server.verify().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn fallback_read_lock_wait_uses_operation_timeout_budget() -> anyhow::Result<()> {
     let server = MockServer::start().await;
     mount_oauth_metadata(&server, /*expected_requests*/ 1).await;
     Mock::given(method("POST"))
@@ -238,7 +281,7 @@ async fn refresh_lock_wait_uses_operation_timeout_budget() -> anyhow::Result<()>
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "access_token": NEW_ACCESS_TOKEN,
             "token_type": "Bearer",
-            "expires_in": 30,
+            "expires_in": 31,
             "refresh_token": NEW_REFRESH_TOKEN,
         })))
         .expect(1)
@@ -262,15 +305,16 @@ async fn refresh_lock_wait_uses_operation_timeout_budget() -> anyhow::Result<()>
         &result_path,
     )?;
     wait_for_paths(std::slice::from_ref(&ready_path)).await?;
+    sleep(Duration::from_secs(2)).await;
 
-    let lock_path = file_oauth_refresh_lock_path(&codex_home, &server_url)?;
-    let refresh_lock = OpenOptions::new()
+    let (lock_path, _) = fallback_lock_path_and_user_namespace(&codex_home)?;
+    let fallback_lock = OpenOptions::new()
         .read(true)
         .write(true)
         .create(true)
         .truncate(false)
         .open(lock_path)?;
-    refresh_lock.lock()?;
+    fallback_lock.lock()?;
 
     fs::write(&go_path, "go")?;
     wait_for_children(vec![child]).await?;
@@ -279,7 +323,7 @@ async fn refresh_lock_wait_uses_operation_timeout_budget() -> anyhow::Result<()>
         format!("error:timed out awaiting tools/list after {OPERATION_TIMEOUT:?}")
     );
 
-    drop(refresh_lock);
+    drop(fallback_lock);
     server.verify().await;
     Ok(())
 }
@@ -944,7 +988,7 @@ fn request_bodies(requests: &[Request], request_path: &str) -> Vec<String> {
 }
 
 fn file_oauth_refresh_lock_path(codex_home: &TempDir, server_url: &str) -> anyhow::Result<PathBuf> {
-    let user_namespace = fallback_lock_user_namespace(codex_home)?;
+    let (_, user_namespace) = fallback_lock_path_and_user_namespace(codex_home)?;
     let lock_id = oauth_refresh_lock_id(server_url)?;
     Ok(shared_lock_root()?.join(format!(
         "{FILE_OAUTH_REFRESH_LOCK_PREFIX}-{user_namespace}-{lock_id}.lock"
@@ -971,18 +1015,21 @@ fn oauth_refresh_lock_id(server_url: &str) -> anyhow::Result<String> {
     sha_256_prefix(&Value::String(format!("{KEYRING_SERVICE}:{account}")))
 }
 
-fn fallback_lock_user_namespace(codex_home: &TempDir) -> anyhow::Result<String> {
+fn fallback_lock_path_and_user_namespace(
+    codex_home: &TempDir,
+) -> anyhow::Result<(PathBuf, String)> {
     let canonical_home = codex_home.path().canonicalize()?;
     let codex_home_id =
         sha_256_bytes_prefix(canonical_home.as_os_str().to_string_lossy().as_bytes());
     let prefix = format!("{FALLBACK_LOCK_PREFIX}-");
     let suffix = format!("-{codex_home_id}.lock");
     for entry in fs::read_dir(shared_lock_root()?)? {
-        let file_name = entry?.file_name().to_string_lossy().into_owned();
+        let entry = entry?;
+        let file_name = entry.file_name().to_string_lossy().into_owned();
         if let Some(remainder) = file_name.strip_prefix(&prefix)
             && let Some(user_namespace) = remainder.strip_suffix(&suffix)
         {
-            return Ok(user_namespace.to_string());
+            return Ok((entry.path(), user_namespace.to_string()));
         }
     }
     anyhow::bail!(
