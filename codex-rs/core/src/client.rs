@@ -143,6 +143,8 @@ pub const X_RESPONSESAPI_INCLUDE_TIMING_METRICS_HEADER: &str =
     "x-responsesapi-include-timing-metrics";
 const X_CODEX_WS_STREAM_REQUEST_START_MS_CLIENT_METADATA_KEY: &str =
     "x-codex-ws-stream-request-start-ms";
+const WS_REQUEST_HEADER_RESPONSES_LITE_CLIENT_METADATA_KEY: &str =
+    "ws_request_header_x_openai_internal_codex_responses_lite";
 const RESPONSES_WEBSOCKETS_V2_BETA_HEADER_VALUE: &str = "responses_websockets=2026-02-06";
 const X_OPENAI_INTERNAL_CODEX_RESPONSES_LITE_HEADER: &str =
     "x-openai-internal-codex-responses-lite";
@@ -261,17 +263,11 @@ struct LastResponse {
 
 #[derive(Debug, Default)]
 struct WebsocketSession {
-    connection: Option<CachedWebsocketConnection>,
+    connection: Option<ApiWebSocketConnection>,
     last_request: Option<ResponsesApiRequest>,
     last_response_rx: Option<oneshot::Receiver<LastResponse>>,
     last_response_from_untraced_warmup: bool,
     connection_reused: StdMutex<bool>,
-}
-
-#[derive(Debug)]
-struct CachedWebsocketConnection {
-    inner: ApiWebSocketConnection,
-    use_responses_lite: bool,
 }
 
 impl WebsocketSession {
@@ -664,6 +660,7 @@ impl ModelClient {
     fn build_ws_client_metadata(
         &self,
         turn_metadata_header: Option<&str>,
+        model_info: &ModelInfo,
     ) -> HashMap<String, String> {
         let mut client_metadata = HashMap::new();
         client_metadata.insert(
@@ -689,6 +686,12 @@ impl ModelClient {
             client_metadata.insert(
                 X_CODEX_TURN_METADATA_HEADER.to_string(),
                 turn_metadata.to_string(),
+            );
+        }
+        if model_info.use_responses_lite {
+            client_metadata.insert(
+                WS_REQUEST_HEADER_RESPONSES_LITE_CLIENT_METADATA_KEY.to_string(),
+                "true".to_string(),
             );
         }
         client_metadata
@@ -847,16 +850,11 @@ impl ModelClient {
         api_auth: SharedAuthProvider,
         turn_state: Option<Arc<OnceLock<String>>>,
         turn_metadata_header: Option<&str>,
-        use_responses_lite: bool,
         auth_context: AuthRequestTelemetryContext,
         request_route_telemetry: RequestRouteTelemetry,
     ) -> std::result::Result<ApiWebSocketConnection, ApiError> {
         let headers = self
-            .build_websocket_headers(
-                turn_state.as_ref(),
-                turn_metadata_header,
-                use_responses_lite,
-            )
+            .build_websocket_headers(turn_state.as_ref(), turn_metadata_header)
             .await;
         let websocket_telemetry = ModelClientSession::build_websocket_telemetry(
             session_telemetry,
@@ -938,7 +936,6 @@ impl ModelClient {
         &self,
         turn_state: Option<&Arc<OnceLock<String>>>,
         turn_metadata_header: Option<&str>,
-        use_responses_lite: bool,
     ) -> ApiHeaderMap {
         let turn_metadata_header = parse_turn_metadata_header(turn_metadata_header);
         let session_id = self.state.session_id.to_string();
@@ -966,7 +963,6 @@ impl ModelClient {
                 HeaderValue::from_static("true"),
             );
         }
-        add_responses_lite_header(&mut headers, use_responses_lite);
         headers
     }
 }
@@ -1113,21 +1109,14 @@ impl ModelClientSession {
     pub async fn preconnect_websocket(
         &mut self,
         session_telemetry: &SessionTelemetry,
-        model_info: &ModelInfo,
+        _model_info: &ModelInfo,
     ) -> std::result::Result<(), ApiError> {
         if !self.client.responses_websocket_enabled() {
             return Ok(());
         }
-        let use_responses_lite = model_info.use_responses_lite;
-        if self
-            .websocket_session
-            .connection
-            .as_ref()
-            .is_some_and(|connection| connection.use_responses_lite == use_responses_lite)
-        {
+        if self.websocket_session.connection.is_some() {
             return Ok(());
         }
-        self.reset_websocket_session();
 
         let client_setup = self.client.current_client_setup().await.map_err(|err| {
             ApiError::Stream(format!(
@@ -1147,15 +1136,11 @@ impl ModelClientSession {
                 client_setup.api_auth,
                 Some(Arc::clone(&self.turn_state)),
                 /*turn_metadata_header*/ None,
-                use_responses_lite,
                 auth_context,
                 RequestRouteTelemetry::for_endpoint(RESPONSES_ENDPOINT),
             )
             .await?;
-        self.websocket_session.connection = Some(CachedWebsocketConnection {
-            inner: connection,
-            use_responses_lite,
-        });
+        self.websocket_session.connection = Some(connection);
         self.websocket_session
             .set_connection_reused(/*connection_reused*/ false);
         Ok(())
@@ -1183,25 +1168,23 @@ impl ModelClientSession {
             api_auth,
             turn_metadata_header,
             options,
-            use_responses_lite,
             auth_context,
             request_route_telemetry,
         } = params;
         let needs_new = match self.websocket_session.connection.as_ref() {
-            Some(connection) => {
-                connection.inner.is_closed().await
-                    || connection.use_responses_lite != use_responses_lite
-            }
+            Some(conn) => conn.is_closed().await,
             None => true,
         };
 
         if needs_new {
-            self.reset_websocket_session();
+            self.websocket_session.last_request = None;
+            self.websocket_session.last_response_rx = None;
+            self.websocket_session.last_response_from_untraced_warmup = false;
             let turn_state = options
                 .turn_state
                 .clone()
                 .unwrap_or_else(|| Arc::clone(&self.turn_state));
-            let connection = self
+            let new_conn = match self
                 .client
                 .connect_websocket(
                     session_telemetry,
@@ -1209,15 +1192,20 @@ impl ModelClientSession {
                     api_auth,
                     Some(turn_state),
                     turn_metadata_header,
-                    use_responses_lite,
                     auth_context,
                     request_route_telemetry,
                 )
-                .await?;
-            self.websocket_session.connection = Some(CachedWebsocketConnection {
-                inner: connection,
-                use_responses_lite,
-            });
+                .await
+            {
+                Ok(new_conn) => new_conn,
+                Err(err) => {
+                    if matches!(err, ApiError::Transport(TransportError::Timeout)) {
+                        self.reset_websocket_session();
+                    }
+                    return Err(err);
+                }
+            };
+            self.websocket_session.connection = Some(new_conn);
             self.websocket_session
                 .set_connection_reused(/*connection_reused*/ false);
         } else {
@@ -1228,7 +1216,6 @@ impl ModelClientSession {
         self.websocket_session
             .connection
             .as_ref()
-            .map(|connection| &connection.inner)
             .ok_or(ApiError::Stream(
                 "websocket connection is unavailable".to_string(),
             ))
@@ -1424,7 +1411,10 @@ impl ModelClientSession {
             )?;
             let mut ws_payload = ResponseCreateWsRequest {
                 client_metadata: response_create_client_metadata(
-                    Some(self.client.build_ws_client_metadata(turn_metadata_header)),
+                    Some(
+                        self.client
+                            .build_ws_client_metadata(turn_metadata_header, model_info),
+                    ),
                     request_trace.as_ref(),
                 ),
                 ..ResponseCreateWsRequest::from(&request)
@@ -1440,7 +1430,6 @@ impl ModelClientSession {
                     api_auth: client_setup.api_auth,
                     turn_metadata_header,
                     options: &options,
-                    use_responses_lite: model_info.use_responses_lite,
                     auth_context: request_auth_context,
                     request_route_telemetry: RequestRouteTelemetry::for_endpoint(
                         RESPONSES_ENDPOINT,
@@ -1497,7 +1486,6 @@ impl ModelClientSession {
                     ))
                 })?;
             let stream_result = websocket_connection
-                .inner
                 .stream_request(ws_request, self.websocket_session.connection_reused())
                 .await
                 .map_err(|err| {
@@ -2015,7 +2003,6 @@ struct WebsocketConnectParams<'a> {
     api_auth: SharedAuthProvider,
     turn_metadata_header: Option<&'a str>,
     options: &'a ApiResponsesOptions,
-    use_responses_lite: bool,
     auth_context: AuthRequestTelemetryContext,
     request_route_telemetry: RequestRouteTelemetry,
 }
