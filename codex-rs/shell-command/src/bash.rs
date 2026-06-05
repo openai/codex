@@ -141,32 +141,35 @@ pub fn extract_bash_command_joined(command: &[String]) -> Option<(String, String
     if rest.len() < 2 || !is_recognised_bash_lc_invocation(shell, flag) {
         return None;
     }
-    Some((shell.clone(), join_flattened_shell_script(rest)))
-}
-
-fn join_flattened_shell_script(tokens: &[String]) -> String {
     let mut script = String::new();
-    for token in tokens {
+    for token in rest {
         if !script.is_empty() {
             script.push(' ');
         }
-        if is_shell_operator_token(token) {
+        let without_fd = token.trim_start_matches(|ch: char| ch.is_ascii_digit());
+        let is_operator = token.chars().any(|ch| "<>|&;()".contains(ch))
+            && token
+                .chars()
+                .all(|ch| ch.is_ascii_digit() || "<>|&;()".contains(ch));
+        let is_attached_redirection = [
+            "&>>", "<<<", ">>", "<<", "<>", ">|", ">&", "<&", "&>", ">", "<",
+        ]
+        .iter()
+        .any(|operator| {
+            without_fd
+                .strip_prefix(operator)
+                .is_some_and(|target| !target.is_empty())
+        });
+        if is_operator || is_attached_redirection {
             script.push_str(token);
         } else {
             let Ok(quoted) = shlex::try_quote(token) else {
-                return "<command included NUL byte>".to_string();
+                return Some((shell.clone(), "<command included NUL byte>".to_string()));
             };
             script.push_str(&quoted);
         }
     }
-    script
-}
-
-fn is_shell_operator_token(token: &str) -> bool {
-    token.chars().any(|ch| "<>|&;()".contains(ch))
-        && token
-            .chars()
-            .all(|ch| ch.is_ascii_digit() || "<>|&;()".contains(ch))
+    Some((shell.clone(), script))
 }
 
 /// Returns the sequence of plain commands within a `bash -lc "..."` or
@@ -176,7 +179,7 @@ fn is_shell_operator_token(token: &str) -> bool {
 /// Uses the strict `extract_bash_command`, so flattened argv returns None
 /// rather than being rich-parsed: disambiguating "tail is script" from "tail
 /// is POSIX `$0`/`$1`" isn't safe here. Such argv instead lands in
-/// `single_unknown_for_command`'s joined fallback as `Unknown { cmd }`.
+/// `single_unknown_for_command` as `Unknown { cmd }` with the wrapper intact.
 pub fn parse_shell_lc_plain_commands(command: &[String]) -> Option<Vec<Vec<String>>> {
     let (_, script) = extract_bash_command(command)?;
 
@@ -424,6 +427,21 @@ mod tests {
         ])
         .expect("known shell + -lc + tail should match");
         assert_eq!(script, "rg 'foo bar' | head > /tmp/out 2>&1 ; echo done");
+    }
+
+    #[test]
+    fn extract_bash_command_joined_preserves_attached_redirections() {
+        let (_, script) = extract_bash_command_joined(&[
+            "zsh".to_string(),
+            "-lc".to_string(),
+            "command".to_string(),
+            "2>/tmp/stderr".to_string(),
+            ">output".to_string(),
+            ">>log".to_string(),
+            "&>/tmp/all".to_string(),
+        ])
+        .expect("known shell + -lc + tail should match");
+        assert_eq!(script, "command 2>/tmp/stderr >output >>log &>/tmp/all");
     }
 
     #[test]

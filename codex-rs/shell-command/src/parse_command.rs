@@ -53,11 +53,6 @@ fn single_unknown_for_command(command: &[String]) -> ParsedCommand {
             cmd: shell_command.to_string(),
         };
     }
-    // Fall back for argv flattened past `[shell, flag, script]` before
-    // leaking the wrapper into shlex_join below.
-    if let Some((_, script)) = crate::bash::extract_bash_command_joined(command) {
-        return ParsedCommand::Unknown { cmd: script };
-    }
     ParsedCommand::Unknown {
         cmd: shlex_join(command),
     }
@@ -81,14 +76,18 @@ mod tests {
     }
 
     #[test]
-    fn flattened_shell_wrapper_strips_to_script_only() {
-        // Flattened argv used to fall through to shlex_join, leaking the
-        // wrapper into Unknown.cmd; the joined fallback now stitches the tail.
-        let parsed = parse_command(&vec_str(&["zsh", "-lc", "touch", "/tmp/foo"]));
+    fn shell_wrapper_with_positional_args_remains_intact() {
+        let parsed = parse_command(&vec_str(&[
+            "bash",
+            "-c",
+            "echo \"$0\" \"$1\"",
+            "tool",
+            "arg",
+        ]));
         assert_eq!(
             parsed,
             vec![ParsedCommand::Unknown {
-                cmd: "touch /tmp/foo".to_string(),
+                cmd: "bash -c 'echo \"$0\" \"$1\"' tool arg".to_string(),
             }]
         );
     }
@@ -129,22 +128,6 @@ mod tests {
         let argv = vec_str(&["bash", "-x", "echo hi"]);
         assert!(crate::bash::extract_bash_command(&argv).is_none());
         assert!(crate::bash::extract_bash_command_joined(&argv).is_none());
-    }
-
-    #[test]
-    fn flattened_shell_wrapper_handles_absolute_shell_path() {
-        let parsed = parse_command(&vec_str(&[
-            "/opt/homebrew/bin/zsh",
-            "-lc",
-            "touch",
-            "/tmp/foo",
-        ]));
-        assert_eq!(
-            parsed,
-            vec![ParsedCommand::Unknown {
-                cmd: "touch /tmp/foo".to_string(),
-            }]
-        );
     }
 
     fn assert_parsed(args: &[String], expected: Vec<ParsedCommand>) {
