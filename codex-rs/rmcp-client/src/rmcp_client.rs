@@ -966,18 +966,8 @@ impl RmcpClient {
     }
 
     fn persist_oauth_tokens_in_background(runtime: OAuthPersistor, error_context: &'static str) {
-        Self::spawn_oauth_persistence(
-            async move { runtime.persist_if_needed().await },
-            error_context,
-        );
-    }
-
-    fn spawn_oauth_persistence(
-        persistence: impl Future<Output = Result<()>> + Send + 'static,
-        error_context: &'static str,
-    ) {
         tokio::spawn(async move {
-            if let Err(error) = persistence.await {
+            if let Err(error) = runtime.persist_if_needed().await {
                 warn!("{error_context}: {error}");
             }
         });
@@ -1129,13 +1119,83 @@ async fn create_oauth_transport_and_runtime(
 
 #[cfg(test)]
 mod tests {
+    use std::ffi::OsString;
+    use std::fs::OpenOptions;
+    use std::path::Path;
+    use std::path::PathBuf;
+    use std::sync::Arc;
     use std::time::Duration;
+    use std::time::SystemTime;
+    use std::time::UNIX_EPOCH;
 
+    use anyhow::Context;
+    use codex_exec_server::Environment;
+    use oauth2::AccessToken;
+    use oauth2::RefreshToken;
+    use oauth2::basic::BasicTokenType;
     use pretty_assertions::assert_eq;
-    use tokio::sync::oneshot;
+    use rmcp::model::ClientCapabilities;
+    use rmcp::model::Implementation;
+    use rmcp::model::ProtocolVersion;
+    use rmcp::transport::auth::CredentialStore;
+    use rmcp::transport::auth::OAuthTokenResponse;
+    use rmcp::transport::auth::StoredCredentials;
+    use rmcp::transport::auth::VendorExtraTokenFields;
+    use serde_json::Value;
+    use serde_json::json;
+    use sha2::Digest;
+    use sha2::Sha256;
+    use tempfile::TempDir;
     use tokio::time;
+    use wiremock::Mock;
+    use wiremock::MockServer;
+    use wiremock::Request;
+    use wiremock::ResponseTemplate;
+    use wiremock::matchers::method;
+    use wiremock::matchers::path;
 
     use super::*;
+    use crate::oauth::WrappedOAuthTokenResponse;
+    use crate::oauth::load_oauth_tokens;
+    use crate::oauth::save_oauth_tokens;
+
+    const OPERATION_TEST_SERVER_NAME: &str = "test-completed-operation-persistence";
+    const OPERATION_TEST_CLIENT_ID: &str = "test-operation-client-id";
+    const OPERATION_TEST_OLD_ACCESS_TOKEN: &str = "old-operation-access-token";
+    const OPERATION_TEST_OLD_REFRESH_TOKEN: &str = "old-operation-refresh-token";
+    const OPERATION_TEST_NEW_ACCESS_TOKEN: &str = "new-operation-access-token";
+    const OPERATION_TEST_NEW_REFRESH_TOKEN: &str = "new-operation-refresh-token";
+
+    struct CodexHomeGuard {
+        original: Option<OsString>,
+    }
+
+    impl CodexHomeGuard {
+        fn set(path: &Path) -> Self {
+            let original = std::env::var_os("CODEX_HOME");
+            // SAFETY: this test is serialized and restores the process environment on drop.
+            unsafe {
+                std::env::set_var("CODEX_HOME", path);
+            }
+            Self { original }
+        }
+    }
+
+    impl Drop for CodexHomeGuard {
+        fn drop(&mut self) {
+            if let Some(original) = &self.original {
+                // SAFETY: this test is serialized and restores the prior value.
+                unsafe {
+                    std::env::set_var("CODEX_HOME", original);
+                }
+            } else {
+                // SAFETY: this test is serialized and removes only the value it set.
+                unsafe {
+                    std::env::remove_var("CODEX_HOME");
+                }
+            }
+        }
+    }
 
     #[tokio::test]
     async fn active_time_timeout_pauses_while_elicitation_is_pending() {
@@ -1156,36 +1216,273 @@ mod tests {
         assert_eq!(Ok("done"), result);
     }
 
-    #[tokio::test]
-    async fn completed_operation_is_not_delayed_by_oauth_persistence() {
-        let (started_tx, started_rx) = oneshot::channel();
-        let (release_tx, release_rx) = oneshot::channel();
-        let (finished_tx, mut finished_rx) = oneshot::channel();
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[serial_test::serial]
+    async fn completed_operation_returns_while_oauth_persistence_is_contended() -> Result<()> {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/.well-known/oauth-authorization-server/mcp"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "authorization_endpoint": format!("{}/oauth/authorize", server.uri()),
+                "token_endpoint": format!("{}/oauth/token", server.uri()),
+                "scopes_supported": [""],
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/mcp"))
+            .respond_with(|request: &Request| {
+                let Ok(body) = request.body_json::<Value>() else {
+                    return ResponseTemplate::new(400).set_body_string("invalid JSON-RPC request");
+                };
+                match body.get("method").and_then(Value::as_str) {
+                    Some("initialize") => ResponseTemplate::new(200).set_body_json(json!({
+                        "jsonrpc": "2.0",
+                        "id": body.get("id").cloned().unwrap_or(Value::Null),
+                        "result": {
+                            "protocolVersion": "2025-06-18",
+                            "capabilities": {},
+                            "serverInfo": {
+                                "name": "completed-operation-test",
+                                "version": "0.0.0-test",
+                            },
+                        },
+                    })),
+                    Some("notifications/initialized") => ResponseTemplate::new(202),
+                    method => ResponseTemplate::new(400)
+                        .set_body_string(format!("unexpected JSON-RPC method: {method:?}")),
+                }
+            })
+            .expect(2)
+            .mount(&server)
+            .await;
 
-        RmcpClient::spawn_oauth_persistence(
-            async move {
-                started_tx.send(()).expect("signal persistence start");
-                release_rx.await.expect("release persistence");
-                finished_tx.send(()).expect("signal persistence finish");
-                Ok(())
-            },
-            "test OAuth persistence failure",
+        let codex_home = TempDir::new()?;
+        let _codex_home_guard = CodexHomeGuard::set(codex_home.path());
+        let server_url = format!("{}/mcp", server.uri());
+        let old_response = operation_test_token_response(
+            OPERATION_TEST_OLD_ACCESS_TOKEN,
+            OPERATION_TEST_OLD_REFRESH_TOKEN,
         );
-        let completed_result = "completed tool response";
+        let initial_tokens = StoredOAuthTokens {
+            server_name: OPERATION_TEST_SERVER_NAME.to_string(),
+            url: server_url.clone(),
+            client_id: OPERATION_TEST_CLIENT_ID.to_string(),
+            token_response: WrappedOAuthTokenResponse(old_response.clone()),
+            expires_at: Some(unix_millis().saturating_add(3_600_000)),
+        };
+        save_oauth_tokens(
+            OPERATION_TEST_SERVER_NAME,
+            &initial_tokens,
+            OAuthCredentialsStoreMode::File,
+        )?;
 
-        time::timeout(Duration::from_secs(1), started_rx)
-            .await
-            .expect("persistence task did not start")
-            .expect("persistence start sender dropped");
-        assert_eq!(completed_result, "completed tool response");
-        assert!(matches!(
-            finished_rx.try_recv(),
-            Err(oneshot::error::TryRecvError::Empty)
-        ));
-        release_tx.send(()).expect("release persistence task");
-        time::timeout(Duration::from_secs(1), finished_rx)
-            .await
-            .expect("persistence task did not finish")
-            .expect("persistence finish sender dropped");
+        let client = RmcpClient::new_streamable_http_client(
+            OPERATION_TEST_SERVER_NAME,
+            &server_url,
+            Some("test-bearer".to_string()),
+            /*http_headers*/ None,
+            /*env_http_headers*/ None,
+            OAuthCredentialsStoreMode::File,
+            Environment::default_for_tests().get_http_client(),
+            /*auth_provider*/ None,
+        )
+        .await?;
+        client
+            .initialize(
+                InitializeRequestParams::new(
+                    ClientCapabilities::default(),
+                    Implementation::new("codex-test", "0.0.0-test"),
+                )
+                .with_protocol_version(ProtocolVersion::V_2025_06_18),
+                Some(Duration::from_secs(2)),
+                Box::new(|_, _| {
+                    async {
+                        Ok(ElicitationResponse {
+                            action: ElicitationAction::Accept,
+                            content: Some(json!({})),
+                            meta: None,
+                        })
+                    }
+                    .boxed()
+                }),
+            )
+            .await?;
+        let service = client.service().await?;
+
+        let credential_store = InMemoryCredentialStore::new();
+        let mut oauth_state =
+            OAuthState::new(server_url.clone(), Some(reqwest::Client::new())).await?;
+        match &mut oauth_state {
+            OAuthState::Unauthorized(manager) => {
+                manager.set_credential_store(credential_store.clone());
+            }
+            _ => {
+                return Err(anyhow!(
+                    "unexpected OAuth state during operation test setup"
+                ));
+            }
+        }
+        oauth_state
+            .set_credentials(OPERATION_TEST_CLIENT_ID, old_response)
+            .await?;
+        let authorization_manager = match oauth_state {
+            OAuthState::Authorized(manager) => manager,
+            _ => return Err(anyhow!("OAuth operation test setup did not authorize")),
+        };
+        let oauth_persistor = OAuthPersistor::new(
+            OPERATION_TEST_SERVER_NAME.to_string(),
+            server_url.clone(),
+            Arc::new(Mutex::new(authorization_manager)),
+            credential_store.clone(),
+            OAuthCredentialsStoreMode::File,
+            Some(initial_tokens.clone()),
+        );
+
+        let fallback_lock = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(operation_test_fallback_lock_path(codex_home.path()))?;
+        fallback_lock.lock_shared()?;
+
+        let new_response = operation_test_token_response(
+            OPERATION_TEST_NEW_ACCESS_TOKEN,
+            OPERATION_TEST_NEW_REFRESH_TOKEN,
+        );
+        let operation_store = credential_store.clone();
+        let operation_response = new_response.clone();
+        let operation = move |_service| {
+            let operation_store = operation_store.clone();
+            let operation_response = operation_response.clone();
+            async move {
+                if let Err(error) = operation_store
+                    .save(StoredCredentials::new(
+                        OPERATION_TEST_CLIENT_ID.to_string(),
+                        Some(operation_response),
+                        Vec::new(),
+                        Some(unix_seconds()),
+                    ))
+                    .await
+                {
+                    panic!("failed to simulate completed OAuth side effect: {error}");
+                }
+                Ok::<_, rmcp::service::ServiceError>("side effect completed".to_string())
+            }
+            .boxed()
+        };
+
+        let result = RmcpClient::run_service_operation_once(
+            service,
+            Some(oauth_persistor),
+            "tools/call",
+            Some(Duration::from_millis(100)),
+            ElicitationPauseState::new(),
+            &operation,
+        )
+        .await?;
+        assert_eq!(result, "side effect completed");
+        time::sleep(Duration::from_millis(200)).await;
+        let persisted_while_locked = load_oauth_tokens(
+            OPERATION_TEST_SERVER_NAME,
+            &server_url,
+            OAuthCredentialsStoreMode::File,
+        )?
+        .context("missing persisted OAuth credentials while fallback lock is held")?;
+        assert_eq!(
+            (
+                persisted_while_locked
+                    .token_response
+                    .0
+                    .access_token()
+                    .secret()
+                    .as_str(),
+                persisted_while_locked
+                    .token_response
+                    .0
+                    .refresh_token()
+                    .map(|token| token.secret().as_str()),
+            ),
+            (
+                OPERATION_TEST_OLD_ACCESS_TOKEN,
+                Some(OPERATION_TEST_OLD_REFRESH_TOKEN),
+            )
+        );
+
+        drop(fallback_lock);
+        let persisted = time::timeout(Duration::from_secs(2), async {
+            loop {
+                let loaded = load_oauth_tokens(
+                    OPERATION_TEST_SERVER_NAME,
+                    &server_url,
+                    OAuthCredentialsStoreMode::File,
+                )?;
+                if loaded.as_ref().is_some_and(|tokens| {
+                    tokens.token_response.0.access_token().secret()
+                        == OPERATION_TEST_NEW_ACCESS_TOKEN
+                }) {
+                    return Ok::<_, anyhow::Error>(loaded);
+                }
+                time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .context("timed out waiting for post-operation OAuth persistence")??;
+        assert_eq!(
+            persisted.as_ref().map(|tokens| tokens
+                .token_response
+                .0
+                .access_token()
+                .secret()
+                .as_str()),
+            Some(OPERATION_TEST_NEW_ACCESS_TOKEN)
+        );
+
+        server.verify().await;
+        Ok(())
+    }
+
+    fn operation_test_token_response(
+        access_token: &str,
+        refresh_token: &str,
+    ) -> OAuthTokenResponse {
+        let mut response = OAuthTokenResponse::new(
+            AccessToken::new(access_token.to_string()),
+            BasicTokenType::Bearer,
+            VendorExtraTokenFields::default(),
+        );
+        response.set_refresh_token(Some(RefreshToken::new(refresh_token.to_string())));
+        response.set_expires_in(Some(&Duration::from_secs(7200)));
+        response
+    }
+
+    #[cfg(unix)]
+    fn operation_test_fallback_lock_path(codex_home: &Path) -> PathBuf {
+        let mut hasher = Sha256::new();
+        hasher.update(codex_home.as_os_str().to_string_lossy().as_bytes());
+        let digest = format!("{:x}", hasher.finalize());
+        // SAFETY: getuid has no preconditions and returns the real UID.
+        let user_namespace = format!("uid-{}", unsafe { libc::getuid() });
+        PathBuf::from("/tmp").join(format!(
+            "codex-mcp-oauth-fallback-{user_namespace}-{}.lock",
+            &digest[..16]
+        ))
+    }
+
+    fn unix_millis() -> u64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64
+    }
+
+    fn unix_seconds() -> u64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
     }
 }

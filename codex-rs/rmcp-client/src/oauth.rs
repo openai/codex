@@ -41,6 +41,7 @@ use std::io::ErrorKind;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::OnceLock;
 use std::time::Duration;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
@@ -399,12 +400,22 @@ struct OAuthPersistorInner {
     credential_store: InMemoryCredentialStore,
     store_mode: OAuthCredentialsStoreMode,
     last_credentials: Mutex<Option<StoredOAuthTokens>>,
+    refresh_attempt: Arc<Mutex<()>>,
     refresh_persistence_failure: Mutex<Option<RefreshPersistenceFailure>>,
 }
 
 struct RefreshPersistenceFailure {
     message: String,
-    _refresh_locks: Vec<fs::File>,
+}
+
+static FAILED_REFRESH_LOCKS: OnceLock<std::sync::Mutex<Vec<fs::File>>> = OnceLock::new();
+
+fn retain_failed_refresh_locks(refresh_locks: Vec<fs::File>) {
+    FAILED_REFRESH_LOCKS
+        .get_or_init(std::sync::Mutex::default)
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .extend(refresh_locks);
 }
 
 impl OAuthPersistor {
@@ -424,6 +435,7 @@ impl OAuthPersistor {
                 credential_store,
                 store_mode,
                 last_credentials: Mutex::new(initial_credentials),
+                refresh_attempt: Arc::new(Mutex::new(())),
                 refresh_persistence_failure: Mutex::new(None),
             }),
         }
@@ -505,6 +517,7 @@ impl OAuthPersistor {
         reason = "AuthorizationManager async access must be serialized through its mutex"
     )]
     pub(crate) async fn refresh_if_needed(&self) -> Result<()> {
+        let refresh_attempt_guard = Arc::clone(&self.inner.refresh_attempt).lock_owned().await;
         let previous_failure = self
             .inner
             .refresh_persistence_failure
@@ -578,6 +591,7 @@ impl OAuthPersistor {
 
         let persistor = self.clone();
         tokio::spawn(async move {
+            let _refresh_attempt_guard = refresh_attempt_guard;
             let manager = persistor.inner.authorization_manager.clone();
             let guard = manager.lock().await;
             match guard.refresh_token().await {
@@ -604,10 +618,10 @@ impl OAuthPersistor {
                     persistor.inner.server_name
                 );
                 warn!("{message}");
+                retain_failed_refresh_locks(refresh_locks);
                 *persistor.inner.refresh_persistence_failure.lock().await =
                     Some(RefreshPersistenceFailure {
                         message: message.clone(),
-                        _refresh_locks: refresh_locks,
                     });
                 return Err(anyhow!(message));
             }
