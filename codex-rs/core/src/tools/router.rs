@@ -92,16 +92,13 @@ impl ToolRouter {
             .unwrap_or(false)
     }
 
-    pub fn tool_is_execution_barrier(&self, call: &ToolCall) -> bool {
+    pub(crate) fn tool_execution_policy(
+        &self,
+        call: &ToolCall,
+    ) -> crate::tools::registry::ToolExecutionPolicy {
         self.registry
-            .execution_barrier(&call.tool_name)
-            .unwrap_or(/*default*/ false)
-    }
-
-    pub fn tool_cancels_suffix_on_failure(&self, call: &ToolCall) -> bool {
-        self.registry
-            .cancel_suffix_on_failure(&call.tool_name)
-            .unwrap_or(/*default*/ false)
+            .execution_policy(&call.tool_name)
+            .unwrap_or_default()
     }
 
     #[instrument(level = "trace", skip_all, err)]

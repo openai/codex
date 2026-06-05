@@ -67,7 +67,7 @@ impl ToolCallRuntime {
     }
 
     pub(crate) fn tool_is_execution_barrier(&self, call: &ToolCall) -> bool {
-        self.router.tool_is_execution_barrier(call)
+        self.router.tool_execution_policy(call).is_barrier()
     }
 
     pub(crate) fn create_diff_consumer(
@@ -85,7 +85,10 @@ impl ToolCallRuntime {
     ) -> impl std::future::Future<Output = Result<ResponseInputItem, CodexErr>> {
         let error_call = call.clone();
         let dependency_failure = Arc::clone(&self.dependency_failure);
-        let cancel_suffix_on_failure = self.router.tool_cancels_suffix_on_failure(&call);
+        let cancel_suffix_on_failure = self
+            .router
+            .tool_execution_policy(&call)
+            .cancels_suffix_on_failure();
         let prior_dependency_failure = dependency_failure
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -112,37 +115,31 @@ impl ToolCallRuntime {
                 Ok(response) => {
                     let response = response.into_response();
                     if cancel_suffix_on_failure && !response_input_succeeded(&response) {
-                        *dependency_failure
-                            .lock()
-                            .unwrap_or_else(std::sync::PoisonError::into_inner) =
-                            Some(DependencyFailure {
-                                call_id: error_call.call_id.clone(),
-                                code: response_input_error_code(&response),
-                            });
+                        record_dependency_failure(
+                            dependency_failure.as_ref(),
+                            &error_call.call_id,
+                            response_input_error_code(&response),
+                        );
                     }
                     Ok(response)
                 }
                 Err(FunctionCallError::Fatal(message)) => {
                     if cancel_suffix_on_failure {
-                        *dependency_failure
-                            .lock()
-                            .unwrap_or_else(std::sync::PoisonError::into_inner) =
-                            Some(DependencyFailure {
-                                call_id: error_call.call_id.clone(),
-                                code: "tool_error".to_string(),
-                            });
+                        record_dependency_failure(
+                            dependency_failure.as_ref(),
+                            &error_call.call_id,
+                            "tool_error",
+                        );
                     }
                     Err(CodexErr::Fatal(message))
                 }
                 Err(other) => {
                     if cancel_suffix_on_failure {
-                        *dependency_failure
-                            .lock()
-                            .unwrap_or_else(std::sync::PoisonError::into_inner) =
-                            Some(DependencyFailure {
-                                call_id: error_call.call_id.clone(),
-                                code: "tool_error".to_string(),
-                            });
+                        record_dependency_failure(
+                            dependency_failure.as_ref(),
+                            &error_call.call_id,
+                            "tool_error",
+                        );
                     }
                     Ok(Self::failure_response(error_call, other))
                 }
@@ -355,6 +352,19 @@ fn response_input_succeeded(response: &ResponseInputItem) -> bool {
     }
 }
 
+fn record_dependency_failure(
+    state: &Mutex<Option<DependencyFailure>>,
+    call_id: &str,
+    code: impl Into<String>,
+) {
+    *state
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(DependencyFailure {
+        call_id: call_id.to_string(),
+        code: code.into(),
+    });
+}
+
 fn response_input_error_code(response: &ResponseInputItem) -> String {
     let output = match response {
         ResponseInputItem::FunctionCallOutput { output, .. }
@@ -415,13 +425,11 @@ mod tests {
 
         fn handle(&self, _invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'_> {
             Box::pin(async {
-                Ok(
-                    Box::new(FunctionToolOutput::from_text(
-                        "ok".to_string(),
-                        /*success*/ Some(true),
-                    ))
-                        as Box<dyn crate::tools::context::ToolOutput>,
-                )
+                Ok(Box::new(FunctionToolOutput::from_text(
+                    "ok".to_string(),
+                    /*success*/ Some(true),
+                ))
+                    as Box<dyn crate::tools::context::ToolOutput>)
             })
         }
     }
@@ -465,18 +473,15 @@ mod tests {
                 Ok(Box::new(FunctionToolOutput::from_text(
                     serde_json::json!({ "code": "path_not_found" }).to_string(),
                     /*success*/ Some(false),
-                )) as Box<dyn crate::tools::context::ToolOutput>)
+                ))
+                    as Box<dyn crate::tools::context::ToolOutput>)
             })
         }
     }
 
     impl CoreToolRuntime for FailingBarrierHandler {
-        fn execution_barrier(&self) -> bool {
-            true
-        }
-
-        fn cancel_suffix_on_failure(&self) -> bool {
-            true
+        fn execution_policy(&self) -> crate::tools::registry::ToolExecutionPolicy {
+            crate::tools::registry::ToolExecutionPolicy::BarrierAndCancelSuffix
         }
     }
 
@@ -507,7 +512,8 @@ mod tests {
                 Ok(Box::new(FunctionToolOutput::from_text(
                     "ok".to_string(),
                     /*success*/ Some(true),
-                )) as Box<dyn crate::tools::context::ToolOutput>)
+                ))
+                    as Box<dyn crate::tools::context::ToolOutput>)
             })
         }
     }
@@ -764,8 +770,10 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
-    async fn failed_barrier_cancels_suffix_without_dispatching_it() -> anyhow::Result<()> {
+    async fn assert_failed_barrier_cancels_suffix(
+        fatal: bool,
+        expected_code: &str,
+    ) -> anyhow::Result<ToolCallRuntime> {
         let (session, turn_context) = crate::session::tests::make_session_and_context().await;
         let barrier_name = codex_tools::ToolName::plain("barrier");
         let suffix_name = codex_tools::ToolName::plain("suffix");
@@ -774,7 +782,7 @@ mod tests {
             ToolRegistry::from_tools([
                 Arc::new(FailingBarrierHandler {
                     tool_name: barrier_name.clone(),
-                    fatal: false,
+                    fatal,
                 }) as Arc<dyn CoreToolRuntime>,
                 Arc::new(RecordingHandler {
                     tool_name: suffix_name.clone(),
@@ -792,7 +800,7 @@ mod tests {
         let payload = ToolPayload::Function {
             arguments: "{}".to_string(),
         };
-        runtime
+        let barrier_response = runtime
             .clone()
             .handle_tool_call(
                 ToolCall {
@@ -802,7 +810,15 @@ mod tests {
                 },
                 CancellationToken::new(),
             )
-            .await?;
+            .await;
+        if fatal {
+            assert!(matches!(
+                barrier_response,
+                Err(CodexErr::Fatal(message)) if message == "fatal barrier"
+            ));
+        } else {
+            barrier_response?;
+        }
         let response = runtime
             .clone()
             .handle_tool_call(
@@ -828,10 +844,21 @@ mod tests {
                 "code": "dependency_cancelled",
                 "message": "cancelled because workspace mutation `barrier-call` failed",
                 "failed_mutation_call_id": "barrier-call",
-                "failed_mutation_code": "path_not_found",
+                "failed_mutation_code": expected_code,
             })
         );
         assert!(!suffix_called.load(Ordering::Acquire));
+
+        Ok(runtime)
+    }
+
+    #[tokio::test]
+    async fn failed_barrier_cancels_suffix_without_dispatching_it() -> anyhow::Result<()> {
+        let runtime = assert_failed_barrier_cancels_suffix(
+            /*fatal*/ false,
+            /*expected_code*/ "path_not_found",
+        )
+        .await?;
 
         let tool_search_response = runtime
             .handle_tool_call(
@@ -862,75 +889,11 @@ mod tests {
 
     #[tokio::test]
     async fn fatal_barrier_cancels_suffix_without_dispatching_it() -> anyhow::Result<()> {
-        let (session, turn_context) = crate::session::tests::make_session_and_context().await;
-        let barrier_name = codex_tools::ToolName::plain("barrier");
-        let suffix_name = codex_tools::ToolName::plain("suffix");
-        let suffix_called = Arc::new(AtomicBool::new(/*v*/ false));
-        let router = Arc::new(ToolRouter::from_parts(
-            ToolRegistry::from_tools([
-                Arc::new(FailingBarrierHandler {
-                    tool_name: barrier_name.clone(),
-                    fatal: true,
-                }) as Arc<dyn CoreToolRuntime>,
-                Arc::new(RecordingHandler {
-                    tool_name: suffix_name.clone(),
-                    called: Arc::clone(&suffix_called),
-                }) as Arc<dyn CoreToolRuntime>,
-            ]),
-            Vec::new(),
-        ));
-        let runtime = ToolCallRuntime::new(
-            router,
-            Arc::new(session),
-            Arc::new(turn_context),
-            Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new())),
-        );
-        let payload = ToolPayload::Function {
-            arguments: "{}".to_string(),
-        };
-        let barrier_response = runtime
-            .clone()
-            .handle_tool_call(
-                ToolCall {
-                    tool_name: barrier_name,
-                    call_id: "barrier-call".to_string(),
-                    payload: payload.clone(),
-                },
-                CancellationToken::new(),
-            )
-            .await;
-        assert!(matches!(
-            barrier_response,
-            Err(CodexErr::Fatal(message)) if message == "fatal barrier"
-        ));
-
-        let response = runtime
-            .handle_tool_call(
-                ToolCall {
-                    tool_name: suffix_name,
-                    call_id: "suffix-call".to_string(),
-                    payload,
-                },
-                CancellationToken::new(),
-            )
-            .await?;
-        let ResponseInputItem::FunctionCallOutput { output, .. } = response else {
-            anyhow::bail!("cancelled suffix should return function output");
-        };
-        let FunctionCallOutputBody::Text(text) = output.body else {
-            anyhow::bail!("cancelled suffix output should be text");
-        };
-        assert_eq!(output.success, Some(false));
-        assert_eq!(
-            serde_json::from_str::<serde_json::Value>(&text)?,
-            serde_json::json!({
-                "code": "dependency_cancelled",
-                "message": "cancelled because workspace mutation `barrier-call` failed",
-                "failed_mutation_call_id": "barrier-call",
-                "failed_mutation_code": "tool_error",
-            })
-        );
-        assert!(!suffix_called.load(Ordering::Acquire));
+        assert_failed_barrier_cancels_suffix(
+            /*fatal*/ true,
+            /*expected_code*/ "tool_error",
+        )
+        .await?;
         Ok(())
     }
 }

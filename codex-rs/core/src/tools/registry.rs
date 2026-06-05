@@ -40,17 +40,32 @@ pub(crate) type ToolTelemetryTags = Vec<(&'static str, String)>;
 pub use codex_tools::ToolExecutor;
 pub use codex_tools::ToolExposure;
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum ToolExecutionPolicy {
+    #[default]
+    Parallel,
+    // Constructed by workspace mutation tools in the next stack layer.
+    #[allow(dead_code)]
+    BarrierAndCancelSuffix,
+}
+
+impl ToolExecutionPolicy {
+    pub(crate) fn is_barrier(self) -> bool {
+        !matches!(self, Self::Parallel)
+    }
+
+    pub(crate) fn cancels_suffix_on_failure(self) -> bool {
+        matches!(self, Self::BarrierAndCancelSuffix)
+    }
+}
+
 /// Typed runtime contract for locally executed tools.
 ///
 /// Implementers provide the shared `ToolExecutor` behavior plus optional
 /// core-owned metadata for hooks, telemetry, tool search, and argument diffs.
 pub(crate) trait CoreToolRuntime: ToolExecutor<ToolInvocation> {
-    fn execution_barrier(&self) -> bool {
-        false
-    }
-
-    fn cancel_suffix_on_failure(&self) -> bool {
-        false
+    fn execution_policy(&self) -> ToolExecutionPolicy {
+        ToolExecutionPolicy::Parallel
     }
 
     fn matches_kind(&self, payload: &ToolPayload) -> bool {
@@ -285,12 +300,8 @@ impl ToolExecutor<ToolInvocation> for ExposureOverride {
 }
 
 impl CoreToolRuntime for ExposureOverride {
-    fn execution_barrier(&self) -> bool {
-        self.handler.execution_barrier()
-    }
-
-    fn cancel_suffix_on_failure(&self) -> bool {
-        self.handler.cancel_suffix_on_failure()
+    fn execution_policy(&self) -> ToolExecutionPolicy {
+        self.handler.execution_policy()
     }
 
     fn matches_kind(&self, payload: &ToolPayload) -> bool {
@@ -403,14 +414,9 @@ impl ToolRegistry {
         Some(tool.waits_for_runtime_cancellation())
     }
 
-    pub(crate) fn execution_barrier(&self, name: &ToolName) -> Option<bool> {
+    pub(crate) fn execution_policy(&self, name: &ToolName) -> Option<ToolExecutionPolicy> {
         let tool = self.tool(name)?;
-        Some(tool.execution_barrier())
-    }
-
-    pub(crate) fn cancel_suffix_on_failure(&self, name: &ToolName) -> Option<bool> {
-        let tool = self.tool(name)?;
-        Some(tool.cancel_suffix_on_failure())
+        Some(tool.execution_policy())
     }
 
     #[allow(dead_code)]
