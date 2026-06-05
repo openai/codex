@@ -197,13 +197,7 @@ impl App {
                     tui.frame_requester().schedule_frame();
                 }
                 self.transcript_cells.push(cell.clone());
-                if self.initial_history_replay_buffer.as_ref().is_some() {
-                    self.insert_history_cell_lines_with_initial_replay_buffer(
-                        cell.as_ref(),
-                        self.chat_widget
-                            .history_wrap_width(tui.terminal.last_known_screen_size.width),
-                    );
-                } else {
+                if self.initial_history_replay_buffer.is_none() {
                     self.insert_history_cell_lines(
                         tui,
                         cell.as_ref(),
@@ -212,8 +206,8 @@ impl App {
                     );
                 }
             }
-            AppEvent::EndInitialHistoryReplayBuffer => {
-                self.finish_initial_history_replay_buffer(tui);
+            AppEvent::EndHistoryReplay => {
+                self.finish_history_replay(tui);
             }
             AppEvent::ConsolidateAgentMessage {
                 source,

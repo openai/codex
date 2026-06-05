@@ -1074,13 +1074,12 @@ impl App {
         let should_buffer_initial_replay =
             self.terminal_resize_reflow_enabled() && !turns.is_empty();
         if should_buffer_initial_replay {
-            self.begin_initial_history_replay_buffer();
+            self.begin_history_replay();
         }
         self.chat_widget
             .replay_thread_turns(turns, ReplayKind::ResumeInitialMessages);
         if should_buffer_initial_replay {
-            self.app_event_tx
-                .send(AppEvent::EndInitialHistoryReplayBuffer);
+            self.app_event_tx.send(AppEvent::EndHistoryReplay);
         }
         let pending = std::mem::take(&mut self.pending_primary_events);
         for pending_event in pending {
@@ -1263,7 +1262,7 @@ impl App {
         let should_buffer_replay = self.terminal_resize_reflow_enabled()
             && (!snapshot.turns.is_empty() || !snapshot.events.is_empty());
         if should_buffer_replay {
-            self.begin_thread_switch_history_replay_buffer();
+            self.begin_history_replay();
         }
         let suppress_replay_notices =
             replay_filter::snapshot_has_pending_interactive_request(&snapshot);
@@ -1291,8 +1290,7 @@ impl App {
             self.handle_thread_event_replay(event);
         }
         if should_buffer_replay {
-            self.app_event_tx
-                .send(AppEvent::EndInitialHistoryReplayBuffer);
+            self.app_event_tx.send(AppEvent::EndHistoryReplay);
         }
         self.chat_widget
             .set_queue_autosend_suppressed(/*suppressed*/ false);

@@ -471,11 +471,9 @@ struct SessionSummary {
     resume_hint: Option<String>,
 }
 
-#[derive(Debug, Default)]
-struct InitialHistoryReplayBuffer {
-    retained_lines: VecDeque<crate::terminal_hyperlinks::HyperlinkLine>,
-    render_from_transcript_tail: bool,
-}
+/// Marks replay whose terminal writes are deferred until `transcript_cells` is complete.
+#[derive(Debug)]
+struct InitialHistoryReplayBuffer;
 
 pub(crate) struct App {
     model_catalog: Arc<ModelCatalog>,

@@ -577,8 +577,8 @@ pub(crate) enum AppEvent {
 
     InsertHistoryCell(Box<dyn HistoryCell>),
 
-    /// Finish buffering initial resume replay after all replay events have been queued.
-    EndInitialHistoryReplayBuffer,
+    /// Render deferred history after all resume or thread-switch replay events have been queued.
+    EndHistoryReplay,
 
     /// Replace the contiguous run of streaming `AgentMessageCell`s at the end of
     /// the transcript with a single `AgentMarkdownCell` that stores the raw
