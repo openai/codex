@@ -576,7 +576,7 @@ fn acquire_fallback_store_lock() -> Result<FallbackStoreLock> {
     let in_process_guard = FALLBACK_STORE_LOCK
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let path = find_codex_home()?.join(".mcp-oauth-locks/fallback-store.lock");
+    let path = fallback_store_lock_path()?;
     let file = open_oauth_lock_file(&path)?;
     file.lock().with_context(|| {
         format!(
@@ -605,13 +605,26 @@ fn open_oauth_lock_file(path: &std::path::Path) -> Result<fs::File> {
 
 fn oauth_server_lock_path(server_name: &str, url: &str) -> Result<PathBuf> {
     let server_digest = sha_256_prefix(&Value::String(format!("{server_name}\n{url}")))?;
-    let user_identity = std::env::var_os("HOME")
-        .or_else(|| std::env::var_os("USERPROFILE"))
-        .unwrap_or_else(|| std::env::temp_dir().into_os_string());
-    let user_digest = sha_256_prefix(&Value::String(user_identity.to_string_lossy().into_owned()))?;
-    Ok(std::env::temp_dir()
-        .join(format!("codex-mcp-oauth-{user_digest}"))
-        .join(format!("server-{server_digest}.lock")))
+    Ok(oauth_lock_root_path()?.join(format!("server-{server_digest}.lock")))
+}
+
+fn fallback_store_lock_path() -> Result<PathBuf> {
+    let credentials_path = fallback_file_path()?;
+    let store_digest = sha_256_prefix(&Value::String(
+        credentials_path.to_string_lossy().into_owned(),
+    ))?;
+    Ok(oauth_lock_root_path()?.join(format!("fallback-{store_digest}.lock")))
+}
+
+fn oauth_lock_root_path() -> Result<PathBuf> {
+    if let Some(user_profile) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))
+    {
+        return Ok(PathBuf::from(user_profile).join(".codex-mcp-oauth-locks"));
+    }
+
+    let codex_home = find_codex_home()?;
+    let parent = codex_home.parent().unwrap_or(codex_home);
+    Ok(parent.join(".codex-mcp-oauth-locks").to_path_buf())
 }
 
 fn same_persisted_generation(left: &StoredOAuthTokens, right: &StoredOAuthTokens) -> bool {
@@ -623,17 +636,14 @@ fn same_persisted_generation(left: &StoredOAuthTokens, right: &StoredOAuthTokens
         return false;
     }
 
-    let mut left_response = left.token_response.0.clone();
-    let mut right_response = right.token_response.0.clone();
-    left_response.set_expires_in(None);
-    right_response.set_expires_in(None);
-    match (
-        serde_json::to_string(&left_response),
-        serde_json::to_string(&right_response),
-    ) {
-        (Ok(left), Ok(right)) => left == right,
-        _ => false,
-    }
+    let left_response = &left.token_response.0;
+    let right_response = &right.token_response.0;
+    left_response.access_token().secret() == right_response.access_token().secret()
+        && left_response.token_type() == right_response.token_type()
+        && left_response.refresh_token().map(RefreshToken::secret)
+            == right_response.refresh_token().map(RefreshToken::secret)
+        && left_response.scopes() == right_response.scopes()
+        && left_response.extra_fields().0 == right_response.extra_fields().0
 }
 
 const FALLBACK_FILENAME: &str = ".credentials.json";
@@ -868,6 +878,7 @@ mod tests {
     use anyhow::Result;
     use keyring::Error as KeyringError;
     use pretty_assertions::assert_eq;
+    use std::ffi::OsString;
     use std::sync::Barrier;
     use std::sync::Mutex;
     use std::sync::MutexGuard;
@@ -882,6 +893,10 @@ mod tests {
     struct TempCodexHome {
         _guard: MutexGuard<'static, ()>,
         _dir: tempfile::TempDir,
+        original_codex_home: Option<OsString>,
+        original_home: Option<OsString>,
+        original_tmpdir: Option<OsString>,
+        original_userprofile: Option<OsString>,
     }
 
     impl TempCodexHome {
@@ -892,12 +907,26 @@ mod tests {
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner);
             let dir = tempdir().expect("create CODEX_HOME temp dir");
+            let codex_home = dir.path().join("codex-home");
+            let user_home = dir.path().join("user-home");
+            fs::create_dir_all(&codex_home).expect("create CODEX_HOME");
+            fs::create_dir_all(&user_home).expect("create user home");
+            let original_codex_home = std::env::var_os("CODEX_HOME");
+            let original_home = std::env::var_os("HOME");
+            let original_tmpdir = std::env::var_os("TMPDIR");
+            let original_userprofile = std::env::var_os("USERPROFILE");
             unsafe {
-                std::env::set_var("CODEX_HOME", dir.path());
+                std::env::set_var("CODEX_HOME", codex_home);
+                std::env::set_var("HOME", &user_home);
+                std::env::set_var("USERPROFILE", user_home);
             }
             Self {
                 _guard: guard,
                 _dir: dir,
+                original_codex_home,
+                original_home,
+                original_tmpdir,
+                original_userprofile,
             }
         }
     }
@@ -905,8 +934,18 @@ mod tests {
     impl Drop for TempCodexHome {
         fn drop(&mut self) {
             unsafe {
-                std::env::remove_var("CODEX_HOME");
+                restore_env_var("CODEX_HOME", self.original_codex_home.as_ref());
+                restore_env_var("HOME", self.original_home.as_ref());
+                restore_env_var("TMPDIR", self.original_tmpdir.as_ref());
+                restore_env_var("USERPROFILE", self.original_userprofile.as_ref());
             }
+        }
+    }
+
+    unsafe fn restore_env_var(name: &str, value: Option<&OsString>) {
+        match value {
+            Some(value) => unsafe { std::env::set_var(name, value) },
+            None => unsafe { std::env::remove_var(name) },
         }
     }
 
@@ -1143,6 +1182,65 @@ mod tests {
     }
 
     #[test]
+    fn persisted_generation_compares_vendor_fields_without_hashmap_order() {
+        let mut left = sample_tokens();
+        let mut right = left.clone();
+        let mut left_extra_fields = VendorExtraTokenFields::default();
+        left_extra_fields
+            .0
+            .insert("first".to_string(), serde_json::json!({"nested": true}));
+        left_extra_fields
+            .0
+            .insert("second".to_string(), serde_json::json!(["value"]));
+        let mut right_extra_fields = VendorExtraTokenFields::default();
+        right_extra_fields
+            .0
+            .insert("second".to_string(), serde_json::json!(["value"]));
+        right_extra_fields
+            .0
+            .insert("first".to_string(), serde_json::json!({"nested": true}));
+        left.token_response.0.set_extra_fields(left_extra_fields);
+        right.token_response.0.set_extra_fields(right_extra_fields);
+        right
+            .token_response
+            .0
+            .set_expires_in(Some(&Duration::from_secs(1)));
+
+        assert!(super::same_persisted_generation(&left, &right));
+
+        let mut changed_extra_fields = right.token_response.0.extra_fields().clone();
+        changed_extra_fields
+            .0
+            .insert("first".to_string(), serde_json::json!({"nested": false}));
+        right
+            .token_response
+            .0
+            .set_extra_fields(changed_extra_fields);
+        assert!(!super::same_persisted_generation(&left, &right));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn load_file_credentials_from_read_only_codex_home() -> Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+
+        let _env = TempCodexHome::new();
+        let tokens = sample_tokens();
+        super::save_oauth_tokens_to_file(&tokens)?;
+        let codex_home = find_codex_home()?;
+        let original_permissions = fs::metadata(&codex_home)?.permissions();
+        fs::set_permissions(&codex_home, fs::Permissions::from_mode(0o500))?;
+
+        let loaded = super::load_oauth_tokens_from_file(&tokens.server_name, &tokens.url);
+
+        fs::set_permissions(&codex_home, original_permissions)?;
+        let loaded = loaded?.expect("tokens should load from read-only CODEX_HOME");
+        assert_tokens_match_without_expiry(&loaded, &tokens);
+        assert!(!codex_home.join(".mcp-oauth-locks").exists());
+        Ok(())
+    }
+
+    #[test]
     fn fallback_store_serializes_writes_for_different_servers() -> Result<()> {
         let _env = TempCodexHome::new();
         let first = sample_tokens();
@@ -1198,12 +1296,18 @@ mod tests {
     }
 
     #[test]
-    fn server_generation_lock_is_shared_across_codex_homes() -> Result<()> {
+    fn server_generation_lock_is_stable_across_codex_homes_and_tmpdirs() -> Result<()> {
         let _env = TempCodexHome::new();
+        let first_tmpdir = tempdir()?;
+        unsafe {
+            std::env::set_var("TMPDIR", first_tmpdir.path());
+        }
         let first = super::oauth_server_lock_path("server", "https://example.test")?;
         let other_codex_home = tempdir()?;
+        let second_tmpdir = tempdir()?;
         unsafe {
             std::env::set_var("CODEX_HOME", other_codex_home.path());
+            std::env::set_var("TMPDIR", second_tmpdir.path());
         }
         let second = super::oauth_server_lock_path("server", "https://example.test")?;
 
