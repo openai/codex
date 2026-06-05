@@ -90,7 +90,7 @@ async fn user_turn_includes_skill_instructions() -> Result<()> {
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                cwd: Some(test.config.cwd.to_path_buf()),
+                cwd: Some(test.config.cwd.clone()),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,

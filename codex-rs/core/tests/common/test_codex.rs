@@ -772,7 +772,7 @@ impl TestCodex {
                 responsesapi_client_metadata: None,
                 additional_context: Default::default(),
                 thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                    cwd: Some(self.config.cwd.to_path_buf()),
+                    cwd: Some(self.config.cwd.clone()),
                     approval_policy: Some(approval_policy),
                     sandbox_policy: Some(sandbox_policy),
                     permission_profile,
@@ -844,6 +844,10 @@ impl TestCodexHarness {
 
     pub fn cwd(&self) -> &Path {
         self.test.config.cwd.as_path()
+    }
+
+    pub fn cwd_abs(&self) -> AbsolutePathBuf {
+        self.test.config.cwd.clone()
     }
 
     pub fn path(&self, rel: impl AsRef<Path>) -> PathBuf {

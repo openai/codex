@@ -22,6 +22,7 @@ use codex_protocol::protocol::Op;
 use codex_protocol::request_permissions::PermissionGrantScope;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
 use codex_protocol::user_input::UserInput;
+use core_test_support::TempDirExt;
 use core_test_support::responses::ev_apply_patch_custom_tool_call;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -150,7 +151,7 @@ async fn remote_model_override_uses_catalog_model_for_strict_auto_review() -> Re
     )
     .await?;
 
-    let cwd_path = cwd.path().to_path_buf();
+    let cwd_path = cwd.abs();
     let (sandbox_policy, permission_profile) =
         turn_permission_fields(PermissionProfile::read_only(), cwd_path.as_path());
     codex

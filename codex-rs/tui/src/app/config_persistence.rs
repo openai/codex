@@ -482,9 +482,10 @@ impl App {
         {
             Ok(response) => response,
             Err(err) => {
-                tracing::error!(error = %err, "failed to persist feature flags");
+                let error = crate::config_update::format_config_error(&err);
+                tracing::error!(error = %error, "failed to persist feature flags");
                 self.chat_widget
-                    .add_error_message(format!("Failed to update experimental features: {err}"));
+                    .add_error_message(format!("Failed to update experimental features: {error}"));
                 return;
             }
         };

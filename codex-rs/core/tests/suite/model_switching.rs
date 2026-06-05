@@ -50,7 +50,7 @@ fn read_only_user_turn(test: &TestCodex, items: Vec<UserInput>, model: String) -
         responsesapi_client_metadata: None,
         additional_context: Default::default(),
         thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-            cwd: Some(test.cwd_path().to_path_buf()),
+            cwd: Some(test.config.cwd.clone()),
             approval_policy: Some(AskForApproval::Never),
             sandbox_policy: Some(sandbox_policy),
             permission_profile,

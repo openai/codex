@@ -167,7 +167,8 @@ pub fn create_send_message_tool() -> ToolSpec {
             "message".to_string(),
             JsonSchema::string(Some(
                 "Message text to queue on the target agent.".to_string(),
-            )),
+            ))
+            .with_encrypted(),
         ),
     ]);
 
@@ -199,13 +200,14 @@ pub fn create_followup_task_tool() -> ToolSpec {
             "message".to_string(),
             JsonSchema::string(Some(
                 "Message text to send to the target agent.".to_string(),
-            )),
+            ))
+            .with_encrypted(),
         ),
     ]);
 
     ToolSpec::Function(ResponsesApiTool {
         name: "followup_task".to_string(),
-        description: "Send a follow-up task to an existing non-root target agent and trigger a turn in that target. If the target is currently mid-turn, the message is queued and will be used to start the target's next turn, after the current turn completes."
+        description: "Send a follow-up task to an existing non-root target agent and trigger a turn if it is idle. If the target is already running, deliver the task promptly at message boundaries while sampling, or after the pending tool call completes."
             .to_string(),
         strict: false,
         defer_loading: None,
@@ -595,7 +597,10 @@ fn spawn_agent_common_properties_v2(agent_type_description: &str) -> BTreeMap<St
     BTreeMap::from([
         (
             "message".to_string(),
-            JsonSchema::string(Some("Initial plain-text task for the new agent.".to_string())),
+            JsonSchema::string(Some(
+                "Initial plain-text task for the new agent.".to_string(),
+            ))
+            .with_encrypted(),
         ),
         (
             "agent_type".to_string(),

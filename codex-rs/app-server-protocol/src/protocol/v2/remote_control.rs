@@ -62,6 +62,23 @@ pub struct RemoteControlPairingStartResponse {
     pub expires_at: i64,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct RemoteControlPairingStatusParams {
+    #[ts(optional = nullable)]
+    pub pairing_code: Option<String>,
+    #[ts(optional = nullable)]
+    pub manual_pairing_code: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct RemoteControlPairingStatusResponse {
+    pub claimed: bool,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
