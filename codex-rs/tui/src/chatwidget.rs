@@ -1624,11 +1624,18 @@ impl ChatWidget {
         self.raw_output_mode = enabled;
         self.config.tui_raw_output_mode = enabled;
         let render_mode = self.history_render_mode();
+        let mut stream_state_changed = false;
         if let Some(controller) = self.stream_controller.as_mut() {
-            controller.set_render_mode(render_mode);
+            stream_state_changed |= controller.set_render_mode(render_mode);
         }
         if let Some(controller) = self.plan_stream_controller.as_mut() {
-            controller.set_render_mode(render_mode);
+            stream_state_changed |= controller.set_render_mode(render_mode);
+        }
+        if stream_state_changed {
+            if !self.stream_controllers_idle() {
+                self.app_event_tx.send(AppEvent::StartCommitAnimation);
+            }
+            self.sync_active_stream_tail();
         }
         self.refresh_status_surfaces();
     }

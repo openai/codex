@@ -1410,6 +1410,81 @@ async fn streaming_final_answer_keeps_task_running_state() {
 }
 
 #[tokio::test]
+async fn finalize_turn_persists_held_stream_tail() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.on_task_started();
+    chat.on_agent_message_delta("prefix already emitted\n".to_string());
+    chat.on_agent_message_delta("tail remains visible\n".to_string());
+    chat.on_commit_tick();
+    drain_insert_history(&mut rx);
+
+    let active_before = chat
+        .transcript
+        .active_cell
+        .as_ref()
+        .map(|cell| lines_to_single_string(&cell.display_lines(/*width*/ 80)))
+        .unwrap_or_default();
+    assert!(
+        active_before.contains("tail remains visible"),
+        "expected held tail before termination, got {active_before:?}",
+    );
+
+    chat.finalize_turn();
+
+    let inserted = drain_insert_history(&mut rx);
+    let rendered = inserted
+        .iter()
+        .map(|cell| lines_to_single_string(cell))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        rendered.contains("tail remains visible"),
+        "expected held tail to be persisted on termination, got {rendered:?}",
+    );
+    assert!(chat.transcript.active_cell.is_none());
+    assert!(chat.stream_controller.is_none());
+}
+
+#[tokio::test]
+async fn raw_output_toggle_refreshes_active_stream_tail() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.on_task_started();
+    chat.on_agent_message_delta("prefix already emitted\n".to_string());
+    chat.on_agent_message_delta("**tail remains visible**\n".to_string());
+    chat.on_commit_tick();
+
+    let rich_tail = chat
+        .transcript
+        .active_cell
+        .as_ref()
+        .map(|cell| lines_to_single_string(&cell.display_lines(/*width*/ 80)))
+        .unwrap_or_default();
+    assert!(
+        rich_tail.contains("tail remains visible"),
+        "expected rich tail before toggle, got {rich_tail:?}",
+    );
+    assert!(
+        !rich_tail.contains("**tail remains visible**"),
+        "expected rich tail to render markdown before toggle, got {rich_tail:?}",
+    );
+
+    chat.set_raw_output_mode(/*enabled*/ true);
+
+    let raw_tail = chat
+        .transcript
+        .active_cell
+        .as_ref()
+        .map(|cell| lines_to_single_string(&cell.display_lines(/*width*/ 80)))
+        .unwrap_or_default();
+    assert!(
+        raw_tail.contains("**tail remains visible**"),
+        "expected active tail to refresh after raw toggle, got {raw_tail:?}",
+    );
+}
+
+#[tokio::test]
 async fn ctrl_c_interrupt_pauses_active_goal_turn() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     let thread_id = ThreadId::new();

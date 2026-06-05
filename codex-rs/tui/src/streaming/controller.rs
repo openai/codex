@@ -250,6 +250,8 @@ impl StreamCore {
         }
         let had_pending_queue = self.state.queued_len() > 0;
         let had_structural_tail = self.requires_final_scrollback_reflow();
+        let emitted_source_boundary =
+            self.source_boundary_after_rendered_len(self.emitted_stable_len);
         self.width = width;
         self.state.collector.set_width(width);
         if self.raw_source.is_empty() {
@@ -257,16 +259,13 @@ impl StreamCore {
         }
 
         self.recompute_streaming_render();
-        self.emitted_stable_len = self.emitted_stable_len.min(self.rendered_lines.len());
+        self.emitted_stable_len = self.rendered_len_for_source_boundary(emitted_source_boundary);
         let target_stable_len = self.compute_target_stable_len();
         if had_pending_queue
             && self.emitted_stable_len >= target_stable_len
             && target_stable_len > 0
         {
-            // If wrapped remainder compresses into fewer lines at the new width,
-            // keep at least one line un-emitted so pre-resize pending content is
-            // not skipped permanently.
-            self.emitted_stable_len = target_stable_len - 1;
+            self.emitted_stable_len = target_stable_len;
         }
         self.state.clear_queue();
         if self.emitted_stable_len > 0 && !had_pending_queue && !had_structural_tail {
@@ -309,9 +308,9 @@ impl StreamCore {
         self.rendered_lines = self.render_source(&self.raw_source);
     }
 
-    fn set_render_mode(&mut self, render_mode: HistoryRenderMode) {
+    fn set_render_mode(&mut self, render_mode: HistoryRenderMode) -> bool {
         if self.render_mode == render_mode {
-            return;
+            return false;
         }
 
         let had_pending_queue = self.state.queued_len() > 0;
@@ -321,20 +320,22 @@ impl StreamCore {
         } else {
             None
         };
+        let emitted_source_boundary =
+            self.source_boundary_after_rendered_len(self.emitted_stable_len);
         self.render_mode = render_mode;
         self.stable_prefix_len_cache = None;
         if self.raw_source.is_empty() {
-            return;
+            return false;
         }
 
         self.recompute_streaming_render();
-        self.emitted_stable_len = self.emitted_stable_len.min(self.rendered_lines.len());
+        self.emitted_stable_len = self.rendered_len_for_source_boundary(emitted_source_boundary);
         let target_stable_len = self.compute_target_stable_len();
         if had_pending_queue
             && self.emitted_stable_len >= target_stable_len
             && target_stable_len > 0
         {
-            self.emitted_stable_len = target_stable_len - 1;
+            self.emitted_stable_len = target_stable_len;
         }
         self.state.clear_queue();
         if self.emitted_stable_len > 0 && !had_pending_queue && !had_structural_tail {
@@ -345,9 +346,10 @@ impl StreamCore {
             };
             self.emitted_stable_len = target_stable_len;
             self.enqueued_stable_len = target_stable_len;
-            return;
+            return true;
         }
         self.rebuild_stable_queue_from_render();
+        true
     }
 
     /// Compute how many rendered lines should be in the stable region.
@@ -485,6 +487,41 @@ impl StreamCore {
             stable_prefix_len,
         });
         stable_prefix_len
+    }
+
+    fn rendered_len_for_source_boundary(&mut self, source_boundary: usize) -> usize {
+        if source_boundary == 0 {
+            return 0;
+        }
+        if source_boundary >= self.raw_source.len() {
+            return self.rendered_lines.len();
+        }
+        self.stable_prefix_len_for_source_start(source_boundary)
+    }
+
+    fn source_boundary_after_rendered_len(&self, rendered_len: usize) -> usize {
+        if rendered_len == 0 || self.raw_source.is_empty() {
+            return 0;
+        }
+        if rendered_len >= self.rendered_lines.len() {
+            return self.raw_source.len();
+        }
+
+        let mut boundaries = self
+            .raw_source
+            .match_indices('\n')
+            .map(|(idx, _)| idx + 1)
+            .collect::<Vec<_>>();
+        if boundaries.last().copied() != Some(self.raw_source.len()) {
+            boundaries.push(self.raw_source.len());
+        }
+
+        for boundary in boundaries {
+            if self.render_source(&self.raw_source[..boundary]).len() >= rendered_len {
+                return boundary;
+            }
+        }
+        self.raw_source.len()
     }
 
     fn default_tail_budget_lines(&mut self) -> usize {
@@ -631,8 +668,8 @@ impl StreamController {
         self.core.set_width(width);
     }
 
-    pub(crate) fn set_render_mode(&mut self, render_mode: HistoryRenderMode) {
-        self.core.set_render_mode(render_mode);
+    pub(crate) fn set_render_mode(&mut self, render_mode: HistoryRenderMode) -> bool {
+        self.core.set_render_mode(render_mode)
     }
 
     fn emit(&mut self, lines: Vec<HyperlinkLine>) -> Option<Box<dyn HistoryCell>> {
@@ -761,8 +798,8 @@ impl PlanStreamController {
         self.core.set_width(width);
     }
 
-    pub(crate) fn set_render_mode(&mut self, render_mode: HistoryRenderMode) {
-        self.core.set_render_mode(render_mode);
+    pub(crate) fn set_render_mode(&mut self, render_mode: HistoryRenderMode) -> bool {
+        self.core.set_render_mode(render_mode)
     }
 
     fn emit(
@@ -838,6 +875,18 @@ mod tests {
         PlanStreamController::new(width, &test_cwd(), HistoryRenderMode::Rich)
     }
 
+    const HAPPY_PATH_DUPLICATE_REPRO_DELTAS: &[&str] = &[
+        "**Happy Path**\n",
+        "\n",
+        "1. In the second terminal, make the smoke home non-writable:\n",
+        "   ```fish\n",
+        "   chmod a-w $CODEX_SMOKE_HOME\n",
+        "   ```\n",
+        "   Expected: the running TUI stays open.\n",
+        "\n",
+        "2. In the TUI, type `/model` and press Enter.\n",
+    ];
+
     fn lines_to_plain_strings(lines: &[ratatui::text::Line<'_>]) -> Vec<String> {
         lines
             .iter()
@@ -874,6 +923,38 @@ mod tests {
             .into_iter()
             .map(|s| s.chars().skip(2).collect::<String>())
             .collect()
+    }
+
+    fn collect_visible_stream_snapshots(deltas: &[&str], width: Option<usize>) -> Vec<Vec<String>> {
+        let mut ctrl = stream_controller(width);
+        let mut committed_lines = Vec::new();
+        let mut snapshots = Vec::new();
+        for delta in deltas {
+            ctrl.push(delta);
+            while let (Some(cell), idle) = ctrl.on_commit_tick() {
+                committed_lines.extend(cell.transcript_lines(u16::MAX));
+                if idle {
+                    break;
+                }
+            }
+
+            let mut visible = lines_to_plain_strings(&committed_lines)
+                .into_iter()
+                .map(|s| s.chars().skip(2).collect::<String>())
+                .collect::<Vec<_>>();
+            visible.extend(hyperlink_lines_to_plain_strings(&ctrl.current_tail_lines()));
+            snapshots.push(visible);
+        }
+        snapshots
+    }
+
+    fn format_stream_snapshots(snapshots: &[Vec<String>]) -> String {
+        snapshots
+            .iter()
+            .enumerate()
+            .map(|(idx, lines)| format!("after delta {idx}:\n{}", lines.join("\n")))
+            .collect::<Vec<_>>()
+            .join("\n---\n")
     }
 
     fn collect_plan_streamed_lines(deltas: &[&str], width: Option<usize>) -> Vec<String> {
@@ -1008,29 +1089,37 @@ mod tests {
 
     #[test]
     fn controller_does_not_duplicate_list_continuation_after_fenced_code() {
-        let lines = collect_streamed_lines(
-            &[
-                "**Happy Path**\n",
-                "\n",
-                "1. In the second terminal, make the smoke home non-writable:\n",
-                "   ```fish\n",
-                "   chmod a-w $CODEX_SMOKE_HOME\n",
-                "   ```\n",
-                "   Expected: the running TUI stays open.\n",
-                "\n",
-                "2. In the TUI, type `/model` and press Enter.\n",
-            ],
-            Some(/*width*/ 80),
-        );
+        let snapshots =
+            collect_visible_stream_snapshots(HAPPY_PATH_DUPLICATE_REPRO_DELTAS, Some(/*width*/ 80));
 
-        let expected_count = lines
-            .iter()
+        for lines in &snapshots {
+            let expected_count = lines
+                .iter()
+                .filter(|line| line.trim() == "Expected: the running TUI stays open.")
+                .count();
+            assert!(
+                expected_count <= 1,
+                "expected list continuation to render at most once, got {lines:?}",
+            );
+        }
+        let final_count = snapshots
+            .last()
+            .into_iter()
+            .flatten()
             .filter(|line| line.trim() == "Expected: the running TUI stays open.")
             .count();
         assert_eq!(
-            expected_count, 1,
-            "expected list continuation to render once, got {lines:?}",
+            final_count, 1,
+            "expected final visible snapshot to include the list continuation once"
         );
+    }
+
+    #[test]
+    fn controller_streamed_list_continuation_snapshot() {
+        let snapshots =
+            collect_visible_stream_snapshots(HAPPY_PATH_DUPLICATE_REPRO_DELTAS, Some(/*width*/ 80));
+
+        insta::assert_snapshot!(format_stream_snapshots(&snapshots));
     }
 
     #[test]
@@ -1088,43 +1177,36 @@ mod tests {
     }
 
     #[test]
-    fn controller_set_width_partial_drain_keeps_pending_queue() {
+    fn controller_set_width_partial_drain_does_not_duplicate_emitted_prefix() {
         let mut ctrl = stream_controller(Some(40));
         ctrl.push("AAAA BBBB CCCC DDDD EEEE FFFF GGGG HHHH IIII JJJJ\n");
         ctrl.push("second line\n");
 
         let (cell, idle) = ctrl.on_commit_tick();
-        assert!(cell.is_some(), "expected 1 emitted line");
+        let emitted_before_resize = cell
+            .expect("expected 1 emitted line")
+            .transcript_lines(u16::MAX);
         assert!(!idle, "queue should still have lines");
         assert!(ctrl.queued_lines() > 0, "expected pending queued lines");
 
-        ctrl.set_width(Some(20));
+        ctrl.set_width(Some(/*width*/ 120));
 
-        assert!(
-            ctrl.queued_lines() > 0,
-            "resize must preserve pending queued lines"
-        );
-
-        let mut drained = Vec::new();
-        for _ in 0..64 {
-            let (cell, is_idle) = ctrl.on_commit_tick();
-            if let Some(cell) = cell {
-                drained.extend(lines_to_plain_strings(&cell.transcript_lines(u16::MAX)));
-            }
-            if is_idle {
-                break;
-            }
-        }
-
-        assert!(
-            drained.iter().any(|l| l.contains("IIII JJJJ")),
-            "pending wrapped lines should continue draining after resize; got {drained:?}",
+        assert_eq!(
+            ctrl.queued_lines(),
+            0,
+            "partially emitted source line should not be re-queued after widening"
         );
 
         let (cell, _source) = ctrl.finalize();
         let final_lines = cell
             .map(|cell| lines_to_plain_strings(&cell.transcript_lines(u16::MAX)))
             .unwrap_or_default();
+        let emitted_before_resize = lines_to_plain_strings(&emitted_before_resize).join("\n");
+        let finalized_after_resize = final_lines.join("\n");
+        assert!(
+            !finalized_after_resize.contains("AAAA BBBB CCCC"),
+            "finalize must not replay the already-visible line prefix; emitted before resize: {emitted_before_resize:?}, finalized after resize: {finalized_after_resize:?}",
+        );
         assert!(
             final_lines.iter().any(|line| line.contains("second line")),
             "ordinary mutable tail should flush on finalize; got {final_lines:?}",
@@ -2106,7 +2188,7 @@ mod tests {
             "expected non-empty queue before resize"
         );
 
-        ctrl.set_width(Some(120));
+        ctrl.set_width(Some(/*width*/ 120));
 
         let (cell, _source) = ctrl.finalize();
         let remaining = cell
@@ -2122,13 +2204,15 @@ mod tests {
     }
 
     #[test]
-    fn controller_set_width_partial_wrapped_emit_keeps_wrapped_remainder() {
+    fn controller_set_width_partial_wrapped_emit_does_not_replay_prefix() {
         let mut ctrl = stream_controller(Some(18));
         ctrl.push("alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu\n");
         ctrl.push("tail line\n");
 
         let (first_emit, idle) = ctrl.on_commit_tick();
-        assert!(first_emit.is_some(), "expected first wrapped line emission");
+        let first_emit = first_emit
+            .expect("expected first wrapped line emission")
+            .transcript_lines(u16::MAX);
         assert!(!idle, "expected remaining wrapped content after one tick");
         assert!(
             ctrl.queued_lines() > 0,
@@ -2141,10 +2225,15 @@ mod tests {
         let remaining = cell
             .map(|c| lines_to_plain_strings(&c.transcript_lines(u16::MAX)))
             .unwrap_or_default();
-        let joined = remaining.join(" ");
+        let first_emit = lines_to_plain_strings(&first_emit).join("\n");
+        let joined = remaining.join("\n");
         assert!(
-            joined.contains("kappa") || joined.contains("lambda") || joined.contains("mu"),
-            "wrapped remainder from partially emitted source line was lost after resize: {remaining:?}",
+            !joined.contains("alpha beta"),
+            "finalize must not replay the already-visible prefix; emitted before resize: {first_emit:?}, finalized after resize: {joined:?}",
+        );
+        assert!(
+            remaining.iter().any(|line| line.contains("tail line")),
+            "ordinary mutable tail should flush on finalize; got {remaining:?}",
         );
     }
 }

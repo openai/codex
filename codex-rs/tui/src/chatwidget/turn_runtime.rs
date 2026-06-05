@@ -294,9 +294,19 @@ impl ChatWidget {
     /// This does not clear MCP startup tracking, because MCP startup can overlap with turn cleanup
     /// and should continue to drive the bottom-pane running indicator while it is in progress.
     pub(super) fn finalize_turn(&mut self) {
-        // Drop preview-only stream tail content on any termination path before
-        // failed-cell finalization, so transient tail cells are never persisted.
-        self.clear_active_stream_tail();
+        self.flush_answer_stream_with_separator();
+        if let Some(mut controller) = self.plan_stream_controller.take() {
+            let requires_scrollback_reflow = controller.requires_final_scrollback_reflow();
+            self.clear_active_stream_tail();
+            let (cell, source) = controller.finalize();
+            if !requires_scrollback_reflow && let Some(cell) = cell {
+                self.add_boxed_history(cell);
+            }
+            if let Some(source) = source {
+                self.app_event_tx
+                    .send(AppEvent::ConsolidateProposedPlan(source));
+            }
+        }
         // Ensure any spinner is replaced by a red ✗ and flushed into history.
         self.finalize_active_cell_as_failed();
         // Turn-scoped hook rows are transient live state; once the turn is over,
@@ -314,8 +324,6 @@ impl ChatWidget {
         self.last_unified_wait = None;
         self.unified_exec_wait_streak = None;
         self.adaptive_chunking.reset();
-        self.stream_controller = None;
-        self.plan_stream_controller = None;
         self.status_state.pending_status_indicator_restore = false;
         self.clear_cancel_edit();
         self.request_status_line_branch_refresh();

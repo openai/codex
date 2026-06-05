@@ -1,0 +1,62 @@
+---
+source: tui/src/streaming/controller.rs
+assertion_line: 1122
+expression: format_stream_snapshots(&snapshots)
+---
+after delta 0:
+Happy Path
+---
+after delta 1:
+Happy Path
+---
+after delta 2:
+Happy Path
+
+1. In the second terminal, make the smoke home non-writable:
+---
+after delta 3:
+Happy Path
+
+1. In the second terminal, make the smoke home non-writable:
+
+---
+after delta 4:
+Happy Path
+
+1. In the second terminal, make the smoke home non-writable:
+
+   chmod a-w $CODEX_SMOKE_HOME
+---
+after delta 5:
+Happy Path
+
+1. In the second terminal, make the smoke home non-writable:
+
+   chmod a-w $CODEX_SMOKE_HOME
+---
+after delta 6:
+Happy Path
+
+1. In the second terminal, make the smoke home non-writable:
+
+   chmod a-w $CODEX_SMOKE_HOME
+   Expected: the running TUI stays open.
+---
+after delta 7:
+Happy Path
+
+1. In the second terminal, make the smoke home non-writable:
+
+   chmod a-w $CODEX_SMOKE_HOME
+   Expected: the running TUI stays open.
+---
+after delta 8:
+Happy Path
+
+1. In the second terminal, make the smoke home non-writable:
+
+   chmod a-w $CODEX_SMOKE_HOME
+
+   Expected: the running TUI stays open.
+
+2. In the TUI, type /model and press Enter.
