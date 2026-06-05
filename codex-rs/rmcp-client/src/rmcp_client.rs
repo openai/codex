@@ -47,6 +47,7 @@ use rmcp::service::{self};
 use rmcp::transport::StreamableHttpClientTransport;
 use rmcp::transport::auth::AuthClient;
 use rmcp::transport::auth::AuthError;
+use rmcp::transport::auth::InMemoryCredentialStore;
 use rmcp::transport::auth::OAuthState;
 use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
 use rmcp::transport::streamable_http_client::StreamableHttpError;
@@ -839,10 +840,13 @@ impl RmcpClient {
             PendingTransport::StreamableHttpWithOAuth {
                 transport,
                 oauth_persistor,
-            } => (
-                service::serve_client(client_service, transport).boxed(),
-                Some(oauth_persistor),
-            ),
+            } => {
+                oauth_persistor.refresh_if_needed().await?;
+                (
+                    service::serve_client(client_service, transport).boxed(),
+                    Some(oauth_persistor),
+                )
+            }
         };
 
         let service = match timeout {
@@ -1023,6 +1027,15 @@ async fn create_oauth_transport_and_runtime(
     // reqwest metadata client here.
     let mut oauth_state =
         OAuthState::new(url.to_string(), Some(oauth_metadata_client.clone())).await?;
+    // Keep a handle so Codex can replace stale RMCP credentials after another
+    // process completes a refresh.
+    let credential_store = InMemoryCredentialStore::new();
+    match &mut oauth_state {
+        OAuthState::Unauthorized(manager) => {
+            manager.set_credential_store(credential_store.clone());
+        }
+        _ => return Err(anyhow!("unexpected OAuth state during client setup")),
+    }
 
     oauth_state
         .set_credentials(
@@ -1054,6 +1067,7 @@ async fn create_oauth_transport_and_runtime(
         server_name.to_string(),
         url.to_string(),
         auth_manager,
+        credential_store,
         credentials_store,
         Some(initial_tokens),
     );

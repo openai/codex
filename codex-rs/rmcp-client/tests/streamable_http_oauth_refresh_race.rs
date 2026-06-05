@@ -57,7 +57,7 @@ const REFRESH_TOKEN_ENV: &str = "MCP_TEST_OAUTH_RACE_REFRESH_TOKEN";
 const EXPIRES_AT_ENV: &str = "MCP_TEST_OAUTH_RACE_EXPIRES_AT";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
-async fn concurrent_processes_duplicate_one_time_refresh_without_stale_overwrite()
+async fn concurrent_processes_coordinate_one_time_refresh_and_reload_rotated_tokens()
 -> anyhow::Result<()> {
     let server = MockServer::start().await;
     mount_oauth_metadata(&server, /*expected_requests*/ 2).await;
@@ -81,10 +81,10 @@ async fn concurrent_processes_duplicate_one_time_refresh_without_stale_overwrite
                 }))
             }
         })
-        .expect(2)
+        .expect(1)
         .mount(&server)
         .await;
-    mount_mcp_server(&server, /*expected_requests*/ 2).await;
+    mount_mcp_server(&server, /*expected_requests*/ 4).await;
 
     let codex_home = TempDir::new()?;
     let control_dir = TempDir::new()?;
@@ -116,28 +116,15 @@ async fn concurrent_processes_duplicate_one_time_refresh_without_stale_overwrite
     wait_for_children(children).await?;
 
     let outcomes = read_outcomes(&result_paths)?;
-    assert_eq!(
-        outcomes
-            .iter()
-            .filter(|outcome| outcome.as_str() == "success")
-            .count(),
-        1
-    );
-    assert_eq!(
-        outcomes
-            .iter()
-            .filter(|outcome| outcome.starts_with("error:"))
-            .count(),
-        1
-    );
-    assert_eq!(refresh_attempts.load(Ordering::SeqCst), 2);
+    assert_eq!(outcomes, vec!["success".to_string(), "success".to_string()]);
+    assert_eq!(refresh_attempts.load(Ordering::SeqCst), 1);
 
     let requests = server
         .received_requests()
         .await
         .context("wiremock request recording disabled")?;
     let refresh_bodies = request_bodies(&requests, "/oauth/token");
-    assert_eq!(refresh_bodies.len(), 2);
+    assert_eq!(refresh_bodies.len(), 1);
     assert!(
         refresh_bodies
             .iter()
