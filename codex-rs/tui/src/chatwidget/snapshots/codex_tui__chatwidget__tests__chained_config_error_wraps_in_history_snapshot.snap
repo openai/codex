@@ -1,5 +1,5 @@
 ---
-source: tui/src/chatwidget/tests/config_errors.rs
+source: tui/src/chatwidget/tests/config_errors_tests.rs
 expression: normalize_snapshot_paths(term.backend().vt100().screen().contents())
 ---
 ■ Failed to save default model: config/batchWrite failed

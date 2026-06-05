@@ -219,6 +219,7 @@ macro_rules! assert_chatwidget_snapshot {
 mod app_server;
 mod approval_requests;
 mod composer_submission;
+#[path = "tests/config_errors_tests.rs"]
 mod config_errors;
 mod exec_flow;
 mod goal_menu;
