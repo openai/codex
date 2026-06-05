@@ -539,7 +539,7 @@ function Test-PackageContentsAreComplete {
         "bin\codex.exe",
         "codex-path\rg.exe",
         "codex-resources\codex-command-runner.exe",
-        "codex-resources\codex-windows-sandbox-setup.exe"
+        "codex-resources\codex-windows-sandbox.exe"
     )
     foreach ($name in $expectedFiles) {
         if (-not (Test-Path -LiteralPath (Join-Path $PackageDir $name) -PathType Leaf)) {

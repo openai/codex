@@ -73,7 +73,7 @@ def build_package_dir(
     if inputs.codex_windows_sandbox_setup_bin is not None:
         copy_executable(
             inputs.codex_windows_sandbox_setup_bin,
-            resources_dir / "codex-windows-sandbox-setup.exe",
+            resources_dir / "codex-windows-sandbox.exe",
             is_windows=True,
         )
 
@@ -147,7 +147,7 @@ def validate_package_dir(
         required_files.extend(
             [
                 Path("codex-resources") / "codex-command-runner.exe",
-                Path("codex-resources") / "codex-windows-sandbox-setup.exe",
+                Path("codex-resources") / "codex-windows-sandbox.exe",
             ]
         )
 
