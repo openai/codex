@@ -231,6 +231,7 @@ fn remote_model_with_auto_review_override(slug: &str, review_model: &str) -> Mod
         input_modalities: default_input_modalities(),
         used_fallback_model_metadata: false,
         supports_search_tool: false,
+        use_responses_lite: false,
         auto_review_model_override: Some(review_model.to_string()),
         tool_mode: None,
         multi_agent_version: None,

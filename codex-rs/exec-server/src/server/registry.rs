@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use crate::protocol::ENVIRONMENT_INFO_METHOD;
 use crate::protocol::EXEC_METHOD;
 use crate::protocol::EXEC_READ_METHOD;
 use crate::protocol::EXEC_TERMINATE_METHOD;
@@ -59,6 +60,10 @@ pub(crate) fn build_router() -> RpcRouter<ExecServerHandler> {
     router.request(
         EXEC_METHOD,
         |handler: Arc<ExecServerHandler>, params: ExecParams| async move { handler.exec(params).await },
+    );
+    router.request(
+        ENVIRONMENT_INFO_METHOD,
+        |handler: Arc<ExecServerHandler>, _params: ()| async move { handler.environment_info() },
     );
     router.request(
         EXEC_READ_METHOD,

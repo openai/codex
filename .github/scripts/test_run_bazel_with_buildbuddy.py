@@ -182,6 +182,38 @@ class RunBazelWithBuildBuddyTest(unittest.TestCase):
             ["fake-bazel", "info", "execution_root"],
         )
 
+    def test_bazel_command_normalizes_github_actions_startup_options(self) -> None:
+        env = {
+            "BAZEL_OUTPUT_USER_ROOT": "/tmp/bazel-output",
+            "GITHUB_ACTIONS": "true",
+        }
+
+        self.assertEqual(
+            run_bazel_with_buildbuddy.bazel_command("build", "//codex-rs/...", env=env),
+            [
+                "bazel",
+                "--output_user_root=/tmp/bazel-output",
+                "--noexperimental_remote_repo_contents_cache",
+                "build",
+                "//codex-rs/...",
+            ],
+        )
+        self.assertEqual(
+            run_bazel_with_buildbuddy.bazel_command(
+                "--experimental_remote_repo_contents_cache",
+                "build",
+                "//codex-rs/...",
+                env=env,
+            ),
+            [
+                "bazel",
+                "--output_user_root=/tmp/bazel-output",
+                "--experimental_remote_repo_contents_cache",
+                "build",
+                "//codex-rs/...",
+            ],
+        )
+
     def test_main_preserves_spaced_argument_and_child_exit_status(self) -> None:
         spaced_arg = (
             r"--test_env=PATH=C:\Program Files\PowerShell\7;C:\Program Files\Git\bin"
@@ -191,7 +223,9 @@ class RunBazelWithBuildBuddyTest(unittest.TestCase):
         )
         env = os.environ.copy()
         env["CODEX_BAZEL_BIN"] = sys.executable
+        env.pop("BAZEL_OUTPUT_USER_ROOT", None)
         env.pop("BUILDBUDDY_API_KEY", None)
+        env.pop("GITHUB_ACTIONS", None)
 
         result = subprocess.run(
             [

@@ -47,7 +47,7 @@ pub fn extract_powershell_command(command: &[String]) -> Option<(&str, &str)> {
 
     let shell = &command[0];
     if !matches!(
-        detect_shell_type(&PathBuf::from(shell)),
+        detect_shell_type(PathBuf::from(shell)),
         Some(ShellType::PowerShell)
     ) {
         return None;
