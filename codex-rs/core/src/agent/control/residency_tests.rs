@@ -4,22 +4,21 @@ use crate::codex_thread::CodexThread;
 use crate::config::Config;
 use crate::config::test_config;
 use crate::thread_manager::ThreadManagerState;
-use assert_matches::assert_matches;
 use codex_features::Feature;
 use codex_login::CodexAuth;
 use codex_protocol::ThreadId;
 use codex_protocol::error::CodexErr;
-use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TurnCompleteEvent;
+use pretty_assertions::assert_eq;
 use std::sync::Arc;
 
 #[tokio::test]
 async fn residency_slot_reservation_unloads_oldest_idle_v2_agent() {
-    let mut config = test_config();
+    let mut config = test_config().await;
     let _ = config.features.enable(Feature::MultiAgentV2);
     config.multi_agent_v2.max_concurrent_threads_per_session = 2;
     let temp_home = tempfile::tempdir().expect("create temp home");
@@ -51,10 +50,11 @@ async fn residency_slot_reservation_unloads_oldest_idle_v2_agent() {
         .reserve_v2_residency_slot(&state, &config, /*protected_thread_id*/ None)
         .await
         .expect("second resident slot should evict the first idle agent");
-    assert_matches!(
-        manager.get_thread(first.thread_id).await,
-        Err(CodexErr::ThreadNotFound(thread_id)) if thread_id == first.thread_id
-    );
+    match manager.get_thread(first.thread_id).await {
+        Err(CodexErr::ThreadNotFound(thread_id)) => assert_eq!(thread_id, first.thread_id),
+        Err(err) => panic!("expected evicted thread to be missing, got {err:?}"),
+        Ok(_) => panic!("expected evicted thread to be missing"),
+    }
     let second = spawn_v2_subagent(&control, &state, config, root.thread_id, "worker-2").await;
     second_slot.commit(second.thread_id);
 
@@ -87,18 +87,21 @@ async fn spawn_v2_subagent(
 }
 
 async fn mark_thread_completed(thread: &CodexThread) {
+    let turn = thread.codex.session.new_default_turn().await;
     thread
         .codex
         .session
-        .send_event_raw(Event {
-            id: "turn-1".to_string(),
-            msg: EventMsg::TurnComplete(TurnCompleteEvent {
-                turn_id: "turn-1".to_string(),
+        .send_event(
+            turn.as_ref(),
+            EventMsg::TurnComplete(TurnCompleteEvent {
+                turn_id: turn.sub_id.clone(),
                 last_agent_message: Some("done".to_string()),
                 completed_at: None,
                 duration_ms: None,
                 time_to_first_token_ms: None,
             }),
-        })
+        )
         .await;
+    // The fixture has no task runner to clear the turn after the terminal event.
+    *thread.codex.session.active_turn.lock().await = None;
 }
