@@ -9,6 +9,7 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
 
+use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
 use codex_api::SharedAuthProvider;
@@ -737,13 +738,9 @@ impl RmcpClient {
                     && auth_provider.is_none()
                     && !default_headers.contains_key(AUTHORIZATION)
                 {
-                    match load_oauth_tokens(server_name, url, *store_mode) {
-                        Ok(tokens) => tokens,
-                        Err(err) => {
-                            warn!("failed to read tokens for server `{server_name}`: {err}");
-                            None
-                        }
-                    }
+                    load_oauth_tokens(server_name, url, *store_mode).with_context(|| {
+                        format!("failed to read OAuth credentials for MCP server `{server_name}`")
+                    })?
                 } else {
                     None
                 };
@@ -1057,6 +1054,8 @@ async fn create_oauth_transport_and_runtime(
         credentials_store,
         Some(initial_tokens),
     );
+
+    runtime.refresh_for_startup_if_needed().await?;
 
     Ok((transport, runtime))
 }

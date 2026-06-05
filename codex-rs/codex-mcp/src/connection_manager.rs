@@ -55,6 +55,7 @@ use codex_protocol::protocol::McpStartupFailure;
 use codex_protocol::protocol::McpStartupStatus;
 use codex_protocol::protocol::McpStartupUpdateEvent;
 use codex_rmcp_client::ElicitationResponse;
+use codex_rmcp_client::OAUTH_REFRESH_REAUTHENTICATION_REQUIRED_ERROR;
 use rmcp::model::ElicitationCapability;
 use rmcp::model::ListResourceTemplatesResult;
 use rmcp::model::ListResourcesResult;
@@ -860,7 +861,10 @@ fn startup_outcome_error_message(error: StartupOutcomeError) -> String {
 
 fn is_mcp_client_auth_required_error(error: &StartupOutcomeError) -> bool {
     match error {
-        StartupOutcomeError::Failed { error } => error.contains("Auth required"),
+        StartupOutcomeError::Failed { error } => {
+            error.contains("Auth required")
+                || error.contains(OAUTH_REFRESH_REAUTHENTICATION_REQUIRED_ERROR)
+        }
         _ => false,
     }
 }

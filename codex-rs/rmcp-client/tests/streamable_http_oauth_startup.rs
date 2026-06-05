@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use codex_config::types::OAuthCredentialsStoreMode;
 use codex_exec_server::Environment;
+use codex_rmcp_client::OAUTH_REFRESH_REAUTHENTICATION_REQUIRED_ERROR;
 use codex_rmcp_client::RmcpClient;
 use codex_rmcp_client::StoredOAuthTokens;
 use codex_rmcp_client::WrappedOAuthTokenResponse;
@@ -105,18 +106,12 @@ async fn transient_refresh_failure_stops_before_initialize() -> anyhow::Result<(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
-async fn credential_load_failure_sends_unauthenticated_initialize() -> anyhow::Result<()> {
+async fn credential_load_failure_stops_before_initialize() -> anyhow::Result<()> {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/mcp"))
-        .respond_with(|request: &Request| {
-            assert!(
-                !request.headers.contains_key("authorization"),
-                "credential load failure should fall through to an unauthenticated initialize"
-            );
-            ResponseTemplate::new(401).insert_header("www-authenticate", "Bearer")
-        })
-        .expect(1)
+        .respond_with(ResponseTemplate::new(500))
+        .expect(0)
         .mount(&server)
         .await;
 
@@ -129,7 +124,7 @@ async fn credential_load_failure_sends_unauthenticated_initialize() -> anyhow::R
 async fn credential_persist_failure_is_swallowed_after_initialize() -> anyhow::Result<()> {
     let server = MockServer::start().await;
     mount_oauth_metadata(&server).await;
-    mount_successful_refresh(&server, /*expected_calls*/ 2).await;
+    mount_successful_refresh(&server, /*expected_calls*/ 1).await;
     mount_successful_mcp_requests(&server, /*expected_calls*/ 3).await;
 
     run_oauth_startup_child(&server, SCENARIO_PERSIST_FAILURE).await?;
@@ -163,37 +158,71 @@ async fn oauth_startup_child() -> anyhow::Result<()> {
         Environment::default_for_tests().get_http_client(),
         /*auth_provider*/ None,
     )
-    .await?;
+    .await;
 
-    let stale_credentials_backup = credentials_path.with_extension("json.stale");
+    if matches!(
+        scenario.as_str(),
+        SCENARIO_INVALID_GRANT | SCENARIO_TRANSIENT_FAILURE | SCENARIO_LOAD_FAILURE
+    ) {
+        let error = match client {
+            Ok(_) => anyhow::bail!("OAuth startup should fail for scenario {scenario}"),
+            Err(error) => format!("{error:#}"),
+        };
+        match scenario.as_str() {
+            SCENARIO_INVALID_GRANT => {
+                assert!(
+                    error.contains(OAUTH_REFRESH_REAUTHENTICATION_REQUIRED_ERROR),
+                    "unexpected invalid_grant failure: {error}"
+                );
+                assert!(
+                    !error.contains("invalid_grant") && !error.contains("refresh token revoked"),
+                    "revoked-token provider details should be hidden: {error}"
+                );
+            }
+            SCENARIO_TRANSIENT_FAILURE => {
+                assert!(
+                    error.contains("OAuth token endpoint refresh failed"),
+                    "unexpected transient refresh failure: {error}"
+                );
+                assert!(
+                    !error.contains(OAUTH_REFRESH_REAUTHENTICATION_REQUIRED_ERROR),
+                    "transient refresh failure should not request reauthentication: {error}"
+                );
+            }
+            SCENARIO_LOAD_FAILURE => {
+                assert!(
+                    error.contains("failed to read OAuth credentials for MCP server"),
+                    "unexpected credential load failure: {error}"
+                );
+                assert!(
+                    error.contains("failed to read credentials file"),
+                    "credential storage cause should be preserved: {error}"
+                );
+                assert!(
+                    !error.contains("Auth required"),
+                    "credential storage failure should not be classified as unauthenticated: {error}"
+                );
+            }
+            _ => unreachable!(),
+        }
+        return Ok(());
+    }
+    let client = client?;
+
+    let original_permissions = fs::metadata(&credentials_path)?.permissions();
     if scenario == SCENARIO_PERSIST_FAILURE {
-        fs::rename(&credentials_path, &stale_credentials_backup)?;
-        fs::create_dir(&credentials_path)?;
+        let mut readonly_permissions = original_permissions.clone();
+        readonly_permissions.set_readonly(true);
+        fs::set_permissions(&credentials_path, readonly_permissions)?;
+        let stale_credentials = fs::read_to_string(&credentials_path)?;
+        let write_error = fs::write(&credentials_path, &stale_credentials)
+            .expect_err("read-only credentials file should reject writes");
+        assert_eq!(write_error.kind(), std::io::ErrorKind::PermissionDenied);
     }
 
     let result = initialize_client(&client).await;
     match scenario.as_str() {
         SCENARIO_SUCCESS => result?,
-        SCENARIO_INVALID_GRANT | SCENARIO_TRANSIENT_FAILURE => {
-            let error = result.expect_err("refresh failure should stop startup");
-            let error = format!("{error:#}");
-            assert!(
-                error.contains("Auth error: OAuth authorization required"),
-                "unexpected refresh failure: {error}"
-            );
-            assert!(
-                !error.contains("invalid_grant") && !error.contains("temporarily unavailable"),
-                "RMCP should collapse refresh details to authorization required: {error}"
-            );
-        }
-        SCENARIO_LOAD_FAILURE => {
-            let error = result.expect_err("unauthenticated initialize should be rejected");
-            let error = format!("{error:#}");
-            assert!(
-                error.contains("Auth required"),
-                "unexpected credential load failure: {error}"
-            );
-        }
         SCENARIO_PERSIST_FAILURE => {
             result?;
             client
@@ -202,11 +231,12 @@ async fn oauth_startup_child() -> anyhow::Result<()> {
                     /*timeout*/ Some(Duration::from_secs(5)),
                 )
                 .await?;
+            fs::set_permissions(&credentials_path, original_permissions)?;
             assert!(
-                credentials_path.is_dir(),
-                "failed persistence should leave the blocking directory in place"
+                credentials_path.is_file(),
+                "failed persistence should leave the credentials file in place"
             );
-            let stale_credentials = fs::read_to_string(stale_credentials_backup)?;
+            let stale_credentials = fs::read_to_string(&credentials_path)?;
             assert!(
                 stale_credentials.contains(EXPIRED_ACCESS_TOKEN),
                 "the only persisted credentials should remain stale"
@@ -215,6 +245,9 @@ async fn oauth_startup_child() -> anyhow::Result<()> {
                 !stale_credentials.contains(REFRESHED_ACCESS_TOKEN),
                 "refreshed credentials should not have been persisted"
             );
+        }
+        SCENARIO_INVALID_GRANT | SCENARIO_TRANSIENT_FAILURE | SCENARIO_LOAD_FAILURE => {
+            unreachable!()
         }
         other => anyhow::bail!("unknown OAuth startup scenario: {other}"),
     }

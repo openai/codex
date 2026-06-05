@@ -26,6 +26,7 @@ use codex_protocol::mcp::McpServerInfo;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::GranularApprovalConfig;
 use codex_protocol::protocol::McpAuthStatus;
+use codex_rmcp_client::OAUTH_REFRESH_REAUTHENTICATION_REQUIRED_ERROR;
 use futures::FutureExt;
 use pretty_assertions::assert_eq;
 use rmcp::model::CreateElicitationRequestParams;
@@ -1293,12 +1294,37 @@ fn mcp_init_error_display_prompts_for_login_when_auth_required() {
 }
 
 #[test]
-fn mcp_init_error_display_keeps_oauth_refresh_authorization_required_generic() {
+fn mcp_init_error_display_prompts_for_login_when_refresh_token_is_rejected() {
     let server_name = "example";
-    let err: StartupOutcomeError = anyhow::anyhow!(
-        "handshaking with MCP server failed: transport error: Auth error: OAuth authorization required"
-    )
-    .into();
+    let err: StartupOutcomeError =
+        anyhow::anyhow!(OAUTH_REFRESH_REAUTHENTICATION_REQUIRED_ERROR).into();
+
+    let display = mcp_init_error_display(server_name, /*entry*/ None, &err);
+
+    let expected = format!(
+        "The {server_name} MCP server is not logged in. Run `codex mcp login {server_name}`."
+    );
+    assert_eq!(expected, display);
+}
+
+#[test]
+fn mcp_init_error_display_keeps_transient_oauth_refresh_failure_generic() {
+    let server_name = "example";
+    let err: StartupOutcomeError =
+        anyhow::anyhow!("OAuth token endpoint refresh failed: 503 Service Unavailable").into();
+
+    let display = mcp_init_error_display(server_name, /*entry*/ None, &err);
+
+    let expected = format!("MCP client for `{server_name}` failed to start: {err:#}");
+    assert_eq!(expected, display);
+    assert!(!display.contains("codex mcp login"));
+}
+
+#[test]
+fn mcp_init_error_display_keeps_credential_store_failure_generic() {
+    let server_name = "example";
+    let err: StartupOutcomeError =
+        anyhow::anyhow!("failed to read OAuth credentials: secure storage is locked").into();
 
     let display = mcp_init_error_display(server_name, /*entry*/ None, &err);
 

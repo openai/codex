@@ -19,6 +19,7 @@
 use anyhow::Context;
 use anyhow::Error;
 use anyhow::Result;
+use anyhow::anyhow;
 use codex_config::types::OAuthCredentialsStoreMode;
 use oauth2::AccessToken;
 use oauth2::RefreshToken;
@@ -45,6 +46,7 @@ use tracing::warn;
 
 use codex_keyring_store::DefaultKeyringStore;
 use codex_keyring_store::KeyringStore;
+use rmcp::transport::auth::AuthError;
 use rmcp::transport::auth::AuthorizationManager;
 use tokio::sync::Mutex;
 
@@ -52,6 +54,8 @@ use codex_utils_home_dir::find_codex_home;
 
 const KEYRING_SERVICE: &str = "Codex MCP Credentials";
 const REFRESH_SKEW_MILLIS: u64 = 30_000;
+pub const OAUTH_REFRESH_REAUTHENTICATION_REQUIRED_ERROR: &str =
+    "OAuth refresh token was rejected; reauthentication required";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct StoredOAuthTokens {
@@ -321,8 +325,9 @@ impl OAuthPersistor {
                     expires_at,
                 };
                 if last_credentials.as_ref() != Some(&stored) {
+                    // Preserve the refreshed in-memory state even when durable storage fails.
+                    *last_credentials = Some(stored.clone());
                     save_oauth_tokens(&self.inner.server_name, &stored, self.inner.store_mode)?;
-                    *last_credentials = Some(stored);
                 }
             }
             None => {
@@ -343,6 +348,40 @@ impl OAuthPersistor {
         }
 
         Ok(())
+    }
+
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "AuthorizationManager async access must be serialized through its mutex"
+    )]
+    pub(crate) async fn refresh_for_startup_if_needed(&self) -> Result<()> {
+        let expires_at = {
+            let guard = self.inner.last_credentials.lock().await;
+            guard.as_ref().and_then(|tokens| tokens.expires_at)
+        };
+
+        if !token_needs_refresh(expires_at) {
+            return Ok(());
+        }
+
+        let manager = self.inner.authorization_manager.clone();
+        let guard = manager.lock().await;
+        match guard.refresh_token().await {
+            Ok(_) => Ok(()),
+            Err(AuthError::TokenRefreshFailed(message)) if message.contains("invalid_grant") => {
+                Err(anyhow!(OAUTH_REFRESH_REAUTHENTICATION_REQUIRED_ERROR))
+            }
+            Err(AuthError::TokenRefreshFailed(message)) => Err(anyhow!(
+                "OAuth token endpoint refresh failed for server {}: {message}",
+                self.inner.server_name
+            )),
+            Err(error) => Err(error).with_context(|| {
+                format!(
+                    "failed to refresh OAuth tokens for server {}",
+                    self.inner.server_name
+                )
+            }),
+        }
     }
 
     #[expect(
@@ -574,7 +613,8 @@ fn write_fallback_file(store: &FallbackFile) -> Result<()> {
     }
 
     let serialized = serde_json::to_string(store)?;
-    fs::write(&path, serialized)?;
+    fs::write(&path, serialized)
+        .with_context(|| format!("failed to write credentials file at {}", path.display()))?;
 
     #[cfg(unix)]
     {
@@ -705,12 +745,18 @@ mod tests {
         let store = MockKeyringStore::default();
         let tokens = sample_tokens();
         let key = super::compute_store_key(&tokens.server_name, &tokens.url)?;
-        store.set_error(&key, KeyringError::Invalid("error".into(), "load".into()));
+        let injected_error =
+            KeyringError::Invalid("injected-load".into(), "underlying load failure".into());
+        let injected_cause = injected_error.to_string();
+        store.set_error(&key, injected_error);
 
         let error = super::load_oauth_tokens_from_keyring(&store, &tokens.server_name, &tokens.url)
             .expect_err("explicit keyring reads should propagate keyring failures");
 
-        assert!(error.to_string().contains("error"));
+        assert_eq!(
+            error.chain().map(ToString::to_string).collect::<Vec<_>>(),
+            vec![injected_cause]
+        );
         Ok(())
     }
 
@@ -772,15 +818,17 @@ mod tests {
         let store = MockKeyringStore::default();
         let tokens = sample_tokens();
         let key = super::compute_store_key(&tokens.server_name, &tokens.url)?;
-        store.set_error(&key, KeyringError::Invalid("error".into(), "save".into()));
+        let injected_error =
+            KeyringError::Invalid("injected-save".into(), "underlying save failure".into());
+        let injected_cause = injected_error.to_string();
+        store.set_error(&key, injected_error);
 
         let error = super::save_oauth_tokens_with_keyring(&store, &tokens.server_name, &tokens)
             .expect_err("explicit keyring writes should propagate keyring failures");
 
-        assert!(
-            error
-                .to_string()
-                .contains("failed to write OAuth tokens to keyring")
+        assert_eq!(
+            error.chain().last().map(ToString::to_string),
+            Some(injected_cause)
         );
         Ok(())
     }
