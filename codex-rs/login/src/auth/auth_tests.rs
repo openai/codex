@@ -164,7 +164,7 @@ async fn login_with_access_token_writes_only_personal_access_token() {
     assert_eq!(
         auth,
         AuthDotJson {
-            auth_mode: Some(AuthMode::PersonalAccessToken),
+            auth_mode: None,
             openai_api_key: None,
             tokens: None,
             last_refresh: None,
@@ -172,6 +172,10 @@ async fn login_with_access_token_writes_only_personal_access_token() {
             personal_access_token: Some("at-login-test".to_string()),
         }
     );
+    assert_eq!(auth.resolved_mode(), AuthMode::PersonalAccessToken);
+    let persisted: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(auth_path).unwrap()).unwrap();
+    assert!(persisted.get("auth_mode").is_none());
     server.verify().await;
 }
 

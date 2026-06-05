@@ -616,7 +616,9 @@ pub async fn login_with_access_token(
                 std::io::Error::new(std::io::ErrorKind::PermissionDenied, message)
             })?;
             AuthDotJson {
-                auth_mode: Some(ApiAuthMode::PersonalAccessToken),
+                // Infer PAT auth from the credential field so older Codex builds can still
+                // deserialize auth.json after a rollback.
+                auth_mode: None,
                 openai_api_key: None,
                 tokens: None,
                 last_refresh: None,
@@ -1088,6 +1090,9 @@ impl AuthDotJson {
     fn resolved_mode(&self) -> ApiAuthMode {
         if let Some(mode) = self.auth_mode {
             return mode;
+        }
+        if self.personal_access_token.is_some() {
+            return ApiAuthMode::PersonalAccessToken;
         }
         if self.openai_api_key.is_some() {
             return ApiAuthMode::ApiKey;
