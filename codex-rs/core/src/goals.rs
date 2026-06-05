@@ -382,6 +382,7 @@ impl Session {
                 Ok(())
             }),
             GoalRuntimeEvent::MaybeContinueIfIdle => Box::pin(async move {
+                self.maybe_start_turn_for_pending_work().await;
                 if self
                     .goal_runtime
                     .suppress_next_idle_continuation
@@ -389,7 +390,7 @@ impl Session {
                 {
                     return Ok(());
                 }
-                self.maybe_continue_goal_if_idle_runtime().await;
+                self.maybe_start_goal_continuation_turn().await;
                 Ok(())
             }),
             GoalRuntimeEvent::TaskAborted { turn_context } => Box::pin(async move {
@@ -1173,16 +1174,23 @@ impl Session {
                 .await;
         }
 
-        if matches!(
-            error,
-            CodexErr::ContextWindowExceeded | CodexErr::Interrupted
-        ) {
+        if matches!(error, CodexErr::TurnAborted | CodexErr::Interrupted) {
             return Ok(());
         }
 
-        if self.enabled(Feature::Goals)
+        let had_active_goal_this_turn = self.enabled(Feature::Goals)
             && !should_ignore_goal_for_mode(turn_context.collaboration_mode.mode)
-        {
+            && self
+                .goal_runtime
+                .accounting
+                .lock()
+                .await
+                .turn
+                .as_ref()
+                .is_some_and(|turn| {
+                    turn.turn_id == turn_context.sub_id && turn.active_this_turn()
+                });
+        if had_active_goal_this_turn {
             self.goal_runtime
                 .suppress_next_idle_continuation
                 .store(true, Ordering::Release);

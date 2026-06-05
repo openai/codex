@@ -9680,7 +9680,7 @@ async fn turn_error_suppresses_next_idle_goal_continuation() -> anyhow::Result<(
     .await;
     set_total_token_usage(&sess, post_goal_token_usage()).await;
 
-    let error = CodexErr::InvalidRequest("bad compaction request".to_string());
+    let error = CodexErr::ContextWindowExceeded;
     sess.goal_runtime_apply(GoalRuntimeEvent::TurnErrored {
         turn_context: tc.as_ref(),
         error: &error,
@@ -9699,6 +9699,61 @@ async fn turn_error_suppresses_next_idle_goal_continuation() -> anyhow::Result<(
     sess.goal_runtime_apply(GoalRuntimeEvent::MaybeContinueIfIdle)
         .await?;
     assert!(sess.active_turn.lock().await.is_none());
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn turn_error_suppression_still_starts_pending_trigger_turn() -> anyhow::Result<()> {
+    let (sess, tc, _rx, _codex_home) = make_goal_session_and_context_with_rx().await;
+    sess.set_thread_goal(
+        tc.as_ref(),
+        SetGoalRequest {
+            objective: Some("Keep improving the benchmark".to_string()),
+            status: None,
+            token_budget: Some(Some(500)),
+        },
+    )
+    .await?;
+    sess.goal_runtime_apply(GoalRuntimeEvent::TurnStarted {
+        turn_context: tc.as_ref(),
+        token_usage: TokenUsage::default(),
+    })
+    .await?;
+    sess.spawn_task(
+        Arc::clone(&tc),
+        Vec::new(),
+        NeverEndingTask {
+            kind: TaskKind::Regular,
+            listen_to_cancellation_token: false,
+        },
+    )
+    .await;
+
+    let error = CodexErr::InvalidRequest("bad compaction request".to_string());
+    sess.goal_runtime_apply(GoalRuntimeEvent::TurnErrored {
+        turn_context: tc.as_ref(),
+        error: &error,
+    })
+    .await?;
+    sess.input_queue
+        .enqueue_mailbox_communication(InterAgentCommunication::new(
+            AgentPath::try_from("/root/worker").expect("worker path should parse"),
+            AgentPath::root(),
+            Vec::new(),
+            "pending trigger".to_string(),
+            /*trigger_turn*/ true,
+        ))
+        .await;
+
+    sess.abort_all_tasks(TurnAbortReason::Replaced).await;
+    assert!(sess.input_queue.has_trigger_turn_mailbox_items().await);
+
+    sess.goal_runtime_apply(GoalRuntimeEvent::MaybeContinueIfIdle)
+        .await?;
+    assert!(!sess.input_queue.has_trigger_turn_mailbox_items().await);
+
+    sess.abort_all_tasks(TurnAbortReason::Replaced).await;
 
     Ok(())
 }
