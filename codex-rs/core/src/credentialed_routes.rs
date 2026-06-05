@@ -44,7 +44,7 @@ pub(crate) async fn load_for_session(
             CredentialedRoutesSessionConfig {
                 routes: response.routes,
                 proxy_headers: credentialed_route_proxy_headers(
-                    client.credential_routes_proxy_auth_headers(),
+                    client.credential_routes_proxy_headers(),
                 ),
                 proxy_url: Some(client.credential_routes_proxy_url()),
             }
