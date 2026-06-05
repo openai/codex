@@ -30,6 +30,7 @@ use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::built_in_model_providers;
 use codex_models_manager::bundled_models_response;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
@@ -238,6 +239,25 @@ impl TestCodexBuilder {
         let new_model = model.to_string();
         self.with_config(move |config| {
             config.model = Some(new_model);
+        })
+    }
+
+    pub fn with_model_info_override<T>(self, model: &str, override_model_info: T) -> Self
+    where
+        T: FnOnce(&mut ModelInfo) + Send + 'static,
+    {
+        let model = model.to_string();
+        self.with_config(move |config| {
+            let mut model_catalog = bundled_models_response()
+                .unwrap_or_else(|err| panic!("bundled models.json should parse: {err}"));
+            let model_info = model_catalog
+                .models
+                .iter_mut()
+                .find(|model_info| model_info.slug == model)
+                .unwrap_or_else(|| panic!("{model} should exist in bundled models.json"));
+            override_model_info(model_info);
+            config.model = Some(model);
+            config.model_catalog = Some(model_catalog);
         })
     }
 

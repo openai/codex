@@ -3,90 +3,18 @@ use std::sync::Arc;
 use anyhow::Context;
 use anyhow::Result;
 use codex_core::config::Config;
-use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionRegistry;
 use codex_extension_api::ExtensionRegistryBuilder;
-use codex_extension_api::ToolCall;
-use codex_extension_api::ToolContributor;
-use codex_extension_api::ToolExecutor;
-use codex_extension_api::ToolName;
 use codex_features::Feature;
+use codex_image_generation_extension::install as install_image_generation_extension;
 use codex_login::CodexAuth;
-use codex_models_manager::bundled_models_response;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::openai_models::InputModality;
-use codex_tools::JsonToolOutput;
-use codex_tools::ResponsesApiNamespace;
-use codex_tools::ResponsesApiNamespaceTool;
-use codex_tools::ResponsesApiTool;
-use codex_tools::ToolOutput;
-use codex_tools::ToolSpec;
+use codex_web_search_extension::install as install_web_search_extension;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
 use serde_json::Value;
-use serde_json::json;
-
-struct ResponsesLiteToolContributor;
-
-impl ToolContributor for ResponsesLiteToolContributor {
-    fn tools(
-        &self,
-        _session_store: &ExtensionData,
-        _thread_store: &ExtensionData,
-    ) -> Vec<Arc<dyn ToolExecutor<ToolCall>>> {
-        vec![
-            Arc::new(TestNamespacedTool::new("web", "run")),
-            Arc::new(TestNamespacedTool::new("image_gen", "imagegen")),
-        ]
-    }
-}
-
-struct TestNamespacedTool {
-    namespace: &'static str,
-    name: &'static str,
-}
-
-impl TestNamespacedTool {
-    fn new(namespace: &'static str, name: &'static str) -> Self {
-        Self { namespace, name }
-    }
-}
-
-#[async_trait::async_trait]
-impl ToolExecutor<ToolCall> for TestNamespacedTool {
-    fn tool_name(&self) -> ToolName {
-        ToolName::namespaced(self.namespace, self.name)
-    }
-
-    fn spec(&self) -> ToolSpec {
-        ToolSpec::Namespace(ResponsesApiNamespace {
-            name: self.namespace.to_string(),
-            description: format!("Test {} namespace.", self.namespace),
-            tools: vec![ResponsesApiNamespaceTool::Function(ResponsesApiTool {
-                name: self.name.to_string(),
-                description: format!("Test {} tool.", self.name),
-                strict: false,
-                defer_loading: None,
-                parameters: codex_tools::JsonSchema::default(),
-                output_schema: None,
-            })],
-        })
-    }
-
-    async fn handle(
-        &self,
-        _call: ToolCall,
-    ) -> Result<Box<dyn ToolOutput>, codex_tools::FunctionCallError> {
-        Ok(Box::new(JsonToolOutput::new(json!({}))))
-    }
-}
-
-fn responses_lite_test_extensions() -> Arc<ExtensionRegistry<Config>> {
-    let mut builder = ExtensionRegistryBuilder::new();
-    builder.tool_contributor(Arc::new(ResponsesLiteToolContributor));
-    Arc::new(builder.build())
-}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn responses_lite_uses_standalone_web_search_and_image_generation() -> Result<()> {
@@ -102,22 +30,21 @@ async fn responses_lite_uses_standalone_web_search_and_image_generation() -> Res
     )
     .await;
 
-    let mut model_catalog = bundled_models_response()
-        .unwrap_or_else(|err| panic!("bundled models.json should parse: {err}"));
-    let model = model_catalog
-        .models
-        .iter_mut()
-        .find(|model| model.slug == "gpt-5.4")
-        .context("gpt-5.4 should exist in bundled models.json")?;
-    model.use_responses_lite = true;
-    model.input_modalities = vec![InputModality::Text, InputModality::Image];
+    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+    let auth_manager = codex_core::test_support::auth_manager_from_auth(auth.clone());
+    let mut extension_builder = ExtensionRegistryBuilder::<Config>::new();
+    install_web_search_extension(&mut extension_builder, Arc::clone(&auth_manager));
+    install_image_generation_extension(&mut extension_builder, auth_manager);
+    let extensions: Arc<ExtensionRegistry<Config>> = Arc::new(extension_builder.build());
 
     let mut builder = test_codex()
-        .with_model("gpt-5.4")
-        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
-        .with_extensions(responses_lite_test_extensions())
-        .with_config(move |config| {
-            config.model_catalog = Some(model_catalog);
+        .with_auth(auth)
+        .with_extensions(extensions)
+        .with_model_info_override("gpt-5.4", |model_info| {
+            model_info.use_responses_lite = true;
+            model_info.input_modalities = vec![InputModality::Text, InputModality::Image];
+        })
+        .with_config(|config| {
             config
                 .web_search_mode
                 .set(WebSearchMode::Live)
