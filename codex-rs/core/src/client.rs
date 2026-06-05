@@ -724,7 +724,7 @@ impl ModelClient {
         let context = if model_info.use_responses_lite {
             Some(ReasoningContext::AllTurns)
         } else {
-            // Omit context so Responses uses the model-configured default, which is currently
+            // Omit context so Responses uses the default, which is currently
             // `current_turn'
             None
         };
