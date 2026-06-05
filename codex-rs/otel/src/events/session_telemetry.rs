@@ -998,6 +998,37 @@ impl SessionTelemetry {
         );
     }
 
+    pub fn sandbox_outcome(
+        &self,
+        tool_name: &str,
+        call_id: &str,
+        outcome: &str,
+        initial_duration: Duration,
+        escalated_duration: Option<Duration>,
+    ) {
+        let initial_duration_ms = initial_duration.as_millis().min(i64::MAX as u128) as i64;
+        let escalated_duration_ms =
+            escalated_duration.map(|duration| duration.as_millis().min(i64::MAX as u128) as i64);
+        log_event!(
+            self,
+            event.name = "codex.sandbox_outcome",
+            tool_name = %tool_name,
+            call_id = %call_id,
+            outcome = %outcome,
+            initial_duration_ms = initial_duration_ms,
+            escalated_duration_ms = escalated_duration_ms,
+        );
+        trace_event!(
+            self,
+            event.name = "codex.sandbox_outcome",
+            tool_name = %tool_name,
+            call_id = %call_id,
+            outcome = %outcome,
+            initial_duration_ms = initial_duration_ms,
+            escalated_duration_ms = escalated_duration_ms,
+        );
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub async fn log_tool_result_with_tags<F, Fut, E>(
         &self,
