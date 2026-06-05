@@ -1,4 +1,5 @@
 use std::error::Error;
+use std::path::PathBuf;
 
 use tokio::io;
 use tokio::io::AsyncReadExt;
@@ -29,8 +30,7 @@ pub fn main() -> ! {
 }
 
 async fn run_main() -> Result<(), Box<dyn Error + Send + Sync>> {
-    let mut input = Vec::new();
-    io::stdin().read_to_end(&mut input).await?;
+    let input = read_request_input().await?;
     let request: FsHelperRequest = serde_json::from_slice(&input)?;
     let response = match run_direct_request(request).await {
         Ok(payload) => FsHelperResponse::Ok(payload),
@@ -42,4 +42,14 @@ async fn run_main() -> Result<(), Box<dyn Error + Send + Sync>> {
         .await?;
     stdout.write_all(b"\n").await?;
     Ok(())
+}
+
+async fn read_request_input() -> Result<Vec<u8>, Box<dyn Error + Send + Sync>> {
+    if let Some(path) = std::env::args_os().nth(2) {
+        return Ok(tokio::fs::read(PathBuf::from(path)).await?);
+    }
+
+    let mut input = Vec::new();
+    io::stdin().read_to_end(&mut input).await?;
+    Ok(input)
 }

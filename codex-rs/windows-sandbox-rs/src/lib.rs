@@ -169,6 +169,8 @@ pub use elevated_impl::run_windows_sandbox_capture_for_permission_profile as run
 #[cfg(target_os = "windows")]
 pub use helper_materialization::resolve_current_exe_for_launch;
 #[cfg(target_os = "windows")]
+pub use helper_materialization::resolve_exe_for_launch;
+#[cfg(target_os = "windows")]
 pub use hide_users::hide_current_user_profile_dir;
 #[cfg(target_os = "windows")]
 pub use hide_users::hide_newly_created_users;
@@ -298,6 +300,8 @@ pub use windows_impl::CaptureResult;
 #[cfg(target_os = "windows")]
 pub use windows_impl::run_windows_sandbox_capture;
 #[cfg(target_os = "windows")]
+pub use windows_impl::run_windows_sandbox_capture_for_level;
+#[cfg(target_os = "windows")]
 pub use windows_impl::run_windows_sandbox_capture_with_filesystem_overrides;
 #[cfg(target_os = "windows")]
 pub use windows_impl::run_windows_sandbox_legacy_preflight;
@@ -333,6 +337,7 @@ mod windows_impl {
     use super::spawn_prep::prepare_legacy_spawn_context;
     use super::spawn_prep::root_capability_sids;
     use anyhow::Result;
+    use codex_protocol::config_types::WindowsSandboxLevel;
     use codex_protocol::models::PermissionProfile;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use std::collections::HashMap;
@@ -432,6 +437,71 @@ mod windows_impl {
         pub timed_out: bool,
     }
 
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    enum CaptureBackend {
+        Elevated,
+        Legacy,
+    }
+
+    fn capture_backend_for_level(windows_sandbox_level: WindowsSandboxLevel) -> CaptureBackend {
+        match windows_sandbox_level {
+            WindowsSandboxLevel::Elevated => CaptureBackend::Elevated,
+            WindowsSandboxLevel::RestrictedToken | WindowsSandboxLevel::Disabled => {
+                CaptureBackend::Legacy
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn run_windows_sandbox_capture_for_level(
+        windows_sandbox_level: WindowsSandboxLevel,
+        permission_profile: &PermissionProfile,
+        workspace_roots: &[AbsolutePathBuf],
+        codex_home: &Path,
+        command: Vec<String>,
+        cwd: &Path,
+        env_map: HashMap<String, String>,
+        use_private_desktop: bool,
+    ) -> Result<CaptureResult> {
+        let empty_paths: &[AbsolutePathBuf] = &[];
+        match capture_backend_for_level(windows_sandbox_level) {
+            CaptureBackend::Elevated => {
+                super::elevated_impl::run_windows_sandbox_capture_for_permission_profile(
+                    super::elevated_impl::ElevatedSandboxProfileCaptureRequest {
+                        permission_profile,
+                        workspace_roots,
+                        codex_home,
+                        command,
+                        cwd,
+                        env_map,
+                        timeout_ms: None,
+                        cancellation: None,
+                        use_private_desktop,
+                        proxy_enforced: false,
+                        read_roots_override: None,
+                        read_roots_include_platform_defaults: false,
+                        write_roots_override: None,
+                        deny_read_paths_override: empty_paths,
+                        deny_write_paths_override: empty_paths,
+                    },
+                )
+            }
+            CaptureBackend::Legacy => run_windows_sandbox_capture_with_filesystem_overrides(
+                permission_profile,
+                workspace_roots,
+                codex_home,
+                command,
+                cwd,
+                env_map,
+                None,
+                None,
+                empty_paths,
+                empty_paths,
+                use_private_desktop,
+            ),
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn run_windows_sandbox_capture(
         permission_profile: &PermissionProfile,
@@ -466,13 +536,14 @@ mod windows_impl {
         codex_home: &Path,
         command: Vec<String>,
         cwd: &Path,
-        mut env_map: HashMap<String, String>,
+        env_map: HashMap<String, String>,
         timeout_ms: Option<u64>,
         cancellation: Option<WindowsSandboxCancellationToken>,
         additional_deny_read_paths: &[AbsolutePathBuf],
         additional_deny_write_paths: &[AbsolutePathBuf],
         use_private_desktop: bool,
     ) -> Result<CaptureResult> {
+        let mut env_map = env_map;
         let additional_deny_read_paths = additional_deny_read_paths
             .iter()
             .map(AbsolutePathBuf::to_path_buf)
@@ -702,6 +773,7 @@ mod windows_impl {
     #[cfg(test)]
     mod tests {
         use crate::resolved_permissions::ResolvedWindowsSandboxPermissions;
+        use codex_protocol::config_types::WindowsSandboxLevel;
         use codex_protocol::models::PermissionProfile;
         use codex_protocol::permissions::NetworkSandboxPolicy;
         use std::collections::HashMap;
@@ -742,6 +814,22 @@ mod windows_impl {
         #[test]
         fn applies_network_block_for_read_only() {
             assert!(should_apply_network_block(&PermissionProfile::read_only()));
+        }
+
+        #[test]
+        fn capture_backend_follows_windows_sandbox_level() {
+            assert_eq!(
+                super::capture_backend_for_level(WindowsSandboxLevel::Elevated),
+                super::CaptureBackend::Elevated
+            );
+            assert_eq!(
+                super::capture_backend_for_level(WindowsSandboxLevel::RestrictedToken),
+                super::CaptureBackend::Legacy
+            );
+            assert_eq!(
+                super::capture_backend_for_level(WindowsSandboxLevel::Disabled),
+                super::CaptureBackend::Legacy
+            );
         }
 
         #[test]
