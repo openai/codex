@@ -1222,7 +1222,10 @@ impl RmcpClient {
     fn is_retryable_client_initialize_error(error: &rmcp::service::ClientInitializeError) -> bool {
         match error {
             rmcp::service::ClientInitializeError::TransportError { error, context }
-                if context.as_ref() == "send initialize request" =>
+                if matches!(
+                    context.as_ref(),
+                    "send initialize request" | "send initialized notification"
+                ) =>
             {
                 error
                     .error

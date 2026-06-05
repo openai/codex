@@ -1,7 +1,9 @@
+use std::any::TypeId;
 use std::collections::BTreeMap;
 use std::time::Duration;
 
 use pretty_assertions::assert_eq;
+use rmcp::transport::DynamicTransportError;
 use tokio::time;
 
 use super::*;
@@ -74,4 +76,35 @@ fn initialize_metric_tags_record_retry_exhaustion() {
             ("failure_kind", "retry_exhausted".to_string()),
         ])
     );
+}
+
+#[test]
+fn retryable_initialize_error_includes_initialized_notification_context() {
+    let contexts = [
+        "send initialize request",
+        "send initialized notification",
+        "receive initialize response",
+    ];
+
+    assert_eq!(
+        contexts.map(|context| {
+            RmcpClient::is_retryable_client_initialize_error(&retryable_initialize_error(context))
+        }),
+        [true, true, false],
+    );
+}
+
+fn retryable_initialize_error(context: &'static str) -> rmcp::service::ClientInitializeError {
+    rmcp::service::ClientInitializeError::TransportError {
+        error: DynamicTransportError::from_parts(
+            "streamable_http",
+            TypeId::of::<()>(),
+            Box::new(StreamableHttpError::Client(
+                StreamableHttpClientAdapterError::RetryableHttpStatus(
+                    reqwest::StatusCode::SERVICE_UNAVAILABLE.as_u16(),
+                ),
+            )),
+        ),
+        context: context.into(),
+    }
 }

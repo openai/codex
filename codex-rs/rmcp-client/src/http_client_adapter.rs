@@ -29,7 +29,6 @@ use reqwest::header::HeaderMap;
 use reqwest::header::HeaderName;
 use rmcp::model::ClientJsonRpcMessage;
 use rmcp::model::JsonRpcMessage;
-use rmcp::model::ServerJsonRpcMessage;
 use rmcp::transport::streamable_http_client::AuthRequiredError;
 use rmcp::transport::streamable_http_client::InsufficientScopeError;
 use rmcp::transport::streamable_http_client::StreamableHttpClient;
@@ -191,8 +190,15 @@ impl StreamableHttpClient for StreamableHttpClientAdapter {
             && content_type.starts_with(JSON_MIME_TYPE)
         {
             let body = collect_body(&mut body_stream).await?;
-            let message: ServerJsonRpcMessage =
-                serde_json::from_slice(&body).map_err(StreamableHttpError::Deserialize)?;
+            let message = match serde_json::from_slice(&body) {
+                Ok(message) => message,
+                Err(_error) if is_retryable_http_status(response.status) => {
+                    return Err(StreamableHttpError::Client(
+                        StreamableHttpClientAdapterError::RetryableHttpStatus(response.status),
+                    ));
+                }
+                Err(error) => return Err(StreamableHttpError::Deserialize(error)),
+            };
             return Ok(StreamableHttpPostResponse::Json(message, session_id));
         }
 
@@ -520,6 +526,7 @@ mod tests {
     use rmcp::model::JsonRpcError;
     use rmcp::model::PingRequest;
     use rmcp::model::RequestId;
+    use rmcp::model::ServerJsonRpcMessage;
     use rmcp::transport::streamable_http_client::StreamableHttpPostResponse;
     use serde_json::json;
     use tokio::net::TcpListener;
@@ -572,6 +579,46 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn post_message_retries_non_json_rpc_json_error_body() -> anyhow::Result<()> {
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let address = listener.local_addr()?;
+        let app = Router::new().route("/", post(non_json_rpc_json_error_response));
+        let server = tokio::spawn(async move { axum::serve(listener, app).await });
+
+        let adapter = StreamableHttpClientAdapter::new(
+            Environment::default_for_tests().get_http_client(),
+            HeaderMap::new(),
+            /*auth_provider*/ None,
+        );
+        let request = ClientJsonRpcMessage::request(
+            ClientRequest::PingRequest(PingRequest::default()),
+            RequestId::Number(1),
+        );
+
+        let result = adapter
+            .post_message(
+                Arc::from(format!("http://{address}/")),
+                request,
+                /*session_id*/ None,
+                /*auth_token*/ None,
+                HashMap::new(),
+            )
+            .await;
+
+        server.abort();
+
+        let Err(StreamableHttpError::Client(
+            StreamableHttpClientAdapterError::RetryableHttpStatus(status),
+        )) = result
+        else {
+            panic!("expected retryable HTTP status error");
+        };
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE.as_u16());
+
+        Ok(())
+    }
+
     async fn json_error_response() -> impl IntoResponse {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -583,6 +630,16 @@ mod tests {
                     "code": -32603,
                     "message": "transient json error",
                 },
+            })),
+        )
+    }
+
+    async fn non_json_rpc_json_error_response() -> impl IntoResponse {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            [(CONTENT_TYPE, JSON_MIME_TYPE)],
+            Json(json!({
+                "error": "service temporarily unavailable",
             })),
         )
     }
