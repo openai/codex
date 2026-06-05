@@ -9,6 +9,7 @@ use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_responses_server_repeating_assistant;
 use app_test_support::create_mock_responses_server_sequence;
 use app_test_support::create_mock_responses_server_sequence_unchecked;
+use app_test_support::create_request_user_input_sse_response;
 use app_test_support::create_shell_command_sse_response;
 use app_test_support::format_with_current_shell_display;
 use app_test_support::to_response;
@@ -908,6 +909,133 @@ async fn turn_start_tracks_turn_event_analytics() -> Result<()> {
     assert_eq!(event["event_params"]["output_tokens"], 0);
     assert_eq!(event["event_params"]["reasoning_output_tokens"], 0);
     assert_eq!(event["event_params"]["total_tokens"], 0);
+    let params = &event["event_params"];
+    assert_eq!(
+        json!({
+            "timingsAreNumbers": [
+                "before_first_sampling_ms",
+                "sampling_ms",
+                "between_sampling_overhead_ms",
+                "tool_blocking_ms",
+                "after_last_sampling_ms",
+            ]
+            .into_iter()
+            .all(|field| params[field].as_u64().is_some()),
+            "toolBlockingMs": params["tool_blocking_ms"],
+            "samplingRequestCount": params["sampling_request_count"],
+            "samplingRetryCount": params["sampling_retry_count"],
+        }),
+        json!({
+            "timingsAreNumbers": true,
+            "toolBlockingMs": 0,
+            "samplingRequestCount": 1,
+            "samplingRetryCount": 0,
+        })
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn turn_profile_tracks_blocking_tool_and_follow_up_sampling() -> Result<()> {
+    let responses = vec![
+        create_request_user_input_sse_response("call1")?,
+        create_final_assistant_message_sse_response("Done")?,
+    ];
+    let server = create_mock_responses_server_sequence(responses).await;
+
+    let codex_home = TempDir::new()?;
+    write_mock_responses_config_toml_with_chatgpt_base_url(
+        codex_home.path(),
+        &server.uri(),
+        &server.uri(),
+    )?;
+    mount_analytics_capture(&server, codex_home.path()).await?;
+
+    let mut mcp = TestAppServer::new_without_managed_config(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let thread_req = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let thread_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
+
+    let turn_req = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            client_user_message_id: None,
+            input: vec![V2UserInput::Text {
+                text: "ask something".to_string(),
+                text_elements: Vec::new(),
+            }],
+            collaboration_mode: Some(CollaborationMode {
+                mode: ModeKind::Plan,
+                settings: Settings {
+                    model: "mock-model".to_string(),
+                    reasoning_effort: Some(ReasoningEffort::Medium),
+                    developer_instructions: None,
+                },
+            }),
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_req)),
+    )
+    .await??;
+
+    let server_req = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_request_message(),
+    )
+    .await??;
+    let ServerRequest::ToolRequestUserInput { request_id, .. } = server_req else {
+        panic!("expected ToolRequestUserInput request, got: {server_req:?}");
+    };
+    tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    mcp.send_response(
+        request_id,
+        json!({
+            "answers": {
+                "confirm_path": { "answers": ["yes"] }
+            }
+        }),
+    )
+    .await?;
+
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let event = wait_for_analytics_event(&server, DEFAULT_READ_TIMEOUT, "codex_turn_event").await?;
+    let params = &event["event_params"];
+    assert_eq!(
+        json!({
+            "toolBlockingIsPositive": params["tool_blocking_ms"]
+                .as_u64()
+                .is_some_and(|duration| duration > 0),
+            "samplingRequestCount": params["sampling_request_count"],
+            "samplingRetryCount": params["sampling_retry_count"],
+            "status": params["status"],
+        }),
+        json!({
+            "toolBlockingIsPositive": true,
+            "samplingRequestCount": 2,
+            "samplingRetryCount": 0,
+            "status": "completed",
+        })
+    );
 
     Ok(())
 }
