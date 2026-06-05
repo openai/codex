@@ -18,9 +18,12 @@ use wiremock::matchers::path_regex;
 
 const CONNECTOR_ID: &str = "calendar";
 const CONNECTOR_NAME: &str = "Calendar";
+const GMAIL_CONNECTOR_ID: &str = "gmail";
+const GMAIL_CONNECTOR_NAME: &str = "Gmail";
 const DISCOVERABLE_CALENDAR_ID: &str = "connector_2128aebfecb84f64a069897515042a44";
 const DISCOVERABLE_GMAIL_ID: &str = "connector_68df038e0ba48191908c8434991bbac2";
 const CONNECTOR_DESCRIPTION: &str = "Plan events and manage your calendar.";
+const GMAIL_CONNECTOR_DESCRIPTION: &str = "Find and summarize email threads.";
 const CODEX_APPS_META_KEY: &str = "_codex_apps";
 const PROTOCOL_VERSION: &str = "2025-11-25";
 const SERVER_NAME: &str = "codex-apps-test";
@@ -28,6 +31,7 @@ const SERVER_VERSION: &str = "1.0.0";
 const SEARCHABLE_TOOL_COUNT: usize = 100;
 const CALENDAR_CREATE_EVENT_TOOL_NAME: &str = "calendar_create_event";
 const CALENDAR_APP_ONLY_TOOL_NAME: &str = "calendar_app_only_action";
+const GMAIL_SEARCH_EMAIL_TOOL_NAME: &str = "gmail_search_email";
 pub const CALENDAR_EXTRACT_TEXT_TOOL_NAME: &str = "calendar_extract_text";
 const CALENDAR_LIST_EVENTS_TOOL_NAME: &str = "calendar_list_events";
 pub const DIRECT_CALENDAR_CREATE_EVENT_TOOL: &str = "mcp__codex_apps__calendar__create_event";
@@ -39,6 +43,8 @@ pub const SEARCH_CALENDAR_APP_ONLY_TOOL: &str = "_app_only_action";
 pub const SEARCH_CALENDAR_CREATE_TOOL: &str = "_create_event";
 pub const SEARCH_CALENDAR_EXTRACT_TEXT_TOOL: &str = "_extract_text";
 pub const SEARCH_CALENDAR_LIST_TOOL: &str = "_list_events";
+pub const SEARCH_GMAIL_NAMESPACE: &str = "mcp__codex_apps__gmail";
+pub const SEARCH_GMAIL_SEARCH_EMAIL_TOOL: &str = "_search_email";
 pub const CALENDAR_CREATE_EVENT_RESOURCE_URI: &str =
     "connector://calendar/tools/calendar_create_event";
 pub const CALENDAR_CREATE_EVENT_MCP_APP_RESOURCE_URI: &str =
@@ -46,6 +52,7 @@ pub const CALENDAR_CREATE_EVENT_MCP_APP_RESOURCE_URI: &str =
 const CALENDAR_LIST_EVENTS_RESOURCE_URI: &str = "connector://calendar/tools/calendar_list_events";
 pub const DOCUMENT_EXTRACT_TEXT_RESOURCE_URI: &str =
     "connector://calendar/tools/calendar_extract_text";
+pub const GMAIL_SEARCH_EMAIL_RESOURCE_URI: &str = "connector://gmail/tools/gmail_search_email";
 
 #[derive(Clone)]
 pub struct AppsTestServer {
@@ -72,6 +79,7 @@ impl AppsTestServer {
             CONNECTOR_DESCRIPTION.to_string(),
             /*searchable*/ true,
             /*include_app_only_tool*/ false,
+            /*include_gmail_tool*/ false,
         )
         .await;
         Ok(Self {
@@ -91,6 +99,24 @@ impl AppsTestServer {
             CONNECTOR_DESCRIPTION.to_string(),
             /*searchable*/ false,
             /*include_app_only_tool*/ false,
+            /*include_gmail_tool*/ false,
+        )
+        .await;
+        Ok(Self {
+            chatgpt_base_url: server.uri(),
+        })
+    }
+
+    pub async fn mount_with_gmail(server: &MockServer) -> Result<Self> {
+        mount_oauth_metadata(server).await;
+        mount_connectors_directory(server).await;
+        mount_streamable_http_json_rpc(
+            server,
+            CONNECTOR_NAME.to_string(),
+            CONNECTOR_DESCRIPTION.to_string(),
+            /*searchable*/ false,
+            /*include_app_only_tool*/ false,
+            /*include_gmail_tool*/ true,
         )
         .await;
         Ok(Self {
@@ -110,6 +136,7 @@ impl AppsTestServer {
             CONNECTOR_DESCRIPTION.to_string(),
             matches!(tool_loading, AppsTestToolLoading::Searchable),
             /*include_app_only_tool*/ true,
+            /*include_gmail_tool*/ false,
         )
         .await;
         Ok(Self {
@@ -264,6 +291,7 @@ async fn mount_streamable_http_json_rpc(
     connector_description: String,
     searchable: bool,
     include_app_only_tool: bool,
+    include_gmail_tool: bool,
 ) {
     Mock::given(method("POST"))
         .and(path_regex("^/api/codex/apps/?$"))
@@ -272,6 +300,7 @@ async fn mount_streamable_http_json_rpc(
             connector_description,
             searchable,
             include_app_only_tool,
+            include_gmail_tool,
         })
         .mount(server)
         .await;
@@ -282,6 +311,7 @@ struct CodexAppsJsonRpcResponder {
     connector_description: String,
     searchable: bool,
     include_app_only_tool: bool,
+    include_gmail_tool: bool,
 }
 
 impl Respond for CodexAppsJsonRpcResponder {
@@ -471,6 +501,38 @@ impl Respond for CodexAppsJsonRpcResponder {
                             "connector_description": self.connector_description.clone(),
                             "ui": {
                                 "visibility": ["app"]
+                            }
+                        }
+                    }));
+                }
+                if self.include_gmail_tool
+                    && let Some(tools) = response
+                        .pointer_mut("/result/tools")
+                        .and_then(Value::as_array_mut)
+                {
+                    tools.push(json!({
+                        "name": GMAIL_SEARCH_EMAIL_TOOL_NAME,
+                        "description": "Search Gmail messages.",
+                        "annotations": {
+                            "readOnlyHint": true
+                        },
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "query": { "type": "string" },
+                                "limit": { "type": "integer" }
+                            },
+                            "required": ["query"],
+                            "additionalProperties": false
+                        },
+                        "_meta": {
+                            "connector_id": GMAIL_CONNECTOR_ID,
+                            "connector_name": GMAIL_CONNECTOR_NAME,
+                            "connector_description": GMAIL_CONNECTOR_DESCRIPTION,
+                            "_codex_apps": {
+                                "resource_uri": GMAIL_SEARCH_EMAIL_RESOURCE_URI,
+                                "contains_mcp_source": true,
+                                "connector_id": GMAIL_CONNECTOR_ID
                             }
                         }
                     }));

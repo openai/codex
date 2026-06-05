@@ -22,10 +22,13 @@ use core_test_support::apps_test_server::CALENDAR_CREATE_EVENT_MCP_APP_RESOURCE_
 use core_test_support::apps_test_server::CALENDAR_CREATE_EVENT_RESOURCE_URI;
 use core_test_support::apps_test_server::DIRECT_CALENDAR_CREATE_EVENT_TOOL as CALENDAR_CREATE_TOOL;
 use core_test_support::apps_test_server::DIRECT_CALENDAR_LIST_EVENTS_TOOL as CALENDAR_LIST_TOOL;
+use core_test_support::apps_test_server::GMAIL_SEARCH_EMAIL_RESOURCE_URI;
 use core_test_support::apps_test_server::SEARCH_CALENDAR_APP_ONLY_TOOL;
 use core_test_support::apps_test_server::SEARCH_CALENDAR_CREATE_TOOL;
 use core_test_support::apps_test_server::SEARCH_CALENDAR_LIST_TOOL;
 use core_test_support::apps_test_server::SEARCH_CALENDAR_NAMESPACE;
+use core_test_support::apps_test_server::SEARCH_GMAIL_NAMESPACE;
+use core_test_support::apps_test_server::SEARCH_GMAIL_SEARCH_EMAIL_TOOL;
 use core_test_support::apps_test_server::apps_enabled_builder;
 use core_test_support::apps_test_server::configure_search_capable_apps;
 use core_test_support::apps_test_server::configure_search_capable_model;
@@ -216,6 +219,135 @@ async fn always_defer_feature_hides_small_app_tool_sets() -> Result<()> {
     assert!(
         tools.iter().all(|name| !name.starts_with("mcp__")),
         "MCP tools should not be directly exposed: {tools:?}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn app_tool_calls_track_multiple_used_connectors_e2e() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let apps_server = AppsTestServer::mount_with_gmail(&server).await?;
+    let calendar_args = serde_json::to_string(&json!({
+        "title": "Lunch",
+        "starts_at": "2026-03-10T12:00:00Z",
+    }))?;
+    let gmail_args = serde_json::to_string(&json!({
+        "query": "lunch",
+        "limit": 5,
+    }))?;
+    let mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_function_call_with_namespace(
+                    "calendar-call-1",
+                    SEARCH_CALENDAR_NAMESPACE,
+                    SEARCH_CALENDAR_CREATE_TOOL,
+                    &calendar_args,
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_function_call_with_namespace(
+                    "gmail-call-1",
+                    SEARCH_GMAIL_NAMESPACE,
+                    SEARCH_GMAIL_SEARCH_EMAIL_TOOL,
+                    &gmail_args,
+                ),
+                ev_completed("resp-2"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-3"),
+                ev_assistant_message("msg-1", "done"),
+                ev_completed("resp-3"),
+            ]),
+        ],
+    )
+    .await;
+
+    let mut builder =
+        apps_enabled_builder(apps_server.chatgpt_base_url.clone()).with_config(|config| {
+            config
+                .features
+                .enable(Feature::Sqlite)
+                .expect("test config should allow feature update");
+        });
+    let test = builder.build(&server).await?;
+    test.submit_turn_with_approval_and_permission_profile(
+        "Use Calendar, then search Gmail.",
+        AskForApproval::Never,
+        PermissionProfile::Disabled,
+    )
+    .await?;
+
+    let requests = mock.requests();
+    assert_eq!(requests.len(), 3);
+    assert!(
+        namespace_child_tool(
+            &requests[0].body_json(),
+            SEARCH_CALENDAR_NAMESPACE,
+            SEARCH_CALENDAR_CREATE_TOOL
+        )
+        .is_some(),
+        "first request should expose the Calendar tool"
+    );
+    assert!(
+        namespace_child_tool(
+            &requests[0].body_json(),
+            SEARCH_GMAIL_NAMESPACE,
+            SEARCH_GMAIL_SEARCH_EMAIL_TOOL
+        )
+        .is_some(),
+        "first request should expose the Gmail tool"
+    );
+
+    let calendar_tool_call = recorded_apps_tool_call_by_call_id(&server, "calendar-call-1").await;
+    assert_eq!(
+        calendar_tool_call.pointer("/params/_meta/_codex_apps"),
+        Some(&json!({
+            "call_id": "calendar-call-1",
+            "resource_uri": CALENDAR_CREATE_EVENT_RESOURCE_URI,
+            "contains_mcp_source": true,
+            "connector_id": "calendar",
+            "used_connector_ids": [],
+        }))
+    );
+
+    let gmail_tool_call = recorded_apps_tool_call_by_call_id(&server, "gmail-call-1").await;
+    assert_eq!(
+        gmail_tool_call.pointer("/params/_meta/_codex_apps"),
+        Some(&json!({
+            "call_id": "gmail-call-1",
+            "resource_uri": GMAIL_SEARCH_EMAIL_RESOURCE_URI,
+            "contains_mcp_source": true,
+            "connector_id": "gmail",
+            "used_connector_ids": ["calendar"],
+        }))
+    );
+
+    let state_db = test.codex.state_db().expect("state db enabled");
+    let mut metadata = None;
+    for _ in 0..100 {
+        metadata = state_db
+            .get_thread(test.session_configured.thread_id)
+            .await?;
+        if metadata
+            .as_ref()
+            .is_some_and(|metadata| metadata.used_connector_ids.len() == 2)
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    let metadata = metadata.expect("thread metadata should be persisted");
+    assert_eq!(
+        metadata.used_connector_ids,
+        vec!["calendar".to_string(), "gmail".to_string()]
     );
 
     Ok(())
