@@ -68,6 +68,7 @@ current assets on the same tag, with the Rust crate's sandbox feature suffix in
 their raw names:
 
 - `librusty_v8_ptrcomp_sandbox_release_<target>.a.gz`
+- `rusty_v8_ptrcomp_sandbox_release_<target>.lib.gz` on Windows MSVC
 - `src_binding_ptrcomp_sandbox_release_<target>.rs`
 
 The dedicated publishing workflow is `.github/workflows/rusty-v8-release.yml`.
@@ -88,6 +89,11 @@ The same run also builds the matching sandbox pair targets:
 - `//third_party/v8:rusty_v8_sandbox_release_pair_aarch64_unknown_linux_gnu`
 - `//third_party/v8:rusty_v8_sandbox_release_pair_x86_64_unknown_linux_musl`
 - `//third_party/v8:rusty_v8_sandbox_release_pair_aarch64_unknown_linux_musl`
+
+The workflow also builds sandbox-enabled
+`x86_64-pc-windows-msvc` and `aarch64-pc-windows-msvc` archive/binding pairs
+from upstream `rusty_v8` source. Those ABI-specific outputs cannot be produced
+by Codex's Bazel Windows GNU toolchain.
 
 The Bazel graph pins the same libc++, libc++abi, and llvm-libc source revisions
 used by `rusty_v8 v149.2.0`, compiles published artifact targets with
