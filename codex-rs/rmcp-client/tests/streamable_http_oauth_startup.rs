@@ -33,6 +33,8 @@ const EXPIRED_ACCESS_TOKEN: &str = "expired-access-token";
 const REFRESH_TOKEN: &str = "valid-refresh-token";
 const REFRESHED_ACCESS_TOKEN: &str = "refreshed-access-token";
 const CHILD_SERVER_URL_ENV: &str = "MCP_TEST_OAUTH_STARTUP_SERVER_URL";
+const DISCOVERY_UNAVAILABLE_CHILD_SERVER_URL_ENV: &str =
+    "MCP_TEST_OAUTH_DISCOVERY_UNAVAILABLE_SERVER_URL";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn refreshes_expired_persisted_token_before_initialize() -> anyhow::Result<()> {
@@ -151,5 +153,114 @@ async fn oauth_startup_child() -> anyhow::Result<()> {
     .await?;
 
     initialize_client(&client).await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn discovery_unavailable_does_not_send_known_expired_access_token() -> anyhow::Result<()> {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(404))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/mcp"))
+        .and(header(
+            "authorization",
+            format!("Bearer {EXPIRED_ACCESS_TOKEN}"),
+        ))
+        .respond_with(|request: &Request| {
+            let body: Value = request.body_json().expect("valid JSON-RPC request");
+            match body.get("method").and_then(Value::as_str) {
+                Some("initialize") => ResponseTemplate::new(200).set_body_json(json!({
+                    "jsonrpc": "2.0",
+                    "id": body.get("id").cloned().unwrap_or(Value::Null),
+                    "result": {
+                        "protocolVersion": body
+                            .pointer("/params/protocolVersion")
+                            .cloned()
+                            .unwrap_or_else(|| json!("2025-06-18")),
+                        "capabilities": {},
+                        "serverInfo": {
+                            "name": "oauth-discovery-unavailable-test",
+                            "version": "0.0.0-test",
+                        },
+                    },
+                })),
+                Some("notifications/initialized") => ResponseTemplate::new(202),
+                method => ResponseTemplate::new(400)
+                    .set_body_string(format!("unexpected JSON-RPC method: {method:?}")),
+            }
+        })
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let codex_home = TempDir::new()?;
+    let server_url = format!("{}/mcp", server.uri());
+    let status = Command::new(std::env::current_exe()?)
+        .args([
+            "oauth_discovery_unavailable_child",
+            "--exact",
+            "--ignored",
+            "--nocapture",
+        ])
+        .env("CODEX_HOME", codex_home.path())
+        .env(DISCOVERY_UNAVAILABLE_CHILD_SERVER_URL_ENV, server_url)
+        .status()
+        .await?;
+
+    assert!(
+        status.success(),
+        "OAuth discovery unavailable child failed: {status}"
+    );
+    server.verify().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+#[ignore = "spawned by discovery_unavailable_does_not_send_known_expired_access_token"]
+async fn oauth_discovery_unavailable_child() -> anyhow::Result<()> {
+    let server_url = std::env::var(DISCOVERY_UNAVAILABLE_CHILD_SERVER_URL_ENV)?;
+
+    let response = OAuthTokenResponse::new(
+        AccessToken::new(EXPIRED_ACCESS_TOKEN.to_string()),
+        BasicTokenType::Bearer,
+        VendorExtraTokenFields::default(),
+    );
+    let tokens = StoredOAuthTokens {
+        server_name: SERVER_NAME.to_string(),
+        url: server_url.clone(),
+        client_id: "test-client-id".to_string(),
+        token_response: WrappedOAuthTokenResponse(response),
+        expires_at: Some(0),
+    };
+    save_oauth_tokens(SERVER_NAME, &tokens, OAuthCredentialsStoreMode::File)?;
+
+    let client = match RmcpClient::new_streamable_http_client(
+        SERVER_NAME,
+        &server_url,
+        /*bearer_token*/ None,
+        /*http_headers*/ None,
+        /*env_http_headers*/ None,
+        OAuthCredentialsStoreMode::File,
+        Environment::default_for_tests().get_http_client(),
+        /*auth_provider*/ None,
+    )
+    .await
+    {
+        Ok(client) => client,
+        Err(error) => {
+            assert!(
+                error.to_string().contains("expired"),
+                "initialization failed for an unexpected reason: {error}"
+            );
+            return Ok(());
+        }
+    };
+
+    initialize_client(&client)
+        .await
+        .expect_err("initialization should reject a known-expired access token");
     Ok(())
 }
