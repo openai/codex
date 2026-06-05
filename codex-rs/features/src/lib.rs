@@ -23,6 +23,8 @@ pub use feature_configs::NetworkProxyDomainPermissionToml;
 pub use feature_configs::NetworkProxyModeToml;
 pub use feature_configs::NetworkProxyUnixSocketPermissionToml;
 use feature_configs::RemovedAppsMcpPathOverrideConfigToml;
+pub use feature_configs::SystemProxyFeatureConfigToml;
+pub use feature_configs::SystemProxyFeatureModeToml;
 use legacy::LegacyFeatureToggles;
 pub use legacy::legacy_feature_keys;
 
@@ -133,6 +135,8 @@ pub enum Feature {
     EnableRequestCompression,
     /// Start the managed network proxy for sandboxed sessions.
     NetworkProxy,
+    /// Use host system proxy settings for auth and startup HTTP clients.
+    SystemProxy,
     /// Enable collab tools.
     Collab,
     /// Enable task-path-based multi-agent routing.
@@ -608,6 +612,9 @@ pub struct FeaturesToml {
     #[serde(default, rename = "apps_mcp_path_override", skip_serializing)]
     #[schemars(skip)]
     removed_apps_mcp_path_override: Option<FeatureToml<RemovedAppsMcpPathOverrideConfigToml>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system_proxy: Option<FeatureToml<SystemProxyFeatureConfigToml>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub network_proxy: Option<FeatureToml<NetworkProxyConfigToml>>,
     /// Boolean feature toggles keyed by canonical or legacy feature name.
     #[serde(flatten)]
@@ -637,6 +644,9 @@ impl FeaturesToml {
         if let Some(enabled) = self.multi_agent_v2.as_ref().and_then(FeatureToml::enabled) {
             entries.insert(Feature::MultiAgentV2.key().to_string(), enabled);
         }
+        if let Some(enabled) = self.system_proxy.as_ref().and_then(FeatureToml::enabled) {
+            entries.insert(Feature::SystemProxy.key().to_string(), enabled);
+        }
         if let Some(enabled) = self.network_proxy.as_ref().and_then(FeatureToml::enabled) {
             entries.insert(Feature::NetworkProxy.key().to_string(), enabled);
         }
@@ -649,6 +659,7 @@ impl FeaturesToml {
             code_mode,
             multi_agent_v2,
             removed_apps_mcp_path_override: _,
+            system_proxy,
             network_proxy,
             entries,
         } = self;
@@ -661,6 +672,8 @@ impl FeaturesToml {
                 materialize_resolved_feature_enabled(code_mode, enabled);
             } else if spec.id == Feature::MultiAgentV2 {
                 materialize_resolved_feature_enabled(multi_agent_v2, enabled);
+            } else if spec.id == Feature::SystemProxy {
+                materialize_resolved_feature_enabled(system_proxy, enabled);
             } else if spec.id == Feature::NetworkProxy {
                 materialize_resolved_feature_enabled(network_proxy, enabled);
             } else {
@@ -952,6 +965,12 @@ pub const FEATURES: &[FeatureSpec] = &[
             menu_description: "Apply network proxy restrictions to sandboxed sessions that already have network access.",
             announcement: "NEW: Network proxy can now be enabled from /experimental. Restart Codex after enabling it.",
         },
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::SystemProxy,
+        key: "system_proxy",
+        stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
     FeatureSpec {

@@ -612,6 +612,9 @@
             "steer": {
               "type": "boolean"
             },
+            "system_proxy": {
+              "$ref": "#/definitions/FeatureToml_for_SystemProxyFeatureConfigToml"
+            },
             "telepathy": {
               "type": "boolean"
             },
@@ -867,6 +870,16 @@
         },
         {
           "$ref": "#/definitions/NetworkProxyConfigToml"
+        }
+      ]
+    },
+    "FeatureToml_for_SystemProxyFeatureConfigToml": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "$ref": "#/definitions/SystemProxyFeatureConfigToml"
         }
       ]
     },
@@ -2668,6 +2681,27 @@
         }
       },
       "type": "object"
+    },
+    "SystemProxyFeatureConfigToml": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "mode": {
+          "$ref": "#/definitions/SystemProxyFeatureModeToml"
+        }
+      },
+      "type": "object"
+    },
+    "SystemProxyFeatureModeToml": {
+      "enum": [
+        "auto",
+        "env",
+        "system",
+        "direct"
+      ],
+      "type": "string"
     },
     "ThreadStoreToml": {
       "oneOf": [
@@ -4743,6 +4777,9 @@
         },
         "steer": {
           "type": "boolean"
+        },
+        "system_proxy": {
+          "$ref": "#/definitions/FeatureToml_for_SystemProxyFeatureConfigToml"
         },
         "telepathy": {
           "type": "boolean"

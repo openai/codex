@@ -47,6 +47,7 @@ use codex_config::types::ModelAvailabilityNuxConfig;
 use codex_config::types::Notice;
 use codex_config::types::OAuthCredentialsStoreMode;
 use codex_config::types::SessionPickerViewMode;
+use codex_config::types::SystemProxyFeatureConfigToml;
 use codex_config::types::ToolSuggestConfig;
 use codex_config::types::ToolSuggestDisabledTool;
 use codex_config::types::ToolSuggestDiscoverable;
@@ -929,6 +930,9 @@ pub struct Config {
 
     /// Base URL for requests to ChatGPT (as opposed to the OpenAI API).
     pub chatgpt_base_url: String,
+
+    /// Host system proxy settings for resolver-aware startup/auth clients.
+    pub system_proxy: Option<SystemProxyFeatureConfigToml>,
 
     /// Optional product SKU forwarded to the host-owned apps MCP server.
     pub apps_mcp_product_sku: Option<String>,
@@ -2414,6 +2418,56 @@ fn network_proxy_toml_config(features: Option<&FeaturesToml>) -> Option<&Network
     }
 }
 
+fn system_proxy_toml_config(
+    features: Option<&FeaturesToml>,
+) -> Option<&SystemProxyFeatureConfigToml> {
+    match features?.system_proxy.as_ref()? {
+        FeatureToml::Enabled(_) => None,
+        FeatureToml::Config(config) => Some(config),
+    }
+}
+
+fn resolved_system_proxy_config_from_features(
+    cfg: &ConfigToml,
+    features: &Features,
+) -> Option<SystemProxyFeatureConfigToml> {
+    if !features.enabled(Feature::SystemProxy) {
+        return None;
+    }
+    let mut config = system_proxy_toml_config(cfg.features.as_ref())
+        .cloned()
+        .unwrap_or_default();
+    config.enabled = Some(true);
+    Some(config)
+}
+
+fn resolved_system_proxy_config(
+    cfg: &ConfigToml,
+    features: &ManagedFeatures,
+) -> Option<SystemProxyFeatureConfigToml> {
+    resolved_system_proxy_config_from_features(cfg, features.get())
+}
+
+/// Resolves `[features.system_proxy]` for the initial cloud-config bootstrap.
+///
+/// This runs before cloud-managed config can be fetched, so it can only use
+/// the already loaded config layers. The full [`Config`] load path resolves the
+/// same raw TOML through [`ManagedFeatures`] and remains authoritative after
+/// cloud config is available.
+pub fn resolve_bootstrap_system_proxy_config(
+    cfg: &ConfigToml,
+) -> Option<SystemProxyFeatureConfigToml> {
+    let configured_features = Features::from_sources(
+        FeatureConfigSource {
+            features: cfg.features.as_ref(),
+            experimental_use_unified_exec_tool: cfg.experimental_use_unified_exec_tool,
+        },
+        FeatureConfigSource::default(),
+        FeatureOverrides::default(),
+    );
+    resolved_system_proxy_config_from_features(cfg, &configured_features)
+}
+
 pub(crate) fn resolve_web_search_mode_for_turn(
     web_search_mode: &Constrained<WebSearchMode>,
     permission_profile: &PermissionProfile,
@@ -2682,6 +2736,7 @@ impl Config {
             feature_requirements,
             &mut startup_warnings,
         )?;
+        let system_proxy = resolved_system_proxy_config(&cfg, &features);
         let enable_network_proxy = features.enabled(Feature::NetworkProxy);
         let configured_windows_sandbox_mode = resolve_windows_sandbox_mode(&cfg);
         // Keep the configured mode separate so a requirement-constrained mode
@@ -3530,6 +3585,7 @@ impl Config {
             chatgpt_base_url: cfg
                 .chatgpt_base_url
                 .unwrap_or("https://chatgpt.com/backend-api/".to_string()),
+            system_proxy,
             apps_mcp_product_sku: cfg.apps_mcp_product_sku.clone(),
             realtime_audio: cfg
                 .audio

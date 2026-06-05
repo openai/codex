@@ -986,6 +986,56 @@ mod tests {
     }
 
     #[test]
+    fn system_proxy_feature_accepts_mode() {
+        let config: ConfigToml = toml::from_str(
+            r#"
+            [features.system_proxy]
+            enabled = true
+            mode = "system"
+            "#,
+        )
+        .expect("system proxy config should deserialize");
+
+        let features = config.features.expect("features should be present");
+        let codex_features::FeatureToml::Config(system_proxy) = features
+            .system_proxy
+            .expect("system proxy config should be present")
+        else {
+            panic!("system proxy should be parsed as a structured feature");
+        };
+        assert_eq!(system_proxy.enabled, Some(true));
+        assert_eq!(
+            system_proxy.mode,
+            Some(crate::types::SystemProxyFeatureModeToml::System)
+        );
+    }
+
+    #[test]
+    fn system_proxy_feature_mode_is_parsed_without_enabled_toggle() {
+        let config: ConfigToml = toml::from_str(
+            r#"
+            [features.system_proxy]
+            mode = "system"
+            "#,
+        )
+        .expect("system proxy config should deserialize");
+
+        let features = config.features.expect("features should be present");
+        assert_eq!(features.entries().get("system_proxy"), None);
+        let codex_features::FeatureToml::Config(system_proxy) = features
+            .system_proxy
+            .expect("system proxy config should be present")
+        else {
+            panic!("system proxy should be parsed as a structured feature");
+        };
+        assert_eq!(system_proxy.enabled, None);
+        assert_eq!(
+            system_proxy.mode,
+            Some(crate::types::SystemProxyFeatureModeToml::System)
+        );
+    }
+
+    #[test]
     fn forced_chatgpt_workspace_id_rejects_comma_separated_string() {
         let err = toml::from_str::<ConfigToml>(&format!(
             r#"forced_chatgpt_workspace_id = "{WORKSPACE_ID_A},{WORKSPACE_ID_B}""#

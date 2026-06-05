@@ -64,6 +64,7 @@ const PROJECT_LOCAL_CONFIG_DENYLIST: &[&str] = &[
     "apps_mcp_product_sku",
     "model_provider",
     "model_providers",
+    "network",
     "notify",
     "profile",
     "profiles",
@@ -940,6 +941,11 @@ fn sanitize_project_config(config: &mut TomlValue) -> Vec<String> {
         if table.remove(*key).is_some() {
             ignored_keys.push((*key).to_string());
         }
+    }
+    if let Some(features) = table.get_mut("features").and_then(TomlValue::as_table_mut)
+        && features.remove("system_proxy").is_some()
+    {
+        ignored_keys.push("features.system_proxy".to_string());
     }
 
     ignored_keys
