@@ -43,7 +43,7 @@ fn throttle_defers_detail_changes_but_not_status_changes() {
 }
 
 #[test]
-fn equal_refresh_rearms_the_detail_throttle() {
+fn equal_refresh_does_not_rearm_the_detail_throttle() {
     let mut state = TabStatusState::new();
     let started_at = Instant::now();
     let unchanged_at = started_at + Duration::from_millis(/*millis*/ 300);
@@ -56,6 +56,6 @@ fn equal_refresh_rearms_the_detail_throttle() {
             TabStatus::Working,
             unchanged_at + Duration::from_millis(/*millis*/ 100)
         ),
-        Some(Duration::from_millis(/*millis*/ 150))
+        None
     );
 }

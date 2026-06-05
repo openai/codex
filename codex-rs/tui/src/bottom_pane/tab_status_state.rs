@@ -80,7 +80,6 @@ impl TabStatusState {
             return;
         }
         if self.last_status.as_ref() == Some(&desired) {
-            self.last_emit_at = Some(now);
             return;
         }
         if let Err(err) = set_tab_status(desired.0, desired.1.as_deref()) {

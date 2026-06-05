@@ -50,6 +50,16 @@ fn detail_is_safe_bounded_osc_text() {
         MAX_TAB_STATUS_DETAIL_CHARS * 2 + 1
     );
     assert!(sanitized.ends_with('…'));
+
+    let sanitized = sanitize_detail(&format!(
+        "{}{}tail",
+        "x".repeat(MAX_TAB_STATUS_DETAIL_CHARS),
+        " \u{202E}".repeat(/*n*/ 10_000)
+    ));
+    assert_eq!(
+        sanitized,
+        format!("{}…", "x".repeat(MAX_TAB_STATUS_DETAIL_CHARS))
+    );
 }
 
 #[test]

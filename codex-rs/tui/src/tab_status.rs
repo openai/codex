@@ -131,12 +131,16 @@ pub(crate) fn clear_tab_status() -> io::Result<()> {
 }
 
 fn sanitize_detail(detail: &str) -> String {
-    let mut out = String::with_capacity(detail.len());
+    let mut out = String::with_capacity(detail.len().min(MAX_TAB_STATUS_DETAIL_CHARS * 2 + 1));
     let mut chars_written = 0;
     let mut pending_space = false;
     let mut truncated = false;
 
     for ch in detail.chars() {
+        if chars_written >= MAX_TAB_STATUS_DETAIL_CHARS {
+            truncated = true;
+            break;
+        }
         if ch.is_whitespace() {
             pending_space = !out.is_empty();
             continue;
