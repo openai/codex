@@ -261,12 +261,17 @@ struct LastResponse {
 
 #[derive(Debug, Default)]
 struct WebsocketSession {
-    connection: Option<ApiWebSocketConnection>,
-    use_responses_lite: Option<bool>,
+    connection: Option<CachedWebsocketConnection>,
     last_request: Option<ResponsesApiRequest>,
     last_response_rx: Option<oneshot::Receiver<LastResponse>>,
     last_response_from_untraced_warmup: bool,
     connection_reused: StdMutex<bool>,
+}
+
+#[derive(Debug)]
+struct CachedWebsocketConnection {
+    inner: ApiWebSocketConnection,
+    use_responses_lite: bool,
 }
 
 impl WebsocketSession {
@@ -976,7 +981,6 @@ impl Drop for ModelClientSession {
 impl ModelClientSession {
     fn reset_websocket_session(&mut self) {
         self.websocket_session.connection = None;
-        self.websocket_session.use_responses_lite = None;
         self.websocket_session.last_request = None;
         self.websocket_session.last_response_rx = None;
         self.websocket_session.last_response_from_untraced_warmup = false;
@@ -1114,8 +1118,11 @@ impl ModelClientSession {
             return Ok(());
         }
         let use_responses_lite = model_info.use_responses_lite;
-        if self.websocket_session.connection.is_some()
-            && self.websocket_session.use_responses_lite == Some(use_responses_lite)
+        if self
+            .websocket_session
+            .connection
+            .as_ref()
+            .is_some_and(|connection| connection.use_responses_lite == use_responses_lite)
         {
             return Ok(());
         }
@@ -1144,8 +1151,10 @@ impl ModelClientSession {
                 RequestRouteTelemetry::for_endpoint(RESPONSES_ENDPOINT),
             )
             .await?;
-        self.websocket_session.connection = Some(connection);
-        self.websocket_session.use_responses_lite = Some(use_responses_lite);
+        self.websocket_session.connection = Some(CachedWebsocketConnection {
+            inner: connection,
+            use_responses_lite,
+        });
         self.websocket_session
             .set_connection_reused(/*connection_reused*/ false);
         Ok(())
@@ -1178,9 +1187,9 @@ impl ModelClientSession {
             request_route_telemetry,
         } = params;
         let needs_new = match self.websocket_session.connection.as_ref() {
-            Some(conn) => {
-                conn.is_closed().await
-                    || self.websocket_session.use_responses_lite != Some(use_responses_lite)
+            Some(connection) => {
+                connection.inner.is_closed().await
+                    || connection.use_responses_lite != use_responses_lite
             }
             None => true,
         };
@@ -1191,7 +1200,7 @@ impl ModelClientSession {
                 .turn_state
                 .clone()
                 .unwrap_or_else(|| Arc::clone(&self.turn_state));
-            let new_conn = match self
+            let connection = self
                 .client
                 .connect_websocket(
                     session_telemetry,
@@ -1203,18 +1212,11 @@ impl ModelClientSession {
                     auth_context,
                     request_route_telemetry,
                 )
-                .await
-            {
-                Ok(new_conn) => new_conn,
-                Err(err) => {
-                    if matches!(err, ApiError::Transport(TransportError::Timeout)) {
-                        self.reset_websocket_session();
-                    }
-                    return Err(err);
-                }
-            };
-            self.websocket_session.connection = Some(new_conn);
-            self.websocket_session.use_responses_lite = Some(use_responses_lite);
+                .await?;
+            self.websocket_session.connection = Some(CachedWebsocketConnection {
+                inner: connection,
+                use_responses_lite,
+            });
             self.websocket_session
                 .set_connection_reused(/*connection_reused*/ false);
         } else {
@@ -1225,6 +1227,7 @@ impl ModelClientSession {
         self.websocket_session
             .connection
             .as_ref()
+            .map(|connection| &connection.inner)
             .ok_or(ApiError::Stream(
                 "websocket connection is unavailable".to_string(),
             ))
@@ -1493,6 +1496,7 @@ impl ModelClientSession {
                     ))
                 })?;
             let stream_result = websocket_connection
+                .inner
                 .stream_request(ws_request, self.websocket_session.connection_reused())
                 .await
                 .map_err(|err| {

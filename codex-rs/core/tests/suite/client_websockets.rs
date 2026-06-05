@@ -517,6 +517,8 @@ async fn responses_websocket_reuses_connection_after_session_drop() {
 async fn responses_websocket_reconnects_when_responses_lite_mode_changes() {
     skip_if_no_network!();
 
+    // Keep the first two sockets open so each reconnect must be caused by a Lite mode change,
+    // rather than by the test server closing a fully consumed connection.
     let server = start_websocket_server(vec![
         vec![
             vec![ev_response_created("lite-1"), ev_completed("lite-1")],
