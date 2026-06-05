@@ -667,12 +667,13 @@ impl StreamCore {
             boundaries.push(self.raw_source.len());
         }
 
-        for boundary in boundaries {
-            if self.render_source(&self.raw_source[..boundary]).len() >= rendered_len {
-                return boundary;
-            }
-        }
-        self.raw_source.len()
+        let idx = boundaries.partition_point(|boundary| {
+            self.render_source(&self.raw_source[..*boundary]).len() < rendered_len
+        });
+        boundaries
+            .get(idx)
+            .copied()
+            .unwrap_or(self.raw_source.len())
     }
 
     fn partial_source_line_after_rendered_len(
@@ -838,7 +839,7 @@ fn visible_text_source_boundary(source: &str, visible_prefix: &str) -> Option<us
             continue;
         }
 
-        if matches!(ch, '*' | '_' | '`') {
+        if matches!(ch, '*' | '_' | '`') && visible_chars.peek().copied() != Some(ch) {
             continue;
         }
 
@@ -3005,6 +3006,36 @@ mod tests {
         assert!(
             joined.contains("delta") && joined.contains("tail line"),
             "raw suffix should preserve un-emitted heading text; emitted before toggle: {first_emit:?}, finalized after toggle: {joined:?}",
+        );
+    }
+
+    #[test]
+    fn controller_set_render_mode_raw_suffix_preserves_escaped_marker_prefix() {
+        let mut ctrl = stream_controller(Some(/*width*/ 12));
+        ctrl.push("\\* alpha beta gamma delta epsilon zeta eta theta\n");
+        ctrl.push("tail line\n");
+
+        let (first_emit, idle) = ctrl.on_commit_tick();
+        let first_emit = first_emit
+            .expect("expected first rich wrapped escaped-marker emission")
+            .transcript_lines(u16::MAX);
+        assert!(!idle, "expected remaining rich content after one tick");
+
+        ctrl.set_render_mode(HistoryRenderMode::Raw);
+
+        let (cell, _source) = ctrl.finalize();
+        let remaining = cell
+            .map(|c| lines_to_plain_strings(&c.transcript_lines(u16::MAX)))
+            .unwrap_or_default();
+        let first_emit = lines_to_plain_strings(&first_emit).join("\n");
+        let joined = remaining.join("\n");
+        assert!(
+            !joined.contains("\\* alpha beta"),
+            "raw suffix must not replay the already-visible escaped marker prefix; emitted before toggle: {first_emit:?}, finalized after toggle: {joined:?}",
+        );
+        assert!(
+            joined.contains("delta") && joined.contains("tail line"),
+            "raw suffix should preserve un-emitted escaped-marker text; emitted before toggle: {first_emit:?}, finalized after toggle: {joined:?}",
         );
     }
 
