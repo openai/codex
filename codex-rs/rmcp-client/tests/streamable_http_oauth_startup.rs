@@ -11,6 +11,7 @@ use codex_rmcp_client::save_oauth_tokens;
 use oauth2::AccessToken;
 use oauth2::RefreshToken;
 use oauth2::basic::BasicTokenType;
+use pretty_assertions::assert_eq;
 use rmcp::transport::auth::OAuthTokenResponse;
 use rmcp::transport::auth::VendorExtraTokenFields;
 use serde_json::Value;
@@ -107,6 +108,24 @@ async fn refreshes_expired_persisted_token_before_initialize() -> anyhow::Result
         .env(CHILD_SERVER_URL_ENV, server_url)
         .status()
         .await?;
+    let stale_authorization = format!("Bearer {EXPIRED_ACCESS_TOKEN}");
+    let requests = server.received_requests().await.unwrap_or_default();
+    let stale_token_request_count = requests
+        .iter()
+        .filter(|request| {
+            request.method == "POST"
+                && request.url.path() == "/mcp"
+                && request
+                    .headers
+                    .get("authorization")
+                    .and_then(|value| value.to_str().ok())
+                    == Some(stale_authorization.as_str())
+        })
+        .count();
+    assert_eq!(
+        stale_token_request_count, 0,
+        "expired access token was sent during startup"
+    );
     assert!(status.success(), "OAuth startup child failed: {status}");
     server.verify().await;
     Ok(())
