@@ -23,6 +23,7 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
 use serde_json::Value as JsonValue;
+use std::fmt::Display;
 use std::path::Path;
 use uuid::Uuid;
 
@@ -41,6 +42,10 @@ pub(crate) fn clear_config_value(key_path: impl Into<String>) -> ConfigEdit {
 pub(crate) fn app_scoped_key_path(app_id: &str, key_path: &str) -> String {
     let app_id = serde_json::Value::String(app_id.to_string()).to_string();
     format!("apps.{app_id}.{key_path}")
+}
+
+pub(crate) fn format_config_error(err: &impl Display) -> String {
+    format!("{err:#}")
 }
 
 fn trusted_project_edit(project_path: &Path) -> ConfigEdit {
@@ -224,6 +229,22 @@ mod tests {
                 value: serde_json::json!("trusted"),
                 merge_strategy: MergeStrategy::Replace,
             }
+        );
+    }
+
+    #[test]
+    fn format_config_error_preserves_server_validation_message() {
+        let err = Err::<(), _>(color_eyre::eyre::eyre!(
+            "config/batchWrite failed: Invalid configuration: features.fast_mode=true violates \
+             managed requirements; allowed set [fast_mode=false]"
+        ))
+        .wrap_err("config/batchWrite failed in TUI")
+        .unwrap_err();
+
+        assert_eq!(
+            format_config_error(&err),
+            "config/batchWrite failed in TUI: config/batchWrite failed: Invalid configuration: \
+             features.fast_mode=true violates managed requirements; allowed set [fast_mode=false]"
         );
     }
 }

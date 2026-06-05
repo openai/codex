@@ -17,6 +17,7 @@ use crate::bottom_pane::ListSelectionView;
 use crate::bottom_pane::SelectionItem;
 use crate::bottom_pane::SelectionViewParams;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line_for_keymap;
+use crate::config_update::format_config_error;
 use crate::hooks_rpc::HookTrustUpdate;
 use crate::hooks_rpc::fetch_hooks_list;
 use crate::hooks_rpc::hook_needs_review;
@@ -130,7 +131,9 @@ async fn run_startup_hooks_review_app(
                         )
                         .await
                         .map(|_| ())
-                        .map_err(|err| format!("Failed to trust hooks: {err}"));
+                        .map_err(|err| {
+                            format!("Failed to trust hooks: {}", format_config_error(&err))
+                        });
                         match result {
                             Ok(()) => return Ok(StartupHooksReviewOutcome::Continue),
                             Err(err) => {
