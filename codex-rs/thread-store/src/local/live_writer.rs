@@ -77,11 +77,18 @@ pub(super) async fn append_items(
     store: &LocalThreadStore,
     params: AppendThreadItemsParams,
 ) -> ThreadStoreResult<()> {
-    let recorder = store.live_recorder(params.thread_id).await?;
+    let AppendThreadItemsParams {
+        thread_id,
+        items,
+        thread_history_mutations: _,
+    } = params;
+    let recorder = store.live_recorder(thread_id).await?;
     recorder
-        .record_canonical_items(params.items.as_slice())
+        .record_canonical_items(items.as_slice())
         .await
         .map_err(thread_store_io_error)?;
+    // TODO: Persist accepted thread-history mutations here if the local store grows durable
+    // ThreadItem, turn summary, or lifecycle tables.
     // LiveThread applies metadata immediately after append_items returns. Wait for the local
     // writer so SQLite never gets ahead of JSONL for accepted live appends.
     recorder.flush().await.map_err(thread_store_io_error)

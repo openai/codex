@@ -18,6 +18,7 @@ clap = { workspace = true, features = ["derive"] }
 codex-experimental-api-macros = { workspace = true }
 codex-protocol = { workspace = true }
 codex-shell-command = { workspace = true }
+codex-thread-store-protocol = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }

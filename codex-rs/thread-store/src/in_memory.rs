@@ -212,13 +212,14 @@ impl ThreadStore for InMemoryThreadStore {
     }
 
     async fn append_items(&self, params: AppendThreadItemsParams) -> ThreadStoreResult<()> {
+        let AppendThreadItemsParams {
+            thread_id,
+            items,
+            thread_history_mutations: _,
+        } = params;
         let mut state = self.state.lock().await;
         state.calls.append_items += 1;
-        state
-            .histories
-            .entry(params.thread_id)
-            .or_default()
-            .extend(params.items);
+        state.histories.entry(thread_id).or_default().extend(items);
         Ok(())
     }
 

@@ -58,6 +58,11 @@ use std::collections::HashMap;
 use tracing::warn;
 use uuid::Uuid;
 
+pub use super::lifecycle_projection::*;
+pub use super::thread_history_builder::*;
+pub use super::thread_item_projection::*;
+pub use super::turn_summary_projection::*;
+
 #[cfg(test)]
 use crate::protocol::v2::CommandAction;
 #[cfg(test)]
@@ -71,19 +76,7 @@ use codex_protocol::protocol::ExecCommandStatus as CoreExecCommandStatus;
 #[cfg(test)]
 use codex_protocol::protocol::PatchApplyStatus as CorePatchApplyStatus;
 
-/// Convert persisted [`RolloutItem`] entries into a sequence of [`Turn`] values.
-///
-/// When available, this uses `TurnContext.turn_id` as the canonical turn id so
-/// resumed/rebuilt thread history preserves the original turn identifiers.
-pub fn build_turns_from_rollout_items(items: &[RolloutItem]) -> Vec<Turn> {
-    let mut builder = ThreadHistoryBuilder::new();
-    for item in items {
-        builder.handle_rollout_item(item);
-    }
-    builder.finish()
-}
-
-pub struct ThreadHistoryBuilder {
+pub(super) struct ThreadHistoryState {
     turns: Vec<Turn>,
     current_turn: Option<PendingTurn>,
     next_item_index: i64,
@@ -91,14 +84,8 @@ pub struct ThreadHistoryBuilder {
     next_rollout_index: usize,
 }
 
-impl Default for ThreadHistoryBuilder {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl ThreadHistoryBuilder {
-    pub fn new() -> Self {
+impl ThreadHistoryState {
+    pub(super) fn new() -> Self {
         Self {
             turns: Vec::new(),
             current_turn: None,
@@ -108,27 +95,31 @@ impl ThreadHistoryBuilder {
         }
     }
 
-    pub fn reset(&mut self) {
-        *self = Self::new();
-    }
-
-    pub fn finish(mut self) -> Vec<Turn> {
+    pub(super) fn finish(mut self) -> Vec<Turn> {
         self.finish_current_turn();
         self.turns
     }
 
-    pub fn active_turn_snapshot(&self) -> Option<Turn> {
+    pub(super) fn active_turn_snapshot(&self) -> Option<Turn> {
         self.current_turn
             .as_ref()
             .map(Turn::from)
             .or_else(|| self.turns.last().cloned())
     }
 
+    pub(super) fn turns_snapshot(&self) -> Vec<Turn> {
+        let mut turns = self.turns.clone();
+        if let Some(turn) = self.current_turn.as_ref() {
+            turns.push(Turn::from(turn));
+        }
+        turns
+    }
+
     /// Returns the index of the active turn snapshot within the finished turn list.
     ///
     /// When a turn is still open, this is the index it will occupy after
     /// `finish`. When no turn is open, it is the index of the last finished turn.
-    pub fn active_turn_position(&self) -> Option<usize> {
+    pub(super) fn active_turn_position(&self) -> Option<usize> {
         if self.current_turn.is_some() {
             Some(self.turns.len())
         } else if self.turns.is_empty() {
@@ -138,21 +129,41 @@ impl ThreadHistoryBuilder {
         }
     }
 
-    pub fn has_active_turn(&self) -> bool {
+    pub(super) fn has_active_turn(&self) -> bool {
         self.current_turn.is_some()
     }
 
-    pub fn active_turn_id_if_explicit(&self) -> Option<String> {
+    pub(super) fn active_turn_id_if_explicit(&self) -> Option<String> {
         self.current_turn
             .as_ref()
             .filter(|turn| turn.opened_explicitly)
             .map(|turn| turn.id.clone())
     }
 
-    pub fn active_turn_start_index(&self) -> Option<usize> {
+    pub(super) fn active_turn_start_index(&self) -> Option<usize> {
         self.current_turn
             .as_ref()
             .map(|turn| turn.rollout_start_index)
+    }
+
+    pub(super) fn set_next_item_index(&mut self, next_item_index: i64) {
+        self.next_item_index = next_item_index;
+    }
+
+    pub(super) fn next_item_index(&self) -> i64 {
+        self.next_item_index
+    }
+
+    pub(super) fn current_turn_id(&self) -> Option<String> {
+        self.current_turn.as_ref().map(|turn| turn.id.clone())
+    }
+
+    pub(super) fn restore_current_turn(&mut self, turn_id: String) {
+        self.current_turn = Some(
+            self.new_turn(Some(turn_id))
+                .with_status(TurnStatus::InProgress)
+                .opened_explicitly(),
+        );
     }
 
     /// Shared reducer for persisted rollout replay and in-memory current-turn
@@ -160,7 +171,7 @@ impl ThreadHistoryBuilder {
     ///
     /// This function should handle all EventMsg variants that can be persisted in a rollout file.
     /// See `should_persist_event_msg` in `codex-rs/core/rollout/policy.rs`.
-    pub fn handle_event(&mut self, event: &EventMsg) {
+    pub(super) fn handle_event(&mut self, event: &EventMsg) {
         match event {
             EventMsg::UserMessage(payload) => self.handle_user_message(payload),
             EventMsg::AgentMessage(payload) => self.handle_agent_message(
@@ -225,7 +236,7 @@ impl ThreadHistoryBuilder {
         }
     }
 
-    pub fn handle_rollout_item(&mut self, item: &RolloutItem) {
+    pub(super) fn handle_rollout_item(&mut self, item: &RolloutItem) {
         self.current_rollout_index = self.next_rollout_index;
         self.next_rollout_index += 1;
         match item {
@@ -233,6 +244,12 @@ impl ThreadHistoryBuilder {
             RolloutItem::Compacted(payload) => self.handle_compacted(payload),
             RolloutItem::ResponseItem(item) => self.handle_response_item(item),
             RolloutItem::TurnContext(_) | RolloutItem::SessionMeta(_) => {}
+        }
+    }
+
+    pub(super) fn handle_rollout_items(&mut self, items: &[RolloutItem]) {
+        for item in items {
+            self.handle_rollout_item(item);
         }
     }
 

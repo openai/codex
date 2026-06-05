@@ -16,6 +16,7 @@ use crate::ReadThreadParams;
 use crate::ResumeThreadParams;
 use crate::StoredThread;
 use crate::StoredThreadHistory;
+use crate::ThreadHistoryProjectionObserver;
 use crate::ThreadMetadataPatch;
 use crate::ThreadStore;
 use crate::ThreadStoreResult;
@@ -32,6 +33,7 @@ pub struct LiveThread {
     thread_id: ThreadId,
     thread_store: Arc<dyn ThreadStore>,
     metadata_sync: Arc<Mutex<ThreadMetadataSync>>,
+    thread_history_projection_observers: Arc<Mutex<Vec<Box<dyn ThreadHistoryProjectionObserver>>>>,
 }
 
 /// Owns a live thread while session initialization is still fallible.
@@ -95,6 +97,7 @@ impl LiveThread {
             thread_id,
             thread_store,
             metadata_sync: Arc::new(Mutex::new(metadata_sync)),
+            thread_history_projection_observers: default_thread_history_projection_observers(),
         })
     }
 
@@ -126,18 +129,37 @@ impl LiveThread {
             thread_id,
             thread_store,
             metadata_sync: Arc::new(Mutex::new(metadata_sync)),
+            thread_history_projection_observers: default_thread_history_projection_observers(),
         })
+    }
+
+    /// Installs append observers that derive typed thread-history mutations for this live thread.
+    pub fn with_thread_history_projection_observers(
+        mut self,
+        thread_history_projection_observers: Vec<Box<dyn ThreadHistoryProjectionObserver>>,
+    ) -> Self {
+        self.thread_history_projection_observers =
+            Arc::new(Mutex::new(thread_history_projection_observers));
+        self
     }
 
     pub async fn append_items(&self, items: &[RolloutItem]) -> ThreadStoreResult<()> {
         let canonical_items = persisted_rollout_items(items);
-        if canonical_items.is_empty() {
+        let thread_history_mutations = self
+            .thread_history_projection_observers
+            .lock()
+            .await
+            .iter_mut()
+            .flat_map(|observer| observer.observe_append(canonical_items.as_slice(), items))
+            .collect::<Vec<_>>();
+        if canonical_items.is_empty() && thread_history_mutations.is_empty() {
             return Ok(());
         }
         self.thread_store
             .append_items(AppendThreadItemsParams {
                 thread_id: self.thread_id,
                 items: canonical_items.clone(),
+                thread_history_mutations,
             })
             .await?;
         let update = self
@@ -293,4 +315,9 @@ impl LiveThread {
             .mark_pending_update_applied(&update);
         Ok(())
     }
+}
+
+fn default_thread_history_projection_observers()
+-> Arc<Mutex<Vec<Box<dyn ThreadHistoryProjectionObserver>>>> {
+    Arc::new(Mutex::new(Vec::new()))
 }

@@ -2041,6 +2041,7 @@ dependencies = [
  "codex-experimental-api-macros",
  "codex-protocol",
  "codex-shell-command",
+ "codex-thread-store-protocol",
  "codex-utils-absolute-path",
  "codex-utils-cargo-bin",
  "inventory",
@@ -3813,6 +3814,7 @@ dependencies = [
  "codex-protocol",
  "codex-rollout",
  "codex-state",
+ "codex-thread-store-protocol",
  "codex-utils-path",
  "pretty_assertions",
  "serde",
@@ -3822,6 +3824,16 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "codex-thread-store-protocol"
+version = "0.0.0"
+dependencies = [
+ "codex-protocol",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

@@ -594,7 +594,16 @@ impl Session {
                         .await?
                     }
                 };
-                Ok(Some(live_thread))
+                let thread_history_projection_observers: Vec<
+                    Box<dyn codex_thread_store::ThreadHistoryProjectionObserver>,
+                > = vec![
+                    Box::new(codex_app_server_protocol::ThreadItemProjectionObserver::new()),
+                    Box::new(codex_app_server_protocol::TurnSummaryProjectionObserver::new()),
+                    Box::new(codex_app_server_protocol::LifecycleProjectionObserver::new()),
+                ];
+                Ok(Some(live_thread.with_thread_history_projection_observers(
+                    thread_history_projection_observers,
+                )))
             }
         }
         .instrument(info_span!(

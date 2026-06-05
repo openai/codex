@@ -329,6 +329,7 @@ mod tests {
             .append_items(AppendThreadItemsParams {
                 thread_id,
                 items: vec![user_message_item("first live write")],
+                thread_history_mutations: Vec::new(),
             })
             .await
             .expect("append live item");
@@ -351,6 +352,7 @@ mod tests {
             .append_items(AppendThreadItemsParams {
                 thread_id,
                 items: vec![user_message_item("write after shutdown")],
+                thread_history_mutations: Vec::new(),
             })
             .await
             .expect_err("shutdown should remove the live thread writer");
@@ -382,6 +384,7 @@ mod tests {
             .append_items(AppendThreadItemsParams {
                 thread_id,
                 items: vec![user_message_item("raw append")],
+                thread_history_mutations: Vec::new(),
             })
             .await
             .expect("append raw item");
@@ -666,6 +669,7 @@ mod tests {
             .append_items(AppendThreadItemsParams {
                 thread_id,
                 items: vec![user_message_item("write after discard")],
+                thread_history_mutations: Vec::new(),
             })
             .await
             .expect_err("discard should remove the live thread writer");
@@ -689,6 +693,7 @@ mod tests {
             .append_items(AppendThreadItemsParams {
                 thread_id,
                 items: vec![user_message_item("before resume")],
+                thread_history_mutations: Vec::new(),
             })
             .await
             .expect("append initial item");
@@ -724,6 +729,7 @@ mod tests {
             .append_items(AppendThreadItemsParams {
                 thread_id,
                 items: vec![user_message_item("after resume")],
+                thread_history_mutations: Vec::new(),
             })
             .await
             .expect("append resumed item");
@@ -835,6 +841,7 @@ mod tests {
             .append_items(AppendThreadItemsParams {
                 thread_id,
                 items: vec![user_message_item("external history item")],
+                thread_history_mutations: Vec::new(),
             })
             .await
             .expect("append live item");
@@ -921,6 +928,7 @@ mod tests {
             .append_items(AppendThreadItemsParams {
                 thread_id,
                 items: vec![user_message_item("archived live history item")],
+                thread_history_mutations: Vec::new(),
             })
             .await
             .expect("append live item");
@@ -979,6 +987,7 @@ mod tests {
             .append_items(AppendThreadItemsParams {
                 thread_id,
                 items: vec![user_message_item("path read")],
+                thread_history_mutations: Vec::new(),
             })
             .await
             .expect("append item");

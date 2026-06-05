@@ -12,6 +12,12 @@ mod store;
 mod thread_metadata_sync;
 mod types;
 
+pub use codex_thread_store_protocol::LifecycleMutation;
+pub use codex_thread_store_protocol::ThreadHistoryMutation;
+pub use codex_thread_store_protocol::ThreadHistoryMutationMetadata;
+pub use codex_thread_store_protocol::ThreadHistoryProjectionObserver;
+pub use codex_thread_store_protocol::ThreadItemMutation;
+pub use codex_thread_store_protocol::TurnSummaryMutation;
 pub use error::ThreadStoreError;
 pub use error::ThreadStoreResult;
 pub use in_memory::InMemoryThreadStore;

@@ -15,11 +15,11 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::ThreadMemoryMode as MemoryMode;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TokenUsage;
+use codex_thread_store_protocol::ThreadHistoryMutation;
 use serde::Deserialize;
 use serde::Deserializer;
 use serde::Serialize;
 use serde::Serializer;
-
 mod optional_option {
     use super::*;
 
@@ -101,6 +101,9 @@ pub struct AppendThreadItemsParams {
     pub thread_id: ThreadId,
     /// Items to append in order.
     pub items: Vec<RolloutItem>,
+    /// Typed derived thread-history mutations committed with the canonical rollout append.
+    #[serde(default)]
+    pub thread_history_mutations: Vec<ThreadHistoryMutation>,
 }
 
 /// Parameters for loading persisted history for resume, fork, rollback, and memory jobs.
