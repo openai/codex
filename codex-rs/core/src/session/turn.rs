@@ -17,7 +17,6 @@ use crate::compact_remote_v2::run_inline_remote_auto_compact_task as run_inline_
 use crate::connectors;
 use crate::context::ContextualUserFragment;
 use crate::feedback_tags;
-use crate::goals::GoalRuntimeEvent;
 use crate::hook_runtime::inspect_pending_input;
 use crate::hook_runtime::record_additional_contexts;
 use crate::hook_runtime::record_pending_input;
@@ -151,15 +150,6 @@ pub(crate) async fn run_turn(
         let error = err.to_codex_protocol_error();
         sess.emit_turn_error_lifecycle(turn_context.as_ref(), error.clone())
             .await;
-        if error == CodexErrorInfo::UsageLimitExceeded
-            && let Err(err) = sess
-                .goal_runtime_apply(GoalRuntimeEvent::UsageLimitReached {
-                    turn_context: turn_context.as_ref(),
-                })
-                .await
-        {
-            warn!("failed to usage-limit active goal after usage-limit error: {err}");
-        }
         error!("Failed to run pre-sampling compact");
         return None;
     }
@@ -304,17 +294,6 @@ pub(crate) async fn run_turn(
                         let error = err.to_codex_protocol_error();
                         sess.emit_turn_error_lifecycle(turn_context.as_ref(), error.clone())
                             .await;
-                        if error == CodexErrorInfo::UsageLimitExceeded
-                            && let Err(err) = sess
-                                .goal_runtime_apply(GoalRuntimeEvent::UsageLimitReached {
-                                    turn_context: turn_context.as_ref(),
-                                })
-                                .await
-                        {
-                            warn!(
-                                "failed to usage-limit active goal after usage-limit error: {err}"
-                            );
-                        }
                         return None;
                     }
                     can_drain_pending_input = !model_needs_follow_up;
@@ -400,15 +379,6 @@ pub(crate) async fn run_turn(
                 let error = e.to_codex_protocol_error();
                 sess.emit_turn_error_lifecycle(turn_context.as_ref(), error.clone())
                     .await;
-                if error == CodexErrorInfo::UsageLimitExceeded
-                    && let Err(err) = sess
-                        .goal_runtime_apply(GoalRuntimeEvent::UsageLimitReached {
-                            turn_context: turn_context.as_ref(),
-                        })
-                        .await
-                {
-                    warn!("failed to usage-limit active goal after usage-limit error: {err}");
-                }
                 sess.track_turn_codex_error(turn_context.as_ref(), &e);
                 let event = EventMsg::Error(e.to_error_event(/*message_prefix*/ None));
                 sess.send_event(&turn_context, event).await;
@@ -1383,78 +1353,7 @@ pub(super) fn realtime_text_for_event(msg: &EventMsg) -> Option<String> {
             TurnItem::AgentMessage(item) => Some(agent_message_text(item)),
             _ => None,
         },
-        EventMsg::Error(_)
-        | EventMsg::Warning(_)
-        | EventMsg::GuardianWarning(_)
-        | EventMsg::RealtimeConversationStarted(_)
-        | EventMsg::RealtimeConversationSdp(_)
-        | EventMsg::RealtimeConversationRealtime(_)
-        | EventMsg::RealtimeConversationClosed(_)
-        | EventMsg::ModelReroute(_)
-        | EventMsg::ModelVerification(_)
-        | EventMsg::ContextCompacted(_)
-        | EventMsg::ThreadRolledBack(_)
-        | EventMsg::TurnStarted(_)
-        | EventMsg::ThreadSettingsApplied(_)
-        | EventMsg::TurnComplete(_)
-        | EventMsg::TokenCount(_)
-        | EventMsg::UserMessage(_)
-        | EventMsg::AgentReasoning(_)
-        | EventMsg::AgentReasoningRawContent(_)
-        | EventMsg::AgentReasoningSectionBreak(_)
-        | EventMsg::SessionConfigured(_)
-        | EventMsg::ThreadGoalUpdated(_)
-        | EventMsg::McpStartupUpdate(_)
-        | EventMsg::McpStartupComplete(_)
-        | EventMsg::McpToolCallBegin(_)
-        | EventMsg::McpToolCallEnd(_)
-        | EventMsg::WebSearchBegin(_)
-        | EventMsg::WebSearchEnd(_)
-        | EventMsg::ExecCommandBegin(_)
-        | EventMsg::ExecCommandOutputDelta(_)
-        | EventMsg::TerminalInteraction(_)
-        | EventMsg::ExecCommandEnd(_)
-        | EventMsg::PatchApplyBegin(_)
-        | EventMsg::PatchApplyUpdated(_)
-        | EventMsg::PatchApplyEnd(_)
-        | EventMsg::ImageGenerationBegin(_)
-        | EventMsg::ImageGenerationEnd(_)
-        | EventMsg::ViewImageToolCall(_)
-        | EventMsg::ExecApprovalRequest(_)
-        | EventMsg::RequestPermissions(_)
-        | EventMsg::RequestUserInput(_)
-        | EventMsg::DynamicToolCallRequest(_)
-        | EventMsg::DynamicToolCallResponse(_)
-        | EventMsg::GuardianAssessment(_)
-        | EventMsg::ElicitationRequest(_)
-        | EventMsg::ApplyPatchApprovalRequest(_)
-        | EventMsg::DeprecationNotice(_)
-        | EventMsg::StreamError(_)
-        | EventMsg::TurnDiff(_)
-        | EventMsg::RealtimeConversationListVoicesResponse(_)
-        | EventMsg::PlanUpdate(_)
-        | EventMsg::TurnAborted(_)
-        | EventMsg::ShutdownComplete
-        | EventMsg::EnteredReviewMode(_)
-        | EventMsg::ExitedReviewMode(_)
-        | EventMsg::RawResponseItem(_)
-        | EventMsg::ItemStarted(_)
-        | EventMsg::HookStarted(_)
-        | EventMsg::HookCompleted(_)
-        | EventMsg::AgentMessageContentDelta(_)
-        | EventMsg::PlanDelta(_)
-        | EventMsg::ReasoningContentDelta(_)
-        | EventMsg::ReasoningRawContentDelta(_)
-        | EventMsg::CollabAgentSpawnBegin(_)
-        | EventMsg::CollabAgentSpawnEnd(_)
-        | EventMsg::CollabAgentInteractionBegin(_)
-        | EventMsg::CollabAgentInteractionEnd(_)
-        | EventMsg::CollabWaitingBegin(_)
-        | EventMsg::CollabWaitingEnd(_)
-        | EventMsg::CollabCloseBegin(_)
-        | EventMsg::CollabCloseEnd(_)
-        | EventMsg::CollabResumeBegin(_)
-        | EventMsg::CollabResumeEnd(_) => None,
+        _ => None,
     }
 }
 

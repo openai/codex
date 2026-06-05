@@ -275,8 +275,6 @@ use codex_config::loader::project_trust_key;
 use codex_config::types::McpServerTransportConfig;
 use codex_core::CodexThread;
 use codex_core::CodexThreadSettingsOverrides;
-use codex_core::ExternalGoalPreviousStatus;
-use codex_core::ExternalGoalSet;
 use codex_core::ForkSnapshot;
 use codex_core::NewThread;
 #[cfg(test)]
