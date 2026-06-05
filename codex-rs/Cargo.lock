@@ -3597,6 +3597,7 @@ dependencies = [
  "urlencoding",
  "webbrowser",
  "which 8.0.0",
+ "wiremock",
 ]
 
 [[package]]
