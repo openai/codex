@@ -2585,7 +2585,6 @@ dependencies = [
  "codex-utils-string",
  "codex-windows-sandbox",
  "core_test_support",
- "csv",
  "ctor 0.6.3",
  "dirs",
  "dunce",
