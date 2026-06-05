@@ -262,6 +262,7 @@ mod tests {
                 glob_scan_max_depth: None,
             },
             network: NetworkSandboxPolicy::Restricted,
+            macos: None,
         };
         let workspace_roots = workspace_roots_for(workspace_root.as_path());
         let permissions =
@@ -315,6 +316,7 @@ mod tests {
                 glob_scan_max_depth: None,
             },
             network: NetworkSandboxPolicy::Restricted,
+            macos: None,
         };
 
         let permissions =
@@ -431,6 +433,7 @@ mod tests {
         let permission_profile = PermissionProfile::Managed {
             file_system: ManagedFileSystemPermissions::Unrestricted,
             network: NetworkSandboxPolicy::Restricted,
+            macos: None,
         };
 
         let err =
@@ -459,6 +462,7 @@ mod tests {
                 glob_scan_max_depth: None,
             },
             network: NetworkSandboxPolicy::Restricted,
+            macos: None,
         };
         let workspace_roots = workspace_roots_for(cwd.as_path());
 

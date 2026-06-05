@@ -873,7 +873,7 @@ mod tests {
                 &permission_profile,
                 &["com.apple.lsd".to_string()],
                 &["com.apple.finder".to_string()],
-                true,
+                /*allow_lsopen*/ true,
             ),
             Some(MacOsSandboxCapabilities {
                 mach_lookup_services: vec![

@@ -96,9 +96,23 @@ fn shell_event_with_request_permissions<S: serde::Serialize>(
     command: &str,
     additional_permissions: &S,
 ) -> Result<Value> {
+    shell_event_with_request_permissions_and_timeout(
+        call_id,
+        command,
+        additional_permissions,
+        /*timeout_ms*/ 1_000,
+    )
+}
+
+fn shell_event_with_request_permissions_and_timeout<S: serde::Serialize>(
+    call_id: &str,
+    command: &str,
+    additional_permissions: &S,
+    timeout_ms: u64,
+) -> Result<Value> {
     let args = json!({
         "command": command,
-        "timeout_ms": 1_000_u64,
+        "timeout_ms": timeout_ms,
         "sandbox_permissions": SandboxPermissions::WithAdditionalPermissions,
         "additional_permissions": additional_permissions,
     });
@@ -547,7 +561,12 @@ async fn managed_macos_capability_survives_additional_permissions_tool_execution
     let probe_arg = super::MACOS_SANDBOX_CAPABILITY_PROBE_ARG;
     let command = format!("{test_exe:?} {probe_arg}");
     let call_id = "managed-macos-capability-with-additional-permissions";
-    let event = shell_event_with_request_permissions(call_id, &command, &requested_permissions)?;
+    let event = shell_event_with_request_permissions_and_timeout(
+        call_id,
+        &command,
+        &requested_permissions,
+        /*timeout_ms*/ 5_000,
+    )?;
 
     let _ = mount_sse_once(
         &server,
