@@ -124,7 +124,8 @@ impl Session {
                 input.into_iter().map(TurnInput::ResponseItem).collect(),
             )
             .await;
-        self.start_task(turn_context, Vec::new(), RegularTask::new())
+        let _ = self
+            .start_task(turn_context, Vec::new(), RegularTask::new())
             .await;
         Ok(())
     }

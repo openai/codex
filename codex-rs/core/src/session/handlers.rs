@@ -22,7 +22,6 @@ use crate::realtime_conversation::prefix_realtime_v2_text;
 use crate::review_prompts::resolve_review_request;
 use crate::session::spawn_review_thread;
 use crate::tasks::CompactTask;
-use crate::tasks::StartTaskOutcome;
 use crate::tasks::UserShellCommandMode;
 use crate::tasks::UserShellCommandTask;
 use crate::tasks::execute_user_shell_command;
@@ -282,8 +281,8 @@ pub(super) async fn user_input_or_turn_inner(
                 )
                 .await
             {
-                StartTaskOutcome::Started => Some(accepted_items),
-                StartTaskOutcome::Rejected(err) => {
+                Ok(()) => Some(accepted_items),
+                Err(err) => {
                     sess.send_event_raw(Event {
                         id: sub_id,
                         msg: EventMsg::Error(err.to_error_event(/*message_prefix*/ None)),
@@ -365,12 +364,13 @@ pub async fn run_user_shell_command(sess: &Arc<Session>, sub_id: String, command
     }
 
     let turn_context = sess.new_default_turn_with_sub_id(sub_id).await;
-    sess.spawn_task(
-        Arc::clone(&turn_context),
-        Vec::new(),
-        UserShellCommandTask::new(command),
-    )
-    .await;
+    let _ = sess
+        .spawn_task(
+            Arc::clone(&turn_context),
+            Vec::new(),
+            UserShellCommandTask::new(command),
+        )
+        .await;
 }
 
 pub async fn resolve_elicitation(
@@ -499,7 +499,8 @@ pub async fn reload_user_config(sess: &Arc<Session>) {
 pub async fn compact(sess: &Arc<Session>, sub_id: String) {
     let turn_context = sess.new_default_turn_with_sub_id(sub_id).await;
 
-    sess.spawn_task(Arc::clone(&turn_context), Vec::new(), CompactTask)
+    let _ = sess
+        .spawn_task(Arc::clone(&turn_context), Vec::new(), CompactTask)
         .await;
 }
 

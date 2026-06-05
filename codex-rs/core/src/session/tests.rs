@@ -305,12 +305,13 @@ async fn regular_turn_emits_turn_started_with_trace_id_without_waiting_for_start
         ),
     )
     .await;
-    sess.spawn_task(
-        Arc::clone(&tc),
-        Vec::new(),
-        crate::tasks::RegularTask::new(),
-    )
-    .await;
+    let _ = sess
+        .spawn_task(
+            Arc::clone(&tc),
+            Vec::new(),
+            crate::tasks::RegularTask::new(),
+        )
+        .await;
 
     let first = tokio::time::timeout(std::time::Duration::from_millis(200), rx.recv())
         .await
@@ -386,12 +387,13 @@ async fn interrupting_regular_turn_waiting_on_startup_prewarm_emits_turn_aborted
         ),
     )
     .await;
-    sess.spawn_task(
-        Arc::clone(&tc),
-        Vec::new(),
-        crate::tasks::RegularTask::new(),
-    )
-    .await;
+    let _ = sess
+        .spawn_task(
+            Arc::clone(&tc),
+            Vec::new(),
+            crate::tasks::RegularTask::new(),
+        )
+        .await;
 
     let first = tokio::time::timeout(std::time::Duration::from_millis(200), rx.recv())
         .await
@@ -2111,15 +2113,16 @@ async fn turn_start_lifecycle_exposes_turn_metadata_and_token_baseline() {
     };
 
     let sess = Arc::new(session);
-    sess.spawn_task(
-        Arc::new(turn_context),
-        Vec::new(),
-        NeverEndingTask {
-            kind: TaskKind::Regular,
-            listen_to_cancellation_token: true,
-        },
-    )
-    .await;
+    let _ = sess
+        .spawn_task(
+            Arc::new(turn_context),
+            Vec::new(),
+            NeverEndingTask {
+                kind: TaskKind::Regular,
+                listen_to_cancellation_token: true,
+            },
+        )
+        .await;
     sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
 
     let actual = records
@@ -6309,20 +6312,21 @@ async fn spawn_task_turn_span_inherits_dispatch_trace_context() {
     let captured_trace = Arc::new(std::sync::Mutex::new(None));
 
     async {
-        sess.spawn_task(
-            Arc::clone(&tc),
-            vec![TurnInput::UserInput {
-                content: vec![UserInput::Text {
-                    text: "hello".to_string(),
-                    text_elements: Vec::new(),
+        let _ = sess
+            .spawn_task(
+                Arc::clone(&tc),
+                vec![TurnInput::UserInput {
+                    content: vec![UserInput::Text {
+                        text: "hello".to_string(),
+                        text_elements: Vec::new(),
+                    }],
+                    client_id: None,
                 }],
-                client_id: None,
-            }],
-            TraceCaptureTask {
-                captured_trace: Arc::clone(&captured_trace),
-            },
-        )
-        .await;
+                TraceCaptureTask {
+                    captured_trace: Arc::clone(&captured_trace),
+                },
+            )
+            .await;
     }
     .instrument(dispatch_span)
     .await;
@@ -6498,7 +6502,7 @@ async fn submission_loop_channel_close_aborts_active_turn_before_thread_stop_lif
     session.services.extensions = Arc::new(builder.build());
 
     let session = Arc::new(session);
-    session
+    let _ = session
         .spawn_task(
             Arc::new(turn_context),
             Vec::new(),
@@ -7138,15 +7142,16 @@ async fn spawn_task_does_not_update_previous_turn_settings_for_non_run_turn_task
         client_id: None,
     }];
 
-    sess.spawn_task(
-        Arc::clone(&tc),
-        input,
-        NeverEndingTask {
-            kind: TaskKind::Regular,
-            listen_to_cancellation_token: true,
-        },
-    )
-    .await;
+    let _ = sess
+        .spawn_task(
+            Arc::clone(&tc),
+            input,
+            NeverEndingTask {
+                kind: TaskKind::Regular,
+                listen_to_cancellation_token: true,
+            },
+        )
+        .await;
 
     sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
     assert_eq!(sess.previous_turn_settings().await, None);
@@ -8461,7 +8466,8 @@ async fn guardian_auto_review_interrupts_after_three_consecutive_denials() {
         }],
         client_id: None,
     }];
-    sess.spawn_task(Arc::clone(&tc), input, GuardianDeniedApprovalTask)
+    let _ = sess
+        .spawn_task(Arc::clone(&tc), input, GuardianDeniedApprovalTask)
         .await;
 
     let mut observed = Vec::new();
@@ -8495,15 +8501,16 @@ async fn guardian_helper_review_interrupts_after_three_consecutive_denials() {
         }],
         client_id: None,
     }];
-    sess.spawn_task(
-        Arc::clone(&tc),
-        input,
-        NeverEndingTask {
-            kind: TaskKind::Regular,
-            listen_to_cancellation_token: true,
-        },
-    )
-    .await;
+    let _ = sess
+        .spawn_task(
+            Arc::clone(&tc),
+            input,
+            NeverEndingTask {
+                kind: TaskKind::Regular,
+                listen_to_cancellation_token: true,
+            },
+        )
+        .await;
 
     let session_for_review = Arc::clone(&sess);
     let turn_for_review = Arc::clone(&tc);
@@ -8558,15 +8565,16 @@ async fn abort_regular_task_emits_marker_before_turn_aborted() {
         }],
         client_id: None,
     }];
-    sess.spawn_task(
-        Arc::clone(&tc),
-        input,
-        NeverEndingTask {
-            kind: TaskKind::Regular,
-            listen_to_cancellation_token: false,
-        },
-    )
-    .await;
+    let _ = sess
+        .spawn_task(
+            Arc::clone(&tc),
+            input,
+            NeverEndingTask {
+                kind: TaskKind::Regular,
+                listen_to_cancellation_token: false,
+            },
+        )
+        .await;
 
     sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
 
@@ -8599,15 +8607,16 @@ async fn abort_gracefully_emits_marker_before_turn_aborted() {
         }],
         client_id: None,
     }];
-    sess.spawn_task(
-        Arc::clone(&tc),
-        input,
-        NeverEndingTask {
-            kind: TaskKind::Regular,
-            listen_to_cancellation_token: true,
-        },
-    )
-    .await;
+    let _ = sess
+        .spawn_task(
+            Arc::clone(&tc),
+            input,
+            NeverEndingTask {
+                kind: TaskKind::Regular,
+                listen_to_cancellation_token: true,
+            },
+        )
+        .await;
 
     sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
 
@@ -8640,15 +8649,16 @@ async fn task_finish_emits_turn_item_lifecycle_for_leftover_pending_user_input()
         }],
         client_id: None,
     }];
-    sess.spawn_task(
-        Arc::clone(&tc),
-        input,
-        NeverEndingTask {
-            kind: TaskKind::Regular,
-            listen_to_cancellation_token: false,
-        },
-    )
-    .await;
+    let _ = sess
+        .spawn_task(
+            Arc::clone(&tc),
+            input,
+            NeverEndingTask {
+                kind: TaskKind::Regular,
+                listen_to_cancellation_token: false,
+            },
+        )
+        .await;
 
     while rx.try_recv().is_ok() {}
 
@@ -8783,7 +8793,7 @@ async fn task_finish_emits_thread_idle_lifecycle_after_active_turn_clears() {
     session.services.extensions = Arc::new(builder.build());
 
     let session = Arc::new(session);
-    session
+    let _ = session
         .spawn_task(Arc::new(turn_context), Vec::new(), CompletingTask)
         .await;
 
@@ -8834,15 +8844,16 @@ async fn thread_idle_lifecycle_waits_for_trigger_turn_mailbox_work() {
 #[tokio::test]
 async fn try_start_turn_if_idle_rejects_active_turn_without_injecting() {
     let (sess, tc, _rx) = make_session_and_context_with_rx().await;
-    sess.spawn_task(
-        Arc::clone(&tc),
-        Vec::new(),
-        NeverEndingTask {
-            kind: TaskKind::Regular,
-            listen_to_cancellation_token: true,
-        },
-    )
-    .await;
+    let _ = sess
+        .spawn_task(
+            Arc::clone(&tc),
+            Vec::new(),
+            NeverEndingTask {
+                kind: TaskKind::Regular,
+                listen_to_cancellation_token: true,
+            },
+        )
+        .await;
 
     let item = user_message("synthetic idle input");
     let err = sess
@@ -8916,15 +8927,16 @@ async fn try_start_turn_if_idle_rejects_pending_trigger_turn_without_injecting()
 #[tokio::test]
 async fn try_start_turn_if_idle_rejects_active_review_turn_without_injecting() {
     let (sess, tc, _rx) = make_session_and_context_with_rx().await;
-    sess.spawn_task(
-        Arc::clone(&tc),
-        Vec::new(),
-        NeverEndingTask {
-            kind: TaskKind::Review,
-            listen_to_cancellation_token: true,
-        },
-    )
-    .await;
+    let _ = sess
+        .spawn_task(
+            Arc::clone(&tc),
+            Vec::new(),
+            NeverEndingTask {
+                kind: TaskKind::Review,
+                listen_to_cancellation_token: true,
+            },
+        )
+        .await;
 
     let item = user_message("synthetic idle input");
     let err = sess
@@ -8974,15 +8986,16 @@ async fn steer_input_enforces_expected_turn_id() {
         }],
         client_id: None,
     }];
-    sess.spawn_task(
-        Arc::clone(&tc),
-        input,
-        NeverEndingTask {
-            kind: TaskKind::Regular,
-            listen_to_cancellation_token: false,
-        },
-    )
-    .await;
+    let _ = sess
+        .spawn_task(
+            Arc::clone(&tc),
+            input,
+            NeverEndingTask {
+                kind: TaskKind::Regular,
+                listen_to_cancellation_token: false,
+            },
+        )
+        .await;
 
     let steer_input = vec![UserInput::Text {
         text: "steer".to_string(),
@@ -9025,15 +9038,16 @@ async fn steer_input_rejects_non_regular_turns() {
             client_id: None,
         }];
         let turn_context = sess.new_default_turn_with_sub_id("turn".to_string()).await;
-        sess.spawn_task(
-            turn_context,
-            input,
-            NeverEndingTask {
-                kind: task_kind,
-                listen_to_cancellation_token: true,
-            },
-        )
-        .await;
+        let _ = sess
+            .spawn_task(
+                turn_context,
+                input,
+                NeverEndingTask {
+                    kind: task_kind,
+                    listen_to_cancellation_token: true,
+                },
+            )
+            .await;
 
         let steer_input = vec![UserInput::Text {
             text: "steer".to_string(),
@@ -9066,15 +9080,16 @@ async fn steer_input_returns_active_turn_id() {
         }],
         client_id: None,
     }];
-    sess.spawn_task(
-        Arc::clone(&tc),
-        input,
-        NeverEndingTask {
-            kind: TaskKind::Regular,
-            listen_to_cancellation_token: false,
-        },
-    )
-    .await;
+    let _ = sess
+        .spawn_task(
+            Arc::clone(&tc),
+            input,
+            NeverEndingTask {
+                kind: TaskKind::Regular,
+                listen_to_cancellation_token: false,
+            },
+        )
+        .await;
 
     let steer_input = vec![UserInput::Text {
         text: "steer".to_string(),
@@ -9142,15 +9157,16 @@ async fn interrupt_accounts_active_goal_without_pausing() -> anyhow::Result<()> 
     )
     .await?;
 
-    sess.spawn_task(
-        Arc::clone(&tc),
-        Vec::new(),
-        NeverEndingTask {
-            kind: TaskKind::Regular,
-            listen_to_cancellation_token: false,
-        },
-    )
-    .await;
+    let _ = sess
+        .spawn_task(
+            Arc::clone(&tc),
+            Vec::new(),
+            NeverEndingTask {
+                kind: TaskKind::Regular,
+                listen_to_cancellation_token: false,
+            },
+        )
+        .await;
     set_total_token_usage(&sess, post_goal_token_usage()).await;
 
     sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
@@ -9510,15 +9526,16 @@ async fn budget_limited_accounting_steers_active_turn_without_aborting() -> anyh
         token_usage: TokenUsage::default(),
     })
     .await?;
-    sess.spawn_task(
-        Arc::clone(&tc),
-        Vec::new(),
-        NeverEndingTask {
-            kind: TaskKind::Regular,
-            listen_to_cancellation_token: false,
-        },
-    )
-    .await;
+    let _ = sess
+        .spawn_task(
+            Arc::clone(&tc),
+            Vec::new(),
+            NeverEndingTask {
+                kind: TaskKind::Regular,
+                listen_to_cancellation_token: false,
+            },
+        )
+        .await;
     while rx.try_recv().is_ok() {}
 
     set_total_token_usage(
@@ -9617,15 +9634,16 @@ async fn usage_limit_runtime_stops_active_goal_and_prevents_idle_continuation() 
         token_usage: TokenUsage::default(),
     })
     .await?;
-    sess.spawn_task(
-        Arc::clone(&tc),
-        Vec::new(),
-        NeverEndingTask {
-            kind: TaskKind::Regular,
-            listen_to_cancellation_token: false,
-        },
-    )
-    .await;
+    let _ = sess
+        .spawn_task(
+            Arc::clone(&tc),
+            Vec::new(),
+            NeverEndingTask {
+                kind: TaskKind::Regular,
+                listen_to_cancellation_token: false,
+            },
+        )
+        .await;
     set_total_token_usage(&sess, post_goal_token_usage()).await;
 
     sess.goal_runtime_apply(GoalRuntimeEvent::UsageLimitReached {
@@ -9662,15 +9680,16 @@ async fn external_goal_mutation_accounts_active_turn_before_status_change() -> a
         },
     )
     .await?;
-    sess.spawn_task(
-        Arc::clone(&tc),
-        Vec::new(),
-        NeverEndingTask {
-            kind: TaskKind::Regular,
-            listen_to_cancellation_token: false,
-        },
-    )
-    .await;
+    let _ = sess
+        .spawn_task(
+            Arc::clone(&tc),
+            Vec::new(),
+            NeverEndingTask {
+                kind: TaskKind::Regular,
+                listen_to_cancellation_token: false,
+            },
+        )
+        .await;
     set_total_token_usage(&sess, post_goal_token_usage()).await;
 
     sess.goal_runtime_apply(GoalRuntimeEvent::ExternalMutationStarting)
@@ -9724,15 +9743,16 @@ async fn external_goal_mutation_accounts_active_turn_before_status_change() -> a
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn external_objective_change_steers_active_turn() -> anyhow::Result<()> {
     let (sess, tc, _rx, _codex_home) = make_goal_session_and_context_with_rx().await;
-    sess.spawn_task(
-        Arc::clone(&tc),
-        Vec::new(),
-        NeverEndingTask {
-            kind: TaskKind::Regular,
-            listen_to_cancellation_token: false,
-        },
-    )
-    .await;
+    let _ = sess
+        .spawn_task(
+            Arc::clone(&tc),
+            Vec::new(),
+            NeverEndingTask {
+                kind: TaskKind::Regular,
+                listen_to_cancellation_token: false,
+            },
+        )
+        .await;
 
     let state_db = goal_test_state_db(sess.as_ref()).await?;
     let old_goal = state_db
@@ -9790,15 +9810,16 @@ async fn external_objective_change_steers_active_turn() -> anyhow::Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn external_active_goal_set_marks_current_turn_for_accounting() -> anyhow::Result<()> {
     let (sess, tc, _rx, _codex_home) = make_goal_session_and_context_with_rx().await;
-    sess.spawn_task(
-        Arc::clone(&tc),
-        Vec::new(),
-        NeverEndingTask {
-            kind: TaskKind::Regular,
-            listen_to_cancellation_token: false,
-        },
-    )
-    .await;
+    let _ = sess
+        .spawn_task(
+            Arc::clone(&tc),
+            Vec::new(),
+            NeverEndingTask {
+                kind: TaskKind::Regular,
+                listen_to_cancellation_token: false,
+            },
+        )
+        .await;
     set_total_token_usage(&sess, post_goal_token_usage()).await;
 
     let state_db = goal_test_state_db(sess.as_ref()).await?;
@@ -9961,15 +9982,16 @@ async fn queue_only_mailbox_mail_waits_for_next_turn_after_answer_boundary() {
         "late queue-only update".to_string(),
         /*trigger_turn*/ false,
     );
-    sess.spawn_task(
-        Arc::clone(&tc),
-        Vec::new(),
-        NeverEndingTask {
-            kind: TaskKind::Regular,
-            listen_to_cancellation_token: true,
-        },
-    )
-    .await;
+    let _ = sess
+        .spawn_task(
+            Arc::clone(&tc),
+            Vec::new(),
+            NeverEndingTask {
+                kind: TaskKind::Regular,
+                listen_to_cancellation_token: true,
+            },
+        )
+        .await;
 
     sess.input_queue
         .defer_mailbox_delivery_to_next_turn(&sess.active_turn, &tc.sub_id)
@@ -10000,15 +10022,16 @@ async fn queue_only_mailbox_mail_waits_for_next_turn_after_answer_boundary() {
 #[tokio::test]
 async fn trigger_turn_mailbox_mail_waits_for_next_turn_after_answer_boundary() {
     let (sess, tc, _rx) = make_session_and_context_with_rx().await;
-    sess.spawn_task(
-        Arc::clone(&tc),
-        Vec::new(),
-        NeverEndingTask {
-            kind: TaskKind::Regular,
-            listen_to_cancellation_token: true,
-        },
-    )
-    .await;
+    let _ = sess
+        .spawn_task(
+            Arc::clone(&tc),
+            Vec::new(),
+            NeverEndingTask {
+                kind: TaskKind::Regular,
+                listen_to_cancellation_token: true,
+            },
+        )
+        .await;
 
     sess.input_queue
         .defer_mailbox_delivery_to_next_turn(&sess.active_turn, &tc.sub_id)
@@ -10043,15 +10066,16 @@ async fn steered_input_reopens_mailbox_delivery_for_current_turn() {
         "queued child update".to_string(),
         /*trigger_turn*/ false,
     );
-    sess.spawn_task(
-        Arc::clone(&tc),
-        Vec::new(),
-        NeverEndingTask {
-            kind: TaskKind::Regular,
-            listen_to_cancellation_token: true,
-        },
-    )
-    .await;
+    let _ = sess
+        .spawn_task(
+            Arc::clone(&tc),
+            Vec::new(),
+            NeverEndingTask {
+                kind: TaskKind::Regular,
+                listen_to_cancellation_token: true,
+            },
+        )
+        .await;
 
     sess.input_queue
         .defer_mailbox_delivery_to_next_turn(&sess.active_turn, &tc.sub_id)
@@ -10097,15 +10121,16 @@ async fn stale_defer_mailbox_delivery_does_not_override_steered_input() {
         "queued child update".to_string(),
         /*trigger_turn*/ false,
     );
-    sess.spawn_task(
-        Arc::clone(&tc),
-        Vec::new(),
-        NeverEndingTask {
-            kind: TaskKind::Regular,
-            listen_to_cancellation_token: true,
-        },
-    )
-    .await;
+    let _ = sess
+        .spawn_task(
+            Arc::clone(&tc),
+            Vec::new(),
+            NeverEndingTask {
+                kind: TaskKind::Regular,
+                listen_to_cancellation_token: true,
+            },
+        )
+        .await;
 
     sess.input_queue
         .defer_mailbox_delivery_to_next_turn(&sess.active_turn, &tc.sub_id)
@@ -10155,15 +10180,16 @@ async fn tool_calls_reopen_mailbox_delivery_for_current_turn() {
         "queued child update".to_string(),
         /*trigger_turn*/ false,
     );
-    sess.spawn_task(
-        Arc::clone(&tc),
-        Vec::new(),
-        NeverEndingTask {
-            kind: TaskKind::Regular,
-            listen_to_cancellation_token: true,
-        },
-    )
-    .await;
+    let _ = sess
+        .spawn_task(
+            Arc::clone(&tc),
+            Vec::new(),
+            NeverEndingTask {
+                kind: TaskKind::Regular,
+                listen_to_cancellation_token: true,
+            },
+        )
+        .await;
 
     sess.input_queue
         .defer_mailbox_delivery_to_next_turn(&sess.active_turn, &tc.sub_id)
@@ -10211,7 +10237,8 @@ async fn abort_review_task_emits_exited_then_aborted_and_records_history() {
         }],
         client_id: None,
     }];
-    sess.spawn_task(Arc::clone(&tc), input, ReviewTask::new())
+    let _ = sess
+        .spawn_task(Arc::clone(&tc), input, ReviewTask::new())
         .await;
 
     sess.abort_all_tasks(TurnAbortReason::Interrupted).await;

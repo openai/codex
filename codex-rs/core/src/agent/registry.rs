@@ -225,7 +225,7 @@ impl AgentRegistry {
         }
     }
 
-    pub(crate) fn register_agent(&self, mut agent_metadata: AgentMetadata) {
+    fn register_agent(&self, agent_metadata: AgentMetadata) {
         let Some(thread_id) = agent_metadata.agent_id else {
             return;
         };
@@ -240,11 +240,6 @@ impl AgentRegistry {
             .unwrap_or_else(|| format!("thread:{thread_id}"));
         if let Some(agent_nickname) = agent_metadata.agent_nickname.clone() {
             active_agents.used_agent_nicknames.insert(agent_nickname);
-        }
-        if let Some(existing) = active_agents.agent_tree.get(key.as_str())
-            && agent_metadata.last_task_message.is_none()
-        {
-            agent_metadata.last_task_message = existing.last_task_message.clone();
         }
         active_agents.agent_tree.insert(key, agent_metadata);
     }

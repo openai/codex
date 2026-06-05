@@ -44,6 +44,7 @@ use codex_otel::TURN_NETWORK_PROXY_METRIC;
 use codex_otel::TURN_TOKEN_USAGE_METRIC;
 use codex_otel::TURN_TOOL_CALL_METRIC;
 use codex_protocol::error::CodexErr;
+use codex_protocol::error::Result as CodexResult;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::MultiAgentVersion;
@@ -70,12 +71,6 @@ pub(crate) enum InterruptedTurnHistoryMarker {
     Disabled,
     ContextualUser,
     Developer,
-}
-
-#[derive(Debug)]
-pub(crate) enum StartTaskOutcome {
-    Started,
-    Rejected(CodexErr),
 }
 
 impl InterruptedTurnHistoryMarker {
@@ -315,10 +310,10 @@ impl Session {
         turn_context: Arc<TurnContext>,
         input: Vec<TurnInput>,
         task: T,
-    ) -> StartTaskOutcome {
+    ) -> CodexResult<()> {
         self.abort_all_tasks(TurnAbortReason::Replaced).await;
         self.clear_connector_selection().await;
-        self.start_task(turn_context, input, task).await;
+        self.start_task(turn_context, input, task).await
     }
 
     pub(crate) async fn start_task<T: SessionTask>(
@@ -326,12 +321,12 @@ impl Session {
         turn_context: Arc<TurnContext>,
         input: Vec<TurnInput>,
         task: T,
-    ) -> StartTaskOutcome {
+    ) -> CodexResult<()> {
         let turn_state = {
             let mut active = self.active_turn.lock().await;
             let turn = active.get_or_insert_with(ActiveTurn::default);
             if turn.task.is_some() {
-                return StartTaskOutcome::Rejected(CodexErr::InvalidRequest(
+                return Err(CodexErr::InvalidRequest(
                     "thread already has an active turn".to_string(),
                 ));
             }
@@ -350,12 +345,9 @@ impl Session {
                     thread_id = %self.thread_id,
                     "agent turn could not reserve an execution slot: {err}"
                 );
-                return StartTaskOutcome::Rejected(err);
+                return Err(err);
             }
         };
-        if let Some(execution_reservation) = execution_reservation {
-            execution_reservation.commit();
-        }
 
         let task: Arc<dyn AnySessionTask> = Arc::new(task);
         let task_kind = task.kind();
@@ -399,7 +391,7 @@ impl Session {
         let turn_extension_data = Arc::clone(&turn_context.extension_data);
         let mut active = self.active_turn.lock().await;
         let Some(turn) = active.as_mut() else {
-            return StartTaskOutcome::Rejected(CodexErr::Fatal(
+            return Err(CodexErr::Fatal(
                 "active turn reservation was lost before task start".to_string(),
             ));
         };
@@ -479,7 +471,10 @@ impl Session {
             _timer: timer,
         };
         turn.task = Some(running_task);
-        StartTaskOutcome::Started
+        if let Some(execution_reservation) = execution_reservation {
+            execution_reservation.commit();
+        }
+        Ok(())
     }
 
     /// Starts a regular turn when the session is idle and pending work is waiting.
@@ -523,7 +518,8 @@ impl Session {
                 self.clear_reserved_active_turn(&turn_state).await;
                 return;
             }
-            self.start_task(turn_context, Vec::new(), RegularTask::new())
+            let _ = self
+                .start_task(turn_context, Vec::new(), RegularTask::new())
                 .await;
         })
     }

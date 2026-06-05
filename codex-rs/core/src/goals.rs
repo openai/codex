@@ -1326,7 +1326,8 @@ impl Session {
                 .await;
             return;
         }
-        self.start_task(turn_context, Vec::new(), RegularTask::new())
+        let _ = self
+            .start_task(turn_context, Vec::new(), RegularTask::new())
             .await;
     }
 
