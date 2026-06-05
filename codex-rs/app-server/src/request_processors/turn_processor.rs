@@ -18,28 +18,6 @@ pub(crate) struct TurnRequestProcessor {
     skills_watcher: Arc<SkillsWatcher>,
 }
 
-fn resolve_runtime_workspace_roots(
-    workspace_roots: Vec<PathBuf>,
-    base_cwd: &AbsolutePathBuf,
-) -> Vec<AbsolutePathBuf> {
-    let mut resolved_roots = Vec::new();
-    for path in workspace_roots {
-        let root = AbsolutePathBuf::resolve_path_against_base(path, base_cwd.as_path());
-        if !resolved_roots.iter().any(|existing| existing == &root) {
-            resolved_roots.push(root);
-        }
-    }
-    resolved_roots
-}
-
-fn resolve_request_cwd(cwd: Option<PathBuf>) -> Result<Option<AbsolutePathBuf>, JSONRPCErrorError> {
-    cwd.map(|cwd| {
-        AbsolutePathBuf::relative_to_current_dir(path_utils::normalize_for_native_workdir(cwd))
-            .map_err(|err| invalid_request(format!("invalid cwd: {err}")))
-    })
-    .transpose()
-}
-
 fn map_additional_context(
     additional_context: Option<HashMap<String, AdditionalContextEntry>>,
 ) -> BTreeMap<String, CoreAdditionalContextEntry> {
@@ -67,7 +45,7 @@ struct ThreadSettingsBuildParams {
     method: &'static str,
     cwd: Option<AbsolutePathBuf>,
     environment_selections: Option<Vec<TurnEnvironmentSelection>>,
-    runtime_workspace_roots: Option<Vec<PathBuf>>,
+    runtime_workspace_roots: Option<Vec<AbsolutePathBuf>>,
     approval_policy: Option<codex_app_server_protocol::AskForApproval>,
     approvals_reviewer: Option<codex_app_server_protocol::ApprovalsReviewer>,
     sandbox_policy: Option<codex_app_server_protocol::SandboxPolicy>,
@@ -536,10 +514,7 @@ impl TurnRequestProcessor {
         // `thread/settings/update` only acknowledges that the update was queued.
         // Clients that send dependent partial updates should wait for
         // `thread/settings/updated` or combine the fields in one request.
-        let snapshot = if permissions.is_some()
-            || runtime_workspace_roots_request.is_some()
-            || has_environment_settings_override
-        {
+        let snapshot = if permissions.is_some() || has_environment_settings_override {
             Some(thread.config_snapshot().await)
         } else {
             None
@@ -559,22 +534,7 @@ impl TurnRequestProcessor {
             || personality.is_some();
 
         let runtime_workspace_roots =
-            if let Some(workspace_roots) = runtime_workspace_roots_request.clone() {
-                let Some(snapshot) = snapshot.as_ref() else {
-                    return Err(internal_error(format!(
-                        "{method} runtime workspace roots missing thread snapshot"
-                    )));
-                };
-                let base_cwd = cwd
-                    .as_ref()
-                    .map(|cwd| {
-                        AbsolutePathBuf::resolve_path_against_base(cwd, snapshot.cwd().as_path())
-                    })
-                    .unwrap_or_else(|| snapshot.cwd().clone());
-                Some(resolve_runtime_workspace_roots(workspace_roots, &base_cwd))
-            } else {
-                None
-            };
+            runtime_workspace_roots_request.map(resolve_runtime_workspace_roots);
         let environment_settings = if has_environment_settings_override {
             let Some(snapshot) = snapshot.as_ref() else {
                 return Err(internal_error(format!(
@@ -606,15 +566,11 @@ impl TurnRequestProcessor {
                 };
                 let overrides = ConfigOverrides {
                     cwd: cwd.as_ref().map(AbsolutePathBuf::to_path_buf),
-                    workspace_roots: Some(runtime_workspace_roots_request.clone().unwrap_or_else(
-                        || {
-                            snapshot
-                                .workspace_roots
-                                .iter()
-                                .map(AbsolutePathBuf::to_path_buf)
-                                .collect()
-                        },
-                    )),
+                    workspace_roots: Some(
+                        runtime_workspace_roots
+                            .clone()
+                            .unwrap_or_else(|| snapshot.workspace_roots.clone()),
+                    ),
                     default_permissions: Some(permissions),
                     codex_linux_sandbox_exe: self.arg0_paths.codex_linux_sandbox_exe.clone(),
                     main_execve_wrapper_exe: self.arg0_paths.main_execve_wrapper_exe.clone(),

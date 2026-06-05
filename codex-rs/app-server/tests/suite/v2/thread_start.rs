@@ -197,15 +197,15 @@ async fn thread_start_creates_thread_and_emits_started() -> Result<()> {
 }
 
 #[tokio::test]
-async fn thread_start_resolves_runtime_workspace_roots_against_cwd() -> Result<()> {
+async fn thread_start_accepts_absolute_runtime_workspace_roots() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     create_config_toml_without_approval_policy(codex_home.path(), &server.uri())?;
 
     let cwd_tmp = TempDir::new()?;
     let cwd = cwd_tmp.path().to_path_buf();
-    let relative_root = PathBuf::from("extra-root");
-    std::fs::create_dir_all(cwd.join(&relative_root))?;
+    let extra_root = cwd.join("extra-root");
+    std::fs::create_dir_all(&extra_root)?;
 
     let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -213,7 +213,7 @@ async fn thread_start_resolves_runtime_workspace_roots_against_cwd() -> Result<(
     let req_id = mcp
         .send_thread_start_request(ThreadStartParams {
             cwd: Some(cwd.to_string_lossy().to_string()),
-            runtime_workspace_roots: Some(vec![relative_root.clone()]),
+            runtime_workspace_roots: Some(vec![extra_root.abs()]),
             ..Default::default()
         })
         .await?;
@@ -230,10 +230,7 @@ async fn thread_start_resolves_runtime_workspace_roots_against_cwd() -> Result<(
     } = to_response::<ThreadStartResponse>(resp)?;
 
     assert_eq!(response_cwd, cwd.abs());
-    assert_eq!(
-        runtime_workspace_roots,
-        vec![cwd_tmp.path().join(relative_root).abs()]
-    );
+    assert_eq!(runtime_workspace_roots, vec![extra_root.abs()]);
 
     Ok(())
 }

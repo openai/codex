@@ -619,36 +619,7 @@ async fn environment_count_controls_environment_backed_tools() {
 }
 
 #[tokio::test]
-async fn host_context_gates_goal_and_agent_job_tools() {
-    let feature_disabled = probe(|turn| {
-        set_feature(turn, Feature::Goals, /*enabled*/ false);
-        turn.goal_tools_supported = true;
-    })
-    .await;
-    feature_disabled.assert_visible_lacks(&["get_goal", "create_goal", "update_goal"]);
-
-    let host_disabled = probe(|turn| {
-        set_feature(turn, Feature::Goals, /*enabled*/ true);
-        turn.goal_tools_supported = false;
-    })
-    .await;
-    host_disabled.assert_visible_lacks(&["get_goal", "create_goal", "update_goal"]);
-
-    let enabled = probe(|turn| {
-        set_feature(turn, Feature::Goals, /*enabled*/ true);
-        turn.goal_tools_supported = true;
-    })
-    .await;
-    enabled.assert_visible_contains(&["get_goal", "create_goal", "update_goal"]);
-
-    let review_thread = probe(|turn| {
-        set_feature(turn, Feature::Goals, /*enabled*/ true);
-        turn.goal_tools_supported = true;
-        turn.session_source = SessionSource::SubAgent(SubAgentSource::Review);
-    })
-    .await;
-    review_thread.assert_visible_lacks(&["get_goal", "create_goal", "update_goal"]);
-
+async fn host_context_gates_agent_job_tools() {
     let normal_agent_job = probe(|turn| {
         set_feature(turn, Feature::SpawnCsv, /*enabled*/ true);
     })

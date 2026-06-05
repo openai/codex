@@ -16,6 +16,7 @@ use crate::app_event::RealtimeAudioDeviceKind;
 #[cfg(target_os = "windows")]
 use crate::app_event::WindowsSandboxEnableMode;
 use crate::app_event_sender::AppEventSender;
+use crate::app_server_session::AppServerBootstrap;
 use crate::app_server_session::AppServerSession;
 use crate::app_server_session::AppServerStartedThread;
 use crate::app_server_session::TurnPermissionsOverride;
@@ -727,6 +728,8 @@ impl App {
         app_server_target: AppServerTarget,
         state_db: Option<StateDbHandle>,
         environment_manager: Arc<EnvironmentManager>,
+        startup_elapsed_before_app: Duration,
+        startup_bootstrap: Option<AppServerBootstrap>,
         startup_hooks_browser: Option<HooksListEntry>,
     ) -> Result<AppExitInfo> {
         use tokio_stream::StreamExt;
@@ -774,9 +777,11 @@ impl App {
                 });
             }
         };
-        let bootstrap_started_at = Instant::now();
-        let bootstrap = app_server.bootstrap(&config).await?;
-        let bootstrap_ms = bootstrap_started_at.elapsed().as_millis();
+        let bootstrap = match startup_bootstrap {
+            Some(bootstrap) => bootstrap,
+            None => app_server.bootstrap(&config).await?,
+        };
+        let bootstrap_ms = bootstrap.duration.as_millis();
         let mut model = bootstrap.default_model;
         let available_models = bootstrap.available_models;
         let remote_connection = crate::status::remote_connection::remote_connection_status_value(
@@ -1085,7 +1090,7 @@ See the Codex keymap documentation for supported actions and examples."
 
         tui.frame_requester().schedule_frame();
         tracing::info!(
-            duration_ms = %startup_started_at.elapsed().as_millis(),
+            duration_ms = %(startup_elapsed_before_app + startup_started_at.elapsed()).as_millis(),
             bootstrap_ms = %bootstrap_ms,
             runtime_model_provider_ms = %runtime_model_provider_ms,
             thread_and_widget_ms = %thread_and_widget_ms,

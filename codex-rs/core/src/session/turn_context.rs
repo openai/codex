@@ -91,7 +91,6 @@ pub struct TurnContext {
     pub(crate) shell_environment_policy: ShellEnvironmentPolicy,
     pub(crate) available_models: Vec<ModelPreset>,
     pub(crate) unified_exec_shell_mode: UnifiedExecShellMode,
-    pub(crate) goal_tools_supported: bool,
     pub features: ManagedFeatures,
     pub(crate) ghost_snapshot: GhostSnapshotConfig,
     pub(crate) final_output_json_schema: Option<Value>,
@@ -168,10 +167,6 @@ impl TurnContext {
 
     pub(crate) fn tool_environment_mode(&self) -> ToolEnvironmentMode {
         ToolEnvironmentMode::from_count(self.environments.turn_environments.len())
-    }
-
-    pub(crate) fn goal_tools_enabled(&self) -> bool {
-        self.goal_tools_supported && self.features.get().enabled(Feature::Goals)
     }
 
     pub(crate) async fn with_model(
@@ -264,7 +259,6 @@ impl TurnContext {
             shell_environment_policy: self.shell_environment_policy.clone(),
             available_models,
             unified_exec_shell_mode: self.unified_exec_shell_mode.clone(),
-            goal_tools_supported: self.goal_tools_supported,
             features,
             ghost_snapshot: self.ghost_snapshot.clone(),
             final_output_json_schema: self.final_output_json_schema.clone(),
@@ -477,7 +471,6 @@ impl Session {
         cwd: AbsolutePathBuf,
         sub_id: String,
         skills_outcome: Arc<SkillLoadOutcome>,
-        goal_tools_supported: bool,
     ) -> TurnContext {
         let reasoning_effort = session_configuration.collaboration_mode.reasoning_effort();
         let reasoning_summary = session_configuration
@@ -568,7 +561,6 @@ impl Session {
             shell_environment_policy: per_turn_config.permissions.shell_environment_policy.clone(),
             available_models,
             unified_exec_shell_mode,
-            goal_tools_supported,
             features: per_turn_config.features.clone(),
             ghost_snapshot: per_turn_config.ghost_snapshot.clone(),
             final_output_json_schema: None,
@@ -771,7 +763,6 @@ impl Session {
                 .skills_for_config(&skills_input, fs)
                 .await,
         );
-        let goal_tools_supported = !per_turn_config.ephemeral && self.state_db().is_some();
         let mut turn_context: TurnContext = Self::make_turn_context(
             self.thread_id(),
             self.session_id(),
@@ -800,7 +791,6 @@ impl Session {
             cwd,
             sub_id,
             skills_outcome,
-            goal_tools_supported,
         );
         turn_context.realtime_active = self.conversation.running_state().await.is_some();
 

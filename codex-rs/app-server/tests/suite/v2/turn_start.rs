@@ -2449,6 +2449,8 @@ async fn turn_start_permission_profile_rebinds_runtime_workspace_roots_between_t
     std::fs::create_dir(&new_root)?;
     let old_root_text = old_root.to_string_lossy().into_owned();
     let new_root_text = new_root.to_string_lossy().into_owned();
+    let old_root = codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(old_root)?;
+    let new_root = codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(new_root)?;
 
     let server = responses::start_mock_server().await;
     let response_mock = responses::mount_sse_sequence(

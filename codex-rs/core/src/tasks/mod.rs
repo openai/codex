@@ -23,7 +23,6 @@ use tracing::warn;
 
 use crate::config::Config;
 use crate::context::ContextualUserFragment;
-use crate::goals::GoalRuntimeEvent;
 use crate::hook_runtime::inspect_pending_input;
 use crate::hook_runtime::record_additional_contexts;
 use crate::hook_runtime::record_pending_input;
@@ -342,15 +341,6 @@ impl Session {
             .await
             .clear_turn(&turn_context.sub_id);
 
-        if let Err(err) = self
-            .goal_runtime_apply(GoalRuntimeEvent::TurnStarted {
-                turn_context: turn_context.as_ref(),
-                token_usage: token_usage_at_turn_start.clone(),
-            })
-            .await
-        {
-            warn!("failed to apply goal runtime turn-start event: {err}");
-        }
         let pending_items = self.input_queue.get_pending_input(&self.active_turn).await;
         let turn_state = {
             let mut active = self.active_turn.lock().await;
@@ -504,15 +494,6 @@ impl Session {
             self.emit_turn_abort_lifecycle(reason.clone(), turn_context.extension_data.as_ref())
                 .await;
         }
-        if (aborted_turn || reason == TurnAbortReason::Interrupted)
-            && let Err(err) = self
-                .goal_runtime_apply(GoalRuntimeEvent::TaskAborted {
-                    turn_context: turn_context.as_deref(),
-                })
-                .await
-        {
-            warn!("failed to apply goal runtime abort event: {err}");
-        }
         if let Some(active_turn) = active_turn_to_clear {
             // Let interrupted tasks observe cancellation before dropping pending approvals, or an
             // in-flight approval wait can surface as a model-visible rejection before TurnAborted.
@@ -552,14 +533,6 @@ impl Session {
         if let Some(turn_context) = turn_context.as_deref() {
             self.emit_turn_abort_lifecycle(reason.clone(), turn_context.extension_data.as_ref())
                 .await;
-        }
-        if let Err(err) = self
-            .goal_runtime_apply(GoalRuntimeEvent::TaskAborted {
-                turn_context: turn_context.as_deref(),
-            })
-            .await
-        {
-            warn!("failed to apply goal runtime abort event: {err}");
         }
         // Let interrupted tasks observe cancellation before dropping pending approvals, or an
         // in-flight approval wait can surface as a model-visible rejection before TurnAborted.
@@ -760,15 +733,6 @@ impl Session {
             });
         self.emit_turn_stop_lifecycle(turn_context.extension_data.as_ref())
             .await;
-        if let Err(err) = self
-            .goal_runtime_apply(GoalRuntimeEvent::TurnFinished {
-                turn_context: turn_context.as_ref(),
-                turn_completed: true,
-            })
-            .await
-        {
-            warn!("failed to apply goal runtime turn-finished event: {err}");
-        }
         let event = EventMsg::TurnComplete(TurnCompleteEvent {
             turn_id: turn_context.sub_id.clone(),
             last_agent_message,
@@ -797,12 +761,6 @@ impl Session {
         };
         if !cleared_active_turn {
             return;
-        }
-        if let Err(err) = self
-            .goal_runtime_apply(GoalRuntimeEvent::MaybeContinueIfIdle)
-            .await
-        {
-            warn!("failed to apply goal runtime maybe-continue event: {err}");
         }
         self.emit_thread_idle_lifecycle_if_idle().await;
     }

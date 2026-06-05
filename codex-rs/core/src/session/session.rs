@@ -3,7 +3,6 @@ use super::*;
 use crate::TurnEnvironmentSelections;
 use crate::agents_md::LoadedAgentsMd;
 use crate::config::ConstraintError;
-use crate::goals::GoalRuntimeState;
 use crate::skills::SkillError;
 use crate::state::ActiveTurn;
 use codex_protocol::SessionId;
@@ -38,7 +37,6 @@ pub(crate) struct Session {
     pub(crate) conversation: Arc<RealtimeConversationManager>,
     pub(crate) active_turn: Mutex<Option<ActiveTurn>>,
     pub(crate) input_queue: InputQueue,
-    pub(crate) goal_runtime: GoalRuntimeState,
     pub(crate) guardian_review_session: GuardianReviewSessionManager,
     pub(crate) services: SessionServices,
     pub(super) next_internal_sub_id: AtomicU64,
@@ -1063,7 +1061,6 @@ impl Session {
                 conversation: Arc::new(RealtimeConversationManager::new()),
                 active_turn: Mutex::new(None),
                 input_queue: InputQueue::new(),
-                goal_runtime: GoalRuntimeState::new(),
                 guardian_review_session: GuardianReviewSessionManager::default(),
                 services,
                 next_internal_sub_id: AtomicU64::new(0),

@@ -33,14 +33,14 @@ fn detects_subagent_notification_fragment_case_insensitively() {
 #[test]
 fn detects_internal_model_context_fragment() {
     let text = InternalModelContextFragment::new(
-        InternalContextSource::from_static("goal"),
-        "Continue working toward the active thread goal.",
+        InternalContextSource::from_static("extension"),
+        "Internal steering.",
     )
     .render();
 
     assert_eq!(
         text,
-        "<codex_internal_context source=\"goal\">\nContinue working toward the active thread goal.\n</codex_internal_context>"
+        "<codex_internal_context source=\"extension\">\nInternal steering.\n</codex_internal_context>"
     );
     assert!(is_contextual_user_fragment(&ContentItem::InputText {
         text
@@ -65,7 +65,7 @@ fn does_not_hide_arbitrary_context_tags() {
 #[test]
 fn rejects_invalid_internal_model_context_source() {
     assert!(!is_contextual_user_fragment(&ContentItem::InputText {
-        text: "<codex_internal_context source=\"Goal\">\nbody\n</codex_internal_context>"
+        text: "<codex_internal_context source=\"Extension\">\nbody\n</codex_internal_context>"
             .to_string(),
     }));
 }
@@ -73,13 +73,13 @@ fn rejects_invalid_internal_model_context_source() {
 #[test]
 fn contextual_user_fragment_is_dyn_compatible() {
     let fragment: Box<dyn ContextualUserFragment> = Box::new(InternalModelContextFragment::new(
-        InternalContextSource::from_static("goal"),
-        "Continue working toward the active thread goal.",
+        InternalContextSource::from_static("extension"),
+        "Internal steering.",
     ));
 
     assert_eq!(
         fragment.render(),
-        "<codex_internal_context source=\"goal\">\nContinue working toward the active thread goal.\n</codex_internal_context>"
+        "<codex_internal_context source=\"extension\">\nInternal steering.\n</codex_internal_context>"
     );
 }
 
