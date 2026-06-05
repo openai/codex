@@ -538,7 +538,10 @@ mod tests {
 
         add_helper_runtime_permissions(
             &mut policy,
-            &helper_read_roots(&runtime_paths.codex_self_exe, None),
+            &helper_read_roots(
+                &runtime_paths.codex_self_exe,
+                /*codex_linux_sandbox_exe*/ None,
+            ),
             cwd.as_path(),
         );
 
@@ -712,7 +715,10 @@ mod tests {
 
         add_helper_runtime_permissions(
             &mut policy,
-            &helper_read_roots(&runtime_paths.codex_self_exe, None),
+            &helper_read_roots(
+                &runtime_paths.codex_self_exe,
+                /*codex_linux_sandbox_exe*/ None,
+            ),
             cwd.as_path(),
         );
 
