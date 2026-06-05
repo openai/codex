@@ -102,6 +102,7 @@ const MCP_RESULT_TELEMETRY_SERVER_USER_FLOW_SPAN_ATTR: &str =
     "codex.mcp.server_user_flow.triggered";
 const MCP_RESULT_TELEMETRY_TARGET_ID_MAX_CHARS: usize = 256;
 const MCP_TOOL_CALL_EVENT_RESULT_MAX_BYTES: usize = DEFAULT_OUTPUT_BYTES_CAP;
+const CONNECTOR_USED_THIS_TURN_METADATA_KEY: &str = "connector_used_this_turn";
 
 /// Handles the specified tool call and dispatches the appropriate MCP tool-call
 /// item lifecycle events to the `Session`.
@@ -340,8 +341,14 @@ async fn handle_approved_mcp_tool_call(
     };
     let result = async {
         let rewritten_arguments = rewrite?;
-        let request_meta =
-            build_mcp_tool_call_request_meta(turn_context, &server, call_id, metadata);
+        let connector_used_this_turn = same_turn_connector_used(sess).await;
+        let request_meta = build_mcp_tool_call_request_meta(
+            turn_context,
+            &server,
+            call_id,
+            metadata,
+            connector_used_this_turn,
+        );
         let result = execute_mcp_tool_call(
             sess,
             turn_context,
@@ -1033,21 +1040,35 @@ async fn custom_mcp_tool_approval_mode(
         .unwrap_or_default()
 }
 
+async fn same_turn_connector_used(sess: &Session) -> bool {
+    sess.get_connector_selection()
+        .await
+        .iter()
+        .any(|connector_id| !connector_id.is_empty())
+}
+
 fn build_mcp_tool_call_request_meta(
     turn_context: &TurnContext,
     server: &str,
     call_id: &str,
     metadata: Option<&McpToolApprovalMetadata>,
+    connector_used_this_turn: bool,
 ) -> Option<serde_json::Value> {
     let mut request_meta = serde_json::Map::new();
 
-    if let Some(turn_metadata) = turn_context
+    if let Some(mut turn_metadata) = turn_context
         .turn_metadata_state
         .current_meta_value_for_mcp_request(McpTurnMetadataContext {
             model: turn_context.model_info.slug.as_str(),
             reasoning_effort: turn_context.effective_reasoning_effort(),
         })
     {
+        if connector_used_this_turn && let Some(turn_metadata) = turn_metadata.as_object_mut() {
+            turn_metadata.insert(
+                CONNECTOR_USED_THIS_TURN_METADATA_KEY.to_string(),
+                serde_json::Value::String("true".to_string()),
+            );
+        }
         request_meta.insert(
             crate::X_CODEX_TURN_METADATA_HEADER.to_string(),
             turn_metadata,
