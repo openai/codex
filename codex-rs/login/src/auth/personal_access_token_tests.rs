@@ -18,18 +18,6 @@ fn response(email: Option<&str>) -> serde_json::Value {
     })
 }
 
-#[test]
-fn access_token_classifier_treats_at_prefix_as_personal_access_token() {
-    assert!(matches!(
-        classify_codex_access_token("at-example"),
-        CodexAccessToken::PersonalAccessToken("at-example")
-    ));
-    assert!(matches!(
-        classify_codex_access_token("header.payload.signature"),
-        CodexAccessToken::AgentIdentityJwt("header.payload.signature")
-    ));
-}
-
 #[tokio::test]
 async fn hydrate_sends_bearer_token_and_preserves_metadata() {
     let server = MockServer::start().await;

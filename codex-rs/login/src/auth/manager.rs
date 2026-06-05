@@ -24,9 +24,9 @@ use codex_app_server_protocol::AuthMode as ApiAuthMode;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::ModelProviderAuthInfo;
 
+use super::access_token::CodexAccessToken;
+use super::access_token::classify_codex_access_token;
 use super::external_bearer::BearerTokenRefresher;
-use super::personal_access_token::CodexAccessToken;
-use super::personal_access_token::classify_codex_access_token;
 use super::revoke::revoke_auth_tokens;
 pub use crate::auth::agent_identity::AgentIdentityAuth;
 pub use crate::auth::personal_access_token::PersonalAccessTokenAuth;
@@ -267,7 +267,6 @@ impl CodexAuth {
             codex_home,
             /*enable_codex_api_key_env*/ false,
             auth_credentials_store_mode,
-            /*forced_chatgpt_workspace_id*/ None,
             chatgpt_base_url,
         )
         .await
@@ -319,10 +318,7 @@ impl CodexAuth {
     }
 
     pub fn is_chatgpt_auth(&self) -> bool {
-        matches!(
-            self,
-            Self::Chatgpt(_) | Self::ChatgptAuthTokens(_) | Self::PersonalAccessToken(_)
-        )
+        self.api_auth_mode().has_chatgpt_account()
     }
 
     pub fn uses_codex_backend(&self) -> bool {
@@ -602,19 +598,11 @@ pub async fn login_with_access_token(
     codex_home: &Path,
     access_token: &str,
     auth_credentials_store_mode: AuthCredentialsStoreMode,
-    forced_chatgpt_workspace_id: Option<&[String]>,
     chatgpt_base_url: Option<&str>,
 ) -> std::io::Result<()> {
     let auth_dot_json = match classify_codex_access_token(access_token) {
         CodexAccessToken::PersonalAccessToken(access_token) => {
-            let auth = PersonalAccessTokenAuth::load(access_token).await?;
-            crate::server::ensure_workspace_account_allowed(
-                forced_chatgpt_workspace_id,
-                auth.account_id(),
-            )
-            .map_err(|message| {
-                std::io::Error::new(std::io::ErrorKind::PermissionDenied, message)
-            })?;
+            PersonalAccessTokenAuth::load(access_token).await?;
             AuthDotJson {
                 // Infer PAT auth from the credential field so older Codex builds can still
                 // deserialize auth.json after a rollback.
@@ -701,7 +689,6 @@ pub async fn enforce_login_restrictions(config: &AuthConfig) -> std::io::Result<
         &config.codex_home,
         /*enable_codex_api_key_env*/ true,
         config.auth_credentials_store_mode,
-        /*forced_chatgpt_workspace_id*/ None,
         config.chatgpt_base_url.as_deref(),
     )
     .await?
@@ -740,10 +727,8 @@ pub async fn enforce_login_restrictions(config: &AuthConfig) -> std::io::Result<
 
     if let Some(expected_account_ids) = config.forced_chatgpt_workspace_id.as_deref() {
         let chatgpt_account_id = match &auth {
-            CodexAuth::ApiKey(_) => return Ok(()),
-            CodexAuth::AgentIdentity(_) | CodexAuth::PersonalAccessToken(_) => {
-                auth.get_account_id()
-            }
+            CodexAuth::ApiKey(_) | CodexAuth::PersonalAccessToken(_) => return Ok(()),
+            CodexAuth::AgentIdentity(_) => auth.get_account_id(),
             CodexAuth::Chatgpt(_) | CodexAuth::ChatgptAuthTokens(_) => {
                 let token_data = match auth.get_token_data() {
                     Ok(data) => data,
@@ -819,7 +804,6 @@ async fn load_auth(
     codex_home: &Path,
     enable_codex_api_key_env: bool,
     auth_credentials_store_mode: AuthCredentialsStoreMode,
-    forced_chatgpt_workspace_id: Option<&[String]>,
     chatgpt_base_url: Option<&str>,
 ) -> std::io::Result<Option<CodexAuth>> {
     // API key via env var takes precedence over any other auth method.
@@ -845,30 +829,18 @@ async fn load_auth(
     }
 
     if let Some(access_token) = read_codex_access_token_from_env() {
-        let auth = match classify_codex_access_token(&access_token) {
+        return match classify_codex_access_token(&access_token) {
             CodexAccessToken::PersonalAccessToken(access_token) => {
-                CodexAuth::from_personal_access_token(access_token).await?
+                CodexAuth::from_personal_access_token(access_token)
+                    .await
+                    .map(Some)
             }
             CodexAccessToken::AgentIdentityJwt(jwt) => {
-                CodexAuth::from_agent_identity_jwt(jwt, chatgpt_base_url).await?
+                CodexAuth::from_agent_identity_jwt(jwt, chatgpt_base_url)
+                    .await
+                    .map(Some)
             }
         };
-        if let Some(expected_workspace_ids) = forced_chatgpt_workspace_id {
-            let account_id = auth.get_account_id().ok_or_else(|| {
-                std::io::Error::new(
-                    std::io::ErrorKind::PermissionDenied,
-                    "Login is restricted to a specific workspace, but the access token did not include a workspace identifier.",
-                )
-            })?;
-            crate::server::ensure_workspace_account_allowed(
-                Some(expected_workspace_ids),
-                &account_id,
-            )
-            .map_err(|message| {
-                std::io::Error::new(std::io::ErrorKind::PermissionDenied, message)
-            })?;
-        }
-        return Ok(Some(auth));
     }
 
     // If the caller explicitly requested ephemeral auth, there is no persisted fallback.
@@ -1434,28 +1406,10 @@ impl AuthManager {
         auth_credentials_store_mode: AuthCredentialsStoreMode,
         chatgpt_base_url: Option<String>,
     ) -> Self {
-        Self::new_with_workspace_restriction(
-            codex_home,
-            enable_codex_api_key_env,
-            auth_credentials_store_mode,
-            /*forced_chatgpt_workspace_id*/ None,
-            chatgpt_base_url,
-        )
-        .await
-    }
-
-    async fn new_with_workspace_restriction(
-        codex_home: PathBuf,
-        enable_codex_api_key_env: bool,
-        auth_credentials_store_mode: AuthCredentialsStoreMode,
-        forced_chatgpt_workspace_id: Option<Vec<String>>,
-        chatgpt_base_url: Option<String>,
-    ) -> Self {
         let managed_auth = load_auth(
             &codex_home,
             enable_codex_api_key_env,
             auth_credentials_store_mode,
-            forced_chatgpt_workspace_id.as_deref(),
             chatgpt_base_url.as_deref(),
         )
         .await
@@ -1471,7 +1425,7 @@ impl AuthManager {
             auth_change_tx,
             enable_codex_api_key_env,
             auth_credentials_store_mode,
-            forced_chatgpt_workspace_id: RwLock::new(forced_chatgpt_workspace_id),
+            forced_chatgpt_workspace_id: RwLock::new(None),
             chatgpt_base_url,
             refresh_lock: Semaphore::new(/*permits*/ 1),
             external_auth: RwLock::new(None),
@@ -1670,12 +1624,10 @@ impl AuthManager {
     }
 
     async fn load_auth_from_storage(&self) -> Option<CodexAuth> {
-        let forced_chatgpt_workspace_id = self.forced_chatgpt_workspace_id();
         load_auth(
             &self.codex_home,
             self.enable_codex_api_key_env,
             self.auth_credentials_store_mode,
-            forced_chatgpt_workspace_id.as_deref(),
             self.chatgpt_base_url.as_deref(),
         )
         .await
@@ -1767,16 +1719,15 @@ impl AuthManager {
         config: &impl AuthManagerConfig,
         enable_codex_api_key_env: bool,
     ) -> Arc<Self> {
-        Arc::new(
-            Self::new_with_workspace_restriction(
-                config.codex_home(),
-                enable_codex_api_key_env,
-                config.cli_auth_credentials_store_mode(),
-                config.forced_chatgpt_workspace_id(),
-                Some(config.chatgpt_base_url()),
-            )
-            .await,
+        let auth_manager = Self::shared(
+            config.codex_home(),
+            enable_codex_api_key_env,
+            config.cli_auth_credentials_store_mode(),
+            Some(config.chatgpt_base_url()),
         )
+        .await;
+        auth_manager.set_forced_chatgpt_workspace_id(config.forced_chatgpt_workspace_id());
+        auth_manager
     }
 
     pub fn unauthorized_recovery(self: &Arc<Self>) -> UnauthorizedRecovery {

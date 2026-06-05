@@ -207,7 +207,6 @@ pub async fn run_login_with_access_token(
         &config.codex_home,
         &access_token,
         config.cli_auth_credentials_store_mode,
-        config.forced_chatgpt_workspace_id.as_deref(),
         Some(&config.chatgpt_base_url),
     )
     .await

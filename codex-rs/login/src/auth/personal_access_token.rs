@@ -9,7 +9,6 @@ use crate::default_client::create_client;
 
 const PROD_AUTHAPI_BASE_URL: &str = "https://auth.openai.com/api/accounts";
 const CODEX_AUTHAPI_BASE_URL_ENV_VAR: &str = "CODEX_AUTHAPI_BASE_URL";
-const PERSONAL_ACCESS_TOKEN_PREFIX: &str = "at-";
 const WHOAMI_PATH: &str = "/v1/user-auth-credential/whoami";
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
@@ -68,19 +67,6 @@ impl PersonalAccessTokenAuth {
 
     pub fn is_fedramp_account(&self) -> bool {
         self.metadata.chatgpt_account_is_fedramp
-    }
-}
-
-pub(super) enum CodexAccessToken<'a> {
-    PersonalAccessToken(&'a str),
-    AgentIdentityJwt(&'a str),
-}
-
-pub(super) fn classify_codex_access_token(access_token: &str) -> CodexAccessToken<'_> {
-    if access_token.starts_with(PERSONAL_ACCESS_TOKEN_PREFIX) {
-        CodexAccessToken::PersonalAccessToken(access_token)
-    } else {
-        CodexAccessToken::AgentIdentityJwt(access_token)
     }
 }
 

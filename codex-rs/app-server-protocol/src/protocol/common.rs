@@ -43,6 +43,16 @@ pub enum AuthMode {
     PersonalAccessToken,
 }
 
+impl AuthMode {
+    /// Returns whether this mode represents an authenticated human ChatGPT account.
+    pub fn has_chatgpt_account(self) -> bool {
+        match self {
+            Self::Chatgpt | Self::ChatgptAuthTokens | Self::PersonalAccessToken => true,
+            Self::ApiKey | Self::AgentIdentity => false,
+        }
+    }
+}
+
 macro_rules! experimental_reason_expr {
     // If a request variant is explicitly marked experimental, that reason wins.
     (variant $variant:ident, #[experimental($reason:expr)] $params:ident $(, $inspect_params:tt)?) => {

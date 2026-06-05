@@ -328,14 +328,9 @@ impl OpenAiModelsManager {
                 .iter()
                 .any(|model| model.visibility == ModelVisibility::List)
             && self.auth_manager.as_ref().is_some_and(|auth_manager| {
-                matches!(
-                    auth_manager.auth_mode(),
-                    Some(
-                        AuthMode::Chatgpt
-                            | AuthMode::ChatgptAuthTokens
-                            | AuthMode::PersonalAccessToken
-                    )
-                )
+                auth_manager
+                    .auth_mode()
+                    .is_some_and(AuthMode::has_chatgpt_account)
             });
         if should_use_remote_models_only {
             *self.remote_models.write().await = models;
