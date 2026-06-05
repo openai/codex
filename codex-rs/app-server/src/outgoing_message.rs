@@ -555,16 +555,6 @@ impl OutgoingMessageSender {
             .await;
     }
 
-    pub(crate) fn try_send_server_notification(&self, notification: ServerNotification) {
-        tracing::trace!("app-server event: {notification}");
-        let outgoing_message = OutgoingMessage::AppServerNotification(notification);
-        if let Err(err) = self.sender.try_send(OutgoingEnvelope::Broadcast {
-            message: outgoing_message,
-        }) {
-            warn!("failed to send server notification to client without waiting: {err:?}");
-        }
-    }
-
     pub(crate) async fn send_server_notification_to_connections(
         &self,
         connection_ids: &[ConnectionId],
