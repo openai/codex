@@ -48,6 +48,14 @@ fn detects_internal_model_context_fragment() {
 }
 
 #[test]
+fn detects_legacy_goal_context_fragment() {
+    assert!(is_contextual_user_fragment(&ContentItem::InputText {
+        text: "<goal_context>\nContinue working toward the active thread goal.\n</goal_context>"
+            .to_string(),
+    }));
+}
+
+#[test]
 fn does_not_hide_arbitrary_context_tags() {
     assert!(!is_contextual_user_fragment(&ContentItem::InputText {
         text: "<project_context>\nbody\n</project_context>".to_string(),
