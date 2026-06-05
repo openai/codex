@@ -153,6 +153,11 @@ async fn app_server_mcp_startup_failure_renders_warning_history() {
         "alpha",
         "MCP client for `alpha` failed to start: handshake failed",
     );
+    notify_mcp_status_error(
+        &mut chat,
+        "alpha",
+        "MCP client for `alpha` failed to start: handshake failed",
+    );
 
     let failure_cells = drain_insert_history(&mut rx);
     let failure_text = failure_cells

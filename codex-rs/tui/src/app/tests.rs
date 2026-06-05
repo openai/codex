@@ -3436,6 +3436,93 @@ async fn primary_thread_ignores_child_mcp_startup_notifications() {
 }
 
 #[tokio::test]
+async fn active_side_thread_renders_live_mcp_startup_notifications() {
+    let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+    while app_event_rx.try_recv().is_ok() {}
+    let sentry_config = toml::from_str::<toml::Value>("command = 'true'")
+        .expect("test MCP config should parse")
+        .try_into()
+        .expect("test MCP config should deserialize");
+    app.config
+        .mcp_servers
+        .set(std::collections::HashMap::from([(
+            "sentry".to_string(),
+            sentry_config,
+        )]))
+        .expect("test MCP servers should accept any configuration");
+    let app_server = crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+        .await
+        .expect("embedded app server");
+    let parent_thread_id = ThreadId::new();
+    let side_thread_id = ThreadId::new();
+    app.primary_thread_id = Some(parent_thread_id);
+    app.side_threads
+        .insert(side_thread_id, SideThreadState::new(parent_thread_id));
+    app.ensure_thread_channel(side_thread_id);
+    app.activate_thread_channel(side_thread_id).await;
+    app.replay_thread_snapshot(
+        ThreadEventSnapshot {
+            session: Some(test_thread_session(
+                side_thread_id,
+                test_path_buf("/tmp/side"),
+            )),
+            turns: Vec::new(),
+            events: Vec::new(),
+            input_state: None,
+        },
+        /*resume_restored_queue*/ false,
+    );
+    app.sync_side_thread_ui();
+
+    for status in [
+        McpServerStartupState::Starting,
+        McpServerStartupState::Failed,
+    ] {
+        app.handle_app_server_event(
+            &app_server,
+            codex_app_server_client::AppServerEvent::ServerNotification(
+                ServerNotification::McpServerStatusUpdated(McpServerStatusUpdatedNotification {
+                    thread_id: side_thread_id.to_string(),
+                    name: "sentry".to_string(),
+                    status,
+                    error: matches!(status, McpServerStartupState::Failed)
+                        .then(|| "sentry is not logged in".to_string()),
+                }),
+            ),
+        )
+        .await;
+    }
+
+    let mut active_thread_events = Vec::new();
+    let active_thread_rx = app
+        .active_thread_rx
+        .as_mut()
+        .expect("side thread receiver should be active");
+    while let Ok(event) = active_thread_rx.try_recv() {
+        active_thread_events.push(event);
+    }
+    for event in active_thread_events {
+        app.handle_thread_event_now(event);
+    }
+
+    let mut rendered_cells = Vec::new();
+    while let Ok(event) = app_event_rx.try_recv() {
+        if let AppEvent::InsertHistoryCell(cell) = event {
+            rendered_cells.push(lines_to_single_string(&cell.display_lines(/*width*/ 120)));
+        }
+    }
+    let rendered = rendered_cells.join("\n");
+    assert!(app.chat_widget.side_conversation_active());
+    assert_eq!(rendered.matches("sentry is not logged in").count(), 1);
+    assert_eq!(
+        rendered
+            .matches("MCP startup incomplete (failed: sentry)")
+            .count(),
+        1
+    );
+}
+
+#[tokio::test]
 async fn side_restore_user_message_puts_inline_question_back_in_composer() {
     let mut app = make_test_app().await;
     let user_message = crate::chatwidget::UserMessage::from("side question");
