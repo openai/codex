@@ -51,7 +51,7 @@ use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStartedNotification;
 use codex_arg0::Arg0DispatchPaths;
-use codex_cloud_config::cloud_config_bundle_loader_for_storage;
+use codex_cloud_config::cloud_config_bundle_loader_for_storage_with_auth_route_config;
 use codex_config::CloudConfigBundleLoader;
 use codex_config::ConfigLoadError;
 use codex_config::ConfigLoadOptions;
@@ -64,6 +64,7 @@ use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::find_codex_home;
 use codex_core::config::load_config_as_toml_with_cli_and_load_options;
+use codex_core::config::resolve_bootstrap_system_proxy_config;
 use codex_core::config::resolve_oss_provider;
 use codex_core::config::resolve_profile_v2_config_path;
 use codex_core::find_thread_meta_by_name_str;
@@ -72,9 +73,11 @@ use codex_core::path_utils;
 use codex_feedback::CodexFeedback;
 use codex_git_utils::get_git_repo_root;
 use codex_login::AuthConfig;
+use codex_login::auth_route_config_from_system_proxy_config;
+use codex_login::bootstrap_auth_route_config_from_system_proxy_config;
 use codex_login::default_client::set_default_client_residency_requirement;
 use codex_login::default_client::set_default_originator;
-use codex_login::enforce_login_restrictions;
+use codex_login::enforce_login_restrictions_with_auth_route_config;
 use codex_model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
 use codex_model_provider_info::OLLAMA_OSS_PROVIDER_ID;
 use codex_otel::set_parent_from_context;
@@ -345,13 +348,17 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         .chatgpt_base_url
         .clone()
         .unwrap_or_else(|| "https://chatgpt.com/backend-api/".to_string());
-    let cloud_config_bundle = cloud_config_bundle_loader_for_storage(
+    let system_proxy_config = resolve_bootstrap_system_proxy_config(&bootstrap_config_toml);
+    let auth_route_config =
+        bootstrap_auth_route_config_from_system_proxy_config(system_proxy_config.as_ref());
+    let cloud_config_bundle = cloud_config_bundle_loader_for_storage_with_auth_route_config(
         codex_home.to_path_buf(),
         /*enable_codex_api_key_env*/ false,
         bootstrap_config_toml
             .cli_auth_credentials_store
             .unwrap_or_default(),
         chatgpt_base_url,
+        auth_route_config,
     )
     .await;
     let run_cli_overrides = cli_kv_overrides.clone();
@@ -463,13 +470,20 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
 
     set_default_client_residency_requirement(config.enforce_residency.value());
 
-    if let Err(err) = enforce_login_restrictions(&AuthConfig {
-        codex_home: config.codex_home.to_path_buf(),
-        auth_credentials_store_mode: config.cli_auth_credentials_store_mode,
-        forced_login_method: config.forced_login_method,
-        forced_chatgpt_workspace_id: config.forced_chatgpt_workspace_id.clone(),
-        chatgpt_base_url: Some(config.chatgpt_base_url.clone()),
-    })
+    let auth_route_config = config
+        .system_proxy
+        .as_ref()
+        .map(auth_route_config_from_system_proxy_config);
+    if let Err(err) = enforce_login_restrictions_with_auth_route_config(
+        &AuthConfig {
+            codex_home: config.codex_home.to_path_buf(),
+            auth_credentials_store_mode: config.cli_auth_credentials_store_mode,
+            forced_login_method: config.forced_login_method,
+            forced_chatgpt_workspace_id: config.forced_chatgpt_workspace_id.clone(),
+            chatgpt_base_url: Some(config.chatgpt_base_url.clone()),
+        },
+        auth_route_config.as_ref(),
+    )
     .await
     {
         eprintln!("{err}");

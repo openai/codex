@@ -10,12 +10,13 @@
 use codex_app_server_protocol::AuthMode;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_core::config::Config;
+use codex_login::AuthManager;
 use codex_login::CLIENT_ID;
 use codex_login::CodexAuth;
 use codex_login::ServerOptions;
-use codex_login::login_with_access_token;
+use codex_login::auth_route_config_from_system_proxy_config;
+use codex_login::login_with_access_token_with_auth_route_config;
 use codex_login::login_with_api_key;
-use codex_login::logout_with_revoke;
 use codex_login::run_device_code_login;
 use codex_login::run_login_server;
 use codex_protocol::config_types::ForcedLoginMethod;
@@ -113,17 +114,34 @@ fn print_login_server_start(actual_port: u16, auth_url: &str) {
     );
 }
 
+pub fn login_server_options_from_config(config: &Config) -> ServerOptions {
+    ServerOptions::new(
+        config.codex_home.to_path_buf(),
+        CLIENT_ID.to_string(),
+        config.forced_chatgpt_workspace_id.clone(),
+        config.cli_auth_credentials_store_mode,
+    )
+    .with_auth_route_config(
+        config
+            .system_proxy
+            .as_ref()
+            .map(auth_route_config_from_system_proxy_config),
+    )
+}
+
 pub async fn login_with_chatgpt(
     codex_home: PathBuf,
     forced_chatgpt_workspace_id: Option<Vec<String>>,
     cli_auth_credentials_store_mode: AuthCredentialsStoreMode,
+    system_proxy: Option<&codex_config::types::SystemProxyFeatureConfigToml>,
 ) -> std::io::Result<()> {
     let opts = ServerOptions::new(
         codex_home,
         CLIENT_ID.to_string(),
         forced_chatgpt_workspace_id,
         cli_auth_credentials_store_mode,
-    );
+    )
+    .with_auth_route_config(system_proxy.map(auth_route_config_from_system_proxy_config));
     let server = run_login_server(opts)?;
 
     print_login_server_start(server.actual_port, &server.auth_url);
@@ -147,6 +165,7 @@ pub async fn run_login_with_chatgpt(cli_config_overrides: CliConfigOverrides) ->
         config.codex_home.to_path_buf(),
         forced_chatgpt_workspace_id,
         config.cli_auth_credentials_store_mode,
+        config.system_proxy.as_ref(),
     )
     .await
     {
@@ -195,6 +214,7 @@ pub async fn run_login_with_access_token(
     access_token: String,
 ) -> ! {
     let config = load_config_or_exit(cli_config_overrides).await;
+    let login_server_opts = login_server_options_from_config(&config);
     let _login_log_guard = init_login_file_logging(&config);
     tracing::info!("starting access token login flow");
 
@@ -203,11 +223,12 @@ pub async fn run_login_with_access_token(
         std::process::exit(1);
     }
 
-    match login_with_access_token(
+    match login_with_access_token_with_auth_route_config(
         &config.codex_home,
         &access_token,
         config.cli_auth_credentials_store_mode,
         Some(&config.chatgpt_base_url),
+        login_server_opts.auth_route_config.as_ref(),
     )
     .await
     {
@@ -282,6 +303,12 @@ pub async fn run_login_with_device_code(
         client_id.unwrap_or(CLIENT_ID.to_string()),
         forced_chatgpt_workspace_id,
         config.cli_auth_credentials_store_mode,
+    )
+    .with_auth_route_config(
+        config
+            .system_proxy
+            .as_ref()
+            .map(auth_route_config_from_system_proxy_config),
     );
     if let Some(iss) = issuer_base_url {
         opts.issuer = iss;
@@ -321,6 +348,12 @@ pub async fn run_login_with_device_code_fallback_to_browser(
         client_id.unwrap_or(CLIENT_ID.to_string()),
         forced_chatgpt_workspace_id,
         config.cli_auth_credentials_store_mode,
+    )
+    .with_auth_route_config(
+        config
+            .system_proxy
+            .as_ref()
+            .map(auth_route_config_from_system_proxy_config),
     );
     if let Some(iss) = issuer_base_url {
         opts.issuer = iss;
@@ -364,11 +397,13 @@ pub async fn run_login_with_device_code_fallback_to_browser(
 
 pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
     let config = load_config_or_exit(cli_config_overrides).await;
+    let login_server_opts = login_server_options_from_config(&config);
 
-    match CodexAuth::from_auth_storage(
+    match CodexAuth::from_auth_storage_with_auth_route_config(
         &config.codex_home,
         config.cli_auth_credentials_store_mode,
         Some(&config.chatgpt_base_url),
+        login_server_opts.auth_route_config.as_ref(),
     )
     .await
     {
@@ -409,8 +444,10 @@ pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
 
 pub async fn run_logout(cli_config_overrides: CliConfigOverrides) -> ! {
     let config = load_config_or_exit(cli_config_overrides).await;
+    let auth_manager =
+        AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false).await;
 
-    match logout_with_revoke(&config.codex_home, config.cli_auth_credentials_store_mode).await {
+    match auth_manager.logout_with_revoke().await {
         Ok(true) => {
             eprintln!("Successfully logged out");
             std::process::exit(0);

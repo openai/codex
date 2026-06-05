@@ -13,8 +13,14 @@ use codex_features::Feature;
 use codex_features::FeatureConfigSource;
 use codex_features::FeatureOverrides;
 use codex_features::Features;
+use codex_features::SystemProxyFeatureModeToml;
 use codex_features::canonical_feature_for_key;
 use codex_features::feature_for_key;
+
+const SYSTEM_PROXY_MODE_AUTO_REQUIREMENT: &str = "system_proxy_mode_auto";
+const SYSTEM_PROXY_MODE_ENV_REQUIREMENT: &str = "system_proxy_mode_env";
+const SYSTEM_PROXY_MODE_SYSTEM_REQUIREMENT: &str = "system_proxy_mode_system";
+const SYSTEM_PROXY_MODE_DIRECT_REQUIREMENT: &str = "system_proxy_mode_direct";
 
 /// Wrapper around [`Features`] which enforces constraints defined in
 /// `FeatureRequirementsToml` and provides normalization to ensure constraints
@@ -72,7 +78,11 @@ impl ManagedFeatures {
                 value: feature_requirements,
                 source,
             }) => (
-                parse_feature_requirements(feature_requirements, &source, startup_warnings),
+                parse_feature_requirements_with_mode_gate(
+                    &feature_requirements,
+                    &source,
+                    startup_warnings,
+                )?,
                 Some(source),
             ),
             None => (BTreeMap::new(), None),
@@ -203,24 +213,119 @@ fn feature_requirements_display(feature_requirements: &BTreeMap<Feature, bool>) 
     format!("[{}]", values.join(", "))
 }
 
+struct SystemProxyModeRequirement {
+    key: String,
+    mode: SystemProxyFeatureModeToml,
+}
+
+pub(crate) fn system_proxy_mode_requirement(
+    feature_requirements: Option<&Sourced<FeatureRequirementsToml>>,
+) -> std::io::Result<Option<SystemProxyFeatureModeToml>> {
+    let Some(Sourced {
+        value: feature_requirements,
+        source,
+    }) = feature_requirements
+    else {
+        return Ok(None);
+    };
+    parse_system_proxy_mode_requirement(feature_requirements, source)
+        .map(|requirement| requirement.map(|requirement| requirement.mode))
+}
+
+fn parse_feature_requirements_with_mode_gate(
+    feature_requirements: &FeatureRequirementsToml,
+    source: &RequirementSource,
+    startup_warnings: Option<&mut Vec<String>>,
+) -> std::io::Result<BTreeMap<Feature, bool>> {
+    let system_proxy_mode = parse_system_proxy_mode_requirement(feature_requirements, source)?;
+    let mut pinned_features =
+        parse_feature_requirements(feature_requirements, source, startup_warnings);
+    if let Some(requirement) = system_proxy_mode {
+        if pinned_features.get(&Feature::SystemProxy) == Some(&false) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                ConstraintError::InvalidValue {
+                    field_name: "features",
+                    candidate: format!("system_proxy=false, {}=true", requirement.key),
+                    allowed:
+                        "system_proxy=true or omit system_proxy when selecting a system proxy mode"
+                            .to_string(),
+                    requirement_source: source.clone(),
+                },
+            ));
+        }
+        pinned_features.insert(Feature::SystemProxy, true);
+    }
+    Ok(pinned_features)
+}
+
+fn parse_system_proxy_mode_requirement(
+    feature_requirements: &FeatureRequirementsToml,
+    source: &RequirementSource,
+) -> std::io::Result<Option<SystemProxyModeRequirement>> {
+    let mut selected = None;
+    for (key, enabled) in &feature_requirements.entries {
+        let Some(mode) = system_proxy_mode_requirement_for_key(key) else {
+            continue;
+        };
+        if !*enabled {
+            continue;
+        }
+        if let Some((existing_key, _)) = selected {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                ConstraintError::InvalidValue {
+                    field_name: "features",
+                    candidate: format!("{existing_key}=true, {key}=true"),
+                    allowed: format!(
+                        "at most one of {SYSTEM_PROXY_MODE_AUTO_REQUIREMENT}, {SYSTEM_PROXY_MODE_ENV_REQUIREMENT}, {SYSTEM_PROXY_MODE_SYSTEM_REQUIREMENT}, {SYSTEM_PROXY_MODE_DIRECT_REQUIREMENT}"
+                    ),
+                    requirement_source: source.clone(),
+                },
+            ));
+        }
+        selected = Some((key.as_str(), mode));
+    }
+
+    Ok(selected.map(|(key, mode)| SystemProxyModeRequirement {
+        key: key.to_string(),
+        mode,
+    }))
+}
+
+fn system_proxy_mode_requirement_for_key(key: &str) -> Option<SystemProxyFeatureModeToml> {
+    match key {
+        SYSTEM_PROXY_MODE_AUTO_REQUIREMENT => Some(SystemProxyFeatureModeToml::Auto),
+        SYSTEM_PROXY_MODE_ENV_REQUIREMENT => Some(SystemProxyFeatureModeToml::Env),
+        SYSTEM_PROXY_MODE_SYSTEM_REQUIREMENT => Some(SystemProxyFeatureModeToml::System),
+        SYSTEM_PROXY_MODE_DIRECT_REQUIREMENT => Some(SystemProxyFeatureModeToml::Direct),
+        _ => None,
+    }
+}
+
 fn parse_feature_requirements(
-    feature_requirements: FeatureRequirementsToml,
+    feature_requirements: &FeatureRequirementsToml,
     source: &RequirementSource,
     mut startup_warnings: Option<&mut Vec<String>>,
 ) -> BTreeMap<Feature, bool> {
     let mut pinned_features = BTreeMap::new();
-    for (key, enabled) in feature_requirements.entries {
+    for (key, enabled) in &feature_requirements.entries {
+        let enabled = *enabled;
         if key == "auto_review" {
             pinned_features.insert(Feature::GuardianApproval, enabled);
             continue;
         }
 
-        if let Some(feature) = canonical_feature_for_key(&key) {
+        if system_proxy_mode_requirement_for_key(key).is_some() {
+            continue;
+        }
+
+        if let Some(feature) = canonical_feature_for_key(key) {
             pinned_features.insert(feature, enabled);
             continue;
         }
 
-        if let Some(feature) = feature_for_key(&key) {
+        if let Some(feature) = feature_for_key(key) {
             push_feature_requirement_warning(
                 &mut startup_warnings,
                 format!(
@@ -283,11 +388,11 @@ pub(crate) fn validate_explicit_feature_settings_in_config_toml(
         return Ok(());
     };
 
-    let pinned_features = parse_feature_requirements(
-        feature_requirements.clone(),
+    let pinned_features = parse_feature_requirements_with_mode_gate(
+        feature_requirements,
         source,
         /*startup_warnings*/ None,
-    );
+    )?;
     if pinned_features.is_empty() {
         return Ok(());
     }

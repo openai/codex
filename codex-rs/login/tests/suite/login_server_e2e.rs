@@ -121,6 +121,7 @@ async fn end_to_end_login_flow_persists_auth_json() -> Result<()> {
     let opts = ServerOptions {
         codex_home: server_home,
         cli_auth_credentials_store_mode: AuthCredentialsStoreMode::File,
+        auth_route_config: None,
         client_id: codex_login::CLIENT_ID.to_string(),
         issuer,
         port: 0,
@@ -183,6 +184,7 @@ async fn creates_missing_codex_home_dir() -> Result<()> {
     let opts = ServerOptions {
         codex_home: server_home,
         cli_auth_credentials_store_mode: AuthCredentialsStoreMode::File,
+        auth_route_config: None,
         client_id: codex_login::CLIENT_ID.to_string(),
         issuer,
         port: 0,
@@ -223,6 +225,7 @@ async fn login_server_includes_forced_workspaces_as_one_query_param() -> Result<
     let opts = ServerOptions {
         codex_home,
         cli_auth_credentials_store_mode: AuthCredentialsStoreMode::File,
+        auth_route_config: None,
         client_id: codex_login::CLIENT_ID.to_string(),
         issuer,
         port: 0,
@@ -264,6 +267,7 @@ async fn forced_chatgpt_workspace_id_mismatch_blocks_login() -> Result<()> {
     let opts = ServerOptions {
         codex_home: codex_home.clone(),
         cli_auth_credentials_store_mode: AuthCredentialsStoreMode::File,
+        auth_route_config: None,
         client_id: codex_login::CLIENT_ID.to_string(),
         issuer,
         port: 0,
@@ -324,6 +328,7 @@ async fn oauth_access_denied_missing_entitlement_blocks_login_with_clear_error()
     let opts = ServerOptions {
         codex_home: codex_home.clone(),
         cli_auth_credentials_store_mode: AuthCredentialsStoreMode::File,
+        auth_route_config: None,
         client_id: codex_login::CLIENT_ID.to_string(),
         issuer,
         port: 0,
@@ -392,6 +397,7 @@ async fn oauth_access_denied_unknown_reason_uses_generic_error_page() -> Result<
     let opts = ServerOptions {
         codex_home: codex_home.clone(),
         cli_auth_credentials_store_mode: AuthCredentialsStoreMode::File,
+        auth_route_config: None,
         client_id: codex_login::CLIENT_ID.to_string(),
         issuer,
         port: 0,
@@ -537,6 +543,7 @@ async fn cancels_previous_login_server_when_port_is_in_use() -> Result<()> {
     let first_opts = ServerOptions {
         codex_home: first_codex_home,
         cli_auth_credentials_store_mode: AuthCredentialsStoreMode::File,
+        auth_route_config: None,
         client_id: codex_login::CLIENT_ID.to_string(),
         issuer: issuer.clone(),
         port: 0,
@@ -558,6 +565,7 @@ async fn cancels_previous_login_server_when_port_is_in_use() -> Result<()> {
     let second_opts = ServerOptions {
         codex_home: second_codex_home,
         cli_auth_credentials_store_mode: AuthCredentialsStoreMode::File,
+        auth_route_config: None,
         client_id: codex_login::CLIENT_ID.to_string(),
         issuer,
         port: login_port,

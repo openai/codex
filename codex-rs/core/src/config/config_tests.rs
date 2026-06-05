@@ -53,6 +53,7 @@ use codex_config::types::OtelExporterKind;
 use codex_config::types::SandboxWorkspaceWrite;
 use codex_config::types::SessionPickerViewMode;
 use codex_config::types::SkillsConfig;
+use codex_config::types::SystemProxyFeatureConfigToml;
 use codex_config::types::SystemProxyFeatureModeToml;
 use codex_config::types::ToolSuggestDisabledTool;
 use codex_config::types::ToolSuggestDiscoverableType;
@@ -9664,6 +9665,107 @@ shell_tool = false
         "{:?}",
         config.startup_warnings
     );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn system_proxy_mode_requirement_enables_and_sets_mode() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .cloud_config_bundle(
+            CloudConfigBundleFixture::loader_with_enterprise_requirement(
+                r#"
+[features]
+system_proxy_mode_system = true
+"#,
+            ),
+        )
+        .build()
+        .await?;
+
+    assert!(config.features.enabled(Feature::SystemProxy));
+    assert_eq!(
+        config.system_proxy,
+        Some(SystemProxyFeatureConfigToml {
+            enabled: Some(true),
+            mode: Some(SystemProxyFeatureModeToml::System),
+        })
+    );
+    assert!(
+        !config
+            .startup_warnings
+            .iter()
+            .any(|warning| warning.contains("system_proxy_mode_system")),
+        "{:?}",
+        config.startup_warnings
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn system_proxy_mode_requirement_overrides_configured_mode() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"
+[features.system_proxy]
+enabled = true
+mode = "env"
+"#,
+    )?;
+
+    let config = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .cloud_config_bundle(
+            CloudConfigBundleFixture::loader_with_enterprise_requirement(
+                r#"
+[features]
+system_proxy_mode_direct = true
+"#,
+            ),
+        )
+        .build()
+        .await?;
+
+    assert_eq!(
+        config.system_proxy,
+        Some(SystemProxyFeatureConfigToml {
+            enabled: Some(true),
+            mode: Some(SystemProxyFeatureModeToml::Direct),
+        })
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn system_proxy_mode_requirements_reject_multiple_modes() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let result = ConfigBuilder::without_managed_config_for_tests()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .cloud_config_bundle(
+            CloudConfigBundleFixture::loader_with_enterprise_requirement(
+                r#"
+[features]
+system_proxy_mode_auto = true
+system_proxy_mode_system = true
+"#,
+            ),
+        )
+        .build()
+        .await;
+
+    let message = result
+        .err()
+        .map(|err| err.to_string())
+        .expect("conflicting system proxy mode requirements should fail");
+    assert!(message.contains("at most one"), "{message}");
 
     Ok(())
 }

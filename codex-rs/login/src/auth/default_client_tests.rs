@@ -1,7 +1,10 @@
 use super::sanitize_user_agent;
 use super::*;
+use crate::AuthRouteConfig;
 use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
+use serial_test::serial;
+use tempfile::tempdir;
 
 #[test]
 fn test_get_codex_user_agent() {
@@ -90,6 +93,38 @@ async fn test_create_client_sets_default_headers() {
 }
 
 #[test]
+#[serial(default_client_ca_env)]
+fn auth_route_client_without_proxy_config_preserves_default_client_fallback() {
+    let temp_dir = tempdir().expect("tempdir");
+    let missing_ca_path = temp_dir.path().join("missing-ca.pem");
+    let _guard = EnvVarGuard::set(
+        "CODEX_CA_CERTIFICATE",
+        missing_ca_path
+            .to_str()
+            .expect("test CA path should be valid UTF-8"),
+    );
+
+    let no_proxy_client = create_client_for_auth_route(
+        "https://auth.openai.com/oauth/token",
+        /*auth_route_config*/ None,
+    );
+    assert!(no_proxy_client.is_ok());
+
+    let raw_no_proxy_client = build_default_reqwest_client_for_auth_route(
+        "https://auth.openai.com/oauth/token",
+        /*auth_route_config*/ None,
+    );
+    assert!(raw_no_proxy_client.is_ok());
+
+    let auth_route_config = AuthRouteConfig::direct();
+    let explicit_proxy_client = create_client_for_auth_route(
+        "https://auth.openai.com/oauth/token",
+        Some(&auth_route_config),
+    );
+    assert!(explicit_proxy_client.is_err());
+}
+
+#[test]
 fn test_invalid_suffix_is_sanitized() {
     let prefix = "codex_cli_rs/0.0.0";
     let suffix = "bad\rsuffix";
@@ -122,4 +157,35 @@ fn test_macos() {
     ))
     .unwrap();
     assert!(re.is_match(&user_agent));
+}
+
+/// Use sparingly.
+/// TODO: replace this with an injectable env var provider.
+#[cfg(test)]
+struct EnvVarGuard {
+    key: &'static str,
+    original: Option<std::ffi::OsString>,
+}
+
+#[cfg(test)]
+impl EnvVarGuard {
+    fn set(key: &'static str, value: &str) -> Self {
+        let original = std::env::var_os(key);
+        unsafe {
+            std::env::set_var(key, value);
+        }
+        Self { key, original }
+    }
+}
+
+#[cfg(test)]
+impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+        unsafe {
+            match &self.original {
+                Some(value) => std::env::set_var(self.key, value),
+                None => std::env::remove_var(self.key),
+            }
+        }
+    }
 }

@@ -44,15 +44,29 @@ pub fn normalize_base_url(input: &str) -> String {
 pub async fn load_auth_manager(chatgpt_base_url: Option<String>) -> Option<AuthManager> {
     // TODO: pass in cli overrides once cloud tasks properly support them.
     let config = Config::load_with_cli_overrides(Vec::new()).await.ok()?;
-    Some(
+    let auth_route_config = codex_login::bootstrap_auth_route_config_from_system_proxy_config(
+        config.system_proxy.as_ref(),
+    );
+    let chatgpt_base_url = chatgpt_base_url.or(Some(config.chatgpt_base_url));
+    Some(if let Some(auth_route_config) = auth_route_config {
+        // Keep the existing cloud auth path unless platform system proxy discovery is selected.
+        AuthManager::new_with_auth_route_config(
+            config.codex_home.to_path_buf(),
+            /*enable_codex_api_key_env*/ false,
+            config.cli_auth_credentials_store_mode,
+            chatgpt_base_url,
+            Some(auth_route_config),
+        )
+        .await
+    } else {
         AuthManager::new(
             config.codex_home.to_path_buf(),
             /*enable_codex_api_key_env*/ false,
             config.cli_auth_credentials_store_mode,
-            chatgpt_base_url.or(Some(config.chatgpt_base_url)),
+            chatgpt_base_url,
         )
-        .await,
-    )
+        .await
+    })
 }
 
 /// Build headers for ChatGPT-backed requests: `User-Agent`, optional `Authorization`,

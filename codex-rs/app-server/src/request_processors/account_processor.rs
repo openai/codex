@@ -335,6 +335,12 @@ impl AccountRequestProcessor {
                 config.forced_chatgpt_workspace_id.clone(),
                 config.cli_auth_credentials_store_mode,
             )
+            .with_auth_route_config(
+                config
+                    .system_proxy
+                    .as_ref()
+                    .map(codex_login::auth_route_config_from_system_proxy_config),
+            )
         };
         #[cfg(debug_assertions)]
         let opts = {

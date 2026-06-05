@@ -5,8 +5,11 @@
 //! workspace.
 
 use codex_client::BuildCustomCaTransportError;
+use codex_client::BuildRouteAwareHttpClientError;
+use codex_client::ClientRouteClass;
 use codex_client::CodexHttpClient;
 pub use codex_client::CodexRequestBuilder;
+use codex_client::build_reqwest_client_for_route;
 use codex_client::build_reqwest_client_with_custom_ca;
 use codex_client::with_chatgpt_cloudflare_cookie_store;
 use codex_terminal_detection::user_agent;
@@ -16,6 +19,8 @@ use reqwest::header::USER_AGENT;
 use std::sync::LazyLock;
 use std::sync::Mutex;
 use std::sync::RwLock;
+
+use crate::outbound_proxy::AuthRouteConfig;
 
 /// Set this to add a suffix to the User-Agent string.
 ///
@@ -220,13 +225,71 @@ pub fn build_reqwest_client() -> reqwest::Client {
 /// Callers that need a structured CA-loading failure instead of the legacy logged fallback can use
 /// this method directly.
 pub fn try_build_reqwest_client() -> Result<reqwest::Client, BuildCustomCaTransportError> {
+    build_reqwest_client_with_custom_ca(default_reqwest_client_builder())
+}
+
+fn default_reqwest_client_builder() -> reqwest::ClientBuilder {
     let mut builder = reqwest::Client::builder().default_headers(default_headers());
     if is_sandboxed() {
         builder = builder.no_proxy();
     }
-    builder = with_chatgpt_cloudflare_cookie_store(builder);
+    with_chatgpt_cloudflare_cookie_store(builder)
+}
 
-    build_reqwest_client_with_custom_ca(builder)
+pub(crate) fn build_auth_reqwest_client_with_auth_route_config(
+    endpoint: &str,
+    auth_route_config: Option<&AuthRouteConfig>,
+) -> Result<reqwest::Client, BuildRouteAwareHttpClientError> {
+    build_auth_reqwest_client_with_builder(reqwest::Client::builder(), endpoint, auth_route_config)
+}
+
+/// Builds the standard Codex reqwest client for a known auth destination.
+pub(crate) fn build_default_reqwest_client_for_auth_route(
+    endpoint: &str,
+    auth_route_config: Option<&AuthRouteConfig>,
+) -> Result<reqwest::Client, BuildRouteAwareHttpClientError> {
+    let Some(route_config) = auth_route_config.and_then(AuthRouteConfig::route_config) else {
+        return Ok(build_reqwest_client());
+    };
+
+    let builder = default_reqwest_client_builder();
+    if is_sandboxed() {
+        return build_reqwest_client_with_custom_ca(builder).map_err(Into::into);
+    }
+    build_reqwest_client_for_route(
+        builder,
+        endpoint,
+        ClientRouteClass::Auth,
+        Some(route_config),
+    )
+}
+
+pub(crate) fn create_client_for_auth_route(
+    endpoint: &str,
+    auth_route_config: Option<&AuthRouteConfig>,
+) -> Result<CodexHttpClient, BuildRouteAwareHttpClientError> {
+    if auth_route_config
+        .and_then(AuthRouteConfig::route_config)
+        .is_none()
+    {
+        return Ok(create_client());
+    }
+
+    build_default_reqwest_client_for_auth_route(endpoint, auth_route_config)
+        .map(CodexHttpClient::new)
+}
+
+fn build_auth_reqwest_client_with_builder(
+    builder: reqwest::ClientBuilder,
+    endpoint: &str,
+    auth_route_config: Option<&AuthRouteConfig>,
+) -> Result<reqwest::Client, BuildRouteAwareHttpClientError> {
+    build_reqwest_client_for_route(
+        builder,
+        endpoint,
+        ClientRouteClass::Auth,
+        auth_route_config.and_then(AuthRouteConfig::route_config),
+    )
 }
 
 pub fn default_headers() -> HeaderMap {

@@ -48,6 +48,7 @@ use codex_config::types::Notice;
 use codex_config::types::OAuthCredentialsStoreMode;
 use codex_config::types::SessionPickerViewMode;
 use codex_config::types::SystemProxyFeatureConfigToml;
+use codex_config::types::SystemProxyFeatureModeToml;
 use codex_config::types::ToolSuggestConfig;
 use codex_config::types::ToolSuggestDisabledTool;
 use codex_config::types::ToolSuggestDiscoverable;
@@ -71,6 +72,8 @@ use codex_features::NetworkProxyConfigToml;
 use codex_git_utils::resolve_root_git_project_for_trust;
 use codex_install_context::InstallContext;
 use codex_login::AuthManagerConfig;
+use codex_login::AuthRouteConfig;
+use codex_login::auth_route_config_from_system_proxy_config;
 use codex_mcp::McpConfig;
 use codex_memories_read::memory_root;
 use codex_model_provider_info::LEGACY_OLLAMA_CHAT_PROVIDER_ID;
@@ -1113,6 +1116,12 @@ impl AuthManagerConfig for Config {
 
     fn chatgpt_base_url(&self) -> String {
         self.chatgpt_base_url.clone()
+    }
+
+    fn auth_route_config(&self) -> Option<AuthRouteConfig> {
+        self.system_proxy
+            .as_ref()
+            .map(auth_route_config_from_system_proxy_config)
     }
 }
 
@@ -2430,6 +2439,7 @@ fn system_proxy_toml_config(
 fn resolved_system_proxy_config_from_features(
     cfg: &ConfigToml,
     features: &Features,
+    mode_requirement: Option<SystemProxyFeatureModeToml>,
 ) -> Option<SystemProxyFeatureConfigToml> {
     if !features.enabled(Feature::SystemProxy) {
         return None;
@@ -2437,6 +2447,9 @@ fn resolved_system_proxy_config_from_features(
     let mut config = system_proxy_toml_config(cfg.features.as_ref())
         .cloned()
         .unwrap_or_default();
+    if let Some(mode) = mode_requirement {
+        config.mode = Some(mode);
+    }
     config.enabled = Some(true);
     Some(config)
 }
@@ -2444,8 +2457,9 @@ fn resolved_system_proxy_config_from_features(
 fn resolved_system_proxy_config(
     cfg: &ConfigToml,
     features: &ManagedFeatures,
+    mode_requirement: Option<SystemProxyFeatureModeToml>,
 ) -> Option<SystemProxyFeatureConfigToml> {
-    resolved_system_proxy_config_from_features(cfg, features.get())
+    resolved_system_proxy_config_from_features(cfg, features.get(), mode_requirement)
 }
 
 /// Resolves `[features.system_proxy]` for the initial cloud-config bootstrap.
@@ -2468,7 +2482,11 @@ pub fn resolve_bootstrap_system_proxy_config(
     );
     let features =
         ManagedFeatures::from_configured(configured_features, feature_requirements.cloned())?;
-    Ok(resolved_system_proxy_config(cfg, &features))
+    Ok(resolved_system_proxy_config(
+        cfg,
+        &features,
+        /*mode_requirement*/ None,
+    ))
 }
 
 pub(crate) fn resolve_web_search_mode_for_turn(
@@ -2734,12 +2752,15 @@ impl Config {
             },
             feature_overrides,
         );
+        let system_proxy_mode_requirement =
+            managed_features::system_proxy_mode_requirement(feature_requirements.as_ref())?;
         let features = ManagedFeatures::from_configured_with_warnings(
             configured_features,
             feature_requirements,
             &mut startup_warnings,
         )?;
-        let system_proxy = resolved_system_proxy_config(&cfg, &features);
+        let system_proxy =
+            resolved_system_proxy_config(&cfg, &features, system_proxy_mode_requirement);
         let enable_network_proxy = features.enabled(Feature::NetworkProxy);
         let configured_windows_sandbox_mode = resolve_windows_sandbox_mode(&cfg);
         // Keep the configured mode separate so a requirement-constrained mode

@@ -8,6 +8,7 @@ use crate::legacy_core::config::Config;
 use crate::legacy_core::config::ConfigBuilder;
 use crate::legacy_core::config::ConfigOverrides;
 use crate::legacy_core::config::load_config_as_toml_with_cli_and_load_options;
+use crate::legacy_core::config::resolve_bootstrap_system_proxy_config;
 use crate::legacy_core::config::resolve_oss_provider;
 use crate::legacy_core::config::resolve_profile_v2_config_path;
 use crate::legacy_core::format_exec_policy_error_with_source;
@@ -38,7 +39,7 @@ use codex_app_server_protocol::ThreadListCwdFilter;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadSortKey as AppServerThreadSortKey;
 use codex_app_server_protocol::ThreadSourceKind;
-use codex_cloud_config::cloud_config_bundle_loader_for_storage;
+use codex_cloud_config::cloud_config_bundle_loader_for_storage_with_auth_route_config;
 use codex_config::CloudConfigBundleLoader;
 use codex_config::ConfigLoadError;
 use codex_config::LoaderOverrides;
@@ -46,9 +47,11 @@ use codex_config::format_config_error_with_source;
 use codex_exec_server::EnvironmentManager;
 use codex_exec_server::ExecServerRuntimePaths;
 use codex_login::AuthConfig;
+use codex_login::auth_route_config_from_system_proxy_config;
+use codex_login::bootstrap_auth_route_config_from_system_proxy_config;
 use codex_login::default_client::originator;
 use codex_login::default_client::set_default_client_residency_requirement;
-use codex_login::enforce_login_restrictions;
+use codex_login::enforce_login_restrictions_with_auth_route_config;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::AltScreenMode;
 use codex_protocol::config_types::SandboxMode;
@@ -1019,13 +1022,17 @@ pub async fn run_main(
         .chatgpt_base_url
         .clone()
         .unwrap_or_else(|| "https://chatgpt.com/backend-api/".to_string());
-    let cloud_config_bundle = cloud_config_bundle_loader_for_storage(
+    let system_proxy_config = resolve_bootstrap_system_proxy_config(&bootstrap_config_toml);
+    let auth_route_config =
+        bootstrap_auth_route_config_from_system_proxy_config(system_proxy_config.as_ref());
+    let cloud_config_bundle = cloud_config_bundle_loader_for_storage_with_auth_route_config(
         codex_home.to_path_buf(),
         /*enable_codex_api_key_env*/ false,
         bootstrap_config_toml
             .cli_auth_credentials_store
             .unwrap_or_default(),
         chatgpt_base_url,
+        auth_route_config,
     )
     .await;
 
@@ -1220,14 +1227,21 @@ pub async fn run_main(
     }
 
     if !app_server_target.uses_remote_workspace() {
+        let auth_route_config = config
+            .system_proxy
+            .as_ref()
+            .map(auth_route_config_from_system_proxy_config);
         #[allow(clippy::print_stderr)]
-        if let Err(err) = enforce_login_restrictions(&AuthConfig {
-            codex_home: config.codex_home.to_path_buf(),
-            auth_credentials_store_mode: config.cli_auth_credentials_store_mode,
-            forced_login_method: config.forced_login_method,
-            forced_chatgpt_workspace_id: config.forced_chatgpt_workspace_id.clone(),
-            chatgpt_base_url: Some(config.chatgpt_base_url.clone()),
-        })
+        if let Err(err) = enforce_login_restrictions_with_auth_route_config(
+            &AuthConfig {
+                codex_home: config.codex_home.to_path_buf(),
+                auth_credentials_store_mode: config.cli_auth_credentials_store_mode,
+                forced_login_method: config.forced_login_method,
+                forced_chatgpt_workspace_id: config.forced_chatgpt_workspace_id.clone(),
+                chatgpt_base_url: Some(config.chatgpt_base_url.clone()),
+            },
+            auth_route_config.as_ref(),
+        )
         .await
         {
             eprintln!("{err}");
@@ -1488,11 +1502,15 @@ async fn run_ratatui_app(
         // and rebuild config. This avoids missing newly available cloud-managed policy due to login
         // status detection edge cases.
         if show_login_screen && !uses_remote_workspace {
-            cloud_config_bundle = cloud_config_bundle_loader_for_storage(
+            let auth_route_config = bootstrap_auth_route_config_from_system_proxy_config(
+                initial_config.system_proxy.as_ref(),
+            );
+            cloud_config_bundle = cloud_config_bundle_loader_for_storage_with_auth_route_config(
                 initial_config.codex_home.to_path_buf(),
                 /*enable_codex_api_key_env*/ false,
                 initial_config.cli_auth_credentials_store_mode,
                 initial_config.chatgpt_base_url.clone(),
+                auth_route_config,
             )
             .await;
         }

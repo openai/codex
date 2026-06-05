@@ -6,6 +6,7 @@ use codex_config::CloudConfigBundleLoadErrorCode;
 use codex_config::CloudConfigBundleLoader;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_login::AuthManager;
+use codex_login::AuthRouteConfig;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -57,12 +58,43 @@ pub async fn cloud_config_bundle_loader_for_storage(
     credentials_store_mode: AuthCredentialsStoreMode,
     chatgpt_base_url: String,
 ) -> CloudConfigBundleLoader {
-    let auth_manager = AuthManager::shared(
-        codex_home.clone(),
+    cloud_config_bundle_loader_for_storage_with_auth_route_config(
+        codex_home,
         enable_codex_api_key_env,
         credentials_store_mode,
-        Some(chatgpt_base_url.clone()),
+        chatgpt_base_url,
+        /*auth_route_config*/ None,
     )
-    .await;
+    .await
+}
+
+/// Loads cloud config with the explicit startup-only auth route policy.
+pub async fn cloud_config_bundle_loader_for_storage_with_auth_route_config(
+    codex_home: PathBuf,
+    enable_codex_api_key_env: bool,
+    credentials_store_mode: AuthCredentialsStoreMode,
+    chatgpt_base_url: String,
+    auth_route_config: Option<AuthRouteConfig>,
+) -> CloudConfigBundleLoader {
+    let auth_manager = if let Some(auth_route_config) = auth_route_config {
+        Arc::new(
+            AuthManager::new_with_auth_route_config(
+                codex_home.clone(),
+                enable_codex_api_key_env,
+                credentials_store_mode,
+                Some(chatgpt_base_url.clone()),
+                Some(auth_route_config),
+            )
+            .await,
+        )
+    } else {
+        AuthManager::shared(
+            codex_home.clone(),
+            enable_codex_api_key_env,
+            credentials_store_mode,
+            Some(chatgpt_base_url.clone()),
+        )
+        .await
+    };
     cloud_config_bundle_loader(auth_manager, chatgpt_base_url, codex_home)
 }
