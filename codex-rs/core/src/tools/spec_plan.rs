@@ -142,7 +142,6 @@ impl PlannedTools {
 #[derive(Clone, Copy)]
 struct CoreToolPlanContext<'a> {
     turn_context: &'a TurnContext,
-    web_search_plan: WebSearchPlan,
     mcp_tools: Option<&'a [ToolInfo]>,
     deferred_mcp_tools: Option<&'a [ToolInfo]>,
     discoverable_tools: Option<&'a [DiscoverableTool]>,
@@ -150,18 +149,6 @@ struct CoreToolPlanContext<'a> {
     dynamic_tools: &'a [DynamicToolSpec],
     default_agent_type_description: &'a str,
     wait_agent_timeouts: WaitAgentTimeoutOptions,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum WebSearchExecution {
-    Hosted,
-    Standalone,
-}
-
-#[derive(Clone, Copy)]
-struct WebSearchPlan {
-    mode: WebSearchMode,
-    execution: Option<WebSearchExecution>,
 }
 
 pub(crate) fn build_tool_router(
@@ -187,7 +174,6 @@ fn build_tool_specs_and_registry(
         crate::agent::role::spawn_tool_spec::build(&std::collections::BTreeMap::new());
     let context = CoreToolPlanContext {
         turn_context,
-        web_search_plan: resolve_web_search_plan(turn_context, &extension_tool_executors),
         mcp_tools: mcp_tools.as_deref(),
         deferred_mcp_tools: deferred_mcp_tools.as_deref(),
         discoverable_tools: discoverable_tools.as_deref(),
@@ -270,17 +256,25 @@ fn hosted_model_tool_specs(context: &CoreToolPlanContext<'_>) -> Vec<ToolSpec> {
     }
 
     let mut specs = Vec::new();
-    match context.web_search_plan.execution {
-        Some(WebSearchExecution::Hosted) => {
-            if let Some(web_search_tool) = create_web_search_tool(WebSearchToolOptions {
-                web_search_mode: Some(context.web_search_plan.mode),
-                web_search_config: turn_context.config.web_search_config.as_ref(),
-                web_search_tool_type: turn_context.model_info.web_search_tool_type,
-            }) {
-                specs.push(web_search_tool);
-            }
-        }
-        Some(WebSearchExecution::Standalone) | None => {}
+    let standalone_web_search_available = standalone_web_search_enabled(turn_context)
+        && context
+            .extension_tool_executors
+            .iter()
+            .any(|executor| executor.tool_name() == ToolName::namespaced("web", "run"));
+    // `Some(Cached/Live/Disabled)` are the options for mode when standalone search is unavailable
+    // and the provider supports hosted search. `None` prevents emitting a hosted search tool.
+    let web_search_mode = (!standalone_web_search_available
+        && turn_context.provider.capabilities().web_search)
+        .then_some(turn_context.config.web_search_mode.value());
+    let web_search_config = web_search_mode
+        .as_ref()
+        .and(turn_context.config.web_search_config.as_ref());
+    if let Some(hosted_web_search_tool) = create_web_search_tool(WebSearchToolOptions {
+        web_search_mode,
+        web_search_config,
+        web_search_tool_type: turn_context.model_info.web_search_tool_type,
+    }) {
+        specs.push(hosted_web_search_tool);
     }
     // TODO: Remove hosted image generation once the standalone extension is ready.
     if image_generation_tool_enabled(turn_context)
@@ -587,38 +581,13 @@ fn add_tool_sources(context: &CoreToolPlanContext<'_>, planned_tools: &mut Plann
     }
 }
 
-fn resolve_web_search_plan(
-    turn_context: &TurnContext,
-    extension_tools: &[Arc<dyn ToolExecutor<ExtensionToolCall>>],
-) -> WebSearchPlan {
-    let mode = turn_context.config.web_search_mode.value();
-    if mode == WebSearchMode::Disabled {
-        return WebSearchPlan {
-            mode,
-            execution: None,
-        };
-    }
-
-    let standalone_requested = turn_context.model_info.use_responses_lite
-        || turn_context
-            .features
-            .get()
-            .enabled(Feature::StandaloneWebSearch);
-    let standalone_available = namespace_tools_enabled(turn_context)
-        && extension_tools
-            .iter()
-            .any(|executor| executor.tool_name() == ToolName::namespaced("web", "run"));
-    let execution = if standalone_requested && standalone_available {
-        Some(WebSearchExecution::Standalone)
-    } else if !turn_context.model_info.use_responses_lite
-        && turn_context.provider.capabilities().web_search
-    {
-        Some(WebSearchExecution::Hosted)
-    } else {
-        None
-    };
-
-    WebSearchPlan { mode, execution }
+fn standalone_web_search_enabled(turn_context: &TurnContext) -> bool {
+    namespace_tools_enabled(turn_context)
+        && (turn_context.model_info.use_responses_lite
+            || turn_context
+                .features
+                .get()
+                .enabled(Feature::StandaloneWebSearch))
 }
 
 fn add_shell_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut PlannedTools) {
@@ -883,7 +852,6 @@ fn add_extension_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut Pl
     append_extension_tool_executors(
         context.turn_context,
         context.extension_tool_executors,
-        context.web_search_plan,
         planned_tools,
     );
 }
@@ -922,7 +890,6 @@ fn prepend_code_mode_executors(
 fn append_extension_tool_executors(
     turn_context: &TurnContext,
     executors: &[Arc<dyn ToolExecutor<ExtensionToolCall>>],
-    web_search_plan: WebSearchPlan,
     planned_tools: &mut PlannedTools,
 ) {
     if executors.is_empty() {
@@ -951,10 +918,13 @@ fn append_extension_tool_executors(
         reserved_tool_names.insert(ToolName::plain(TOOL_SEARCH_TOOL_NAME));
     }
 
+    let standalone_web_search_enabled = standalone_web_search_enabled(turn_context);
+    let web_search_mode_on = turn_context.config.web_search_mode.value() != WebSearchMode::Disabled;
+
     for executor in executors.iter().cloned() {
         let tool_name = executor.tool_name();
         if tool_name == ToolName::namespaced("web", "run")
-            && web_search_plan.execution != Some(WebSearchExecution::Standalone)
+            && (!standalone_web_search_enabled || !web_search_mode_on)
         {
             continue;
         }
