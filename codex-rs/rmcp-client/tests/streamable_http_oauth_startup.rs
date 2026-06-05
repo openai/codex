@@ -4,9 +4,11 @@ use std::time::Duration;
 
 use codex_config::types::OAuthCredentialsStoreMode;
 use codex_exec_server::Environment;
+use codex_rmcp_client::McpAuthStatus;
 use codex_rmcp_client::RmcpClient;
 use codex_rmcp_client::StoredOAuthTokens;
 use codex_rmcp_client::WrappedOAuthTokenResponse;
+use codex_rmcp_client::determine_streamable_http_auth_status;
 use codex_rmcp_client::save_oauth_tokens;
 use oauth2::AccessToken;
 use oauth2::RefreshToken;
@@ -33,6 +35,7 @@ const EXPIRED_ACCESS_TOKEN: &str = "expired-access-token";
 const REFRESH_TOKEN: &str = "valid-refresh-token";
 const REFRESHED_ACCESS_TOKEN: &str = "refreshed-access-token";
 const CHILD_SERVER_URL_ENV: &str = "MCP_TEST_OAUTH_STARTUP_SERVER_URL";
+const UNREFRESHABLE_SERVER_URL: &str = "https://unrefreshable.example/mcp";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn refreshes_expired_persisted_token_before_initialize() -> anyhow::Result<()> {
@@ -109,6 +112,59 @@ async fn refreshes_expired_persisted_token_before_initialize() -> anyhow::Result
         .await?;
     assert!(status.success(), "OAuth startup child failed: {status}");
     server.verify().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn reports_expired_unrefreshable_credentials_as_not_logged_in() -> anyhow::Result<()> {
+    let codex_home = TempDir::new()?;
+
+    let status = Command::new(std::env::current_exe()?)
+        .args([
+            "expired_unrefreshable_auth_status_child",
+            "--exact",
+            "--ignored",
+            "--nocapture",
+        ])
+        .env("CODEX_HOME", codex_home.path())
+        .status()
+        .await?;
+
+    assert!(
+        status.success(),
+        "expired unrefreshable auth status child failed: {status}"
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+#[ignore = "spawned by reports_expired_unrefreshable_credentials_as_not_logged_in"]
+async fn expired_unrefreshable_auth_status_child() -> anyhow::Result<()> {
+    let response = OAuthTokenResponse::new(
+        AccessToken::new(EXPIRED_ACCESS_TOKEN.to_string()),
+        BasicTokenType::Bearer,
+        VendorExtraTokenFields::default(),
+    );
+    let tokens = StoredOAuthTokens {
+        server_name: SERVER_NAME.to_string(),
+        url: UNREFRESHABLE_SERVER_URL.to_string(),
+        client_id: "test-client-id".to_string(),
+        token_response: WrappedOAuthTokenResponse(response),
+        expires_at: Some(0),
+    };
+    save_oauth_tokens(SERVER_NAME, &tokens, OAuthCredentialsStoreMode::File)?;
+
+    let status = determine_streamable_http_auth_status(
+        SERVER_NAME,
+        UNREFRESHABLE_SERVER_URL,
+        /*bearer_token_env_var*/ None,
+        /*http_headers*/ None,
+        /*env_http_headers*/ None,
+        OAuthCredentialsStoreMode::File,
+    )
+    .await?;
+
+    assert_eq!(status, McpAuthStatus::NotLoggedIn);
     Ok(())
 }
 
