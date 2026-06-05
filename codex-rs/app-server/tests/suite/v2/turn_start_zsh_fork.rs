@@ -45,6 +45,7 @@ use tokio::time::timeout;
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 #[cfg(not(windows))]
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+const ZSH_FORK_INITIALIZE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(25);
 
 #[tokio::test]
 async fn turn_start_shell_zsh_fork_executes_command_v2() -> Result<()> {
@@ -98,7 +99,7 @@ async fn turn_start_shell_zsh_fork_executes_command_v2() -> Result<()> {
     )?;
 
     let mut mcp = create_zsh_test_mcp_process(&codex_home, &workspace, &zsh_path).await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+    timeout(ZSH_FORK_INITIALIZE_TIMEOUT, mcp.initialize()).await??;
 
     let start_id = mcp
         .send_thread_start_request(ThreadStartParams {
@@ -217,7 +218,7 @@ async fn turn_start_shell_zsh_fork_exec_approval_decline_v2() -> Result<()> {
     )?;
 
     let mut mcp = create_zsh_test_mcp_process(&codex_home, &workspace, &zsh_path).await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+    timeout(ZSH_FORK_INITIALIZE_TIMEOUT, mcp.initialize()).await??;
 
     let start_id = mcp
         .send_thread_start_request(ThreadStartParams {
@@ -350,7 +351,7 @@ async fn turn_start_shell_zsh_fork_exec_approval_cancel_v2() -> Result<()> {
     )?;
 
     let mut mcp = create_zsh_test_mcp_process(&codex_home, &workspace, &zsh_path).await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+    timeout(ZSH_FORK_INITIALIZE_TIMEOUT, mcp.initialize()).await??;
 
     let start_id = mcp
         .send_thread_start_request(ThreadStartParams {
@@ -509,7 +510,7 @@ async fn turn_start_shell_zsh_fork_subcommand_decline_marks_parent_declined_v2()
     )?;
 
     let mut mcp = create_zsh_test_mcp_process(&codex_home, &workspace, &zsh_path).await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+    timeout(ZSH_FORK_INITIALIZE_TIMEOUT, mcp.initialize()).await??;
 
     let start_id = mcp
         .send_thread_start_request(ThreadStartParams {
