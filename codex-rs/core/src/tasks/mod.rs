@@ -755,6 +755,7 @@ impl Session {
         if !cleared_active_turn {
             return;
         }
+        self.maybe_start_turn_for_pending_work().await;
         self.emit_thread_idle_lifecycle_if_idle().await;
     }
 
