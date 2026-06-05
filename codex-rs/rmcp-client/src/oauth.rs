@@ -593,6 +593,7 @@ fn acquire_fallback_store_lock() -> Result<FallbackStoreLock> {
 fn open_oauth_lock_file(path: &std::path::Path) -> Result<fs::File> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
+        secure_oauth_lock_dir(parent)?;
     }
     OpenOptions::new()
         .read(true)
@@ -601,6 +602,28 @@ fn open_oauth_lock_file(path: &std::path::Path) -> Result<fs::File> {
         .truncate(false)
         .open(path)
         .with_context(|| format!("failed to open OAuth credential lock at {}", path.display()))
+}
+
+#[cfg(unix)]
+fn secure_oauth_lock_dir(path: &std::path::Path) -> Result<()> {
+    use std::os::unix::fs::MetadataExt;
+    use std::os::unix::fs::PermissionsExt;
+
+    let metadata = fs::symlink_metadata(path)?;
+    let effective_uid = unsafe { libc::geteuid() };
+    if !metadata.file_type().is_dir() || metadata.uid() != effective_uid {
+        anyhow::bail!(
+            "OAuth credential lock directory {} is not owned by the current user",
+            path.display()
+        );
+    }
+    fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn secure_oauth_lock_dir(_path: &std::path::Path) -> Result<()> {
+    Ok(())
 }
 
 fn oauth_server_lock_path(server_name: &str, url: &str) -> Result<PathBuf> {
@@ -616,15 +639,57 @@ fn fallback_store_lock_path() -> Result<PathBuf> {
     Ok(oauth_lock_root_path()?.join(format!("fallback-{store_digest}.lock")))
 }
 
+#[cfg(unix)]
 fn oauth_lock_root_path() -> Result<PathBuf> {
-    if let Some(user_profile) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))
-    {
-        return Ok(PathBuf::from(user_profile).join(".codex-mcp-oauth-locks"));
+    let effective_uid = unsafe { libc::geteuid() };
+    Ok(PathBuf::from("/tmp").join(format!("codex-mcp-oauth-{effective_uid}")))
+}
+
+#[cfg(windows)]
+fn oauth_lock_root_path() -> Result<PathBuf> {
+    Ok(windows_local_app_data_dir()?
+        .join("Temp")
+        .join("codex-mcp-oauth-locks"))
+}
+
+#[cfg(windows)]
+fn windows_local_app_data_dir() -> Result<PathBuf> {
+    use std::ffi::OsString;
+    use std::os::windows::ffi::OsStringExt;
+    use windows_sys::Win32::System::Com::CoTaskMemFree;
+    use windows_sys::Win32::UI::Shell::FOLDERID_LocalAppData;
+    use windows_sys::Win32::UI::Shell::KF_FLAG_DEFAULT;
+    use windows_sys::Win32::UI::Shell::SHGetKnownFolderPath;
+
+    let mut path_ptr = std::ptr::null_mut::<u16>();
+    let known_folder_flags =
+        u32::try_from(KF_FLAG_DEFAULT).context("KF_FLAG_DEFAULT did not fit in u32")?;
+    let hr = unsafe {
+        SHGetKnownFolderPath(&FOLDERID_LocalAppData, known_folder_flags, 0, &mut path_ptr)
+    };
+    if hr != 0 {
+        anyhow::bail!("SHGetKnownFolderPath(FOLDERID_LocalAppData) failed with HRESULT {hr:#010x}");
+    }
+    if path_ptr.is_null() {
+        anyhow::bail!("SHGetKnownFolderPath(FOLDERID_LocalAppData) returned a null pointer");
     }
 
-    let codex_home = find_codex_home()?;
-    let parent = codex_home.parent().unwrap_or(codex_home);
-    Ok(parent.join(".codex-mcp-oauth-locks").to_path_buf())
+    let path = unsafe {
+        let mut len = 0usize;
+        while *path_ptr.add(len) != 0 {
+            len += 1;
+        }
+        let wide = std::slice::from_raw_parts(path_ptr, len);
+        let path = PathBuf::from(OsString::from_wide(wide));
+        CoTaskMemFree(path_ptr.cast());
+        path
+    };
+    Ok(path)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn oauth_lock_root_path() -> Result<PathBuf> {
+    anyhow::bail!("OAuth credential locks are unsupported on this platform")
 }
 
 fn same_persisted_generation(left: &StoredOAuthTokens, right: &StoredOAuthTokens) -> bool {
@@ -1221,22 +1286,35 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn load_file_credentials_from_read_only_codex_home() -> Result<()> {
+    fn read_only_home_and_codex_home_allow_reads_but_not_mutations() -> Result<()> {
         use std::os::unix::fs::PermissionsExt;
 
         let _env = TempCodexHome::new();
         let tokens = sample_tokens();
         super::save_oauth_tokens_to_file(&tokens)?;
         let codex_home = find_codex_home()?;
-        let original_permissions = fs::metadata(&codex_home)?.permissions();
+        let user_home = PathBuf::from(std::env::var_os("HOME").expect("HOME should be set"));
+        let codex_home_permissions = fs::metadata(&codex_home)?.permissions();
+        let user_home_permissions = fs::metadata(&user_home)?.permissions();
         fs::set_permissions(&codex_home, fs::Permissions::from_mode(0o500))?;
+        fs::set_permissions(&user_home, fs::Permissions::from_mode(0o500))?;
 
         let loaded = super::load_oauth_tokens_from_file(&tokens.server_name, &tokens.url);
+        let key = super::compute_store_key(&tokens.server_name, &tokens.url)?;
+        let deletion = super::delete_oauth_tokens_from_file(&key);
 
-        fs::set_permissions(&codex_home, original_permissions)?;
-        let loaded = loaded?.expect("tokens should load from read-only CODEX_HOME");
+        fs::set_permissions(&codex_home, codex_home_permissions)?;
+        fs::set_permissions(&user_home, user_home_permissions)?;
+        let loaded = loaded?.expect("tokens should load from read-only homes");
         assert_tokens_match_without_expiry(&loaded, &tokens);
-        assert!(!codex_home.join(".mcp-oauth-locks").exists());
+        let error = deletion.expect_err("credential deletion should require a writable store");
+        assert_eq!(
+            error
+                .root_cause()
+                .downcast_ref::<std::io::Error>()
+                .map(std::io::Error::kind),
+            Some(ErrorKind::PermissionDenied)
+        );
         Ok(())
     }
 
@@ -1296,20 +1374,37 @@ mod tests {
     }
 
     #[test]
-    fn server_generation_lock_is_stable_across_codex_homes_and_tmpdirs() -> Result<()> {
+    fn server_generation_lock_is_stable_across_read_only_homes_and_tmpdirs() -> Result<()> {
+        #[cfg(unix)]
+        use std::os::unix::fs::PermissionsExt;
+
         let _env = TempCodexHome::new();
+        let first_home = PathBuf::from(std::env::var_os("HOME").expect("HOME should be set"));
         let first_tmpdir = tempdir()?;
         unsafe {
             std::env::set_var("TMPDIR", first_tmpdir.path());
         }
         let first = super::oauth_server_lock_path("server", "https://example.test")?;
         let other_codex_home = tempdir()?;
+        let other_home = tempdir()?;
         let second_tmpdir = tempdir()?;
+        #[cfg(unix)]
+        {
+            fs::set_permissions(&first_home, fs::Permissions::from_mode(0o500))?;
+            fs::set_permissions(other_home.path(), fs::Permissions::from_mode(0o500))?;
+        }
         unsafe {
             std::env::set_var("CODEX_HOME", other_codex_home.path());
+            std::env::set_var("HOME", other_home.path());
             std::env::set_var("TMPDIR", second_tmpdir.path());
+            std::env::set_var("USERPROFILE", other_home.path());
         }
         let second = super::oauth_server_lock_path("server", "https://example.test")?;
+        #[cfg(unix)]
+        {
+            fs::set_permissions(&first_home, fs::Permissions::from_mode(0o700))?;
+            fs::set_permissions(other_home.path(), fs::Permissions::from_mode(0o700))?;
+        }
 
         assert_eq!(first, second);
         Ok(())

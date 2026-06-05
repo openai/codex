@@ -3579,6 +3579,7 @@ dependencies = [
  "codex-utils-pty",
  "futures",
  "keyring",
+ "libc",
  "memchr",
  "oauth2",
  "pretty_assertions",
@@ -3597,6 +3598,7 @@ dependencies = [
  "urlencoding",
  "webbrowser",
  "which 8.0.0",
+ "windows-sys 0.52.0",
  "wiremock",
 ]
 
