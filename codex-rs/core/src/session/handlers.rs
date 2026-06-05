@@ -22,6 +22,7 @@ use crate::realtime_conversation::prefix_realtime_v2_text;
 use crate::review_prompts::resolve_review_request;
 use crate::session::spawn_review_thread;
 use crate::tasks::CompactTask;
+use crate::tasks::StartTaskOutcome;
 use crate::tasks::UserShellCommandMode;
 use crate::tasks::UserShellCommandTask;
 use crate::tasks::execute_user_shell_command;
@@ -273,13 +274,24 @@ pub(super) async fn user_input_or_turn_inner(
                     client_id: client_user_message_id,
                 });
             }
-            sess.spawn_task(
-                Arc::clone(&current_context),
-                task_input,
-                crate::tasks::RegularTask::new(),
-            )
-            .await;
-            Some(accepted_items)
+            match sess
+                .spawn_task(
+                    Arc::clone(&current_context),
+                    task_input,
+                    crate::tasks::RegularTask::new(),
+                )
+                .await
+            {
+                StartTaskOutcome::Started => Some(accepted_items),
+                StartTaskOutcome::Rejected(err) => {
+                    sess.send_event_raw(Event {
+                        id: sub_id,
+                        msg: EventMsg::Error(err.to_error_event(/*message_prefix*/ None)),
+                    })
+                    .await;
+                    None
+                }
+            }
         }
         Err(err) => {
             sess.send_event_raw(Event {

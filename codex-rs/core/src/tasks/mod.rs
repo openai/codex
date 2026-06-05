@@ -33,6 +33,7 @@ use crate::session::turn_context::TurnContext;
 use crate::state::ActiveTurn;
 use crate::state::RunningTask;
 use crate::state::TaskKind;
+use crate::state::TurnState;
 use codex_analytics::TurnTokenUsageFact;
 use codex_login::AuthManager;
 use codex_models_manager::manager::SharedModelsManager;
@@ -42,6 +43,7 @@ use codex_otel::TURN_MEMORY_METRIC;
 use codex_otel::TURN_NETWORK_PROXY_METRIC;
 use codex_otel::TURN_TOKEN_USAGE_METRIC;
 use codex_otel::TURN_TOOL_CALL_METRIC;
+use codex_protocol::error::CodexErr;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::MultiAgentVersion;
@@ -68,6 +70,12 @@ pub(crate) enum InterruptedTurnHistoryMarker {
     Disabled,
     ContextualUser,
     Developer,
+}
+
+#[derive(Debug)]
+pub(crate) enum StartTaskOutcome {
+    Started,
+    Rejected(CodexErr),
 }
 
 impl InterruptedTurnHistoryMarker {
@@ -307,7 +315,7 @@ impl Session {
         turn_context: Arc<TurnContext>,
         input: Vec<TurnInput>,
         task: T,
-    ) {
+    ) -> StartTaskOutcome {
         self.abort_all_tasks(TurnAbortReason::Replaced).await;
         self.clear_connector_selection().await;
         self.start_task(turn_context, input, task).await;
@@ -318,7 +326,37 @@ impl Session {
         turn_context: Arc<TurnContext>,
         input: Vec<TurnInput>,
         task: T,
-    ) {
+    ) -> StartTaskOutcome {
+        let turn_state = {
+            let mut active = self.active_turn.lock().await;
+            let turn = active.get_or_insert_with(ActiveTurn::default);
+            if turn.task.is_some() {
+                return StartTaskOutcome::Rejected(CodexErr::InvalidRequest(
+                    "thread already has an active turn".to_string(),
+                ));
+            }
+            Arc::clone(&turn.turn_state)
+        };
+        let execution_reservation = match self
+            .services
+            .agent_control
+            .reserve_execution_slot_for_turn_start(self)
+            .await
+        {
+            Ok(reservation) => reservation,
+            Err(err) => {
+                self.clear_reserved_active_turn(&turn_state).await;
+                warn!(
+                    thread_id = %self.thread_id,
+                    "agent turn could not reserve an execution slot: {err}"
+                );
+                return StartTaskOutcome::Rejected(err);
+            }
+        };
+        if let Some(execution_reservation) = execution_reservation {
+            execution_reservation.commit();
+        }
+
         let task: Arc<dyn AnySessionTask> = Arc::new(task);
         let task_kind = task.kind();
         let span_name = task.span_name();
@@ -351,12 +389,6 @@ impl Session {
             warn!("failed to apply goal runtime turn-start event: {err}");
         }
         let pending_items = self.input_queue.get_pending_input(&self.active_turn).await;
-        let turn_state = {
-            let mut active = self.active_turn.lock().await;
-            let turn = active.get_or_insert_with(ActiveTurn::default);
-            debug_assert!(turn.task.is_none());
-            Arc::clone(&turn.turn_state)
-        };
         turn_state.lock().await.token_usage_at_turn_start = token_usage_at_turn_start.clone();
         self.input_queue
             .extend_pending_input_for_turn_state(turn_state.as_ref(), pending_items)
@@ -366,7 +398,12 @@ impl Session {
 
         let turn_extension_data = Arc::clone(&turn_context.extension_data);
         let mut active = self.active_turn.lock().await;
-        let turn = active.get_or_insert_with(ActiveTurn::default);
+        let Some(turn) = active.as_mut() else {
+            return StartTaskOutcome::Rejected(CodexErr::Fatal(
+                "active turn reservation was lost before task start".to_string(),
+            ));
+        };
+        debug_assert!(Arc::ptr_eq(&turn.turn_state, &turn_state));
         debug_assert!(turn.task.is_none());
         let done_clone = Arc::clone(&done);
         let session_ctx = Arc::new(SessionTaskContext::new(
@@ -442,6 +479,7 @@ impl Session {
             _timer: timer,
         };
         turn.task = Some(running_task);
+        StartTaskOutcome::Started
     }
 
     /// Starts a regular turn when the session is idle and pending work is waiting.
@@ -469,36 +507,22 @@ impl Session {
                 return;
             }
 
-            let execution_reservation = match self
-                .services
-                .agent_control
-                .reserve_execution_slot_for_pending_turn(self)
-                .await
-            {
-                Ok(reservation) => reservation,
-                Err(err) => {
-                    warn!(
-                        thread_id = %self.thread_id,
-                        "pending agent turn could not reserve an execution slot: {err}"
-                    );
-                    return;
-                }
-            };
-
-            {
+            let turn_state = {
                 let mut active_turn = self.active_turn.lock().await;
                 if active_turn.is_some() {
                     return;
                 }
-                *active_turn = Some(ActiveTurn::default());
-            }
-            if let Some(execution_reservation) = execution_reservation {
-                execution_reservation.commit();
-            }
+                let active_turn = active_turn.get_or_insert_with(ActiveTurn::default);
+                Arc::clone(&active_turn.turn_state)
+            };
 
             let turn_context = self.new_default_turn_with_sub_id(sub_id).await;
             self.maybe_emit_unknown_model_warning_for_turn(turn_context.as_ref())
                 .await;
+            if !self.input_queue.has_trigger_turn_mailbox_items().await {
+                self.clear_reserved_active_turn(&turn_state).await;
+                return;
+            }
             self.start_task(turn_context, Vec::new(), RegularTask::new())
                 .await;
         })
@@ -827,6 +851,16 @@ impl Session {
     async fn take_active_turn(&self) -> Option<ActiveTurn> {
         let mut active = self.active_turn.lock().await;
         active.take()
+    }
+
+    async fn clear_reserved_active_turn(&self, turn_state: &Arc<tokio::sync::Mutex<TurnState>>) {
+        let mut active_turn_guard = self.active_turn.lock().await;
+        if let Some(active_turn) = active_turn_guard.as_ref()
+            && active_turn.task.is_none()
+            && Arc::ptr_eq(&active_turn.turn_state, turn_state)
+        {
+            *active_turn_guard = None;
+        }
     }
 
     pub(crate) async fn close_unified_exec_processes(&self) {

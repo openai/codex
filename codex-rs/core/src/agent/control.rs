@@ -268,7 +268,7 @@ impl AgentControl {
         Ok(thread.subscribe_status())
     }
 
-    pub(crate) async fn reserve_execution_slot_for_pending_turn(
+    pub(crate) async fn reserve_execution_slot_for_turn_start(
         &self,
         session: &Session,
     ) -> CodexResult<Option<crate::agent::registry::ExecutionReservation>> {
@@ -305,8 +305,35 @@ impl AgentControl {
         }
         if session.active_turn.lock().await.is_none()
             && !session.input_queue.has_trigger_turn_mailbox_items().await
+            && self.state.release_execution_slot(session.thread_id)
         {
-            self.state.release_execution_slot(session.thread_id);
+            let Ok(state) = self.upgrade() else {
+                return;
+            };
+            for agent in self.state.live_agents() {
+                let Some(thread_id) = agent.agent_id else {
+                    continue;
+                };
+                if thread_id == session.thread_id {
+                    continue;
+                }
+                let Ok(thread) = state.get_thread(thread_id).await else {
+                    continue;
+                };
+                if thread
+                    .codex
+                    .session
+                    .input_queue
+                    .has_trigger_turn_mailbox_items()
+                    .await
+                {
+                    thread
+                        .codex
+                        .session
+                        .maybe_start_turn_for_pending_work()
+                        .await;
+                }
+            }
         }
     }
 

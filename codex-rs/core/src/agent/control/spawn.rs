@@ -581,6 +581,10 @@ impl AgentControl {
         // Resumed threads are re-registered in-memory and need the same listener
         // attachment path as freshly spawned threads.
         state.notify_thread_created(resumed_thread.thread_id);
+        if multi_agent_version == MultiAgentVersion::V2 {
+            self.release_execution_slot_if_idle(resumed_thread.thread.codex.session.as_ref())
+                .await;
+        }
         if multi_agent_version != MultiAgentVersion::V2 {
             let child_reference = agent_metadata
                 .agent_path
