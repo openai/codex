@@ -725,7 +725,7 @@ impl ModelClient {
             Some(ReasoningContext::AllTurns)
         } else {
             // Omit context so Responses uses the model-configured default, which is currently
-            // `current_turn` for the Codex models supported by this client.
+            // `current_turn'
             None
         };
         if model_info.supports_reasoning_summaries {
