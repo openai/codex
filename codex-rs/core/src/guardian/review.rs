@@ -620,26 +620,36 @@ pub(crate) fn spawn_approval_request_review(
     approval_request_source: GuardianApprovalRequestSource,
     cancel_token: CancellationToken,
 ) -> oneshot::Receiver<ReviewDecision> {
+    // Keep this above the default macOS pthread stack because permission-review
+    // sessions can recurse through thread materialization and state loading.
+    const GUARDIAN_REVIEW_THREAD_STACK_SIZE_BYTES: usize = 4 * 1024 * 1024;
+
     let (tx, rx) = oneshot::channel();
-    std::thread::spawn(move || {
-        let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-        else {
-            let _ = tx.send(ReviewDecision::Denied);
-            return;
-        };
-        let decision = runtime.block_on(review_approval_request_with_cancel(
-            &session,
-            &turn,
-            review_id,
-            request,
-            retry_reason,
-            approval_request_source,
-            cancel_token,
-        ));
-        let _ = tx.send(decision);
-    });
+    // Guardian reviews materialize a nested Codex session and can overflow the
+    // default macOS pthread stack when reviewing permission requests.
+    // Dropping the sender if spawning fails closes the channel, which callers treat as denial.
+    let _ = std::thread::Builder::new()
+        .name("guardian-approval-request-review".to_string())
+        .stack_size(GUARDIAN_REVIEW_THREAD_STACK_SIZE_BYTES)
+        .spawn(move || {
+            let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            else {
+                let _ = tx.send(ReviewDecision::Denied);
+                return;
+            };
+            let decision = runtime.block_on(review_approval_request_with_cancel(
+                &session,
+                &turn,
+                review_id,
+                request,
+                retry_reason,
+                approval_request_source,
+                cancel_token,
+            ));
+            let _ = tx.send(decision);
+        });
     rx
 }
 
