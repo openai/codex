@@ -770,6 +770,12 @@ impl RmcpClient {
                                 matches!(auth_err, AuthError::NoAuthorizationSupport)
                             }) =>
                         {
+                            if initial_tokens.token_response.0.expires_in() == Some(Duration::ZERO)
+                            {
+                                return Err(anyhow!(
+                                    "stored OAuth access token for MCP server `{server_name}` is expired and OAuth metadata discovery is unavailable"
+                                ));
+                            }
                             let access_token = initial_tokens
                                 .token_response
                                 .0
