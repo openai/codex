@@ -445,7 +445,6 @@ impl RmcpClient {
                 async move { service.list_tools(params).await }.boxed()
             })
             .await?;
-        self.persist_oauth_tokens().await;
         Ok(result)
     }
 
@@ -478,7 +477,6 @@ impl RmcpClient {
                 })
             })
             .collect::<Result<Vec<_>>>()?;
-        self.persist_oauth_tokens().await;
         Ok(ListToolsWithConnectorIdResult {
             next_cursor: result.next_cursor,
             tools,
@@ -504,7 +502,6 @@ impl RmcpClient {
                 async move { service.list_resources(params).await }.boxed()
             })
             .await?;
-        self.persist_oauth_tokens().await;
         Ok(result)
     }
 
@@ -519,7 +516,6 @@ impl RmcpClient {
                 async move { service.list_resource_templates(params).await }.boxed()
             })
             .await?;
-        self.persist_oauth_tokens().await;
         Ok(result)
     }
 
@@ -534,7 +530,6 @@ impl RmcpClient {
                 async move { service.read_resource(params).await }.boxed()
             })
             .await?;
-        self.persist_oauth_tokens().await;
         Ok(result)
     }
 
@@ -591,7 +586,6 @@ impl RmcpClient {
                 .boxed()
             })
             .await?;
-        self.persist_oauth_tokens().await;
         Ok(result)
     }
 
@@ -620,7 +614,6 @@ impl RmcpClient {
             },
         )
         .await?;
-        self.persist_oauth_tokens().await;
         Ok(())
     }
 
@@ -642,7 +635,6 @@ impl RmcpClient {
                 .boxed()
             })
             .await?;
-        self.persist_oauth_tokens().await;
         Ok(response)
     }
 
@@ -903,7 +895,9 @@ impl RmcpClient {
     {
         let operation = async {
             self.refresh_oauth_if_needed().await;
-            operation(service).await
+            let result = operation(service).await?;
+            self.persist_oauth_tokens().await;
+            Ok::<T, rmcp::service::ServiceError>(result)
         };
         match timeout {
             Some(duration) => active_time_timeout(duration, pause_state.subscribe(), operation)

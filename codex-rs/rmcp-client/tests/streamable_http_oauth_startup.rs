@@ -40,6 +40,10 @@ const STARTUP_REFRESH_CHILD_SERVER_URL_ENV: &str = "MCP_TEST_OAUTH_STARTUP_REFRE
 const EXTERNAL_UPDATE_CHILD_SERVER_URL_ENV: &str = "MCP_TEST_OAUTH_EXTERNAL_UPDATE_SERVER_URL";
 const OPERATION_TIMEOUT_CHILD_SERVER_URL_ENV: &str = "MCP_TEST_OAUTH_TIMEOUT_SERVER_URL";
 const OPERATION_TIMEOUT_REFRESH_STARTED_ENV: &str = "MCP_TEST_OAUTH_TIMEOUT_REFRESH_STARTED";
+const PERSIST_TIMEOUT_CHILD_SERVER_URL_ENV: &str = "MCP_TEST_OAUTH_PERSIST_TIMEOUT_SERVER_URL";
+const PERSIST_TIMEOUT_OPERATION_STARTED_ENV: &str =
+    "MCP_TEST_OAUTH_PERSIST_TIMEOUT_OPERATION_STARTED";
+const PERSIST_TIMEOUT_REFRESH_STARTED_ENV: &str = "MCP_TEST_OAUTH_PERSIST_TIMEOUT_REFRESH_STARTED";
 const REFRESH_CONTENTION_SERVER_URL_ENV: &str = "MCP_TEST_OAUTH_REFRESH_CONTENTION_SERVER_URL";
 const REFRESH_CONTENTION_ATTEMPT_ENV: &str = "MCP_TEST_OAUTH_REFRESH_CONTENTION_ATTEMPT";
 const REFRESH_CONTENTION_DONE_ENV: &str = "MCP_TEST_OAUTH_REFRESH_CONTENTION_DONE";
@@ -231,6 +235,138 @@ async fn oauth_operation_timeout_child() -> anyhow::Result<()> {
         error
             .to_string()
             .contains("timed out awaiting tools/call after 100ms"),
+        "unexpected timeout error: {error}"
+    );
+    lock_holder_call.await??;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn operation_timeout_includes_post_operation_persistence_lock_wait() -> anyhow::Result<()> {
+    let server = MockServer::start().await;
+    mount_oauth_metadata(&server, /*expected_calls*/ 3).await;
+    let codex_home = TempDir::new()?;
+    let operation_started = codex_home.path().join("operation-started");
+    let refresh_started = codex_home.path().join("refresh-started");
+    let refresh_started_for_mock = refresh_started.clone();
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .and(body_string_contains("grant_type=refresh_token"))
+        .and(body_string_contains(format!(
+            "refresh_token={EXTERNAL_REFRESH_TOKEN}"
+        )))
+        .respond_with(move |_request: &Request| {
+            std::fs::write(&refresh_started_for_mock, b"started").expect("write refresh marker");
+            ResponseTemplate::new(200)
+                .set_delay(Duration::from_secs(2))
+                .set_body_json(json!({
+                    "access_token": TIMEOUT_REFRESHED_ACCESS_TOKEN,
+                    "token_type": "Bearer",
+                    "expires_in": 7200,
+                    "refresh_token": EXTERNAL_REFRESH_TOKEN,
+                }))
+        })
+        .expect(1)
+        .mount(&server)
+        .await;
+    let operation_started_for_mock = operation_started.clone();
+    Mock::given(method("POST"))
+        .and(path("/mcp"))
+        .respond_with(move |request: &Request| {
+            let Ok(body) = request.body_json::<Value>() else {
+                return ResponseTemplate::new(400);
+            };
+            let request_name = body.pointer("/params/name").and_then(Value::as_str);
+            let expected_access_token = match request_name {
+                Some("hold-generation-lock-during-persistence") => TIMEOUT_REFRESHED_ACCESS_TOKEN,
+                _ => OLD_ACCESS_TOKEN,
+            };
+            let response = oauth_mcp_response(request, expected_access_token);
+            if request_name == Some("successful-call-before-persist-contention") {
+                std::fs::write(&operation_started_for_mock, b"started")
+                    .expect("write operation marker");
+                response.set_delay(Duration::from_secs(1))
+            } else {
+                response
+            }
+        })
+        .expect(6)
+        .mount(&server)
+        .await;
+
+    let server_url = format!("{}/mcp", server.uri());
+    let status = Command::new(std::env::current_exe()?)
+        .args([
+            "oauth_persist_timeout_child",
+            "--exact",
+            "--ignored",
+            "--nocapture",
+        ])
+        .env("CODEX_HOME", codex_home.path())
+        .env(PERSIST_TIMEOUT_CHILD_SERVER_URL_ENV, server_url)
+        .env(PERSIST_TIMEOUT_OPERATION_STARTED_ENV, operation_started)
+        .env(PERSIST_TIMEOUT_REFRESH_STARTED_ENV, refresh_started)
+        .status()
+        .await?;
+    assert!(
+        status.success(),
+        "OAuth persistence timeout child failed: {status}"
+    );
+    server.verify().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+#[ignore = "spawned by operation_timeout_includes_post_operation_persistence_lock_wait"]
+async fn oauth_persist_timeout_child() -> anyhow::Result<()> {
+    let server_url = std::env::var(PERSIST_TIMEOUT_CHILD_SERVER_URL_ENV)?;
+    let operation_started =
+        std::path::PathBuf::from(std::env::var(PERSIST_TIMEOUT_OPERATION_STARTED_ENV)?);
+    let refresh_started =
+        std::path::PathBuf::from(std::env::var(PERSIST_TIMEOUT_REFRESH_STARTED_ENV)?);
+    save_test_tokens(
+        &server_url,
+        OLD_ACCESS_TOKEN,
+        OLD_REFRESH_TOKEN,
+        future_expiry()?,
+    )?;
+    let timed_client = Arc::new(initialized_oauth_client(&server_url).await?);
+    let lock_holder = Arc::new(initialized_oauth_client(&server_url).await?);
+
+    let timed_call = tokio::spawn(async move {
+        timed_client
+            .call_tool(
+                "successful-call-before-persist-contention".to_string(),
+                /*arguments*/ None,
+                /*meta*/ None,
+                Some(Duration::from_millis(1500)),
+            )
+            .await
+    });
+    wait_for_path(&operation_started).await?;
+    save_test_tokens(
+        &server_url,
+        EXTERNAL_ACCESS_TOKEN,
+        EXTERNAL_REFRESH_TOKEN,
+        /*expires_at*/ 0,
+    )?;
+    let lock_holder_call = tokio::spawn(async move {
+        lock_holder
+            .call_tool(
+                "hold-generation-lock-during-persistence".to_string(),
+                /*arguments*/ None,
+                /*meta*/ None,
+                Some(Duration::from_secs(5)),
+            )
+            .await
+    });
+    wait_for_path(&refresh_started).await?;
+
+    let error = timed_call
+        .await?
+        .expect_err("persistence lock wait must consume the operation timeout");
+    assert!(
+        error.to_string().contains("timed out awaiting tools/call"),
         "unexpected timeout error: {error}"
     );
     lock_holder_call.await??;
