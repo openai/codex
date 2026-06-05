@@ -311,7 +311,7 @@ impl BottomPane {
 
     /// Compute the desired tab-status state from current task + modal state.
     ///
-    /// Waiting pre-empts Working: a user-blocking modal is the more important
+    /// Waiting preempts Working: a user-blocking modal is the more important
     /// signal to surface. Waiting reads the same `terminal_title_requires_action`
     /// signal as the title indicator, so the two can never disagree.
     fn desired_tab_status(&self) -> TabStatus {
