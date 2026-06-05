@@ -1,5 +1,5 @@
 use super::*;
-use codex_config::config_toml::ConfigToml;
+use codex_core::config::permission_profile_catalog;
 use futures::StreamExt;
 
 #[derive(Clone)]
@@ -419,50 +419,32 @@ impl CatalogRequestProcessor {
         params: PermissionProfileListParams,
     ) -> Result<PermissionProfileListResponse, JSONRPCErrorError> {
         let PermissionProfileListParams { cursor, limit, cwd } = params;
-        let config_layer_stack = match cwd {
+        let (config_layer_stack, policy_cwd) = match cwd {
             Some(cwd) => {
                 let cwd = PathBuf::from(cwd);
                 let (_, config_layer_stack) = self
                     .resolve_cwd_config(&cwd)
                     .await
                     .map_err(|err| internal_error(format!("failed to reload config: {err}")))?;
-                config_layer_stack
+                (config_layer_stack, cwd)
             }
-            None => self
-                .config_manager
-                .load_config_layers(/*cwd*/ None)
-                .await
-                .map_err(|err| internal_error(format!("failed to reload config: {err}")))?,
+            None => (
+                self.config_manager
+                    .load_config_layers(/*cwd*/ None)
+                    .await
+                    .map_err(|err| internal_error(format!("failed to reload config: {err}")))?,
+                self.config.cwd.to_path_buf(),
+            ),
         };
-        let effective_config: ConfigToml = config_layer_stack
-            .effective_config()
-            .try_into()
-            .map_err(|err| internal_error(format!("failed to read effective config: {err}")))?;
-        let mut profiles = vec![
-            PermissionProfileSummary {
-                id: BUILT_IN_PERMISSION_PROFILE_READ_ONLY.to_string(),
-                description: None,
-            },
-            PermissionProfileSummary {
-                id: BUILT_IN_PERMISSION_PROFILE_WORKSPACE.to_string(),
-                description: None,
-            },
-            PermissionProfileSummary {
-                id: BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS.to_string(),
-                description: None,
-            },
-        ];
-        let mut configured_profiles = effective_config
-            .permissions
+        let profiles = permission_profile_catalog(&config_layer_stack, &policy_cwd)
+            .map_err(|err| internal_error(format!("failed to resolve permission profiles: {err}")))?
             .into_iter()
-            .flat_map(|permissions| permissions.entries)
-            .map(|(id, profile)| PermissionProfileSummary {
-                id,
+            .map(|profile| PermissionProfileSummary {
+                id: profile.id,
                 description: profile.description,
+                allowed: profile.allowed,
             })
             .collect::<Vec<_>>();
-        configured_profiles.sort_by(|left, right| left.id.cmp(&right.id));
-        profiles.extend(configured_profiles);
         let total = profiles.len();
         let effective_limit = limit.unwrap_or(total as u32).max(1) as usize;
         let effective_limit = effective_limit.min(total);
