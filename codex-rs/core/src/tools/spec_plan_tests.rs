@@ -619,7 +619,7 @@ async fn environment_count_controls_environment_backed_tools() {
 }
 
 #[tokio::test]
-async fn host_context_gates_goal_and_agent_job_tools() {
+async fn host_context_gates_goal_tools() {
     let feature_disabled = probe(|turn| {
         set_feature(turn, Feature::Goals, /*enabled*/ false);
         turn.goal_tools_supported = true;
@@ -648,21 +648,6 @@ async fn host_context_gates_goal_and_agent_job_tools() {
     })
     .await;
     review_thread.assert_visible_lacks(&["get_goal", "create_goal", "update_goal"]);
-
-    let normal_agent_job = probe(|turn| {
-        set_feature(turn, Feature::SpawnCsv, /*enabled*/ true);
-    })
-    .await;
-    normal_agent_job.assert_visible_contains(&["spawn_agents_on_csv"]);
-    normal_agent_job.assert_visible_lacks(&["report_agent_job_result"]);
-
-    let worker_agent_job = probe(|turn| {
-        set_feature(turn, Feature::SpawnCsv, /*enabled*/ true);
-        turn.session_source =
-            SessionSource::SubAgent(SubAgentSource::Other("agent_job:42".to_string()));
-    })
-    .await;
-    worker_agent_job.assert_visible_contains(&["spawn_agents_on_csv", "report_agent_job_result"]);
 }
 
 #[tokio::test]

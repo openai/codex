@@ -167,7 +167,6 @@ fn save_config_resolved_fields(
         config.agent_max_threads
     };
     agents.max_depth = Some(config.agent_max_depth);
-    agents.job_max_runtime_seconds = config.agent_job_max_runtime_seconds;
     agents.interrupt_message = Some(config.agent_interrupt_message_enabled);
 
     lock_config

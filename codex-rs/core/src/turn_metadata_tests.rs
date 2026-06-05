@@ -306,8 +306,8 @@ fn turn_metadata_state_includes_known_parent_for_non_thread_spawn_subagents_with
         (SubAgentSource::Review, "review"),
         (SubAgentSource::Other("guardian".to_string()), "guardian"),
         (
-            SubAgentSource::Other("agent_job:job-1".to_string()),
-            "agent_job:job-1",
+            SubAgentSource::Other("custom_worker:job-1".to_string()),
+            "custom_worker:job-1",
         ),
     ];
 

@@ -667,9 +667,6 @@ pub struct AgentsToml {
     /// Root sessions start at depth 0.
     #[schemars(range(min = 1))]
     pub max_depth: Option<i32>,
-    /// Default maximum runtime in seconds for agent job workers.
-    #[schemars(range(min = 1))]
-    pub job_max_runtime_seconds: Option<u64>,
     /// Whether to record a model-visible message when an agent turn is interrupted.
     /// Defaults to true.
     pub interrupt_message: Option<bool>,

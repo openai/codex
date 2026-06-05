@@ -6776,7 +6776,6 @@ async fn load_config_rejects_missing_agent_role_config_file() -> std::io::Result
         agents: Some(AgentsToml {
             max_threads: None,
             max_depth: None,
-            job_max_runtime_seconds: None,
             interrupt_message: None,
             roles: BTreeMap::from([(
                 "researcher".to_string(),
@@ -7724,7 +7723,6 @@ async fn load_config_normalizes_agent_role_nickname_candidates() -> std::io::Res
         agents: Some(AgentsToml {
             max_threads: None,
             max_depth: None,
-            job_max_runtime_seconds: None,
             interrupt_message: None,
             roles: BTreeMap::from([(
                 "researcher".to_string(),
@@ -7767,7 +7765,6 @@ async fn load_config_rejects_empty_agent_role_nickname_candidates() -> std::io::
         agents: Some(AgentsToml {
             max_threads: None,
             max_depth: None,
-            job_max_runtime_seconds: None,
             interrupt_message: None,
             roles: BTreeMap::from([(
                 "researcher".to_string(),
@@ -7804,7 +7801,6 @@ async fn load_config_rejects_duplicate_agent_role_nickname_candidates() -> std::
         agents: Some(AgentsToml {
             max_threads: None,
             max_depth: None,
-            job_max_runtime_seconds: None,
             interrupt_message: None,
             roles: BTreeMap::from([(
                 "researcher".to_string(),
@@ -7841,7 +7837,6 @@ async fn load_config_rejects_unsafe_agent_role_nickname_candidates() -> std::io:
         agents: Some(AgentsToml {
             max_threads: None,
             max_depth: None,
-            job_max_runtime_seconds: None,
             interrupt_message: None,
             roles: BTreeMap::from([(
                 "researcher".to_string(),
