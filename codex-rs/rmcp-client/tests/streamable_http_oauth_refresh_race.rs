@@ -1669,6 +1669,7 @@ fn spawn_client_child_held_open(
     Ok(command.spawn()?)
 }
 
+#[cfg(unix)]
 fn spawn_client_child_with_attempt(
     codex_home: &TempDir,
     server_url: &str,
@@ -1745,6 +1746,7 @@ fn spawn_operation_timeout_child_held_open(
     Ok(command.spawn()?)
 }
 
+#[cfg(unix)]
 fn spawn_concurrent_waiter_child(
     codex_home: &TempDir,
     server_url: &str,
@@ -1769,6 +1771,7 @@ fn spawn_concurrent_waiter_child(
     Ok(command.spawn()?)
 }
 
+#[cfg(unix)]
 fn spawn_read_only_refresh_child(
     codex_home: &TempDir,
     server_url: &str,
@@ -1861,6 +1864,7 @@ fn file_oauth_refresh_lock_path(codex_home: &TempDir, server_url: &str) -> anyho
     )))
 }
 
+#[cfg(unix)]
 fn legacy_file_oauth_refresh_lock_path(
     codex_home: &TempDir,
     server_url: &str,
@@ -1885,8 +1889,10 @@ fn fallback_lock_path_and_user_namespace(
     codex_home: &TempDir,
 ) -> anyhow::Result<(PathBuf, String)> {
     let canonical_home = codex_home.path().canonicalize()?;
-    let codex_home_id =
-        sha_256_bytes_prefix(canonical_home.as_os_str().to_string_lossy().as_bytes());
+    let canonical_home = canonical_home.as_os_str().to_string_lossy().into_owned();
+    #[cfg(windows)]
+    let canonical_home = normalize_windows_device_path(canonical_home);
+    let codex_home_id = sha_256_bytes_prefix(canonical_home.as_bytes());
     let prefix = format!("{FALLBACK_LOCK_PREFIX}-");
     let suffix = format!("-{codex_home_id}.lock");
     for entry in fs::read_dir(shared_lock_root()?)? {
@@ -1917,13 +1923,10 @@ fn shared_lock_root() -> anyhow::Result<PathBuf> {
     use windows_sys::Win32::System::SystemInformation::GetSystemWindowsDirectoryW;
 
     let mut buffer = vec![0_u16; 32_768];
+    let buffer_len =
+        u32::try_from(buffer.len()).context("Windows path buffer length did not fit u32")?;
     // SAFETY: buffer is writable for the length passed to GetSystemWindowsDirectoryW.
-    let length = unsafe {
-        GetSystemWindowsDirectoryW(
-            buffer.as_mut_ptr(),
-            u32::try_from(buffer.len()).expect("Windows path buffer length fits in u32"),
-        )
-    };
+    let length = unsafe { GetSystemWindowsDirectoryW(buffer.as_mut_ptr(), buffer_len) };
     if length == 0 {
         return Err(io::Error::last_os_error())
             .context("failed to resolve the system Windows directory");
@@ -1934,6 +1937,23 @@ fn shared_lock_root() -> anyhow::Result<PathBuf> {
         "system Windows directory exceeded the fixed path buffer"
     );
     Ok(PathBuf::from(OsString::from_wide(&buffer[..length])).join("Temp"))
+}
+
+#[cfg(windows)]
+fn normalize_windows_device_path(path: String) -> String {
+    if let Some(unc) = path.strip_prefix(r"\\?\UNC\") {
+        return format!(r"\\{unc}");
+    }
+    if let Some(unc) = path.strip_prefix(r"\\.\UNC\") {
+        return format!(r"\\{unc}");
+    }
+    if let Some(path) = path
+        .strip_prefix(r"\\?\")
+        .or_else(|| path.strip_prefix(r"\\.\"))
+    {
+        return path.to_string();
+    }
+    path
 }
 
 #[cfg(not(any(unix, windows)))]

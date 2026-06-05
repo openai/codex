@@ -1119,57 +1119,98 @@ async fn create_oauth_transport_and_runtime(
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
     use std::ffi::OsString;
+    #[cfg(unix)]
     use std::fs::OpenOptions;
+    #[cfg(unix)]
     use std::path::Path;
+    #[cfg(unix)]
     use std::path::PathBuf;
+    #[cfg(unix)]
     use std::sync::Arc;
     use std::time::Duration;
+    #[cfg(unix)]
     use std::time::SystemTime;
+    #[cfg(unix)]
     use std::time::UNIX_EPOCH;
 
+    #[cfg(unix)]
     use anyhow::Context;
+    #[cfg(unix)]
     use codex_exec_server::Environment;
+    #[cfg(unix)]
     use oauth2::AccessToken;
+    #[cfg(unix)]
     use oauth2::RefreshToken;
+    #[cfg(unix)]
     use oauth2::basic::BasicTokenType;
     use pretty_assertions::assert_eq;
+    #[cfg(unix)]
     use rmcp::model::ClientCapabilities;
+    #[cfg(unix)]
     use rmcp::model::Implementation;
+    #[cfg(unix)]
     use rmcp::model::ProtocolVersion;
+    #[cfg(unix)]
     use rmcp::transport::auth::CredentialStore;
+    #[cfg(unix)]
     use rmcp::transport::auth::OAuthTokenResponse;
+    #[cfg(unix)]
     use rmcp::transport::auth::StoredCredentials;
+    #[cfg(unix)]
     use rmcp::transport::auth::VendorExtraTokenFields;
+    #[cfg(unix)]
     use serde_json::Value;
+    #[cfg(unix)]
     use serde_json::json;
+    #[cfg(unix)]
     use sha2::Digest;
+    #[cfg(unix)]
     use sha2::Sha256;
+    #[cfg(unix)]
     use tempfile::TempDir;
     use tokio::time;
+    #[cfg(unix)]
     use wiremock::Mock;
+    #[cfg(unix)]
     use wiremock::MockServer;
+    #[cfg(unix)]
     use wiremock::Request;
+    #[cfg(unix)]
     use wiremock::ResponseTemplate;
+    #[cfg(unix)]
     use wiremock::matchers::method;
+    #[cfg(unix)]
     use wiremock::matchers::path;
 
     use super::*;
+    #[cfg(unix)]
     use crate::oauth::WrappedOAuthTokenResponse;
+    #[cfg(unix)]
     use crate::oauth::load_oauth_tokens;
+    #[cfg(unix)]
     use crate::oauth::save_oauth_tokens;
 
+    #[cfg(unix)]
     const OPERATION_TEST_SERVER_NAME: &str = "test-completed-operation-persistence";
+    #[cfg(unix)]
     const OPERATION_TEST_CLIENT_ID: &str = "test-operation-client-id";
+    #[cfg(unix)]
     const OPERATION_TEST_OLD_ACCESS_TOKEN: &str = "old-operation-access-token";
+    #[cfg(unix)]
     const OPERATION_TEST_OLD_REFRESH_TOKEN: &str = "old-operation-refresh-token";
+    #[cfg(unix)]
     const OPERATION_TEST_NEW_ACCESS_TOKEN: &str = "new-operation-access-token";
+    #[cfg(unix)]
     const OPERATION_TEST_NEW_REFRESH_TOKEN: &str = "new-operation-refresh-token";
 
+    #[cfg(unix)]
     struct CodexHomeGuard {
         original: Option<OsString>,
     }
 
+    #[cfg(unix)]
     impl CodexHomeGuard {
         fn set(path: &Path) -> Self {
             let original = std::env::var_os("CODEX_HOME");
@@ -1181,6 +1222,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     impl Drop for CodexHomeGuard {
         fn drop(&mut self) {
             if let Some(original) = &self.original {
@@ -1346,7 +1388,7 @@ mod tests {
             .write(true)
             .create(true)
             .truncate(false)
-            .open(operation_test_fallback_lock_path(codex_home.path()))?;
+            .open(operation_test_fallback_lock_path(codex_home.path())?)?;
         fallback_lock.lock_shared()?;
 
         let new_response = operation_test_token_response(
@@ -1445,6 +1487,7 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(unix)]
     fn operation_test_token_response(
         access_token: &str,
         refresh_token: &str,
@@ -1460,18 +1503,20 @@ mod tests {
     }
 
     #[cfg(unix)]
-    fn operation_test_fallback_lock_path(codex_home: &Path) -> PathBuf {
+    fn operation_test_fallback_lock_path(codex_home: &Path) -> Result<PathBuf> {
+        let canonical_home = codex_home.canonicalize()?;
         let mut hasher = Sha256::new();
-        hasher.update(codex_home.as_os_str().to_string_lossy().as_bytes());
+        hasher.update(canonical_home.as_os_str().to_string_lossy().as_bytes());
         let digest = format!("{:x}", hasher.finalize());
         // SAFETY: getuid has no preconditions and returns the real UID.
         let user_namespace = format!("uid-{}", unsafe { libc::getuid() });
-        PathBuf::from("/tmp").join(format!(
+        Ok(PathBuf::from("/tmp").join(format!(
             "codex-mcp-oauth-fallback-{user_namespace}-{}.lock",
             &digest[..16]
-        ))
+        )))
     }
 
+    #[cfg(unix)]
     fn unix_millis() -> u64 {
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -1479,6 +1524,7 @@ mod tests {
             .as_millis() as u64
     }
 
+    #[cfg(unix)]
     fn unix_seconds() -> u64 {
         SystemTime::now()
             .duration_since(UNIX_EPOCH)

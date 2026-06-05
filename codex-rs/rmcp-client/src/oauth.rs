@@ -736,13 +736,10 @@ fn os_shared_temp_dir() -> Result<PathBuf> {
     use windows_sys::Win32::System::SystemInformation::GetSystemWindowsDirectoryW;
 
     let mut buffer = vec![0_u16; 32_768];
+    let buffer_len =
+        u32::try_from(buffer.len()).context("Windows path buffer length did not fit u32")?;
     // SAFETY: buffer is writable for the length passed to GetSystemWindowsDirectoryW.
-    let length = unsafe {
-        GetSystemWindowsDirectoryW(
-            buffer.as_mut_ptr(),
-            u32::try_from(buffer.len()).expect("Windows path buffer length fits in u32"),
-        )
-    };
+    let length = unsafe { GetSystemWindowsDirectoryW(buffer.as_mut_ptr(), buffer_len) };
     if length == 0 {
         return Err(io::Error::last_os_error())
             .context("failed to resolve the system Windows directory");
@@ -1321,6 +1318,7 @@ mod tests {
             }
         }
 
+        #[cfg(unix)]
         fn path(&self) -> &Path {
             self._dir.path()
         }
