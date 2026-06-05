@@ -1187,9 +1187,7 @@ impl Session {
                 .await
                 .turn
                 .as_ref()
-                .is_some_and(|turn| {
-                    turn.turn_id == turn_context.sub_id && turn.active_this_turn()
-                });
+                .is_some_and(|turn| turn.turn_id == turn_context.sub_id && turn.active_this_turn());
         if had_active_goal_this_turn {
             self.goal_runtime
                 .suppress_next_idle_continuation
