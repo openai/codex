@@ -495,10 +495,7 @@ pub(crate) fn compute_expires_at_millis(response: &OAuthTokenResponse) -> Option
 }
 
 fn expires_in_from_timestamp(expires_at: u64) -> Option<u64> {
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_else(|_| Duration::from_secs(0));
-    let now_ms = now.as_millis() as u64;
+    let now_ms = current_time_millis();
 
     if expires_at <= now_ms {
         None
@@ -507,17 +504,23 @@ fn expires_in_from_timestamp(expires_at: u64) -> Option<u64> {
     }
 }
 
+pub(crate) fn token_is_expired(expires_at: Option<u64>) -> bool {
+    expires_at.is_some_and(|expires_at| expires_at <= current_time_millis())
+}
+
 fn token_needs_refresh(expires_at: Option<u64>) -> bool {
     let Some(expires_at) = expires_at else {
         return false;
     };
 
-    let now = SystemTime::now()
+    current_time_millis().saturating_add(REFRESH_SKEW_MILLIS) >= expires_at
+}
+
+fn current_time_millis() -> u64 {
+    SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_else(|_| Duration::from_secs(0))
-        .as_millis() as u64;
-
-    now.saturating_add(REFRESH_SKEW_MILLIS) >= expires_at
+        .as_millis() as u64
 }
 
 fn compute_store_key(server_name: &str, server_url: &str) -> Result<String> {

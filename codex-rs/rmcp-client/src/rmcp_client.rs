@@ -66,6 +66,7 @@ use crate::in_process_transport::InProcessTransportFactory;
 use crate::load_oauth_tokens;
 use crate::oauth::OAuthPersistor;
 use crate::oauth::StoredOAuthTokens;
+use crate::oauth::token_is_expired;
 use crate::stdio_server_launcher::StdioServerCommand;
 use crate::stdio_server_launcher::StdioServerLauncher;
 use crate::stdio_server_launcher::StdioServerProcessHandle;
@@ -770,8 +771,7 @@ impl RmcpClient {
                                 matches!(auth_err, AuthError::NoAuthorizationSupport)
                             }) =>
                         {
-                            if initial_tokens.token_response.0.expires_in() == Some(Duration::ZERO)
-                            {
+                            if token_is_expired(initial_tokens.expires_at) {
                                 return Err(anyhow!(
                                     "stored OAuth access token for MCP server `{server_name}` is expired and OAuth metadata discovery is unavailable"
                                 ));
