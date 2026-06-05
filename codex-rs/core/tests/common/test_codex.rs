@@ -248,16 +248,17 @@ impl TestCodexBuilder {
     {
         let model = model.to_string();
         self.with_config(move |config| {
-            let mut model_catalog = bundled_models_response()
-                .unwrap_or_else(|err| panic!("bundled models.json should parse: {err}"));
+            let model_catalog = config.model_catalog.get_or_insert_with(|| {
+                bundled_models_response()
+                    .unwrap_or_else(|err| panic!("bundled models.json should parse: {err}"))
+            });
             let model_info = model_catalog
                 .models
                 .iter_mut()
                 .find(|model_info| model_info.slug == model)
-                .unwrap_or_else(|| panic!("{model} should exist in bundled models.json"));
+                .unwrap_or_else(|| panic!("{model} should exist in the configured model catalog"));
             override_model_info(model_info);
             config.model = Some(model);
-            config.model_catalog = Some(model_catalog);
         })
     }
 
