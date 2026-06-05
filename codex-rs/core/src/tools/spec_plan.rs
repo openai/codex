@@ -59,6 +59,7 @@ use crate::tools::router::ToolRouterParams;
 use codex_features::Feature;
 use codex_login::AuthManager;
 use codex_mcp::ToolInfo;
+use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::InputModality;
@@ -249,6 +250,11 @@ fn spec_for_model_request(
 
 fn hosted_model_tool_specs(context: &CoreToolPlanContext<'_>) -> Vec<ToolSpec> {
     let turn_context = context.turn_context;
+    // Responses Lite accepts schemas for client-executed tools, not hosted Responses tools.
+    if turn_context.model_info.use_responses_lite {
+        return Vec::new();
+    }
+
     let mut specs = Vec::new();
     let provider_capabilities = turn_context.provider.capabilities();
     let web_search_mode = (!standalone_web_run_available(context.extension_tool_executors)
@@ -347,9 +353,15 @@ fn image_generation_runtime_enabled(turn_context: &TurnContext) -> bool {
 }
 
 fn standalone_image_generation_model_visible(turn_context: &TurnContext) -> bool {
-    image_generation_runtime_enabled(turn_context)
-        && turn_context.features.get().enabled(Feature::ImageGenExt)
-        && namespace_tools_enabled(turn_context)
+    if !image_generation_runtime_enabled(turn_context) || !namespace_tools_enabled(turn_context) {
+        return false;
+    }
+
+    if turn_context.model_info.use_responses_lite {
+        return true;
+    }
+
+    turn_context.features.get().enabled(Feature::ImageGenExt)
 }
 
 fn standalone_image_generation_available(
@@ -563,6 +575,23 @@ fn add_tool_sources(context: &CoreToolPlanContext<'_>, planned_tools: &mut Plann
     for spec in hosted_model_tool_specs(context) {
         planned_tools.add_hosted_spec(spec);
     }
+}
+
+fn standalone_web_search_model_visible(turn_context: &TurnContext) -> bool {
+    if turn_context.config.web_search_mode.value() == WebSearchMode::Disabled
+        || !namespace_tools_enabled(turn_context)
+    {
+        return false;
+    }
+
+    if turn_context.model_info.use_responses_lite {
+        return true;
+    }
+
+    turn_context
+        .features
+        .get()
+        .enabled(Feature::StandaloneWebSearch)
 }
 
 fn standalone_web_run_available(
@@ -904,6 +933,11 @@ fn append_extension_tool_executors(
 
     for executor in executors.iter().cloned() {
         let tool_name = executor.tool_name();
+        if tool_name == ToolName::namespaced("web", "run")
+            && !standalone_web_search_model_visible(turn_context)
+        {
+            continue;
+        }
         if tool_name == ToolName::namespaced(IMAGE_GEN_NAMESPACE, IMAGEGEN_TOOL_NAME)
             && !standalone_image_generation_model_visible(turn_context)
         {
