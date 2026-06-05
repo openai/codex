@@ -48,11 +48,12 @@ pub async fn determine_streamable_http_auth_status(
         return Ok(McpAuthStatus::BearerToken);
     }
 
-    if load_oauth_tokens(server_name, url, store_mode)?
-        .as_ref()
-        .is_some_and(stored_oauth_tokens_are_locally_usable)
-    {
-        return Ok(McpAuthStatus::OAuth);
+    if let Some(tokens) = load_oauth_tokens(server_name, url, store_mode)? {
+        return Ok(if stored_oauth_tokens_are_locally_usable(&tokens) {
+            McpAuthStatus::OAuth
+        } else {
+            McpAuthStatus::NotLoggedIn
+        });
     }
 
     match discover_streamable_http_oauth_with_headers(url, &default_headers).await {

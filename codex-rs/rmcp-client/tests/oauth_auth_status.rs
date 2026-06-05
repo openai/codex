@@ -34,29 +34,25 @@ const CHILD_SCENARIO_ENV: &str = "MCP_TEST_AUTH_STATUS_SCENARIO";
 const CHILD_SERVER_URL_ENV: &str = "MCP_TEST_AUTH_STATUS_SERVER_URL";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
-async fn locally_unusable_credentials_are_not_logged_in() -> anyhow::Result<()> {
-    let server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/.well-known/oauth-authorization-server/mcp"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "authorization_endpoint": format!("{}/oauth/authorize", server.uri()),
-            "token_endpoint": format!("{}/oauth/token", server.uri()),
-        })))
-        .expect(2)
-        .mount(&server)
-        .await;
+async fn blank_access_tokens_are_not_logged_in_without_discovery() -> anyhow::Result<()> {
+    run_child("empty_access_token", "not-a-valid-url").await?;
+    run_child("whitespace_access_token", "not-a-valid-url").await
+}
 
-    let server_url = format!("{}/mcp", server.uri());
-    run_child("expired_without_refresh", &server_url).await?;
-    run_child("empty_fields", &server_url).await?;
-
-    server.verify().await;
-    Ok(())
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn blank_refresh_tokens_do_not_make_expired_credentials_usable() -> anyhow::Result<()> {
+    run_child("expired_with_empty_refresh", "not-a-valid-url").await?;
+    run_child("expired_with_whitespace_refresh", "not-a-valid-url").await
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn refreshable_expired_credentials_report_oauth() -> anyhow::Result<()> {
     run_child("expired_with_refresh", "not-a-valid-url").await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn future_credentials_without_refresh_report_oauth_without_discovery() -> anyhow::Result<()> {
+    run_child("future_without_refresh", "not-a-valid-url").await
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
@@ -147,10 +143,31 @@ async fn oauth_auth_status_child() -> anyhow::Result<()> {
 
     let (access_token, client_id, refresh_token, expires_at, expected_status) =
         match scenario.as_str() {
-            "expired_without_refresh" => (
-                "expired-access-token",
+            "empty_access_token" => (
+                "",
                 "client-id",
                 /*refresh_token*/ None,
+                /*expires_at*/ None,
+                McpAuthStatus::NotLoggedIn,
+            ),
+            "whitespace_access_token" => (
+                " \t ",
+                "client-id",
+                /*refresh_token*/ None,
+                /*expires_at*/ None,
+                McpAuthStatus::NotLoggedIn,
+            ),
+            "expired_with_empty_refresh" => (
+                "expired-access-token",
+                "client-id",
+                Some(""),
+                Some(0),
+                McpAuthStatus::NotLoggedIn,
+            ),
+            "expired_with_whitespace_refresh" => (
+                "expired-access-token",
+                "client-id",
+                Some(" \t "),
                 Some(0),
                 McpAuthStatus::NotLoggedIn,
             ),
@@ -160,13 +177,6 @@ async fn oauth_auth_status_child() -> anyhow::Result<()> {
                 /*refresh_token*/ None,
                 /*expires_at*/ None,
                 McpAuthStatus::OAuth,
-            ),
-            "empty_fields" => (
-                "",
-                "",
-                Some(""),
-                /*expires_at*/ None,
-                McpAuthStatus::NotLoggedIn,
             ),
             "unreachable_server" => (
                 "access-token",
@@ -180,6 +190,13 @@ async fn oauth_auth_status_child() -> anyhow::Result<()> {
                 "client-id",
                 Some("refresh-token"),
                 Some(0),
+                McpAuthStatus::OAuth,
+            ),
+            "future_without_refresh" => (
+                "access-token",
+                "client-id",
+                /*refresh_token*/ None,
+                Some(u64::MAX),
                 McpAuthStatus::OAuth,
             ),
             unexpected => panic!("unexpected child scenario: {unexpected}"),
@@ -210,7 +227,12 @@ async fn oauth_auth_status_child() -> anyhow::Result<()> {
                 );
             }
         }
-        "expired_without_refresh" | "empty_fields" | "expired_with_refresh" => {}
+        "empty_access_token"
+        | "whitespace_access_token"
+        | "expired_with_empty_refresh"
+        | "expired_with_whitespace_refresh"
+        | "expired_with_refresh"
+        | "future_without_refresh" => {}
         unexpected => panic!("unexpected child scenario: {unexpected}"),
     }
 
