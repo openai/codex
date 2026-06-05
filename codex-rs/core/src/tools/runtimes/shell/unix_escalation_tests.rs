@@ -11,6 +11,7 @@ use crate::config::Constrained;
 use crate::sandboxing::SandboxPermissions;
 use crate::session::tests::make_session_and_context;
 use anyhow::Context;
+use codex_config::types::ApprovalsReviewer;
 use codex_execpolicy::Decision;
 use codex_execpolicy::Evaluation;
 use codex_execpolicy::PolicyParser;
@@ -151,6 +152,42 @@ fn approval_sandbox_permissions_only_downgrades_preapproved_additional_permissio
         ),
         SandboxPermissions::RequireEscalated,
     );
+}
+
+#[test]
+fn parent_approved_sandbox_override_tracks_parent_approval_sources() {
+    assert!(super::parent_approved_sandbox_override(
+        SandboxPermissions::RequireEscalated,
+        /*additional_permissions_preapproved*/ false,
+        &crate::tools::sandboxing::ExecApprovalRequirement::NeedsApproval {
+            reason: None,
+            proposed_execpolicy_amendment: None,
+        },
+    ));
+    assert!(super::parent_approved_sandbox_override(
+        SandboxPermissions::WithAdditionalPermissions,
+        /*additional_permissions_preapproved*/ true,
+        &crate::tools::sandboxing::ExecApprovalRequirement::Skip {
+            bypass_sandbox: false,
+            proposed_execpolicy_amendment: None,
+        },
+    ));
+    assert!(!super::parent_approved_sandbox_override(
+        SandboxPermissions::UseDefault,
+        /*additional_permissions_preapproved*/ false,
+        &crate::tools::sandboxing::ExecApprovalRequirement::NeedsApproval {
+            reason: None,
+            proposed_execpolicy_amendment: None,
+        },
+    ));
+    assert!(!super::parent_approved_sandbox_override(
+        SandboxPermissions::RequireEscalated,
+        /*additional_permissions_preapproved*/ false,
+        &crate::tools::sandboxing::ExecApprovalRequirement::Skip {
+            bypass_sandbox: true,
+            proposed_execpolicy_amendment: None,
+        },
+    ));
 }
 
 #[test]
@@ -428,6 +465,7 @@ async fn preapproved_additional_permissions_escalate_intercepted_exec() -> anyho
         sandbox_permissions: SandboxPermissions::WithAdditionalPermissions,
         approval_sandbox_permissions: SandboxPermissions::UseDefault,
         prompt_permissions: Some(requested_permissions),
+        parent_sandbox_override_approved: true,
         stopwatch: codex_shell_escalation::Stopwatch::new(Duration::from_secs(1)),
     };
 
@@ -445,6 +483,143 @@ async fn preapproved_additional_permissions_escalate_intercepted_exec() -> anyho
         )),
     );
     assert_eq!(action, expected);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn parent_require_escalated_approval_escalates_intercepted_exec() -> anyhow::Result<()> {
+    let (session, turn_context) = make_session_and_context().await;
+    let workdir = test_sandbox_cwd();
+    let provider = CoreShellActionProvider {
+        policy: Arc::new(RwLock::new(codex_execpolicy::Policy::empty())),
+        session: Arc::new(session),
+        turn: Arc::new(turn_context),
+        call_id: "parent-require-escalated".to_string(),
+        tool_name: GuardianCommandSource::Shell,
+        approval_policy: AskForApproval::OnRequest,
+        permission_profile: PermissionProfile::workspace_write(),
+        file_system_sandbox_policy: read_only_file_system_sandbox_policy(),
+        sandbox_policy_cwd: workdir.clone(),
+        sandbox_permissions: SandboxPermissions::RequireEscalated,
+        approval_sandbox_permissions: SandboxPermissions::RequireEscalated,
+        prompt_permissions: None,
+        parent_sandbox_override_approved: true,
+        stopwatch: codex_shell_escalation::Stopwatch::new(Duration::from_secs(1)),
+    };
+
+    let action = codex_shell_escalation::EscalationPolicy::determine_action(
+        &provider,
+        &AbsolutePathBuf::from_absolute_path("/usr/bin/curl")?,
+        &["curl".to_string(), "example.com".to_string()],
+        &workdir,
+    )
+    .await?;
+
+    assert_eq!(
+        action,
+        codex_shell_escalation::EscalationDecision::Escalate(EscalationExecution::Unsandboxed)
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn parent_approval_does_not_bypass_guardian_routed_exec_prompt() -> anyhow::Result<()> {
+    let (session, mut turn_context) = make_session_and_context().await;
+    let approval_policy = AskForApproval::Granular(GranularApprovalConfig {
+        sandbox_approval: false,
+        rules: true,
+        skill_approval: true,
+        request_permissions: true,
+        mcp_elicitations: true,
+    });
+    turn_context.approval_policy = Constrained::allow_any(approval_policy);
+    let mut config = (*turn_context.config).clone();
+    config.approvals_reviewer = ApprovalsReviewer::AutoReview;
+    turn_context.config = Arc::new(config);
+    let workdir = test_sandbox_cwd();
+    let provider = CoreShellActionProvider {
+        policy: Arc::new(RwLock::new(codex_execpolicy::Policy::empty())),
+        session: Arc::new(session),
+        turn: Arc::new(turn_context),
+        call_id: "parent-guardian-routed".to_string(),
+        tool_name: GuardianCommandSource::Shell,
+        approval_policy,
+        permission_profile: PermissionProfile::workspace_write(),
+        file_system_sandbox_policy: read_only_file_system_sandbox_policy(),
+        sandbox_policy_cwd: workdir.clone(),
+        sandbox_permissions: SandboxPermissions::RequireEscalated,
+        approval_sandbox_permissions: SandboxPermissions::RequireEscalated,
+        prompt_permissions: None,
+        parent_sandbox_override_approved: true,
+        stopwatch: codex_shell_escalation::Stopwatch::new(Duration::from_secs(1)),
+    };
+
+    let action = codex_shell_escalation::EscalationPolicy::determine_action(
+        &provider,
+        &AbsolutePathBuf::from_absolute_path("/usr/bin/curl")?,
+        &["curl".to_string(), "example.com".to_string()],
+        &workdir,
+    )
+    .await?;
+
+    assert_eq!(
+        action,
+        codex_shell_escalation::EscalationDecision::Deny {
+            reason: Some("Execution forbidden by policy".to_string()),
+        }
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn parent_approval_does_not_override_intercepted_exec_policy_prompt() -> anyhow::Result<()> {
+    let (session, turn_context) = make_session_and_context().await;
+    let mut parser = PolicyParser::new();
+    parser.parse(
+        "test.rules",
+        r#"prefix_rule(pattern = ["curl"], decision = "prompt")"#,
+    )?;
+    let workdir = test_sandbox_cwd();
+    let provider = CoreShellActionProvider {
+        policy: Arc::new(RwLock::new(parser.build())),
+        session: Arc::new(session),
+        turn: Arc::new(turn_context),
+        call_id: "parent-policy-prompt".to_string(),
+        tool_name: GuardianCommandSource::Shell,
+        approval_policy: AskForApproval::Granular(GranularApprovalConfig {
+            sandbox_approval: true,
+            rules: false,
+            skill_approval: true,
+            request_permissions: true,
+            mcp_elicitations: true,
+        }),
+        permission_profile: PermissionProfile::workspace_write(),
+        file_system_sandbox_policy: read_only_file_system_sandbox_policy(),
+        sandbox_policy_cwd: workdir.clone(),
+        sandbox_permissions: SandboxPermissions::RequireEscalated,
+        approval_sandbox_permissions: SandboxPermissions::RequireEscalated,
+        prompt_permissions: None,
+        parent_sandbox_override_approved: true,
+        stopwatch: codex_shell_escalation::Stopwatch::new(Duration::from_secs(1)),
+    };
+
+    let action = codex_shell_escalation::EscalationPolicy::determine_action(
+        &provider,
+        &AbsolutePathBuf::from_absolute_path("/usr/bin/curl")?,
+        &["curl".to_string(), "example.com".to_string()],
+        &workdir,
+    )
+    .await?;
+
+    assert_eq!(
+        action,
+        codex_shell_escalation::EscalationDecision::Deny {
+            reason: Some("Execution forbidden by policy".to_string()),
+        }
+    );
 
     Ok(())
 }
@@ -561,6 +736,7 @@ async fn execve_permission_request_hook_short_circuits_prompt() -> anyhow::Resul
         sandbox_permissions: SandboxPermissions::RequireEscalated,
         approval_sandbox_permissions: SandboxPermissions::RequireEscalated,
         prompt_permissions: None,
+        parent_sandbox_override_approved: false,
         stopwatch: codex_shell_escalation::Stopwatch::new(Duration::from_secs(1)),
     };
 
@@ -775,6 +951,7 @@ prefix_rule(pattern = ["{cat_path_literal}"], decision = "allow")
         sandbox_permissions: SandboxPermissions::UseDefault,
         approval_sandbox_permissions: SandboxPermissions::UseDefault,
         prompt_permissions: None,
+        parent_sandbox_override_approved: false,
         stopwatch: codex_shell_escalation::Stopwatch::new(Duration::from_secs(1)),
     };
 
@@ -818,6 +995,7 @@ async fn denied_reads_keep_granular_sandbox_rejection_for_escalation() -> anyhow
         sandbox_permissions: SandboxPermissions::RequireEscalated,
         approval_sandbox_permissions: SandboxPermissions::RequireEscalated,
         prompt_permissions: None,
+        parent_sandbox_override_approved: false,
         stopwatch: codex_shell_escalation::Stopwatch::new(Duration::from_secs(1)),
     };
 
