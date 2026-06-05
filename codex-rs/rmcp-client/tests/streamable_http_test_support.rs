@@ -184,24 +184,16 @@ pub(crate) async fn arm_session_post_failure(
 }
 
 pub(crate) async fn spawn_streamable_http_server() -> anyhow::Result<(Child, String)> {
-    spawn_streamable_http_server_with_env(&[]).await
-}
-
-pub(crate) async fn spawn_streamable_http_server_with_env(
-    env: &[(&str, &str)],
-) -> anyhow::Result<(Child, String)> {
     let listener = TcpListener::bind("127.0.0.1:0")?;
     let port = listener.local_addr()?.port();
     drop(listener);
 
     let bind_addr = format!("127.0.0.1:{port}");
     let base_url = format!("http://{bind_addr}");
-    let mut command = Command::new(streamable_http_server_bin()?);
-    command
+    let mut child = Command::new(streamable_http_server_bin()?)
         .kill_on_drop(true)
         .env("MCP_STREAMABLE_HTTP_BIND_ADDR", &bind_addr)
-        .envs(env.iter().copied());
-    let mut child = command.spawn()?;
+        .spawn()?;
 
     wait_for_streamable_http_server(&mut child, &bind_addr, Duration::from_secs(5)).await?;
     Ok((child, base_url))

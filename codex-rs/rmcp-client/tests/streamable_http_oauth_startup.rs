@@ -11,16 +11,22 @@ use codex_rmcp_client::save_oauth_tokens;
 use oauth2::AccessToken;
 use oauth2::RefreshToken;
 use oauth2::basic::BasicTokenType;
-use pretty_assertions::assert_eq;
 use rmcp::transport::auth::OAuthTokenResponse;
 use rmcp::transport::auth::VendorExtraTokenFields;
+use serde_json::Value;
+use serde_json::json;
 use tempfile::TempDir;
 use tokio::process::Command;
+use wiremock::Mock;
+use wiremock::MockServer;
+use wiremock::Request;
+use wiremock::ResponseTemplate;
+use wiremock::matchers::body_string_contains;
+use wiremock::matchers::header;
+use wiremock::matchers::method;
+use wiremock::matchers::path;
 
-use streamable_http_test_support::call_echo_tool;
-use streamable_http_test_support::expected_echo_result;
 use streamable_http_test_support::initialize_client;
-use streamable_http_test_support::spawn_streamable_http_server_with_env;
 
 const SERVER_NAME: &str = "test-streamable-http-oauth-startup";
 const EXPIRED_ACCESS_TOKEN: &str = "expired-access-token";
@@ -30,14 +36,67 @@ const CHILD_SERVER_URL_ENV: &str = "MCP_TEST_OAUTH_STARTUP_SERVER_URL";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn refreshes_expired_persisted_token_before_initialize() -> anyhow::Result<()> {
-    let (_server, base_url) = spawn_streamable_http_server_with_env(&[
-        ("MCP_EXPECT_BEARER", REFRESHED_ACCESS_TOKEN),
-        ("MCP_EXPECT_REFRESH_TOKEN", REFRESH_TOKEN),
-        ("MCP_REFRESH_ACCESS_TOKEN", REFRESHED_ACCESS_TOKEN),
-    ])
-    .await?;
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/.well-known/oauth-authorization-server/mcp"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "authorization_endpoint": format!("{}/oauth/authorize", server.uri()),
+            "token_endpoint": format!("{}/oauth/token", server.uri()),
+            "scopes_supported": [""],
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .and(body_string_contains("grant_type=refresh_token"))
+        .and(body_string_contains(format!(
+            "refresh_token={REFRESH_TOKEN}"
+        )))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "access_token": REFRESHED_ACCESS_TOKEN,
+            "token_type": "Bearer",
+            "expires_in": 7200,
+            "refresh_token": REFRESH_TOKEN,
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/mcp"))
+        .and(header(
+            "authorization",
+            format!("Bearer {REFRESHED_ACCESS_TOKEN}"),
+        ))
+        .respond_with(|request: &Request| {
+            let body: Value = request.body_json().expect("valid JSON-RPC request");
+            match body.get("method").and_then(Value::as_str) {
+                Some("initialize") => ResponseTemplate::new(200).set_body_json(json!({
+                    "jsonrpc": "2.0",
+                    "id": body.get("id").cloned().unwrap_or(Value::Null),
+                    "result": {
+                        "protocolVersion": body
+                            .pointer("/params/protocolVersion")
+                            .cloned()
+                            .unwrap_or_else(|| json!("2025-06-18")),
+                        "capabilities": {},
+                        "serverInfo": {
+                            "name": "oauth-startup-test",
+                            "version": "0.0.0-test",
+                        },
+                    },
+                })),
+                Some("notifications/initialized") => ResponseTemplate::new(202),
+                method => ResponseTemplate::new(400)
+                    .set_body_string(format!("unexpected JSON-RPC method: {method:?}")),
+            }
+        })
+        .expect(2)
+        .mount(&server)
+        .await;
+
     let codex_home = TempDir::new()?;
-    let server_url = format!("{base_url}/mcp");
+    let server_url = format!("{}/mcp", server.uri());
 
     // Credential storage resolves CODEX_HOME from the process environment.
     // Run the client half of the test in an ignored helper test so it can use
@@ -49,6 +108,7 @@ async fn refreshes_expired_persisted_token_before_initialize() -> anyhow::Result
         .status()
         .await?;
     assert!(status.success(), "OAuth startup child failed: {status}");
+    server.verify().await;
     Ok(())
 }
 
@@ -91,8 +151,5 @@ async fn oauth_startup_child() -> anyhow::Result<()> {
     .await?;
 
     initialize_client(&client).await?;
-
-    let result = call_echo_tool(&client, "after-refresh").await?;
-    assert_eq!(result, expected_echo_result("after-refresh"));
     Ok(())
 }
