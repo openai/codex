@@ -31,6 +31,7 @@ use crate::context::PersonalitySpecInstructions;
 use crate::default_skill_metadata_budget;
 use crate::environment_selection::ResolvedTurnEnvironments;
 use crate::exec_policy::ExecPolicyManager;
+use crate::mentions::collect_explicit_app_ids;
 use crate::parse_turn_item;
 use crate::path_utils::normalize_for_native_workdir;
 use crate::realtime_conversation::RealtimeConversationManager;
@@ -3252,6 +3253,12 @@ impl Session {
 
         if input.is_empty() {
             return Err(SteerInputError::EmptyInput);
+        }
+
+        let explicitly_enabled_connectors = collect_explicit_app_ids(&input);
+        if !explicitly_enabled_connectors.is_empty() {
+            self.merge_connector_selection(explicitly_enabled_connectors)
+                .await;
         }
 
         let additional_context_input = {

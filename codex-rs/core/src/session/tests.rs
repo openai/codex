@@ -8933,6 +8933,43 @@ async fn steer_input_returns_active_turn_id() {
 }
 
 #[tokio::test]
+async fn steer_input_merges_explicit_app_mentions_into_connector_selection() {
+    let (sess, tc, _rx) = make_session_and_context_with_rx().await;
+    let input = vec![TurnInput::UserInput {
+        content: vec![UserInput::Text {
+            text: "hello".to_string(),
+            text_elements: Vec::new(),
+        }],
+        client_id: None,
+    }];
+    sess.spawn_task(
+        Arc::clone(&tc),
+        input,
+        NeverEndingTask {
+            kind: TaskKind::Regular,
+            listen_to_cancellation_token: false,
+        },
+    )
+    .await;
+
+    let steer_input = vec![UserInput::Text {
+        text: "Use [$calendar](app://calendar).".to_string(),
+        text_elements: Vec::new(),
+    }];
+    sess.steer_input(
+        steer_input,
+        /*additional_context*/ Default::default(),
+        Some(&tc.sub_id),
+        /*client_user_message_id*/ None,
+        /*responsesapi_client_metadata*/ None,
+    )
+    .await
+    .expect("steering with matching expected turn id should succeed");
+
+    assert!(sess.get_connector_selection().await.contains("calendar"));
+}
+
+#[tokio::test]
 async fn abort_empty_active_turn_preserves_pending_input() {
     let (sess, _tc, _rx) = make_session_and_context_with_rx().await;
     let pending_item = ResponseItem::Message {
