@@ -55,6 +55,10 @@ pub fn with_chatgpt_cloudflare_cookie_store(
     builder.cookie_provider(Arc::clone(&SHARED_CHATGPT_CLOUDFLARE_COOKIE_STORE))
 }
 
+pub fn chatgpt_cloudflare_cookie_header(url: &reqwest::Url) -> Option<HeaderValue> {
+    SHARED_CHATGPT_CLOUDFLARE_COOKIE_STORE.cookies(url)
+}
+
 fn is_chatgpt_cookie_url(url: &reqwest::Url) -> bool {
     match url.scheme() {
         "https" => {}
