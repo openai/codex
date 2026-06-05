@@ -1186,16 +1186,17 @@ async fn assert_expired_credentials_refresh_with_read_only_codex_home(
     let authorization_headers = requests
         .iter()
         .filter(|request| request.method.as_str() == "POST" && request.url.path() == "/mcp")
-        .map(|request| {
-            request
+        .map(|request| -> anyhow::Result<String> {
+            let authorization = request
                 .headers
                 .get("authorization")
-                .expect("authorization header")
+                .context("missing authorization header")?;
+            Ok(authorization
                 .to_str()
-                .expect("ASCII authorization header")
-                .to_string()
+                .context("authorization header is not ASCII")?
+                .to_string())
         })
-        .collect::<Vec<_>>();
+        .collect::<anyhow::Result<Vec<_>>>()?;
     assert_eq!(
         authorization_headers,
         vec![format!("Bearer {NEW_ACCESS_TOKEN}"); 2]
@@ -1451,7 +1452,10 @@ async fn oauth_refresh_operation_timeout_child() -> anyhow::Result<()> {
 
     fs::write(ready_path, "ready")?;
     wait_for_paths(std::slice::from_ref(&go_path)).await?;
-    let outcome = match client.list_tools(None, Some(OPERATION_TIMEOUT)).await {
+    let outcome = match client
+        .list_tools(/*params*/ None, Some(OPERATION_TIMEOUT))
+        .await
+    {
         Ok(_) => "success".to_string(),
         Err(error) => format!("error:{error:#}"),
     };
@@ -1486,8 +1490,8 @@ async fn oauth_refresh_concurrent_waiter_child() -> anyhow::Result<()> {
     wait_for_paths(std::slice::from_ref(&go_path)).await?;
     let outcomes = timeout(Duration::from_secs(3), async {
         tokio::join!(
-            client.list_tools(None, /*timeout*/ None),
-            client.list_tools(None, /*timeout*/ None),
+            client.list_tools(/*params*/ None, /*timeout*/ None),
+            client.list_tools(/*params*/ None, /*timeout*/ None),
         )
     })
     .await
