@@ -9,6 +9,7 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
 
+use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
 use codex_api::SharedAuthProvider;
@@ -41,6 +42,7 @@ use rmcp::model::ReadResourceResult;
 use rmcp::model::RequestId;
 use rmcp::model::ServerResult;
 use rmcp::model::Tool;
+use rmcp::service::ClientInitializeError;
 use rmcp::service::RoleClient;
 use rmcp::service::RunningService;
 use rmcp::service::{self};
@@ -66,6 +68,7 @@ use crate::in_process_transport::InProcessTransportFactory;
 use crate::load_oauth_tokens;
 use crate::oauth::OAuthPersistor;
 use crate::oauth::StoredOAuthTokens;
+use crate::oauth_invalid_token;
 use crate::stdio_server_launcher::StdioServerCommand;
 use crate::stdio_server_launcher::StdioServerLauncher;
 use crate::stdio_server_launcher::StdioServerProcessHandle;
@@ -222,6 +225,10 @@ enum ClientOperationError {
     #[error("timed out awaiting {label} after {duration:?}")]
     Timeout { label: String, duration: Duration },
 }
+
+#[derive(Debug, thiserror::Error)]
+#[error("handshaking with MCP server failed: {0}")]
+struct McpHandshakeError(#[source] ClientInitializeError);
 
 pub type Elicitation = CreateElicitationRequestParams;
 
@@ -396,9 +403,47 @@ impl RmcpClient {
             }
         };
 
-        let (service, oauth_persistor) =
-            Self::connect_pending_transport(pending_transport, client_service.clone(), timeout)
-                .await?;
+        let startup_oauth_persistor = match &pending_transport {
+            PendingTransport::StreamableHttpWithOAuth {
+                oauth_persistor, ..
+            } => Some(oauth_persistor.clone()),
+            PendingTransport::InProcess { .. }
+            | PendingTransport::Stdio { .. }
+            | PendingTransport::StreamableHttp { .. } => None,
+        };
+        let connect = async {
+            match Self::connect_pending_transport(
+                pending_transport,
+                client_service.clone(),
+                /*timeout*/ None,
+            )
+            .await
+            {
+                Err(error) if oauth_invalid_token::rejected_initialize_request(&error) => {
+                    let Some(oauth_persistor) = startup_oauth_persistor else {
+                        return Err(error);
+                    };
+                    oauth_persistor.force_refresh().await.with_context(
+                        || "failed to refresh MCP OAuth access token after invalid_token",
+                    )?;
+                    let retry_transport =
+                        Self::create_pending_transport(&self.transport_recipe).await?;
+                    Self::connect_pending_transport(
+                        retry_transport,
+                        client_service.clone(),
+                        /*timeout*/ None,
+                    )
+                    .await
+                }
+                result => result,
+            }
+        };
+        let (service, oauth_persistor) = match timeout {
+            Some(duration) => time::timeout(duration, connect).await.map_err(|_| {
+                anyhow!("timed out handshaking with MCP server after {duration:?}")
+            })??,
+            None => connect.await?,
+        };
 
         let initialize_result_rmcp = service
             .peer()
@@ -596,7 +641,20 @@ impl RmcpClient {
                 }
                 .boxed()
             })
-            .await?;
+            .await;
+        let result = match result {
+            Ok(result) => result,
+            Err(error) if Self::is_invalid_token_operation_error(&error) => {
+                let Some(oauth_persistor) = self.oauth_persistor().await else {
+                    return Err(error);
+                };
+                oauth_persistor.force_refresh().await.with_context(
+                    || "failed to refresh MCP OAuth access token after invalid_token",
+                )?;
+                return Err(oauth_invalid_token::RetryRequired.into());
+            }
+            Err(error) => return Err(error),
+        };
         self.persist_oauth_tokens().await;
         Ok(result)
     }
@@ -849,10 +907,8 @@ impl RmcpClient {
             Some(duration) => time::timeout(duration, transport)
                 .await
                 .map_err(|_| anyhow!("timed out handshaking with MCP server after {duration:?}"))?
-                .map_err(|err| anyhow!("handshaking with MCP server failed: {err}"))?,
-            None => transport
-                .await
-                .map_err(|err| anyhow!("handshaking with MCP server failed: {err}"))?,
+                .map_err(McpHandshakeError)?,
+            None => transport.await.map_err(McpHandshakeError)?,
         };
 
         Ok((Arc::new(service), oauth_persistor))
@@ -939,6 +995,16 @@ impl RmcpClient {
                     )
                 )
             })
+    }
+
+    fn is_invalid_token_operation_error(error: &anyhow::Error) -> bool {
+        let Some(ClientOperationError::Service(rmcp::service::ServiceError::TransportSend(error))) =
+            error.downcast_ref::<ClientOperationError>()
+        else {
+            return false;
+        };
+
+        oauth_invalid_token::rejected_transport(error)
     }
 
     async fn reinitialize_after_session_expiry(

@@ -60,6 +60,10 @@ impl BearerChallenge {
             Parameter::Missing | Parameter::Value(_) | Parameter::Invalid => None,
         }
     }
+
+    fn has_error(&self, expected: &str) -> bool {
+        matches!(&self.error, Parameter::Value(error) if error == expected)
+    }
 }
 
 /// Finds a Bearer insufficient-scope challenge among all `WWW-Authenticate`
@@ -80,6 +84,15 @@ pub(super) fn insufficient_scope_challenge(
         })
 }
 
+/// Returns whether any `WWW-Authenticate` response header field value contains
+/// a Bearer challenge with an `invalid_token` error.
+pub(super) fn has_bearer_invalid_token_challenge(headers: &[HttpHeader]) -> bool {
+    headers
+        .iter()
+        .filter(|header| header.name.eq_ignore_ascii_case(WWW_AUTHENTICATE.as_str()))
+        .any(|header| parse_bearer_challenge(&header.value, "invalid_token").is_some())
+}
+
 /// Parses a Bearer `WWW-Authenticate` challenge with an `insufficient_scope`
 /// error and extracts its optional required scope.
 ///
@@ -96,6 +109,11 @@ pub(super) fn insufficient_scope_challenge(
 ///
 /// RMCP has related parsing logic, but it is private to that crate.
 fn parse_bearer_insufficient_scope(header: &str) -> Option<BearerInsufficientScope> {
+    parse_bearer_challenge(header, "insufficient_scope")
+        .and_then(BearerChallenge::into_insufficient_scope)
+}
+
+fn parse_bearer_challenge(header: &str, expected_error: &str) -> Option<BearerChallenge> {
     let segments = split_unquoted_segments(header)?;
     let mut bearer_challenge: Option<BearerChallenge> = None;
 
@@ -107,9 +125,8 @@ fn parse_bearer_insufficient_scope(header: &str) -> Option<BearerInsufficientSco
             continue;
         }
 
-        if let Some(challenge) = bearer_challenge
-            .take()
-            .and_then(BearerChallenge::into_insufficient_scope)
+        if let Some(challenge) = bearer_challenge.take()
+            && challenge.has_error(expected_error)
         {
             return Some(challenge);
         }
@@ -124,7 +141,7 @@ fn parse_bearer_insufficient_scope(header: &str) -> Option<BearerInsufficientSco
         }
     }
 
-    bearer_challenge.and_then(BearerChallenge::into_insufficient_scope)
+    bearer_challenge.filter(|challenge| challenge.has_error(expected_error))
 }
 
 fn parse_challenge_start(segment: &str) -> Option<ChallengeStart<'_>> {

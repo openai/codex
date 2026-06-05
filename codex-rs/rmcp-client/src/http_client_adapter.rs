@@ -40,6 +40,7 @@ use sse_stream::SseStream;
 
 mod www_authenticate;
 
+use self::www_authenticate::has_bearer_invalid_token_challenge;
 use self::www_authenticate::insufficient_scope_challenge;
 
 const EVENT_STREAM_MIME_TYPE: &str = "text/event-stream";
@@ -58,6 +59,8 @@ pub(crate) struct StreamableHttpClientAdapter {
 pub(crate) enum StreamableHttpClientAdapterError {
     #[error("streamable HTTP session expired with 404 Not Found")]
     SessionExpired404,
+    #[error("MCP OAuth access token was rejected")]
+    OAuthInvalidToken,
     #[error(transparent)]
     HttpRequest(#[from] ExecServerError),
     #[error("invalid HTTP header: {0}")]
@@ -156,6 +159,13 @@ impl StreamableHttpClient for StreamableHttpClientAdapter {
         if response.status == StatusCode::NOT_FOUND.as_u16() && session_id.is_some() {
             return Err(StreamableHttpError::Client(
                 StreamableHttpClientAdapterError::SessionExpired404,
+            ));
+        }
+        if response.status == StatusCode::UNAUTHORIZED.as_u16()
+            && has_bearer_invalid_token_challenge(&response.headers)
+        {
+            return Err(StreamableHttpError::Client(
+                StreamableHttpClientAdapterError::OAuthInvalidToken,
             ));
         }
         if response.status == StatusCode::UNAUTHORIZED.as_u16()

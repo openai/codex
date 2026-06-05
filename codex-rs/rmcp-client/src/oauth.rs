@@ -345,10 +345,6 @@ impl OAuthPersistor {
         Ok(())
     }
 
-    #[expect(
-        clippy::await_holding_invalid_type,
-        reason = "AuthorizationManager async access must be serialized through its mutex"
-    )]
     pub(crate) async fn refresh_if_needed(&self) -> Result<()> {
         let expires_at = {
             let guard = self.inner.last_credentials.lock().await;
@@ -359,6 +355,18 @@ impl OAuthPersistor {
             return Ok(());
         }
 
+        self.refresh().await
+    }
+
+    pub(crate) async fn force_refresh(&self) -> Result<()> {
+        self.refresh().await
+    }
+
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "AuthorizationManager async access must be serialized through its mutex"
+    )]
+    async fn refresh(&self) -> Result<()> {
         {
             let manager = self.inner.authorization_manager.clone();
             let guard = manager.lock().await;

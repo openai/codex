@@ -3,6 +3,7 @@ use pretty_assertions::assert_eq;
 
 use super::BearerInsufficientScope;
 use super::InsufficientScopeChallenge;
+use super::has_bearer_invalid_token_challenge;
 use super::insufficient_scope_challenge;
 use super::parse_bearer_insufficient_scope;
 
@@ -121,4 +122,25 @@ fn selects_bearer_challenge_from_a_later_www_authenticate_field_value() {
             required_scope: Some("files:read".to_string()),
         })
     );
+}
+
+#[test]
+fn detects_only_bearer_invalid_token_challenges() {
+    let matching = vec![HttpHeader {
+        name: "WWW-Authenticate".to_string(),
+        value: r#"Basic realm="example", Bearer error="invalid_token""#.to_string(),
+    }];
+    assert!(has_bearer_invalid_token_challenge(&matching));
+
+    for value in [
+        r#"Bearer realm="example""#,
+        r#"Bearer error="insufficient_scope""#,
+        r#"Basic error="invalid_token""#,
+    ] {
+        let headers = vec![HttpHeader {
+            name: "www-authenticate".to_string(),
+            value: value.to_string(),
+        }];
+        assert!(!has_bearer_invalid_token_challenge(&headers), "{value}");
+    }
 }
