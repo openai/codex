@@ -58,7 +58,7 @@ use tokio::sync::Mutex;
 use codex_utils_home_dir::find_codex_home;
 
 const KEYRING_SERVICE: &str = "Codex MCP Credentials";
-const FALLBACK_WRITE_LOCK_FILENAME: &str = ".credentials.json.lock";
+const FALLBACK_LOCK_PREFIX: &str = "codex-mcp-oauth-fallback";
 const FILE_OAUTH_REFRESH_LOCK_PREFIX: &str = ".credentials";
 const KEYRING_OAUTH_REFRESH_LOCK_PREFIX: &str = "codex-mcp-oauth-refresh";
 const MISSING_REFRESH_TOKEN_ERROR: &str = "No refresh token available";
@@ -683,9 +683,7 @@ async fn acquire_oauth_refresh_lock(path: &Path) -> Result<fs::File> {
 }
 
 fn acquire_fallback_write_lock() -> Result<fs::File> {
-    let path = find_codex_home()?
-        .join(FALLBACK_WRITE_LOCK_FILENAME)
-        .to_path_buf();
+    let path = fallback_lock_path()?;
     let file = open_oauth_lock_file(&path)?;
     file.lock().with_context(|| {
         format!(
@@ -697,9 +695,7 @@ fn acquire_fallback_write_lock() -> Result<fs::File> {
 }
 
 fn acquire_fallback_read_lock() -> Result<fs::File> {
-    let path = find_codex_home()?
-        .join(FALLBACK_WRITE_LOCK_FILENAME)
-        .to_path_buf();
+    let path = fallback_lock_path()?;
     let file = open_oauth_lock_file(&path)?;
     file.lock_shared().with_context(|| {
         format!(
@@ -708,6 +704,15 @@ fn acquire_fallback_read_lock() -> Result<fs::File> {
         )
     })?;
     Ok(file)
+}
+
+fn fallback_lock_path() -> Result<PathBuf> {
+    let codex_home = find_codex_home()?;
+    let codex_home_id = sha_256_bytes_prefix(codex_home.as_os_str().to_string_lossy().as_bytes());
+    let user_namespace = os_user_namespace()?;
+    Ok(os_shared_temp_dir()?.join(format!(
+        "{FALLBACK_LOCK_PREFIX}-{user_namespace}-{codex_home_id}.lock"
+    )))
 }
 
 fn open_oauth_lock_file(path: &Path) -> Result<fs::File> {
@@ -1038,6 +1043,10 @@ mod tests {
                 _dir: dir,
             }
         }
+
+        fn path(&self) -> &Path {
+            self._dir.path()
+        }
     }
 
     impl Drop for TempCodexHome {
@@ -1226,6 +1235,46 @@ mod tests {
         assert_tokens_match_without_expiry(
             &loaded.expect("auto mode should load fallback file credentials"),
             &tokens,
+        );
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn file_and_auto_reads_work_with_read_only_codex_home() -> Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+
+        let env = TempCodexHome::new();
+        let store = MockKeyringStore::default();
+        let tokens = sample_tokens();
+        save_oauth_tokens_to_file(&tokens)?;
+
+        let credentials_path = fallback_file_path()?;
+        fs::set_permissions(&credentials_path, fs::Permissions::from_mode(0o400))?;
+        fs::set_permissions(env.path(), fs::Permissions::from_mode(0o500))?;
+
+        let result = (|| -> Result<(StoredOAuthTokens, StoredOAuthTokens)> {
+            let file_tokens = load_oauth_tokens_from_file(&tokens.server_name, &tokens.url)?
+                .expect("file credentials should load");
+            let auto_tokens = load_oauth_tokens_from_keyring_with_fallback_to_file(
+                &store,
+                &tokens.server_name,
+                &tokens.url,
+            )?
+            .expect("auto credentials should load from fallback");
+            Ok((file_tokens, auto_tokens))
+        })();
+
+        fs::set_permissions(env.path(), fs::Permissions::from_mode(0o700))?;
+        fs::set_permissions(&credentials_path, fs::Permissions::from_mode(0o600))?;
+
+        let (file_tokens, auto_tokens) = result?;
+        assert_tokens_match_without_expiry(&file_tokens, &tokens);
+        assert_tokens_match_without_expiry(&auto_tokens, &tokens);
+        assert!(!env.path().join(".credentials.json.lock").exists());
+        assert_eq!(
+            fallback_lock_path()?.parent(),
+            Some(os_shared_temp_dir()?.as_path())
         );
         Ok(())
     }
