@@ -731,6 +731,7 @@ pub(crate) struct CodexHookRunMetadata {
     pub(crate) hook_name: Option<String>,
     pub(crate) hook_source: Option<&'static str>,
     pub(crate) status: Option<HookRunStatus>,
+    pub(crate) duration_ms: Option<i64>,
 }
 
 #[derive(Serialize)]
@@ -997,6 +998,7 @@ pub(crate) fn codex_hook_run_metadata(
         hook_name: Some(analytics_hook_event_name(hook.event_name).to_owned()),
         hook_source: Some(analytics_hook_source(hook.hook_source)),
         status: Some(analytics_hook_status(hook.status)),
+        duration_ms: hook.duration_ms,
     }
 }
 

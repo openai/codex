@@ -679,6 +679,7 @@ fn hook_run_analytics_payload(
             event_name: completed.run.event_name,
             hook_source: completed.run.source,
             status: completed.run.status,
+            duration_ms: completed.run.duration_ms,
         },
     )
 }
@@ -834,6 +835,7 @@ mod tests {
         assert_eq!(hook.event_name, HookEventName::Stop);
         assert_eq!(hook.hook_source, HookSource::Project);
         assert_eq!(hook.status, HookRunStatus::Blocked);
+        assert_eq!(hook.duration_ms, Some(27));
     }
 
     #[tokio::test]

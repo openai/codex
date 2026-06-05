@@ -509,6 +509,7 @@ pub struct HookRunFact {
     pub event_name: HookEventName,
     pub hook_source: HookSource,
     pub status: HookRunStatus,
+    pub duration_ms: Option<i64>,
 }
 
 pub(crate) struct PluginUsedInput {

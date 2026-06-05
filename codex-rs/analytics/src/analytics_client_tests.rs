@@ -2918,6 +2918,7 @@ fn hook_run_event_serializes_expected_shape() {
                 event_name: HookEventName::PreToolUse,
                 hook_source: HookSource::User,
                 status: HookRunStatus::Completed,
+                duration_ms: Some(123),
             },
         ),
     });
@@ -2934,7 +2935,8 @@ fn hook_run_event_serializes_expected_shape() {
                 "model_slug": "gpt-5",
                 "hook_name": "PreToolUse",
                 "hook_source": "user",
-                "status": "completed"
+                "status": "completed",
+                "duration_ms": 123
             }
         })
     );
@@ -2954,6 +2956,7 @@ fn hook_run_metadata_maps_sources_and_statuses() {
             event_name: HookEventName::SessionStart,
             hook_source: HookSource::System,
             status: HookRunStatus::Completed,
+            duration_ms: None,
         },
     ))
     .expect("serialize system hook");
@@ -2963,6 +2966,7 @@ fn hook_run_metadata_maps_sources_and_statuses() {
             event_name: HookEventName::Stop,
             hook_source: HookSource::Project,
             status: HookRunStatus::Blocked,
+            duration_ms: None,
         },
     ))
     .expect("serialize project hook");
@@ -2972,6 +2976,7 @@ fn hook_run_metadata_maps_sources_and_statuses() {
             event_name: HookEventName::Stop,
             hook_source: HookSource::CloudRequirements,
             status: HookRunStatus::Blocked,
+            duration_ms: None,
         },
     ))
     .expect("serialize cloud requirements hook");
@@ -2981,6 +2986,7 @@ fn hook_run_metadata_maps_sources_and_statuses() {
             event_name: HookEventName::UserPromptSubmit,
             hook_source: HookSource::Unknown,
             status: HookRunStatus::Failed,
+            duration_ms: None,
         },
     ))
     .expect("serialize unknown hook");
@@ -3009,6 +3015,7 @@ fn hook_run_metadata_maps_stopped_status() {
             event_name: HookEventName::Stop,
             hook_source: HookSource::User,
             status: HookRunStatus::Stopped,
+            duration_ms: None,
         },
     ))
     .expect("serialize stopped hook");
@@ -3149,6 +3156,7 @@ async fn reducer_ingests_hook_run_fact() {
                     event_name: HookEventName::PostToolUse,
                     hook_source: HookSource::Unknown,
                     status: HookRunStatus::Failed,
+                    duration_ms: None,
                 },
             })),
             &mut events,
