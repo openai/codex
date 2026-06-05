@@ -7,13 +7,13 @@ use crate::ToolSearchSourceInfo;
 use crate::ToolSpec;
 use crate::default_namespace_description;
 
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ToolSearchEntry {
     pub search_text: String,
     pub output: LoadableToolSpec,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ToolSearchInfo {
     pub entry: ToolSearchEntry,
     pub source_info: Option<ToolSearchSourceInfo>,

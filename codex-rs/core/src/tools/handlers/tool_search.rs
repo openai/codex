@@ -19,11 +19,64 @@ use codex_tools::ToolSearchInfo;
 use codex_tools::ToolSearchSourceInfo;
 use codex_tools::ToolSpec;
 use codex_tools::coalesce_loadable_tool_specs;
+use std::sync::Arc;
+use std::sync::Mutex;
 
 pub struct ToolSearchHandler {
     entries: Vec<ToolSearchEntry>,
     search_source_infos: Vec<ToolSearchSourceInfo>,
     search_engine: SearchEngine<usize>,
+}
+
+#[derive(Default)]
+pub(crate) struct ToolSearchHandlerCache {
+    cached: Mutex<Option<CachedToolSearchHandler>>,
+}
+
+struct CachedToolSearchHandler {
+    search_infos: Vec<ToolSearchInfo>,
+    handler: Arc<ToolSearchHandler>,
+}
+
+impl ToolSearchHandlerCache {
+    pub(crate) fn get_or_build(&self, search_infos: Vec<ToolSearchInfo>) -> Arc<ToolSearchHandler> {
+        {
+            let cached = self.cached();
+            if let Some(cached) = cached.as_ref()
+                && cached.search_infos == search_infos
+            {
+                return Arc::clone(&cached.handler);
+            }
+        }
+
+        let handler = Arc::new(ToolSearchHandler::new(search_infos.clone()));
+        let mut cached = self.cached();
+        if let Some(cached) = cached.as_ref()
+            && cached.search_infos == search_infos
+        {
+            return Arc::clone(&cached.handler);
+        }
+
+        *cached = Some(CachedToolSearchHandler {
+            search_infos,
+            handler: Arc::clone(&handler),
+        });
+        handler
+    }
+
+    fn cached(&self) -> std::sync::MutexGuard<'_, Option<CachedToolSearchHandler>> {
+        match self.cached.lock() {
+            Ok(cached) => cached,
+            Err(poisoned) => poisoned.into_inner(),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn cached_handler_ptr_for_test(&self) -> Option<*const ToolSearchHandler> {
+        self.cached()
+            .as_ref()
+            .map(|cached| Arc::as_ptr(&cached.handler))
+    }
 }
 
 impl ToolSearchHandler {

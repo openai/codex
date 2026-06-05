@@ -4846,6 +4846,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
             /*attestation_provider*/ None,
         ),
         code_mode_service: crate::tools::code_mode::CodeModeService::new(),
+        tool_search_handler_cache: Default::default(),
         environment_manager: Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
     };
 
@@ -6923,6 +6924,7 @@ where
             /*attestation_provider*/ None,
         ),
         code_mode_service: crate::tools::code_mode::CodeModeService::new(),
+        tool_search_handler_cache: Default::default(),
         environment_manager: Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
     };
 

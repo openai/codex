@@ -1163,16 +1163,19 @@ pub(crate) async fn built_tools(
     );
     let mcp_tools = has_mcp_servers.then_some(mcp_tool_exposure.direct_tools);
     let deferred_mcp_tools = mcp_tool_exposure.deferred_tools;
-    Ok(Arc::new(ToolRouter::from_turn_context(
-        turn_context,
-        ToolRouterParams {
-            mcp_tools,
-            deferred_mcp_tools,
-            discoverable_tools,
-            extension_tool_executors: extension_tool_executors(sess),
-            dynamic_tools: turn_context.dynamic_tools.as_slice(),
-        },
-    )))
+    Ok(Arc::new(
+        ToolRouter::from_turn_context_with_tool_search_cache(
+            turn_context,
+            ToolRouterParams {
+                mcp_tools,
+                deferred_mcp_tools,
+                discoverable_tools,
+                extension_tool_executors: extension_tool_executors(sess),
+                dynamic_tools: turn_context.dynamic_tools.as_slice(),
+            },
+            &sess.services.tool_search_handler_cache,
+        ),
+    ))
 }
 
 #[derive(Debug)]
