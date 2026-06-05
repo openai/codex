@@ -157,7 +157,7 @@ impl AgentControl {
             .inherited_exec_policy_for_source(&state, Some(&session_source), &config)
             .await;
 
-        let reloaded_thread = state
+        match state
             .resume_thread_with_history_with_source(ResumeThreadWithHistoryOptions {
                 config,
                 initial_history,
@@ -167,9 +167,19 @@ impl AgentControl {
                 inherited_shell_snapshot,
                 inherited_exec_policy,
             })
-            .await?;
-        state.notify_thread_created(reloaded_thread.thread_id);
-        Ok(())
+            .await
+        {
+            Ok(reloaded_thread) => {
+                state.notify_thread_created(reloaded_thread.thread_id);
+                Ok(())
+            }
+            Err(err) => {
+                if state.get_thread(thread_id).await.is_ok() {
+                    return Ok(());
+                }
+                Err(err)
+            }
+        }
     }
 
     async fn spawn_agent_internal(
