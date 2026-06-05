@@ -418,7 +418,6 @@ impl TurnRequestProcessor {
         })?;
 
         let environment_selections = self.parse_environment_selections(params.environments)?;
-        let cwd = resolve_request_cwd(params.cwd)?;
 
         // Map v2 input items to core input items.
         let mapped_items: Vec<CoreInputItem> = params

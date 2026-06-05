@@ -458,6 +458,21 @@ async fn warm_plugins_and_skills_for_session_init(
 }
 
 impl Session {
+    pub(crate) fn thread_settings_environments_update(
+        &self,
+        cwd: &Option<AbsolutePathBuf>,
+        environments: Option<Vec<TurnEnvironmentSelection>>,
+    ) -> Option<Vec<TurnEnvironmentSelection>> {
+        environments.or_else(|| {
+            cwd.as_ref().map(|cwd| {
+                crate::environment_selection::default_thread_environment_selections(
+                    self.services.environment_manager.as_ref(),
+                    cwd,
+                )
+            })
+        })
+    }
+
     /// Returns the concrete identity for this thread.
     pub(crate) fn thread_id(&self) -> ThreadId {
         self.thread_id

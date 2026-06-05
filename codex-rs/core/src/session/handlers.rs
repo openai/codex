@@ -139,6 +139,7 @@ async fn thread_settings_update(
         collaboration_mode,
         personality,
     } = thread_settings;
+    let environments = sess.thread_settings_environments_update(&cwd, environments);
     let state = sess.state.lock().await;
     let collaboration_mode = match collaboration_mode {
         Some(collaboration_mode) => collaboration_mode,

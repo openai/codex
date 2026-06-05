@@ -384,6 +384,10 @@ impl CodexThread {
             collaboration_mode,
             personality,
         } = overrides;
+        let environments = self
+            .codex
+            .session
+            .thread_settings_environments_update(&cwd, environments);
         let collaboration_mode = if let Some(collaboration_mode) = collaboration_mode {
             collaboration_mode
         } else {
