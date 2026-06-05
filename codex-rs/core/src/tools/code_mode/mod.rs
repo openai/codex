@@ -63,12 +63,15 @@ pub(crate) struct CodeModeService {
 }
 
 impl CodeModeService {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(config: codex_code_mode::CodeModeSessionConfig) -> Self {
         let dispatch_broker = Arc::new(CodeModeDispatchBroker::new());
         Self {
-            session: Some(Arc::new(codex_code_mode::CodeModeService::with_delegate(
-                dispatch_broker.clone(),
-            ))),
+            session: Some(Arc::new(
+                codex_code_mode::CodeModeService::with_delegate_and_config(
+                    dispatch_broker.clone(),
+                    config,
+                ),
+            )),
             dispatch_broker,
         }
     }

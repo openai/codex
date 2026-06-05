@@ -477,6 +477,7 @@ fn build_code_mode_executors(
                 &namespace_descriptions,
                 turn_context.tool_mode == ToolMode::CodeModeOnly,
                 deferred_tools_available,
+                turn_context.config.code_mode.session,
             ),
             code_mode_nested_tool_specs,
         )),

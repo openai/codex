@@ -9,6 +9,7 @@ pub(crate) fn create_code_mode_tool(
     namespace_descriptions: &BTreeMap<String, codex_code_mode::ToolNamespaceDescription>,
     code_mode_only: bool,
     deferred_tools_available: bool,
+    session_config: codex_code_mode::CodeModeSessionConfig,
 ) -> ToolSpec {
     const CODE_MODE_FREEFORM_GRAMMAR: &str = r#"
 start: pragma_source | plain_source
@@ -22,11 +23,12 @@ SOURCE: /[\s\S]+/
 
     ToolSpec::Freeform(FreeformTool {
         name: codex_code_mode::PUBLIC_TOOL_NAME.to_string(),
-        description: codex_code_mode::build_exec_tool_description(
+        description: codex_code_mode::build_exec_tool_description_with_config(
             enabled_tools,
             namespace_descriptions,
             code_mode_only,
             deferred_tools_available,
+            session_config,
         ),
         format: FreeformToolFormat {
             r#type: "grammar".to_string(),
@@ -59,14 +61,16 @@ mod tests {
                 &BTreeMap::new(),
                 /*code_mode_only*/ true,
                 /*deferred_tools_available*/ false,
+                codex_code_mode::CodeModeSessionConfig::default(),
             ),
             ToolSpec::Freeform(FreeformTool {
                 name: codex_code_mode::PUBLIC_TOOL_NAME.to_string(),
-                description: codex_code_mode::build_exec_tool_description(
+                description: codex_code_mode::build_exec_tool_description_with_config(
                     &enabled_tools,
                     &BTreeMap::new(),
                     /*code_mode_only*/ true,
-                    /*deferred_tools_available*/ false
+                    /*deferred_tools_available*/ false,
+                    codex_code_mode::CodeModeSessionConfig::default(),
                 ),
                 format: FreeformToolFormat {
                     r#type: "grammar".to_string(),

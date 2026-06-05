@@ -1037,6 +1037,7 @@ pub struct Config {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct CodeModeConfig {
     pub excluded_tool_namespaces: Vec<String>,
+    pub session: codex_code_mode::CodeModeSessionConfig,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -2308,6 +2309,7 @@ fn resolve_code_mode_config(config_toml: &ConfigToml) -> CodeModeConfig {
             .and_then(|config| config.excluded_tool_namespaces.as_ref())
             .cloned()
             .unwrap_or_default(),
+        session: codex_code_mode::CodeModeSessionConfig::default(),
     }
 }
 

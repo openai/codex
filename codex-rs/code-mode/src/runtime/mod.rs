@@ -285,12 +285,16 @@ fn run_runtime(
     v8::scope!(let scope, isolate);
     let context = v8::Context::new(scope, Default::default());
     let scope = &mut v8::ContextScope::new(scope, context);
+    let stored_value_writes = match &config.stored_values {
+        StoredValues::Enabled(_) => StoredValues::Enabled(HashMap::new()),
+        StoredValues::Disabled => StoredValues::Disabled,
+    };
 
     scope.set_slot(RuntimeState {
         event_tx: event_tx.clone(),
         pending_tool_calls: HashMap::new(),
         pending_timeouts: HashMap::new(),
-        stored_value_writes: config.stored_values.empty_like(),
+        stored_value_writes,
         stored_values: config.stored_values,
         enabled_tools: config.enabled_tools,
         next_tool_call_id: 1,

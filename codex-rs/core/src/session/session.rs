@@ -1048,7 +1048,9 @@ impl Session {
                         session_configuration.parent_thread_id,
                     ),
                 ),
-                code_mode_service: crate::tools::code_mode::CodeModeService::new(),
+                code_mode_service: crate::tools::code_mode::CodeModeService::new(
+                    config.code_mode.session,
+                ),
                 environment_manager,
             };
             services

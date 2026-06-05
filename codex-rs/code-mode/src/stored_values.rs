@@ -19,13 +19,6 @@ impl StoredValues {
         }
     }
 
-    pub(crate) fn empty_like(&self) -> Self {
-        match self {
-            Self::Enabled(_) => Self::Enabled(HashMap::new()),
-            Self::Disabled => Self::Disabled,
-        }
-    }
-
     pub(crate) fn is_enabled(&self) -> bool {
         matches!(self, Self::Enabled(_))
     }

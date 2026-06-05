@@ -3,6 +3,7 @@
 use anyhow::Result;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use codex_code_mode::StoreLoadMode;
 use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerTransportConfig;
 use codex_core::config::Config;
@@ -3433,6 +3434,75 @@ text(JSON.stringify(load("nb")));
         loaded,
         serde_json::json!({ "title": "Notebook", "items": [1, true, null] })
     );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_can_disable_store_and_load_for_session() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let test = test_codex()
+        .with_config(|config| {
+            let _ = config.features.enable(Feature::CodeMode);
+            config.code_mode.session.store_load = StoreLoadMode::Disabled;
+        })
+        .build(&server)
+        .await?;
+
+    let first_mock = responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_custom_tool_call(
+                "call-1",
+                "exec",
+                r#"
+text(JSON.stringify([
+  Object.hasOwn(globalThis, "store"),
+  Object.hasOwn(globalThis, "load"),
+]));
+"#,
+            ),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let follow_up_mock = responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+
+    test.submit_turn("inspect disabled store and load helpers")
+        .await?;
+
+    let first_body = first_mock.single_request().body_json();
+    let exec_description = first_body
+        .get("tools")
+        .and_then(Value::as_array)
+        .and_then(|tools| {
+            tools
+                .iter()
+                .find(|tool| tool.get("name").and_then(Value::as_str) == Some("exec"))
+                .and_then(|tool| tool.get("description").and_then(Value::as_str))
+        })
+        .expect("exec description should be present");
+    assert!(!exec_description.contains("`store(key: string, value: any)`"));
+    assert!(!exec_description.contains("`load(key: string)`"));
+
+    let follow_up = follow_up_mock.single_request();
+    let (output, success) = custom_tool_output_body_and_success(&follow_up, "call-1");
+    assert_ne!(
+        success,
+        Some(false),
+        "disabled store/load check failed unexpectedly: {output}"
+    );
+    assert_eq!(output, "[false,false]");
 
     Ok(())
 }
