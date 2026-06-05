@@ -6,7 +6,26 @@
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
+use std::collections::BTreeSet;
 use ts_rs::TS;
+
+/// Passive MCP App presentation features supported by the active host.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema, TS,
+)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub enum McpAppUiCapability {
+    WebView,
+    DeclarativeUi,
+}
+
+/// Passive MCP capabilities supplied by the active Codex host.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct McpClientCapabilities {
+    pub app_ui: BTreeSet<McpAppUiCapability>,
+}
 
 /// ID of a request, which can be either a string or an integer.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema, TS)]

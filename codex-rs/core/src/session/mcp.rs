@@ -358,6 +358,7 @@ impl Session {
             tool_plugin_provenance,
             auth.as_ref(),
             elicitation_reviewer,
+            turn_context.mcp_client_capabilities.clone(),
         )
         .await;
         {
@@ -377,6 +378,54 @@ impl Session {
             std::mem::replace(&mut *manager, refreshed_manager)
         };
         old_manager.shutdown().await;
+    }
+
+    pub(crate) async fn refresh_codex_apps_client(
+        &self,
+        client_capabilities: Option<McpClientCapabilities>,
+        submit_id: String,
+    ) {
+        let auth = self.services.auth_manager.auth().await;
+        let config = self.get_config().await;
+        let mcp_config = config
+            .to_mcp_config(self.services.plugins_manager.as_ref())
+            .await;
+        let mut effective = with_codex_apps_mcp(HashMap::new(), auth.as_ref(), &mcp_config);
+        let auth_statuses = compute_auth_statuses(
+            effective.iter(),
+            config.mcp_oauth_credentials_store_mode,
+            auth.as_ref(),
+        )
+        .await;
+        let server = effective.remove(codex_mcp::CODEX_APPS_MCP_SERVER_NAME);
+        let auth_entry = auth_statuses
+            .get(codex_mcp::CODEX_APPS_MCP_SERVER_NAME)
+            .cloned();
+        let runtime_auth_provider = auth
+            .as_ref()
+            .filter(|auth| auth.uses_codex_backend())
+            .map(codex_model_provider::auth_provider_from_auth);
+        self.services
+            .mcp_connection_manager
+            .write()
+            .await
+            .refresh_codex_apps_client(
+                server,
+                config.mcp_oauth_credentials_store_mode,
+                auth_entry,
+                submit_id,
+                self.get_tx_event(),
+                config.codex_home.to_path_buf(),
+                codex_apps_tools_cache_key(auth.as_ref()),
+                client_capabilities,
+                McpRuntimeContext::new(
+                    Arc::clone(&self.services.environment_manager),
+                    config.cwd.to_path_buf(),
+                ),
+                runtime_auth_provider,
+                mcp_config.client_elicitation_capability,
+            )
+            .await;
     }
 
     pub(crate) async fn refresh_mcp_servers_if_requested(

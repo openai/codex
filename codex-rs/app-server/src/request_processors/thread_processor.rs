@@ -1,5 +1,6 @@
 use super::*;
 use crate::error_code::method_not_found;
+use codex_app_server_protocol::McpClientCapabilities;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
 
@@ -370,6 +371,7 @@ impl ThreadRequestProcessor {
         params: ThreadStartParams,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
+        mcp_client_capabilities: Option<McpClientCapabilities>,
         request_context: RequestContext,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
         self.thread_start_inner(
@@ -377,6 +379,7 @@ impl ThreadRequestProcessor {
             params,
             app_server_client_name,
             app_server_client_version,
+            mcp_client_capabilities,
             request_context,
         )
         .await
@@ -399,12 +402,14 @@ impl ThreadRequestProcessor {
         params: ThreadResumeParams,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
+        mcp_client_capabilities: Option<McpClientCapabilities>,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
         self.thread_resume_inner(
             request_id,
             params,
             app_server_client_name,
             app_server_client_version,
+            mcp_client_capabilities,
         )
         .await
         .map(|()| None)
@@ -416,12 +421,14 @@ impl ThreadRequestProcessor {
         params: ThreadForkParams,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
+        mcp_client_capabilities: Option<McpClientCapabilities>,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
         self.thread_fork_inner(
             request_id,
             params,
             app_server_client_name,
             app_server_client_version,
+            mcp_client_capabilities,
         )
         .await
         .map(|()| None)
@@ -680,6 +687,7 @@ impl ThreadRequestProcessor {
         thread: &CodexThread,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
+        mcp_client_capabilities: Option<McpClientCapabilities>,
     ) -> Result<(), JSONRPCErrorError> {
         let mcp_elicitations_auto_deny = xcode_26_4_mcp_elicitations_auto_deny(
             app_server_client_name.as_deref(),
@@ -690,6 +698,7 @@ impl ThreadRequestProcessor {
                 app_server_client_name,
                 app_server_client_version,
                 mcp_elicitations_auto_deny,
+                mcp_client_capabilities,
             )
             .await
             .map_err(|err| internal_error(format!("failed to set app server client info: {err}")))
@@ -805,6 +814,7 @@ impl ThreadRequestProcessor {
         params: ThreadStartParams,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
+        mcp_client_capabilities: Option<McpClientCapabilities>,
         request_context: RequestContext,
     ) -> Result<(), JSONRPCErrorError> {
         let ThreadStartParams {
@@ -874,6 +884,7 @@ impl ThreadRequestProcessor {
                 request_id,
                 app_server_client_name,
                 app_server_client_version,
+                mcp_client_capabilities,
                 config,
                 typesafe_overrides,
                 dynamic_tools,
@@ -946,6 +957,7 @@ impl ThreadRequestProcessor {
         request_id: ConnectionRequestId,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
+        mcp_client_capabilities: Option<McpClientCapabilities>,
         config_overrides: Option<HashMap<String, serde_json::Value>>,
         typesafe_overrides: ConfigOverrides,
         dynamic_tools: Option<Vec<ApiDynamicToolSpec>>,
@@ -1094,6 +1106,7 @@ impl ThreadRequestProcessor {
             thread.as_ref(),
             app_server_client_name,
             app_server_client_version,
+            mcp_client_capabilities,
         )
         .await?;
 
@@ -2381,6 +2394,7 @@ impl ThreadRequestProcessor {
         params: ThreadResumeParams,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
+        mcp_client_capabilities: Option<McpClientCapabilities>,
     ) -> Result<(), JSONRPCErrorError> {
         if let Ok(thread_id) = ThreadId::from_string(&params.thread_id)
             && self
@@ -2425,6 +2439,7 @@ impl ThreadRequestProcessor {
                 &params,
                 app_server_client_name.clone(),
                 app_server_client_version.clone(),
+                mcp_client_capabilities.clone(),
             )
             .await
         {
@@ -2533,6 +2548,7 @@ impl ThreadRequestProcessor {
                     codex_thread.as_ref(),
                     app_server_client_name,
                     app_server_client_version,
+                    mcp_client_capabilities.clone(),
                 )
                 .await
                 {
@@ -2707,6 +2723,7 @@ impl ThreadRequestProcessor {
         params: &ThreadResumeParams,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
+        mcp_client_capabilities: Option<McpClientCapabilities>,
     ) -> Result<bool, JSONRPCErrorError> {
         let running_thread = if params.history.is_some() {
             if let Ok(existing_thread_id) = ThreadId::from_string(&params.thread_id)
@@ -2829,6 +2846,7 @@ impl ThreadRequestProcessor {
                 existing_thread.as_ref(),
                 app_server_client_name,
                 app_server_client_version,
+                mcp_client_capabilities,
             )
             .await?;
 
@@ -3127,6 +3145,7 @@ impl ThreadRequestProcessor {
         params: ThreadForkParams,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
+        mcp_client_capabilities: Option<McpClientCapabilities>,
     ) -> Result<(), JSONRPCErrorError> {
         let ThreadForkParams {
             thread_id,
@@ -3250,6 +3269,7 @@ impl ThreadRequestProcessor {
             forked_thread.as_ref(),
             app_server_client_name,
             app_server_client_version,
+            mcp_client_capabilities,
         )
         .await?;
         if session_configured.rollout_path.is_some()

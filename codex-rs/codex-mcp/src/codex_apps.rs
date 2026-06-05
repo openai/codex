@@ -41,6 +41,7 @@ pub fn codex_apps_tools_cache_key(auth: Option<&CodexAuth>) -> CodexAppsToolsCac
 pub(crate) struct CodexAppsToolsCacheContext {
     pub(crate) codex_home: PathBuf,
     pub(crate) user_key: CodexAppsToolsCacheKey,
+    pub(crate) client_capabilities_fingerprint: Option<String>,
 }
 
 impl CodexAppsToolsCacheContext {
@@ -55,9 +56,11 @@ impl CodexAppsToolsCacheContext {
     fn cache_path_in(&self, cache_dir: &str) -> PathBuf {
         let user_key_json = serde_json::to_string(&self.user_key).unwrap_or_default();
         let user_key_hash = sha1_hex(&user_key_json);
-        self.codex_home
-            .join(cache_dir)
-            .join(format!("{user_key_hash}.json"))
+        let filename = self.client_capabilities_fingerprint.as_ref().map_or_else(
+            || format!("{user_key_hash}.json"),
+            |fingerprint| format!("{user_key_hash}-{fingerprint}.json"),
+        );
+        self.codex_home.join(cache_dir).join(filename)
     }
 }
 

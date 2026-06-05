@@ -82,7 +82,108 @@ fn create_codex_apps_tools_cache_context(
             chatgpt_user_id: chatgpt_user_id.map(ToOwned::to_owned),
             is_workspace_account: false,
         },
+        client_capabilities_fingerprint: None,
     }
+}
+
+#[test]
+fn capability_profiles_partition_codex_apps_cache_paths() {
+    let legacy = create_codex_apps_tools_cache_context(PathBuf::from("/tmp/codex"), None, None);
+    let mut explicit_empty = legacy.clone();
+    explicit_empty.client_capabilities_fingerprint = Some(crate::client_capabilities::fingerprint(
+        &codex_protocol::mcp::McpClientCapabilities::default(),
+    ));
+
+    assert_ne!(legacy.tools_cache_path(), explicit_empty.tools_cache_path());
+    assert_ne!(
+        legacy.server_info_cache_path(),
+        explicit_empty.server_info_cache_path()
+    );
+    assert!(
+        legacy
+            .tools_cache_path()
+            .to_string_lossy()
+            .ends_with(".json")
+    );
+}
+
+#[tokio::test]
+async fn refreshing_codex_apps_capabilities_preserves_unrelated_clients() {
+    let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
+    let permission_profile = Constrained::allow_any(PermissionProfile::default());
+    let mut manager = McpConnectionManager::new_uninitialized(
+        &approval_policy,
+        &permission_profile,
+        /*prefix_mcp_tool_names*/ true,
+    );
+    let unrelated_cancel_token = CancellationToken::new();
+    let old_codex_apps_cancel_token = CancellationToken::new();
+    let pending_client = futures::future::pending::<Result<ManagedClient, StartupOutcomeError>>()
+        .boxed()
+        .shared();
+    let cancelled_client = futures::future::ready(Err(StartupOutcomeError::Cancelled))
+        .boxed()
+        .shared();
+    manager.clients.insert(
+        "local".to_string(),
+        AsyncManagedClient {
+            client: pending_client,
+            cached_tool_info_snapshot: None,
+            cached_server_info: None,
+            startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
+            cancel_token: unrelated_cancel_token.clone(),
+        },
+    );
+    manager.clients.insert(
+        CODEX_APPS_MCP_SERVER_NAME.to_string(),
+        AsyncManagedClient {
+            client: cancelled_client,
+            cached_tool_info_snapshot: None,
+            cached_server_info: None,
+            startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
+            cancel_token: old_codex_apps_cancel_token.clone(),
+        },
+    );
+    let capabilities = codex_protocol::mcp::McpClientCapabilities {
+        app_ui: [codex_protocol::mcp::McpAppUiCapability::WebView]
+            .into_iter()
+            .collect(),
+    };
+    let (tx_event, _rx_event) = async_channel::unbounded();
+
+    manager
+        .refresh_codex_apps_client(
+            None,
+            OAuthCredentialsStoreMode::default(),
+            None,
+            "test".to_string(),
+            tx_event,
+            tempdir().expect("tempdir").path().to_path_buf(),
+            CodexAppsToolsCacheKey {
+                account_id: None,
+                chatgpt_user_id: None,
+                is_workspace_account: false,
+            },
+            Some(capabilities.clone()),
+            McpRuntimeContext::new(
+                Arc::new(EnvironmentManager::without_environments()),
+                PathBuf::from("/tmp"),
+            ),
+            None,
+            ElicitationCapability::default(),
+        )
+        .await;
+
+    assert!(old_codex_apps_cancel_token.is_cancelled());
+    assert!(!unrelated_cancel_token.is_cancelled());
+    assert!(manager.clients.contains_key("local"));
+    assert!(!manager.clients.contains_key(CODEX_APPS_MCP_SERVER_NAME));
+    assert_eq!(
+        manager.codex_apps_client_capabilities(),
+        Some(&capabilities)
+    );
 }
 
 fn create_test_server_info(title: &str) -> McpServerInfo {
@@ -1191,6 +1292,7 @@ async fn no_local_runtime_fails_local_stdio_but_keeps_local_http_server() {
         ToolPluginProvenance::default(),
         /*auth*/ None,
         /*elicitation_reviewer*/ None,
+        /*codex_apps_client_capabilities*/ None,
     )
     .await;
 

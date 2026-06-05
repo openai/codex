@@ -24,6 +24,7 @@ use codex_config::types::AppToolApproval;
 use codex_config::types::OAuthCredentialsStoreMode;
 use codex_login::CodexAuth;
 use codex_plugin::PluginCapabilitySummary;
+use codex_protocol::mcp::McpClientCapabilities;
 use codex_protocol::mcp::McpServerInfo;
 use codex_protocol::mcp::Resource;
 use codex_protocol::mcp::ResourceTemplate;
@@ -266,6 +267,7 @@ pub async fn read_mcp_resource(
     runtime_context: McpRuntimeContext,
     server: &str,
     uri: &str,
+    mcp_client_capabilities: Option<McpClientCapabilities>,
 ) -> anyhow::Result<ReadResourceResult> {
     let mut mcp_servers = effective_mcp_servers(config, auth);
     let host_owned_codex_apps_enabled = host_owned_codex_apps_enabled(config, auth);
@@ -295,6 +297,7 @@ pub async fn read_mcp_resource(
         tool_plugin_provenance(config),
         auth,
         /*elicitation_reviewer*/ None,
+        mcp_client_capabilities,
     )
     .await;
 
@@ -321,6 +324,7 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
     submit_id: String,
     runtime_context: McpRuntimeContext,
     detail: McpSnapshotDetail,
+    mcp_client_capabilities: Option<McpClientCapabilities>,
 ) -> McpServerStatusSnapshot {
     let mcp_servers = effective_mcp_servers(config, auth);
     let host_owned_codex_apps_enabled = host_owned_codex_apps_enabled(config, auth);
@@ -365,6 +369,7 @@ pub async fn collect_mcp_server_status_snapshot_with_detail(
         tool_plugin_provenance,
         auth,
         /*elicitation_reviewer*/ None,
+        mcp_client_capabilities,
     )
     .await;
 

@@ -14,6 +14,7 @@ use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::mcp::CallToolResult;
+use codex_protocol::mcp::McpClientCapabilities;
 use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::PermissionProfile;
@@ -315,12 +316,14 @@ impl CodexThread {
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
         mcp_elicitations_auto_deny: bool,
+        mcp_client_capabilities: Option<McpClientCapabilities>,
     ) -> ConstraintResult<()> {
         self.codex
             .set_app_server_client_info(
                 app_server_client_name,
                 app_server_client_version,
                 mcp_elicitations_auto_deny,
+                mcp_client_capabilities,
             )
             .await
     }

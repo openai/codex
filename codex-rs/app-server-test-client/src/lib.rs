@@ -1564,6 +1564,7 @@ impl CodexClient {
                             .map(|method| (*method).to_string())
                             .collect(),
                     ),
+                    mcp_client_capabilities: None,
                 }),
             },
         };

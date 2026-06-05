@@ -1,4 +1,5 @@
 use super::*;
+use codex_app_server_protocol::McpClientCapabilities;
 use codex_protocol::protocol::AdditionalContextEntry as CoreAdditionalContextEntry;
 use codex_protocol::protocol::AdditionalContextKind as CoreAdditionalContextKind;
 
@@ -95,12 +96,14 @@ impl TurnRequestProcessor {
         params: TurnStartParams,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
+        mcp_client_capabilities: Option<McpClientCapabilities>,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
         self.turn_start_inner(
             request_id,
             params,
             app_server_client_name,
             app_server_client_version,
+            mcp_client_capabilities,
         )
         .await
         .map(|response| Some(response.into()))
@@ -200,10 +203,19 @@ impl TurnRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: ReviewStartParams,
+        app_server_client_name: Option<String>,
+        app_server_client_version: Option<String>,
+        mcp_client_capabilities: Option<McpClientCapabilities>,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.review_start_inner(request_id, params)
-            .await
-            .map(|()| None)
+        self.review_start_inner(
+            request_id,
+            params,
+            app_server_client_name,
+            app_server_client_version,
+            mcp_client_capabilities,
+        )
+        .await
+        .map(|()| None)
     }
 
     fn track_error_response(
@@ -369,6 +381,7 @@ impl TurnRequestProcessor {
         params: TurnStartParams,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
+        mcp_client_capabilities: Option<McpClientCapabilities>,
     ) -> Result<TurnStartResponse, JSONRPCErrorError> {
         if let Err(error) = Self::validate_v2_input_limit(&params.input) {
             self.track_error_response(
@@ -388,6 +401,7 @@ impl TurnRequestProcessor {
             thread.as_ref(),
             app_server_client_name,
             app_server_client_version,
+            mcp_client_capabilities,
         )
         .await
         .inspect_err(|error| {
@@ -736,6 +750,7 @@ impl TurnRequestProcessor {
         thread: &CodexThread,
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
+        mcp_client_capabilities: Option<McpClientCapabilities>,
     ) -> Result<(), JSONRPCErrorError> {
         let mcp_elicitations_auto_deny = xcode_26_4_mcp_elicitations_auto_deny(
             app_server_client_name.as_deref(),
@@ -746,6 +761,7 @@ impl TurnRequestProcessor {
                 app_server_client_name,
                 app_server_client_version,
                 mcp_elicitations_auto_deny,
+                mcp_client_capabilities,
             )
             .await
             .map_err(|err| internal_error(format!("failed to set app server client info: {err}")))
@@ -1065,6 +1081,9 @@ impl TurnRequestProcessor {
         parent_thread: Arc<CodexThread>,
         review_request: ReviewRequest,
         display_text: &str,
+        app_server_client_name: Option<String>,
+        app_server_client_version: Option<String>,
+        mcp_client_capabilities: Option<McpClientCapabilities>,
     ) -> std::result::Result<(), JSONRPCErrorError> {
         parent_thread.ensure_rollout_materialized().await;
         parent_thread.flush_rollout().await.map_err(|err| {
@@ -1107,6 +1126,14 @@ impl TurnRequestProcessor {
             .map_err(|err| {
                 internal_error(format!("error creating detached review thread: {err}"))
             })?;
+
+        Self::set_app_server_client_info(
+            review_thread.as_ref(),
+            app_server_client_name,
+            app_server_client_version,
+            mcp_client_capabilities,
+        )
+        .await?;
 
         log_listener_attach_result(
             self.ensure_conversation_listener(
@@ -1173,6 +1200,9 @@ impl TurnRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: ReviewStartParams,
+        app_server_client_name: Option<String>,
+        app_server_client_version: Option<String>,
+        mcp_client_capabilities: Option<McpClientCapabilities>,
     ) -> Result<(), JSONRPCErrorError> {
         let ReviewStartParams {
             thread_id,
@@ -1181,6 +1211,13 @@ impl TurnRequestProcessor {
         } = params;
 
         let (parent_thread_id, parent_thread) = self.load_thread(&thread_id).await?;
+        Self::set_app_server_client_info(
+            parent_thread.as_ref(),
+            app_server_client_name.clone(),
+            app_server_client_version.clone(),
+            mcp_client_capabilities.clone(),
+        )
+        .await?;
         let (review_request, display_text) = Self::review_request_from_target(target)?;
         match delivery.unwrap_or(ApiReviewDelivery::Inline).to_core() {
             CoreReviewDelivery::Inline => {
@@ -1200,6 +1237,9 @@ impl TurnRequestProcessor {
                     parent_thread,
                     review_request,
                     &display_text,
+                    app_server_client_name,
+                    app_server_client_version,
+                    mcp_client_capabilities,
                 )
                 .await?;
             }

@@ -16,6 +16,7 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
 
+use crate::client_capabilities;
 use crate::codex_apps::CachedCodexAppsToolsLoad;
 use crate::codex_apps::CodexAppsToolsCacheContext;
 use crate::codex_apps::filter_disallowed_codex_apps_tools;
@@ -48,6 +49,7 @@ use codex_config::McpServerTransportConfig;
 use codex_config::types::OAuthCredentialsStoreMode;
 use codex_exec_server::HttpClient;
 use codex_exec_server::ReqwestHttpClient;
+use codex_protocol::mcp::McpClientCapabilities;
 use codex_protocol::mcp::McpServerInfo;
 use codex_protocol::protocol::Event;
 use codex_rmcp_client::ExecutorStdioServerLauncher;
@@ -94,6 +96,7 @@ pub(crate) struct ManagedClient {
     pub(crate) server_instructions: Option<String>,
     pub(crate) server_supports_sandbox_state_meta_capability: bool,
     pub(crate) codex_apps_tools_cache_context: Option<CodexAppsToolsCacheContext>,
+    pub(crate) client_capabilities: Option<McpClientCapabilities>,
 }
 
 impl ManagedClient {
@@ -145,6 +148,7 @@ impl AsyncManagedClient {
         tx_event: Sender<Event>,
         elicitation_requests: ElicitationRequestManager,
         codex_apps_tools_cache_context: Option<CodexAppsToolsCacheContext>,
+        client_capabilities: Option<McpClientCapabilities>,
         tool_plugin_provenance: Arc<ToolPluginProvenance>,
         runtime_context: McpRuntimeContext,
         runtime_auth_provider: Option<SharedAuthProvider>,
@@ -200,6 +204,7 @@ impl AsyncManagedClient {
                         tx_event,
                         elicitation_requests,
                         codex_apps_tools_cache_context,
+                        client_capabilities,
                         client_elicitation_capability,
                     },
                 )
@@ -344,9 +349,11 @@ pub(crate) async fn list_tools_for_client_uncached(
     client: &Arc<RmcpClient>,
     timeout: Option<Duration>,
     server_instructions: Option<&str>,
+    client_capabilities: Option<&McpClientCapabilities>,
 ) -> Result<Vec<ToolInfo>> {
+    let params = client_capabilities::paginated_params(None, client_capabilities);
     let resp = client
-        .list_tools_with_connector_ids(/*params*/ None, timeout)
+        .list_tools_with_connector_ids(params, timeout)
         .await?;
     let tools = resp
         .tools
@@ -479,10 +486,14 @@ async fn start_server_task(
         tx_event,
         elicitation_requests,
         codex_apps_tools_cache_context,
+        client_capabilities,
         client_elicitation_capability,
     } = params;
     let mut capabilities = ClientCapabilities::default();
     capabilities.elicitation = Some(client_elicitation_capability);
+    capabilities.extensions = client_capabilities
+        .as_ref()
+        .map(client_capabilities::as_extensions);
     let params = InitializeRequestParams::new(
         capabilities,
         Implementation::new("codex-mcp-client", env!("CARGO_PKG_VERSION")).with_title("Codex"),
@@ -509,6 +520,7 @@ async fn start_server_task(
         &client,
         startup_timeout,
         initialize_result.instructions.as_deref(),
+        client_capabilities.as_ref(),
     )
     .await
     .map_err(StartupOutcomeError::from)?;
@@ -542,6 +554,7 @@ async fn start_server_task(
         server_instructions: initialize_result.instructions,
         server_supports_sandbox_state_meta_capability,
         codex_apps_tools_cache_context,
+        client_capabilities,
     };
 
     Ok(managed)
@@ -570,6 +583,7 @@ struct StartServerTaskParams {
     tx_event: Sender<Event>,
     elicitation_requests: ElicitationRequestManager,
     codex_apps_tools_cache_context: Option<CodexAppsToolsCacheContext>,
+    client_capabilities: Option<McpClientCapabilities>,
     client_elicitation_capability: ElicitationCapability,
 }
 

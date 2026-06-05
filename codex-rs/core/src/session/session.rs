@@ -29,6 +29,9 @@ pub(crate) struct Session {
     /// Serializes rebuild/apply cycles for the running proxy; each cycle
     /// rebuilds from the current SessionState while holding this lock.
     pub(super) managed_network_proxy_refresh_lock: Semaphore,
+    /// Keeps the active app-server client profile and the host-owned Apps MCP
+    /// client in sync when different clients resume the same thread.
+    pub(super) app_server_client_profile_update_lock: Mutex<()>,
     /// The set of enabled features should be invariant for the lifetime of the
     /// session.
     pub(super) features: ManagedFeatures,
@@ -93,6 +96,7 @@ pub(crate) struct SessionConfiguration {
     pub(super) metrics_service_name: Option<String>,
     pub(super) app_server_client_name: Option<String>,
     pub(super) app_server_client_version: Option<String>,
+    pub(super) mcp_client_capabilities: Option<McpClientCapabilities>,
     /// Source of the session (cli, vscode, exec, mcp, ...)
     pub(super) session_source: SessionSource,
     /// Immediate history source copied into this thread, when this thread was forked.
@@ -367,6 +371,9 @@ impl SessionConfiguration {
         if let Some(app_server_client_version) = updates.app_server_client_version.clone() {
             next_configuration.app_server_client_version = Some(app_server_client_version);
         }
+        if let Some(mcp_client_capabilities) = updates.mcp_client_capabilities.clone() {
+            next_configuration.mcp_client_capabilities = mcp_client_capabilities;
+        }
         Ok(next_configuration)
     }
 
@@ -425,6 +432,7 @@ pub(crate) struct SessionSettingsUpdate {
     pub(crate) personality: Option<Personality>,
     pub(crate) app_server_client_name: Option<String>,
     pub(crate) app_server_client_version: Option<String>,
+    pub(crate) mcp_client_capabilities: Option<Option<McpClientCapabilities>>,
 }
 
 pub(crate) struct AppServerClientMetadata {
@@ -1060,6 +1068,7 @@ impl Session {
                 out_of_band_elicitation_paused,
                 state: Mutex::new(state),
                 managed_network_proxy_refresh_lock: Semaphore::new(/*permits*/ 1),
+                app_server_client_profile_update_lock: Mutex::new(()),
                 features: config.features.clone(),
                 multi_agent_version,
                 pending_mcp_server_refresh_config: Mutex::new(None),
@@ -1176,6 +1185,7 @@ impl Session {
                 tool_plugin_provenance,
                 auth,
                 Some(sess.mcp_elicitation_reviewer()),
+                session_configuration.mcp_client_capabilities.clone(),
             )
             .instrument(info_span!(
                 "session_init.mcp_manager_init",

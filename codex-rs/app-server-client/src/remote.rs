@@ -33,6 +33,7 @@ use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCRequest;
 use codex_app_server_protocol::JSONRPCResponse;
+use codex_app_server_protocol::McpClientCapabilities;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::Result as JsonRpcResult;
 use codex_app_server_protocol::ServerNotification;
@@ -87,10 +88,11 @@ pub struct RemoteAppServerConnectArgs {
     pub client_version: String,
     pub experimental_api: bool,
     pub opt_out_notification_methods: Vec<String>,
+    pub mcp_client_capabilities: Option<McpClientCapabilities>,
     pub channel_capacity: usize,
 }
 impl RemoteAppServerConnectArgs {
-    fn initialize_params(&self) -> InitializeParams {
+    pub(crate) fn initialize_params(&self) -> InitializeParams {
         let capabilities = InitializeCapabilities {
             experimental_api: self.experimental_api,
             request_attestation: false,
@@ -99,6 +101,7 @@ impl RemoteAppServerConnectArgs {
             } else {
                 Some(self.opt_out_notification_methods.clone())
             },
+            mcp_client_capabilities: self.mcp_client_capabilities.clone(),
         };
 
         InitializeParams {

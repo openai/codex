@@ -14,6 +14,7 @@ use std::time::Duration;
 use std::time::Instant;
 
 use crate::McpAuthStatusEntry;
+use crate::client_capabilities;
 use crate::codex_apps::CodexAppsToolsCacheContext;
 use crate::codex_apps::CodexAppsToolsCacheKey;
 use crate::codex_apps::write_cached_codex_apps_tools_if_needed;
@@ -40,11 +41,13 @@ use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
 use async_channel::Sender;
+use codex_api::SharedAuthProvider;
 use codex_config::Constrained;
 use codex_config::McpServerTransportConfig;
 use codex_config::types::OAuthCredentialsStoreMode;
 use codex_login::CodexAuth;
 use codex_protocol::mcp::CallToolResult;
+use codex_protocol::mcp::McpClientCapabilities;
 use codex_protocol::mcp::McpServerInfo;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
@@ -110,6 +113,7 @@ pub struct McpConnectionManager {
     prefix_mcp_tool_names: bool,
     elicitation_requests: ElicitationRequestManager,
     startup_cancellation_token: CancellationToken,
+    codex_apps_client_capabilities: Option<McpClientCapabilities>,
 }
 
 impl McpConnectionManager {
@@ -142,6 +146,7 @@ impl McpConnectionManager {
                 /*reviewer*/ None,
             ),
             startup_cancellation_token: CancellationToken::new(),
+            codex_apps_client_capabilities: None,
         }
     }
 
@@ -189,6 +194,10 @@ impl McpConnectionManager {
         self.host_owned_codex_apps_enabled && server_name == CODEX_APPS_MCP_SERVER_NAME
     }
 
+    pub fn codex_apps_client_capabilities(&self) -> Option<&McpClientCapabilities> {
+        self.codex_apps_client_capabilities.as_ref()
+    }
+
     pub fn set_approval_policy(&self, approval_policy: &Constrained<AskForApproval>) {
         if let Ok(mut policy) = self.elicitation_requests.approval_policy.lock() {
             *policy = approval_policy.value();
@@ -227,6 +236,7 @@ impl McpConnectionManager {
         tool_plugin_provenance: ToolPluginProvenance,
         auth: Option<&CodexAuth>,
         elicitation_reviewer: Option<ElicitationReviewerHandle>,
+        codex_apps_client_capabilities: Option<McpClientCapabilities>,
     ) -> (Self, CancellationToken) {
         let cancel_token = CancellationToken::new();
         let mut clients = HashMap::new();
@@ -262,6 +272,9 @@ impl McpConnectionManager {
                 Some(CodexAppsToolsCacheContext {
                     codex_home: codex_home.clone(),
                     user_key: codex_apps_tools_cache_key.clone(),
+                    client_capabilities_fingerprint: codex_apps_client_capabilities
+                        .as_ref()
+                        .map(client_capabilities::fingerprint),
                 })
             } else {
                 None
@@ -290,6 +303,9 @@ impl McpConnectionManager {
                 tx_event.clone(),
                 elicitation_requests.clone(),
                 codex_apps_tools_cache_context,
+                (host_owned_codex_apps_enabled && server_name == CODEX_APPS_MCP_SERVER_NAME)
+                    .then(|| codex_apps_client_capabilities.clone())
+                    .flatten(),
                 Arc::clone(&tool_plugin_provenance),
                 runtime_context.clone(),
                 runtime_auth_provider,
@@ -338,6 +354,7 @@ impl McpConnectionManager {
             prefix_mcp_tool_names,
             elicitation_requests: elicitation_requests.clone(),
             startup_cancellation_token: cancel_token.clone(),
+            codex_apps_client_capabilities,
         };
         tokio::spawn(async move {
             let outcomes = join_set.join_all().await;
@@ -362,6 +379,115 @@ impl McpConnectionManager {
                 .await;
         });
         (manager, cancel_token)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn refresh_codex_apps_client(
+        &mut self,
+        server: Option<EffectiveMcpServer>,
+        store_mode: OAuthCredentialsStoreMode,
+        auth_entry: Option<McpAuthStatusEntry>,
+        submit_id: String,
+        tx_event: Sender<Event>,
+        codex_home: PathBuf,
+        codex_apps_tools_cache_key: CodexAppsToolsCacheKey,
+        client_capabilities: Option<McpClientCapabilities>,
+        runtime_context: McpRuntimeContext,
+        runtime_auth_provider: Option<SharedAuthProvider>,
+        client_elicitation_capability: ElicitationCapability,
+    ) {
+        if let Some(client) = self.clients.remove(CODEX_APPS_MCP_SERVER_NAME) {
+            client.shutdown().await;
+        }
+        self.server_metadata.remove(CODEX_APPS_MCP_SERVER_NAME);
+        self.codex_apps_client_capabilities = client_capabilities.clone();
+
+        let Some(server) = server.filter(EffectiveMcpServer::enabled) else {
+            return;
+        };
+        self.server_metadata.insert(
+            CODEX_APPS_MCP_SERVER_NAME.to_string(),
+            McpServerMetadata::from(&server),
+        );
+        let _ = emit_update(
+            submit_id.as_str(),
+            &tx_event,
+            McpStartupUpdateEvent {
+                server: CODEX_APPS_MCP_SERVER_NAME.to_string(),
+                status: McpStartupStatus::Starting,
+            },
+        )
+        .await;
+
+        let cancel_token = self.startup_cancellation_token.child_token();
+        let client = AsyncManagedClient::new(
+            CODEX_APPS_MCP_SERVER_NAME.to_string(),
+            server,
+            store_mode,
+            cancel_token.clone(),
+            tx_event.clone(),
+            self.elicitation_requests.clone(),
+            Some(CodexAppsToolsCacheContext {
+                codex_home,
+                user_key: codex_apps_tools_cache_key,
+                client_capabilities_fingerprint: client_capabilities
+                    .as_ref()
+                    .map(client_capabilities::fingerprint),
+            }),
+            client_capabilities,
+            Arc::clone(&self.tool_plugin_provenance),
+            runtime_context,
+            runtime_auth_provider,
+            client_elicitation_capability,
+        );
+        self.clients
+            .insert(CODEX_APPS_MCP_SERVER_NAME.to_string(), client.clone());
+
+        tokio::spawn(async move {
+            let mut outcome = client.client().await;
+            if cancel_token.is_cancelled() {
+                outcome = Err(StartupOutcomeError::Cancelled);
+            }
+            let status = match &outcome {
+                Ok(_) => McpStartupStatus::Ready,
+                Err(StartupOutcomeError::Cancelled) => McpStartupStatus::Cancelled,
+                Err(error) => McpStartupStatus::Failed {
+                    error: mcp_init_error_display(
+                        CODEX_APPS_MCP_SERVER_NAME,
+                        auth_entry.as_ref(),
+                        error,
+                    ),
+                },
+            };
+            let _ = emit_update(
+                submit_id.as_str(),
+                &tx_event,
+                McpStartupUpdateEvent {
+                    server: CODEX_APPS_MCP_SERVER_NAME.to_string(),
+                    status,
+                },
+            )
+            .await;
+            let mut summary = McpStartupCompleteEvent::default();
+            match outcome {
+                Ok(_) => summary.ready.push(CODEX_APPS_MCP_SERVER_NAME.to_string()),
+                Err(StartupOutcomeError::Cancelled) => summary
+                    .cancelled
+                    .push(CODEX_APPS_MCP_SERVER_NAME.to_string()),
+                Err(StartupOutcomeError::Failed { error }) => {
+                    summary.failed.push(McpStartupFailure {
+                        server: CODEX_APPS_MCP_SERVER_NAME.to_string(),
+                        error,
+                    });
+                }
+            }
+            let _ = tx_event
+                .send(Event {
+                    id: submit_id,
+                    msg: EventMsg::McpStartupComplete(summary),
+                })
+                .await;
+        });
     }
 
     pub async fn resolve_elicitation(
@@ -498,6 +624,7 @@ impl McpConnectionManager {
             &managed_client.client,
             managed_client.tool_timeout,
             managed_client.server_instructions.as_deref(),
+            managed_client.client_capabilities.as_ref(),
         )
         .await
         .with_context(|| {
@@ -561,15 +688,17 @@ impl McpConnectionManager {
             };
             let timeout = managed_client.tool_timeout;
             let client = managed_client.client.clone();
+            let client_capabilities = managed_client.client_capabilities.clone();
 
             join_set.spawn(async move {
                 let mut collected: Vec<Resource> = Vec::new();
                 let mut cursor: Option<String> = None;
 
                 loop {
-                    let params = cursor.as_ref().map(|next| {
-                        PaginatedRequestParams::default().with_cursor(Some(next.clone()))
-                    });
+                    let params = client_capabilities::paginated_params(
+                        cursor.clone(),
+                        client_capabilities.as_ref(),
+                    );
                     let response = match client.list_resources(params, timeout).await {
                         Ok(result) => result,
                         Err(err) => return (server_name, Err(err)),
@@ -626,15 +755,17 @@ impl McpConnectionManager {
             };
             let client = managed_client.client.clone();
             let timeout = managed_client.tool_timeout;
+            let client_capabilities = managed_client.client_capabilities.clone();
 
             join_set.spawn(async move {
                 let mut collected: Vec<ResourceTemplate> = Vec::new();
                 let mut cursor: Option<String> = None;
 
                 loop {
-                    let params = cursor.as_ref().map(|next| {
-                        PaginatedRequestParams::default().with_cursor(Some(next.clone()))
-                    });
+                    let params = client_capabilities::paginated_params(
+                        cursor.clone(),
+                        client_capabilities.as_ref(),
+                    );
                     let response = match client.list_resource_templates(params, timeout).await {
                         Ok(result) => result,
                         Err(err) => return (server_name_cloned, Err(err)),
@@ -687,7 +818,7 @@ impl McpConnectionManager {
         server: &str,
         tool: &str,
         arguments: Option<serde_json::Value>,
-        meta: Option<serde_json::Value>,
+        mut meta: Option<serde_json::Value>,
     ) -> Result<CallToolResult> {
         let client = self.client_by_name(server).await?;
         if !client.tool_filter.allows(tool) {
@@ -696,6 +827,7 @@ impl McpConnectionManager {
             ));
         }
 
+        client_capabilities::add_json_meta(&mut meta, client.client_capabilities.as_ref());
         let result: rmcp::model::CallToolResult = client
             .client
             .call_tool(tool.to_string(), arguments, meta, client.tool_timeout)
@@ -733,11 +865,15 @@ impl McpConnectionManager {
     pub async fn list_resources(
         &self,
         server: &str,
-        params: Option<PaginatedRequestParams>,
+        mut params: Option<PaginatedRequestParams>,
     ) -> Result<ListResourcesResult> {
         let managed = self.client_by_name(server).await?;
         let timeout = managed.tool_timeout;
 
+        if managed.client_capabilities.is_some() {
+            let params = params.get_or_insert_with(PaginatedRequestParams::default);
+            client_capabilities::add_meta(&mut params.meta, managed.client_capabilities.as_ref());
+        }
         managed
             .client
             .list_resources(params, timeout)
@@ -749,12 +885,16 @@ impl McpConnectionManager {
     pub async fn list_resource_templates(
         &self,
         server: &str,
-        params: Option<PaginatedRequestParams>,
+        mut params: Option<PaginatedRequestParams>,
     ) -> Result<ListResourceTemplatesResult> {
         let managed = self.client_by_name(server).await?;
         let client = managed.client.clone();
         let timeout = managed.tool_timeout;
 
+        if managed.client_capabilities.is_some() {
+            let params = params.get_or_insert_with(PaginatedRequestParams::default);
+            client_capabilities::add_meta(&mut params.meta, managed.client_capabilities.as_ref());
+        }
         client
             .list_resource_templates(params, timeout)
             .await
@@ -765,12 +905,13 @@ impl McpConnectionManager {
     pub async fn read_resource(
         &self,
         server: &str,
-        params: ReadResourceRequestParams,
+        mut params: ReadResourceRequestParams,
     ) -> Result<ReadResourceResult> {
         let managed = self.client_by_name(server).await?;
         let client = managed.client.clone();
         let timeout = managed.tool_timeout;
         let uri = params.uri.clone();
+        client_capabilities::add_meta(&mut params.meta, managed.client_capabilities.as_ref());
 
         client
             .read_resource(params, timeout)

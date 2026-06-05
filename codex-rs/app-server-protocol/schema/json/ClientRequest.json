@@ -1124,6 +1124,17 @@
           "description": "Opt into receiving experimental API methods and fields.",
           "type": "boolean"
         },
+        "mcpClientCapabilities": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/McpClientCapabilities"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Passive MCP capabilities supported by this app-server client."
+        },
         "optOutNotificationMethods": {
           "description": "Exact notification method names that should be suppressed for this connection (for example `thread/started`).",
           "items": {
@@ -1404,6 +1415,30 @@
           ]
         }
       },
+      "type": "object"
+    },
+    "McpAppUiCapability": {
+      "description": "Passive MCP App presentation features supported by the active host.",
+      "enum": [
+        "webView",
+        "declarativeUi"
+      ],
+      "type": "string"
+    },
+    "McpClientCapabilities": {
+      "description": "Passive MCP capabilities supplied by the active Codex host.",
+      "properties": {
+        "appUi": {
+          "items": {
+            "$ref": "#/definitions/McpAppUiCapability"
+          },
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "appUi"
+      ],
       "type": "object"
     },
     "McpResourceReadParams": {

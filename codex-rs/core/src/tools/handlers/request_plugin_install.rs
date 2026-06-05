@@ -339,6 +339,7 @@ async fn refresh_missing_requested_connectors(
                 &turn.config,
                 auth,
                 &mcp_tools,
+                turn.mcp_client_capabilities.as_ref(),
             );
             Some(accessible_connectors)
         }

@@ -21,6 +21,8 @@ use codex_features::Feature;
 use codex_login::CodexAuth;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::ToolInfo;
+use codex_protocol::mcp::McpAppUiCapability;
+use codex_protocol::mcp::McpClientCapabilities;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use rmcp::model::JsonObject;
@@ -167,7 +169,43 @@ async fn refresh_accessible_connectors_cache_from_mcp_tools_writes_latest_instal
         .await
         .expect("config should load");
     let _ = config.features.set_enabled(Feature::Apps, /*enabled*/ true);
-    let cache_key = accessible_connectors_cache_key(&config, /*auth*/ None);
+    let explicit_empty = McpClientCapabilities::default();
+    let web_view = McpClientCapabilities {
+        app_ui: [McpAppUiCapability::WebView].into_iter().collect(),
+    };
+    let declarative_ui = McpClientCapabilities {
+        app_ui: [McpAppUiCapability::DeclarativeUi].into_iter().collect(),
+    };
+    let combined = McpClientCapabilities {
+        app_ui: [
+            McpAppUiCapability::WebView,
+            McpAppUiCapability::DeclarativeUi,
+        ]
+        .into_iter()
+        .collect(),
+    };
+    let legacy_cache_key = accessible_connectors_cache_key(&config, /*auth*/ None, None);
+    let explicit_empty_cache_key =
+        accessible_connectors_cache_key(&config, /*auth*/ None, Some(explicit_empty.clone()));
+    let web_view_cache_key =
+        accessible_connectors_cache_key(&config, /*auth*/ None, Some(web_view));
+    let declarative_ui_cache_key =
+        accessible_connectors_cache_key(&config, /*auth*/ None, Some(declarative_ui));
+    let combined_cache_key =
+        accessible_connectors_cache_key(&config, /*auth*/ None, Some(combined));
+
+    let cache_keys = [
+        &legacy_cache_key,
+        &explicit_empty_cache_key,
+        &web_view_cache_key,
+        &declarative_ui_cache_key,
+        &combined_cache_key,
+    ];
+    for (index, cache_key) in cache_keys.iter().enumerate() {
+        for other_cache_key in &cache_keys[index + 1..] {
+            assert!(cache_key != other_cache_key);
+        }
+    }
     let tools = vec![
         codex_app_tool(
             "calendar_list_events",
@@ -184,8 +222,18 @@ async fn refresh_accessible_connectors_cache_from_mcp_tools_writes_latest_instal
     ];
 
     let cached = with_accessible_connectors_cache_cleared(|| {
-        refresh_accessible_connectors_cache_from_mcp_tools(&config, /*auth*/ None, &tools);
-        read_cached_accessible_connectors(&cache_key).expect("cache should be populated")
+        refresh_accessible_connectors_cache_from_mcp_tools(
+            &config,
+            /*auth*/ None,
+            &tools,
+            Some(&explicit_empty),
+        );
+        assert!(read_cached_accessible_connectors(&legacy_cache_key).is_none());
+        assert!(read_cached_accessible_connectors(&web_view_cache_key).is_none());
+        assert!(read_cached_accessible_connectors(&declarative_ui_cache_key).is_none());
+        assert!(read_cached_accessible_connectors(&combined_cache_key).is_none());
+        read_cached_accessible_connectors(&explicit_empty_cache_key)
+            .expect("explicit-empty capability cache should be populated")
     });
 
     assert_eq!(

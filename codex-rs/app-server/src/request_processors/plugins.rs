@@ -1,6 +1,7 @@
 use super::*;
 use crate::error_code::internal_error;
 use crate::error_code::invalid_request;
+use codex_app_server_protocol::McpClientCapabilities;
 use codex_app_server_protocol::PluginAvailability;
 use codex_app_server_protocol::PluginInstallPolicy;
 use codex_app_server_protocol::PluginSharePrincipalRole;
@@ -363,8 +364,9 @@ impl PluginRequestProcessor {
     pub(crate) async fn plugin_read(
         &self,
         params: PluginReadParams,
+        mcp_client_capabilities: Option<McpClientCapabilities>,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.plugin_read_response(params)
+        self.plugin_read_response(params, mcp_client_capabilities)
             .await
             .map(|response| Some(response.into()))
     }
@@ -925,6 +927,7 @@ impl PluginRequestProcessor {
     async fn plugin_read_response(
         &self,
         params: PluginReadParams,
+        mcp_client_capabilities: Option<McpClientCapabilities>,
     ) -> Result<PluginReadResponse, JSONRPCErrorError> {
         let plugins_manager = self.thread_manager.plugins_manager();
         let PluginReadParams {
@@ -1017,6 +1020,7 @@ impl PluginRequestProcessor {
                     &config,
                     &outcome.plugin.apps,
                     Arc::clone(&environment_manager),
+                    mcp_client_capabilities.clone(),
                 )
                 .await;
                 let visible_skills = outcome
@@ -1099,6 +1103,7 @@ impl PluginRequestProcessor {
                     &config,
                     &plugin_apps,
                     Arc::clone(&environment_manager),
+                    mcp_client_capabilities,
                 )
                 .await;
                 remote_plugin_detail_to_info(remote_detail, app_summaries)
@@ -1568,7 +1573,8 @@ impl PluginRequestProcessor {
             connectors::list_accessible_connectors_from_mcp_tools_with_environment_manager(
                 config,
                 /*force_refetch*/ true,
-                Arc::clone(&environment_manager)
+                Arc::clone(&environment_manager),
+                None,
             ),
         );
 
@@ -1593,7 +1599,7 @@ impl PluginRequestProcessor {
                     "failed to load accessible apps after plugin install: {err:#}"
                 );
                 (
-                    connectors::list_cached_accessible_connectors_from_mcp_tools(config)
+                    connectors::list_cached_accessible_connectors_from_mcp_tools(config, None)
                         .await
                         .unwrap_or_default(),
                     false,
@@ -1835,6 +1841,7 @@ async fn load_plugin_app_summaries(
     config: &Config,
     plugin_apps: &[codex_plugin::AppConnectorId],
     environment_manager: Arc<EnvironmentManager>,
+    mcp_client_capabilities: Option<McpClientCapabilities>,
 ) -> Vec<AppSummary> {
     if plugin_apps.is_empty() {
         return Vec::new();
@@ -1858,6 +1865,7 @@ async fn load_plugin_app_summaries(
             config,
             /*force_refetch*/ false,
             environment_manager,
+            mcp_client_capabilities,
         )
         .await
         {

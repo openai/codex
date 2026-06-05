@@ -89,6 +89,7 @@ use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::items::TurnItem;
 use codex_protocol::items::UserMessageItem;
 use codex_protocol::mcp::CallToolResult;
+use codex_protocol::mcp::McpClientCapabilities;
 use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::models::BaseInstructions;
@@ -319,6 +320,7 @@ use codex_git_utils::get_git_repo_root;
 use codex_mcp::compute_auth_statuses;
 use codex_mcp::effective_mcp_servers_from_configured;
 use codex_mcp::host_owned_codex_apps_enabled;
+use codex_mcp::with_codex_apps_mcp;
 use codex_otel::SessionTelemetry;
 use codex_otel::THREAD_STARTED_METRIC;
 use codex_otel::TelemetryAuthMode;
@@ -614,6 +616,8 @@ impl Codex {
             metrics_service_name,
             app_server_client_name: None,
             app_server_client_version: None,
+            mcp_client_capabilities: matches!(&session_source, SessionSource::Cli)
+                .then(McpClientCapabilities::default),
             session_source,
             forked_from_thread_id,
             parent_thread_id,
@@ -782,16 +786,39 @@ impl Codex {
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
         mcp_elicitations_auto_deny: bool,
+        mcp_client_capabilities: Option<McpClientCapabilities>,
     ) -> ConstraintResult<()> {
+        let _profile_update_guard = self
+            .session
+            .app_server_client_profile_update_lock
+            .lock()
+            .await;
+        let capabilities_changed = {
+            let manager = self.session.services.mcp_connection_manager.read().await;
+            manager.codex_apps_client_capabilities() != mcp_client_capabilities.as_ref()
+        };
         self.session
             .update_settings(SessionSettingsUpdate {
                 app_server_client_name,
                 app_server_client_version,
+                mcp_client_capabilities: Some(mcp_client_capabilities.clone()),
                 ..Default::default()
             })
             .await?;
-        let mcp_connection_manager = self.session.services.mcp_connection_manager.read().await;
-        mcp_connection_manager.set_elicitations_auto_deny(mcp_elicitations_auto_deny);
+        self.session
+            .services
+            .mcp_connection_manager
+            .read()
+            .await
+            .set_elicitations_auto_deny(mcp_elicitations_auto_deny);
+        if capabilities_changed {
+            self.session
+                .refresh_codex_apps_client(
+                    mcp_client_capabilities,
+                    "app-server-client-profile".to_string(),
+                )
+                .await;
+        }
         Ok(())
     }
 

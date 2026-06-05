@@ -1,4 +1,5 @@
 use super::*;
+use codex_app_server_protocol::McpClientCapabilities;
 
 const MCP_TOOL_THREAD_ID_META_KEY: &str = "threadId";
 
@@ -47,8 +48,9 @@ impl McpRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: ListMcpServerStatusParams,
+        mcp_client_capabilities: Option<McpClientCapabilities>,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.list_mcp_server_status(request_id, params)
+        self.list_mcp_server_status(request_id, params, mcp_client_capabilities)
             .await
             .map(|()| None)
     }
@@ -57,8 +59,9 @@ impl McpRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: McpResourceReadParams,
+        mcp_client_capabilities: Option<McpClientCapabilities>,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.read_mcp_resource(request_id, params)
+        self.read_mcp_resource(request_id, params, mcp_client_capabilities)
             .await
             .map(|()| None)
     }
@@ -195,6 +198,7 @@ impl McpRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: ListMcpServerStatusParams,
+        mcp_client_capabilities: Option<McpClientCapabilities>,
     ) -> Result<(), JSONRPCErrorError> {
         let request = request_id.clone();
 
@@ -229,6 +233,7 @@ impl McpRequestProcessor {
                 mcp_config,
                 auth,
                 runtime_context,
+                mcp_client_capabilities,
             )
             .await;
         });
@@ -242,6 +247,7 @@ impl McpRequestProcessor {
         mcp_config: codex_mcp::McpConfig,
         auth: Option<CodexAuth>,
         runtime_context: McpRuntimeContext,
+        mcp_client_capabilities: Option<McpClientCapabilities>,
     ) {
         let result = Self::list_mcp_server_status_response(
             request_id.request_id.to_string(),
@@ -249,6 +255,7 @@ impl McpRequestProcessor {
             mcp_config,
             auth,
             runtime_context,
+            mcp_client_capabilities,
         )
         .await;
         outgoing.send_result(request_id, result).await;
@@ -260,6 +267,7 @@ impl McpRequestProcessor {
         mcp_config: codex_mcp::McpConfig,
         auth: Option<CodexAuth>,
         runtime_context: McpRuntimeContext,
+        mcp_client_capabilities: Option<McpClientCapabilities>,
     ) -> Result<ListMcpServerStatusResponse, JSONRPCErrorError> {
         let detail = match params.detail.unwrap_or(McpServerStatusDetail::Full) {
             McpServerStatusDetail::Full => McpSnapshotDetail::Full,
@@ -272,6 +280,7 @@ impl McpRequestProcessor {
             request_id,
             runtime_context,
             detail,
+            mcp_client_capabilities,
         )
         .await;
 
@@ -341,6 +350,7 @@ impl McpRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: McpResourceReadParams,
+        mcp_client_capabilities: Option<McpClientCapabilities>,
     ) -> Result<(), JSONRPCErrorError> {
         let outgoing = Arc::clone(&self.outgoing);
         let McpResourceReadParams {
@@ -380,6 +390,7 @@ impl McpRequestProcessor {
                 runtime_context,
                 &server,
                 &uri,
+                mcp_client_capabilities,
             )
             .await
             .and_then(|result| serde_json::to_value(result).map_err(anyhow::Error::from));

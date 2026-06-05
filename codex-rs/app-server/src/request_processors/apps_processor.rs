@@ -1,4 +1,5 @@
 use super::*;
+use codex_app_server_protocol::McpClientCapabilities;
 
 pub(crate) struct AppsRequestProcessor {
     auth_manager: Arc<AuthManager>,
@@ -35,8 +36,9 @@ impl AppsRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: AppsListParams,
+        mcp_client_capabilities: Option<McpClientCapabilities>,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.apps_list_inner(request_id, params)
+        self.apps_list_inner(request_id, params, mcp_client_capabilities)
             .await
             .map(|response| response.map(Into::into))
     }
@@ -45,6 +47,7 @@ impl AppsRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: AppsListParams,
+        mcp_client_capabilities: Option<McpClientCapabilities>,
     ) -> Result<Option<AppsListResponse>, JSONRPCErrorError> {
         let thread = if let Some(thread_id) = params.thread_id.as_deref() {
             let (_, loaded_thread) = self.load_thread(thread_id).await?;
@@ -92,7 +95,14 @@ impl AppsRequestProcessor {
         tokio::spawn(async move {
             tokio::select! {
                 _ = shutdown_token.cancelled() => {}
-                _ = Self::apps_list_task(outgoing, request, params, config, environment_manager) => {}
+                _ = Self::apps_list_task(
+                    outgoing,
+                    request,
+                    params,
+                    config,
+                    environment_manager,
+                    mcp_client_capabilities,
+                ) => {}
             }
         });
         Ok(None)
@@ -108,11 +118,19 @@ impl AppsRequestProcessor {
         params: AppsListParams,
         config: Config,
         environment_manager: Arc<EnvironmentManager>,
+        mcp_client_capabilities: Option<McpClientCapabilities>,
     ) {
         let retry_params = params.clone();
         let retry_config = config.clone();
         let retry_environment_manager = Arc::clone(&environment_manager);
-        let result = Self::apps_list_response(&outgoing, params, config, environment_manager).await;
+        let result = Self::apps_list_response(
+            &outgoing,
+            params,
+            config,
+            environment_manager,
+            mcp_client_capabilities.clone(),
+        )
+        .await;
         let should_retry = result
             .as_ref()
             .is_ok_and(|(_, codex_apps_ready)| !codex_apps_ready);
@@ -128,6 +146,7 @@ impl AppsRequestProcessor {
                 retry_params,
                 retry_config,
                 retry_environment_manager,
+                mcp_client_capabilities,
             )
             .await
             {
@@ -141,6 +160,7 @@ impl AppsRequestProcessor {
         params: AppsListParams,
         config: Config,
         environment_manager: Arc<EnvironmentManager>,
+        mcp_client_capabilities: Option<McpClientCapabilities>,
     ) -> Result<(AppsListResponse, bool), JSONRPCErrorError> {
         let AppsListParams {
             cursor,
@@ -157,7 +177,10 @@ impl AppsRequestProcessor {
         };
 
         let (mut accessible_connectors, mut all_connectors) = tokio::join!(
-            connectors::list_cached_accessible_connectors_from_mcp_tools(&config),
+            connectors::list_cached_accessible_connectors_from_mcp_tools(
+                &config,
+                mcp_client_capabilities.as_ref(),
+            ),
             connectors::list_cached_all_connectors(&config)
         );
         let cached_all_connectors = all_connectors.clone();
@@ -172,6 +195,7 @@ impl AppsRequestProcessor {
                     &accessible_config,
                     force_refetch,
                     Arc::clone(&environment_manager),
+                    mcp_client_capabilities,
                 )
                 .await
                 .map_err(|err| format!("failed to load accessible apps: {err}"));

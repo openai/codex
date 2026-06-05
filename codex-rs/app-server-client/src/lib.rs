@@ -38,6 +38,7 @@ use codex_app_server_protocol::ConfigWarningNotification;
 use codex_app_server_protocol::InitializeCapabilities;
 use codex_app_server_protocol::InitializeParams;
 use codex_app_server_protocol::JSONRPCErrorError;
+use codex_app_server_protocol::McpClientCapabilities;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::Result as JsonRpcResult;
 use codex_app_server_protocol::ServerNotification;
@@ -363,6 +364,8 @@ pub struct InProcessClientStartArgs {
     pub experimental_api: bool,
     /// Notification methods this client opts out of receiving.
     pub opt_out_notification_methods: Vec<String>,
+    /// Passive MCP host capabilities advertised by this client.
+    pub mcp_client_capabilities: Option<McpClientCapabilities>,
     /// Queue capacity for command/event channels (clamped to at least 1).
     pub channel_capacity: usize,
 }
@@ -385,6 +388,7 @@ impl InProcessClientStartArgs {
             } else {
                 Some(self.opt_out_notification_methods.clone())
             },
+            mcp_client_capabilities: self.mcp_client_capabilities.clone(),
         };
 
         InitializeParams {
@@ -950,6 +954,8 @@ mod tests {
     use codex_app_server_protocol::JSONRPCMessage;
     use codex_app_server_protocol::JSONRPCRequest;
     use codex_app_server_protocol::JSONRPCResponse;
+    use codex_app_server_protocol::McpAppUiCapability;
+    use codex_app_server_protocol::McpClientCapabilities;
     use codex_app_server_protocol::ServerNotification;
     use codex_app_server_protocol::SessionSource as ApiSessionSource;
     use codex_app_server_protocol::ThreadStartParams;
@@ -1047,6 +1053,7 @@ mod tests {
             client_version: "0.0.0-test".to_string(),
             experimental_api: true,
             opt_out_notification_methods: Vec::new(),
+            mcp_client_capabilities: None,
             channel_capacity,
         })
         .await
@@ -1239,8 +1246,30 @@ mod tests {
             client_version: "0.0.0-test".to_string(),
             experimental_api: true,
             opt_out_notification_methods: Vec::new(),
+            mcp_client_capabilities: None,
             channel_capacity: 8,
         }
+    }
+
+    #[test]
+    fn remote_initialize_params_forward_mcp_client_capabilities() {
+        let expected = McpClientCapabilities {
+            app_ui: [
+                McpAppUiCapability::WebView,
+                McpAppUiCapability::DeclarativeUi,
+            ]
+            .into_iter()
+            .collect(),
+        };
+        let mut args = test_remote_connect_args("ws://127.0.0.1:4500".to_string());
+        args.mcp_client_capabilities = Some(expected.clone());
+
+        assert_eq!(
+            args.initialize_params()
+                .capabilities
+                .and_then(|capabilities| capabilities.mcp_client_capabilities),
+            Some(expected)
+        );
     }
 
     #[tokio::test]
@@ -1513,6 +1542,7 @@ mod tests {
             client_version: "0.0.0-test".to_string(),
             experimental_api: true,
             opt_out_notification_methods: Vec::new(),
+            mcp_client_capabilities: None,
             channel_capacity: 8,
         })
         .await
@@ -1601,6 +1631,7 @@ mod tests {
             client_version: "0.0.0-test".to_string(),
             experimental_api: true,
             opt_out_notification_methods: Vec::new(),
+            mcp_client_capabilities: None,
             channel_capacity: 8,
         })
         .await
@@ -1620,6 +1651,7 @@ mod tests {
             client_version: "0.0.0-test".to_string(),
             experimental_api: true,
             opt_out_notification_methods: Vec::new(),
+            mcp_client_capabilities: None,
             channel_capacity: 8,
         })
         .await;
@@ -2179,6 +2211,9 @@ mod tests {
     #[tokio::test]
     async fn runtime_start_args_forward_environment_manager() {
         let config = Arc::new(build_test_config().await);
+        let expected_capabilities = McpClientCapabilities {
+            app_ui: [McpAppUiCapability::WebView].into_iter().collect(),
+        };
         let environment_manager = Arc::new(
             EnvironmentManager::create_for_tests(
                 Some("ws://127.0.0.1:8765".to_string()),
@@ -2211,11 +2246,19 @@ mod tests {
             client_version: "0.0.0-test".to_string(),
             experimental_api: true,
             opt_out_notification_methods: Vec::new(),
+            mcp_client_capabilities: Some(expected_capabilities.clone()),
             channel_capacity: DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
         }
         .into_runtime_start_args();
 
         assert_eq!(runtime_args.config, config);
+        assert_eq!(
+            runtime_args
+                .initialize
+                .capabilities
+                .and_then(|capabilities| capabilities.mcp_client_capabilities),
+            Some(expected_capabilities)
+        );
         assert!(Arc::ptr_eq(
             &runtime_args.environment_manager,
             &environment_manager
@@ -2252,6 +2295,7 @@ mod tests {
             client_version: "0.0.0-test".to_string(),
             experimental_api: true,
             opt_out_notification_methods: Vec::new(),
+            mcp_client_capabilities: None,
             channel_capacity: DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
         }
         .into_runtime_start_args();

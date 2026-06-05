@@ -4,6 +4,8 @@ mod jsonrpc_lite;
 mod protocol;
 mod schema_fixtures;
 
+pub use codex_protocol::mcp::McpAppUiCapability;
+pub use codex_protocol::mcp::McpClientCapabilities;
 pub use experimental_api::*;
 pub use export::GenerateTsOptions;
 pub use export::generate_internal_json_schema;
