@@ -314,25 +314,6 @@ impl ConfigRequestProcessor {
 }
 
 fn map_requirements_toml_to_api(requirements: ConfigRequirementsToml) -> ConfigRequirements {
-    let allowed_permission_profiles = requirements.allowed_permission_profiles.or_else(|| {
-        requirements.allowed_permissions.as_ref().map(|profiles| {
-            profiles
-                .iter()
-                .cloned()
-                .map(|profile| (profile, true))
-                .collect()
-        })
-    });
-    let allowed_permissions = requirements.allowed_permissions.or_else(|| {
-        allowed_permission_profiles.as_ref().map(|profiles| {
-            profiles
-                .iter()
-                .filter(|(_, allowed)| **allowed)
-                .map(|(profile, _)| profile.clone())
-                .collect()
-        })
-    });
-
     ConfigRequirements {
         allowed_approval_policies: requirements.allowed_approval_policies.map(|policies| {
             policies
@@ -369,8 +350,7 @@ fn map_requirements_toml_to_api(requirements: ConfigRequirementsToml) -> ConfigR
                         .collect()
                 })
         }),
-        allowed_permissions,
-        allowed_permission_profiles,
+        allowed_permission_profiles: requirements.allowed_permission_profiles,
         default_permissions: requirements.default_permissions,
         allowed_web_search_modes: requirements.allowed_web_search_modes.map(|modes| {
             let mut normalized = modes
@@ -614,10 +594,6 @@ mod tests {
             ..ConfigRequirementsToml::default()
         });
 
-        assert_eq!(
-            mapped.allowed_permissions,
-            Some(vec!["managed-standard".to_string()])
-        );
         assert_eq!(
             mapped.allowed_permission_profiles,
             Some(BTreeMap::from([

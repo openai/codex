@@ -176,7 +176,6 @@ fn populate_merged_regular_fields_with_sources(
         allowed_approval_policies,
         allowed_approvals_reviewers,
         allowed_sandbox_modes,
-        allowed_permissions,
         allowed_permission_profiles,
         default_permissions,
         remote_sandbox_config: _,
@@ -203,7 +202,6 @@ fn populate_merged_regular_fields_with_sources(
         &["allowed_approvals_reviewers"]
     );
     set_sourced!(allowed_sandbox_modes, &["allowed_sandbox_modes"]);
-    set_sourced!(allowed_permissions, &["allowed_permissions"]);
     set_sourced!(
         allowed_permission_profiles,
         &["allowed_permission_profiles"]

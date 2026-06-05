@@ -8351,7 +8351,6 @@ async fn test_requirements_web_search_mode_allowlist_does_not_warn_when_unset() 
         allowed_approval_policies: None,
         allowed_approvals_reviewers: None,
         allowed_sandbox_modes: None,
-        allowed_permissions: None,
         allowed_permission_profiles: None,
         default_permissions: None,
         remote_sandbox_config: None,
