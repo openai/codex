@@ -66,6 +66,9 @@ struct TurnProfileState {
     pending_idle_after_sampling: Duration,
     sampling_request_count: u32,
     sampling_retry_count: u32,
+    sampling_retry_delay: Duration,
+    request_user_input_count: u32,
+    request_user_input_wait: Duration,
     completed_profile: Option<TurnProfile>,
 }
 
@@ -127,8 +130,13 @@ impl TurnTimingState {
         }
     }
 
-    pub(crate) fn record_sampling_retry(&self) {
-        self.profile_state().record_sampling_retry();
+    pub(crate) fn record_sampling_retry(&self, delay: Duration) {
+        self.profile_state().record_sampling_retry(delay);
+    }
+
+    pub(crate) fn record_request_user_input_wait(&self, duration: Duration) {
+        self.profile_state()
+            .record_request_user_input_wait(duration);
     }
 
     pub(crate) fn begin_tool_blocking(self: &Arc<Self>) -> TurnProfileTimingGuard {
@@ -217,9 +225,17 @@ impl TurnProfileState {
         true
     }
 
-    fn record_sampling_retry(&mut self) {
+    fn record_sampling_retry(&mut self, delay: Duration) {
         if self.completed_profile.is_none() && self.started_at.is_some() {
             self.sampling_retry_count = self.sampling_retry_count.saturating_add(1);
+            self.sampling_retry_delay = self.sampling_retry_delay.saturating_add(delay);
+        }
+    }
+
+    fn record_request_user_input_wait(&mut self, duration: Duration) {
+        if self.completed_profile.is_none() && self.started_at.is_some() {
+            self.request_user_input_count = self.request_user_input_count.saturating_add(1);
+            self.request_user_input_wait = self.request_user_input_wait.saturating_add(duration);
         }
     }
 
@@ -277,6 +293,9 @@ impl TurnProfileState {
             after_last_sampling_ms: duration_to_u64_ms(after_last_sampling),
             sampling_request_count: self.sampling_request_count,
             sampling_retry_count: self.sampling_retry_count,
+            sampling_retry_delay_ms: duration_to_u64_ms(self.sampling_retry_delay),
+            request_user_input_count: self.request_user_input_count,
+            request_user_input_wait_ms: duration_to_u64_ms(self.request_user_input_wait),
         };
         let total_ms = self
             .started_at

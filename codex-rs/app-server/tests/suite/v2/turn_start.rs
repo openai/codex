@@ -942,6 +942,9 @@ async fn turn_start_tracks_turn_event_analytics() -> Result<()> {
             "toolBlockingMs": params["tool_blocking_ms"],
             "samplingRequestCount": params["sampling_request_count"],
             "samplingRetryCount": params["sampling_retry_count"],
+            "samplingRetryDelayIsPositive": params["sampling_retry_delay_ms"]
+                .as_u64()
+                .is_some_and(|duration| duration > 0),
             "responseRequestCount": response_mock.requests().len(),
         }),
         json!({
@@ -949,6 +952,7 @@ async fn turn_start_tracks_turn_event_analytics() -> Result<()> {
             "toolBlockingMs": 0,
             "samplingRequestCount": 2,
             "samplingRetryCount": 1,
+            "samplingRetryDelayIsPositive": true,
             "responseRequestCount": 2,
         })
     );
@@ -1047,12 +1051,18 @@ async fn turn_profile_tracks_blocking_tool_and_follow_up_sampling() -> Result<()
                 .is_some_and(|duration| duration > 0),
             "samplingRequestCount": params["sampling_request_count"],
             "samplingRetryCount": params["sampling_retry_count"],
+            "requestUserInputCount": params["request_user_input_count"],
+            "requestUserInputWaitIsPositive": params["request_user_input_wait_ms"]
+                .as_u64()
+                .is_some_and(|duration| duration > 0),
             "status": params["status"],
         }),
         json!({
             "toolBlockingIsPositive": true,
             "samplingRequestCount": 2,
             "samplingRetryCount": 0,
+            "requestUserInputCount": 1,
+            "requestUserInputWaitIsPositive": true,
             "status": "completed",
         })
     );

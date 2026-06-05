@@ -407,6 +407,9 @@ fn sample_turn_profile() -> TurnProfile {
         after_last_sampling_ms: 134,
         sampling_request_count: 2,
         sampling_retry_count: 1,
+        sampling_retry_delay_ms: 50,
+        request_user_input_count: 1,
+        request_user_input_wait_ms: 250,
     }
 }
 
@@ -3333,6 +3336,9 @@ fn turn_event_serializes_expected_shape() {
             after_last_sampling_ms: 134,
             sampling_request_count: 2,
             sampling_retry_count: 1,
+            sampling_retry_delay_ms: 50,
+            request_user_input_count: 1,
+            request_user_input_wait_ms: 250,
             duration_ms: Some(1234),
             started_at: Some(455),
             completed_at: Some(456),
@@ -3406,6 +3412,9 @@ fn turn_event_serializes_expected_shape() {
                 "after_last_sampling_ms": 134,
                 "sampling_request_count": 2,
                 "sampling_retry_count": 1,
+                "sampling_retry_delay_ms": 50,
+                "request_user_input_count": 1,
+                "request_user_input_wait_ms": 250,
                 "duration_ms": 1234,
                 "started_at": 455,
                 "completed_at": 456

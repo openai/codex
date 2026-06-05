@@ -113,6 +113,9 @@ pub struct TurnProfile {
     pub after_last_sampling_ms: u64,
     pub sampling_request_count: u32,
     pub sampling_retry_count: u32,
+    pub sampling_retry_delay_ms: u64,
+    pub request_user_input_count: u32,
+    pub request_user_input_wait_ms: u64,
 }
 
 #[derive(Clone)]

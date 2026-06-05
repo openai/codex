@@ -6,6 +6,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
+use std::time::Instant;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
@@ -2352,7 +2353,12 @@ impl Session {
             .turn_metadata_state
             .mark_user_input_requested_during_turn();
         self.send_event(turn_context, event).await;
-        rx_response.await.ok()
+        let wait_started_at = Instant::now();
+        let response = rx_response.await.ok();
+        turn_context
+            .turn_timing_state
+            .record_request_user_input_wait(wait_started_at.elapsed());
+        response
     }
 
     #[expect(

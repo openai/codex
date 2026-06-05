@@ -1088,7 +1088,6 @@ async fn run_sampling_request(
             ResponsesStreamRequest::Sampling,
         )
         .await?;
-        turn_context.turn_timing_state.record_sampling_retry();
     }
 }
 

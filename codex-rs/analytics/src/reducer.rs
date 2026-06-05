@@ -2433,6 +2433,9 @@ fn codex_turn_event_params(
         after_last_sampling_ms,
         sampling_request_count,
         sampling_retry_count,
+        sampling_retry_delay_ms,
+        request_user_input_count,
+        request_user_input_wait_ms,
     } = profile;
     let token_usage = turn_state.token_usage.clone();
     let codex_error = turn_state.codex_error.as_ref();
@@ -2503,6 +2506,9 @@ fn codex_turn_event_params(
         after_last_sampling_ms,
         sampling_request_count,
         sampling_retry_count,
+        sampling_retry_delay_ms,
+        request_user_input_count,
+        request_user_input_wait_ms,
         duration_ms: completed.duration_ms,
         started_at,
         completed_at: Some(completed.completed_at),

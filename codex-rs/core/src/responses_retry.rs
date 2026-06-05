@@ -1,6 +1,7 @@
 //! Shared retry and transport fallback decisions for Responses requests.
 
 use std::time::Duration;
+use std::time::Instant;
 
 use crate::client::ModelClientSession;
 use crate::session::session::Session;
@@ -42,6 +43,11 @@ pub(crate) async fn handle_retryable_response_stream_error(
         )
         .await;
         *retries = 0;
+        if matches!(request, ResponsesStreamRequest::Sampling) {
+            turn_context
+                .turn_timing_state
+                .record_sampling_retry(Duration::ZERO);
+        }
         return Ok(());
     }
 
@@ -71,7 +77,13 @@ pub(crate) async fn handle_retryable_response_stream_error(
             )
             .await;
         }
+        let retry_delay_started_at = Instant::now();
         tokio::time::sleep(delay).await;
+        if matches!(request, ResponsesStreamRequest::Sampling) {
+            turn_context
+                .turn_timing_state
+                .record_sampling_retry(retry_delay_started_at.elapsed());
+        }
         return Ok(());
     }
 

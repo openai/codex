@@ -167,7 +167,8 @@ fn turn_profile_breaks_down_sampling_blocking_and_retry_overhead() {
         started_at + Duration::from_millis(900),
         TurnProfilePhase::ToolBlocking,
     );
-    state.record_sampling_retry();
+    state.record_sampling_retry(Duration::from_millis(50));
+    state.record_request_user_input_wait(Duration::from_millis(250));
     let _ = state.begin_sampling(started_at + Duration::from_millis(1_000));
     state.end_phase(
         started_at + Duration::from_millis(1_200),
@@ -184,6 +185,9 @@ fn turn_profile_breaks_down_sampling_blocking_and_retry_overhead() {
             after_last_sampling_ms: 100,
             sampling_request_count: 2,
             sampling_retry_count: 1,
+            sampling_retry_delay_ms: 50,
+            request_user_input_count: 1,
+            request_user_input_wait_ms: 250,
         }
     );
 }
