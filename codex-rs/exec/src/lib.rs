@@ -1044,13 +1044,7 @@ fn thread_start_params_from_config(config: &Config) -> ThreadStartParams {
         model: config.model.clone(),
         model_provider: Some(config.model_provider_id.clone()),
         cwd: Some(config.cwd.to_string_lossy().to_string()),
-        runtime_workspace_roots: Some(
-            config
-                .workspace_roots
-                .iter()
-                .map(AbsolutePathBuf::to_path_buf)
-                .collect(),
-        ),
+        runtime_workspace_roots: Some(config.workspace_roots.clone()),
         approval_policy: Some(config.permissions.approval_policy.value().into()),
         approvals_reviewer: approvals_reviewer_override_from_config(config),
         sandbox: sandbox.flatten(),
@@ -1075,13 +1069,7 @@ fn thread_resume_params_from_config(config: &Config, thread_id: String) -> Threa
         model: config.model.clone(),
         model_provider: Some(config.model_provider_id.clone()),
         cwd: Some(config.cwd.to_string_lossy().to_string()),
-        runtime_workspace_roots: Some(
-            config
-                .workspace_roots
-                .iter()
-                .map(AbsolutePathBuf::to_path_buf)
-                .collect(),
-        ),
+        runtime_workspace_roots: Some(config.workspace_roots.clone()),
         approval_policy: Some(config.permissions.approval_policy.value().into()),
         approvals_reviewer: approvals_reviewer_override_from_config(config),
         sandbox: sandbox.flatten(),

@@ -708,12 +708,7 @@ impl AppServerSession {
                     additional_context: None,
                     environments: None,
                     cwd: Some(cwd),
-                    runtime_workspace_roots: Some(
-                        workspace_roots
-                            .iter()
-                            .map(AbsolutePathBuf::to_path_buf)
-                            .collect(),
-                    ),
+                    runtime_workspace_roots: Some(workspace_roots.to_vec()),
                     approval_policy: Some(approval_policy),
                     approvals_reviewer: Some(approvals_reviewer.into()),
                     sandbox_policy,
@@ -1403,13 +1398,7 @@ fn thread_start_params_from_config(
         model_provider: thread_params_mode.model_provider_from_config(config),
         service_tier: service_tier_override_from_config(config),
         cwd: thread_cwd_from_config(config, thread_params_mode, remote_cwd_override),
-        runtime_workspace_roots: Some(
-            config
-                .workspace_roots
-                .iter()
-                .map(AbsolutePathBuf::to_path_buf)
-                .collect(),
-        ),
+        runtime_workspace_roots: Some(config.workspace_roots.clone()),
         approval_policy: Some(config.permissions.approval_policy.value().into()),
         approvals_reviewer: approvals_reviewer_override_from_config(config),
         sandbox,
@@ -1444,13 +1433,7 @@ fn thread_resume_params_from_config(
         model_provider: thread_params_mode.model_provider_from_config(&config),
         service_tier: service_tier_override_from_config(&config),
         cwd: thread_cwd_from_config(&config, thread_params_mode, remote_cwd_override),
-        runtime_workspace_roots: Some(
-            config
-                .workspace_roots
-                .iter()
-                .map(AbsolutePathBuf::to_path_buf)
-                .collect(),
-        ),
+        runtime_workspace_roots: Some(config.workspace_roots.clone()),
         approval_policy: Some(config.permissions.approval_policy.value().into()),
         approvals_reviewer: approvals_reviewer_override_from_config(&config),
         sandbox,
@@ -1482,13 +1465,7 @@ fn thread_fork_params_from_config(
         model_provider: thread_params_mode.model_provider_from_config(&config),
         service_tier: service_tier_override_from_config(&config),
         cwd: thread_cwd_from_config(&config, thread_params_mode, remote_cwd_override),
-        runtime_workspace_roots: Some(
-            config
-                .workspace_roots
-                .iter()
-                .map(AbsolutePathBuf::to_path_buf)
-                .collect(),
-        ),
+        runtime_workspace_roots: Some(config.workspace_roots.clone()),
         approval_policy: Some(config.permissions.approval_policy.value().into()),
         approvals_reviewer: approvals_reviewer_override_from_config(&config),
         sandbox,
@@ -1885,13 +1862,7 @@ mod tests {
         assert_eq!(params.cwd, Some(config.cwd.to_string_lossy().to_string()));
         assert_eq!(
             params.runtime_workspace_roots,
-            Some(
-                config
-                    .workspace_roots
-                    .iter()
-                    .map(AbsolutePathBuf::to_path_buf)
-                    .collect()
-            )
+            Some(config.workspace_roots.clone())
         );
         assert_eq!(params.sandbox, None);
         assert_eq!(
@@ -2009,13 +1980,7 @@ mod tests {
             &config.permissions.effective_permission_profile(),
             config.cwd.as_path(),
         );
-        let expected_runtime_workspace_roots = Some(
-            config
-                .workspace_roots
-                .iter()
-                .map(AbsolutePathBuf::to_path_buf)
-                .collect::<Vec<_>>(),
-        );
+        let expected_runtime_workspace_roots = Some(config.workspace_roots.clone());
 
         let start = thread_start_params_from_config(
             &config,
