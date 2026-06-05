@@ -1439,6 +1439,7 @@ impl AnalyticsReducer {
         if turn_state.thread_id.is_none()
             || turn_state.num_input_images.is_none()
             || turn_state.resolved_config.is_none()
+            || turn_state.profile.is_none()
             || turn_state.completed.is_none()
         {
             return;
@@ -2385,12 +2386,20 @@ fn codex_turn_event_params(
     turn_state: &TurnState,
     thread_metadata: &ThreadMetadataState,
 ) -> CodexTurnEventParams {
-    let (Some(thread_id), Some(num_input_images), Some(resolved_config), Some(completed)) = (
+    let (
+        Some(thread_id),
+        Some(num_input_images),
+        Some(resolved_config),
+        Some(profile),
+        Some(completed),
+    ) = (
         turn_state.thread_id.clone(),
         turn_state.num_input_images,
         turn_state.resolved_config.clone(),
+        turn_state.profile.clone(),
         turn_state.completed.clone(),
-    ) else {
+    )
+    else {
         unreachable!("turn event params require a fully populated turn state");
     };
     let started_at = turn_state.started_at;
@@ -2424,7 +2433,7 @@ fn codex_turn_event_params(
         after_last_sampling_ms,
         sampling_request_count,
         sampling_retry_count,
-    } = turn_state.profile.clone().unwrap_or_default();
+    } = profile;
     let token_usage = turn_state.token_usage.clone();
     let codex_error = turn_state.codex_error.as_ref();
     CodexTurnEventParams {

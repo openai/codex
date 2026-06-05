@@ -104,7 +104,7 @@ pub struct TurnTokenUsageFact {
     pub token_usage: TokenUsage,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct TurnProfile {
     pub before_first_sampling_ms: u64,
     pub sampling_ms: u64,
