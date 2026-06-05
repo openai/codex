@@ -4,7 +4,7 @@ use pretty_assertions::assert_eq;
 fn notify_mcp_status(chat: &mut ChatWidget, name: &str, status: McpServerStartupState) {
     chat.handle_server_notification(
         ServerNotification::McpServerStatusUpdated(McpServerStatusUpdatedNotification {
-            thread_id: "thread-1".to_string(),
+            thread_id: Some("thread-1".to_string()),
             name: name.to_string(),
             status,
             error: None,
@@ -16,7 +16,7 @@ fn notify_mcp_status(chat: &mut ChatWidget, name: &str, status: McpServerStartup
 fn notify_mcp_status_error(chat: &mut ChatWidget, name: &str, error: &str) {
     chat.handle_server_notification(
         ServerNotification::McpServerStatusUpdated(McpServerStatusUpdatedNotification {
-            thread_id: "thread-1".to_string(),
+            thread_id: Some("thread-1".to_string()),
             name: name.to_string(),
             status: McpServerStartupState::Failed,
             error: Some(error.to_string()),

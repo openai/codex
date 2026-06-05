@@ -141,6 +141,12 @@ impl App {
                 );
                 return;
             }
+            ServerNotificationThreadTarget::AppScoped => {
+                tracing::debug!(
+                    "ignoring app-scoped MCP startup notification without a TUI app-level target"
+                );
+                return;
+            }
             ServerNotificationThreadTarget::Global => {}
         }
 
