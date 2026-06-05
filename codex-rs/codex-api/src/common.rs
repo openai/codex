@@ -113,6 +113,7 @@ pub enum ResponseEvent {
 #[derive(Debug, Serialize, Clone, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum ReasoningContext {
+    Auto,
     CurrentTurn,
     AllTurns,
 }
