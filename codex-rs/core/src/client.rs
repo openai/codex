@@ -721,25 +721,23 @@ impl ModelClient {
         effort: Option<ReasoningEffortConfig>,
         summary: ReasoningSummaryConfig,
     ) -> Option<Reasoning> {
-        if !model_info.supports_reasoning_summaries && !model_info.use_responses_lite {
-            return None;
+        if model_info.supports_reasoning_summaries {
+            Some(Reasoning {
+                effort: effort.or_else(|| model_info.default_reasoning_level.clone()),
+                summary: if summary == ReasoningSummaryConfig::None {
+                    None
+                } else {
+                    Some(summary)
+                },
+                // When Responses Lite is disabled, omit context so Responses uses the default,
+                // which is currently `current_turn`.
+                context: model_info
+                    .use_responses_lite
+                    .then_some(ReasoningContext::AllTurns),
+            })
+        } else {
+            None
         }
-
-        Some(Reasoning {
-            effort: if model_info.supports_reasoning_summaries {
-                effort.or_else(|| model_info.default_reasoning_level.clone())
-            } else {
-                None
-            },
-            summary: (model_info.supports_reasoning_summaries
-                && summary != ReasoningSummaryConfig::None)
-                .then_some(summary),
-            // When Responses Lite is disabled, omit context so Responses uses the default, which
-            // is currently `current_turn`.
-            context: model_info
-                .use_responses_lite
-                .then_some(ReasoningContext::AllTurns),
-        })
     }
 
     fn build_responses_request(
