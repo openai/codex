@@ -52,9 +52,10 @@ impl RemoteControlRequestProcessor {
     pub(crate) async fn pairing_start(
         &self,
         params: RemoteControlPairingStartParams,
+        app_server_client_name: Option<&str>,
     ) -> Result<RemoteControlPairingStartResponse, JSONRPCErrorError> {
         self.handle()?
-            .start_pairing(params)
+            .start_pairing(params, app_server_client_name)
             .await
             .map_err(map_pairing_start_error)
     }

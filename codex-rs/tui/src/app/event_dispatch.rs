@@ -5,6 +5,7 @@
 
 use super::resize_reflow::trailing_run_start;
 use super::*;
+use crate::config_update::format_config_error;
 #[cfg(target_os = "windows")]
 use codex_config::types::WindowsSandboxModeToml;
 
@@ -1321,12 +1322,13 @@ impl App {
                         self.chat_widget.add_info_message(message, /*hint*/ None);
                     }
                     Err(err) => {
+                        let error = format_config_error(&err);
                         tracing::error!(
-                            error = %err,
+                            error = %error,
                             "failed to persist model selection"
                         );
                         self.chat_widget
-                            .add_error_message(format!("Failed to save default model: {err}"));
+                            .add_error_message(format!("Failed to save default model: {error}"));
                     }
                 }
             }
@@ -1945,9 +1947,10 @@ impl App {
                         self.chat_widget.setup_status_line(items, use_theme_colors);
                     }
                     Err(err) => {
-                        tracing::error!(error = %err, "failed to persist status line settings; keeping previous selection");
+                        let error = format_config_error(&err);
+                        tracing::error!(error = %error, "failed to persist status line settings; keeping previous selection");
                         self.chat_widget.add_error_message(format!(
-                            "Failed to save status line settings: {err}"
+                            "Failed to save status line settings: {error}"
                         ));
                     }
                 }

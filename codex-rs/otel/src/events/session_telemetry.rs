@@ -1208,6 +1208,7 @@ impl SessionTelemetry {
             }
             ResponseEvent::ServerModel(_) => "server_model".into(),
             ResponseEvent::ModelVerifications(_) => "model_verifications".into(),
+            ResponseEvent::TurnModerationMetadata(_) => "turn_moderation_metadata".into(),
             ResponseEvent::ServerReasoningIncluded(_) => "server_reasoning_included".into(),
             ResponseEvent::RateLimits(_) => "rate_limits".into(),
             ResponseEvent::ModelsEtag(_) => "models_etag".into(),
@@ -1217,6 +1218,7 @@ impl SessionTelemetry {
     fn responses_item_type(item: &ResponseItem) -> String {
         match item {
             ResponseItem::Message { role, .. } => format!("message_from_{role}"),
+            ResponseItem::AgentMessage { .. } => "agent_message".into(),
             ResponseItem::Reasoning { .. } => "reasoning".into(),
             ResponseItem::LocalShellCall { .. } => "local_shell_call".into(),
             ResponseItem::FunctionCall { .. } => "function_call".into(),

@@ -1152,7 +1152,7 @@ async fn multi_agent_v2_spawn_returns_path_and_send_message_accepts_relative_pat
             turn.clone(),
             "spawn_agent",
             function_payload(json!({
-                "message": "inspect this repo",
+                "message": "encrypted-spawn-message",
                 "task_name": "test_process"
             })),
         ))
@@ -1188,7 +1188,8 @@ async fn multi_agent_v2_spawn_returns_path_and_send_message_accepts_relative_pat
                     if communication.author == AgentPath::root()
                         && communication.recipient.as_str() == "/root/test_process"
                         && communication.other_recipients.is_empty()
-                        && communication.content == "inspect this repo"
+                        && communication.content.is_empty()
+                        && communication.encrypted_content.as_deref() == Some("encrypted-spawn-message")
                         && communication.trigger_turn
             )
     }));
@@ -1200,7 +1201,7 @@ async fn multi_agent_v2_spawn_returns_path_and_send_message_accepts_relative_pat
             "send_message",
             function_payload(json!({
                 "target": "test_process",
-                "message": "continue"
+                "message": "encrypted-send-message"
             })),
         ))
         .await
@@ -1214,7 +1215,8 @@ async fn multi_agent_v2_spawn_returns_path_and_send_message_accepts_relative_pat
                     if communication.author == AgentPath::root()
                         && communication.recipient.as_str() == "/root/test_process"
                         && communication.other_recipients.is_empty()
-                        && communication.content == "continue"
+                        && communication.content.is_empty()
+                        && communication.encrypted_content.as_deref() == Some("encrypted-send-message")
                         && !communication.trigger_turn
             )
     }));
@@ -1396,7 +1398,7 @@ async fn multi_agent_v2_send_message_accepts_root_target_from_child() {
             "send_message",
             function_payload(json!({
                 "target": "/root",
-                "message": "done"
+                "message": "encrypted-done"
             })),
         ))
         .await
@@ -1410,7 +1412,8 @@ async fn multi_agent_v2_send_message_accepts_root_target_from_child() {
                     if communication.author == child_path
                         && communication.recipient == AgentPath::root()
                         && communication.other_recipients.is_empty()
-                        && communication.content == "done"
+                        && communication.content.is_empty()
+                        && communication.encrypted_content.as_deref() == Some("encrypted-done")
                         && !communication.trigger_turn
             )
     }));
@@ -1500,7 +1503,7 @@ async fn multi_agent_v2_followup_task_rejects_root_target_from_child() {
 }
 
 #[tokio::test]
-async fn multi_agent_v2_list_agents_returns_completed_status_and_last_task_message() {
+async fn multi_agent_v2_list_agents_returns_completed_status_without_encrypted_spawn_preview() {
     let (mut session, mut turn) = make_session_and_context().await;
     let manager = thread_manager();
     let root = manager
@@ -1586,10 +1589,7 @@ async fn multi_agent_v2_list_agents_returns_completed_status_and_last_task_messa
         .find(|agent| agent.agent_name == "/root/worker")
         .expect("worker agent should be listed");
     assert_eq!(worker.agent_status, json!({"completed": "done"}));
-    assert_eq!(
-        worker.last_task_message.as_deref(),
-        Some("inspect this repo")
-    );
+    assert_eq!(worker.last_task_message, None);
     assert_eq!(success, Some(true));
 }
 
@@ -1868,7 +1868,8 @@ async fn multi_agent_v2_send_message_rejects_interrupt_parameter() {
             if communication.author == AgentPath::root()
                 && communication.recipient.as_str() == "/root/worker"
                 && communication.other_recipients.is_empty()
-                && communication.content == "continue"
+                && communication.content.is_empty()
+                && communication.encrypted_content.as_deref() == Some("continue")
                 && !communication.trigger_turn
     )));
 }

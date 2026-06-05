@@ -38,7 +38,8 @@ impl ChatWidget {
             // Consolidate the run of streaming AgentMessageCells into a single AgentMarkdownCell
             // that can re-render from source on resize.
             if let Some(source) = source {
-                let source = parse_assistant_markdown(&source).visible_markdown;
+                let source =
+                    parse_assistant_markdown(&source, self.config.cwd.as_path()).visible_markdown;
                 self.app_event_tx.send(AppEvent::ConsolidateAgentMessage {
                     source,
                     cwd: self.config.cwd.to_path_buf(),
@@ -261,7 +262,7 @@ impl ChatWidget {
                 AgentMessageContent::Text { text } => message.push_str(text),
             }
         }
-        let parsed = parse_assistant_markdown(&message);
+        let parsed = parse_assistant_markdown(&message, self.config.cwd.as_path());
         self.finalize_completed_assistant_message(
             (!parsed.visible_markdown.is_empty()).then_some(parsed.visible_markdown.as_str()),
         );

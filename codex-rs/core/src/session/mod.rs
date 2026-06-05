@@ -358,6 +358,7 @@ use codex_protocol::protocol::ThreadMemoryMode;
 use codex_protocol::protocol::TokenCountEvent;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
+use codex_protocol::protocol::TurnModerationMetadataEvent;
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
 use codex_tools::ToolEnvironmentMode;
@@ -2634,6 +2635,15 @@ impl Session {
             EventMsg::ModelVerification(ModelVerificationEvent { verifications }),
         )
         .await;
+    }
+
+    pub(crate) async fn emit_turn_moderation_metadata(
+        self: &Arc<Self>,
+        turn_context: &Arc<TurnContext>,
+        metadata: TurnModerationMetadataEvent,
+    ) {
+        self.send_event(turn_context, EventMsg::TurnModerationMetadata(metadata))
+            .await;
     }
 
     pub(crate) async fn replace_history(

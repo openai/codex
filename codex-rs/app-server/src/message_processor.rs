@@ -918,7 +918,7 @@ impl MessageProcessor {
                 .map(|response| Some(response.into())),
             ClientRequest::RemoteControlPairingStart { params, .. } => self
                 .remote_control_processor
-                .pairing_start(params)
+                .pairing_start(params, app_server_client_name.as_deref())
                 .await
                 .map(|response| Some(response.into())),
             ClientRequest::RemoteControlClientsList { params, .. } => self
@@ -1293,6 +1293,9 @@ impl MessageProcessor {
             }
             ClientRequest::GetAccountRateLimits { .. } => {
                 self.account_processor.get_account_rate_limits().await
+            }
+            ClientRequest::GetAccountTokenUsage { .. } => {
+                self.account_processor.get_account_token_usage().await
             }
             ClientRequest::SendAddCreditsNudgeEmail { params, .. } => {
                 self.account_processor

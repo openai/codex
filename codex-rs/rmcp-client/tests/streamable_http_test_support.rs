@@ -86,6 +86,12 @@ pub(crate) async fn create_client(base_url: &str) -> anyhow::Result<RmcpClient> 
     )
     .await?;
 
+    initialize_client(&client).await?;
+
+    Ok(client)
+}
+
+pub(crate) async fn initialize_client(client: &RmcpClient) -> anyhow::Result<()> {
     client
         .initialize(
             init_params(),
@@ -102,8 +108,7 @@ pub(crate) async fn create_client(base_url: &str) -> anyhow::Result<RmcpClient> 
             }),
         )
         .await?;
-
-    Ok(client)
+    Ok(())
 }
 
 /// Creates a Streamable HTTP RMCP client that sends traffic through the remote
