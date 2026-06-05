@@ -841,11 +841,16 @@ fn save_oauth_tokens_to_file(tokens: &StoredOAuthTokens) -> Result<()> {
     };
 
     store.insert(key, entry);
-    write_fallback_file(&store)
+    write_fallback_file_unlocked(&store)
 }
 
 fn delete_oauth_tokens_from_file(key: &str) -> Result<bool> {
-    let mut store = match read_fallback_file()? {
+    let _write_lock = acquire_fallback_write_lock()?;
+    delete_oauth_tokens_from_file_unlocked(key)
+}
+
+fn delete_oauth_tokens_from_file_unlocked(key: &str) -> Result<bool> {
+    let mut store = match read_fallback_file_unlocked()? {
         Some(store) => store,
         None => return Ok(false),
     };
@@ -853,7 +858,7 @@ fn delete_oauth_tokens_from_file(key: &str) -> Result<bool> {
     let removed = store.remove(key).is_some();
 
     if removed {
-        write_fallback_file(&store)?;
+        write_fallback_file_unlocked(&store)?;
     }
 
     Ok(removed)
@@ -916,11 +921,6 @@ fn fallback_file_path() -> Result<PathBuf> {
     Ok(find_codex_home()?.join(FALLBACK_FILENAME).to_path_buf())
 }
 
-fn read_fallback_file() -> Result<Option<FallbackFile>> {
-    let _read_lock = acquire_fallback_read_lock()?;
-    read_fallback_file_unlocked()
-}
-
 fn read_fallback_file_unlocked() -> Result<Option<FallbackFile>> {
     let path = fallback_file_path()?;
     let contents = match fs::read_to_string(&path) {
@@ -943,7 +943,7 @@ fn read_fallback_file_unlocked() -> Result<Option<FallbackFile>> {
     }
 }
 
-fn write_fallback_file(store: &FallbackFile) -> Result<()> {
+fn write_fallback_file_unlocked(store: &FallbackFile) -> Result<()> {
     let path = fallback_file_path()?;
 
     if store.is_empty() {
@@ -995,6 +995,8 @@ mod tests {
     use std::sync::MutexGuard;
     use std::sync::OnceLock;
     use std::sync::PoisonError;
+    use std::sync::mpsc;
+    use std::thread;
     use tempfile::tempdir;
 
     use codex_keyring_store::tests::MockKeyringStore;
@@ -1397,7 +1399,8 @@ mod tests {
 
         let fallback_path = super::fallback_file_path()?;
         assert!(fallback_path.exists(), "fallback file should be created");
-        let saved = super::read_fallback_file()?.expect("fallback file should load");
+        let _read_lock = super::acquire_fallback_read_lock()?;
+        let saved = super::read_fallback_file_unlocked()?.expect("fallback file should load");
         let key = super::compute_store_key(&tokens.server_name, &tokens.url)?;
         let entry = saved.get(&key).expect("entry for key");
         assert_eq!(entry.server_name, tokens.server_name);
@@ -1472,6 +1475,71 @@ mod tests {
         );
         assert!(result.is_err());
         assert!(super::fallback_file_path().unwrap().exists());
+        Ok(())
+    }
+
+    #[test]
+    fn concurrent_save_and_delete_preserve_other_fallback_entries() -> Result<()> {
+        let _env = TempCodexHome::new();
+        let target = sample_tokens();
+        let target_key = super::compute_store_key(&target.server_name, &target.url)?;
+        let mut unrelated = sample_tokens();
+        unrelated.url = "https://unrelated.example.test".to_string();
+        let mut new_tokens = sample_tokens();
+        new_tokens.url = "https://new.example.test".to_string();
+        let expected_new_tokens = new_tokens.clone();
+
+        super::save_oauth_tokens_to_file(&target)?;
+        super::save_oauth_tokens_to_file(&unrelated)?;
+
+        let held_read_lock = super::acquire_fallback_read_lock()?;
+        let (started_tx, started_rx) = mpsc::channel();
+        let (delete_done_tx, delete_done_rx) = mpsc::channel();
+
+        let delete_started_tx = started_tx.clone();
+        let delete_thread = thread::spawn(move || {
+            let _ = delete_started_tx.send(());
+            let result = super::delete_oauth_tokens_from_file(&target_key);
+            let _ = delete_done_tx.send(());
+            result
+        });
+        let save_thread = thread::spawn(move || {
+            let _ = started_tx.send(());
+            super::save_oauth_tokens_to_file(&new_tokens)
+        });
+
+        for _ in 0..2 {
+            started_rx
+                .recv_timeout(Duration::from_secs(1))
+                .context("timed out waiting for fallback mutation thread")?;
+        }
+        let delete_completed_while_read_locked =
+            delete_done_rx.recv_timeout(Duration::from_secs(1)).is_ok();
+        drop(held_read_lock);
+
+        let removed = delete_thread
+            .join()
+            .map_err(|_| anyhow!("fallback delete thread panicked"))??;
+        save_thread
+            .join()
+            .map_err(|_| anyhow!("fallback save thread panicked"))??;
+
+        assert!(
+            !delete_completed_while_read_locked,
+            "fallback deletion escaped the shared lock before its write"
+        );
+        assert!(removed);
+        assert!(super::load_oauth_tokens_from_file(&target.server_name, &target.url)?.is_none());
+        let loaded_unrelated =
+            super::load_oauth_tokens_from_file(&unrelated.server_name, &unrelated.url)?
+                .context("unrelated fallback entry was lost")?;
+        let loaded_new = super::load_oauth_tokens_from_file(
+            &expected_new_tokens.server_name,
+            &expected_new_tokens.url,
+        )?
+        .context("concurrently saved fallback entry was lost")?;
+        assert_tokens_match_without_expiry(&loaded_unrelated, &unrelated);
+        assert_tokens_match_without_expiry(&loaded_new, &expected_new_tokens);
         Ok(())
     }
 
