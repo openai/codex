@@ -115,6 +115,20 @@ ON CONFLICT(child_thread_id) DO UPDATE SET
         Ok(())
     }
 
+    /// Return whether `child_thread_id` is still an open spawned agent.
+    pub async fn is_thread_spawn_edge_open(
+        &self,
+        child_thread_id: ThreadId,
+    ) -> anyhow::Result<bool> {
+        let status = sqlx::query_scalar::<_, String>(
+            "SELECT status FROM thread_spawn_edges WHERE child_thread_id = ?",
+        )
+        .bind(child_thread_id.to_string())
+        .fetch_optional(self.pool.as_ref())
+        .await?;
+        Ok(status.as_deref() == Some(crate::DirectionalThreadSpawnEdgeStatus::Open.as_ref()))
+    }
+
     /// List direct spawned children of `parent_thread_id` whose edge matches `status`.
     pub async fn list_thread_spawn_children_with_status(
         &self,
@@ -181,8 +195,8 @@ LIMIT 2
         one_thread_id_from_rows(rows, agent_path)
     }
 
-    /// Find a spawned descendant of `root_thread_id` by canonical agent path.
-    pub async fn find_thread_spawn_descendant_by_path(
+    /// Find an open spawned descendant of `root_thread_id` by canonical agent path.
+    pub async fn find_open_thread_spawn_descendant_by_path(
         &self,
         root_thread_id: ThreadId,
         agent_path: &str,
@@ -193,10 +207,12 @@ WITH RECURSIVE subtree(child_thread_id) AS (
     SELECT child_thread_id
     FROM thread_spawn_edges
     WHERE parent_thread_id = ?
+      AND status = ?
     UNION ALL
     SELECT edge.child_thread_id
     FROM thread_spawn_edges AS edge
     JOIN subtree ON edge.parent_thread_id = subtree.child_thread_id
+    WHERE edge.status = ?
 )
 SELECT threads.id
 FROM subtree
@@ -207,6 +223,8 @@ LIMIT 2
             "#,
         )
         .bind(root_thread_id.to_string())
+        .bind(crate::DirectionalThreadSpawnEdgeStatus::Open.as_ref())
+        .bind(crate::DirectionalThreadSpawnEdgeStatus::Open.as_ref())
         .bind(agent_path)
         .fetch_all(self.pool.as_ref())
         .await?;

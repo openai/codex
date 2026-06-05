@@ -13,12 +13,7 @@ use std::sync::Mutex;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 
-/// This structure is used to add some limits on the multi-agent capabilities for Codex. In
-/// the current implementation, it limits:
-/// * Total number of sub-agents (i.e. threads) per user session
-///
-/// This structure is shared by all agents in the same user session (because the `AgentControl`
-/// is).
+/// Tracks logical agents and active execution slots for one multi-agent session tree.
 #[derive(Default)]
 pub(crate) struct AgentRegistry {
     active_agents: Mutex<ActiveAgents>,
@@ -28,6 +23,7 @@ pub(crate) struct AgentRegistry {
 #[derive(Default)]
 struct ActiveAgents {
     agent_tree: HashMap<String, AgentMetadata>,
+    active_thread_ids: HashSet<ThreadId>,
     used_agent_nicknames: HashSet<String>,
     nickname_reset_count: usize,
 }
@@ -97,25 +93,67 @@ impl AgentRegistry {
     }
 
     pub(crate) fn release_spawned_thread(&self, thread_id: ThreadId) {
-        let removed_counted_agent = {
-            let mut active_agents = self
-                .active_agents
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let removed_key = active_agents
-                .agent_tree
-                .iter()
-                .find_map(|(key, metadata)| (metadata.agent_id == Some(thread_id)).then_some(key))
-                .cloned();
-            removed_key
-                .and_then(|key| active_agents.agent_tree.remove(key.as_str()))
-                .is_some_and(|metadata| {
-                    !metadata.agent_path.as_ref().is_some_and(AgentPath::is_root)
-                })
-        };
-        if removed_counted_agent {
+        let mut active_agents = self
+            .active_agents
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let removed_key = active_agents
+            .agent_tree
+            .iter()
+            .find_map(|(key, metadata)| (metadata.agent_id == Some(thread_id)).then_some(key))
+            .cloned();
+        if let Some(removed_key) = removed_key {
+            active_agents.agent_tree.remove(removed_key.as_str());
+        }
+        if active_agents.active_thread_ids.remove(&thread_id) {
             self.total_count.fetch_sub(1, Ordering::AcqRel);
         }
+    }
+
+    pub(crate) fn release_execution_slot(&self, thread_id: ThreadId) {
+        let mut active_agents = self
+            .active_agents
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let removed = active_agents.active_thread_ids.remove(&thread_id);
+        if removed {
+            self.total_count.fetch_sub(1, Ordering::AcqRel);
+        }
+    }
+
+    pub(crate) fn reserve_execution_slot(
+        self: &Arc<Self>,
+        thread_id: ThreadId,
+        max_threads: usize,
+    ) -> Result<ExecutionReservation> {
+        let mut active_agents = self
+            .active_agents
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if active_agents.active_thread_ids.contains(&thread_id) {
+            return Ok(ExecutionReservation {
+                state: Arc::clone(self),
+                thread_id,
+                release_on_drop: false,
+            });
+        }
+        if !self.try_increment_spawned(max_threads) {
+            return Err(CodexErr::AgentLimitReached { max_threads });
+        }
+        active_agents.active_thread_ids.insert(thread_id);
+        Ok(ExecutionReservation {
+            state: Arc::clone(self),
+            thread_id,
+            release_on_drop: true,
+        })
+    }
+
+    pub(crate) fn is_execution_active(&self, thread_id: ThreadId) -> bool {
+        self.active_agents
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .active_thread_ids
+            .contains(&thread_id)
     }
 
     pub(crate) fn register_root_thread(&self, thread_id: ThreadId) {
@@ -152,20 +190,6 @@ impl AgentRegistry {
             .cloned()
     }
 
-    pub(crate) fn live_agents(&self) -> Vec<AgentMetadata> {
-        self.active_agents
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .agent_tree
-            .values()
-            .filter(|metadata| {
-                metadata.agent_id.is_some()
-                    && !metadata.agent_path.as_ref().is_some_and(AgentPath::is_root)
-            })
-            .cloned()
-            .collect()
-    }
-
     pub(crate) fn update_last_task_message(&self, thread_id: ThreadId, last_task_message: String) {
         let mut active_agents = self
             .active_agents
@@ -194,7 +218,7 @@ impl AgentRegistry {
         }
     }
 
-    fn register_spawned_thread(&self, agent_metadata: AgentMetadata) {
+    pub(crate) fn register_agent(&self, mut agent_metadata: AgentMetadata) {
         let Some(thread_id) = agent_metadata.agent_id else {
             return;
         };
@@ -210,7 +234,23 @@ impl AgentRegistry {
         if let Some(agent_nickname) = agent_metadata.agent_nickname.clone() {
             active_agents.used_agent_nicknames.insert(agent_nickname);
         }
+        if let Some(existing) = active_agents.agent_tree.get(key.as_str())
+            && agent_metadata.last_task_message.is_none()
+        {
+            agent_metadata.last_task_message = existing.last_task_message.clone();
+        }
         active_agents.agent_tree.insert(key, agent_metadata);
+    }
+
+    fn commit_spawned_thread(&self, agent_metadata: AgentMetadata) {
+        if let Some(thread_id) = agent_metadata.agent_id {
+            self.active_agents
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .active_thread_ids
+                .insert(thread_id);
+        }
+        self.register_agent(agent_metadata);
     }
 
     fn reserve_agent_nickname(&self, names: &[&str], preferred: Option<&str>) -> Option<String> {
@@ -337,7 +377,7 @@ impl SpawnReservation {
     pub(crate) fn commit(mut self, agent_metadata: AgentMetadata) {
         self.reserved_agent_nickname = None;
         self.reserved_agent_path = None;
-        self.state.register_spawned_thread(agent_metadata);
+        self.state.commit_spawned_thread(agent_metadata);
         self.active = false;
     }
 }
@@ -349,6 +389,26 @@ impl Drop for SpawnReservation {
                 self.state.release_reserved_agent_path(&agent_path);
             }
             self.state.total_count.fetch_sub(1, Ordering::AcqRel);
+        }
+    }
+}
+
+pub(crate) struct ExecutionReservation {
+    state: Arc<AgentRegistry>,
+    thread_id: ThreadId,
+    release_on_drop: bool,
+}
+
+impl ExecutionReservation {
+    pub(crate) fn commit(mut self) {
+        self.release_on_drop = false;
+    }
+}
+
+impl Drop for ExecutionReservation {
+    fn drop(&mut self) {
+        if self.release_on_drop {
+            self.state.release_execution_slot(self.thread_id);
         }
     }
 }

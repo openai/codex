@@ -307,7 +307,7 @@ fn followup_task_tool_requires_message_and_has_no_output_schema() {
     assert_eq!(name, "followup_task");
     assert_eq!(
         description,
-        "Send a follow-up task to an existing non-root target agent and trigger a turn if it is idle. If the target is already running, deliver the task promptly at message boundaries while sampling, or after the pending tool call completes."
+        "Send a follow-up task to an existing non-root target agent and trigger a turn if it is idle. If the target is already running, deliver the task promptly at message boundaries while sampling, or after the pending tool call completes. Starting an idle agent can fail when the session concurrency limit is full."
     );
     assert_eq!(
         parameters.schema_type,
@@ -397,7 +397,7 @@ fn list_agents_tool_includes_path_prefix_and_agent_fields() {
         properties
             .get("path_prefix")
             .and_then(|schema| schema.description.as_deref()),
-        Some("Task-path prefix filter without a trailing slash. Omit to list all live agents.")
+        Some("Task-path prefix filter without a trailing slash. Omit to list all resident agents.")
     );
     assert_eq!(
         output_schema.expect("list_agents output schema")["properties"]["agents"]["items"]["required"],

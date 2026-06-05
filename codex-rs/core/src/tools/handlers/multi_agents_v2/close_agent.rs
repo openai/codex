@@ -37,9 +37,12 @@ async fn handle_close_agent(
     let arguments = function_arguments(payload)?;
     let args: CloseAgentArgs = parse_arguments(&arguments)?;
     let agent_id = resolve_agent_target(&session, &turn, &args.target).await?;
-    let receiver_agent = session.services.agent_control.get_agent_metadata(agent_id);
-    let known_agent = receiver_agent.is_some();
-    let receiver_agent = receiver_agent.unwrap_or_default();
+    let receiver_agent = session
+        .services
+        .agent_control
+        .ensure_agent_known(agent_id)
+        .await
+        .map_err(|err| collab_agent_error(agent_id, err))?;
     if receiver_agent
         .agent_path
         .as_ref()
@@ -67,43 +70,16 @@ async fn handle_close_agent(
             .into(),
         )
         .await;
-    let status = match session
+    let status = session.services.agent_control.get_status(agent_id).await;
+    let result = match session
         .services
         .agent_control
-        .subscribe_status(agent_id)
+        .interrupt_agent(agent_id)
         .await
     {
-        Ok(mut status_rx) => status_rx.borrow_and_update().clone(),
-        Err(CodexErr::ThreadNotFound(_)) if known_agent => {
-            session.services.agent_control.get_status(agent_id).await
-        }
-        Err(err) => {
-            let status = session.services.agent_control.get_status(agent_id).await;
-            session
-                .send_event(
-                    &turn,
-                    CollabCloseEndEvent {
-                        call_id: call_id.clone(),
-                        completed_at_ms: now_unix_timestamp_ms(),
-                        sender_thread_id: session.thread_id,
-                        receiver_thread_id: agent_id,
-                        receiver_agent_nickname: receiver_agent.agent_nickname.clone(),
-                        receiver_agent_role: receiver_agent.agent_role.clone(),
-                        status,
-                    }
-                    .into(),
-                )
-                .await;
-            return Err(collab_agent_error(agent_id, err));
-        }
+        Ok(_) | Err(CodexErr::ThreadNotFound(_)) | Err(CodexErr::InternalAgentDied) => Ok(()),
+        Err(err) => Err(collab_agent_error(agent_id, err)),
     };
-    let result = session
-        .services
-        .agent_control
-        .close_agent(agent_id)
-        .await
-        .map_err(|err| collab_agent_error(agent_id, err))
-        .map(|_| ());
     session
         .send_event(
             &turn,

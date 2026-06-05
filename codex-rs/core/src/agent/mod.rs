@@ -1,6 +1,7 @@
 pub(crate) mod agent_resolver;
 pub(crate) mod control;
 mod registry;
+mod residency;
 pub(crate) mod role;
 pub(crate) mod status;
 

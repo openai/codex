@@ -182,7 +182,7 @@ async fn try_resume_closed_agent(
     child_depth: i32,
 ) -> Result<(), FunctionCallError> {
     let config = build_agent_resume_config(turn.as_ref())?;
-    Box::pin(session.services.agent_control.resume_agent_from_rollout(
+    Box::pin(session.services.agent_control.resume_agent_from_rollout_v1(
         config,
         receiver_thread_id,
         thread_spawn_source(

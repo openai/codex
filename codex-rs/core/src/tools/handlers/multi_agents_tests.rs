@@ -1681,7 +1681,7 @@ async fn multi_agent_v2_list_agents_filters_by_relative_path_prefix() {
 }
 
 #[tokio::test]
-async fn multi_agent_v2_list_agents_omits_closed_agents() {
+async fn multi_agent_v2_list_agents_keeps_interrupted_resident_agents() {
     let (mut session, mut turn) = make_session_and_context().await;
     let manager = thread_manager();
     let root = manager
@@ -1716,12 +1716,23 @@ async fn multi_agent_v2_list_agents_omits_closed_agents() {
         .resolve_agent_reference(session.thread_id, &turn.session_source, "worker")
         .await
         .expect("worker path should resolve");
-    session
+    let agent_path = session
         .services
         .agent_control
-        .close_agent(agent_id)
+        .get_agent_metadata(agent_id)
+        .expect("worker metadata should exist")
+        .agent_path
+        .expect("worker path should exist");
+    let close_output = CloseAgentHandlerV2
+        .handle(invocation(
+            session.clone(),
+            turn.clone(),
+            "close_agent",
+            function_payload(json!({"target": "worker"})),
+        ))
         .await
         .expect("close_agent should succeed");
+    let _ = expect_text_output(close_output);
 
     let output = ListAgentsHandlerV2
         .handle(invocation(
@@ -1736,12 +1747,13 @@ async fn multi_agent_v2_list_agents_omits_closed_agents() {
     let result: ListAgentsResult =
         serde_json::from_str(&content).expect("list_agents result should be json");
 
-    assert_eq!(result.agents.len(), 1);
+    assert_eq!(result.agents.len(), 2);
     assert_eq!(result.agents[0].agent_name, "/root");
     assert_eq!(
         result.agents[0].last_task_message.as_deref(),
         Some("Main thread")
     );
+    assert_eq!(result.agents[1].agent_name, agent_path.as_str());
 }
 
 #[tokio::test]
@@ -2722,7 +2734,7 @@ async fn resume_agent_restores_closed_agent_and_accepts_send_input() {
     let agent_id = thread.thread_id;
     let _ = manager
         .agent_control()
-        .shutdown_live_agent(agent_id)
+        .shutdown_and_forget_agent(agent_id)
         .await
         .expect("shutdown agent");
     assert_eq!(
@@ -2770,7 +2782,7 @@ async fn resume_agent_restores_closed_agent_and_accepts_send_input() {
 
     let _ = manager
         .agent_control()
-        .shutdown_live_agent(agent_id)
+        .shutdown_and_forget_agent(agent_id)
         .await
         .expect("shutdown resumed agent");
 }
@@ -3736,11 +3748,34 @@ async fn multi_agent_v2_close_agent_accepts_task_name_target() {
         .resolve_agent_reference(session.thread_id, &turn.session_source, "worker")
         .await
         .expect("worker path should resolve");
+    let worker_thread = manager
+        .get_thread(agent_id)
+        .await
+        .expect("worker thread should be resident");
+    let worker_session = worker_thread.codex.session.clone();
+    SpawnAgentHandlerV2::default()
+        .handle(invocation(
+            worker_session.clone(),
+            worker_session.new_default_turn().await,
+            "spawn_agent",
+            function_payload(json!({
+                "message": "inspect a child task",
+                "task_name": "child"
+            })),
+        ))
+        .await
+        .expect("child spawn should succeed");
+    let child_id = session
+        .services
+        .agent_control
+        .resolve_agent_reference(session.thread_id, &turn.session_source, "worker/child")
+        .await
+        .expect("child path should resolve");
 
     let output = CloseAgentHandlerV2
         .handle(invocation(
-            session,
-            turn,
+            session.clone(),
+            turn.clone(),
             "close_agent",
             function_payload(json!({"target": "worker"})),
         ))
@@ -3752,13 +3787,38 @@ async fn multi_agent_v2_close_agent_accepts_task_name_target() {
     assert_ne!(result.previous_status, AgentStatus::NotFound);
     assert_eq!(success, Some(true));
     assert_eq!(
-        manager.agent_control().get_status(agent_id).await,
-        AgentStatus::NotFound
+        session
+            .services
+            .agent_control
+            .resolve_agent_reference(session.thread_id, &turn.session_source, "worker")
+            .await
+            .expect("worker path should remain resolvable"),
+        agent_id
+    );
+    manager
+        .get_thread(agent_id)
+        .await
+        .expect("worker should remain resident");
+    manager
+        .get_thread(child_id)
+        .await
+        .expect("child should remain resident");
+    let ops = manager.captured_ops();
+    assert!(
+        ops.iter()
+            .any(|(thread_id, op)| *thread_id == agent_id && matches!(op, Op::Interrupt))
+    );
+    assert!(!ops.iter().any(|(thread_id, op)| {
+        (*thread_id == agent_id || *thread_id == child_id) && matches!(op, Op::Shutdown)
+    }));
+    assert!(
+        !ops.iter()
+            .any(|(thread_id, op)| *thread_id == child_id && matches!(op, Op::Interrupt))
     );
 }
 
 #[tokio::test]
-async fn multi_agent_v2_close_agent_reaps_stale_task_name_target() {
+async fn multi_agent_v2_close_agent_accepts_unloaded_task_name_target() {
     let (mut session, mut turn) = make_session_and_context().await;
     let mut config = (*turn.config).clone();
     config.multi_agent_v2.max_concurrent_threads_per_session = 2;
@@ -3827,7 +3887,7 @@ async fn multi_agent_v2_close_agent_reaps_stale_task_name_target() {
             function_payload(json!({"target": "worker"})),
         ))
         .await
-        .expect("close_agent should reap stale v2 task names");
+        .expect("close_agent should accept unloaded v2 task names");
     let (content, success) = expect_text_output(output);
     let result: close_agent::CloseAgentResult =
         serde_json::from_str(&content).expect("close_agent result should be json");
@@ -3841,7 +3901,7 @@ async fn multi_agent_v2_close_agent_reaps_stale_task_name_target() {
         )
         .await
         .expect("open children should load");
-    assert_eq!(open_children, Vec::<ThreadId>::new());
+    assert_eq!(open_children, vec![agent_id]);
     let closed_children = state_db
         .list_thread_spawn_children_with_status(
             root.thread_id,
@@ -3849,32 +3909,22 @@ async fn multi_agent_v2_close_agent_reaps_stale_task_name_target() {
         )
         .await
         .expect("closed children should load");
-    assert_eq!(closed_children, vec![agent_id]);
+    assert_eq!(closed_children, Vec::<ThreadId>::new());
 
-    SpawnAgentHandlerV2::default()
+    let output = ListAgentsHandlerV2
         .handle(invocation(
             session.clone(),
             turn.clone(),
-            "spawn_agent",
-            function_payload(json!({
-                "message": "inspect this repo again",
-                "task_name": "replacement"
-            })),
+            "list_agents",
+            function_payload(json!({})),
         ))
         .await
-        .expect("spawn_agent should succeed after stale close releases the slot");
-    let replacement_id = session
-        .services
-        .agent_control
-        .resolve_agent_reference(session.thread_id, &turn.session_source, "replacement")
-        .await
-        .expect("replacement path should resolve");
-    let _ = session
-        .services
-        .agent_control
-        .shutdown_live_agent(replacement_id)
-        .await
-        .expect("replacement should shut down");
+        .expect("list_agents should succeed");
+    let (content, _) = expect_text_output(output);
+    let result: ListAgentsResult =
+        serde_json::from_str(&content).expect("list_agents result should be json");
+    assert_eq!(result.agents.len(), 1);
+    assert_eq!(result.agents[0].agent_name, "/root");
 }
 
 #[tokio::test]
@@ -4212,7 +4262,7 @@ async fn tool_handlers_cascade_close_and_resume_and_keep_explicitly_closed_subtr
             function_payload(json!({"id": child_thread_id.to_string()})),
         ))
         .await
-        .expect("resume_agent should reopen the child subtree");
+        .expect("resume_agent should reopen only the child");
     let (child_resume_content, child_resume_success) = expect_text_output(child_resume_output);
     let child_resume_result: resume_agent::ResumeAgentResult =
         serde_json::from_str(&child_resume_content).expect("resume result should be json");
@@ -4222,12 +4272,12 @@ async fn tool_handlers_cascade_close_and_resume_and_keep_explicitly_closed_subtr
         manager.agent_control().get_status(child_thread_id).await,
         AgentStatus::NotFound
     );
-    assert_ne!(
+    assert_eq!(
         manager
             .agent_control()
             .get_status(grandchild_thread_id)
             .await,
-        AgentStatus::NotFound
+        AgentStatus::NotFound,
     );
 
     let close_again_output = CloseAgentHandler
@@ -4264,7 +4314,7 @@ async fn tool_handlers_cascade_close_and_resume_and_keep_explicitly_closed_subtr
     let operator_session = operator.thread.codex.session.clone();
     let _ = manager
         .agent_control()
-        .shutdown_live_agent(parent_thread_id)
+        .shutdown_and_forget_agent(parent_thread_id)
         .await
         .expect("parent shutdown should succeed");
     assert_eq!(

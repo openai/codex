@@ -207,7 +207,7 @@ pub fn create_followup_task_tool() -> ToolSpec {
 
     ToolSpec::Function(ResponsesApiTool {
         name: "followup_task".to_string(),
-        description: "Send a follow-up task to an existing non-root target agent and trigger a turn if it is idle. If the target is already running, deliver the task promptly at message boundaries while sampling, or after the pending tool call completes."
+        description: "Send a follow-up task to an existing non-root target agent and trigger a turn if it is idle. If the target is already running, deliver the task promptly at message boundaries while sampling, or after the pending tool call completes. Starting an idle agent can fail when the session concurrency limit is full."
             .to_string(),
         strict: false,
         defer_loading: None,
@@ -270,16 +270,15 @@ pub fn create_list_agents_tool() -> ToolSpec {
     let properties = BTreeMap::from([(
         "path_prefix".to_string(),
         JsonSchema::string(Some(
-            "Task-path prefix filter without a trailing slash. Omit to list all live agents."
+            "Task-path prefix filter without a trailing slash. Omit to list all resident agents."
                 .to_string(),
         )),
     )]);
 
     ToolSpec::Function(ResponsesApiTool {
         name: "list_agents".to_string(),
-        description:
-            "List live agents in the current root thread tree. Optionally filter by task-path prefix."
-                .to_string(),
+        description: "List currently resident agents in the root thread tree. Optionally filter by task-path prefix."
+            .to_string(),
         strict: false,
         defer_loading: None,
         parameters: JsonSchema::object(properties, /*required*/ None, Some(false.into())),
@@ -311,13 +310,13 @@ pub fn create_close_agent_tool_v2() -> ToolSpec {
     let properties = BTreeMap::from([(
         "target".to_string(),
         JsonSchema::string(Some(
-            "Agent id or canonical task name to close (from spawn_agent).".to_string(),
+            "Agent id or canonical task name to interrupt (from spawn_agent).".to_string(),
         )),
     )]);
 
     ToolSpec::Function(ResponsesApiTool {
         name: "close_agent".to_string(),
-        description: "Close an agent and any open descendants when they are no longer needed, and return the target agent's previous status before shutdown was requested. Completed agents remain open and count toward the concurrency limit until closed. Don't keep agents open for too long if they are not needed anymore.".to_string(),
+        description: "Interrupt an agent's current turn, if any, and return its previous status. The agent remains available for messages and follow-up tasks.".to_string(),
         strict: false,
         defer_loading: None,
         parameters: JsonSchema::object(properties, Some(vec!["target".to_string()]), Some(false.into())),
@@ -445,7 +444,7 @@ fn list_agents_output_schema() -> Value {
                     "required": ["agent_name", "agent_status", "last_task_message"],
                     "additionalProperties": false
                 },
-                "description": "Live agents visible in the current root thread tree."
+                "description": "Currently resident agents visible in the root thread tree."
             }
         },
         "required": ["agents"],
@@ -506,7 +505,7 @@ fn close_agent_output_schema() -> Value {
         "type": "object",
         "properties": {
             "previous_status": {
-                "description": "The agent status observed before shutdown was requested.",
+                "description": "The agent status observed before the request was handled.",
                 "allOf": [agent_status_output_schema()]
             }
         },
@@ -725,7 +724,7 @@ fn spawn_agent_tool_description_v2(
     let concurrency_guidance = max_concurrent_threads_per_session
         .map(|limit| {
             format!(
-                "This session is configured with `max_concurrent_threads_per_session = {limit}` for concurrently open agent threads."
+                "This session is configured with `max_concurrent_threads_per_session = {limit}` for concurrently active agent threads. Idle agents do not count toward this limit."
             )
         })
         .unwrap_or_default();

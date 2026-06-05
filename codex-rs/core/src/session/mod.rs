@@ -1760,7 +1760,11 @@ impl Session {
         if let Err(err) = self
             .services
             .agent_control
-            .send_inter_agent_communication(parent_thread_id, communication)
+            .send_message_to_agent(
+                turn_context.config.as_ref(),
+                parent_thread_id,
+                communication,
+            )
             .await
         {
             debug!("failed to notify parent thread {parent_thread_id}: {err}");

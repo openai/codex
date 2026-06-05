@@ -1,5 +1,6 @@
 use crate::SkillsManager;
 use crate::agent::AgentControl;
+use crate::agent::AgentStatus;
 use crate::attestation::AttestationProvider;
 use crate::codex_thread::CodexThread;
 use crate::config::Config;
@@ -1030,6 +1031,35 @@ impl ThreadManagerState {
             log.push((thread_id, op.clone()));
         }
         thread.submit(op).await
+    }
+
+    pub(crate) async fn enqueue_inter_agent_communication(
+        &self,
+        thread_id: ThreadId,
+        communication: codex_protocol::protocol::InterAgentCommunication,
+    ) -> CodexResult<String> {
+        let thread = self.get_thread(thread_id).await?;
+        if matches!(thread.agent_status().await, AgentStatus::Shutdown) {
+            return Err(CodexErr::InternalAgentDied);
+        }
+        if let Some(ops_log) = &self.ops_log
+            && let Ok(mut log) = ops_log.lock()
+        {
+            log.push((
+                thread_id,
+                Op::InterAgentCommunication {
+                    communication: communication.clone(),
+                },
+            ));
+        }
+        let sub_id = uuid::Uuid::now_v7().to_string();
+        thread
+            .codex
+            .session
+            .input_queue
+            .enqueue_mailbox_communication(communication)
+            .await;
+        Ok(sub_id)
     }
 
     /// Remove a thread from the manager by ID, returning it when present.

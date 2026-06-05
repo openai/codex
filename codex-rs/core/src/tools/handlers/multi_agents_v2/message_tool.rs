@@ -74,8 +74,9 @@ pub(crate) async fn handle_message_string_tool(
     let receiver_agent = session
         .services
         .agent_control
-        .get_agent_metadata(receiver_thread_id)
-        .unwrap_or_default();
+        .ensure_agent_known(receiver_thread_id)
+        .await
+        .map_err(|err| collab_agent_error(receiver_thread_id, err))?;
     if mode == MessageDeliveryMode::TriggerTurn
         && receiver_agent
             .agent_path
@@ -107,12 +108,24 @@ pub(crate) async fn handle_message_string_tool(
         .get_agent_path()
         .unwrap_or_else(AgentPath::root);
     let communication = communication_from_tool_message(author, receiver_agent_path, message);
-    let result = session
-        .services
-        .agent_control
-        .send_inter_agent_communication(receiver_thread_id, mode.apply(communication))
-        .await
-        .map_err(|err| collab_agent_error(receiver_thread_id, err));
+    let communication = mode.apply(communication);
+    let result = match mode {
+        MessageDeliveryMode::QueueOnly => {
+            session
+                .services
+                .agent_control
+                .send_message_to_agent(turn.config.as_ref(), receiver_thread_id, communication)
+                .await
+        }
+        MessageDeliveryMode::TriggerTurn => {
+            session
+                .services
+                .agent_control
+                .send_followup_to_agent(turn.config.as_ref(), receiver_thread_id, communication)
+                .await
+        }
+    }
+    .map_err(|err| collab_agent_error(receiver_thread_id, err));
     let status = session
         .services
         .agent_control

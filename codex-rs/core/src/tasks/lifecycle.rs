@@ -1,5 +1,6 @@
 use codex_extension_api::ExtensionData;
 use codex_protocol::protocol::CodexErrorInfo;
+use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TurnAbortReason;
 
@@ -51,6 +52,13 @@ impl Session {
                     session_store: &self.services.session_extension_data,
                     thread_store: &self.services.thread_extension_data,
                 })
+                .await;
+        }
+
+        if self.multi_agent_version() == Some(MultiAgentVersion::V2) {
+            self.services
+                .agent_control
+                .release_execution_slot_if_idle(self)
                 .await;
         }
     }
