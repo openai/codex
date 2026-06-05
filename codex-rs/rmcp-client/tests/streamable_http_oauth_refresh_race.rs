@@ -50,6 +50,8 @@ const OLD_ACCESS_TOKEN: &str = "old-access-token";
 const OLD_REFRESH_TOKEN: &str = "old-one-time-refresh-token";
 const NEW_ACCESS_TOKEN: &str = "new-access-token";
 const NEW_REFRESH_TOKEN: &str = "new-one-time-refresh-token";
+const FALLBACK_LOCK_PREFIX: &str = "codex-mcp-oauth-fallback";
+const FILE_OAUTH_REFRESH_LOCK_PREFIX: &str = "codex-mcp-oauth-refresh-file";
 const KEYRING_SERVICE: &str = "Codex MCP Credentials";
 const CHILD_WAIT_TIMEOUT: Duration = Duration::from_secs(10);
 const OPERATION_TIMEOUT: Duration = Duration::from_millis(100);
@@ -61,6 +63,7 @@ const RESULT_PATH_ENV: &str = "MCP_TEST_OAUTH_RACE_RESULT_PATH";
 const ACCESS_TOKEN_ENV: &str = "MCP_TEST_OAUTH_RACE_ACCESS_TOKEN";
 const REFRESH_TOKEN_ENV: &str = "MCP_TEST_OAUTH_RACE_REFRESH_TOKEN";
 const EXPIRES_AT_ENV: &str = "MCP_TEST_OAUTH_RACE_EXPIRES_AT";
+const STORE_MODE_ENV: &str = "MCP_TEST_OAUTH_RACE_STORE_MODE";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn concurrent_processes_coordinate_one_time_refresh_and_reload_rotated_tokens()
@@ -388,6 +391,96 @@ async fn distinct_file_credentials_do_not_block_each_other() -> anyhow::Result<(
     Ok(())
 }
 
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn expired_file_credentials_refresh_with_read_only_codex_home() -> anyhow::Result<()> {
+    assert_expired_credentials_refresh_with_read_only_codex_home(OAuthCredentialsStoreMode::File)
+        .await
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+async fn expired_auto_credentials_refresh_with_read_only_codex_home() -> anyhow::Result<()> {
+    assert_expired_credentials_refresh_with_read_only_codex_home(OAuthCredentialsStoreMode::Auto)
+        .await
+}
+
+#[cfg(unix)]
+async fn assert_expired_credentials_refresh_with_read_only_codex_home(
+    store_mode: OAuthCredentialsStoreMode,
+) -> anyhow::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let server = MockServer::start().await;
+    mount_oauth_metadata(&server, /*expected_requests*/ 1).await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "access_token": NEW_ACCESS_TOKEN,
+            "token_type": "Bearer",
+            "expires_in": 7200,
+            "refresh_token": NEW_REFRESH_TOKEN,
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    mount_mcp_server(&server, /*expected_requests*/ 2).await;
+
+    let codex_home = TempDir::new()?;
+    let control_dir = TempDir::new()?;
+    let server_url = format!("{}/mcp", server.uri());
+    seed_tokens(&codex_home, &server_url, /*expires_at*/ 0).await?;
+    fs::set_permissions(codex_home.path(), fs::Permissions::from_mode(0o500))?;
+
+    let result_path = control_dir.path().join("client.result");
+    let child = spawn_read_only_refresh_child(&codex_home, &server_url, &result_path, store_mode);
+    let child_result = match child {
+        Ok(child) => wait_for_children(vec![child]).await,
+        Err(error) => Err(error),
+    };
+    fs::set_permissions(codex_home.path(), fs::Permissions::from_mode(0o700))?;
+    child_result?;
+
+    assert_eq!(fs::read_to_string(result_path)?, "success");
+    assert!(!legacy_file_oauth_refresh_lock_path(&codex_home, &server_url)?.exists());
+    assert!(file_oauth_refresh_lock_path(&codex_home, &server_url)?.exists());
+
+    let requests = server
+        .received_requests()
+        .await
+        .context("wiremock request recording disabled")?;
+    let authorization_headers = requests
+        .iter()
+        .filter(|request| request.method.as_str() == "POST" && request.url.path() == "/mcp")
+        .map(|request| {
+            request
+                .headers
+                .get("authorization")
+                .expect("authorization header")
+                .to_str()
+                .expect("ASCII authorization header")
+                .to_string()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        authorization_headers,
+        vec![format!("Bearer {NEW_ACCESS_TOKEN}"); 2]
+    );
+
+    if store_mode == OAuthCredentialsStoreMode::File {
+        assert_eq!(
+            persisted_token_snapshot(&codex_home)?,
+            PersistedTokenSnapshot {
+                access_token: NEW_ACCESS_TOKEN.to_string(),
+                refresh_token: Some(NEW_REFRESH_TOKEN.to_string()),
+            }
+        );
+    }
+
+    server.verify().await;
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn rejected_refresh_requires_login_without_reaching_mcp() -> anyhow::Result<()> {
     let server = MockServer::start().await;
@@ -626,6 +719,42 @@ async fn oauth_refresh_operation_timeout_child() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+#[ignore = "spawned by the OAuth refresh race integration tests"]
+async fn oauth_refresh_read_only_child() -> anyhow::Result<()> {
+    let server_url = std::env::var(SERVER_URL_ENV)?;
+    let result_path = PathBuf::from(std::env::var(RESULT_PATH_ENV)?);
+    let store_mode = match std::env::var(STORE_MODE_ENV)?.as_str() {
+        "file" => OAuthCredentialsStoreMode::File,
+        "auto" => {
+            keyring::set_default_credential_builder(keyring::mock::default_credential_builder());
+            OAuthCredentialsStoreMode::Auto
+        }
+        value => anyhow::bail!("unsupported OAuth credential store mode: {value}"),
+    };
+    let outcome: anyhow::Result<()> = async {
+        let client = RmcpClient::new_streamable_http_client(
+            SERVER_NAME,
+            &server_url,
+            /*bearer_token*/ None,
+            /*http_headers*/ None,
+            /*env_http_headers*/ None,
+            store_mode,
+            Environment::default_for_tests().get_http_client(),
+            /*auth_provider*/ None,
+        )
+        .await?;
+        initialize_client(&client).await
+    }
+    .await;
+    let outcome = match outcome {
+        Ok(()) => "success".to_string(),
+        Err(error) => format!("error:{error:#}"),
+    };
+    fs::write(result_path, outcome)?;
+    Ok(())
+}
+
 async fn mount_oauth_metadata(server: &MockServer, expected_requests: u64) {
     Mock::given(method("GET"))
         .and(path("/.well-known/oauth-authorization-server/mcp"))
@@ -746,6 +875,35 @@ fn spawn_operation_timeout_child(
     Ok(command.spawn()?)
 }
 
+fn spawn_read_only_refresh_child(
+    codex_home: &TempDir,
+    server_url: &str,
+    result_path: &Path,
+    store_mode: OAuthCredentialsStoreMode,
+) -> anyhow::Result<Child> {
+    let store_mode = match store_mode {
+        OAuthCredentialsStoreMode::File => "file",
+        OAuthCredentialsStoreMode::Auto => "auto",
+        OAuthCredentialsStoreMode::Keyring => {
+            anyhow::bail!("read-only refresh child does not support keyring-only mode")
+        }
+    };
+    let mut command = Command::new(std::env::current_exe()?);
+    command
+        .args([
+            "oauth_refresh_read_only_child",
+            "--exact",
+            "--ignored",
+            "--nocapture",
+        ])
+        .env("CODEX_HOME", codex_home.path())
+        .env(SERVER_URL_ENV, server_url)
+        .env(RESULT_PATH_ENV, result_path)
+        .env(STORE_MODE_ENV, store_mode)
+        .kill_on_drop(true);
+    Ok(command.spawn()?)
+}
+
 async fn wait_for_children(children: Vec<Child>) -> anyhow::Result<()> {
     for mut child in children {
         let status = timeout(CHILD_WAIT_TIMEOUT, child.wait())
@@ -786,24 +944,100 @@ fn request_bodies(requests: &[Request], request_path: &str) -> Vec<String> {
 }
 
 fn file_oauth_refresh_lock_path(codex_home: &TempDir, server_url: &str) -> anyhow::Result<PathBuf> {
+    let user_namespace = fallback_lock_user_namespace(codex_home)?;
+    let lock_id = oauth_refresh_lock_id(server_url)?;
+    Ok(shared_lock_root()?.join(format!(
+        "{FILE_OAUTH_REFRESH_LOCK_PREFIX}-{user_namespace}-{lock_id}.lock"
+    )))
+}
+
+fn legacy_file_oauth_refresh_lock_path(
+    codex_home: &TempDir,
+    server_url: &str,
+) -> anyhow::Result<PathBuf> {
+    let lock_id = oauth_refresh_lock_id(server_url)?;
+    Ok(codex_home
+        .path()
+        .join(format!(".credentials.{lock_id}.refresh.lock")))
+}
+
+fn oauth_refresh_lock_id(server_url: &str) -> anyhow::Result<String> {
     let store_key_payload = json!({
         "type": "http",
         "url": server_url,
         "headers": {},
     });
     let account = format!("{SERVER_NAME}|{}", sha_256_prefix(&store_key_payload)?);
-    let lock_id = sha_256_prefix(&Value::String(format!("{KEYRING_SERVICE}:{account}")))?;
-    Ok(codex_home
-        .path()
-        .join(format!(".credentials.{lock_id}.refresh.lock")))
+    sha_256_prefix(&Value::String(format!("{KEYRING_SERVICE}:{account}")))
+}
+
+fn fallback_lock_user_namespace(codex_home: &TempDir) -> anyhow::Result<String> {
+    let canonical_home = codex_home.path().canonicalize()?;
+    let codex_home_id =
+        sha_256_bytes_prefix(canonical_home.as_os_str().to_string_lossy().as_bytes());
+    let prefix = format!("{FALLBACK_LOCK_PREFIX}-");
+    let suffix = format!("-{codex_home_id}.lock");
+    for entry in fs::read_dir(shared_lock_root()?)? {
+        let file_name = entry?.file_name().to_string_lossy().into_owned();
+        if let Some(remainder) = file_name.strip_prefix(&prefix)
+            && let Some(user_namespace) = remainder.strip_suffix(&suffix)
+        {
+            return Ok(user_namespace.to_string());
+        }
+    }
+    anyhow::bail!(
+        "missing OAuth fallback lock for CODEX_HOME {}",
+        codex_home.path().display()
+    )
+}
+
+#[cfg(unix)]
+fn shared_lock_root() -> anyhow::Result<PathBuf> {
+    Ok(PathBuf::from("/tmp"))
+}
+
+#[cfg(windows)]
+fn shared_lock_root() -> anyhow::Result<PathBuf> {
+    use std::ffi::OsString;
+    use std::io;
+    use std::os::windows::ffi::OsStringExt;
+    use windows_sys::Win32::System::SystemInformation::GetSystemWindowsDirectoryW;
+
+    let mut buffer = vec![0_u16; 32_768];
+    // SAFETY: buffer is writable for the length passed to GetSystemWindowsDirectoryW.
+    let length = unsafe {
+        GetSystemWindowsDirectoryW(
+            buffer.as_mut_ptr(),
+            u32::try_from(buffer.len()).expect("Windows path buffer length fits in u32"),
+        )
+    };
+    if length == 0 {
+        return Err(io::Error::last_os_error())
+            .context("failed to resolve the system Windows directory");
+    }
+    let length = usize::try_from(length).context("Windows directory length did not fit usize")?;
+    anyhow::ensure!(
+        length < buffer.len(),
+        "system Windows directory exceeded the fixed path buffer"
+    );
+    Ok(PathBuf::from(OsString::from_wide(&buffer[..length])).join("Temp"))
+}
+
+#[cfg(not(any(unix, windows)))]
+fn shared_lock_root() -> anyhow::Result<PathBuf> {
+    anyhow::bail!("OAuth refresh race tests do not support this platform")
 }
 
 fn sha_256_prefix(value: &Value) -> anyhow::Result<String> {
     let serialized = serde_json::to_string(value)?;
+    Ok(sha_256_bytes_prefix(serialized.as_bytes()))
+}
+
+fn sha_256_bytes_prefix(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
-    hasher.update(serialized.as_bytes());
+    hasher.update(bytes);
     let digest = hasher.finalize();
-    Ok(format!("{digest:x}")[..16].to_string())
+    format!("{digest:x}")[..16].to_string()
 }
 
 #[derive(Debug, Deserialize)]

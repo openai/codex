@@ -59,7 +59,7 @@ use codex_utils_home_dir::find_codex_home;
 
 const KEYRING_SERVICE: &str = "Codex MCP Credentials";
 const FALLBACK_LOCK_PREFIX: &str = "codex-mcp-oauth-fallback";
-const FILE_OAUTH_REFRESH_LOCK_PREFIX: &str = ".credentials";
+const FILE_OAUTH_REFRESH_LOCK_PREFIX: &str = "codex-mcp-oauth-refresh-file";
 const KEYRING_OAUTH_REFRESH_LOCK_PREFIX: &str = "codex-mcp-oauth-refresh";
 const MISSING_REFRESH_TOKEN_ERROR: &str = "No refresh token available";
 const OAUTH_SERVER_ERROR_PREFIX: &str = "Server returned error response: ";
@@ -522,19 +522,17 @@ fn oauth_refresh_lock_id(server_name: &str, url: &str) -> Result<String> {
 
 fn file_oauth_refresh_lock_path(server_name: &str, url: &str) -> Result<PathBuf> {
     let lock_id = oauth_refresh_lock_id(server_name, url)?;
-    Ok(find_codex_home()?
-        .join(format!(
-            "{FILE_OAUTH_REFRESH_LOCK_PREFIX}.{lock_id}.refresh.lock"
-        ))
-        .to_path_buf())
+    external_oauth_lock_path(FILE_OAUTH_REFRESH_LOCK_PREFIX, &lock_id)
 }
 
 fn keyring_oauth_refresh_lock_path(server_name: &str, url: &str) -> Result<PathBuf> {
     let lock_id = oauth_refresh_lock_id(server_name, url)?;
+    external_oauth_lock_path(KEYRING_OAUTH_REFRESH_LOCK_PREFIX, &lock_id)
+}
+
+fn external_oauth_lock_path(prefix: &str, lock_id: &str) -> Result<PathBuf> {
     let user_namespace = os_user_namespace()?;
-    Ok(os_shared_temp_dir()?.join(format!(
-        "{KEYRING_OAUTH_REFRESH_LOCK_PREFIX}-{user_namespace}-{lock_id}.lock"
-    )))
+    Ok(os_shared_temp_dir()?.join(format!("{prefix}-{user_namespace}-{lock_id}.lock")))
 }
 
 #[cfg(unix)]
@@ -709,10 +707,7 @@ fn acquire_fallback_read_lock() -> Result<fs::File> {
 fn fallback_lock_path() -> Result<PathBuf> {
     let codex_home = find_codex_home()?;
     let codex_home_id = sha_256_bytes_prefix(codex_home.as_os_str().to_string_lossy().as_bytes());
-    let user_namespace = os_user_namespace()?;
-    Ok(os_shared_temp_dir()?.join(format!(
-        "{FALLBACK_LOCK_PREFIX}-{user_namespace}-{codex_home_id}.lock"
-    )))
+    external_oauth_lock_path(FALLBACK_LOCK_PREFIX, &codex_home_id)
 }
 
 fn open_oauth_lock_file(path: &Path) -> Result<fs::File> {
@@ -1064,11 +1059,18 @@ mod tests {
         let other_url = "https://other.example.test/mcp";
 
         let keyring_path = keyring_oauth_refresh_lock_path(&tokens.server_name, &tokens.url)?;
+        let file_path = file_oauth_refresh_lock_path(&tokens.server_name, &tokens.url)?;
         let shared_temp_dir = os_shared_temp_dir()?;
         let user_namespace = os_user_namespace()?;
         assert_eq!(keyring_path.parent(), Some(shared_temp_dir.as_path()));
+        assert_eq!(file_path.parent(), Some(shared_temp_dir.as_path()));
         assert!(
             keyring_path
+                .file_name()
+                .is_some_and(|name| name.to_string_lossy().contains(&user_namespace))
+        );
+        assert!(
+            file_path
                 .file_name()
                 .is_some_and(|name| name.to_string_lossy().contains(&user_namespace))
         );
@@ -1083,7 +1085,7 @@ mod tests {
             keyring_oauth_refresh_lock_path(&tokens.server_name, other_url)?
         );
         assert_ne!(
-            file_oauth_refresh_lock_path(&tokens.server_name, &tokens.url)?,
+            file_path,
             file_oauth_refresh_lock_path(&tokens.server_name, other_url)?
         );
         Ok(())
