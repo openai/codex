@@ -36,7 +36,6 @@ use codex_protocol::protocol::RolloutItem;
 use codex_rollout::append_rollout_item_to_path;
 use codex_rollout::append_thread_name;
 use codex_rollout::read_session_meta_line;
-use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
@@ -295,16 +294,12 @@ async fn thread_fork_loads_instruction_sources() -> Result<()> {
     )
     .await??;
     let ThreadForkResponse {
+        cwd,
         instruction_sources,
         ..
     } = to_response::<ThreadForkResponse>(fork_resp)?;
 
-    assert_eq!(
-        instruction_sources,
-        vec![AbsolutePathBuf::try_from(std::fs::canonicalize(
-            project_agents
-        )?)?]
-    );
+    assert_eq!(instruction_sources, vec![cwd.join("AGENTS.md")]);
 
     Ok(())
 }

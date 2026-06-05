@@ -381,9 +381,7 @@ async fn thread_resume_cold_thread_loads_instruction_sources() -> Result<()> {
 
     assert_eq!(
         instruction_sources,
-        vec![AbsolutePathBuf::try_from(std::fs::canonicalize(
-            project_agents
-        )?)?]
+        vec![AbsolutePathBuf::try_from(project_agents)?]
     );
 
     Ok(())
