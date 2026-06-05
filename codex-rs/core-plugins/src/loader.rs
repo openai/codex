@@ -223,6 +223,10 @@ fn merge_configured_plugins_with_remote_installed(
         .collect::<HashMap<_, _>>();
 
     for (plugin_key, plugin_config) in extra_plugins {
+        if configured_plugins.contains_key(&plugin_key) {
+            continue;
+        }
+
         let remote_curated_plugin_name = installed_plugin_name_for_marketplace(
             &plugin_key,
             REMOTE_GLOBAL_MARKETPLACE_NAME,

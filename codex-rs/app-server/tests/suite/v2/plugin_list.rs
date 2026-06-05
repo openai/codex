@@ -2305,8 +2305,6 @@ plugin_sharing = true
         .expect("installed plugins should be an array")
         .push(unlisted_installed_body["plugins"][0].clone());
     let workspace_installed_body = serde_json::to_string(&workspace_installed_body)?;
-    let global_installed_body = remote_installed_plugin_body("", "1.2.3", /*enabled*/ true);
-    mount_remote_installed_plugins(&server, "GLOBAL", &global_installed_body).await;
     mount_remote_installed_plugins(&server, "WORKSPACE", &workspace_installed_body).await;
 
     let mut mcp = TestAppServer::new(codex_home.path()).await?;
@@ -2356,7 +2354,6 @@ plugin_sharing = true
         ]
     );
     wait_for_remote_installed_scope_request(&server, "WORKSPACE").await?;
-    wait_for_remote_installed_scope_request(&server, "GLOBAL").await?;
     Ok(())
 }
 
@@ -2395,8 +2392,6 @@ plugin_sharing = false
     let global_installed_body =
         remote_installed_plugin_body(&bundle_url, "1.2.3", /*enabled*/ true);
     mount_remote_installed_plugins(&server, "GLOBAL", &global_installed_body).await;
-    mount_remote_installed_plugins(&server, "WORKSPACE", empty_remote_installed_plugins_body())
-        .await;
 
     let mut mcp = TestAppServer::new_with_env(
         codex_home.path(),
@@ -2434,7 +2429,6 @@ plugin_sharing = false
         .join("plugins/cache/openai-curated-remote/linear/1.2.3/.codex-plugin/plugin.json");
     wait_for_path_exists(&installed_path).await?;
     wait_for_remote_installed_scope_request(&server, "GLOBAL").await?;
-    wait_for_remote_installed_scope_request(&server, "WORKSPACE").await?;
     Ok(())
 }
 
@@ -2586,7 +2580,6 @@ async fn plugin_list_fetches_shared_with_me_kind() -> Result<()> {
         .push(unlisted_installed_body["plugins"][0].clone());
     let workspace_installed_body = serde_json::to_string(&workspace_installed_body)?;
     mount_shared_workspace_plugins(&server, &shared_plugin_body).await;
-    mount_remote_installed_plugins(&server, "GLOBAL", empty_remote_installed_plugins_body()).await;
     mount_remote_installed_plugins(&server, "WORKSPACE", &workspace_installed_body).await;
 
     let mut mcp = TestAppServer::new(codex_home.path()).await?;
@@ -2716,7 +2709,6 @@ async fn plugin_list_fetches_shared_with_me_kind() -> Result<()> {
         Some(PluginShareDiscoverability::Unlisted)
     );
     wait_for_remote_installed_scope_request(&server, "WORKSPACE").await?;
-    wait_for_remote_installed_scope_request(&server, "GLOBAL").await?;
     wait_for_remote_plugin_request_count(&server, "/ps/plugins/list", /*expected_count*/ 0).await?;
     Ok(())
 }

@@ -137,8 +137,15 @@ fn remote_installed_linear_plugin() -> RemoteInstalledPlugin {
 }
 
 fn remote_installed_plugin(name: &str) -> RemoteInstalledPlugin {
+    remote_installed_plugin_in_marketplace(name, "openai-curated-remote")
+}
+
+fn remote_installed_plugin_in_marketplace(
+    name: &str,
+    marketplace_name: &str,
+) -> RemoteInstalledPlugin {
     RemoteInstalledPlugin {
-        marketplace_name: "openai-curated-remote".to_string(),
+        marketplace_name: marketplace_name.to_string(),
         id: format!("plugins~Plugin_{name}"),
         name: name.to_string(),
         enabled: true,
@@ -362,14 +369,17 @@ remote_plugin = true
 
     let config = load_config(codex_home.path(), codex_home.path()).await;
     let manager = PluginsManager::new(codex_home.path().to_path_buf());
-    manager.write_remote_installed_plugins_cache(vec![remote_installed_linear_plugin()]);
+    manager.write_remote_installed_plugins_cache(
+        &[RemotePluginScope::Global],
+        vec![remote_installed_linear_plugin()],
+    );
 
     let outcome = manager.plugins_for_config(&config).await;
     assert_eq!(outcome, PluginLoadOutcome::default());
 }
 
 #[tokio::test]
-async fn remote_installed_cache_prefers_local_curated_conflicts_when_remote_plugin_disabled() {
+async fn remote_installed_cache_omits_global_remote_plugins_when_remote_plugin_disabled() {
     let codex_home = TempDir::new().unwrap();
     write_file(
         &codex_home.path().join(CONFIG_TOML_FILE),
@@ -391,10 +401,13 @@ enabled = true
 
     let config = load_config(codex_home.path(), codex_home.path()).await;
     let manager = PluginsManager::new(codex_home.path().to_path_buf());
-    manager.write_remote_installed_plugins_cache(vec![
-        remote_installed_plugin("linear"),
-        remote_installed_plugin("remote-only"),
-    ]);
+    manager.write_remote_installed_plugins_cache(
+        &[RemotePluginScope::Global],
+        vec![
+            remote_installed_plugin("linear"),
+            remote_installed_plugin("remote-only"),
+        ],
+    );
 
     let outcome = manager.plugins_for_config(&config).await;
     assert_eq!(
@@ -406,8 +419,41 @@ enabled = true
         vec![
             "calendar@openai-curated".to_string(),
             "linear@openai-curated".to_string(),
-            "remote-only@openai-curated-remote".to_string(),
         ]
+    );
+}
+
+#[tokio::test]
+async fn remote_installed_cache_includes_workspace_plugins_when_plugin_sharing_enabled() {
+    let codex_home = TempDir::new().unwrap();
+    write_file(
+        &codex_home.path().join(CONFIG_TOML_FILE),
+        r#"[features]
+plugins = true
+remote_plugin = false
+plugin_sharing = true
+"#,
+    );
+    write_cached_plugin(codex_home.path(), "workspace-directory", "workspace-only");
+
+    let config = load_config(codex_home.path(), codex_home.path()).await;
+    let manager = PluginsManager::new(codex_home.path().to_path_buf());
+    manager.write_remote_installed_plugins_cache(
+        &[RemotePluginScope::Workspace],
+        vec![remote_installed_plugin_in_marketplace(
+            "workspace-only",
+            "workspace-directory",
+        )],
+    );
+
+    let outcome = manager.plugins_for_config(&config).await;
+    assert_eq!(
+        outcome
+            .plugins()
+            .iter()
+            .map(|plugin| plugin.config_name.clone())
+            .collect::<Vec<_>>(),
+        vec!["workspace-only@workspace-directory".to_string()]
     );
 }
 
@@ -434,10 +480,13 @@ enabled = true
 
     let config = load_config(codex_home.path(), codex_home.path()).await;
     let manager = PluginsManager::new(codex_home.path().to_path_buf());
-    manager.write_remote_installed_plugins_cache(vec![
-        remote_installed_plugin("linear"),
-        remote_installed_plugin("remote-only"),
-    ]);
+    manager.write_remote_installed_plugins_cache(
+        &[RemotePluginScope::Global],
+        vec![
+            remote_installed_plugin("linear"),
+            remote_installed_plugin("remote-only"),
+        ],
+    );
 
     let outcome = manager.plugins_for_config(&config).await;
     assert_eq!(
@@ -451,6 +500,39 @@ enabled = true
             "linear@openai-curated-remote".to_string(),
             "remote-only@openai-curated-remote".to_string(),
         ]
+    );
+}
+
+#[tokio::test]
+async fn remote_installed_cache_respects_local_disabled_remote_plugin_config() {
+    let codex_home = TempDir::new().unwrap();
+    write_file(
+        &codex_home.path().join(CONFIG_TOML_FILE),
+        r#"[features]
+plugins = true
+remote_plugin = true
+
+[plugins."remote-only@openai-curated-remote"]
+enabled = false
+"#,
+    );
+    write_cached_plugin(codex_home.path(), "openai-curated-remote", "remote-only");
+
+    let config = load_config(codex_home.path(), codex_home.path()).await;
+    let manager = PluginsManager::new(codex_home.path().to_path_buf());
+    manager.write_remote_installed_plugins_cache(
+        &[RemotePluginScope::Global],
+        vec![remote_installed_plugin("remote-only")],
+    );
+
+    let outcome = manager.plugins_for_config(&config).await;
+    assert_eq!(
+        outcome
+            .plugins()
+            .iter()
+            .map(|plugin| (plugin.config_name.clone(), plugin.enabled))
+            .collect::<Vec<_>>(),
+        vec![("remote-only@openai-curated-remote".to_string(), false)]
     );
 }
 
@@ -481,7 +563,7 @@ async fn build_remote_installed_plugin_marketplaces_from_cache_uses_remote_metad
         screenshot_urls: Vec::new(),
     });
     plugin.keywords = vec!["issues".to_string()];
-    manager.write_remote_installed_plugins_cache(vec![plugin]);
+    manager.write_remote_installed_plugins_cache(&[RemotePluginScope::Global], vec![plugin]);
 
     let marketplaces = manager
         .build_remote_installed_plugin_marketplaces_from_cache(&[RemotePluginScope::Global])
@@ -521,9 +603,8 @@ async fn build_remote_installed_plugin_marketplaces_from_cache_uses_remote_metad
     );
     assert_eq!(
         manager
-            .build_remote_installed_plugin_marketplaces_from_cache(&[RemotePluginScope::Workspace])
-            .expect("remote installed cache should be present"),
-        Vec::new()
+            .build_remote_installed_plugin_marketplaces_from_cache(&[RemotePluginScope::Workspace]),
+        None
     );
 }
 

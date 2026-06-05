@@ -148,17 +148,6 @@ fn convert_configured_marketplace_plugin_to_plugin_summary(
     }
 }
 
-fn remote_installed_plugin_visible_scopes(config: &Config) -> Vec<RemotePluginScope> {
-    let mut scopes = Vec::new();
-    if config.features.enabled(Feature::RemotePlugin) {
-        scopes.push(RemotePluginScope::Global);
-    }
-    if config.features.enabled(Feature::PluginSharing) {
-        scopes.push(RemotePluginScope::Workspace);
-    }
-    scopes
-}
-
 fn filter_openai_curated_installed_conflicts(
     marketplaces: &mut Vec<PluginMarketplaceEntry>,
     prefer_remote_curated_conflicts: bool,
@@ -764,7 +753,7 @@ impl PluginRequestProcessor {
 
         let plugins_input = config.plugins_config_input();
         let remote_installed_plugin_visible_scopes =
-            remote_installed_plugin_visible_scopes(&config);
+            plugins_input.remote_installed_plugin_visible_scopes();
         plugins_manager.maybe_start_remote_installed_plugin_bundle_sync(
             &plugins_input,
             auth.clone(),

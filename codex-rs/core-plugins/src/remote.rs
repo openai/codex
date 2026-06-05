@@ -360,7 +360,7 @@ impl RemotePluginScope {
         }
     }
 
-    fn from_marketplace_name(name: &str) -> Option<Self> {
+    pub(crate) fn from_marketplace_name(name: &str) -> Option<Self> {
         match name {
             REMOTE_GLOBAL_MARKETPLACE_NAME => Some(Self::Global),
             REMOTE_WORKSPACE_MARKETPLACE_NAME
@@ -781,34 +781,29 @@ fn build_remote_marketplace(
     }))
 }
 
-pub(crate) async fn fetch_remote_installed_plugins(
+pub(crate) async fn fetch_remote_installed_plugins_for_scopes(
     config: &RemotePluginServiceConfig,
     auth: Option<&CodexAuth>,
+    scopes: &[RemotePluginScope],
 ) -> Result<Vec<RemoteInstalledPlugin>, RemotePluginCatalogError> {
     let auth = ensure_chatgpt_auth(auth)?;
-    let global = async {
-        let scope = RemotePluginScope::Global;
-        let installed_plugins = fetch_installed_plugins_for_scope(config, auth, scope).await?;
-        Ok::<_, RemotePluginCatalogError>((scope, installed_plugins))
-    };
-    let workspace = async {
-        let scope = RemotePluginScope::Workspace;
-        let installed_plugins = fetch_installed_plugins_for_scope(config, auth, scope).await?;
-        Ok::<_, RemotePluginCatalogError>((scope, installed_plugins))
-    };
+    let mut scopes = scopes.to_vec();
+    scopes.sort_unstable();
+    scopes.dedup();
 
-    let (global, workspace) = tokio::try_join!(global, workspace)?;
-    let mut installed_plugins = [global, workspace]
-        .into_iter()
-        .flat_map(|(_scope, plugins)| plugins)
-        .map(|plugin| remote_installed_plugin_to_cache_entry(&plugin))
-        .collect::<Result<Vec<_>, _>>()?;
-    installed_plugins.sort_by(|left, right| {
+    let mut remote_installed_plugins = Vec::new();
+    for scope in scopes {
+        let installed_items = fetch_installed_plugins_for_scope(config, auth, scope).await?;
+        for plugin in installed_items {
+            remote_installed_plugins.push(remote_installed_plugin_to_cache_entry(&plugin)?);
+        }
+    }
+    remote_installed_plugins.sort_by(|left, right| {
         left.marketplace_name
             .cmp(&right.marketplace_name)
             .then_with(|| left.id.cmp(&right.id))
     });
-    Ok(installed_plugins)
+    Ok(remote_installed_plugins)
 }
 
 pub fn group_remote_installed_plugins_by_marketplaces(

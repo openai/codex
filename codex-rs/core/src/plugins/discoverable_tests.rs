@@ -344,20 +344,18 @@ remote_plugin = true
             .all(|plugin| plugin.id != "github@openai-curated-remote")
     );
 
-    for scope in ["GLOBAL", "WORKSPACE"] {
-        Mock::given(method("GET"))
-            .and(path("/backend-api/ps/plugins/installed"))
-            .and(query_param("scope", scope))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-                "plugins": [],
-                "pagination": {
-                    "next_page_token": null
-                }
-            })))
-            .expect(1)
-            .mount(&server)
-            .await;
-    }
+    Mock::given(method("GET"))
+        .and(path("/backend-api/ps/plugins/installed"))
+        .and(query_param("scope", "GLOBAL"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "plugins": [],
+            "pagination": {
+                "next_page_token": null
+            }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
     plugins_manager
         .build_and_cache_remote_installed_plugin_marketplaces(
             &config.plugins_config_input(),
