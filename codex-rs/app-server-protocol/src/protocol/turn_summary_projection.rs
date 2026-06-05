@@ -123,10 +123,7 @@ impl TurnSummaryProjectionObserver {
         turn_id: &str,
         update: impl FnOnce(&mut TurnSummaryState),
     ) -> TurnSummaryState {
-        let summary = self
-            .summaries
-            .entry(turn_id.to_string())
-            .or_insert_with(TurnSummaryState::default);
+        let summary = self.summaries.entry(turn_id.to_string()).or_default();
         update(summary);
         summary.clone()
     }
