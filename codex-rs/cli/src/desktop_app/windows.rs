@@ -11,10 +11,11 @@ pub async fn run_windows_app_open_or_install(
     workspace: PathBuf,
     download_url_override: Option<String>,
 ) -> anyhow::Result<()> {
-    let workspace = display_workspace_path(&workspace);
+    let workspace_path = workspace.display().to_string();
+    let display_workspace = display_workspace_path(&workspace);
     if codex_app_is_installed().await? {
-        eprintln!("Opening Codex Desktop workspace {workspace}...");
-        open_url(&codex_new_thread_url(&workspace)).await?;
+        eprintln!("Opening Codex Desktop workspace {display_workspace}...");
+        open_url(&codex_new_thread_url(&workspace_path)).await?;
         return Ok(());
     }
 
@@ -25,7 +26,7 @@ pub async fn run_windows_app_open_or_install(
     if open_url(download_url).await.is_err() && download_url_override.is_none() {
         open_url(CODEX_MICROSOFT_STORE_WEB_URL).await?;
     }
-    eprintln!("After installing Codex Desktop, open workspace {workspace}.");
+    eprintln!("After installing Codex Desktop, open workspace {display_workspace}.");
     Ok(())
 }
 
@@ -116,6 +117,14 @@ mod tests {
         assert_eq!(
             codex_new_thread_url(r"C:\Users\akuma\repos\koba"),
             r"codex://threads/new?path=C%3A%5CUsers%5Cakuma%5Crepos%5Ckoba"
+        );
+    }
+
+    #[test]
+    fn codex_new_thread_url_preserves_verbatim_workspace_path() {
+        assert_eq!(
+            codex_new_thread_url(r"\\?\C:\Users\akuma\repos\koba"),
+            r"codex://threads/new?path=%5C%5C%3F%5CC%3A%5CUsers%5Cakuma%5Crepos%5Ckoba"
         );
     }
 }
