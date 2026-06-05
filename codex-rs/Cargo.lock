@@ -1916,6 +1916,7 @@ dependencies = [
  "codex-cloud-config",
  "codex-config",
  "codex-core",
+ "codex-core-api",
  "codex-core-plugins",
  "codex-exec-server",
  "codex-extension-api",
