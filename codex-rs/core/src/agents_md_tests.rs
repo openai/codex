@@ -388,7 +388,7 @@ async fn resolving_again_replaces_project_instructions() {
             entries: vec![
                 InstructionEntry {
                     contents: "user instructions".to_string(),
-                    provenance: InstructionProvenance::User(Some(user_agents)),
+                    provenance: InstructionProvenance::User(user_agents),
                 },
                 InstructionEntry {
                     contents: "second project".to_string(),
@@ -517,7 +517,7 @@ async fn child_agents_message_after_global_instructions_uses_plain_separator() {
         entries: vec![
             InstructionEntry {
                 contents: "global doc".to_string(),
-                provenance: InstructionProvenance::User(Some(global_agents)),
+                provenance: InstructionProvenance::User(global_agents),
             },
             InstructionEntry {
                 contents: HIERARCHICAL_AGENTS_MESSAGE.to_string(),
@@ -554,7 +554,7 @@ async fn instruction_sources_include_global_before_agents_md_docs() {
         entries: vec![
             InstructionEntry {
                 contents: "global doc".to_string(),
-                provenance: InstructionProvenance::User(Some(global_agents.clone())),
+                provenance: InstructionProvenance::User(global_agents.clone()),
             },
             InstructionEntry {
                 contents: "project doc".to_string(),
@@ -595,7 +595,7 @@ async fn child_agents_message_after_project_docs_is_not_an_instruction_source() 
         entries: vec![
             InstructionEntry {
                 contents: "global doc".to_string(),
-                provenance: InstructionProvenance::User(Some(global_agents.clone())),
+                provenance: InstructionProvenance::User(global_agents.clone()),
             },
             InstructionEntry {
                 contents: "project doc".to_string(),

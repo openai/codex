@@ -31,11 +31,11 @@ axum = { workspace = true, default-features = false, features = [
     "ws",
 ] }
 codex-analytics = { workspace = true }
+codex-agents-md = { workspace = true }
 codex-arg0 = { workspace = true }
 codex-cloud-config = { workspace = true }
 codex-config = { workspace = true }
 codex-core = { workspace = true }
-codex-core-api = { workspace = true }
 codex-core-plugins = { workspace = true }
 codex-exec-server = { workspace = true }
 codex-extension-api = { workspace = true }

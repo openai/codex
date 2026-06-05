@@ -71,6 +71,8 @@ async fn apply_role_to_config_inner(
     }
     let preserve_current_provider = role_layer_toml.get("model_provider").is_none();
     let preserve_current_service_tier = role_layer_toml.get("service_tier").is_none();
+    // Role reload rebuilds Config from config layers, but thread instructions
+    // are a caller-provided snapshot and must not be reloaded from disk here.
     let user_instructions = config.user_instructions.clone();
 
     let mut next_config = reload::build_next_config(

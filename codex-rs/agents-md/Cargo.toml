@@ -1,0 +1,19 @@
+[package]
+edition.workspace = true
+license.workspace = true
+name = "codex-agents-md"
+version.workspace = true
+
+[lib]
+doctest = false
+name = "codex_agents_md"
+path = "src/lib.rs"
+test = false
+
+[lints]
+workspace = true
+
+[dependencies]
+codex-core = { workspace = true }
+codex-exec-server = { workspace = true }
+codex-protocol = { workspace = true }

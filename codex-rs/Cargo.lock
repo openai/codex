@@ -1833,6 +1833,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-agents-md"
+version = "0.0.0"
+dependencies = [
+ "codex-core",
+ "codex-exec-server",
+ "codex-protocol",
+]
+
+[[package]]
 name = "codex-analytics"
 version = "0.0.0"
 dependencies = [
@@ -1907,6 +1916,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "clap",
+ "codex-agents-md",
  "codex-analytics",
  "codex-app-server-protocol",
  "codex-app-server-transport",
@@ -1916,7 +1926,6 @@ dependencies = [
  "codex-cloud-config",
  "codex-config",
  "codex-core",
- "codex-core-api",
  "codex-core-plugins",
  "codex-exec-server",
  "codex-extension-api",
@@ -2250,6 +2259,7 @@ dependencies = [
  "assert_matches",
  "clap",
  "clap_complete",
+ "codex-agents-md",
  "codex-api",
  "codex-app-server",
  "codex-app-server-daemon",
@@ -2260,7 +2270,6 @@ dependencies = [
  "codex-cloud-tasks",
  "codex-config",
  "codex-core",
- "codex-core-api",
  "codex-core-plugins",
  "codex-exec",
  "codex-exec-server",
@@ -2642,6 +2651,7 @@ dependencies = [
 name = "codex-core-api"
 version = "0.0.0"
 dependencies = [
+ "codex-agents-md",
  "codex-analytics",
  "codex-app-server-protocol",
  "codex-arg0",
@@ -3198,6 +3208,7 @@ name = "codex-mcp-server"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "codex-agents-md",
  "codex-arg0",
  "codex-config",
  "codex-core",
@@ -3263,6 +3274,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "codex-agents-md",
  "codex-backend-client",
  "codex-config",
  "codex-core",

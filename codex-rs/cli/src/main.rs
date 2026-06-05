@@ -1871,8 +1871,12 @@ async fn run_debug_prompt_input_command(
         )
         .into_iter()
         .collect::<Vec<_>>();
-    codex_core_api::load_thread_user_instructions(&mut config, &environment_manager, &environments)
-        .await?;
+    codex_agents_md::load_thread_user_instructions(
+        &mut config,
+        &environment_manager,
+        &environments,
+    )
+    .await?;
 
     let mut input = shared
         .images

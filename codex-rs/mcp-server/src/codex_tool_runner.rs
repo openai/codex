@@ -9,7 +9,7 @@ use crate::exec_approval::handle_exec_approval_request;
 use crate::outgoing_message::OutgoingMessageSender;
 use crate::outgoing_message::OutgoingNotificationMeta;
 use crate::patch_approval::handle_patch_approval_request;
-use codex_core::AgentsMdManager;
+use codex_agents_md::load_thread_user_instructions;
 use codex_core::CodexThread;
 use codex_core::NewThread;
 use codex_core::ThreadManager;
@@ -63,16 +63,16 @@ pub async fn run_codex_tool_session(
     thread_manager: Arc<ThreadManager>,
     running_requests_id_to_codex_uuid: Arc<Mutex<HashMap<RequestId, ThreadId>>>,
 ) {
-    let mut warnings = Vec::new();
-    config.user_instructions = match thread_manager.environment_manager().default_environment() {
-        Some(environment) => {
-            AgentsMdManager::new(&config)
-                .load_user_instructions(environment.as_ref(), &mut warnings)
-                .await
-        }
-        None => None,
-    };
-    config.startup_warnings.extend(warnings);
+    let environments = thread_manager.default_environment_selections(&config.cwd);
+    if let Err(err) = load_thread_user_instructions(
+        &mut config,
+        thread_manager.environment_manager().as_ref(),
+        &environments,
+    )
+    .await
+    {
+        tracing::error!("failed to load thread user instructions: {err}");
+    }
     let NewThread {
         thread_id,
         thread,

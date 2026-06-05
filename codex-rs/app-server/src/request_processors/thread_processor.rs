@@ -1,6 +1,6 @@
 use super::*;
 use crate::error_code::method_not_found;
-use codex_core_api::load_thread_user_instructions;
+use codex_agents_md::load_thread_user_instructions;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_DANGER_FULL_ACCESS;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
 

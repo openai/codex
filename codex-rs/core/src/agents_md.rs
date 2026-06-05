@@ -106,7 +106,7 @@ impl<'a> AgentsMdManager<'a> {
             .config
             .user_instructions
             .as_ref()
-            .map(LoadedAgentsMd::user_instructions)
+            .map(LoadedAgentsMd::user_scoped_instructions)
             .unwrap_or_default();
 
         match agents_md_docs {
@@ -330,7 +330,7 @@ impl LoadedAgentsMd {
         Self {
             entries: vec![InstructionEntry {
                 contents,
-                provenance: InstructionProvenance::User(Some(path)),
+                provenance: InstructionProvenance::User(path),
             }],
         }
     }
@@ -347,7 +347,7 @@ impl LoadedAgentsMd {
         Self {
             entries: vec![InstructionEntry {
                 contents,
-                provenance: InstructionProvenance::User(None),
+                provenance: InstructionProvenance::InlineUser,
             }],
         }
     }
@@ -358,12 +358,17 @@ impl LoadedAgentsMd {
             .all(|entry| entry.contents.trim().is_empty())
     }
 
-    fn user_instructions(&self) -> Self {
+    fn user_scoped_instructions(&self) -> Self {
         Self {
             entries: self
                 .entries
                 .iter()
-                .filter(|entry| matches!(entry.provenance, InstructionProvenance::User(_)))
+                .filter(|entry| {
+                    matches!(
+                        entry.provenance,
+                        InstructionProvenance::User(_) | InstructionProvenance::InlineUser
+                    )
+                })
                 .cloned()
                 .collect(),
         }
@@ -374,16 +379,15 @@ impl LoadedAgentsMd {
         let mut output = String::new();
         let mut previous_provenance: Option<&InstructionProvenance> = None;
         for entry in &self.entries {
-            if entry.contents.trim().is_empty() {
-                continue;
-            }
             if let Some(previous_provenance) = previous_provenance {
                 // The project-doc marker tells the model where workspace-scoped
                 // instructions begin, so it is only needed on the transition
                 // from user or internal instructions to project instructions.
                 let separator = match (previous_provenance, &entry.provenance) {
                     (
-                        InstructionProvenance::User(_) | InstructionProvenance::Internal,
+                        InstructionProvenance::User(_)
+                        | InstructionProvenance::InlineUser
+                        | InstructionProvenance::Internal,
                         InstructionProvenance::Project(_),
                     ) => AGENTS_MD_SEPARATOR,
                     _ => "\n\n",
@@ -417,7 +421,10 @@ struct InstructionEntry {
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum InstructionProvenance {
     /// User-level instructions, normally loaded from CODEX_HOME.
-    User(Option<AbsolutePathBuf>),
+    User(AbsolutePathBuf),
+
+    /// User-scoped instructions supplied directly rather than loaded from a file.
+    InlineUser,
 
     /// Workspace instructions discovered from project AGENTS.md files.
     Project(AbsolutePathBuf),
@@ -429,9 +436,8 @@ enum InstructionProvenance {
 impl InstructionProvenance {
     fn path(&self) -> Option<&AbsolutePathBuf> {
         match self {
-            Self::User(path) => path.as_ref(),
-            Self::Project(path) => Some(path),
-            Self::Internal => None,
+            Self::User(path) | Self::Project(path) => Some(path),
+            Self::InlineUser | Self::Internal => None,
         }
     }
 }

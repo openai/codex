@@ -1,5 +1,5 @@
 use super::*;
-use codex_core_api::load_thread_user_instructions;
+use codex_agents_md::load_thread_user_instructions;
 use codex_protocol::protocol::AdditionalContextEntry as CoreAdditionalContextEntry;
 use codex_protocol::protocol::AdditionalContextKind as CoreAdditionalContextKind;
 
