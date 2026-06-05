@@ -64,7 +64,6 @@ pub use responses_api::mcp_tool_to_responses_api_tool;
 pub use responses_api::tool_definition_to_responses_api_tool;
 pub use tool_call::ConversationHistory;
 pub use tool_call::ExtensionTurnItem;
-pub use tool_call::ImageGenerationCompletionFuture;
 pub use tool_call::NoopTurnItemEmitter;
 pub use tool_call::ToolCall;
 pub use tool_call::TurnItemEmissionFuture;

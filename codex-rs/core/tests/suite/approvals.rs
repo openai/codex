@@ -663,7 +663,7 @@ async fn submit_turn(
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                cwd: Some(test.cwd.path().to_path_buf()),
+                cwd: Some(test.config.cwd.clone()),
                 approval_policy: Some(approval_policy),
                 approvals_reviewer: Some(ApprovalsReviewer::User),
                 sandbox_policy: Some(sandbox_policy),
@@ -2624,7 +2624,7 @@ async fn env_zsh_script_spawned_by_python_can_request_escalation_under_zsh_fork(
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                cwd: Some(test.cwd.path().to_path_buf()),
+                cwd: Some(test.config.cwd.clone()),
                 approval_policy: Some(approval_policy),
                 approvals_reviewer: Some(ApprovalsReviewer::User),
                 sandbox_policy: Some(sandbox_policy),
@@ -2769,7 +2769,7 @@ async fn matched_prefix_rule_runs_unsandboxed_under_zsh_fork() -> Result<()> {
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                cwd: Some(test.cwd.path().to_path_buf()),
+                cwd: Some(test.config.cwd.clone()),
                 approval_policy: Some(approval_policy),
                 approvals_reviewer: Some(ApprovalsReviewer::User),
                 sandbox_policy: Some(sandbox_policy),
@@ -2999,7 +2999,7 @@ allow_local_binding = true
     let sandbox_policy_for_config = sandbox_policy.clone();
     let mut builder = test_codex()
         .with_home(home)
-        .with_cloud_requirements(managed_network_requirements_loader())
+        .with_cloud_config_bundle(managed_network_requirements_loader())
         .with_config(move |config| {
             config.permissions.approval_policy = Constrained::allow_any(approval_policy);
             config
@@ -3279,7 +3279,7 @@ allow_local_binding = true
     };
     let mut builder = test_codex()
         .with_home(home)
-        .with_cloud_requirements(managed_network_requirements_loader())
+        .with_cloud_config_bundle(managed_network_requirements_loader())
         .with_config(move |config| {
             config.permissions.approval_policy = Constrained::allow_any(approval_policy);
         });
@@ -3361,7 +3361,7 @@ allow_local_binding = true
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                cwd: Some(test.config.cwd.to_path_buf()),
+                cwd: Some(test.config.cwd.clone()),
                 approval_policy: Some(approval_policy),
                 approvals_reviewer: Some(ApprovalsReviewer::User),
                 sandbox_policy: Some(turn_sandbox_policy),
@@ -3484,7 +3484,7 @@ allow_local_binding = true
     };
     let mut builder = test_codex()
         .with_home(home)
-        .with_cloud_requirements(managed_network_requirements_loader())
+        .with_cloud_config_bundle(managed_network_requirements_loader())
         .with_config(move |config| {
             config.permissions.approval_policy = Constrained::allow_any(approval_policy);
             let cwd = config.cwd.clone();

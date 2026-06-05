@@ -89,9 +89,9 @@ impl ChatWidget {
         // source only when no earlier item-level event (AgentMessageItem, plan
         // commit, review output) already recorded markdown for this turn. This
         // prevents the final summary from overwriting a more specific source.
-        let sanitized_last_agent_message = last_agent_message
-            .as_deref()
-            .map(|message| parse_assistant_markdown(message).visible_markdown);
+        let sanitized_last_agent_message = last_agent_message.as_deref().map(|message| {
+            parse_assistant_markdown(message, self.config.cwd.as_path()).visible_markdown
+        });
         if let Some(message) = sanitized_last_agent_message
             .as_ref()
             .filter(|message| !message.is_empty())

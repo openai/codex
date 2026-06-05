@@ -11,6 +11,7 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::user_input::UserInput;
+use core_test_support::PathBufExt;
 use core_test_support::context_snapshot;
 use core_test_support::context_snapshot::ContextSnapshotOptions;
 use core_test_support::context_snapshot::ContextSnapshotRenderMode;
@@ -112,7 +113,8 @@ async fn snapshot_model_visible_layout_turn_overrides() -> Result<()> {
     let test = builder.build(&server).await?;
     let preturn_context_diff_cwd = test.cwd_path().join(PRETURN_CONTEXT_DIFF_CWD);
     fs::create_dir_all(&preturn_context_diff_cwd)?;
-    let first_turn_cwd = test.cwd_path().to_path_buf();
+    let preturn_context_diff_cwd = preturn_context_diff_cwd.abs();
+    let first_turn_cwd = test.config.cwd.clone();
     let (first_sandbox_policy, first_permission_profile) =
         turn_permission_fields(PermissionProfile::read_only(), first_turn_cwd.as_path());
 
@@ -135,7 +137,7 @@ async fn snapshot_model_visible_layout_turn_overrides() -> Result<()> {
                     mode: codex_protocol::config_types::ModeKind::Default,
                     settings: codex_protocol::config_types::Settings {
                         model: test.session_configured.model.clone(),
-                        reasoning_effort: test.config.model_reasoning_effort,
+                        reasoning_effort: test.config.model_reasoning_effort.clone(),
                         developer_instructions: None,
                     },
                 }),
@@ -172,7 +174,7 @@ async fn snapshot_model_visible_layout_turn_overrides() -> Result<()> {
                     mode: codex_protocol::config_types::ModeKind::Default,
                     settings: codex_protocol::config_types::Settings {
                         model: test.session_configured.model.clone(),
-                        reasoning_effort: test.config.model_reasoning_effort,
+                        reasoning_effort: test.config.model_reasoning_effort.clone(),
                         developer_instructions: None,
                     },
                 }),
@@ -239,6 +241,8 @@ async fn snapshot_model_visible_layout_cwd_change_does_not_refresh_agents() -> R
         cwd_two.join("AGENTS.md"),
         "# AGENTS two\n\n<INSTRUCTIONS>\nTurn two agents instructions.\n</INSTRUCTIONS>\n",
     )?;
+    let cwd_one = cwd_one.abs();
+    let cwd_two = cwd_two.abs();
     let (first_sandbox_policy, first_permission_profile) =
         turn_permission_fields(PermissionProfile::read_only(), cwd_one.as_path());
 
@@ -261,7 +265,7 @@ async fn snapshot_model_visible_layout_cwd_change_does_not_refresh_agents() -> R
                     mode: codex_protocol::config_types::ModeKind::Default,
                     settings: codex_protocol::config_types::Settings {
                         model: test.session_configured.model.clone(),
-                        reasoning_effort: test.config.model_reasoning_effort,
+                        reasoning_effort: test.config.model_reasoning_effort.clone(),
                         developer_instructions: None,
                     },
                 }),
@@ -295,7 +299,7 @@ async fn snapshot_model_visible_layout_cwd_change_does_not_refresh_agents() -> R
                     mode: codex_protocol::config_types::ModeKind::Default,
                     settings: codex_protocol::config_types::Settings {
                         model: test.session_configured.model.clone(),
-                        reasoning_effort: test.config.model_reasoning_effort,
+                        reasoning_effort: test.config.model_reasoning_effort.clone(),
                         developer_instructions: None,
                     },
                 }),
@@ -397,6 +401,7 @@ async fn snapshot_model_visible_layout_resume_with_personality_change() -> Resul
     let resumed = resume_builder.resume(&server, home, rollout_path).await?;
     let resume_override_cwd = resumed.cwd_path().join(PRETURN_CONTEXT_DIFF_CWD);
     fs::create_dir_all(&resume_override_cwd)?;
+    let resume_override_cwd = resume_override_cwd.abs();
     let (sandbox_policy, permission_profile) = turn_permission_fields(
         PermissionProfile::read_only(),
         resume_override_cwd.as_path(),
@@ -422,7 +427,7 @@ async fn snapshot_model_visible_layout_resume_with_personality_change() -> Resul
                     mode: codex_protocol::config_types::ModeKind::Default,
                     settings: codex_protocol::config_types::Settings {
                         model: resumed.session_configured.model.clone(),
-                        reasoning_effort: resumed.config.model_reasoning_effort,
+                        reasoning_effort: resumed.config.model_reasoning_effort.clone(),
                         developer_instructions: None,
                     },
                 }),
@@ -508,6 +513,7 @@ async fn snapshot_model_visible_layout_resume_override_matches_rollout_model() -
     let resumed = resume_builder.resume(&server, home, rollout_path).await?;
     let resume_override_cwd = resumed.cwd_path().join(PRETURN_CONTEXT_DIFF_CWD);
     fs::create_dir_all(&resume_override_cwd)?;
+    let resume_override_cwd = resume_override_cwd.abs();
     core_test_support::submit_thread_settings(
         &resumed.codex,
         codex_protocol::protocol::ThreadSettingsOverrides {

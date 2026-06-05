@@ -168,7 +168,7 @@ async fn user_shell_command_does_not_replace_active_turn() -> anyhow::Result<()>
     ]);
     let mock = responses::mount_sse_sequence(&server, vec![first, second]).await;
 
-    let cwd = fixture.cwd.path().to_path_buf();
+    let cwd = fixture.config.cwd.clone();
     let (sandbox_policy, permission_profile) =
         turn_permission_fields(PermissionProfile::Disabled, cwd.as_path());
 

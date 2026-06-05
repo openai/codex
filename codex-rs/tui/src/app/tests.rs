@@ -2539,6 +2539,7 @@ async fn inactive_thread_permissions_approval_preserves_file_system_permissions(
             thread_id: thread_id.to_string(),
             turn_id: "turn-approval".to_string(),
             item_id: "call-approval".to_string(),
+            environment_id: Some("remote".to_string()),
             started_at_ms: 0,
             cwd: test_absolute_path("/tmp"),
             reason: Some("Need access to .git".to_string()),
@@ -2557,7 +2558,9 @@ async fn inactive_thread_permissions_approval_preserves_file_system_permissions(
     };
 
     let Some(ThreadInteractiveRequest::Approval(ApprovalRequest::Permissions {
-        permissions, ..
+        environment_id,
+        permissions,
+        ..
     })) = app
         .interactive_request_for_thread_request(thread_id, &request)
         .await
@@ -2565,6 +2568,7 @@ async fn inactive_thread_permissions_approval_preserves_file_system_permissions(
         panic!("expected permissions approval request");
     };
 
+    assert_eq!(environment_id.as_deref(), Some("remote"));
     assert_eq!(
         permissions,
         RequestPermissionProfile {
@@ -5237,7 +5241,7 @@ async fn override_turn_context_sends_thread_settings_update() {
             .expect("thread/start should succeed");
         let thread_id = started.session.thread_id;
         let initial_model = started.session.model.clone();
-        let initial_effort = started.session.reasoning_effort;
+        let initial_effort = started.session.reasoning_effort.clone();
         app.enqueue_primary_thread_session(started.session, started.turns)
             .await
             .expect("primary thread should be registered");
@@ -5462,7 +5466,7 @@ async fn inactive_thread_settings_notification_updates_cached_collaboration_mode
             model: "gpt-plan".to_string(),
             model_provider: "openai".to_string(),
             service_tier: None,
-            effort: collaboration_mode.settings.reasoning_effort,
+            effort: collaboration_mode.settings.reasoning_effort.clone(),
             summary: None,
             collaboration_mode: collaboration_mode.clone(),
             personality: Some(Personality::Pragmatic),

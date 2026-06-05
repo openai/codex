@@ -1,9 +1,10 @@
+use crate::types::AccountsCheckResponse;
 use crate::types::CodeTaskDetailsResponse;
 use crate::types::ConfigBundleResponse;
-use crate::types::ConfigFileResponse;
 use crate::types::PaginatedListTaskListItem;
 use crate::types::RateLimitReachedKind as BackendRateLimitReachedKind;
 use crate::types::RateLimitStatusPayload;
+use crate::types::TokenUsageProfile;
 use crate::types::TurnAttemptsSiblingTurnsResponse;
 use anyhow::Result;
 use codex_api::SharedAuthProvider;
@@ -303,6 +304,30 @@ impl Client {
         Ok(Self::rate_limit_snapshots_from_payload(payload))
     }
 
+    pub async fn get_accounts_check(&self) -> Result<AccountsCheckResponse> {
+        let url = match self.path_style {
+            PathStyle::CodexApi => format!("{}/api/codex/accounts/check", self.base_url),
+            PathStyle::ChatGptApi => format!("{}/wham/accounts/check", self.base_url),
+        };
+        let req = self.http.get(&url).headers(self.headers());
+        let (body, ct) = self.exec_request(req, "GET", &url).await?;
+        self.decode_json(&url, &ct, &body)
+    }
+
+    pub async fn get_token_usage_profile(&self) -> Result<TokenUsageProfile> {
+        let url = self.token_usage_profile_url();
+        let req = self.http.get(&url).headers(self.headers());
+        let (body, ct) = self.exec_request(req, "GET", &url).await?;
+        self.decode_json(&url, &ct, &body)
+    }
+
+    fn token_usage_profile_url(&self) -> String {
+        match self.path_style {
+            PathStyle::CodexApi => format!("{}/api/codex/profiles/me", self.base_url),
+            PathStyle::ChatGptApi => format!("{}/wham/profiles/me", self.base_url),
+        }
+    }
+
     pub async fn send_add_credits_nudge_email(
         &self,
         credit_type: AddCreditsNudgeCreditType,
@@ -391,23 +416,6 @@ impl Client {
         let req = self.http.get(&url).headers(self.headers());
         let (body, ct) = self.exec_request(req, "GET", &url).await?;
         self.decode_json::<TurnAttemptsSiblingTurnsResponse>(&url, &ct, &body)
-    }
-
-    /// Fetch the managed requirements file from codex-backend.
-    ///
-    /// `GET /api/codex/config/requirements` (Codex API style) or
-    /// `GET /wham/config/requirements` (ChatGPT backend-api style).
-    pub async fn get_config_requirements_file(
-        &self,
-    ) -> std::result::Result<ConfigFileResponse, RequestError> {
-        let url = match self.path_style {
-            PathStyle::CodexApi => format!("{}/api/codex/config/requirements", self.base_url),
-            PathStyle::ChatGptApi => format!("{}/wham/config/requirements", self.base_url),
-        };
-        let req = self.http.get(&url).headers(self.headers());
-        let (body, ct) = self.exec_request_detailed(req, "GET", &url).await?;
-        self.decode_json::<ConfigFileResponse>(&url, &ct, &body)
-            .map_err(RequestError::from)
     }
 
     /// Fetch the selected cloud-managed config bundle from codex-backend.
@@ -890,29 +898,13 @@ mod tests {
 
     #[test]
     fn add_credits_nudge_email_uses_expected_paths_and_bodies() {
-        let codex_client = Client {
-            base_url: "https://example.test".to_string(),
-            http: reqwest::Client::new(),
-            auth_provider: codex_model_provider::unauthenticated_auth_provider(),
-            user_agent: None,
-            chatgpt_account_id: None,
-            chatgpt_account_is_fedramp: false,
-            path_style: PathStyle::CodexApi,
-        };
+        let codex_client = test_client("https://example.test", PathStyle::CodexApi);
         assert_eq!(
             codex_client.send_add_credits_nudge_email_url(),
             "https://example.test/api/codex/accounts/send_add_credits_nudge_email"
         );
 
-        let chatgpt_client = Client {
-            base_url: "https://chatgpt.com/backend-api".to_string(),
-            http: reqwest::Client::new(),
-            auth_provider: codex_model_provider::unauthenticated_auth_provider(),
-            user_agent: None,
-            chatgpt_account_id: None,
-            chatgpt_account_is_fedramp: false,
-            path_style: PathStyle::ChatGptApi,
-        };
+        let chatgpt_client = test_client("https://chatgpt.com/backend-api", PathStyle::ChatGptApi);
         assert_eq!(
             chatgpt_client.send_add_credits_nudge_email_url(),
             "https://chatgpt.com/backend-api/wham/accounts/send_add_credits_nudge_email"
@@ -932,5 +924,32 @@ mod tests {
             .unwrap(),
             serde_json::json!({ "credit_type": "usage_limit" })
         );
+    }
+
+    #[test]
+    fn token_usage_profile_uses_expected_paths() {
+        let codex_client = test_client("https://example.test", PathStyle::CodexApi);
+        assert_eq!(
+            codex_client.token_usage_profile_url(),
+            "https://example.test/api/codex/profiles/me"
+        );
+
+        let chatgpt_client = test_client("https://chatgpt.com/backend-api", PathStyle::ChatGptApi);
+        assert_eq!(
+            chatgpt_client.token_usage_profile_url(),
+            "https://chatgpt.com/backend-api/wham/profiles/me"
+        );
+    }
+
+    fn test_client(base_url: &str, path_style: PathStyle) -> Client {
+        Client {
+            base_url: base_url.to_string(),
+            http: reqwest::Client::new(),
+            auth_provider: codex_model_provider::unauthenticated_auth_provider(),
+            user_agent: None,
+            chatgpt_account_id: None,
+            chatgpt_account_is_fedramp: false,
+            path_style,
+        }
     }
 }

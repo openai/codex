@@ -9,6 +9,7 @@ use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
 use codex_protocol::user_input::UserInput;
+use core_test_support::TempDirExt;
 use core_test_support::responses;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -129,7 +130,7 @@ async fn copy_paste_local_image_persists_rollout_request_shape() -> anyhow::Resu
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                cwd: Some(cwd.path().to_path_buf()),
+                cwd: Some(cwd.abs()),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,
@@ -161,7 +162,9 @@ async fn copy_paste_local_image_persists_rollout_request_shape() -> anyhow::Resu
         role: "user".to_string(),
         content: vec![
             ContentItem::InputText {
-                text: codex_protocol::models::local_image_open_tag_text(/*label_number*/ 1),
+                text: codex_protocol::models::local_image_open_tag_text_with_path(
+                    /*label_number*/ 1, &abs_path,
+                ),
             },
             ContentItem::InputImage {
                 image_url,
@@ -226,7 +229,7 @@ async fn drag_drop_image_persists_rollout_request_shape() -> anyhow::Result<()> 
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                cwd: Some(cwd.path().to_path_buf()),
+                cwd: Some(cwd.abs()),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,

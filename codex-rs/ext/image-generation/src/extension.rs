@@ -13,6 +13,7 @@ use codex_features::Feature;
 use codex_login::AuthManager;
 use codex_model_provider::create_model_provider;
 use codex_model_provider_info::ModelProviderInfo;
+use codex_utils_absolute_path::AbsolutePathBuf;
 
 use crate::backend::CodexImagesBackend;
 use crate::tool::ImageGenerationTool;
@@ -26,6 +27,7 @@ struct ImageGenerationExtension {
 struct ImageGenerationExtensionConfig {
     enabled: bool,
     provider: ModelProviderInfo,
+    codex_home: AbsolutePathBuf,
 }
 
 impl From<&Config> for ImageGenerationExtensionConfig {
@@ -35,6 +37,7 @@ impl From<&Config> for ImageGenerationExtensionConfig {
             enabled: config.features.enabled(Feature::ImageGenExt)
                 && config.model_provider.is_openai(),
             provider: config.model_provider.clone(),
+            codex_home: config.codex_home.clone(),
         }
     }
 }
@@ -76,9 +79,14 @@ impl ToolContributor for ImageGenerationExtension {
             return Vec::new();
         }
 
-        vec![Arc::new(ImageGenerationTool::new(CodexImagesBackend::new(
-            create_model_provider(config.provider.clone(), Some(self.auth_manager.clone())),
-        )))]
+        vec![Arc::new(ImageGenerationTool::new(
+            CodexImagesBackend::new(create_model_provider(
+                config.provider.clone(),
+                Some(self.auth_manager.clone()),
+            )),
+            config.codex_home.clone(),
+            thread_store.level_id().to_string(),
+        ))]
     }
 }
 

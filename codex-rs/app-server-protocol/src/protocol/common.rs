@@ -849,6 +849,18 @@ client_request_definitions! {
         serialization: global("remote-control-pairing"),
         response: v2::RemoteControlPairingStartResponse,
     },
+    #[experimental("remoteControl/client/list")]
+    RemoteControlClientsList => "remoteControl/client/list" {
+        params: v2::RemoteControlClientsListParams,
+        serialization: global_shared_read("remote-control-clients"),
+        response: v2::RemoteControlClientsListResponse,
+    },
+    #[experimental("remoteControl/client/revoke")]
+    RemoteControlClientsRevoke => "remoteControl/client/revoke" {
+        params: v2::RemoteControlClientsRevokeParams,
+        serialization: global("remote-control-clients"),
+        response: v2::RemoteControlClientsRevokeResponse,
+    },
     #[experimental("collaborationMode/list")]
     /// Lists collaboration mode presets.
     CollaborationModeList => "collaborationMode/list" {
@@ -935,6 +947,12 @@ client_request_definitions! {
         params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
         serialization: None,
         response: v2::GetAccountRateLimitsResponse,
+    },
+
+    GetAccountTokenUsage => "account/usage/read" {
+        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        serialization: None,
+        response: v2::GetAccountTokenUsageResponse,
     },
 
     SendAddCreditsNudgeEmail => "account/sendAddCreditsNudgeEmail" {
@@ -1537,6 +1555,8 @@ server_notification_definitions! {
     ContextCompacted => "thread/compacted" (v2::ContextCompactedNotification),
     ModelRerouted => "model/rerouted" (v2::ModelReroutedNotification),
     ModelVerification => "model/verification" (v2::ModelVerificationNotification),
+    #[experimental("turn/moderationMetadata")]
+    TurnModerationMetadata => "turn/moderationMetadata" (v2::TurnModerationMetadataNotification),
     Warning => "warning" (v2::WarningNotification),
     GuardianWarning => "guardianWarning" (v2::GuardianWarningNotification),
     DeprecationNotice => "deprecationNotice" (v2::DeprecationNoticeNotification),
@@ -1994,6 +2014,29 @@ mod tests {
                 "remote-control-pairing"
             ))
         );
+        let remote_control_clients_list = ClientRequest::RemoteControlClientsList {
+            request_id: request_id(),
+            params: v2::RemoteControlClientsListParams::default(),
+        };
+        assert_eq!(
+            remote_control_clients_list.serialization_scope(),
+            Some(ClientRequestSerializationScope::GlobalSharedRead(
+                "remote-control-clients"
+            ))
+        );
+        let remote_control_clients_revoke = ClientRequest::RemoteControlClientsRevoke {
+            request_id: request_id(),
+            params: v2::RemoteControlClientsRevokeParams {
+                environment_id: "environment-id".to_string(),
+                client_id: "client-id".to_string(),
+            },
+        };
+        assert_eq!(
+            remote_control_clients_revoke.serialization_scope(),
+            Some(ClientRequestSerializationScope::Global(
+                "remote-control-clients"
+            ))
+        );
     }
 
     #[test]
@@ -2328,6 +2371,24 @@ mod tests {
         assert_eq!(
             json!({
                 "method": "account/rateLimits/read",
+                "id": 1,
+            }),
+            serde_json::to_value(&request)?,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_get_account_token_usage() -> Result<()> {
+        let request = ClientRequest::GetAccountTokenUsage {
+            request_id: RequestId::Integer(1),
+            params: None,
+        };
+        assert_eq!(request.id(), &RequestId::Integer(1));
+        assert_eq!(request.method(), "account/usage/read");
+        assert_eq!(
+            json!({
+                "method": "account/usage/read",
                 "id": 1,
             }),
             serde_json::to_value(&request)?,
@@ -3184,6 +3245,21 @@ mod tests {
         assert_eq!(
             crate::experimental_api::ExperimentalApi::experimental_reason(&notification),
             Some("thread/settings/updated")
+        );
+    }
+
+    #[test]
+    fn turn_moderation_metadata_notification_is_marked_experimental() {
+        let notification =
+            ServerNotification::TurnModerationMetadata(v2::TurnModerationMetadataNotification {
+                thread_id: "thr_123".to_string(),
+                turn_id: "turn_123".to_string(),
+                metadata: json!({"presentation": "inline"}),
+            });
+
+        assert_eq!(
+            crate::experimental_api::ExperimentalApi::experimental_reason(&notification),
+            Some("turn/moderationMetadata")
         );
     }
 

@@ -265,7 +265,7 @@ async fn run_guardian_review(
     let action_summary = guardian_assessment_action(&request);
     let reviewed_action = guardian_reviewed_action(&request);
     let review_tracking = GuardianReviewTrackContext::new(
-        session.conversation_id.to_string(),
+        session.thread_id.to_string(),
         assessment_turn_id.clone(),
         review_id.clone(),
         target_item_id.clone(),
@@ -702,7 +702,7 @@ pub(super) async fn run_guardian_review_session(
                 .supported_reasoning_efforts
                 .iter()
                 .any(|effort| effort.effort == codex_protocol::openai_models::ReasoningEffort::Low),
-            Some(preset.default_reasoning_effort),
+            Some(preset.default_reasoning_effort.clone()),
         );
         (review_model_id.to_string(), reasoning_effort)
     } else {
@@ -712,7 +712,8 @@ pub(super) async fn run_guardian_review_session(
                 .iter()
                 .any(|preset| preset.effort == codex_protocol::openai_models::ReasoningEffort::Low),
             turn.reasoning_effort
-                .or(turn.model_info.default_reasoning_level),
+                .clone()
+                .or_else(|| turn.model_info.default_reasoning_level.clone()),
         );
         (
             model_override
@@ -725,7 +726,7 @@ pub(super) async fn run_guardian_review_session(
         turn.config.as_ref(),
         live_network_config.clone(),
         guardian_model.as_str(),
-        guardian_reasoning_effort,
+        guardian_reasoning_effort.clone(),
     );
     let guardian_config = match guardian_config {
         Ok(config) => config,

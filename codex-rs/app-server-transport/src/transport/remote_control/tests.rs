@@ -21,6 +21,7 @@ use codex_app_server_protocol::ConfigWarningNotification;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::RemoteControlConnectionStatus;
 use codex_app_server_protocol::RemoteControlPairingStartParams;
+use codex_app_server_protocol::RemoteControlPairingStatusParams;
 use codex_app_server_protocol::RemoteControlStatusChangedNotification;
 use codex_app_server_protocol::ServerNotification;
 use codex_config::types::AuthCredentialsStoreMode;
@@ -40,7 +41,6 @@ use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use std::sync::Mutex as StdMutex;
 use tempfile::TempDir;
 use time::OffsetDateTime;
 use tokio::io::AsyncBufReadExt;
@@ -60,6 +60,7 @@ use tokio_tungstenite::accept_hdr_async;
 use tokio_tungstenite::tungstenite;
 use tokio_util::sync::CancellationToken;
 
+mod clients_tests;
 mod pairing_tests;
 
 const TEST_INSTALLATION_ID: &str = "11111111-1111-4111-8111-111111111111";
@@ -147,23 +148,29 @@ fn remote_control_handle_with_current_enrollment(
     });
     let remote_control_target = normalize_remote_control_url(remote_control_url)
         .expect("remote control target should normalize");
-    let current_enrollment = Arc::new(StdMutex::new(Some(RemoteControlEnrollment {
-        remote_control_target,
-        account_id: "account_id".to_string(),
-        environment_id: "env_test".to_string(),
-        server_id: "srv_e_test".to_string(),
-        server_name: test_server_name(),
-        remote_control_token: Some(TEST_REMOTE_CONTROL_SERVER_TOKEN.to_string()),
-        expires_at: Some(
-            OffsetDateTime::from_unix_timestamp(33_336_362_096)
-                .expect("future timestamp should parse"),
-        ),
-    })));
+    let current_enrollment = Arc::new(RemoteControlEnrollmentState::new(Some(
+        RemoteControlEnrollment {
+            remote_control_target,
+            account_id: "account_id".to_string(),
+            environment_id: "env_test".to_string(),
+            server_id: "srv_e_test".to_string(),
+            server_name: test_server_name(),
+            remote_control_token: Some(TEST_REMOTE_CONTROL_SERVER_TOKEN.to_string()),
+            expires_at: Some(
+                OffsetDateTime::from_unix_timestamp(33_336_362_096)
+                    .expect("future timestamp should parse"),
+            ),
+        },
+    )));
     RemoteControlHandle {
         enabled_tx: Arc::new(enabled_tx),
         status_tx: Arc::new(status_tx),
         state_db_available: true,
+        state_db: None,
+        remote_control_url: remote_control_url.to_string(),
         current_enrollment,
+        pairing_persistence_key: watch::channel(None).0,
+        pairing_persistence_key_required: false,
         auth_manager,
     }
 }

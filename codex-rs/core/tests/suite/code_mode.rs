@@ -375,7 +375,11 @@ async fn code_mode_only_restricts_prompt_tools() -> Result<()> {
     let first_body = resp_mock.single_request().body_json();
     assert_eq!(
         tool_names(&first_body),
-        vec!["exec".to_string(), "wait".to_string()]
+        vec![
+            "exec".to_string(),
+            "wait".to_string(),
+            "web_search".to_string()
+        ]
     );
 
     Ok(())
@@ -457,7 +461,12 @@ if (!tool) {
     let first_body = resp_mock.single_request().body_json();
     assert_eq!(
         tool_names(&first_body),
-        vec!["exec".to_string(), "wait".to_string()]
+        vec![
+            "exec".to_string(),
+            "wait".to_string(),
+            "web_search".to_string(),
+            "image_generation".to_string()
+        ]
     );
 
     let exec_description = first_body
@@ -2898,6 +2907,7 @@ text(JSON.stringify(Object.getOwnPropertyNames(globalThis).sort()));
         "escape",
         "exit",
         "eval",
+        "generatedImage",
         "globalThis",
         "image",
         "isFinite",
@@ -2953,7 +2963,7 @@ text(JSON.stringify(tool));
         parsed,
         serde_json::json!({
             "name": "view_image",
-            "description": "View a local image file from the filesystem when visual inspection is needed. Use this for images already available on disk.\n\nexec tool declaration:\n```ts\ndeclare const tools: { view_image(args: {\n  // Local filesystem path to an image file\n  path: string;\n}): Promise<{\n  // Image detail hint returned by view_image. Returns `high` for default resized behavior or `original` when original resolution is preserved.\n  detail: \"high\" | \"original\";\n  // Data URL for the loaded image.\n  image_url: string;\n}>; };\n```",
+            "description": "View a local image file from the filesystem when visual inspection is needed. Use this for images already available on disk.\n\nexec tool declaration:\n```ts\ndeclare const tools: { view_image(args: {\n  // Local filesystem path to an image file.\n  path: string;\n}): Promise<{\n  // Image detail hint returned by view_image. Returns `high` for default resized behavior or `original` when original resolution is preserved.\n  detail: \"high\" | \"original\";\n  // Data URL for the loaded image.\n  image_url: string;\n}>; };\n```",
         })
     );
 
@@ -3069,7 +3079,7 @@ text(
     )
     .await;
 
-    let cwd = test.cwd.path().to_path_buf();
+    let cwd = test.config.cwd.clone();
     let (sandbox_policy, permission_profile) =
         turn_permission_fields(PermissionProfile::Disabled, cwd.as_path());
 
@@ -3160,6 +3170,93 @@ text(
                     && description.contains("declare const tools:")
                     && description.contains("codex_app_hidden_dynamic_tool(args:")
             })
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_excludes_configured_nested_tool_namespaces() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let mut builder = test_codex().with_config(|config| {
+        let _ = config.features.enable(Feature::CodeMode);
+        config.code_mode.excluded_tool_namespaces = vec!["excluded".to_string()];
+    });
+    let base_test = builder.build(&server).await?;
+    let new_thread = base_test
+        .thread_manager
+        .start_thread_with_tools(
+            base_test.config.clone(),
+            vec![DynamicToolSpec {
+                namespace: Some("excluded".to_string()),
+                name: "lookup".to_string(),
+                description: "An excluded dynamic tool.".to_string(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": false,
+                }),
+                defer_loading: false,
+            }],
+        )
+        .await?;
+    let mut test = base_test;
+    test.codex = new_thread.thread;
+    test.session_configured = new_thread.session_configured;
+
+    let first_mock = responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_custom_tool_call(
+                "call-1",
+                "exec",
+                r#"
+text(JSON.stringify({
+  excludedType: typeof tools.excluded__lookup,
+  excludedMetadata: ALL_TOOLS.some(({ name }) => name === "excluded__lookup"),
+  allowedType: typeof tools.update_plan,
+  allowedMetadata: ALL_TOOLS.some(({ name }) => name === "update_plan"),
+}));
+"#,
+            ),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let second_mock = responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+
+    test.submit_turn("use exec to inspect nested tool namespaces")
+        .await?;
+
+    assert!(
+        tool_names(&first_mock.single_request().body_json()).contains(&"excluded".to_string()),
+        "excluded namespace should remain directly exposed in mixed code mode"
+    );
+    let request = second_mock.single_request();
+    let (output, success) = custom_tool_output_body_and_success(&request, "call-1");
+    assert_ne!(
+        success,
+        Some(false),
+        "exec configured namespace exclusion failed unexpectedly: {output}"
+    );
+    assert_eq!(
+        serde_json::from_str::<Value>(&output)?,
+        serde_json::json!({
+            "excludedType": "undefined",
+            "excludedMetadata": false,
+            "allowedType": "function",
+            "allowedMetadata": true,
+        })
     );
 
     Ok(())

@@ -348,13 +348,90 @@ async fn thread_start_response_includes_loaded_instruction_sources() -> Result<(
         .collect::<Vec<_>>();
     let expected_instruction_sources = vec![
         std::fs::canonicalize(global_agents_path)?,
-        std::fs::canonicalize(project_agents_path)?,
+        project_agents_path,
     ]
     .into_iter()
     .map(normalize_path_for_comparison)
     .collect::<Vec<_>>();
 
     assert_eq!(instruction_sources, expected_instruction_sources);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_start_response_excludes_empty_project_instruction_source() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml_without_approval_policy(codex_home.path(), &server.uri())?;
+    let global_agents_path = codex_home.path().join("AGENTS.md");
+    std::fs::write(&global_agents_path, "global instructions")?;
+    let workspace = TempDir::new()?;
+    let project_agents_path = workspace.path().join("AGENTS.md");
+    std::fs::write(project_agents_path, "")?;
+
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            cwd: Some(workspace.path().display().to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let ThreadStartResponse {
+        instruction_sources,
+        ..
+    } = to_response::<ThreadStartResponse>(response)?;
+
+    let instruction_sources = instruction_sources
+        .into_iter()
+        .map(normalize_path_for_comparison)
+        .collect::<Vec<_>>();
+    let expected_instruction_sources = vec![normalize_path_for_comparison(std::fs::canonicalize(
+        global_agents_path,
+    )?)];
+
+    assert_eq!(instruction_sources, expected_instruction_sources);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_start_without_selected_environment_excludes_instruction_sources() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml_without_approval_policy(codex_home.path(), &server.uri())?;
+    std::fs::write(codex_home.path().join("AGENTS.md"), "global instructions")?;
+    let workspace = TempDir::new()?;
+    std::fs::write(workspace.path().join("AGENTS.md"), "project instructions")?;
+
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            cwd: Some(workspace.path().display().to_string()),
+            environments: Some(Vec::new()),
+            ..Default::default()
+        })
+        .await?;
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let ThreadStartResponse {
+        instruction_sources,
+        ..
+    } = to_response::<ThreadStartResponse>(response)?;
+
+    assert!(instruction_sources.is_empty());
 
     Ok(())
 }
@@ -718,10 +795,10 @@ async fn thread_start_emits_mcp_server_status_updated_notifications() -> Result<
 }
 
 #[tokio::test]
-async fn thread_start_surfaces_cloud_requirements_load_errors() -> Result<()> {
+async fn thread_start_surfaces_cloud_config_bundle_load_errors() -> Result<()> {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
-        .and(path("/backend-api/wham/config/requirements"))
+        .and(path("/backend-api/wham/config/bundle"))
         .respond_with(
             ResponseTemplate::new(401)
                 .insert_header("content-type", "text/html")
@@ -788,7 +865,7 @@ async fn thread_start_surfaces_cloud_requirements_load_errors() -> Result<()> {
     assert_eq!(
         err.error.data,
         Some(json!({
-            "reason": "cloudRequirements",
+            "reason": "cloudConfigBundle",
             "errorCode": "Auth",
             "action": "relogin",
             "statusCode": 401,

@@ -1,7 +1,9 @@
 use super::*;
 use crate::SkillLoadOutcome;
+use crate::agents_md::LoadedAgentsMd;
 use crate::config::GhostSnapshotConfig;
 use crate::environment_selection::ResolvedTurnEnvironments;
+use codex_core_skills::HostLoadedSkills;
 use codex_model_provider::SharedModelProvider;
 use codex_model_provider::create_model_provider;
 use codex_protocol::SessionId;
@@ -124,12 +126,8 @@ impl TurnContext {
     }
 
     pub(crate) fn sandbox_policy(&self) -> SandboxPolicy {
-        let file_system_sandbox_policy = self.file_system_sandbox_policy();
-        let network_sandbox_policy = self.network_sandbox_policy();
         compatibility_sandbox_policy_for_permission_profile(
             &self.permission_profile,
-            &file_system_sandbox_policy,
-            network_sandbox_policy,
             #[allow(deprecated)]
             &self.cwd,
         )
@@ -138,7 +136,8 @@ impl TurnContext {
     pub(crate) fn effective_reasoning_effort(&self) -> Option<ReasoningEffortConfig> {
         if self.model_info.supports_reasoning_summaries {
             self.reasoning_effort
-                .or(self.model_info.default_reasoning_level)
+                .clone()
+                .or_else(|| self.model_info.default_reasoning_level.clone())
         } else {
             None
         }
@@ -198,28 +197,29 @@ impl TurnContext {
         let supported_reasoning_levels = model_info
             .supported_reasoning_levels
             .iter()
-            .map(|preset| preset.effort)
+            .map(|preset| preset.effort.clone())
             .collect::<Vec<_>>();
-        let reasoning_effort = if let Some(current_reasoning_effort) = self.reasoning_effort {
+        let reasoning_effort = if let Some(current_reasoning_effort) = self.reasoning_effort.clone()
+        {
             if supported_reasoning_levels.contains(&current_reasoning_effort) {
                 Some(current_reasoning_effort)
             } else {
                 supported_reasoning_levels
                     .get(supported_reasoning_levels.len().saturating_sub(1) / 2)
-                    .copied()
-                    .or(model_info.default_reasoning_level)
+                    .cloned()
+                    .or_else(|| model_info.default_reasoning_level.clone())
             }
         } else {
             supported_reasoning_levels
                 .get(supported_reasoning_levels.len().saturating_sub(1) / 2)
-                .copied()
-                .or(model_info.default_reasoning_level)
+                .cloned()
+                .or_else(|| model_info.default_reasoning_level.clone())
         };
-        config.model_reasoning_effort = reasoning_effort;
+        config.model_reasoning_effort = reasoning_effort.clone();
 
         let collaboration_mode = self.collaboration_mode.with_updates(
             Some(model.clone()),
-            Some(reasoning_effort),
+            Some(reasoning_effort.clone()),
             /*developer_instructions*/ None,
         );
         let features = self.features.clone();
@@ -365,7 +365,7 @@ impl TurnContext {
             collaboration_mode: Some(self.collaboration_mode.clone()),
             multi_agent_version: Some(self.multi_agent_version),
             realtime_active: Some(self.realtime_active),
-            effort: self.reasoning_effort,
+            effort: self.reasoning_effort.clone(),
             summary: ReasoningSummaryConfig::Auto,
         }
     }
@@ -530,6 +530,7 @@ impl Session {
         ));
         let (current_date, timezone) = local_time_context();
         let extension_data = Arc::new(codex_extension_api::ExtensionData::new(sub_id.clone()));
+        extension_data.insert(HostLoadedSkills::new(Arc::clone(&skills_outcome)));
         TurnContext {
             sub_id,
             trace_id: current_span_trace_id(),
@@ -553,7 +554,10 @@ impl Session {
             app_server_client_name: session_configuration.app_server_client_name.clone(),
             developer_instructions: session_configuration.developer_instructions.clone(),
             compact_prompt: session_configuration.compact_prompt.clone(),
-            user_instructions: session_configuration.user_instructions.clone(),
+            user_instructions: session_configuration
+                .user_instructions
+                .as_ref()
+                .map(LoadedAgentsMd::text),
             collaboration_mode: session_configuration.collaboration_mode.clone(),
             multi_agent_version,
             personality: session_configuration.personality,
@@ -814,7 +818,13 @@ impl Session {
             turn_context.final_output_json_schema = final_schema;
         }
         let turn_context = Arc::new(turn_context);
-        turn_context.turn_metadata_state.spawn_git_enrichment_task();
+        if turn_context
+            .environments
+            .single_local_environment_cwd()
+            .is_some()
+        {
+            turn_context.turn_metadata_state.spawn_git_enrichment_task();
+        }
         turn_context
     }
 

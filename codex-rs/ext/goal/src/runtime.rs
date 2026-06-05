@@ -307,8 +307,12 @@ impl GoalRuntimeHandle {
             return Ok(());
         };
 
-        if thread.try_start_turn_if_idle(vec![item]).await.is_err() {
-            tracing::debug!("skipping goal continuation because the thread is no longer idle");
+        if let Err(err) = thread.try_start_turn_if_idle(vec![item]).await {
+            let reason = err.reason();
+            tracing::debug!(
+                ?reason,
+                "skipping goal continuation because automatic idle work was rejected"
+            );
         }
 
         let current_turn_is_goal_active = self
@@ -348,6 +352,10 @@ impl GoalRuntimeHandle {
         budget_limited_goal_disposition: BudgetLimitedGoalDisposition,
     ) -> Result<Option<AccountedGoalProgress>, String> {
         let accounting = self.accounting_state();
+        let _accounting_permit = accounting
+            .progress_accounting_permit()
+            .await
+            .map_err(|err| err.to_string())?;
         let Some(snapshot) = accounting.progress_snapshot(turn_id) else {
             return Ok(None);
         };
@@ -398,6 +406,10 @@ impl GoalRuntimeHandle {
         budget_limited_goal_disposition: BudgetLimitedGoalDisposition,
     ) -> Result<Option<AccountedGoalProgress>, String> {
         let accounting = self.accounting_state();
+        let _accounting_permit = accounting
+            .progress_accounting_permit()
+            .await
+            .map_err(|err| err.to_string())?;
         let Some(snapshot) = accounting.idle_progress_snapshot() else {
             return Ok(None);
         };

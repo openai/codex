@@ -118,6 +118,9 @@ pub(super) fn server_notification_thread_target(
         ServerNotification::ModelVerification(notification) => {
             Some(notification.thread_id.as_str())
         }
+        ServerNotification::TurnModerationMetadata(notification) => {
+            Some(notification.thread_id.as_str())
+        }
         ServerNotification::ThreadRealtimeStarted(notification) => {
             Some(notification.thread_id.as_str())
         }

@@ -62,6 +62,7 @@ use crate::facts::SkillInvokedInput;
 use crate::facts::SubAgentThreadStartedInput;
 use crate::facts::ThreadInitializationMode;
 use crate::facts::TrackEventsContext;
+use crate::facts::TurnCodexErrorFact;
 use crate::facts::TurnResolvedConfigFact;
 use crate::facts::TurnStatus;
 use crate::facts::TurnSteerRequestError;
@@ -132,6 +133,7 @@ use codex_plugin::PluginTelemetryMetadata;
 use codex_protocol::approvals::NetworkApprovalProtocol;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::ModeKind;
+use codex_protocol::error::CodexErr;
 use codex_protocol::models::NetworkPermissions as CoreNetworkPermissions;
 use codex_protocol::models::PermissionProfile as CorePermissionProfile;
 use codex_protocol::protocol::AskForApproval;
@@ -389,6 +391,7 @@ fn sample_turn_resolved_config(thread_id: &str, turn_id: &str) -> TurnResolvedCo
         sandbox_network_access: true,
         collaboration_mode: ModeKind::Plan,
         personality: None,
+        workspace_kind: None,
         is_first_turn: true,
     }
 }
@@ -833,6 +836,7 @@ fn sample_permissions_approval_request(request_id: i64) -> ServerRequest {
             thread_id: "thread-1".to_string(),
             turn_id: "turn-1".to_string(),
             item_id: "permissions-1".to_string(),
+            environment_id: None,
             started_at_ms: 1_000,
             cwd: test_path_buf("/tmp").abs(),
             reason: Some("need network".to_string()),
@@ -1343,6 +1347,7 @@ fn thread_initialized_event_serializes_expected_shape() {
             initialization_mode: ThreadInitializationMode::New,
             subagent_source: None,
             parent_thread_id: None,
+            forked_from_thread_id: None,
             created_at: 1,
         },
     });
@@ -1375,6 +1380,7 @@ fn thread_initialized_event_serializes_expected_shape() {
                 "initialization_mode": "new",
                 "subagent_source": null,
                 "parent_thread_id": null,
+                "forked_from_thread_id": null,
                 "created_at": 1
             }
         })
@@ -2425,6 +2431,7 @@ fn subagent_thread_started_review_serializes_expected_shape() {
             session_id: "session-root".to_string(),
             thread_id: "thread-review".to_string(),
             parent_thread_id: None,
+            forked_from_thread_id: None,
             product_client_id: "codex-tui".to_string(),
             client_name: "codex-tui".to_string(),
             client_version: "1.0.0".to_string(),
@@ -2457,18 +2464,26 @@ fn subagent_thread_started_review_serializes_expected_shape() {
     assert_eq!(payload["event_params"]["initialization_mode"], "new");
     assert_eq!(payload["event_params"]["subagent_source"], "review");
     assert_eq!(payload["event_params"]["parent_thread_id"], json!(null));
+    assert_eq!(
+        payload["event_params"]["forked_from_thread_id"],
+        json!(null)
+    );
 }
 
 #[test]
-fn subagent_thread_started_thread_spawn_serializes_parent_thread_id() {
+fn subagent_thread_started_thread_spawn_serializes_thread_lineage() {
     let parent_thread_id =
         codex_protocol::ThreadId::from_string("11111111-1111-1111-1111-111111111111")
+            .expect("valid thread id");
+    let forked_from_thread_id =
+        codex_protocol::ThreadId::from_string("22222222-2222-4222-8222-222222222222")
             .expect("valid thread id");
     let event = TrackEventRequest::ThreadInitialized(subagent_thread_started_event_request(
         SubAgentThreadStartedInput {
             session_id: "session-root".to_string(),
             thread_id: "thread-spawn".to_string(),
             parent_thread_id: Some(parent_thread_id.to_string()),
+            forked_from_thread_id: Some(forked_from_thread_id.to_string()),
             product_client_id: "codex-tui".to_string(),
             client_name: "codex-tui".to_string(),
             client_version: "1.0.0".to_string(),
@@ -2493,6 +2508,10 @@ fn subagent_thread_started_thread_spawn_serializes_parent_thread_id() {
         payload["event_params"]["parent_thread_id"],
         "11111111-1111-1111-1111-111111111111"
     );
+    assert_eq!(
+        payload["event_params"]["forked_from_thread_id"],
+        "22222222-2222-4222-8222-222222222222"
+    );
     assert_eq!(payload["event_params"]["session_id"], "session-root");
 }
 
@@ -2503,6 +2522,7 @@ fn subagent_thread_started_memory_consolidation_serializes_expected_shape() {
             session_id: "session-root".to_string(),
             thread_id: "thread-memory".to_string(),
             parent_thread_id: None,
+            forked_from_thread_id: None,
             product_client_id: "codex-tui".to_string(),
             client_name: "codex-tui".to_string(),
             client_version: "1.0.0".to_string(),
@@ -2529,6 +2549,7 @@ fn subagent_thread_started_other_serializes_expected_shape() {
             session_id: "session-root".to_string(),
             thread_id: "thread-guardian".to_string(),
             parent_thread_id: None,
+            forked_from_thread_id: None,
             product_client_id: "codex-tui".to_string(),
             client_name: "codex-tui".to_string(),
             client_version: "1.0.0".to_string(),
@@ -2554,6 +2575,7 @@ fn subagent_thread_started_other_serializes_explicit_parent_thread_id() {
             session_id: "session-root".to_string(),
             thread_id: "thread-guardian".to_string(),
             parent_thread_id: Some(parent_thread_id.to_string()),
+            forked_from_thread_id: None,
             product_client_id: "codex-tui".to_string(),
             client_name: "codex-tui".to_string(),
             client_version: "1.0.0".to_string(),
@@ -2584,6 +2606,7 @@ async fn subagent_thread_started_publishes_without_initialize() {
                     session_id: "session-root".to_string(),
                     thread_id: "thread-review".to_string(),
                     parent_thread_id: None,
+                    forked_from_thread_id: None,
                     product_client_id: "codex-tui".to_string(),
                     client_name: "codex-tui".to_string(),
                     client_version: "1.0.0".to_string(),
@@ -2658,6 +2681,7 @@ async fn subagent_thread_started_inherits_parent_connection_for_new_thread() {
                     session_id: "session-root".to_string(),
                     thread_id: "thread-review".to_string(),
                     parent_thread_id: Some(parent_thread_id.to_string()),
+                    forked_from_thread_id: None,
                     product_client_id: "parent-client".to_string(),
                     client_name: "parent-client".to_string(),
                     client_version: "1.0.0".to_string(),
@@ -2728,6 +2752,7 @@ async fn subagent_tool_items_inherit_parent_connection_metadata() {
                     session_id: "session-root".to_string(),
                     thread_id: "thread-subagent".to_string(),
                     parent_thread_id: Some("thread-1".to_string()),
+                    forked_from_thread_id: None,
                     product_client_id: "codex-tui".to_string(),
                     client_name: "codex-tui".to_string(),
                     client_version: "1.0.0".to_string(),
@@ -2824,6 +2849,7 @@ fn plugin_used_event_serializes_expected_shape() {
                 "mcp_server_count": 2,
                 "connector_ids": ["calendar", "drive"],
                 "product_client_id": originator().value,
+                "mcp_server_names": ["mcp-1", "mcp-2"],
                 "thread_id": "thread-3",
                 "turn_id": "turn-3",
                 "model_slug": "gpt-5"
@@ -3252,10 +3278,14 @@ fn turn_event_serializes_expected_shape() {
             sandbox_network_access: true,
             collaboration_mode: Some("plan"),
             personality: Some("pragmatic".to_string()),
+            workspace_kind: Some("projectless".to_string()),
             num_input_images: 2,
             is_first_turn: true,
             status: Some(TurnStatus::Completed),
             turn_error: None,
+            codex_error_kind: None,
+            codex_error_subreason: None,
+            codex_error_http_status_code: None,
             steer_count: Some(0),
             total_tool_call_count: None,
             shell_command_count: None,
@@ -3314,10 +3344,14 @@ fn turn_event_serializes_expected_shape() {
                 "sandbox_network_access": true,
                 "collaboration_mode": "plan",
                 "personality": "pragmatic",
+                "workspace_kind": "projectless",
                 "num_input_images": 2,
                 "is_first_turn": true,
                 "status": "completed",
                 "turn_error": null,
+                "codex_error_kind": null,
+                "codex_error_subreason": null,
+                "codex_error_http_status_code": null,
                 "steer_count": 0,
                 "total_tool_call_count": null,
                 "shell_command_count": null,
@@ -3631,6 +3665,7 @@ async fn turn_lifecycle_emits_turn_event() {
     );
     assert!(payload["event_params"].get("product_client_id").is_none());
     assert_eq!(payload["event_params"]["ephemeral"], json!(false));
+    assert_eq!(payload["event_params"]["workspace_kind"], json!(null));
     assert_eq!(payload["event_params"]["num_input_images"], json!(1));
     assert_eq!(payload["event_params"]["status"], json!("completed"));
     assert_eq!(payload["event_params"]["steer_count"], json!(0));
@@ -3985,6 +4020,18 @@ async fn turn_lifecycle_emits_failed_turn_event() {
     .await;
     reducer
         .ingest(
+            AnalyticsFact::Custom(CustomAnalyticsFact::TurnCodexError(Box::new(
+                TurnCodexErrorFact::from_codex_err(
+                    "thread-2".to_string(),
+                    "turn-2".to_string(),
+                    &CodexErr::InvalidRequest("unknown turn environment id `env-2`".to_string()),
+                ),
+            ))),
+            &mut out,
+        )
+        .await;
+    reducer
+        .ingest(
             AnalyticsFact::Notification(Box::new(sample_turn_completed_notification(
                 "thread-2",
                 "turn-2",
@@ -3999,6 +4046,18 @@ async fn turn_lifecycle_emits_failed_turn_event() {
     let payload = serde_json::to_value(&out[0]).expect("serialize turn event");
     assert_eq!(payload["event_params"]["status"], json!("failed"));
     assert_eq!(payload["event_params"]["turn_error"], json!("badRequest"));
+    assert_eq!(
+        payload["event_params"]["codex_error_kind"],
+        json!("invalid_request")
+    );
+    assert_eq!(
+        payload["event_params"]["codex_error_subreason"],
+        json!("unknown turn environment id `env-2`")
+    );
+    assert_eq!(
+        payload["event_params"]["codex_error_http_status_code"],
+        json!(null)
+    );
 }
 
 #[tokio::test]
@@ -4031,6 +4090,7 @@ async fn turn_lifecycle_emits_interrupted_turn_event_without_error() {
     let payload = serde_json::to_value(&out[0]).expect("serialize turn event");
     assert_eq!(payload["event_params"]["status"], json!("interrupted"));
     assert_eq!(payload["event_params"]["turn_error"], json!(null));
+    assert_eq!(payload["event_params"]["codex_error_kind"], json!(null));
 }
 
 #[tokio::test]

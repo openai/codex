@@ -1,21 +1,23 @@
 use super::CurrentRemoteControlEnrollment;
-use super::clear_current_enrollment;
+use super::RemoteControlPairingPersistenceKey;
 use super::protocol::ClientEnvelope;
 use super::protocol::ClientEvent;
 use super::protocol::ClientId;
 use super::protocol::RemoteControlTarget;
 use super::protocol::ServerEnvelope;
 use super::protocol::StreamId;
-use super::publish_current_enrollment;
 use super::remote_control_status_with_connection_status;
+use super::same_remote_control_enrollment;
 use super::segment::ClientSegmentObservation;
 use super::segment::ClientSegmentReassembler;
 use super::segment::REMOTE_CONTROL_SEGMENT_MAX_BYTES;
 use super::segment::split_server_envelope_for_transport;
 use crate::transport::TransportEvent;
+use crate::transport::remote_control::auth::RemoteControlConnectionAuth;
+use crate::transport::remote_control::auth::load_remote_control_auth;
+use crate::transport::remote_control::auth::recover_remote_control_auth;
 use crate::transport::remote_control::client_tracker::ClientTracker;
 use crate::transport::remote_control::client_tracker::REMOTE_CONTROL_IDLE_SWEEP_INTERVAL;
-use crate::transport::remote_control::enroll::RemoteControlConnectionAuth;
 use crate::transport::remote_control::enroll::RemoteControlEnrollment;
 use crate::transport::remote_control::enroll::enroll_remote_control_server;
 use crate::transport::remote_control::enroll::format_headers;
@@ -53,6 +55,9 @@ use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_util::sync::CancellationToken;
+
+#[cfg(test)]
+use super::RemoteControlEnrollmentState;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -250,10 +255,10 @@ pub(crate) struct RemoteControlWebsocket {
     status_publisher: RemoteControlStatusPublisher,
     shutdown_token: CancellationToken,
     reconnect_attempt: u64,
-    enrollment: Option<RemoteControlEnrollment>,
     auth_recovery: UnauthorizedRecovery,
     auth_change_rx: watch::Receiver<u64>,
     current_enrollment: CurrentRemoteControlEnrollment,
+    pairing_persistence_key: RemoteControlPairingPersistenceKey,
     client_tracker: Arc<Mutex<ClientTracker>>,
     state: Arc<Mutex<WebsocketState>>,
     server_event_rx: Arc<Mutex<mpsc::Receiver<super::QueuedServerEnvelope>>>,
@@ -292,6 +297,7 @@ pub(super) struct RemoteControlChannels {
     pub(super) transport_event_tx: mpsc::Sender<TransportEvent>,
     pub(super) status_publisher: RemoteControlStatusPublisher,
     pub(super) current_enrollment: CurrentRemoteControlEnrollment,
+    pub(super) pairing_persistence_key: RemoteControlPairingPersistenceKey,
 }
 
 #[derive(Clone)]
@@ -405,10 +411,10 @@ impl RemoteControlWebsocket {
             status_publisher: channels.status_publisher,
             shutdown_token,
             reconnect_attempt: 0,
-            enrollment: None,
             auth_recovery,
             auth_change_rx,
             current_enrollment: channels.current_enrollment,
+            pairing_persistence_key: channels.pairing_persistence_key,
             client_tracker: Arc::new(Mutex::new(client_tracker)),
             state: Arc::new(Mutex::new(WebsocketState {
                 outbound_buffer,
@@ -455,6 +461,8 @@ impl RemoteControlWebsocket {
                 return;
             }
         };
+        self.pairing_persistence_key
+            .send_replace(app_server_client_name.clone());
 
         loop {
             if !self.wait_until_enabled().await {
@@ -577,15 +585,15 @@ impl RemoteControlWebsocket {
 
         loop {
             let subscribe_cursor = self.state.lock().await.subscribe_cursor.clone();
-            let enrollment = self.enrollment.as_ref();
+            let enrollment = self.current_enrollment.snapshot();
             info!(
                 websocket_url = %remote_control_target.websocket_url,
                 installation_id = %self.installation_id,
                 server_name = %self.server_name,
                 reconnect_attempt = self.reconnect_attempt.saturating_add(1),
                 has_enrollment = enrollment.is_some(),
-                server_id = ?enrollment.map(|enrollment| enrollment.server_id.as_str()),
-                environment_id = ?enrollment.map(|enrollment| enrollment.environment_id.as_str()),
+                server_id = ?enrollment.as_ref().map(|enrollment| enrollment.server_id.as_str()),
+                environment_id = ?enrollment.as_ref().map(|enrollment| enrollment.environment_id.as_str()),
                 subscribe_cursor_present = subscribe_cursor.is_some(),
                 app_server_client_name = ?app_server_client_name,
                 "connecting to app-server remote control websocket"
@@ -609,15 +617,17 @@ impl RemoteControlWebsocket {
                     }
                     return ConnectOutcome::Disabled;
                 }
-                connect_result = connect_remote_control_websocket(
-                    &remote_control_target,
-                    self.state_db.as_deref(),
-                    auth_context,
-                    &mut self.enrollment,
-                    connect_options,
-                    &self.status_publisher,
-                    &self.current_enrollment,
-                ) => connect_result,
+                connect_result = async {
+                    connect_remote_control_websocket(
+                        &remote_control_target,
+                        self.state_db.as_deref(),
+                        auth_context,
+                        &self.current_enrollment,
+                        connect_options,
+                        &self.status_publisher,
+                    )
+                    .await
+                } => connect_result,
             };
 
             match connect_result {
@@ -629,13 +639,13 @@ impl RemoteControlWebsocket {
                     self.auth_recovery = self.auth_manager.unauthorized_recovery();
                     self.status_publisher
                         .publish_status(RemoteControlConnectionStatus::Connected);
-                    let enrollment = self.enrollment.as_ref();
+                    let enrollment = self.current_enrollment.snapshot();
                     info!(
                         websocket_url = %remote_control_target.websocket_url,
                         installation_id = %self.installation_id,
                         server_name = %self.server_name,
-                        server_id = ?enrollment.map(|enrollment| enrollment.server_id.as_str()),
-                        environment_id = ?enrollment.map(|enrollment| enrollment.environment_id.as_str()),
+                        server_id = ?enrollment.as_ref().map(|enrollment| enrollment.server_id.as_str()),
+                        environment_id = ?enrollment.as_ref().map(|enrollment| enrollment.environment_id.as_str()),
                         subscribe_cursor_present = subscribe_cursor.is_some(),
                         response_headers = %format_headers(response.headers()),
                         "connected to app-server remote control websocket"
@@ -654,7 +664,7 @@ impl RemoteControlWebsocket {
                         let reconnect_attempt = self.reconnect_attempt.saturating_add(1);
                         let (reconnect_delay, reconnect_backoff_reset) =
                             next_reconnect_delay(&mut self.reconnect_attempt);
-                        let enrollment = self.enrollment.as_ref();
+                        let enrollment = self.current_enrollment.snapshot();
                         warn!(
                             websocket_url = %remote_control_target.websocket_url,
                             installation_id = %self.installation_id,
@@ -665,8 +675,8 @@ impl RemoteControlWebsocket {
                             reconnect_delay = ?reconnect_delay,
                             reconnect_backoff_reset,
                             has_enrollment = enrollment.is_some(),
-                            server_id = ?enrollment.map(|enrollment| enrollment.server_id.as_str()),
-                            environment_id = ?enrollment.map(|enrollment| enrollment.environment_id.as_str()),
+                            server_id = ?enrollment.as_ref().map(|enrollment| enrollment.server_id.as_str()),
+                            environment_id = ?enrollment.as_ref().map(|enrollment| enrollment.environment_id.as_str()),
                             subscribe_cursor_present = subscribe_cursor.is_some(),
                             "failed to connect to app-server remote control websocket"
                         );
@@ -1172,51 +1182,6 @@ fn build_remote_control_websocket_request(
     Ok(request)
 }
 
-pub(crate) async fn load_remote_control_auth(
-    auth_manager: &Arc<AuthManager>,
-) -> io::Result<RemoteControlConnectionAuth> {
-    let mut reloaded = false;
-    let auth = loop {
-        let Some(auth) = auth_manager.auth().await else {
-            if reloaded {
-                return Err(io::Error::new(
-                    ErrorKind::PermissionDenied,
-                    "remote control requires ChatGPT authentication",
-                ));
-            }
-            auth_manager.reload().await;
-            reloaded = true;
-            continue;
-        };
-        if !auth.uses_codex_backend() {
-            break auth;
-        }
-        if auth.get_account_id().is_none() && !reloaded {
-            auth_manager.reload().await;
-            reloaded = true;
-            continue;
-        }
-        break auth;
-    };
-
-    if !auth.uses_codex_backend() {
-        return Err(io::Error::new(
-            ErrorKind::PermissionDenied,
-            "remote control requires ChatGPT authentication; API key auth is not supported",
-        ));
-    }
-
-    Ok(RemoteControlConnectionAuth {
-        auth_provider: codex_model_provider::auth_provider_from_auth(&auth),
-        account_id: auth.get_account_id().ok_or_else(|| {
-            io::Error::new(
-                ErrorKind::WouldBlock,
-                "remote control enrollment is waiting for a ChatGPT account id",
-            )
-        })?,
-    })
-}
-
 fn next_reconnect_delay(reconnect_attempt: &mut u64) -> (std::time::Duration, bool) {
     let reconnect_delay = backoff(*reconnect_attempt).min(REMOTE_CONTROL_RECONNECT_BACKOFF_CAP);
     let reconnect_backoff_reset = reconnect_delay == REMOTE_CONTROL_RECONNECT_BACKOFF_CAP;
@@ -1232,19 +1197,108 @@ pub(super) async fn connect_remote_control_websocket(
     remote_control_target: &RemoteControlTarget,
     state_db: Option<&StateRuntime>,
     mut auth_context: RemoteControlAuthContext<'_>,
-    enrollment: &mut Option<RemoteControlEnrollment>,
+    current_enrollment: &CurrentRemoteControlEnrollment,
     connect_options: RemoteControlConnectOptions<'_>,
     status_publisher: &RemoteControlStatusPublisher,
-    current_enrollment: &CurrentRemoteControlEnrollment,
 ) -> io::Result<(
     WebSocketStream<MaybeTlsStream<TcpStream>>,
     tungstenite::http::Response<()>,
 )> {
     ensure_rustls_crypto_provider();
 
+    let (auth, enrollment) = {
+        let mut current_enrollment = current_enrollment.lock().await;
+        let auth = prepare_remote_control_enrollment(
+            remote_control_target,
+            state_db,
+            &mut auth_context,
+            &mut current_enrollment,
+            connect_options,
+            status_publisher,
+        )
+        .await?;
+        let enrollment = current_enrollment.as_ref().cloned().ok_or_else(|| {
+            io::Error::other("missing remote control enrollment after enrollment step")
+        })?;
+        (auth, enrollment)
+    };
+    let request = build_remote_control_websocket_request(
+        &remote_control_target.websocket_url,
+        &enrollment,
+        connect_options.installation_id,
+        connect_options.subscribe_cursor,
+    )?;
+
+    let websocket_connect_result = tokio::time::timeout(
+        REMOTE_CONTROL_WEBSOCKET_CONNECT_TIMEOUT,
+        connect_async(request),
+    )
+    .await
+    .map_err(|_| {
+        io::Error::new(
+            ErrorKind::TimedOut,
+            format!(
+                "timed out connecting to remote control websocket at `{}` after {:?}",
+                remote_control_target.websocket_url, REMOTE_CONTROL_WEBSOCKET_CONNECT_TIMEOUT
+            ),
+        )
+    })?;
+
+    match websocket_connect_result {
+        Ok((websocket_stream, response)) => Ok((websocket_stream, response.map(|_| ()))),
+        Err(err) => {
+            match &err {
+                tungstenite::Error::Http(response) if response.status().as_u16() == 404 => {
+                    info!(
+                        "remote control websocket returned HTTP 404; clearing stale enrollment before re-enrolling: websocket_url={}, account_id={}, server_id={}, environment_id={}",
+                        remote_control_target.websocket_url,
+                        auth.account_id,
+                        enrollment.server_id,
+                        enrollment.environment_id
+                    );
+                    clear_remote_control_enrollment_if_matches(
+                        state_db,
+                        remote_control_target,
+                        &auth.account_id,
+                        connect_options.app_server_client_name,
+                        current_enrollment,
+                        &enrollment,
+                        status_publisher,
+                    )
+                    .await;
+                }
+                tungstenite::Error::Http(response)
+                    if matches!(response.status().as_u16(), 401 | 403) =>
+                {
+                    clear_remote_control_server_token_if_matches(current_enrollment, &enrollment)
+                        .await?;
+                    return Err(io::Error::other(format!(
+                        "remote control websocket auth failed with HTTP {}; refreshing server token before reconnect",
+                        response.status()
+                    )));
+                }
+                _ => {}
+            }
+            Err(io::Error::other(
+                format_remote_control_websocket_connect_error(
+                    &remote_control_target.websocket_url,
+                    &err,
+                ),
+            ))
+        }
+    }
+}
+
+async fn prepare_remote_control_enrollment(
+    remote_control_target: &RemoteControlTarget,
+    state_db: Option<&StateRuntime>,
+    auth_context: &mut RemoteControlAuthContext<'_>,
+    enrollment: &mut Option<RemoteControlEnrollment>,
+    connect_options: RemoteControlConnectOptions<'_>,
+    status_publisher: &RemoteControlStatusPublisher,
+) -> io::Result<RemoteControlConnectionAuth> {
     let Some(state_db) = state_db else {
         *enrollment = None;
-        clear_current_enrollment(current_enrollment);
         return Err(io::Error::new(
             ErrorKind::NotFound,
             "remote control requires sqlite state db",
@@ -1257,7 +1311,6 @@ pub(super) async fn connect_remote_control_websocket(
             if err.kind() == ErrorKind::PermissionDenied {
                 *enrollment = None;
                 status_publisher.publish_environment_id(/*environment_id*/ None);
-                clear_current_enrollment(current_enrollment);
             }
             return Err(err);
         }
@@ -1274,7 +1327,6 @@ pub(super) async fn connect_remote_control_websocket(
         );
         *enrollment = None;
         status_publisher.publish_environment_id(/*environment_id*/ None);
-        clear_current_enrollment(current_enrollment);
     }
     if let Some(enrollment) = enrollment.as_mut() {
         enrollment.remote_control_target = remote_control_target.clone();
@@ -1305,7 +1357,7 @@ pub(super) async fn connect_remote_control_websocket(
         remote_control_target,
         state_db,
         &auth,
-        &mut auth_context,
+        auth_context,
         enrollment,
         connect_options,
         status_publisher,
@@ -1350,14 +1402,13 @@ pub(super) async fn connect_remote_control_websocket(
                     connect_options.app_server_client_name,
                     enrollment,
                     status_publisher,
-                    current_enrollment,
                 )
                 .await;
                 enroll_remote_control_server_if_missing(
                     remote_control_target,
                     state_db,
                     &auth,
-                    &mut auth_context,
+                    auth_context,
                     enrollment,
                     connect_options,
                     status_publisher,
@@ -1380,82 +1431,7 @@ pub(super) async fn connect_remote_control_websocket(
         }
     }
 
-    let enrollment_ref = enrollment.as_ref().ok_or_else(|| {
-        io::Error::other("missing remote control enrollment after enrollment step")
-    })?;
-    publish_current_enrollment(current_enrollment, enrollment_ref);
-    let request = build_remote_control_websocket_request(
-        &remote_control_target.websocket_url,
-        enrollment_ref,
-        connect_options.installation_id,
-        connect_options.subscribe_cursor,
-    )?;
-
-    let websocket_connect_result = tokio::time::timeout(
-        REMOTE_CONTROL_WEBSOCKET_CONNECT_TIMEOUT,
-        connect_async(request),
-    )
-    .await
-    .map_err(|_| {
-        io::Error::new(
-            ErrorKind::TimedOut,
-            format!(
-                "timed out connecting to remote control websocket at `{}` after {:?}",
-                remote_control_target.websocket_url, REMOTE_CONTROL_WEBSOCKET_CONNECT_TIMEOUT
-            ),
-        )
-    })?;
-
-    match websocket_connect_result {
-        Ok((websocket_stream, response)) => Ok((websocket_stream, response.map(|_| ()))),
-        Err(err) => {
-            match &err {
-                tungstenite::Error::Http(response) if response.status().as_u16() == 404 => {
-                    info!(
-                        "remote control websocket returned HTTP 404; clearing stale enrollment before re-enrolling: websocket_url={}, account_id={}, server_id={}, environment_id={}",
-                        remote_control_target.websocket_url,
-                        auth.account_id,
-                        enrollment_ref.server_id,
-                        enrollment_ref.environment_id
-                    );
-                    clear_remote_control_enrollment(
-                        state_db,
-                        remote_control_target,
-                        &auth.account_id,
-                        connect_options.app_server_client_name,
-                        enrollment,
-                        status_publisher,
-                        current_enrollment,
-                    )
-                    .await;
-                }
-                tungstenite::Error::Http(response)
-                    if matches!(response.status().as_u16(), 401 | 403) =>
-                {
-                    enrollment
-                        .as_mut()
-                        .ok_or_else(|| {
-                            io::Error::other(
-                                "missing remote control enrollment after websocket auth failure",
-                            )
-                        })?
-                        .clear_server_token();
-                    clear_current_enrollment(current_enrollment);
-                    return Err(io::Error::other(format!(
-                        "remote control websocket auth failed with HTTP {}; refreshing server token before reconnect",
-                        response.status()
-                    )));
-                }
-                _ => {}
-            }
-            Err(io::Error::other(
-                format_remote_control_websocket_connect_error(
-                    &remote_control_target.websocket_url,
-                    &err,
-                ),
-            ))
-        }
-    }
+    Ok(auth)
 }
 
 async fn clear_remote_control_enrollment(
@@ -1465,7 +1441,6 @@ async fn clear_remote_control_enrollment(
     app_server_client_name: Option<&str>,
     enrollment: &mut Option<RemoteControlEnrollment>,
     status_publisher: &RemoteControlStatusPublisher,
-    current_enrollment: &CurrentRemoteControlEnrollment,
 ) {
     if let Err(clear_err) = update_persisted_remote_control_enrollment(
         Some(state_db),
@@ -1480,7 +1455,51 @@ async fn clear_remote_control_enrollment(
     }
     *enrollment = None;
     status_publisher.publish_environment_id(/*environment_id*/ None);
-    clear_current_enrollment(current_enrollment);
+}
+
+async fn clear_remote_control_enrollment_if_matches(
+    state_db: Option<&StateRuntime>,
+    remote_control_target: &RemoteControlTarget,
+    account_id: &str,
+    app_server_client_name: Option<&str>,
+    current_enrollment: &CurrentRemoteControlEnrollment,
+    enrollment: &RemoteControlEnrollment,
+    status_publisher: &RemoteControlStatusPublisher,
+) {
+    let Some(state_db) = state_db else {
+        return;
+    };
+    let mut current_enrollment = current_enrollment.lock().await;
+    if !current_enrollment
+        .as_ref()
+        .is_some_and(|current| same_remote_control_enrollment(current, enrollment))
+    {
+        return;
+    }
+    clear_remote_control_enrollment(
+        state_db,
+        remote_control_target,
+        account_id,
+        app_server_client_name,
+        &mut current_enrollment,
+        status_publisher,
+    )
+    .await;
+}
+
+async fn clear_remote_control_server_token_if_matches(
+    current_enrollment: &CurrentRemoteControlEnrollment,
+    enrollment: &RemoteControlEnrollment,
+) -> io::Result<()> {
+    let mut current_enrollment = current_enrollment.lock().await;
+    current_enrollment
+        .as_mut()
+        .filter(|current| same_remote_control_enrollment(current, enrollment))
+        .ok_or_else(|| {
+            io::Error::other("missing remote control enrollment after websocket auth failure")
+        })?
+        .clear_server_token();
+    Ok(())
 }
 
 async fn enroll_remote_control_server_if_missing(
@@ -1548,52 +1567,6 @@ async fn enroll_remote_control_server_if_missing(
     Ok(())
 }
 
-pub(super) async fn recover_remote_control_auth(
-    auth_recovery: &mut UnauthorizedRecovery,
-    auth_change_rx: &mut watch::Receiver<u64>,
-) -> bool {
-    if !auth_recovery.has_next() {
-        return false;
-    }
-
-    let mode = auth_recovery.mode_name();
-    let step = auth_recovery.step_name();
-    let auth_change_revision_before_recovery = *auth_change_rx.borrow();
-    match auth_recovery.next().await {
-        Ok(step_result) => {
-            if step_result.auth_state_changed() == Some(true) {
-                mark_recovery_auth_change_seen(
-                    auth_change_rx,
-                    auth_change_revision_before_recovery,
-                );
-            }
-            info!(
-                "remote control websocket auth recovery succeeded: mode={mode}, step={step}, auth_state_changed={:?}",
-                step_result.auth_state_changed()
-            );
-            true
-        }
-        Err(err) => {
-            warn!("remote control websocket auth recovery failed: mode={mode}, step={step}: {err}");
-            false
-        }
-    }
-}
-
-fn mark_recovery_auth_change_seen(
-    auth_change_rx: &mut watch::Receiver<u64>,
-    auth_change_revision_before_recovery: u64,
-) {
-    let auth_change_revision_after_recovery = *auth_change_rx.borrow();
-    if auth_change_revision_after_recovery == auth_change_revision_before_recovery.wrapping_add(1) {
-        // Recovery updated the same watch that wakes the outer reconnect
-        // loop. Mark only that single revision seen; if more revisions
-        // arrived while recovery was in flight, leave them pending so the
-        // reconnect loop still reacts to the later external auth change.
-        auth_change_rx.borrow_and_update();
-    }
-}
-
 fn format_remote_control_websocket_connect_error(
     websocket_url: &str,
     err: &tungstenite::Error,
@@ -1620,6 +1593,7 @@ mod tests {
     use super::*;
     use crate::outgoing_message::OutgoingMessage;
     use crate::transport::remote_control::ServerEvent;
+    use crate::transport::remote_control::auth::mark_recovery_auth_change_seen;
     use crate::transport::remote_control::protocol::StreamId;
     use crate::transport::remote_control::protocol::normalize_remote_control_url;
     use chrono::Utc;
@@ -1673,8 +1647,10 @@ mod tests {
         }
     }
 
-    fn test_current_enrollment() -> CurrentRemoteControlEnrollment {
-        Arc::new(std::sync::Mutex::new(None))
+    fn test_current_enrollment(
+        enrollment: Option<RemoteControlEnrollment>,
+    ) -> CurrentRemoteControlEnrollment {
+        Arc::new(RemoteControlEnrollmentState::new(enrollment))
     }
 
     #[test]
@@ -1827,10 +1803,9 @@ mod tests {
         let auth_manager = remote_control_auth_manager();
         let mut auth_recovery = auth_manager.unauthorized_recovery();
         let mut auth_change_rx = auth_manager.auth_change_receiver();
-        let mut enrollment = Some(remote_control_enrollment(Some(
+        let current_enrollment = test_current_enrollment(Some(remote_control_enrollment(Some(
             TEST_REMOTE_CONTROL_SERVER_TOKEN,
-        )));
-        let current_enrollment = test_current_enrollment();
+        ))));
         let (status_publisher, status_rx) = remote_control_status_channel();
 
         let err = match connect_remote_control_websocket(
@@ -1841,7 +1816,7 @@ mod tests {
                 auth_recovery: &mut auth_recovery,
                 auth_change_rx: &mut auth_change_rx,
             },
-            &mut enrollment,
+            &current_enrollment,
             RemoteControlConnectOptions {
                 installation_id: TEST_INSTALLATION_ID,
                 server_name: "test-server",
@@ -1849,7 +1824,6 @@ mod tests {
                 app_server_client_name: None,
             },
             &status_publisher,
-            &current_enrollment,
         )
         .await
         {
@@ -1859,12 +1833,7 @@ mod tests {
 
         server_task.await.expect("server task should succeed");
         assert_eq!(err.to_string(), expected_error);
-        assert!(
-            current_enrollment
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .is_some()
-        );
+        assert!(current_enrollment.lock().await.is_some());
         assert_eq!(
             status_rx.borrow().clone(),
             RemoteControlStatusChangedNotification {
@@ -1889,10 +1858,9 @@ mod tests {
         let auth_manager = remote_control_auth_manager();
         let mut auth_recovery = auth_manager.unauthorized_recovery();
         let mut auth_change_rx = auth_manager.auth_change_receiver();
-        let mut enrollment = Some(remote_control_enrollment(Some(
+        let current_enrollment = test_current_enrollment(Some(remote_control_enrollment(Some(
             TEST_REMOTE_CONTROL_SERVER_TOKEN,
-        )));
-        let current_enrollment = test_current_enrollment();
+        ))));
         let (status_publisher, status_rx) = remote_control_status_channel();
 
         let server_task = tokio::spawn(async move {
@@ -1912,7 +1880,7 @@ mod tests {
                 auth_recovery: &mut auth_recovery,
                 auth_change_rx: &mut auth_change_rx,
             },
-            &mut enrollment,
+            &current_enrollment,
             RemoteControlConnectOptions {
                 installation_id: TEST_INSTALLATION_ID,
                 server_name: "test-server",
@@ -1920,7 +1888,6 @@ mod tests {
                 app_server_client_name: None,
             },
             &status_publisher,
-            &current_enrollment,
         )
         .await
         .expect_err("unauthorized response should fail the websocket connect");
@@ -1941,13 +1908,7 @@ mod tests {
         );
         let mut expected_enrollment = remote_control_enrollment(/*remote_control_token*/ None);
         expected_enrollment.remote_control_target = remote_control_target;
-        assert_eq!(enrollment, Some(expected_enrollment));
-        assert!(
-            current_enrollment
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .is_none()
-        );
+        assert_eq!(*current_enrollment.lock().await, Some(expected_enrollment));
     }
 
     #[tokio::test]
@@ -1984,7 +1945,7 @@ mod tests {
         .await;
         let mut auth_recovery = auth_manager.unauthorized_recovery();
         let mut auth_change_rx = auth_manager.auth_change_receiver();
-        let mut enrollment = None;
+        let current_enrollment = test_current_enrollment(/*enrollment*/ None);
         let (status_publisher, status_rx) = remote_control_status_channel();
         save_auth(
             codex_home.path(),
@@ -2001,7 +1962,7 @@ mod tests {
                 auth_recovery: &mut auth_recovery,
                 auth_change_rx: &mut auth_change_rx,
             },
-            &mut enrollment,
+            &current_enrollment,
             RemoteControlConnectOptions {
                 installation_id: TEST_INSTALLATION_ID,
                 server_name: "test-server",
@@ -2009,7 +1970,6 @@ mod tests {
                 app_server_client_name: None,
             },
             &status_publisher,
-            &test_current_enrollment(),
         )
         .await
         .expect_err("unauthorized enrollment should fail the websocket connect");
@@ -2077,9 +2037,9 @@ mod tests {
         .await;
         let mut auth_recovery = auth_manager.unauthorized_recovery();
         let mut auth_change_rx = auth_manager.auth_change_receiver();
-        let mut enrollment = Some(remote_control_enrollment(
+        let current_enrollment = test_current_enrollment(Some(remote_control_enrollment(
             /*remote_control_token*/ None,
-        ));
+        )));
         let (status_publisher, status_rx) = remote_control_status_channel();
         save_auth(
             codex_home.path(),
@@ -2096,7 +2056,7 @@ mod tests {
                 auth_recovery: &mut auth_recovery,
                 auth_change_rx: &mut auth_change_rx,
             },
-            &mut enrollment,
+            &current_enrollment,
             RemoteControlConnectOptions {
                 installation_id: TEST_INSTALLATION_ID,
                 server_name: "test-server",
@@ -2104,7 +2064,6 @@ mod tests {
                 app_server_client_name: None,
             },
             &status_publisher,
-            &test_current_enrollment(),
         )
         .await
         .expect_err("unauthorized refresh should fail the websocket connect");
@@ -2149,9 +2108,9 @@ mod tests {
         let auth_manager = remote_control_auth_manager();
         let mut auth_recovery = auth_manager.unauthorized_recovery();
         let mut auth_change_rx = auth_manager.auth_change_receiver();
-        let mut enrollment = Some(remote_control_enrollment(Some(
+        let current_enrollment = test_current_enrollment(Some(remote_control_enrollment(Some(
             TEST_REMOTE_CONTROL_SERVER_TOKEN,
-        )));
+        ))));
         let (status_publisher, _status_rx) = remote_control_status_channel();
 
         let err = connect_remote_control_websocket(
@@ -2162,7 +2121,7 @@ mod tests {
                 auth_recovery: &mut auth_recovery,
                 auth_change_rx: &mut auth_change_rx,
             },
-            &mut enrollment,
+            &current_enrollment,
             RemoteControlConnectOptions {
                 installation_id: TEST_INSTALLATION_ID,
                 server_name: "test-server",
@@ -2170,14 +2129,13 @@ mod tests {
                 app_server_client_name: None,
             },
             &status_publisher,
-            &test_current_enrollment(),
         )
         .await
         .expect_err("missing sqlite state db should fail remote control");
 
         assert_eq!(err.kind(), ErrorKind::NotFound);
         assert_eq!(err.to_string(), "remote control requires sqlite state db");
-        assert_eq!(enrollment, None);
+        assert_eq!(*current_enrollment.lock().await, None);
     }
 
     #[tokio::test]
@@ -2195,9 +2153,9 @@ mod tests {
         .await;
         let mut auth_recovery = auth_manager.unauthorized_recovery();
         let mut auth_change_rx = auth_manager.auth_change_receiver();
-        let mut enrollment = Some(remote_control_enrollment(Some(
+        let current_enrollment = test_current_enrollment(Some(remote_control_enrollment(Some(
             TEST_REMOTE_CONTROL_SERVER_TOKEN,
-        )));
+        ))));
         let (status_publisher, mut status_rx) = remote_control_status_channel();
         status_publisher.publish_environment_id(Some("env_test".to_string()));
         status_rx
@@ -2213,7 +2171,7 @@ mod tests {
                 auth_recovery: &mut auth_recovery,
                 auth_change_rx: &mut auth_change_rx,
             },
-            &mut enrollment,
+            &current_enrollment,
             RemoteControlConnectOptions {
                 installation_id: TEST_INSTALLATION_ID,
                 server_name: "test-server",
@@ -2221,7 +2179,6 @@ mod tests {
                 app_server_client_name: None,
             },
             &status_publisher,
-            &test_current_enrollment(),
         )
         .await
         .expect_err("missing auth should fail remote control");
@@ -2231,7 +2188,7 @@ mod tests {
             err.to_string(),
             "remote control requires ChatGPT authentication"
         );
-        assert_eq!(enrollment, None);
+        assert_eq!(*current_enrollment.lock().await, None);
         assert_eq!(
             status_rx.borrow().clone(),
             RemoteControlStatusChangedNotification {
@@ -2273,7 +2230,8 @@ mod tests {
                     RemoteControlChannels {
                         transport_event_tx,
                         status_publisher,
-                        current_enrollment: test_current_enrollment(),
+                        current_enrollment: test_current_enrollment(/*enrollment*/ None),
+                        pairing_persistence_key: watch::channel(None).0,
                     },
                     shutdown_token,
                     enabled_rx,

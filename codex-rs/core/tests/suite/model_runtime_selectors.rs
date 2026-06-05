@@ -5,6 +5,7 @@ use codex_login::CodexAuth;
 use codex_models_manager::manager::RefreshStrategy;
 use codex_models_manager::manager::SharedModelsManager;
 use codex_models_manager::model_info::model_info_from_slug;
+use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelVisibility;
@@ -165,12 +166,17 @@ async fn remote_tool_mode_selector_overrides_feature_flags() -> Result<()> {
 
     let mut code_mode_only_model = remote_model("test-tool-mode-code-mode-only");
     code_mode_only_model.tool_mode = Some(ToolMode::CodeModeOnly);
+    code_mode_only_model.input_modalities = vec![InputModality::Text, InputModality::Image];
     let code_mode_only_body = response_body_for_remote_model(code_mode_only_model, |_| {}).await?;
     assert_eq!(
         tool_names(&code_mode_only_body),
         vec![
+            // Code-mode entrypoints.
             codex_code_mode::PUBLIC_TOOL_NAME.to_string(),
             codex_code_mode::WAIT_TOOL_NAME.to_string(),
+            // Hosted Responses tools.
+            "web_search".to_string(),
+            "image_generation".to_string(),
         ]
     );
 
@@ -184,6 +190,7 @@ async fn remote_multi_agent_selector_overrides_feature_flags() -> Result<()> {
     let mut v2_model = remote_model("test-multi-agent-v2");
     v2_model.multi_agent_version = Some(MultiAgentVersion::V2);
     let v2_body = response_body_for_remote_model(v2_model, |config| {
+        config.agent_max_threads = Some(3);
         config
             .features
             .enable(Feature::Collab)

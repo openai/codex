@@ -92,7 +92,7 @@ pub(crate) async fn run_codex_thread_interactive(
         conversation_history,
         session_source: SessionSource::SubAgent(subagent_source.clone()),
         forked_from_thread_id,
-        parent_thread_id: Some(parent_session.conversation_id),
+        parent_thread_id: Some(parent_session.thread_id),
         thread_source: Some(ThreadSource::Subagent),
         agent_control: parent_session.services.agent_control.clone(),
         dynamic_tools: Vec::new(),
@@ -116,8 +116,8 @@ pub(crate) async fn run_codex_thread_interactive(
         &parent_session.services.analytics_events_client,
         client_metadata,
         codex.session.session_id(),
-        codex.session.conversation_id,
-        Some(parent_session.conversation_id),
+        codex.session.thread_id,
+        Some(parent_session.thread_id),
         thread_config,
         subagent_source,
     );
@@ -755,6 +755,7 @@ async fn handle_request_permissions(
 ) {
     let call_id = event.call_id;
     let args = RequestPermissionsArgs {
+        environment_id: event.environment_id,
         reason: event.reason,
         permissions: event.permissions,
     };

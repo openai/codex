@@ -158,7 +158,7 @@ fn merge_persisted_resume_metadata(
     typesafe_overrides.model = persisted_metadata.model.clone();
     typesafe_overrides.model_provider = Some(persisted_metadata.model_provider.clone());
 
-    if let Some(reasoning_effort) = persisted_metadata.reasoning_effort {
+    if let Some(reasoning_effort) = persisted_metadata.reasoning_effort.as_ref() {
         request_overrides.get_or_insert_with(HashMap::new).insert(
             "model_reasoning_effort".to_string(),
             serde_json::Value::String(reasoning_effort.to_string()),
@@ -659,12 +659,6 @@ impl ThreadRequestProcessor {
             .map(|response| Some(response.into()))
     }
 
-    async fn instruction_sources_from_config(config: &Config) -> Vec<AbsolutePathBuf> {
-        codex_core::AgentsMdManager::new(config)
-            .instruction_sources(LOCAL_FS.as_ref())
-            .await
-    }
-
     async fn load_thread(
         &self,
         thread_id: &str,
@@ -1043,7 +1037,6 @@ impl ThreadRequestProcessor {
                 .map_err(|err| config_load_error(&err))?;
         }
 
-        let instruction_sources = Self::instruction_sources_from_config(&config).await;
         let environments = environments.unwrap_or_else(|| {
             listener_task_context
                 .thread_manager
@@ -1113,6 +1106,7 @@ impl ThreadRequestProcessor {
         )
         .await?;
 
+        let instruction_sources = thread.instruction_sources().await;
         let config_snapshot = thread
             .config_snapshot()
             .instrument(tracing::info_span!(
@@ -2524,13 +2518,12 @@ impl ThreadRequestProcessor {
             }
         };
 
-        let instruction_sources = Self::instruction_sources_from_config(&config).await;
         let response_history = thread_history.clone();
 
         match self
             .thread_manager
             .resume_thread_with_history(
-                config.clone(),
+                config,
                 thread_history,
                 self.auth_manager.clone(),
                 self.request_trace_context(&request_id).await,
@@ -2553,6 +2546,7 @@ impl ThreadRequestProcessor {
                     self.outgoing.send_error(request_id, err).await;
                     return Ok(());
                 }
+                let instruction_sources = codex_thread.instruction_sources().await;
                 let SessionConfiguredEvent { rollout_path, .. } = session_configured;
                 let Some(rollout_path) = rollout_path else {
                     let error =
@@ -2766,7 +2760,7 @@ impl ThreadRequestProcessor {
                 .as_ref()
                 .or(source_thread.rollout_path.as_ref());
             if let (Some(requested_path), Some(active_path)) = (params.path.as_ref(), active_path)
-                && requested_path != active_path
+                && !path_utils::paths_match_after_normalization(requested_path, active_path)
             {
                 return Err(invalid_request(format!(
                     "cannot resume running thread {existing_thread_id} with stale path: requested `{}`, active `{}`",
@@ -2853,10 +2847,7 @@ impl ThreadRequestProcessor {
                 /*include_turns*/ false,
             );
             thread_summary.session_id = existing_thread.session_configured().session_id.to_string();
-            let mut config_for_instruction_sources = self.config.as_ref().clone();
-            config_for_instruction_sources.cwd = config_snapshot.cwd.clone();
-            let instruction_sources =
-                Self::instruction_sources_from_config(&config_for_instruction_sources).await;
+            let instruction_sources = existing_thread.instruction_sources().await;
 
             let listener_command_tx = {
                 let thread_state = thread_state.lock().await;
@@ -3173,6 +3164,10 @@ impl ThreadRequestProcessor {
             .read_stored_thread_for_resume(&thread_id, path.as_ref(), /*include_history*/ true)
             .await?;
         let source_thread_id = source_thread.thread_id;
+        let source_thread_name = source_thread
+            .name
+            .as_deref()
+            .and_then(codex_core::util::normalize_thread_name);
         let history_items = source_thread
             .history
             .as_ref()
@@ -3229,7 +3224,6 @@ impl ThreadRequestProcessor {
             .map_err(|err| config_load_error(&err))?;
 
         let fallback_model_provider = config.model_provider_id.clone();
-        let instruction_sources = Self::instruction_sources_from_config(&config).await;
 
         let NewThread {
             thread_id,
@@ -3264,6 +3258,23 @@ impl ThreadRequestProcessor {
             app_server_client_version,
         )
         .await?;
+        if session_configured.rollout_path.is_some()
+            && let Some(name) = source_thread_name.clone()
+        {
+            self.thread_manager
+                .update_thread_metadata(
+                    thread_id,
+                    StoreThreadMetadataPatch {
+                        name: Some(Some(name)),
+                        ..Default::default()
+                    },
+                    /*include_archived*/ true,
+                )
+                .await
+                .map_err(|err| core_thread_write_error("inherit source thread name", err))?;
+        }
+
+        let instruction_sources = forked_thread.instruction_sources().await;
 
         // Auto-attach a conversation listener when forking a thread.
         log_listener_attach_result(
@@ -3291,7 +3302,6 @@ impl ThreadRequestProcessor {
             )
         } else {
             let config_snapshot = forked_thread.config_snapshot().await;
-            // forked thread names do not inherit the source thread name
             let mut thread = build_thread_from_snapshot(
                 thread_id,
                 session_configured.session_id.to_string(),
@@ -3309,6 +3319,9 @@ impl ThreadRequestProcessor {
             }
             thread
         };
+        if let Some(name) = source_thread_name {
+            set_thread_name_from_title(&mut thread, name);
+        }
         thread.session_id = session_configured.session_id.to_string();
         thread.thread_source = forked_thread
             .config_snapshot()

@@ -42,8 +42,17 @@ impl ToolExecutor<ToolInvocation> for Handler {
         let receiver_agent = session
             .services
             .agent_control
-            .get_agent_metadata(receiver_thread_id)
-            .unwrap_or_default();
+            .get_agent_metadata(receiver_thread_id);
+        if receiver_agent.is_some() {
+            let resume_config = build_agent_resume_config(turn.as_ref())?;
+            session
+                .services
+                .agent_control
+                .ensure_v2_agent_loaded(resume_config, receiver_thread_id)
+                .await
+                .map_err(|err| collab_agent_error(receiver_thread_id, err))?;
+        }
+        let receiver_agent = receiver_agent.unwrap_or_default();
         if args.interrupt {
             session
                 .services
@@ -58,7 +67,7 @@ impl ToolExecutor<ToolInvocation> for Handler {
                 CollabAgentInteractionBeginEvent {
                     call_id: call_id.clone(),
                     started_at_ms: now_unix_timestamp_ms(),
-                    sender_thread_id: session.conversation_id,
+                    sender_thread_id: session.thread_id,
                     receiver_thread_id,
                     prompt: prompt.clone(),
                 }
@@ -81,7 +90,7 @@ impl ToolExecutor<ToolInvocation> for Handler {
                 CollabAgentInteractionEndEvent {
                     call_id,
                     completed_at_ms: now_unix_timestamp_ms(),
-                    sender_thread_id: session.conversation_id,
+                    sender_thread_id: session.thread_id,
                     receiver_thread_id,
                     receiver_agent_nickname: receiver_agent.agent_nickname,
                     receiver_agent_role: receiver_agent.agent_role,

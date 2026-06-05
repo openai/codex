@@ -578,6 +578,7 @@ async fn thread_lifecycle_params_include_legacy_sandbox_when_no_active_profile()
     let codex_home = tempdir().expect("create temp codex home");
     let cwd = tempdir().expect("create temp cwd");
     let config = ConfigBuilder::default()
+        .loader_overrides(LoaderOverrides::without_managed_config_for_tests())
         .codex_home(codex_home.path().to_path_buf())
         .harness_overrides(ConfigOverrides {
             sandbox_mode: Some(SandboxMode::DangerFullAccess),

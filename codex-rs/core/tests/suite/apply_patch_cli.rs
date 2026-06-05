@@ -93,7 +93,7 @@ async fn submit_without_wait_with_turn_permissions(
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                cwd: Some(harness.cwd().to_path_buf()),
+                cwd: Some(harness.cwd_abs()),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,
