@@ -977,6 +977,8 @@ mod tests {
     const FALLBACK_WRITER_VARIANT_ENV: &str = "CODEX_TEST_FALLBACK_WRITER_VARIANT";
     const FALLBACK_WRITER_ATTEMPT_ENV: &str = "CODEX_TEST_FALLBACK_WRITER_ATTEMPT";
     const FALLBACK_WRITER_DONE_ENV: &str = "CODEX_TEST_FALLBACK_WRITER_DONE";
+    const FALLBACK_HOLDER_READY_ENV: &str = "CODEX_TEST_FALLBACK_HOLDER_READY";
+    const FALLBACK_HOLDER_RELEASE_ENV: &str = "CODEX_TEST_FALLBACK_HOLDER_RELEASE";
 
     struct TempCodexHome {
         _guard: MutexGuard<'static, ()>,
@@ -1447,9 +1449,22 @@ mod tests {
             VendorExtraTokenFields::default(),
         );
 
-        let fallback_lock = super::acquire_fallback_store_lock()?;
         let codex_home = find_codex_home()?;
         let markers = tempdir()?;
+        let holder_ready = markers.path().join("holder-ready");
+        let holder_release = markers.path().join("holder-release");
+        let mut holder = Command::new(std::env::current_exe()?)
+            .args([
+                "fallback_store_lock_holder_child",
+                "--ignored",
+                "--nocapture",
+            ])
+            .env("CODEX_HOME", codex_home.as_path())
+            .env(FALLBACK_HOLDER_READY_ENV, &holder_ready)
+            .env(FALLBACK_HOLDER_RELEASE_ENV, &holder_release)
+            .spawn()?;
+        wait_for_paths(std::slice::from_ref(&holder_ready), Duration::from_secs(5))?;
+
         let mut writers = ["first", "second"]
             .into_iter()
             .map(|variant| {
@@ -1484,7 +1499,8 @@ mod tests {
             );
         }
 
-        drop(fallback_lock);
+        fs::write(holder_release, b"release")?;
+        wait_for_child_success(&mut holder, Duration::from_secs(5))?;
         for (child, _, _) in &mut writers {
             wait_for_child_success(child, Duration::from_secs(5))?;
         }
@@ -1499,6 +1515,24 @@ mod tests {
                 .collect::<std::collections::BTreeSet<_>>(),
             [first_key, second_key].into_iter().collect()
         );
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "spawned by fallback_store_serializes_cross_process_writes_for_different_servers"]
+    fn fallback_store_lock_holder_child() -> Result<()> {
+        let ready = PathBuf::from(
+            std::env::var_os(FALLBACK_HOLDER_READY_ENV)
+                .context("fallback holder ready path should be set")?,
+        );
+        let release = PathBuf::from(
+            std::env::var_os(FALLBACK_HOLDER_RELEASE_ENV)
+                .context("fallback holder release path should be set")?,
+        );
+        let fallback_lock = super::acquire_fallback_store_lock()?;
+        fs::write(ready, b"ready")?;
+        wait_for_paths(std::slice::from_ref(&release), Duration::from_secs(5))?;
+        drop(fallback_lock);
         Ok(())
     }
 
