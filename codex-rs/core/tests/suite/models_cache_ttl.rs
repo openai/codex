@@ -97,7 +97,6 @@ async fn renews_cache_ttl_on_matching_models_etag() -> Result<()> {
                 text: "hi".into(),
                 text_elements: Vec::new(),
             }],
-            environments: None,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
             additional_context: Default::default(),

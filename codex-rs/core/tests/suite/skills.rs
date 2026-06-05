@@ -85,7 +85,6 @@ async fn user_turn_includes_skill_instructions() -> Result<()> {
                     path: skill_path.clone(),
                 },
             ],
-            environments: None,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
             additional_context: Default::default(),

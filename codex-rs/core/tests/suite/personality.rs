@@ -65,7 +65,6 @@ fn read_only_text_turn_with_personality(
             text: text.into(),
             text_elements: Vec::new(),
         }],
-        environments: None,
         final_output_json_schema: None,
         responsesapi_client_metadata: None,
         additional_context: Default::default(),

@@ -111,7 +111,6 @@ printf '%s\n' "${@: -1}" >> "${payload_path}""#,
 
     test.codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "run a command that requires Guardian review".into(),
                 text_elements: Vec::new(),

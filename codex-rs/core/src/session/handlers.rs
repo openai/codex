@@ -123,6 +123,7 @@ async fn thread_settings_update(
 ) -> SessionSettingsUpdate {
     let ThreadSettingsOverrides {
         cwd,
+        environments,
         workspace_roots,
         profile_workspace_roots,
         approval_policy,
@@ -138,20 +139,18 @@ async fn thread_settings_update(
         collaboration_mode,
         personality,
     } = thread_settings;
+    let state = sess.state.lock().await;
     let collaboration_mode = match collaboration_mode {
         Some(collaboration_mode) => collaboration_mode,
-        None => {
-            let state = sess.state.lock().await;
-            // Model and reasoning effort live in CollaborationMode settings today, so
-            // partial thread-settings updates refresh those fields on the active mode.
-            state
-                .session_configuration
-                .collaboration_mode
-                .with_updates(model, effort, /*developer_instructions*/ None)
-        }
+        None => state
+            .session_configuration
+            .collaboration_mode
+            .with_updates(model, effort, /*developer_instructions*/ None),
     };
+    drop(state);
     SessionSettingsUpdate {
         cwd,
+        environments,
         workspace_roots,
         profile_workspace_roots,
         approval_policy,
@@ -200,7 +199,6 @@ pub(super) async fn user_input_or_turn_inner(
 ) {
     let Op::UserInput {
         items,
-        environments,
         final_output_json_schema,
         responsesapi_client_metadata,
         additional_context,
@@ -216,7 +214,6 @@ pub(super) async fn user_input_or_turn_inner(
         SessionSettingsUpdate::default()
     };
     updates.final_output_json_schema = Some(final_output_json_schema);
-    updates.environments = environments;
 
     let Ok(current_context) = sess.new_turn_with_sub_id(sub_id.clone(), updates).await else {
         // new_turn_with_sub_id already emits the error event.

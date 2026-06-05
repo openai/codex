@@ -595,18 +595,8 @@ impl Session {
             let mut state = self.state.lock().await;
             match state.session_configuration.clone().apply(&updates) {
                 Ok(next) => {
-                    let mut effective_environments = updates
-                        .environments
-                        .clone()
-                        .unwrap_or_else(|| next.environments.clone());
-                    if updates.environments.is_none() {
-                        Self::overlay_runtime_cwd_on_primary_environment(
-                            &mut effective_environments,
-                            &next.cwd,
-                        );
-                    }
-                    let turn_environments =
-                        self.resolve_turn_environments(&effective_environments)?;
+                    // Validate before committing sticky environments to session state.
+                    self.resolve_turn_environments(&next.environments)?;
                     let previous_cwd = state.session_configuration.cwd.clone();
                     let previous_permission_profile =
                         state.session_configuration.permission_profile();
@@ -623,7 +613,6 @@ impl Session {
                     state.session_configuration = next.clone();
                     Ok((
                         next,
-                        turn_environments,
                         permission_profile_changed,
                         previous_cwd,
                         codex_home,
@@ -638,7 +627,6 @@ impl Session {
 
         let (
             session_configuration,
-            turn_environments,
             permission_profile_changed,
             previous_cwd,
             codex_home,
@@ -679,7 +667,6 @@ impl Session {
                 sub_id,
                 session_configuration,
                 updates.final_output_json_schema,
-                turn_environments,
             )
             .await)
     }
@@ -699,13 +686,11 @@ impl Session {
         sub_id: String,
         session_configuration: SessionConfiguration,
         final_output_json_schema: Option<Option<Value>>,
-        turn_environments: ResolvedTurnEnvironments,
     ) -> Arc<TurnContext> {
         self.new_turn_context_from_configuration(
             sub_id,
             session_configuration,
             final_output_json_schema,
-            turn_environments,
             TurnMultiAgentRuntime::ResolveAndStore,
         )
         .await
@@ -715,13 +700,11 @@ impl Session {
         &self,
         sub_id: String,
         session_configuration: SessionConfiguration,
-        turn_environments: ResolvedTurnEnvironments,
     ) -> Arc<TurnContext> {
         self.new_turn_context_from_configuration(
             sub_id,
             session_configuration,
             /*final_output_json_schema*/ None,
-            turn_environments,
             TurnMultiAgentRuntime::Preview,
         )
         .await
@@ -732,9 +715,16 @@ impl Session {
         sub_id: String,
         session_configuration: SessionConfiguration,
         final_output_json_schema: Option<Option<Value>>,
-        turn_environments: ResolvedTurnEnvironments,
         multi_agent_runtime: TurnMultiAgentRuntime,
     ) -> Arc<TurnContext> {
+        let turn_environments =
+            match self.resolve_turn_environments(&session_configuration.environments) {
+                Ok(turn_environments) => turn_environments,
+                Err(err) => {
+                    warn!("failed to resolve stored session environments: {err}");
+                    ResolvedTurnEnvironments::default()
+                }
+            };
         let primary_turn_environment = turn_environments.primary().cloned();
         let cwd = primary_turn_environment
             .as_ref()
@@ -849,13 +839,11 @@ impl Session {
     }
 
     pub(crate) async fn new_default_turn_with_sub_id(&self, sub_id: String) -> Arc<TurnContext> {
-        let (session_configuration, turn_environments) =
-            self.default_turn_configuration_and_environments().await;
+        let session_configuration = self.default_turn_configuration().await;
         self.new_turn_from_configuration(
             sub_id,
             session_configuration,
             /*final_output_json_schema*/ None,
-            turn_environments,
         )
         .await
     }
@@ -864,46 +852,15 @@ impl Session {
         &self,
         sub_id: String,
     ) -> Arc<TurnContext> {
-        let (session_configuration, turn_environments) =
-            self.default_turn_configuration_and_environments().await;
-        self.new_startup_prewarm_turn_from_configuration(
-            sub_id,
-            session_configuration,
-            turn_environments,
-        )
-        .await
+        let session_configuration = self.default_turn_configuration().await;
+        self.new_startup_prewarm_turn_from_configuration(sub_id, session_configuration)
+            .await
     }
 
-    async fn default_turn_configuration_and_environments(
-        &self,
-    ) -> (SessionConfiguration, ResolvedTurnEnvironments) {
-        let session_configuration = {
+    async fn default_turn_configuration(&self) -> SessionConfiguration {
+        {
             let state = self.state.lock().await;
             state.session_configuration.clone()
-        };
-        let mut effective_environments = session_configuration.environments.clone();
-        Self::overlay_runtime_cwd_on_primary_environment(
-            &mut effective_environments,
-            &session_configuration.cwd,
-        );
-        let turn_environments = match self.resolve_turn_environments(&effective_environments) {
-            Ok(turn_environments) => turn_environments,
-            Err(err) => {
-                warn!("failed to resolve stored session environments: {err}");
-                ResolvedTurnEnvironments::default()
-            }
-        };
-        (session_configuration, turn_environments)
-    }
-
-    fn overlay_runtime_cwd_on_primary_environment(
-        environments: &mut [TurnEnvironmentSelection],
-        runtime_cwd: &AbsolutePathBuf,
-    ) {
-        if let Some(turn_environment) = environments.first_mut()
-            && turn_environment.cwd != *runtime_cwd
-        {
-            turn_environment.cwd = runtime_cwd.clone();
         }
     }
 }

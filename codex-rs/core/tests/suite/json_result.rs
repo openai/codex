@@ -81,7 +81,6 @@ async fn codex_returns_json_result(model: String) -> anyhow::Result<()> {
                 text: "hello world".into(),
                 text_elements: Vec::new(),
             }],
-            environments: None,
             final_output_json_schema: Some(serde_json::from_str(SCHEMA)?),
             responsesapi_client_metadata: None,
             additional_context: Default::default(),

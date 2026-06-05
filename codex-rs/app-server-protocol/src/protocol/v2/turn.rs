@@ -76,11 +76,12 @@ pub struct TurnStartParams {
     #[experimental("turn/start.additionalContext")]
     #[ts(optional = nullable)]
     pub additional_context: Option<HashMap<String, AdditionalContextEntry>>,
-    /// Optional turn-scoped environments.
+    /// Optional sticky environments to use for this and subsequent turns.
     ///
     /// Omitted uses the thread sticky environments. Empty disables
-    /// environment access for this turn. Non-empty selects the first
-    /// environment as the current turn environment for this turn.
+    /// environment access for this and subsequent turns. Non-empty selects
+    /// the first environment as the current environment for this and
+    /// subsequent turns.
     #[experimental("turn/start.environments")]
     #[ts(optional = nullable)]
     pub environments: Option<Vec<TurnEnvironmentParams>>,

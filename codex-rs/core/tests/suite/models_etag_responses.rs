@@ -110,7 +110,6 @@ async fn refresh_models_on_models_etag_mismatch_and_avoid_duplicate_models_fetch
                 text: "please run a tool".into(),
                 text_elements: Vec::new(),
             }],
-            environments: None,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
             additional_context: Default::default(),

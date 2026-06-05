@@ -2452,7 +2452,6 @@ async fn fork_startup_context_then_first_turn_diff_snapshot() -> anyhow::Result<
     initial
         .codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "fork seed".into(),
                 text_elements: Vec::new(),
@@ -2498,7 +2497,6 @@ async fn fork_startup_context_then_first_turn_diff_snapshot() -> anyhow::Result<
     forked
         .thread
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "after fork".into(),
                 text_elements: Vec::new(),
@@ -5954,7 +5952,6 @@ fn submission_dispatch_span_uses_debug_for_realtime_audio() {
 fn op_kind_for_input_and_context_ops() {
     assert_eq!(
         Op::UserInput {
-            environments: None,
             items: vec![],
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
@@ -5986,7 +5983,6 @@ async fn user_turn_updates_approvals_reviewer() {
                 text: "hello".to_string(),
                 text_elements: Vec::new(),
             }],
-            environments: None,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
@@ -9249,7 +9245,6 @@ async fn active_goal_continuation_runs_again_after_no_tool_turn() -> anyhow::Res
 
     test.codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "write a benchmark note".into(),
                 text_elements: Vec::new(),
@@ -9344,7 +9339,6 @@ async fn pending_request_user_input_does_not_spawn_extra_goal_continuation() -> 
 
     test.codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "write a benchmark note".into(),
                 text_elements: Vec::new(),
@@ -9892,7 +9886,6 @@ async fn completed_goal_accounts_current_turn_tokens_before_tool_response() -> a
 
     test.codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "write a report".into(),
                 text_elements: Vec::new(),

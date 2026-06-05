@@ -767,12 +767,12 @@ impl TestCodex {
                     text: prompt.into(),
                     text_elements: Vec::new(),
                 }],
-                environments,
                 final_output_json_schema: None,
                 responsesapi_client_metadata: None,
                 additional_context: Default::default(),
                 thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
                     cwd: Some(self.config.cwd.clone()),
+                    environments,
                     approval_policy: Some(approval_policy),
                     sandbox_policy: Some(sandbox_policy),
                     permission_profile,

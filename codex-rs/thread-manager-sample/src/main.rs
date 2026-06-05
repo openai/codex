@@ -296,7 +296,6 @@ async fn run_turn(thread: &CodexThread, thread_id: &str, prompt: String) -> anyh
                 text: prompt,
                 text_elements: Vec::new(),
             }],
-            environments: None,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
             additional_context: Default::default(),

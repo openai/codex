@@ -179,7 +179,6 @@ async fn user_shell_command_does_not_replace_active_turn() -> anyhow::Result<()>
                 text: "run model shell command".to_string(),
                 text_elements: Vec::new(),
             }],
-            environments: None,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
             additional_context: Default::default(),

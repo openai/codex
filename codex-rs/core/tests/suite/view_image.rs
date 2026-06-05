@@ -74,7 +74,6 @@ fn disabled_user_turn(test: &TestCodex, items: Vec<UserInput>, model: String) ->
         turn_permission_fields(PermissionProfile::Disabled, test.config.cwd.as_path());
     Op::UserInput {
         items,
-        environments: None,
         final_output_json_schema: None,
         responsesapi_client_metadata: None,
         additional_context: Default::default(),
