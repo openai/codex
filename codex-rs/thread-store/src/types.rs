@@ -20,6 +20,7 @@ use serde::Deserialize;
 use serde::Deserializer;
 use serde::Serialize;
 use serde::Serializer;
+use serde_json::Value;
 mod optional_option {
     use super::*;
 
@@ -244,7 +245,7 @@ pub enum StoredTurnItemsView {
     /// Return display summary items for each turn.
     #[default]
     Summary,
-    /// Return every persisted item available for each turn.
+    /// Return every projected thread item available for each turn.
     Full,
 }
 
@@ -270,6 +271,23 @@ pub struct StoredTurnError {
     pub additional_details: Option<String>,
 }
 
+/// Store-owned projected ThreadItem row.
+///
+/// The store keeps `item` storage-neutral because app-server owns the concrete `ThreadItem` type.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct StoredThreadItem {
+    /// Turn that owns this projected item.
+    pub turn_id: String,
+    /// Stable projection key for upserting/tombstoning this item.
+    pub item_key: String,
+    /// Stable order of this item within the projected thread history.
+    pub item_ordinal: i64,
+    /// Whether the item may receive future updates.
+    pub is_open: bool,
+    /// Materialized app-server `ThreadItem` JSON.
+    pub item: Value,
+}
+
 /// Parameters for listing turns within a stored thread.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ListTurnsParams {
@@ -292,8 +310,11 @@ pub struct ListTurnsParams {
 pub struct StoredTurn {
     /// Turn id.
     pub turn_id: String,
-    /// Persisted rollout items associated with this turn, according to `items_view`.
-    pub items: Vec<RolloutItem>,
+    /// Projected thread items associated with this turn, according to `items_view`.
+    ///
+    /// `NotLoaded` returns no items, `Summary` returns the display summary items for the turn, and
+    /// `Full` is reserved for stores that can inline the complete item list.
+    pub items: Vec<StoredThreadItem>,
     /// Amount of item detail included in `items`.
     pub items_view: StoredTurnItemsView,
     /// Store-owned status for API layer projection.
@@ -319,7 +340,7 @@ pub struct TurnPage {
     pub backwards_cursor: Option<String>,
 }
 
-/// Parameters for listing persisted items within a single turn.
+/// Parameters for listing projected thread items within a single turn.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ListItemsParams {
     /// Thread id to read.
@@ -336,11 +357,11 @@ pub struct ListItemsParams {
     pub sort_direction: SortDirection,
 }
 
-/// A page of persisted rollout items within a turn.
+/// A page of projected thread items within a turn.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ItemPage {
     /// Items returned for this page.
-    pub items: Vec<RolloutItem>,
+    pub items: Vec<StoredThreadItem>,
     /// Opaque cursor to continue listing.
     pub next_cursor: Option<String>,
     /// Opaque cursor for fetching in the opposite direction.

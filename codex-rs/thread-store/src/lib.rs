@@ -44,6 +44,7 @@ pub use types::SearchThreadsParams;
 pub use types::SortDirection;
 pub use types::StoredThread;
 pub use types::StoredThreadHistory;
+pub use types::StoredThreadItem;
 pub use types::StoredThreadSearchResult;
 pub use types::StoredTurn;
 pub use types::StoredTurnError;
