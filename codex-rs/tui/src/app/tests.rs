@@ -3353,24 +3353,33 @@ async fn side_thread_snapshot_skips_session_header_preamble() {
 }
 
 #[tokio::test]
-async fn side_thread_ignores_global_mcp_startup_notifications() {
+async fn primary_thread_ignores_child_mcp_startup_notifications() {
     let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
     while app_event_rx.try_recv().is_ok() {}
+    let sentry_config = toml::from_str::<toml::Value>("command = 'true'")
+        .expect("test MCP config should parse")
+        .try_into()
+        .expect("test MCP config should deserialize");
+    app.config
+        .mcp_servers
+        .set(std::collections::HashMap::from([(
+            "sentry".to_string(),
+            sentry_config,
+        )]))
+        .expect("test MCP servers should accept any configuration");
     let app_server = crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
         .await
         .expect("embedded app server");
     let parent_thread_id = ThreadId::new();
-    let side_thread_id = ThreadId::new();
+    let child_thread_id = ThreadId::new();
     app.primary_thread_id = Some(parent_thread_id);
-    app.active_thread_id = Some(side_thread_id);
-    app.side_threads
-        .insert(side_thread_id, SideThreadState::new(parent_thread_id));
-    app.sync_side_thread_ui();
+    app.active_thread_id = Some(parent_thread_id);
 
     app.handle_app_server_event(
         &app_server,
         codex_app_server_client::AppServerEvent::ServerNotification(
             ServerNotification::McpServerStatusUpdated(McpServerStatusUpdatedNotification {
+                thread_id: child_thread_id.to_string(),
                 name: "sentry".to_string(),
                 status: McpServerStartupState::Failed,
                 error: Some("sentry is not logged in".to_string()),
@@ -3380,6 +3389,50 @@ async fn side_thread_ignores_global_mcp_startup_notifications() {
     .await;
 
     assert!(app_event_rx.try_recv().is_err());
+    let mut child_snapshot = app
+        .thread_event_channels
+        .get(&child_thread_id)
+        .expect("child thread channel should be created")
+        .store
+        .lock()
+        .await
+        .snapshot();
+    assert!(
+        matches!(
+            child_snapshot.events.as_slice(),
+            [ThreadBufferedEvent::Notification(
+                ServerNotification::McpServerStatusUpdated(_)
+            )]
+        ),
+        "child MCP startup notification should be buffered for the child thread"
+    );
+
+    app.apply_refreshed_snapshot_thread(
+        child_thread_id,
+        AppServerStartedThread {
+            session: test_thread_session(child_thread_id, test_path_buf("/tmp/child")),
+            turns: Vec::new(),
+        },
+        &mut child_snapshot,
+    )
+    .await;
+    app.replay_thread_snapshot(child_snapshot, /*resume_restored_queue*/ false);
+
+    let mut rendered_cells = Vec::new();
+    while let Ok(event) = app_event_rx.try_recv() {
+        if let AppEvent::InsertHistoryCell(cell) = event {
+            rendered_cells.push(lines_to_single_string(&cell.display_lines(/*width*/ 120)));
+        }
+    }
+    let rendered = rendered_cells.join("\n");
+    assert_eq!(app.chat_widget.thread_id(), Some(child_thread_id));
+    assert_eq!(rendered.matches("sentry is not logged in").count(), 1);
+    assert_eq!(
+        rendered
+            .matches("MCP startup incomplete (failed: sentry)")
+            .count(),
+        1
+    );
 }
 
 #[tokio::test]
