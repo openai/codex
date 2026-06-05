@@ -5,7 +5,6 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use crate::function_tool::FunctionCallError;
-use crate::goals::GoalRuntimeEvent;
 use crate::hook_runtime::PreToolUseHookResult;
 use crate::hook_runtime::record_additional_contexts;
 use crate::hook_runtime::run_post_tool_use_hooks;
@@ -34,7 +33,6 @@ use codex_tools::ToolSearchInfo;
 use codex_tools::ToolSpec;
 use futures::future::BoxFuture;
 use serde_json::Value;
-use tracing::warn;
 
 pub(crate) type ToolTelemetryTags = Vec<(&'static str, String)>;
 
@@ -649,24 +647,12 @@ impl ToolRegistry {
                 handler_executed: true,
             },
         };
-        let finished = notify_tool_finish_if_unclaimed(
+        notify_tool_finish_if_unclaimed(
             &invocation,
             terminal_outcome_reached.as_deref(),
             lifecycle_outcome,
         )
         .await;
-
-        if finished
-            && let Err(err) = invocation
-                .session
-                .goal_runtime_apply(GoalRuntimeEvent::ToolCompleted {
-                    turn_context: invocation.turn.as_ref(),
-                    tool_name: tool_name.name.as_str(),
-                })
-                .await
-        {
-            warn!("failed to account thread goal progress after tool call: {err}");
-        }
 
         match result {
             Ok(_) => {

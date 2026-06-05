@@ -6,11 +6,9 @@ use crate::tools::context::ToolInvocation;
 use crate::tools::handlers::ApplyPatchHandler;
 use crate::tools::handlers::CodeModeExecuteHandler;
 use crate::tools::handlers::CodeModeWaitHandler;
-use crate::tools::handlers::CreateGoalHandler;
 use crate::tools::handlers::DynamicToolHandler;
 use crate::tools::handlers::ExecCommandHandler;
 use crate::tools::handlers::ExecCommandHandlerOptions;
-use crate::tools::handlers::GetGoalHandler;
 use crate::tools::handlers::ListAvailablePluginsToInstallHandler;
 use crate::tools::handlers::ListMcpResourceTemplatesHandler;
 use crate::tools::handlers::ListMcpResourcesHandler;
@@ -24,7 +22,6 @@ use crate::tools::handlers::ShellCommandHandler;
 use crate::tools::handlers::ShellCommandHandlerOptions;
 use crate::tools::handlers::TestSyncHandler;
 use crate::tools::handlers::ToolSearchHandler;
-use crate::tools::handlers::UpdateGoalHandler;
 use crate::tools::handlers::ViewImageHandler;
 use crate::tools::handlers::WriteStdinHandler;
 use crate::tools::handlers::agent_jobs::ReportAgentJobResultHandler;
@@ -303,14 +300,6 @@ fn collab_tools_enabled(turn_context: &TurnContext) -> bool {
         ),
         MultiAgentVersion::V2 => true,
     }
-}
-
-fn goal_tools_enabled(turn_context: &TurnContext) -> bool {
-    turn_context.goal_tools_enabled()
-        && !matches!(
-            turn_context.session_source,
-            SessionSource::SubAgent(SubAgentSource::Review)
-        )
 }
 
 fn agent_jobs_tools_enabled(turn_context: &TurnContext) -> bool {
@@ -639,11 +628,6 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut
     let environment_mode = turn_context.tool_environment_mode();
 
     planned_tools.add(PlanHandler);
-    if goal_tools_enabled(turn_context) {
-        planned_tools.add(GetGoalHandler);
-        planned_tools.add(CreateGoalHandler);
-        planned_tools.add(UpdateGoalHandler);
-    }
 
     if turn_context.config.experimental_request_user_input_enabled {
         planned_tools.add(RequestUserInputHandler {

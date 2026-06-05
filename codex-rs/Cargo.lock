@@ -1926,6 +1926,7 @@ dependencies = [
  "codex-file-search",
  "codex-file-watcher",
  "codex-git-utils",
+ "codex-goal-extension",
  "codex-guardian",
  "codex-hooks",
  "codex-image-generation-extension",

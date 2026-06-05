@@ -24,9 +24,7 @@ pub(super) async fn spawn_review_thread(
     let mut review_features = sess.features.clone();
     let _ = review_features.disable(Feature::WebSearchRequest);
     let _ = review_features.disable(Feature::WebSearchCached);
-    let _ = review_features.disable(Feature::Goals);
     let review_web_search_mode = WebSearchMode::Disabled;
-    let goal_tools_supported = !config.ephemeral && parent_turn_context.goal_tools_enabled();
     let available_models = sess
         .services
         .models_manager
@@ -126,7 +124,6 @@ pub(super) async fn spawn_review_thread(
         environments: parent_turn_context.environments.clone(),
         available_models,
         unified_exec_shell_mode,
-        goal_tools_supported,
         features: review_features,
         ghost_snapshot: parent_turn_context.ghost_snapshot.clone(),
         current_date: parent_turn_context.current_date.clone(),

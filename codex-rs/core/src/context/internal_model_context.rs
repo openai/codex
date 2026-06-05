@@ -6,8 +6,6 @@ use std::fmt;
 
 const CONTEXT_START_MARKER: &str = "<codex_internal_context";
 const CONTEXT_END_MARKER: &str = "</codex_internal_context>";
-const LEGACY_GOAL_CONTEXT_START_MARKER: &str = "<goal_context>";
-const LEGACY_GOAL_CONTEXT_END_MARKER: &str = "</goal_context>";
 const SOURCE_ATTR_START: &str = " source=\"";
 const SOURCE_ATTR_END: &str = "\">";
 
@@ -90,10 +88,6 @@ impl ContextualUserFragment for InternalModelContextFragment {
 
     fn matches_text(text: &str) -> bool {
         let trimmed = text.trim();
-        if matches_legacy_goal_context(trimmed) {
-            return true;
-        }
-
         let Some(rest) = trimmed.strip_prefix(CONTEXT_START_MARKER) else {
             return false;
         };
@@ -112,11 +106,6 @@ impl ContextualUserFragment for InternalModelContextFragment {
         let body = &self.body;
         format!(" source=\"{source}\">\n{body}\n")
     }
-}
-
-fn matches_legacy_goal_context(text: &str) -> bool {
-    text.starts_with(LEGACY_GOAL_CONTEXT_START_MARKER)
-        && text.ends_with(LEGACY_GOAL_CONTEXT_END_MARKER)
 }
 
 fn is_valid_source(source: &str) -> bool {
