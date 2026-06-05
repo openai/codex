@@ -15,6 +15,7 @@ use crate::allow::compute_allow_paths_for_permissions;
 use crate::helper_materialization::bundled_executable_path_for_exe;
 use crate::helper_materialization::helper_bin_dir;
 use crate::identity::sandbox_setup_is_complete;
+use crate::logging::current_log_file_path;
 use crate::logging::log_note;
 use crate::path_normalization::canonical_path_key;
 use crate::path_normalization::canonicalize_path;
@@ -25,7 +26,6 @@ use crate::setup_error::clear_setup_error_report;
 use crate::setup_error::failure;
 use crate::setup_error::read_setup_error_report;
 use crate::ssh_config_dependencies::ssh_config_dependency_paths;
-use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
 use base64::Engine;
@@ -210,6 +210,18 @@ fn run_setup_refresh_inner(
     let json = serde_json::to_vec(&payload)?;
     let b64 = BASE64_STANDARD.encode(json);
     let exe = find_setup_exe();
+    let sbx_dir = sandbox_dir(request.codex_home);
+    let log_path = current_log_file_path(&sbx_dir);
+    let cleared_report = match clear_setup_error_report(request.codex_home) {
+        Ok(()) => true,
+        Err(err) => {
+            log_note(
+                &format!("setup refresh: failed to clear setup_error.json before launch: {err}"),
+                Some(&sbx_dir),
+            );
+            false
+        }
+    };
     // Refresh should never request elevation; ensure verb isn't set and we don't trigger UAC.
     let mut cmd = Command::new(&exe);
     cmd.arg(&b64).stdout(Stdio::null()).stderr(Stdio::null());
@@ -221,24 +233,34 @@ fn run_setup_refresh_inner(
             cwd.display(),
             b64.len()
         ),
-        Some(&sandbox_dir(request.codex_home)),
+        Some(&sbx_dir),
     );
-    let status = cmd
-        .status()
-        .map_err(|e| {
-            log_note(
-                &format!("setup refresh: failed to spawn {}: {e}", exe.display()),
-                Some(&sandbox_dir(request.codex_home)),
-            );
-            e
-        })
-        .context("spawn setup refresh")?;
+    let status = cmd.status().map_err(|err| {
+        let message = format!(
+            "setup refresh failed to launch helper: helper={}, cwd={}, log={}, error={err}",
+            exe.display(),
+            cwd.display(),
+            log_path.display()
+        );
+        log_note(&format!("setup refresh: {message}"), Some(&sbx_dir));
+        failure(SetupErrorCode::OrchestratorHelperLaunchFailed, message)
+    })?;
     if !status.success() {
         log_note(
             &format!("setup refresh: exited with status {status:?}"),
-            Some(&sandbox_dir(request.codex_home)),
+            Some(&sbx_dir),
         );
-        return Err(anyhow!("setup refresh failed with status {status}"));
+        return Err(report_helper_failure(
+            request.codex_home,
+            cleared_report,
+            status.code(),
+        ));
+    }
+    if let Err(err) = clear_setup_error_report(request.codex_home) {
+        log_note(
+            &format!("setup refresh: failed to clear setup_error.json after success: {err}"),
+            Some(&sbx_dir),
+        );
     }
     Ok(())
 }
@@ -1087,7 +1109,9 @@ mod tests {
     use crate::helper_materialization::helper_bin_dir;
     use crate::resolved_permissions::ResolvedWindowsSandboxPermissions;
     use crate::setup_error::SetupErrorCode;
+    use crate::setup_error::SetupErrorReport;
     use crate::setup_error::extract_failure;
+    use crate::setup_error::write_setup_error_report;
     use codex_protocol::models::PermissionProfile;
     use codex_protocol::permissions::NetworkSandboxPolicy;
     use codex_utils_absolute_path::AbsolutePathBuf;
@@ -1144,6 +1168,64 @@ mod tests {
             exclude_tmpdir_env_var,
             exclude_slash_tmp,
         )
+    }
+
+    #[test]
+    fn report_helper_failure_uses_setup_error_report_when_clear_succeeded() {
+        let tmp = TempDir::new().expect("tempdir");
+        let codex_home = tmp.path().join("codex-home");
+        write_setup_error_report(
+            codex_home.as_path(),
+            &SetupErrorReport {
+                code: super::SetupErrorCode::HelperFirewallPolicyAccessFailed,
+                message: "firewall policy unavailable".to_string(),
+            },
+        )
+        .expect("write setup error report");
+
+        let err = super::report_helper_failure(
+            codex_home.as_path(),
+            /*cleared_report*/ true,
+            /*exit_code*/ Some(1),
+        );
+
+        let failure = extract_failure(&err).expect("structured setup failure");
+        assert_eq!(
+            &super::SetupFailure::new(
+                super::SetupErrorCode::HelperFirewallPolicyAccessFailed,
+                "firewall policy unavailable",
+            ),
+            failure
+        );
+    }
+
+    #[test]
+    fn report_helper_failure_ignores_setup_error_report_when_clear_failed() {
+        let tmp = TempDir::new().expect("tempdir");
+        let codex_home = tmp.path().join("codex-home");
+        write_setup_error_report(
+            codex_home.as_path(),
+            &SetupErrorReport {
+                code: super::SetupErrorCode::HelperFirewallPolicyAccessFailed,
+                message: "stale report".to_string(),
+            },
+        )
+        .expect("write setup error report");
+
+        let err = super::report_helper_failure(
+            codex_home.as_path(),
+            /*cleared_report*/ false,
+            /*exit_code*/ Some(1),
+        );
+
+        let failure = extract_failure(&err).expect("structured setup failure");
+        assert_eq!(
+            &super::SetupFailure::new(
+                super::SetupErrorCode::OrchestratorHelperExitNonzero,
+                "setup helper exited with status Some(1)",
+            ),
+            failure
+        );
     }
 
     #[test]

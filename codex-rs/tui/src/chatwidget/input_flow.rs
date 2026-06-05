@@ -166,7 +166,7 @@ impl ChatWidget {
         mut collaboration_mode: CollaborationModeMask,
     ) {
         if collaboration_mode.mode == Some(ModeKind::Plan)
-            && let Some(effort) = self.config.plan_mode_reasoning_effort
+            && let Some(effort) = self.config.plan_mode_reasoning_effort.clone()
         {
             collaboration_mode.reasoning_effort = Some(Some(effort));
         }

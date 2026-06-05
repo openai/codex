@@ -42,6 +42,28 @@ async fn lookup_reads_history_entries() {
 }
 
 #[tokio::test]
+async fn history_metadata_counts_newlines_across_read_boundaries() {
+    let temp_dir = TempDir::new().expect("create temp dir");
+    let history_path = temp_dir.path().join(HISTORY_FILENAME);
+    let mut contents = vec![b'x'; 3 * HISTORY_READ_BUFFER_SIZE + 1];
+    let newline_offsets = [
+        0,
+        HISTORY_READ_BUFFER_SIZE - 1,
+        HISTORY_READ_BUFFER_SIZE,
+        2 * HISTORY_READ_BUFFER_SIZE,
+        contents.len() - 2,
+    ];
+    for offset in newline_offsets {
+        contents[offset] = b'\n';
+    }
+    std::fs::write(&history_path, contents).expect("write history file");
+
+    let (_, count) = history_metadata_for_file(&history_path).await;
+
+    assert_eq!(count, newline_offsets.len());
+}
+
+#[tokio::test]
 async fn lookup_uses_stable_log_id_after_appends() {
     let temp_dir = TempDir::new().expect("create temp dir");
     let history_path = temp_dir.path().join(HISTORY_FILENAME);

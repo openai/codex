@@ -8,5 +8,6 @@ mod state;
 
 pub use extension::install;
 pub use extension::install_with_providers;
+pub use provider::HostSkillProvider;
 pub use sources::SkillProviderSource;
 pub use sources::SkillProviders;

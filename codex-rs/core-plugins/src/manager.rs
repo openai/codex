@@ -2,11 +2,13 @@ use super::PluginLoadOutcome;
 use super::startup_remote_sync::start_startup_remote_plugin_sync_once;
 use crate::OPENAI_CURATED_MARKETPLACE_NAME;
 use crate::installed_marketplaces::installed_marketplace_roots_from_layer_stack;
+use crate::loader::PluginHookLoadOutcome;
 use crate::loader::configured_curated_plugin_ids_from_codex_home;
 use crate::loader::curated_plugin_cache_version;
 use crate::loader::installed_plugin_telemetry_metadata;
 use crate::loader::load_plugin_apps;
 use crate::loader::load_plugin_hooks;
+use crate::loader::load_plugin_hooks_from_layer_stack;
 use crate::loader::load_plugin_mcp_servers;
 use crate::loader::load_plugin_skills;
 use crate::loader::load_plugins_from_layer_stack;
@@ -538,6 +540,24 @@ impl PluginsManager {
             self.remote_installed_plugin_configs(),
             &self.store,
             self.restriction_product,
+            config.remote_plugin_enabled,
+        )
+        .await
+    }
+
+    /// Resolve plugin hooks for a config layer stack without loading other plugin capabilities.
+    pub async fn plugin_hooks_for_layer_stack(
+        &self,
+        config_layer_stack: &ConfigLayerStack,
+        config: &PluginsConfigInput,
+    ) -> PluginHookLoadOutcome {
+        if !config.plugins_enabled {
+            return PluginHookLoadOutcome::default();
+        }
+        load_plugin_hooks_from_layer_stack(
+            config_layer_stack,
+            self.remote_installed_plugin_configs(),
+            &self.store,
             config.remote_plugin_enabled,
         )
         .await

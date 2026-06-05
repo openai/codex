@@ -182,7 +182,7 @@ impl ToolExecutor<ToolInvocation> for ShellCommandHandler {
             session.thread_id,
             turn.config.permissions.allow_login_shell,
         )?;
-        let shell_type = Some(session.user_shell().shell_type.clone());
+        let shell_type = Some(session.user_shell().shell_type);
         run_exec_like(RunExecLikeArgs {
             tool_name,
             exec_params,

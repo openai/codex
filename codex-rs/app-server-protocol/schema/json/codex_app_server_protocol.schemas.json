@@ -3786,8 +3786,8 @@
         "environmentId": {
           "default": null,
           "type": [
-            "null",
-            "string"
+            "string",
+            "null"
           ]
         },
         "itemId": {
@@ -4908,6 +4908,26 @@
           "properties": {
             "method": {
               "enum": [
+                "turn/moderationMetadata"
+              ],
+              "title": "Turn/moderationMetadataNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/TurnModerationMetadataNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Turn/moderationMetadataNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
                 "warning"
               ],
               "title": "WarningNotificationMethod",
@@ -5900,6 +5920,30 @@
         "title": "AgentMessageDeltaNotification",
         "type": "object"
       },
+      "AgentMessageInputContent": {
+        "oneOf": [
+          {
+            "properties": {
+              "encrypted_content": {
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "encrypted_content"
+                ],
+                "title": "EncryptedContentAgentMessageInputContentType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "encrypted_content",
+              "type"
+            ],
+            "title": "EncryptedContentAgentMessageInputContent",
+            "type": "object"
+          }
+        ]
+      },
       "AgentPath": {
         "type": "string"
       },
@@ -6277,6 +6321,69 @@
           "needsAuth"
         ],
         "type": "object"
+      },
+      "AppTemplateSummary": {
+        "properties": {
+          "canonicalConnectorId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "logoUrl": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "logoUrlDark": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "materializedAppIds": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "name": {
+            "type": "string"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/AppTemplateUnavailableReason"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "templateId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "materializedAppIds",
+          "name",
+          "templateId"
+        ],
+        "type": "object"
+      },
+      "AppTemplateUnavailableReason": {
+        "enum": [
+          "NOT_CONFIGURED_FOR_WORKSPACE",
+          "NO_ACTIVE_WORKSPACE"
+        ],
+        "type": "string"
       },
       "AppToolApproval": {
         "enum": [
@@ -12168,6 +12275,12 @@
       },
       "PluginDetail": {
         "properties": {
+          "appTemplates": {
+            "items": {
+              "$ref": "#/definitions/v2/AppTemplateSummary"
+            },
+            "type": "array"
+          },
           "apps": {
             "items": {
               "$ref": "#/definitions/v2/AppSummary"
@@ -12216,6 +12329,7 @@
           }
         },
         "required": [
+          "appTemplates",
           "apps",
           "hooks",
           "marketplaceName",
@@ -13525,15 +13639,8 @@
         "type": "object"
       },
       "ReasoningEffort": {
-        "description": "See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#get-started-with-reasoning",
-        "enum": [
-          "none",
-          "minimal",
-          "low",
-          "medium",
-          "high",
-          "xhigh"
-        ],
+        "description": "A non-empty reasoning effort value advertised by the model.",
+        "minLength": 1,
         "type": "string"
       },
       "ReasoningEffortOption": {
@@ -13985,6 +14092,37 @@
               "type"
             ],
             "title": "MessageResponseItem",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "author": {
+                "type": "string"
+              },
+              "content": {
+                "items": {
+                  "$ref": "#/definitions/v2/AgentMessageInputContent"
+                },
+                "type": "array"
+              },
+              "recipient": {
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "agent_message"
+                ],
+                "title": "AgentMessageResponseItemType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "author",
+              "content",
+              "recipient",
+              "type"
+            ],
+            "title": "AgentMessageResponseItem",
             "type": "object"
           },
           {
@@ -18482,6 +18620,25 @@
             "type": "string"
           }
         ]
+      },
+      "TurnModerationMetadataNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "metadata": true,
+          "threadId": {
+            "type": "string"
+          },
+          "turnId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "metadata",
+          "threadId",
+          "turnId"
+        ],
+        "title": "TurnModerationMetadataNotification",
+        "type": "object"
       },
       "TurnPlanStep": {
         "properties": {

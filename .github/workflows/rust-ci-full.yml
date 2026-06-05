@@ -167,8 +167,6 @@ jobs:
       USE_SCCACHE: ${{ (startsWith(matrix.runner, 'windows') || (matrix.runner == 'macos-15-xlarge' && matrix.target == 'x86_64-apple-darwin')) && 'false' || 'true' }}
       CARGO_INCREMENTAL: "0"
       SCCACHE_CACHE_SIZE: 10G
-      # In rust-ci, representative release-profile checks use thin LTO for faster feedback.
-      CARGO_PROFILE_RELEASE_LTO: ${{ matrix.profile == 'release' && 'thin' || 'fat' }}
 
     strategy:
       fail-fast: false

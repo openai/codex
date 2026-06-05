@@ -1549,6 +1549,8 @@ server_notification_definitions! {
     ContextCompacted => "thread/compacted" (v2::ContextCompactedNotification),
     ModelRerouted => "model/rerouted" (v2::ModelReroutedNotification),
     ModelVerification => "model/verification" (v2::ModelVerificationNotification),
+    #[experimental("turn/moderationMetadata")]
+    TurnModerationMetadata => "turn/moderationMetadata" (v2::TurnModerationMetadataNotification),
     Warning => "warning" (v2::WarningNotification),
     GuardianWarning => "guardianWarning" (v2::GuardianWarningNotification),
     DeprecationNotice => "deprecationNotice" (v2::DeprecationNoticeNotification),
@@ -3219,6 +3221,21 @@ mod tests {
         assert_eq!(
             crate::experimental_api::ExperimentalApi::experimental_reason(&notification),
             Some("thread/settings/updated")
+        );
+    }
+
+    #[test]
+    fn turn_moderation_metadata_notification_is_marked_experimental() {
+        let notification =
+            ServerNotification::TurnModerationMetadata(v2::TurnModerationMetadataNotification {
+                thread_id: "thr_123".to_string(),
+                turn_id: "turn_123".to_string(),
+                metadata: json!({"presentation": "inline"}),
+            });
+
+        assert_eq!(
+            crate::experimental_api::ExperimentalApi::experimental_reason(&notification),
+            Some("turn/moderationMetadata")
         );
     }
 

@@ -355,6 +355,22 @@
       },
       "type": "object"
     },
+    "CodeModeConfigToml": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "excluded_tool_namespaces": {
+          "description": "Exact tool namespaces to omit from the code-mode nested tool surface.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
     "ConfigProfile": {
       "additionalProperties": false,
       "description": "Collection of common configuration options that a user can define as a unit in `config.toml`.",
@@ -410,7 +426,7 @@
               "type": "boolean"
             },
             "code_mode": {
-              "type": "boolean"
+              "$ref": "#/definitions/FeatureToml_for_CodeModeConfigToml"
             },
             "code_mode_only": {
               "type": "boolean"
@@ -554,9 +570,6 @@
               "type": "boolean"
             },
             "request_rule": {
-              "type": "boolean"
-            },
-            "responses_websocket_response_processed": {
               "type": "boolean"
             },
             "responses_websockets": {
@@ -827,6 +840,16 @@
         },
         {
           "$ref": "#/definitions/AppsMcpPathOverrideConfigToml"
+        }
+      ]
+    },
+    "FeatureToml_for_CodeModeConfigToml": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "$ref": "#/definitions/CodeModeConfigToml"
         }
       ]
     },
@@ -2480,15 +2503,8 @@
       "type": "string"
     },
     "ReasoningEffort": {
-      "description": "See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#get-started-with-reasoning",
-      "enum": [
-        "none",
-        "minimal",
-        "low",
-        "medium",
-        "high",
-        "xhigh"
-      ],
+      "description": "A non-empty reasoning effort value advertised by the model.",
+      "minLength": 1,
       "type": "string"
     },
     "ReasoningSummary": {
@@ -4554,7 +4570,7 @@
           "type": "boolean"
         },
         "code_mode": {
-          "type": "boolean"
+          "$ref": "#/definitions/FeatureToml_for_CodeModeConfigToml"
         },
         "code_mode_only": {
           "type": "boolean"
@@ -4698,9 +4714,6 @@
           "type": "boolean"
         },
         "request_rule": {
-          "type": "boolean"
-        },
-        "responses_websocket_response_processed": {
           "type": "boolean"
         },
         "responses_websockets": {

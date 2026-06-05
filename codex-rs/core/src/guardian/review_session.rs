@@ -29,6 +29,7 @@ use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
+use crate::LoadedAgentsMd;
 use crate::codex_delegate::run_codex_thread_interactive;
 use crate::config::Config;
 use crate::config::Constrained;
@@ -146,7 +147,7 @@ struct GuardianReviewSessionReuseKey {
     permissions: Permissions,
     developer_instructions: Option<String>,
     base_instructions: Option<String>,
-    user_instructions: Option<String>,
+    user_instructions: Option<LoadedAgentsMd>,
     compact_prompt: Option<String>,
     cwd: AbsolutePathBuf,
     mcp_servers: Constrained<HashMap<String, McpServerConfig>>,
@@ -166,7 +167,7 @@ impl GuardianReviewSessionReuseKey {
             model_context_window: spawn_config.model_context_window,
             model_auto_compact_token_limit: spawn_config.model_auto_compact_token_limit,
             model_auto_compact_token_limit_scope: spawn_config.model_auto_compact_token_limit_scope,
-            model_reasoning_effort: spawn_config.model_reasoning_effort,
+            model_reasoning_effort: spawn_config.model_reasoning_effort.clone(),
             model_reasoning_summary: spawn_config.model_reasoning_summary,
             permissions: spawn_config.permissions.clone(),
             developer_instructions: spawn_config.developer_instructions.clone(),
@@ -657,7 +658,8 @@ async fn run_review_on_session(
     let guardian_reasoning_effort = if model_info.supports_reasoning_summaries {
         params
             .reasoning_effort
-            .or(model_info.default_reasoning_level)
+            .clone()
+            .or_else(|| model_info.default_reasoning_level.clone())
     } else {
         None
     };
@@ -741,7 +743,7 @@ async fn run_review_on_session(
                     mode: codex_protocol::config_types::ModeKind::Default,
                     settings: codex_protocol::config_types::Settings {
                         model: params.model.clone(),
-                        reasoning_effort: params.reasoning_effort,
+                        reasoning_effort: params.reasoning_effort.clone(),
                         developer_instructions: None,
                     },
                 }),
@@ -1106,7 +1108,7 @@ mod tests {
     async fn test_review_params() -> GuardianReviewSessionParams {
         let (session, turn) = crate::session::tests::make_session_and_context().await;
         let model = turn.model_info.slug.clone();
-        let reasoning_effort = turn.reasoning_effort;
+        let reasoning_effort = turn.reasoning_effort.clone();
         let reasoning_summary = turn.reasoning_summary;
         let personality = turn.personality;
         #[allow(deprecated)]
@@ -1115,7 +1117,7 @@ mod tests {
             turn.config.as_ref(),
             /*live_network_config*/ None,
             model.as_str(),
-            reasoning_effort,
+            reasoning_effort.clone(),
         )
         .expect("guardian config");
 

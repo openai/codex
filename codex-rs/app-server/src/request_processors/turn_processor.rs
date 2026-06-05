@@ -629,7 +629,7 @@ impl TurnRequestProcessor {
                     profile_workspace_roots: profile_workspace_roots.clone(),
                     windows_sandbox_level: None,
                     model: model.clone(),
-                    effort,
+                    effort: effort.clone(),
                     summary,
                     service_tier: service_tier.clone(),
                     collaboration_mode: collaboration_mode.clone(),
