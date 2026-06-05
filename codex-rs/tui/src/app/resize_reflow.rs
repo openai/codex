@@ -117,7 +117,10 @@ impl App {
     pub(super) fn begin_history_replay(&mut self) {
         if self.terminal_resize_reflow_enabled() && self.overlay.is_none() {
             self.transcript_reflow.clear_pending_reflow();
-            self.initial_history_replay_buffer = Some(InitialHistoryReplayBuffer);
+            self.initial_history_replay_buffer = Some(InitialHistoryReplayBuffer {
+                awaiting_session_header: true,
+                ..Default::default()
+            });
         }
     }
 
@@ -134,18 +137,28 @@ impl App {
 
     /// Render replayed history once from source after all replay events have been applied.
     pub(super) fn finish_history_replay(&mut self, tui: &mut tui::Tui) {
-        if self.initial_history_replay_buffer.take().is_none() {
+        let Some(replay) = self.initial_history_replay_buffer.take() else {
             return;
-        }
+        };
 
-        let width = tui.terminal.last_known_screen_size.width;
-        let reflowed_lines = self.render_transcript_lines_for_reflow(width).lines;
+        let terminal_width = tui.terminal.last_known_screen_size.width;
+        let reflowed_lines = self.render_history_replay_lines(replay.source_start, terminal_width);
         if !reflowed_lines.is_empty() {
             tui.insert_history_hyperlink_lines_with_wrap_policy(
                 reflowed_lines,
                 self.history_line_wrap_policy(),
             );
         }
+    }
+
+    pub(super) fn render_history_replay_lines(
+        &mut self,
+        source_start: usize,
+        terminal_width: u16,
+    ) -> Vec<HyperlinkLine> {
+        let width = self.chat_widget.history_wrap_width(terminal_width);
+        self.render_transcript_lines_for_reflow_from(source_start, width)
+            .lines
     }
 
     pub(crate) fn history_line_wrap_policy(&self) -> HistoryLineWrapPolicy {
@@ -414,12 +427,20 @@ impl App {
     /// were a new top-level history item. The final row trim happens after separators are restored,
     /// so the returned rows obey the cap exactly.
     pub(super) fn render_transcript_lines_for_reflow(&mut self, width: u16) -> ReflowRenderResult {
+        self.render_transcript_lines_for_reflow_from(/*source_start*/ 0, width)
+    }
+
+    fn render_transcript_lines_for_reflow_from(
+        &mut self,
+        source_start: usize,
+        width: u16,
+    ) -> ReflowRenderResult {
         let row_cap = self.resize_reflow_max_rows();
         let mut cell_displays = VecDeque::new();
         let mut rendered_rows = 0usize;
         let mut start = self.transcript_cells.len();
 
-        while start > 0 {
+        while start > source_start {
             start -= 1;
             let cell = self.transcript_cells[start].clone();
             let lines = cell
@@ -435,7 +456,7 @@ impl App {
             }
         }
 
-        while start > 0
+        while start > source_start
             && cell_displays
                 .front()
                 .is_some_and(|display| display.is_stream_continuation)

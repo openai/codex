@@ -4030,6 +4030,71 @@ async fn history_replay_activates_without_row_cap() {
 }
 
 #[tokio::test]
+async fn capped_history_replay_excludes_preserved_header_from_source_render() {
+    let (mut app, _rx, _op_rx) = make_test_app_with_channels().await;
+    app.config.terminal_resize_reflow.max_rows = TerminalResizeReflowMaxRows::Limit(1);
+    let session = ThreadSessionState {
+        thread_id: ThreadId::new(),
+        forked_from_id: None,
+        fork_parent_title: None,
+        thread_name: None,
+        model: "gpt-test".to_string(),
+        model_provider_id: "test-provider".to_string(),
+        service_tier: None,
+        approval_policy: AskForApproval::Never,
+        approvals_reviewer: ApprovalsReviewer::User,
+        permission_profile: PermissionProfile::read_only(),
+        active_permission_profile: None,
+        cwd: test_path_buf("/tmp/project").abs(),
+        runtime_workspace_roots: Vec::new(),
+        instruction_source_paths: Vec::new(),
+        reasoning_effort: None,
+        collaboration_mode: None,
+        personality: None,
+        message_history: None,
+        network_proxy: None,
+        rollout_path: Some(PathBuf::new()),
+    };
+    let header = Arc::new(new_session_info(
+        app.chat_widget.config_ref(),
+        app.chat_widget.current_model(),
+        &session,
+        /*is_first_event*/ false,
+        /*tooltip_override*/ None,
+        /*auth_plan*/ None,
+        /*show_fast_status*/ false,
+    ));
+    let expected = vec![Line::from("tail").into()];
+    app.transcript_cells = vec![header, plain_line_cell("tail")];
+
+    let rendered =
+        app.render_history_replay_lines(/*source_start*/ 1, /*terminal_width*/ 80);
+
+    assert_eq!(rendered, expected);
+}
+
+#[tokio::test]
+async fn history_replay_uses_pet_reserved_width() {
+    let (mut app, _rx, _op_rx) = make_test_app_with_channels().await;
+    app.chat_widget
+        .set_pet_image_support_for_tests(crate::pets::PetImageSupport::Supported(
+            crate::pets::ImageProtocol::Kitty,
+        ));
+    app.chat_widget
+        .install_test_ambient_pet_for_tests(/*animations_enabled*/ false);
+    let cell = plain_line_cell("one two three four five six seven eight nine ten");
+    let width = app.chat_widget.history_wrap_width(/*width*/ 40);
+    let expected =
+        cell.display_hyperlink_lines_for_mode(width, app.chat_widget.history_render_mode());
+    app.transcript_cells = vec![cell];
+
+    let rendered =
+        app.render_history_replay_lines(/*source_start*/ 0, /*terminal_width*/ 40);
+
+    assert_eq!(rendered, expected);
+}
+
+#[tokio::test]
 async fn history_replay_defers_resize_and_consolidation_reflows() {
     let (mut app, _rx, _op_rx) = make_test_app_with_channels().await;
     enable_terminal_resize_reflow(&mut app);

@@ -472,8 +472,11 @@ struct SessionSummary {
 }
 
 /// Marks replay whose terminal writes are deferred until `transcript_cells` is complete.
-#[derive(Debug)]
-struct InitialHistoryReplayBuffer;
+#[derive(Debug, Default)]
+struct InitialHistoryReplayBuffer {
+    source_start: usize,
+    awaiting_session_header: bool,
+}
 
 pub(crate) struct App {
     model_catalog: Arc<ModelCatalog>,

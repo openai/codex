@@ -86,18 +86,12 @@ fn should_emit_notification(condition: NotificationCondition, terminal_focused: 
 
 fn run_synchronized_draw<W, T>(
     writer: &mut W,
-    replay_clear_pending: &mut bool,
     operations: impl FnOnce(&mut W) -> Result<T>,
 ) -> Result<T>
 where
     W: Write,
 {
-    let replay_clear_requested = *replay_clear_pending;
-    let result = writer.sync_update(operations)?;
-    if replay_clear_requested && result.is_ok() {
-        *replay_clear_pending = false;
-    }
-    result
+    writer.sync_update(operations)?
 }
 
 impl Drop for Tui {
@@ -193,10 +187,11 @@ mod tests {
         let mut replay_clear_pending = true;
         let replay_clear_requested = replay_clear_pending;
 
-        let value = run_synchronized_draw(&mut output, &mut replay_clear_pending, |writer| {
+        let value = run_synchronized_draw(&mut output, |writer| {
             assert!(replay_clear_requested);
             writer.write_all(b"clear")?;
             writer.write_all(b"replay")?;
+            replay_clear_pending = false;
             Ok(42)
         })
         .expect("synchronized draw");
@@ -209,10 +204,10 @@ mod tests {
     #[test]
     fn synchronized_draw_retries_replay_clear_after_render_error() {
         let mut output = Vec::new();
-        let mut replay_clear_pending = true;
+        let replay_clear_pending = true;
         let replay_clear_requested = replay_clear_pending;
 
-        let error = run_synchronized_draw(&mut output, &mut replay_clear_pending, |writer| {
+        let error = run_synchronized_draw(&mut output, |writer| {
             assert!(replay_clear_requested);
             writer.write_all(b"clear")?;
             Err::<(), _>(std::io::Error::other("render failed"))
@@ -225,7 +220,7 @@ mod tests {
     }
 
     #[test]
-    fn synchronized_draw_retries_replay_clear_after_sync_flush_error() {
+    fn synchronized_draw_does_not_retry_clear_after_replay_is_committed() {
         struct FailOnFlush {
             output: Vec<u8>,
         }
@@ -245,16 +240,18 @@ mod tests {
         let mut replay_clear_pending = true;
         let replay_clear_requested = replay_clear_pending;
 
-        let error = run_synchronized_draw(&mut writer, &mut replay_clear_pending, |writer| {
+        let error = run_synchronized_draw(&mut writer, |writer| {
             assert!(replay_clear_requested);
             writer.write_all(b"clear")?;
+            writer.write_all(b"replay")?;
+            replay_clear_pending = false;
             Ok(())
         })
         .expect_err("sync flush should fail");
 
         assert_eq!(error.kind(), std::io::ErrorKind::Other);
-        assert!(replay_clear_pending);
-        assert_eq!(writer.output, b"\x1b[?2026hclear\x1b[?2026l");
+        assert!(!replay_clear_pending);
+        assert_eq!(writer.output, b"\x1b[?2026hclearreplay\x1b[?2026l");
     }
 }
 
@@ -971,7 +968,7 @@ impl Tui {
 
         let mut replay_clear_pending = self.terminal_replay_clear_pending;
         let replay_clear_requested = replay_clear_pending;
-        let result = run_synchronized_draw(&mut stdout(), &mut replay_clear_pending, |_| {
+        let result = run_synchronized_draw(&mut stdout(), |_| {
             #[cfg(unix)]
             if let Some(prepared) = prepared_resume.take() {
                 prepared.apply(&mut self.terminal)?;
@@ -1011,6 +1008,9 @@ impl Tui {
                 &mut self.pending_history_lines,
                 self.is_zellij,
             )?;
+            if replay_clear_requested {
+                replay_clear_pending = false;
+            }
 
             // Update the y position for suspending so Ctrl-Z can place the cursor correctly.
             #[cfg(unix)]
@@ -1111,7 +1111,7 @@ impl Tui {
 
         let mut replay_clear_pending = self.terminal_replay_clear_pending;
         let replay_clear_requested = replay_clear_pending;
-        let result = run_synchronized_draw(&mut stdout(), &mut replay_clear_pending, |_| {
+        let result = run_synchronized_draw(&mut stdout(), |_| {
             #[cfg(unix)]
             if let Some(prepared) = prepared_resume.take() {
                 prepared.apply(&mut self.terminal)?;
@@ -1129,6 +1129,9 @@ impl Tui {
                 &mut self.pending_history_lines,
                 self.is_zellij,
             )?;
+            if replay_clear_requested {
+                replay_clear_pending = false;
+            }
 
             if needs_full_repaint {
                 terminal.invalidate_viewport();

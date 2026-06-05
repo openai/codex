@@ -197,13 +197,28 @@ impl App {
                     tui.frame_requester().schedule_frame();
                 }
                 self.transcript_cells.push(cell.clone());
-                if self.initial_history_replay_buffer.is_none() {
+                let replayed_session_header = self
+                    .initial_history_replay_buffer
+                    .as_ref()
+                    .is_some_and(|replay| {
+                        replay.awaiting_session_header
+                            && cell.as_any().is::<history_cell::SessionInfoCell>()
+                    });
+                if self.initial_history_replay_buffer.is_none() || replayed_session_header {
                     self.insert_history_cell_lines(
                         tui,
                         cell.as_ref(),
                         self.chat_widget
                             .history_wrap_width(tui.terminal.last_known_screen_size.width),
                     );
+                }
+                if let Some(replay) = &mut self.initial_history_replay_buffer
+                    && replay.awaiting_session_header
+                {
+                    replay.awaiting_session_header = false;
+                    if replayed_session_header {
+                        replay.source_start = self.transcript_cells.len();
+                    }
                 }
             }
             AppEvent::EndHistoryReplay => {
