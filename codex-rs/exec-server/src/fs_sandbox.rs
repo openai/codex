@@ -85,6 +85,11 @@ impl FileSystemSandboxRunner {
     fn helper_exe_for_launch(&self) -> Result<AbsolutePathBuf, JSONRPCErrorError> {
         #[cfg(target_os = "windows")]
         {
+            // Windows sandbox launch grants are prepared around the executable
+            // path that the sandbox will spawn. When exec-server is embedded or
+            // hosted, `current_exe()` can point at the host process instead of
+            // the configured Codex binary, so materialize the runtime-provided
+            // helper and use that exact path for both launch and read roots.
             let codex_home = codex_utils_home_dir::find_codex_home().map_err(|err| {
                 internal_error(format!(
                     "windows fs sandbox helper failed to resolve CODEX_HOME: {err}"
@@ -377,6 +382,11 @@ fn write_windows_fs_helper_request_file(
     helper_program: &str,
     request_json: &[u8],
 ) -> Result<std::path::PathBuf, JSONRPCErrorError> {
+    // The Windows sandbox capture helpers expose argv/env/cwd/stdout/stderr,
+    // but not a stdin pipe. Write the helper request next to the materialized
+    // helper executable and pass that path as an argv item instead. That
+    // directory is already included in the helper read roots for the sandboxed
+    // child, and the file is removed after the capture returns.
     let helper_dir = std::path::Path::new(helper_program)
         .parent()
         .ok_or_else(|| {

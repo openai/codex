@@ -45,6 +45,9 @@ async fn run_main() -> Result<(), Box<dyn Error + Send + Sync>> {
 }
 
 async fn read_request_input() -> Result<Vec<u8>, Box<dyn Error + Send + Sync>> {
+    // Normal helper launches send the JSON request over stdin. The Windows
+    // sandbox capture path cannot pipe stdin into the sandboxed child, so it
+    // passes a temporary request-file path as the second helper argument.
     if let Some(path) = std::env::args_os().nth(2) {
         return Ok(tokio::fs::read(PathBuf::from(path)).await?);
     }

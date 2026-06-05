@@ -99,6 +99,13 @@ pub fn resolve_current_exe_for_launch(codex_home: &Path, fallback_executable: &s
     resolve_exe_for_launch(&source, codex_home)
 }
 
+/// Returns the executable path that should be launched from a Windows sandbox.
+///
+/// Windows sandbox launch setup may grant access to helper binaries under
+/// CODEX_HOME/.sandbox-bin. Callers that already know the intended helper
+/// binary should pass it here instead of relying on `current_exe()`, which can
+/// name a host process rather than the Codex helper in embedded exec-server
+/// scenarios.
 pub fn resolve_exe_for_launch(source: &Path, codex_home: &Path) -> PathBuf {
     let Some(file_name) = source.file_name() else {
         return source.to_path_buf();
