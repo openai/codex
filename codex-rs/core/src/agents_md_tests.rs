@@ -376,11 +376,7 @@ async fn resolving_again_replaces_project_instructions() {
         .await
         .expect("instructions expected");
     let user_agents = config.codex_home.join(DEFAULT_AGENTS_MD_FILENAME);
-    let second_agents = AbsolutePathBuf::try_from(
-        dunce::canonicalize(second_project.join("AGENTS.md"))
-            .expect("canonical second project doc path"),
-    )
-    .expect("absolute second project doc path");
+    let second_agents = second_project.join("AGENTS.md").abs();
 
     assert_eq!(
         loaded,
