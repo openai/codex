@@ -2450,6 +2450,14 @@ impl ThreadRequestProcessor {
             }
         }
 
+        let thread_manager_for_prewarm = Arc::clone(&self.thread_manager);
+        let config_for_prewarm = Arc::clone(&self.config);
+        tokio::spawn(async move {
+            thread_manager_for_prewarm
+                .prewarm_plugins_and_skills(config_for_prewarm)
+                .await;
+        });
+
         let ThreadResumeParams {
             thread_id,
             history,

@@ -439,7 +439,7 @@ pub(crate) struct AppServerClientMetadata {
     pub(crate) client_version: Option<String>,
 }
 
-async fn warm_plugins_and_skills_for_session_init(
+pub(crate) async fn warm_plugins_and_skills_for_session_init(
     config: Arc<Config>,
     environment_manager: Arc<EnvironmentManager>,
     plugins_manager: Arc<PluginsManager>,

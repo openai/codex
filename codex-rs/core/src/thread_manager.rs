@@ -13,6 +13,7 @@ use crate::session::CodexSpawnArgs;
 use crate::session::CodexSpawnOk;
 use crate::session::INITIAL_SUBMIT_ID;
 use crate::session::resolve_multi_agent_version;
+use crate::session::session::warm_plugins_and_skills_for_session_init;
 use crate::shell_snapshot::ShellSnapshot;
 use crate::tasks::InterruptedTurnHistoryMarker;
 use crate::tasks::interrupted_turn_history_marker;
@@ -423,6 +424,22 @@ impl ThreadManager {
 
     pub fn environment_manager(&self) -> Arc<EnvironmentManager> {
         self.state.environment_manager.clone()
+    }
+
+    /// Populate the plugin and skill caches for a likely upcoming thread.
+    pub async fn prewarm_plugins_and_skills(&self, config: Arc<Config>) {
+        let environments = default_thread_environment_selections(
+            self.state.environment_manager.as_ref(),
+            &config.cwd,
+        );
+        let _ = warm_plugins_and_skills_for_session_init(
+            config,
+            Arc::clone(&self.state.environment_manager),
+            Arc::clone(&self.state.plugins_manager),
+            Arc::clone(&self.state.skills_manager),
+            environments,
+        )
+        .await;
     }
 
     pub fn default_environment_selections(

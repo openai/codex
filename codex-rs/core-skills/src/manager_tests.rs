@@ -222,6 +222,59 @@ async fn skills_for_config_reuses_cache_for_same_effective_config() {
 }
 
 #[tokio::test]
+async fn skills_for_config_reuses_in_progress_load() {
+    let codex_home = tempfile::tempdir().expect("tempdir");
+    let cwd = tempfile::tempdir().expect("tempdir");
+    let config_layer_stack = config_stack(&codex_home, "");
+    let skills_manager = Arc::new(SkillsManager::new(
+        codex_home.path().abs(),
+        /*bundled_skills_enabled*/ true,
+    ));
+    let skills_input = SkillsLoadInput::new(
+        cwd.path().abs(),
+        Vec::new(),
+        config_layer_stack.clone(),
+        bundled_skills_enabled_from_stack(&config_layer_stack),
+    );
+    let roots = skills_manager
+        .skill_roots_for_config(&skills_input, Some(Arc::clone(&LOCAL_FS)))
+        .await;
+    let cache_key =
+        config_skills_cache_key(&roots, &skill_config_rules_from_stack(&config_layer_stack));
+    let in_progress = Arc::new(OnceCell::new());
+    skills_manager
+        .cache_by_config
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .insert(cache_key, Arc::clone(&in_progress));
+
+    let lookup = {
+        let skills_manager = Arc::clone(&skills_manager);
+        tokio::spawn(async move {
+            skills_manager
+                .skills_for_config(&skills_input, Some(Arc::clone(&LOCAL_FS)))
+                .await
+        })
+    };
+    tokio::task::yield_now().await;
+    assert!(!lookup.is_finished());
+
+    let expected = SkillLoadOutcome {
+        errors: vec![crate::SkillError {
+            path: cwd.path().abs(),
+            message: "loaded once".to_string(),
+        }],
+        ..Default::default()
+    };
+    in_progress
+        .set(expected.clone())
+        .expect("in-progress load should not be initialized");
+
+    let outcome = lookup.await.expect("skill lookup should finish");
+    assert_eq!(outcome.errors, expected.errors);
+}
+
+#[tokio::test]
 async fn set_extra_roots_replaces_runtime_roots_and_clears_cache() {
     let codex_home = tempfile::tempdir().expect("tempdir");
     let cwd = tempfile::tempdir().expect("tempdir");

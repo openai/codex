@@ -9,6 +9,7 @@ use codex_protocol::protocol::Product;
 use codex_protocol::protocol::SkillScope;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_plugins::PluginSkillRoot;
+use tokio::sync::OnceCell;
 use tracing::info;
 use tracing::warn;
 
@@ -53,7 +54,7 @@ pub struct SkillsManager {
     restriction_product: Option<Product>,
     extra_roots: RwLock<Vec<AbsolutePathBuf>>,
     cache_by_cwd: RwLock<HashMap<AbsolutePathBuf, SkillLoadOutcome>>,
-    cache_by_config: RwLock<HashMap<ConfigSkillsCacheKey, SkillLoadOutcome>>,
+    cache_by_config: RwLock<HashMap<ConfigSkillsCacheKey, Arc<OnceCell<SkillLoadOutcome>>>>,
 }
 
 impl SkillsManager {
@@ -108,17 +109,17 @@ impl SkillsManager {
         let roots = self.skill_roots_for_config(input, fs).await;
         let skill_config_rules = skill_config_rules_from_stack(&input.config_layer_stack);
         let cache_key = config_skills_cache_key(&roots, &skill_config_rules);
-        if let Some(outcome) = self.cached_outcome_for_config(&cache_key) {
-            return outcome;
-        }
-
-        let outcome = self.build_skill_outcome(roots, &skill_config_rules).await;
-        let mut cache = self
-            .cache_by_config
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        cache.insert(cache_key, outcome.clone());
-        outcome
+        let cache_entry = {
+            let mut cache = self
+                .cache_by_config
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            Arc::clone(cache.entry(cache_key).or_default())
+        };
+        cache_entry
+            .get_or_init(|| self.build_skill_outcome(roots, &skill_config_rules))
+            .await
+            .clone()
     }
 
     pub async fn skill_roots_for_config(
@@ -154,8 +155,21 @@ impl SkillsManager {
             return outcome;
         }
 
+        if use_cwd_cache {
+            if force_reload {
+                self.clear_config_cache();
+            }
+            let outcome = self.skills_for_config(input, fs).await;
+            let mut cache = self
+                .cache_by_cwd
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            cache.insert(input.cwd.clone(), outcome.clone());
+            return outcome;
+        }
+
         let mut roots = skill_roots(
-            fs.clone(),
+            fs,
             &input.config_layer_stack,
             &input.cwd,
             input.effective_skill_roots.clone(),
@@ -166,15 +180,7 @@ impl SkillsManager {
             roots.retain(|root| root.scope != SkillScope::System);
         }
         let skill_config_rules = skill_config_rules_from_stack(&input.config_layer_stack);
-        let outcome = self.build_skill_outcome(roots, &skill_config_rules).await;
-        if use_cwd_cache {
-            let mut cache = self
-                .cache_by_cwd
-                .write()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            cache.insert(input.cwd.clone(), outcome.clone());
-        }
-        outcome
+        self.build_skill_outcome(roots, &skill_config_rules).await
     }
 
     async fn build_skill_outcome(
@@ -200,15 +206,7 @@ impl SkillsManager {
             cache.clear();
             cleared
         };
-        let cleared_config = {
-            let mut cache = self
-                .cache_by_config
-                .write()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let cleared = cache.len();
-            cache.clear();
-            cleared
-        };
+        let cleared_config = self.clear_config_cache();
         let cleared = cleared_cwd + cleared_config;
         info!("skills cache cleared ({cleared} entries)");
     }
@@ -220,14 +218,14 @@ impl SkillsManager {
         }
     }
 
-    fn cached_outcome_for_config(
-        &self,
-        cache_key: &ConfigSkillsCacheKey,
-    ) -> Option<SkillLoadOutcome> {
-        match self.cache_by_config.read() {
-            Ok(cache) => cache.get(cache_key).cloned(),
-            Err(err) => err.into_inner().get(cache_key).cloned(),
-        }
+    fn clear_config_cache(&self) -> usize {
+        let mut cache = self
+            .cache_by_config
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let cleared = cache.len();
+        cache.clear();
+        cleared
     }
 
     fn extra_roots(&self) -> Vec<AbsolutePathBuf> {
