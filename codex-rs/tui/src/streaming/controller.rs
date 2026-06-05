@@ -744,31 +744,7 @@ impl StreamCore {
             return source_start + boundary;
         }
 
-        let mut boundaries = Vec::new();
-        boundaries.push(source_start);
-        boundaries.extend(
-            self.raw_source[source_start..source_end]
-                .char_indices()
-                .map(|(idx, ch)| source_start + idx + ch.len_utf8()),
-        );
-
-        for boundary in boundaries {
-            let rendered = self.render_source(&self.raw_source[..boundary]);
-            if rendered.len() < emitted_prefix.len() {
-                continue;
-            }
-            let rendered_text = rendered[..emitted_prefix.len()]
-                .iter()
-                .map(hyperlink_line_text)
-                .collect::<Vec<_>>();
-            if rendered_text == emitted_text {
-                return boundary;
-            }
-        }
-
-        self.source_boundary_after_rendered_len(emitted_prefix.len())
-            .min(source_end)
-            .max(source_start)
+        source_start
     }
 
     fn default_tail_budget_lines(&mut self) -> usize {
@@ -805,20 +781,34 @@ fn visible_text_source_boundary(source: &str, visible_prefix: &str) -> Option<us
 
     let mut visible_chars = visible_prefix.chars().peekable();
     let mut iter = source.char_indices().peekable();
+    let mut at_line_start = true;
     while let Some((idx, ch)) = iter.next() {
         if visible_chars.peek().is_none() {
             return Some(idx);
         }
 
+        if at_line_start && skip_line_marker(ch, &mut iter, visible_chars.peek().copied()) {
+            continue;
+        }
+
         if ch == '[' {
             let mut label_end = None;
             let mut label_chars = Vec::new();
+            let mut depth = 1usize;
             for (label_idx, label_ch) in iter.by_ref() {
                 if label_ch == ']' {
-                    label_end = Some(label_idx + label_ch.len_utf8());
-                    break;
+                    depth = depth.saturating_sub(1);
+                    if depth == 0 {
+                        label_end = Some(label_idx + label_ch.len_utf8());
+                        break;
+                    }
+                    label_chars.push((label_idx, label_ch));
+                } else {
+                    if label_ch == '[' {
+                        depth += 1;
+                    }
+                    label_chars.push((label_idx, label_ch));
                 }
-                label_chars.push((label_idx, label_ch));
             }
             let label_end = label_end?;
             for (label_idx, label_ch) in label_chars {
@@ -844,6 +834,7 @@ fn visible_text_source_boundary(source: &str, visible_prefix: &str) -> Option<us
                     }
                 }
             }
+            at_line_start = false;
             continue;
         }
 
@@ -854,10 +845,12 @@ fn visible_text_source_boundary(source: &str, visible_prefix: &str) -> Option<us
         match visible_chars.peek().copied() {
             Some(expected) if expected == ch => {
                 visible_chars.next();
+                at_line_start = ch == '\n';
                 if visible_chars.peek().is_none() {
                     return Some(idx + ch.len_utf8());
                 }
             }
+            Some(_) if ch.is_ascii_punctuation() => continue,
             _ => return None,
         }
     }
@@ -865,14 +858,70 @@ fn visible_text_source_boundary(source: &str, visible_prefix: &str) -> Option<us
     visible_chars.peek().is_none().then_some(source.len())
 }
 
+fn skip_line_marker(
+    ch: char,
+    iter: &mut std::iter::Peekable<std::str::CharIndices<'_>>,
+    expected: Option<char>,
+) -> bool {
+    if expected == Some(ch) {
+        return false;
+    }
+
+    if matches!(ch, '#' | '>' | '-' | '+' | '*') {
+        while let Some((_, next_ch)) = iter.peek().copied() {
+            if next_ch.is_whitespace() {
+                iter.next();
+            } else {
+                break;
+            }
+        }
+        return true;
+    }
+
+    if ch.is_ascii_digit() {
+        let mut clone = iter.clone();
+        while let Some((_, next_ch)) = clone.peek().copied() {
+            if next_ch.is_ascii_digit() {
+                clone.next();
+            } else {
+                break;
+            }
+        }
+        if let Some((_, '.' | ')')) = clone.next() {
+            while let Some((_, next_ch)) = clone.peek().copied() {
+                if next_ch.is_whitespace() {
+                    clone.next();
+                } else {
+                    break;
+                }
+            }
+            *iter = clone;
+            return true;
+        }
+    }
+
+    false
+}
+
 fn skip_link_destination(source: &str, label_end: usize) -> Option<usize> {
     let after_label = source.get(label_end..)?;
     if !after_label.starts_with('(') {
         return None;
     }
-    after_label
-        .find(')')
-        .map(|destination_end| label_end + destination_end + ')'.len_utf8())
+    let mut depth = 0usize;
+    for (idx, ch) in after_label.char_indices() {
+        match ch {
+            '(' => depth += 1,
+            ')' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    return Some(label_end + idx + ch.len_utf8());
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 fn trim_rendered_prefix(
@@ -2864,6 +2913,98 @@ mod tests {
         assert!(
             joined.contains("gamma") && joined.contains("tail line"),
             "raw suffix should preserve un-emitted source after the rendered link label; emitted before toggle: {first_emit:?}, finalized after toggle: {joined:?}",
+        );
+    }
+
+    #[test]
+    fn controller_set_render_mode_raw_suffix_skips_balanced_link_destination() {
+        let mut ctrl = stream_controller(Some(/*width*/ 10));
+        ctrl.push(
+            "[alpha beta](https://example.com/a(foo)/bar) gamma delta epsilon zeta eta theta\n",
+        );
+        ctrl.push("tail line\n");
+
+        let (first_emit, idle) = ctrl.on_commit_tick();
+        let first_emit = first_emit
+            .expect("expected first rich wrapped line emission")
+            .transcript_lines(u16::MAX);
+        assert!(!idle, "expected remaining rich content after one tick");
+
+        ctrl.set_render_mode(HistoryRenderMode::Raw);
+
+        let (cell, _source) = ctrl.finalize();
+        let remaining = cell
+            .map(|c| lines_to_plain_strings(&c.transcript_lines(u16::MAX)))
+            .unwrap_or_default();
+        let first_emit = lines_to_plain_strings(&first_emit).join("\n");
+        let joined = remaining.join("\n");
+        assert!(
+            !joined.contains("foo") && !joined.contains("/bar"),
+            "raw suffix must skip the full hidden destination with balanced parens; emitted before toggle: {first_emit:?}, finalized after toggle: {joined:?}",
+        );
+        assert!(
+            joined.contains("gamma") && joined.contains("tail line"),
+            "raw suffix should resume after the link destination; emitted before toggle: {first_emit:?}, finalized after toggle: {joined:?}",
+        );
+    }
+
+    #[test]
+    fn controller_set_render_mode_raw_suffix_handles_nested_link_label() {
+        let mut ctrl = stream_controller(Some(/*width*/ 14));
+        ctrl.push("[alpha [beta] rest](https://example.com) gamma delta epsilon zeta\n");
+        ctrl.push("tail line\n");
+
+        let (first_emit, idle) = ctrl.on_commit_tick();
+        let first_emit = first_emit
+            .expect("expected first rich wrapped line emission")
+            .transcript_lines(u16::MAX);
+        assert!(!idle, "expected remaining rich content after one tick");
+
+        ctrl.set_render_mode(HistoryRenderMode::Raw);
+
+        let (cell, _source) = ctrl.finalize();
+        let remaining = cell
+            .map(|c| lines_to_plain_strings(&c.transcript_lines(u16::MAX)))
+            .unwrap_or_default();
+        let first_emit = lines_to_plain_strings(&first_emit).join("\n");
+        let joined = remaining.join("\n");
+        assert!(
+            !joined.contains("](https://example.com)") && !joined.contains("https://example.com"),
+            "raw suffix must not resume inside nested link markup; emitted before toggle: {first_emit:?}, finalized after toggle: {joined:?}",
+        );
+        assert!(
+            joined.contains("gamma") && joined.contains("tail line"),
+            "raw suffix should preserve text after the nested link label; emitted before toggle: {first_emit:?}, finalized after toggle: {joined:?}",
+        );
+    }
+
+    #[test]
+    fn controller_set_render_mode_raw_suffix_offsets_heading_marker() {
+        let mut ctrl = stream_controller(Some(/*width*/ 12));
+        ctrl.push("## alpha beta gamma delta epsilon zeta eta theta\n");
+        ctrl.push("tail line\n");
+
+        let (first_emit, idle) = ctrl.on_commit_tick();
+        let first_emit = first_emit
+            .expect("expected first rich wrapped heading emission")
+            .transcript_lines(u16::MAX);
+        assert!(!idle, "expected remaining rich content after one tick");
+
+        ctrl.set_render_mode(HistoryRenderMode::Raw);
+
+        let (cell, _source) = ctrl.finalize();
+        let remaining = cell
+            .map(|c| lines_to_plain_strings(&c.transcript_lines(u16::MAX)))
+            .unwrap_or_default();
+        let first_emit = lines_to_plain_strings(&first_emit).join("\n");
+        let joined = remaining.join("\n");
+        assert!(
+            !joined.contains("## alpha beta"),
+            "raw suffix must not replay the already-visible heading prefix; emitted before toggle: {first_emit:?}, finalized after toggle: {joined:?}",
+        );
+        assert!(
+            joined.contains("delta") && joined.contains("tail line"),
+            "raw suffix should preserve un-emitted heading text; emitted before toggle: {first_emit:?}, finalized after toggle: {joined:?}",
         );
     }
 
