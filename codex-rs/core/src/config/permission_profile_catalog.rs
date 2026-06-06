@@ -4,7 +4,7 @@ use codex_config::ConfigLayerStack;
 use codex_config::RequirementSource;
 use codex_config::SandboxModeRequirement;
 use codex_config::Sourced;
-use codex_config::config_toml::ConfigToml;
+use codex_config::permissions_toml::PermissionsToml;
 use codex_config::sandbox_mode_requirement_for_permission_profile;
 use codex_protocol::models::PermissionProfile;
 
@@ -32,13 +32,15 @@ pub fn permission_profile_catalog(
     config_layer_stack: &ConfigLayerStack,
     policy_cwd: &Path,
 ) -> std::io::Result<Vec<PermissionProfileCatalogEntry>> {
-    let config_toml: ConfigToml = config_layer_stack
+    let permissions = config_layer_stack
         .effective_config()
-        .try_into()
+        .get("permissions")
+        .cloned()
+        .map(toml::Value::try_into::<PermissionsToml>)
+        .transpose()
         .map_err(std::io::Error::other)?;
     let requirements_toml = config_layer_stack.requirements_toml();
-    let permissions =
-        merge_managed_permission_profiles(config_toml.permissions.as_ref(), requirements_toml)?;
+    let permissions = merge_managed_permission_profiles(permissions.as_ref(), requirements_toml)?;
     validate_user_permission_profile_names(permissions.as_ref())?;
     validate_required_permission_profile_catalog(requirements_toml, permissions.as_ref())?;
 
