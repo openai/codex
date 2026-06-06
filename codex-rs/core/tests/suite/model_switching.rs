@@ -1,5 +1,7 @@
 use anyhow::Result;
 use codex_config::types::Personality;
+use codex_core::config::Config;
+use codex_extension_api::ExtensionRegistryBuilder;
 use codex_features::Feature;
 use codex_login::CodexAuth;
 use codex_models_manager::manager::RefreshStrategy;
@@ -39,6 +41,8 @@ use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::Duration;
 use wiremock::MockServer;
 
 fn read_only_user_turn(test: &TestCodex, items: Vec<UserInput>, model: String) -> Op {
@@ -794,6 +798,19 @@ async fn model_change_from_generated_image_to_text_preserves_prior_generated_ima
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn thread_rollback_after_generated_image_drops_entire_image_turn_history() -> Result<()> {
+    struct ThreadIdleCounter {
+        tx: tokio::sync::watch::Sender<u64>,
+    }
+
+    #[async_trait::async_trait]
+    impl codex_extension_api::ThreadLifecycleContributor<codex_core::config::Config>
+        for ThreadIdleCounter
+    {
+        async fn on_thread_idle(&self, _input: codex_extension_api::ThreadIdleInput<'_>) {
+            self.tx.send_modify(|count| *count += 1);
+        }
+    }
+
     skip_if_no_network!(Ok(()));
 
     let server = MockServer::start().await;
@@ -825,7 +842,11 @@ async fn thread_rollback_after_generated_image_drops_entire_image_turn_history()
     )
     .await;
 
+    let (thread_idle_tx, mut thread_idle_rx) = tokio::sync::watch::channel(0_u64);
+    let mut extensions = ExtensionRegistryBuilder::<Config>::new();
+    extensions.thread_lifecycle_contributor(Arc::new(ThreadIdleCounter { tx: thread_idle_tx }));
     let mut builder = test_codex()
+        .with_extensions(Arc::new(extensions.build()))
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_config(move |config| {
             config.model = Some(image_model_slug.to_string());
@@ -842,6 +863,7 @@ async fn thread_rollback_after_generated_image_drops_entire_image_turn_history()
         .list_models(RefreshStrategy::OnlineIfUncached)
         .await;
 
+    let idle_count_before_turn = *thread_idle_rx.borrow();
     test.codex
         .submit(read_only_user_turn(
             &test,
@@ -854,13 +876,39 @@ async fn thread_rollback_after_generated_image_drops_entire_image_turn_history()
         .await?;
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
-    test.codex
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while *thread_idle_rx.borrow_and_update() <= idle_count_before_turn {
+            thread_idle_rx
+                .changed()
+                .await
+                .expect("thread idle counter should remain available");
+        }
+    })
+    .await
+    .expect("timed out waiting for the image turn to become idle");
+
+    let rollback_id = test
+        .codex
         .submit(Op::ThreadRollback { num_turns: 1 })
         .await?;
-    wait_for_event(&test.codex, |ev| {
-        matches!(ev, EventMsg::ThreadRolledBack(_))
+    let rollback_event = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let event = test.codex.next_event().await?;
+            if event.id != rollback_id {
+                continue;
+            }
+            match event.msg {
+                EventMsg::ThreadRolledBack(event) => return Ok(event),
+                EventMsg::Error(error) => {
+                    anyhow::bail!("thread rollback failed: {}", error.message);
+                }
+                _ => {}
+            }
+        }
     })
-    .await;
+    .await
+    .expect("timed out waiting for thread rollback")?;
+    assert_eq!(rollback_event.num_turns, 1);
 
     test.codex
         .submit(read_only_user_turn(
