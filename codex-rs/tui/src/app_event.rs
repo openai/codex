@@ -416,6 +416,12 @@ pub(crate) enum AppEvent {
         result: Result<PluginListResponse, String>,
     },
 
+    /// Open the plugin list from an already cached response.
+    OpenPluginsList {
+        cwd: PathBuf,
+        response: PluginListResponse,
+    },
+
     /// Result of explicitly fetching remote-backed plugin sections.
     PluginRemoteSectionsLoaded {
         cwd: PathBuf,
