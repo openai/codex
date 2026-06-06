@@ -3,6 +3,7 @@ use std::sync::atomic::Ordering;
 
 use axum::http::HeaderValue;
 use codex_analytics::AppServerRpcTransport;
+use codex_app_server_protocol::InitializeCapabilities;
 use codex_login::default_client::SetOriginatorError;
 use codex_login::default_client::USER_AGENT_SUFFIX;
 use codex_login::default_client::get_codex_user_agent;
@@ -67,22 +68,13 @@ impl InitializeRequestProcessor {
         // experimental API). Proposed direction is instance-global first-write-wins
         // with initialize-time mismatch rejection.
         let analytics_initialize_params = params.clone();
-        let (
-            experimental_api_enabled,
+        let InitializeCapabilities {
+            experimental_api: experimental_api_enabled,
             request_attestation,
             opt_out_notification_methods,
             mcp_client_capabilities,
-        ) = match params.capabilities {
-            Some(capabilities) => (
-                capabilities.experimental_api,
-                capabilities.request_attestation,
-                capabilities
-                    .opt_out_notification_methods
-                    .unwrap_or_default(),
-                capabilities.mcp_client_capabilities,
-            ),
-            None => (false, false, Vec::new(), None),
-        };
+        } = params.capabilities.unwrap_or_default();
+        let opt_out_notification_methods = opt_out_notification_methods.unwrap_or_default();
         let ClientInfo {
             name,
             title: _title,

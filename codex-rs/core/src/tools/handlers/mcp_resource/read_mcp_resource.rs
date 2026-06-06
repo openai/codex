@@ -78,7 +78,11 @@ impl ToolExecutor<ToolInvocation> for ReadMcpResourceHandler {
 
         let payload_result: Result<ReadResourcePayload, FunctionCallError> = async {
             let result = session
-                .read_resource(&server, ReadResourceRequestParams::new(uri.clone()))
+                .read_resource_with_client_capabilities(
+                    &server,
+                    ReadResourceRequestParams::new(uri.clone()),
+                    turn.mcp_client_capabilities.as_ref(),
+                )
                 .await
                 .map_err(|err| {
                     FunctionCallError::RespondToModel(format!("resources/read failed: {err:#}"))

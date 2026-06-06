@@ -10,9 +10,13 @@ use app_test_support::create_mock_responses_server_sequence;
 use app_test_support::to_response;
 use app_test_support::write_mock_responses_config_toml;
 use axum::Router;
+use codex_app_server_protocol::ClientInfo;
+use codex_app_server_protocol::InitializeCapabilities;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
+use codex_app_server_protocol::McpAppUiCapability;
+use codex_app_server_protocol::McpClientCapabilities;
 use codex_app_server_protocol::McpElicitationSchema;
 use codex_app_server_protocol::McpServerElicitationAction;
 use codex_app_server_protocol::McpServerElicitationRequest;
@@ -95,7 +99,24 @@ url = "{mcp_server_url}/mcp"
     std::fs::write(config_path, config_toml)?;
 
     let mut mcp = TestAppServer::new(codex_home.path()).await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.initialize_with_capabilities(
+            ClientInfo {
+                name: "mcp-tool-capability-test".to_string(),
+                title: None,
+                version: "1.0.0".to_string(),
+            },
+            Some(InitializeCapabilities {
+                experimental_api: true,
+                mcp_client_capabilities: Some(McpClientCapabilities {
+                    app_ui: [McpAppUiCapability::WebView].into_iter().collect(),
+                }),
+                ..Default::default()
+            }),
+        ),
+    )
+    .await??;
 
     let thread_start_id = mcp
         .send_thread_start_request(ThreadStartParams {
@@ -577,6 +598,7 @@ impl ServerHandler for ToolAppsMcpServer {
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         assert_eq!(request.name.as_ref(), TEST_TOOL_NAME);
+        assert!(!context.meta.0.contains_key("openai/clientCapabilities"));
         let message = request
             .arguments
             .as_ref()

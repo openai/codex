@@ -8,6 +8,8 @@ use codex_features::Feature;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
+use codex_protocol::mcp::McpAppUiCapability;
+use codex_protocol::mcp::McpClientCapabilities;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ElicitationAction;
@@ -142,6 +144,17 @@ async fn approved_mcp_tool_call_metadata_records_prior_user_input_request() -> R
         });
     let test = builder.build(&server).await?;
 
+    test.codex
+        .set_app_server_client_info(
+            Some("turn-client".to_string()),
+            Some("1.0.0".to_string()),
+            false,
+            Some(McpClientCapabilities {
+                app_ui: [McpAppUiCapability::WebView].into_iter().collect(),
+            }),
+        )
+        .await?;
+
     submit_user_turn(
         &test,
         "Use [$calendar](app://calendar) to create a calendar event.",
@@ -168,6 +181,15 @@ async fn approved_mcp_tool_call_metadata_records_prior_user_input_request() -> R
     };
 
     test.codex
+        .set_app_server_client_info(
+            Some("resumed-client".to_string()),
+            Some("1.0.0".to_string()),
+            false,
+            Some(McpClientCapabilities::default()),
+        )
+        .await?;
+
+    test.codex
         .submit(Op::ResolveElicitation {
             server_name: request.server_name,
             request_id: request.id,
@@ -189,6 +211,12 @@ async fn approved_mcp_tool_call_metadata_records_prior_user_input_request() -> R
         apps_tool_call
             .pointer("/params/_meta/x-codex-turn-metadata/user_input_requested_during_turn"),
         Some(&json!(true))
+    );
+    assert_eq!(
+        apps_tool_call.pointer(
+            "/params/_meta/openai~1clientCapabilities/extensions/io.modelcontextprotocol~1ui/mimeTypes"
+        ),
+        Some(&json!(["text/html;profile=mcp-app"]))
     );
 
     Ok(())

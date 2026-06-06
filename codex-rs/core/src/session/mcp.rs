@@ -270,16 +270,17 @@ impl Session {
         clippy::await_holding_invalid_type,
         reason = "MCP resource calls are serialized through the session-owned manager guard"
     )]
-    pub async fn read_resource(
+    pub async fn read_resource_with_client_capabilities(
         &self,
         server: &str,
         params: ReadResourceRequestParams,
+        client_capabilities: Option<&McpClientCapabilities>,
     ) -> anyhow::Result<ReadResourceResult> {
         self.services
             .mcp_connection_manager
             .read()
             .await
-            .read_resource(server, params)
+            .read_resource_with_client_capabilities(server, params, client_capabilities)
             .await
     }
 
@@ -287,18 +288,19 @@ impl Session {
         clippy::await_holding_invalid_type,
         reason = "MCP tool calls are serialized through the session-owned manager guard"
     )]
-    pub async fn call_tool(
+    pub async fn call_tool_with_client_capabilities(
         &self,
         server: &str,
         tool: &str,
         arguments: Option<serde_json::Value>,
         meta: Option<serde_json::Value>,
+        client_capabilities: Option<&McpClientCapabilities>,
     ) -> anyhow::Result<CallToolResult> {
         self.services
             .mcp_connection_manager
             .read()
             .await
-            .call_tool(server, tool, arguments, meta)
+            .call_tool_with_client_capabilities(server, tool, arguments, meta, client_capabilities)
             .await
     }
 

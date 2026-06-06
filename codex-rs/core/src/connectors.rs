@@ -203,22 +203,6 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options(
     )
 }
 
-pub async fn list_accessible_connectors_from_mcp_tools_with_client_capabilities(
-    config: &Config,
-    force_refetch: bool,
-    mcp_client_capabilities: Option<McpClientCapabilities>,
-) -> anyhow::Result<Vec<AppInfo>> {
-    Ok(
-        list_accessible_connectors_from_mcp_tools_with_options_and_status(
-            config,
-            force_refetch,
-            mcp_client_capabilities,
-        )
-        .await?
-        .connectors,
-    )
-}
-
 pub async fn list_accessible_connectors_from_mcp_tools_with_options_and_status(
     config: &Config,
     force_refetch: bool,

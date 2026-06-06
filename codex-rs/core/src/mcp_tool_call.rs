@@ -569,11 +569,12 @@ async fn execute_mcp_tool_call(
         .start_mcp_call_trace(call_id);
     let request_meta = mcp_call_trace.add_request_meta(request_meta);
     let result = sess
-        .call_tool(
+        .call_tool_with_client_capabilities(
             &invocation.server,
             &invocation.tool,
             rewritten_arguments,
             request_meta,
+            turn_context.mcp_client_capabilities.as_ref(),
         )
         .await
         .map_err(|e| format!("tool call error: {e:?}"))?;
@@ -676,7 +677,11 @@ async fn maybe_request_codex_apps_auth_elicitation(
 async fn refresh_codex_apps_after_connector_auth(sess: &Session, turn_context: &TurnContext) {
     let mcp_tools_result = {
         let manager = sess.services.mcp_connection_manager.read().await;
-        manager.hard_refresh_codex_apps_tools_cache().await
+        manager
+            .hard_refresh_codex_apps_tools_cache_with_client_capabilities(
+                turn_context.mcp_client_capabilities.as_ref(),
+            )
+            .await
     };
 
     match mcp_tools_result {
@@ -1441,13 +1446,14 @@ pub(crate) async fn lookup_mcp_tool_metadata(
         .await
         {
             Some(connectors) => Some(connectors),
-            None => connectors::list_accessible_connectors_from_mcp_tools_with_client_capabilities(
+            None => connectors::list_accessible_connectors_from_mcp_tools_with_options_and_status(
                 turn_context.config.as_ref(),
                 false,
                 turn_context.mcp_client_capabilities.clone(),
             )
             .await
-            .ok(),
+            .ok()
+            .map(|status| status.connectors),
         };
         connectors.and_then(|connectors| {
             let connector_id = tool_info.connector_id.as_deref()?;

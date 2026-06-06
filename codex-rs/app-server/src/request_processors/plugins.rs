@@ -428,8 +428,9 @@ impl PluginRequestProcessor {
     pub(crate) async fn plugin_install(
         &self,
         params: PluginInstallParams,
+        mcp_client_capabilities: Option<McpClientCapabilities>,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.plugin_install_response(params)
+        self.plugin_install_response(params, mcp_client_capabilities)
             .await
             .map(|response| Some(response.into()))
     }
@@ -1364,6 +1365,7 @@ impl PluginRequestProcessor {
     async fn plugin_install_response(
         &self,
         params: PluginInstallParams,
+        mcp_client_capabilities: Option<McpClientCapabilities>,
     ) -> Result<PluginInstallResponse, JSONRPCErrorError> {
         let PluginInstallParams {
             marketplace_path,
@@ -1374,7 +1376,11 @@ impl PluginRequestProcessor {
             (Some(marketplace_path), None) => marketplace_path,
             (None, Some(remote_marketplace_name)) => {
                 return self
-                    .remote_plugin_install_response(remote_marketplace_name, plugin_name)
+                    .remote_plugin_install_response(
+                        remote_marketplace_name,
+                        plugin_name,
+                        mcp_client_capabilities,
+                    )
                     .await;
             }
             (Some(_), Some(_)) | (None, None) => {
@@ -1432,6 +1438,7 @@ impl PluginRequestProcessor {
                 auth.as_ref().is_some_and(CodexAuth::is_chatgpt_auth),
                 &result.plugin_id.as_key(),
                 &plugin_apps,
+                mcp_client_capabilities,
             )
             .await;
 
@@ -1445,6 +1452,7 @@ impl PluginRequestProcessor {
         &self,
         remote_marketplace_name: String,
         remote_plugin_id: String,
+        mcp_client_capabilities: Option<McpClientCapabilities>,
     ) -> Result<PluginInstallResponse, JSONRPCErrorError> {
         let config = self.load_latest_config(/*fallback_cwd*/ None).await?;
         if !config.features.enabled(Feature::Plugins) {
@@ -1547,6 +1555,7 @@ impl PluginRequestProcessor {
                 auth.as_ref().is_some_and(CodexAuth::is_chatgpt_auth),
                 &result.plugin_id.as_key(),
                 &plugin_apps,
+                mcp_client_capabilities,
             )
             .await;
 
@@ -1562,6 +1571,7 @@ impl PluginRequestProcessor {
         is_chatgpt_auth: bool,
         plugin_id: &str,
         plugin_apps: &[codex_plugin::AppConnectorId],
+        mcp_client_capabilities: Option<McpClientCapabilities>,
     ) -> Vec<AppSummary> {
         if plugin_apps.is_empty() || !config.features.apps_enabled_for_auth(is_chatgpt_auth) {
             return Vec::new();
@@ -1574,7 +1584,7 @@ impl PluginRequestProcessor {
                 config,
                 /*force_refetch*/ true,
                 Arc::clone(&environment_manager),
-                None,
+                mcp_client_capabilities.clone(),
             ),
         );
 
@@ -1599,9 +1609,12 @@ impl PluginRequestProcessor {
                     "failed to load accessible apps after plugin install: {err:#}"
                 );
                 (
-                    connectors::list_cached_accessible_connectors_from_mcp_tools(config, None)
-                        .await
-                        .unwrap_or_default(),
+                    connectors::list_cached_accessible_connectors_from_mcp_tools(
+                        config,
+                        mcp_client_capabilities.as_ref(),
+                    )
+                    .await
+                    .unwrap_or_default(),
                     false,
                 )
             }

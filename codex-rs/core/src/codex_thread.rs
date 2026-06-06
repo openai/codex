@@ -553,11 +553,16 @@ impl CodexThread {
         &self,
         server: &str,
         uri: &str,
+        client_capabilities: Option<&McpClientCapabilities>,
     ) -> anyhow::Result<serde_json::Value> {
         let result = self
             .codex
             .session
-            .read_resource(server, ReadResourceRequestParams::new(uri))
+            .read_resource_with_client_capabilities(
+                server,
+                ReadResourceRequestParams::new(uri),
+                client_capabilities,
+            )
             .await?;
 
         Ok(serde_json::to_value(result)?)
@@ -569,10 +574,11 @@ impl CodexThread {
         tool: &str,
         arguments: Option<serde_json::Value>,
         meta: Option<serde_json::Value>,
+        client_capabilities: Option<&McpClientCapabilities>,
     ) -> anyhow::Result<CallToolResult> {
         self.codex
             .session
-            .call_tool(server, tool, arguments, meta)
+            .call_tool_with_client_capabilities(server, tool, arguments, meta, client_capabilities)
             .await
     }
 

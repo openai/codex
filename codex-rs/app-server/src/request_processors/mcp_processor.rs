@@ -70,8 +70,9 @@ impl McpRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: McpServerToolCallParams,
+        mcp_client_capabilities: Option<McpClientCapabilities>,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.call_mcp_server_tool(request_id, params)
+        self.call_mcp_server_tool(request_id, params, mcp_client_capabilities)
             .await
             .map(|()| None)
     }
@@ -364,7 +365,9 @@ impl McpRequestProcessor {
             let request_id = request_id.clone();
 
             tokio::spawn(async move {
-                let result = thread.read_mcp_resource(&server, &uri).await;
+                let result = thread
+                    .read_mcp_resource(&server, &uri, mcp_client_capabilities.as_ref())
+                    .await;
                 Self::send_mcp_resource_read_response(outgoing, request_id, result).await;
             });
             return Ok(());
@@ -420,6 +423,7 @@ impl McpRequestProcessor {
         &self,
         request_id: &ConnectionRequestId,
         params: McpServerToolCallParams,
+        mcp_client_capabilities: Option<McpClientCapabilities>,
     ) -> Result<(), JSONRPCErrorError> {
         let outgoing = Arc::clone(&self.outgoing);
         let thread_id = params.thread_id.clone();
@@ -429,7 +433,13 @@ impl McpRequestProcessor {
 
         tokio::spawn(async move {
             let result = thread
-                .call_mcp_tool(&params.server, &params.tool, params.arguments, meta)
+                .call_mcp_tool(
+                    &params.server,
+                    &params.tool,
+                    params.arguments,
+                    meta,
+                    mcp_client_capabilities.as_ref(),
+                )
                 .await
                 .map(McpServerToolCallResponse::from)
                 .map_err(|error| internal_error(format!("{error:#}")));

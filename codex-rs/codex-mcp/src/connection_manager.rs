@@ -268,11 +268,15 @@ impl McpConnectionManager {
                 },
             )
             .await;
+            let effective_client_capabilities = (host_owned_codex_apps_enabled
+                && server_name == CODEX_APPS_MCP_SERVER_NAME)
+                .then(|| codex_apps_client_capabilities.clone())
+                .flatten();
             let codex_apps_tools_cache_context = if server_name == CODEX_APPS_MCP_SERVER_NAME {
                 Some(CodexAppsToolsCacheContext {
                     codex_home: codex_home.clone(),
                     user_key: codex_apps_tools_cache_key.clone(),
-                    client_capabilities_fingerprint: codex_apps_client_capabilities
+                    client_capabilities_fingerprint: effective_client_capabilities
                         .as_ref()
                         .map(client_capabilities::fingerprint),
                 })
@@ -303,9 +307,7 @@ impl McpConnectionManager {
                 tx_event.clone(),
                 elicitation_requests.clone(),
                 codex_apps_tools_cache_context,
-                (host_owned_codex_apps_enabled && server_name == CODEX_APPS_MCP_SERVER_NAME)
-                    .then(|| codex_apps_client_capabilities.clone())
-                    .flatten(),
+                effective_client_capabilities,
                 Arc::clone(&tool_plugin_provenance),
                 runtime_context.clone(),
                 runtime_auth_provider,
@@ -616,7 +618,53 @@ impl McpConnectionManager {
             .client()
             .await
             .context("failed to get client")?;
+        let client_capabilities = managed_client.client_capabilities.clone();
+        self.hard_refresh_codex_apps_tools_cache_for_client(
+            &managed_client,
+            client_capabilities.as_ref(),
+            managed_client.codex_apps_tools_cache_context.clone(),
+        )
+        .await
+    }
 
+    pub async fn hard_refresh_codex_apps_tools_cache_with_client_capabilities(
+        &self,
+        client_capabilities: Option<&McpClientCapabilities>,
+    ) -> Result<Vec<ToolInfo>> {
+        let client_capabilities = self
+            .is_host_owned_codex_apps_server(CODEX_APPS_MCP_SERVER_NAME)
+            .then_some(client_capabilities)
+            .flatten();
+        let managed_client = self
+            .clients
+            .get(CODEX_APPS_MCP_SERVER_NAME)
+            .ok_or_else(|| anyhow!("unknown MCP server '{CODEX_APPS_MCP_SERVER_NAME}'"))?
+            .client()
+            .await
+            .context("failed to get client")?;
+        let cache_context =
+            managed_client
+                .codex_apps_tools_cache_context
+                .clone()
+                .map(|mut context| {
+                    context.client_capabilities_fingerprint =
+                        client_capabilities.map(client_capabilities::fingerprint);
+                    context
+                });
+        self.hard_refresh_codex_apps_tools_cache_for_client(
+            &managed_client,
+            client_capabilities,
+            cache_context,
+        )
+        .await
+    }
+
+    async fn hard_refresh_codex_apps_tools_cache_for_client(
+        &self,
+        managed_client: &ManagedClient,
+        client_capabilities: Option<&McpClientCapabilities>,
+        cache_context: Option<CodexAppsToolsCacheContext>,
+    ) -> Result<Vec<ToolInfo>> {
         let list_start = Instant::now();
         let fetch_start = Instant::now();
         let tools = list_tools_for_client_uncached(
@@ -624,7 +672,7 @@ impl McpConnectionManager {
             &managed_client.client,
             managed_client.tool_timeout,
             managed_client.server_instructions.as_deref(),
-            managed_client.client_capabilities.as_ref(),
+            client_capabilities,
         )
         .await
         .with_context(|| {
@@ -638,7 +686,7 @@ impl McpConnectionManager {
 
         write_cached_codex_apps_tools_if_needed(
             CODEX_APPS_MCP_SERVER_NAME,
-            managed_client.codex_apps_tools_cache_context.as_ref(),
+            cache_context.as_ref(),
             &managed_client.server_info,
             &tools,
         );
@@ -818,16 +866,53 @@ impl McpConnectionManager {
         server: &str,
         tool: &str,
         arguments: Option<serde_json::Value>,
-        mut meta: Option<serde_json::Value>,
+        meta: Option<serde_json::Value>,
     ) -> Result<CallToolResult> {
         let client = self.client_by_name(server).await?;
+        let client_capabilities = client.client_capabilities.clone();
+        Self::call_tool_for_client(
+            &client,
+            server,
+            tool,
+            arguments,
+            meta,
+            client_capabilities.as_ref(),
+        )
+        .await
+    }
+
+    pub async fn call_tool_with_client_capabilities(
+        &self,
+        server: &str,
+        tool: &str,
+        arguments: Option<serde_json::Value>,
+        meta: Option<serde_json::Value>,
+        client_capabilities: Option<&McpClientCapabilities>,
+    ) -> Result<CallToolResult> {
+        let client_capabilities = self
+            .is_host_owned_codex_apps_server(server)
+            .then_some(client_capabilities)
+            .flatten();
+        let client = self.client_by_name(server).await?;
+        Self::call_tool_for_client(&client, server, tool, arguments, meta, client_capabilities)
+            .await
+    }
+
+    async fn call_tool_for_client(
+        client: &ManagedClient,
+        server: &str,
+        tool: &str,
+        arguments: Option<serde_json::Value>,
+        mut meta: Option<serde_json::Value>,
+        client_capabilities: Option<&McpClientCapabilities>,
+    ) -> Result<CallToolResult> {
         if !client.tool_filter.allows(tool) {
             return Err(anyhow!(
                 "tool '{tool}' is disabled for MCP server '{server}'"
             ));
         }
 
-        client_capabilities::add_json_meta(&mut meta, client.client_capabilities.as_ref());
+        client_capabilities::add_json_meta(&mut meta, client_capabilities);
         let result: rmcp::model::CallToolResult = client
             .client
             .call_tool(tool.to_string(), arguments, meta, client.tool_timeout)
@@ -870,9 +955,9 @@ impl McpConnectionManager {
         let managed = self.client_by_name(server).await?;
         let timeout = managed.tool_timeout;
 
-        if managed.client_capabilities.is_some() {
+        if let Some(capabilities) = managed.client_capabilities.as_ref() {
             let params = params.get_or_insert_with(PaginatedRequestParams::default);
-            client_capabilities::add_meta(&mut params.meta, managed.client_capabilities.as_ref());
+            client_capabilities::add_meta(&mut params.meta, Some(capabilities));
         }
         managed
             .client
@@ -891,9 +976,9 @@ impl McpConnectionManager {
         let client = managed.client.clone();
         let timeout = managed.tool_timeout;
 
-        if managed.client_capabilities.is_some() {
+        if let Some(capabilities) = managed.client_capabilities.as_ref() {
             let params = params.get_or_insert_with(PaginatedRequestParams::default);
-            client_capabilities::add_meta(&mut params.meta, managed.client_capabilities.as_ref());
+            client_capabilities::add_meta(&mut params.meta, Some(capabilities));
         }
         client
             .list_resource_templates(params, timeout)
@@ -905,13 +990,37 @@ impl McpConnectionManager {
     pub async fn read_resource(
         &self,
         server: &str,
-        mut params: ReadResourceRequestParams,
+        params: ReadResourceRequestParams,
     ) -> Result<ReadResourceResult> {
         let managed = self.client_by_name(server).await?;
+        let client_capabilities = managed.client_capabilities.clone();
+        Self::read_resource_for_client(&managed, server, params, client_capabilities.as_ref()).await
+    }
+
+    pub async fn read_resource_with_client_capabilities(
+        &self,
+        server: &str,
+        params: ReadResourceRequestParams,
+        client_capabilities: Option<&McpClientCapabilities>,
+    ) -> Result<ReadResourceResult> {
+        let client_capabilities = self
+            .is_host_owned_codex_apps_server(server)
+            .then_some(client_capabilities)
+            .flatten();
+        let managed = self.client_by_name(server).await?;
+        Self::read_resource_for_client(&managed, server, params, client_capabilities).await
+    }
+
+    async fn read_resource_for_client(
+        managed: &ManagedClient,
+        server: &str,
+        mut params: ReadResourceRequestParams,
+        client_capabilities: Option<&McpClientCapabilities>,
+    ) -> Result<ReadResourceResult> {
         let client = managed.client.clone();
         let timeout = managed.tool_timeout;
         let uri = params.uri.clone();
-        client_capabilities::add_meta(&mut params.meta, managed.client_capabilities.as_ref());
+        client_capabilities::add_meta(&mut params.meta, client_capabilities);
 
         client
             .read_resource(params, timeout)
