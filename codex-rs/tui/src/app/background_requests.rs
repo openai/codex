@@ -134,13 +134,32 @@ impl App {
     }
 
     pub(super) fn fetch_plugins_list(&mut self, app_server: &AppServerSession, cwd: PathBuf) {
+        self.chat_widget.on_plugins_list_fetch_started(cwd.clone());
         let request_handle = app_server.request_handle();
         let app_event_tx = self.app_event_tx.clone();
+        let plugin_sharing_enabled = self.config.features.enabled(Feature::PluginSharing);
         tokio::spawn(async move {
-            let result = fetch_plugins_list(request_handle, cwd.clone())
+            let result = fetch_plugins_list(request_handle.clone(), cwd.clone())
                 .await
                 .map_err(|err| err.to_string());
-            app_event_tx.send(AppEvent::PluginsLoaded { cwd, result });
+            let should_fetch_remote_sections = result.is_ok();
+            app_event_tx.send(AppEvent::PluginsLoaded {
+                cwd: cwd.clone(),
+                result,
+            });
+            if should_fetch_remote_sections {
+                let (marketplaces, section_errors) = fetch_plugin_remote_sections(
+                    request_handle,
+                    cwd.clone(),
+                    plugin_sharing_enabled,
+                )
+                .await;
+                app_event_tx.send(AppEvent::PluginRemoteSectionsLoaded {
+                    cwd,
+                    marketplaces,
+                    section_errors,
+                });
+            }
         });
     }
 
@@ -721,6 +740,111 @@ pub(super) async fn fetch_plugins_list(
     Ok(response)
 }
 
+pub(super) async fn fetch_plugin_remote_sections(
+    request_handle: AppServerRequestHandle,
+    cwd: PathBuf,
+    plugin_sharing_enabled: bool,
+) -> (Vec<PluginMarketplaceEntry>, Vec<PluginRemoteSectionError>) {
+    let mut marketplaces = Vec::new();
+    let mut section_errors = Vec::new();
+    let mut sections = vec![
+        (
+            "vertical",
+            "OpenAI Curated",
+            vec![PluginListMarketplaceKind::Vertical],
+        ),
+        (
+            "workspace",
+            "Workspace",
+            vec![PluginListMarketplaceKind::WorkspaceDirectory],
+        ),
+    ];
+    if plugin_sharing_enabled {
+        sections.push((
+            "shared-with-me",
+            "Shared with me",
+            vec![PluginListMarketplaceKind::SharedWithMe],
+        ));
+    } else {
+        section_errors.push(plugin_sharing_disabled_remote_section_error());
+    }
+
+    for (section_id, label, marketplace_kinds) in sections {
+        match request_plugin_list_for_kinds(request_handle.clone(), cwd.clone(), marketplace_kinds)
+            .await
+        {
+            Ok(mut response) => {
+                hide_cli_only_plugin_marketplaces(&mut response);
+                marketplaces.extend(response.marketplaces);
+            }
+            Err(err) => {
+                let message = format!("{err:#}");
+                section_errors.push(PluginRemoteSectionError {
+                    section_id: section_id.to_string(),
+                    label: label.to_string(),
+                    message: plugin_remote_section_error_message(label, &message),
+                });
+            }
+        }
+    }
+
+    (marketplaces, section_errors)
+}
+
+fn plugin_remote_section_error_message(label: &str, err: &str) -> String {
+    let next_step = plugin_remote_section_error_next_step(label, err);
+    if next_step.is_empty() {
+        err.to_string()
+    } else {
+        format!("{err} {next_step}")
+    }
+}
+
+fn plugin_remote_section_error_next_step(label: &str, err: &str) -> &'static str {
+    let err = err.to_ascii_lowercase();
+    if err.contains("api key auth is not supported") {
+        "Sign in with ChatGPT auth; API key auth cannot load remote plugin catalogs."
+    } else if err.contains("authentication required")
+        || err.contains("not signed in")
+        || err.contains("not logged in")
+    {
+        "Sign in to ChatGPT, then try loading this section again."
+    } else if err.contains("codex plugins are disabled")
+        || err.contains("plugin sharing is disabled")
+        || err.contains("plugin sharing is not enabled")
+        || err.contains("feature disabled")
+    {
+        "Ask a workspace admin to enable Codex plugins or plugin sharing."
+    } else if err.contains("workspace") && (err.contains("access") || err.contains("mismatch")) {
+        "Switch to the matching workspace or ask the sharer for access."
+    } else if err.contains("not found") || err.contains("status 404") {
+        "Check that you are signed in to the correct workspace and still have access."
+    } else if err.contains("old build") || err.contains("update codex") || err.contains("stale") {
+        "Update Codex, then try opening the shared plugin again."
+    } else if err.contains("service unavailable")
+        || err.contains("temporarily unavailable")
+        || err.contains("status 503")
+    {
+        "Try again later; local plugin functionality is still available."
+    } else if err.contains("failed to send") || err.contains("request") || err.contains("status") {
+        "Try again later; local plugin functionality is still available."
+    } else if err.contains("disabled by admin") || err.contains("admin disabled") {
+        "Ask a workspace admin to confirm plugin access."
+    } else if label == "Shared with me" && err.contains("plugin") && err.contains("disabled") {
+        "Ask the sharer or a workspace admin to confirm plugin access."
+    } else {
+        ""
+    }
+}
+
+fn plugin_sharing_disabled_remote_section_error() -> PluginRemoteSectionError {
+    PluginRemoteSectionError {
+        section_id: "shared-with-me".to_string(),
+        label: "Shared with me".to_string(),
+        message: "Plugin sharing is disabled for this Codex session. Enable plugin sharing to load shared plugins.".to_string(),
+    }
+}
+
 const CLI_HIDDEN_PLUGIN_MARKETPLACES: &[&str] = &["openai-bundled"];
 
 pub(super) fn hide_cli_only_plugin_marketplaces(response: &mut PluginListResponse) {
@@ -733,6 +857,22 @@ pub(super) async fn request_plugin_list(
     request_handle: AppServerRequestHandle,
     cwd: PathBuf,
 ) -> Result<PluginListResponse> {
+    request_plugin_list_with_marketplace_kinds(request_handle, cwd, None).await
+}
+
+pub(super) async fn request_plugin_list_for_kinds(
+    request_handle: AppServerRequestHandle,
+    cwd: PathBuf,
+    marketplace_kinds: Vec<PluginListMarketplaceKind>,
+) -> Result<PluginListResponse> {
+    request_plugin_list_with_marketplace_kinds(request_handle, cwd, Some(marketplace_kinds)).await
+}
+
+async fn request_plugin_list_with_marketplace_kinds(
+    request_handle: AppServerRequestHandle,
+    cwd: PathBuf,
+    marketplace_kinds: Option<Vec<PluginListMarketplaceKind>>,
+) -> Result<PluginListResponse> {
     let cwd = AbsolutePathBuf::try_from(cwd).wrap_err("plugin list cwd must be absolute")?;
     let request_id = RequestId::String(format!("plugin-list-{}", Uuid::new_v4()));
     request_handle
@@ -740,7 +880,7 @@ pub(super) async fn request_plugin_list(
             request_id,
             params: PluginListParams {
                 cwds: Some(vec![cwd]),
-                marketplace_kinds: None,
+                marketplace_kinds,
             },
         })
         .await
@@ -1064,22 +1204,67 @@ mod tests {
     }
 
     #[test]
-    fn plugin_location_request_params_select_exactly_one_location() {
-        let local_path = test_absolute_path("/marketplaces/local");
+    fn plugin_remote_section_error_message_adds_concrete_next_steps() {
+        let cases = [
+            (
+                "Workspace",
+                "chatgpt authentication required for remote plugin catalog",
+                "Sign in to ChatGPT, then try loading this section again.",
+            ),
+            (
+                "OpenAI Curated",
+                "chatgpt authentication required for remote plugin catalog; api key auth is not supported",
+                "Sign in with ChatGPT auth; API key auth cannot load remote plugin catalogs.",
+            ),
+            (
+                "Shared with me",
+                "remote plugin catalog request failed with status 404: missing",
+                "Check that you are signed in to the correct workspace and still have access.",
+            ),
+            (
+                "Shared with me",
+                "workspace access mismatch",
+                "Switch to the matching workspace or ask the sharer for access.",
+            ),
+            (
+                "Shared with me",
+                "old build fallback",
+                "Update Codex, then try opening the shared plugin again.",
+            ),
+            (
+                "Shared with me",
+                "remote service unavailable",
+                "Try again later; local plugin functionality is still available.",
+            ),
+            (
+                "Workspace",
+                "plugin disabled by admin",
+                "Ask a workspace admin to confirm plugin access.",
+            ),
+            (
+                "Shared with me",
+                "plugin sharing is not enabled",
+                "Ask a workspace admin to enable Codex plugins or plugin sharing.",
+            ),
+        ];
 
+        for (label, err, next_step) in cases {
+            assert_eq!(
+                plugin_remote_section_error_message(label, err),
+                format!("{err} {next_step}")
+            );
+        }
+    }
+
+    #[test]
+    fn plugin_sharing_disabled_remote_section_error_targets_shared_with_me() {
         assert_eq!(
-            PluginLocation::Local {
-                marketplace_path: local_path.clone()
+            plugin_sharing_disabled_remote_section_error(),
+            PluginRemoteSectionError {
+                section_id: "shared-with-me".to_string(),
+                label: "Shared with me".to_string(),
+                message: "Plugin sharing is disabled for this Codex session. Enable plugin sharing to load shared plugins.".to_string(),
             }
-            .into_request_params(),
-            (Some(local_path), None)
-        );
-        assert_eq!(
-            PluginLocation::Remote {
-                marketplace_name: "workspace-directory".to_string()
-            }
-            .into_request_params(),
-            (None, Some("workspace-directory".to_string()))
         );
     }
 
