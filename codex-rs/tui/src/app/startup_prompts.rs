@@ -13,28 +13,26 @@ struct SkillLoadWarningKey {
     message: String,
 }
 
-impl SkillLoadWarningKey {
-    fn from_error(error: &SkillErrorInfo) -> Self {
-        Self {
-            path: error.path.clone(),
-            message: error.message.clone(),
-        }
-    }
-}
-
 #[derive(Debug, Default)]
 pub(super) struct SkillLoadWarningState {
     active: HashSet<SkillLoadWarningKey>,
 }
 
 impl SkillLoadWarningState {
+    pub(super) fn clear(&mut self) {
+        self.active.clear();
+    }
+
     pub(super) fn newly_active_errors(&mut self, errors: &[SkillErrorInfo]) -> Vec<SkillErrorInfo> {
         let previous = std::mem::take(&mut self.active);
         let mut current = HashSet::new();
         let mut newly_active = Vec::new();
 
         for error in errors {
-            let key = SkillLoadWarningKey::from_error(error);
+            let key = SkillLoadWarningKey {
+                path: error.path.clone(),
+                message: error.message.clone(),
+            };
             let was_active = previous.contains(&key);
             if current.insert(key) && !was_active {
                 newly_active.push(error.clone());
@@ -377,8 +375,10 @@ mod tests {
     use super::*;
     use crate::test_support::PathBufExt;
     use pretty_assertions::assert_eq;
+    use ratatui::text::Line;
     use std::path::PathBuf;
     use tempfile::tempdir;
+    use tokio::sync::mpsc::unbounded_channel;
 
     #[test]
     fn normalize_harness_overrides_resolves_relative_add_dirs() -> Result<()> {
@@ -404,6 +404,26 @@ mod tests {
             path: PathBuf::from(path),
             message: message.to_string(),
         }
+    }
+
+    fn render_line_text(line: &Line<'static>) -> String {
+        line.spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect()
+    }
+
+    fn render_skill_load_warning_cells(errors: &[SkillErrorInfo]) -> String {
+        let (tx, mut rx) = unbounded_channel();
+        let app_event_tx = AppEventSender::new(tx);
+
+        emit_skill_load_warnings(&app_event_tx, errors);
+
+        let mut rendered = Vec::new();
+        while let Ok(AppEvent::InsertHistoryCell(cell)) = rx.try_recv() {
+            rendered.extend(cell.display_lines(120).iter().map(render_line_text));
+        }
+        rendered.join("\n")
     }
 
     #[test]
@@ -451,5 +471,49 @@ mod tests {
             state.newly_active_errors(std::slice::from_ref(&changed)),
             vec![changed]
         );
+    }
+
+    #[test]
+    fn skill_load_warning_state_clear_allows_active_error_again() {
+        let mut state = SkillLoadWarningState::default();
+        let error = skill_error("/repo/.codex/skills/abc/SKILL.md", "invalid description");
+
+        assert_eq!(
+            state.newly_active_errors(std::slice::from_ref(&error)),
+            vec![error.clone()]
+        );
+        assert_eq!(
+            state.newly_active_errors(std::slice::from_ref(&error)),
+            Vec::<SkillErrorInfo>::new()
+        );
+
+        state.clear();
+
+        assert_eq!(
+            state.newly_active_errors(std::slice::from_ref(&error)),
+            vec![error]
+        );
+    }
+
+    #[test]
+    fn repeated_active_skill_load_warning_renders_once() {
+        let mut state = SkillLoadWarningState::default();
+        let error = skill_error("/repo/.codex/skills/abc/SKILL.md", "invalid description");
+
+        let first_errors = state.newly_active_errors(std::slice::from_ref(&error));
+        let repeated_errors = state.newly_active_errors(std::slice::from_ref(&error));
+        let rendered = [
+            render_skill_load_warning_cells(&first_errors),
+            render_skill_load_warning_cells(&repeated_errors),
+        ]
+        .into_iter()
+        .filter(|output| !output.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+        insta::assert_snapshot!(rendered, @r"
+⚠ Skipped loading 1 skill(s) due to invalid SKILL.md files.
+⚠ /repo/.codex/skills/abc/SKILL.md: invalid description
+");
     }
 }

@@ -5579,6 +5579,34 @@ async fn clear_only_ui_reset_preserves_chat_session_state() {
 }
 
 #[tokio::test]
+async fn clear_only_ui_reset_allows_active_skill_warning_to_render_again() {
+    let mut app = make_test_app().await;
+    let error = SkillErrorInfo {
+        path: test_path_buf("/tmp/project/.codex/skills/abc/SKILL.md"),
+        message: "invalid description".to_string(),
+    };
+
+    assert_eq!(
+        app.skill_load_warnings
+            .newly_active_errors(std::slice::from_ref(&error)),
+        vec![error.clone()]
+    );
+    assert_eq!(
+        app.skill_load_warnings
+            .newly_active_errors(std::slice::from_ref(&error)),
+        Vec::<SkillErrorInfo>::new()
+    );
+
+    app.reset_app_ui_state_after_clear();
+
+    assert_eq!(
+        app.skill_load_warnings
+            .newly_active_errors(std::slice::from_ref(&error)),
+        vec![error]
+    );
+}
+
+#[tokio::test]
 async fn backtrack_esc_does_not_steal_empty_vim_insert_escape() {
     let mut app = make_test_app().await;
     let esc = crossterm::event::KeyEvent::new(crossterm::event::KeyCode::Esc, KeyModifiers::NONE);
