@@ -121,7 +121,7 @@ bazel-lock-check:
     bazel mod deps --lockfile_mode=error; if ($LASTEXITCODE -ne 0) { Write-Error "MODULE.bazel.lock is out of date. Run 'just bazel-lock-update' and commit the updated lockfile."; exit 1 }
 
 bazel-test:
-    bazel test --test_tag_filters=-argument-comment-lint //... --keep_going
+    bazel test --config=local-test --test_tag_filters=-argument-comment-lint //... --keep_going
 
 [no-cd]
 [unix]

@@ -77,6 +77,12 @@ common:buildbuddy-openai-rbe --remote_executor=grpcs://openai.buildbuddy.io
 # memory in exchange for higher download concurrency.
 common --jobs=30
 
+# Full local test runs include heavily sharded suites whose processes can
+# contend for CPU and SQLite resources. Keep these limits opt-in so remote and
+# CI configurations retain their existing concurrency.
+test:local-test --jobs=8
+test:local-test --local_test_jobs=2
+
 # Shared remote execution policy. The endpoint-bearing `buildbuddy-*-rbe`
 # configurations include this group; CI configs override TestRunner below
 # when tests must remain local on their runner.

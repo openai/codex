@@ -29,6 +29,16 @@ just bazel-test
 just bazel-clippy
 ```
 
+`just bazel-test` selects the opt-in `local-test` Bazel configuration. It caps
+local build actions at 8 and local test processes at 2 so the heavily sharded
+app-server, core, and TUI suites do not overwhelm developer machines or
+contend excessively for SQLite resources. The cap only controls scheduling:
+all test targets and their configured shards still run.
+
+Direct `bazel test` commands do not select this configuration automatically.
+Use `--config=local-test` for the same scheduling limits. CI uses its existing
+CI-specific configurations and concurrency.
+
 Ordinary local `bazel` and `just` invocations run locally. BuildBuddy cache,
 build event upload, downloads, and remote execution are opt-in configurations.
 
