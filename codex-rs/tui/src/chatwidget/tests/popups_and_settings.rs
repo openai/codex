@@ -2409,7 +2409,7 @@ async fn model_reasoning_selection_popup_snapshot() {
     preset.supported_reasoning_efforts.insert(
         2,
         ReasoningEffortPreset {
-            effort: ReasoningEffortConfig::Custom("max".to_string()),
+            effort: ReasoningEffortConfig::Max,
             description: "Maximum available reasoning".to_string(),
         },
     );
@@ -2422,7 +2422,7 @@ async fn model_reasoning_selection_popup_snapshot() {
 #[tokio::test]
 async fn model_reasoning_selection_popup_applies_custom_effort() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
-    let custom_effort = ReasoningEffortConfig::Custom("max".to_string());
+    let custom_effort = ReasoningEffortConfig::Custom("future".to_string());
     chat.set_reasoning_effort(Some(ReasoningEffortConfig::XHigh));
 
     let mut preset = get_available_model(&chat, "gpt-5.4");

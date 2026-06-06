@@ -356,6 +356,11 @@ impl ChatWidget {
 
         let warn_effort = if supported
             .iter()
+            .any(|option| option.effort == ReasoningEffortConfig::Max)
+        {
+            Some(ReasoningEffortConfig::Max)
+        } else if supported
+            .iter()
             .any(|option| option.effort == ReasoningEffortConfig::XHigh)
         {
             Some(ReasoningEffortConfig::XHigh)
@@ -505,6 +510,7 @@ impl ChatWidget {
             ReasoningEffortConfig::Medium => "Medium".to_string(),
             ReasoningEffortConfig::High => "High".to_string(),
             ReasoningEffortConfig::XHigh => "Extra high".to_string(),
+            ReasoningEffortConfig::Max => "Max".to_string(),
             ReasoningEffortConfig::Custom(value) => value.clone(),
         }
     }
