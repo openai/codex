@@ -42,6 +42,11 @@ use serde_json::json;
 use std::fs;
 use std::path::Path;
 
+// These tests exercise permission behavior, not command deadlines. A fully loaded
+// Bazel run can spend more than a second starting the sandboxed subprocess.
+const TEST_SHELL_COMMAND_TIMEOUT_MS: u64 = 10_000;
+const TEST_UNIFIED_EXEC_YIELD_TIME_MS: u64 = 5_000;
+
 fn absolute_path(path: &Path) -> AbsolutePathBuf {
     AbsolutePathBuf::try_from(path).expect("absolute path")
 }
@@ -97,7 +102,7 @@ fn shell_event_with_request_permissions<S: serde::Serialize>(
 ) -> Result<Value> {
     let args = json!({
         "command": command,
-        "timeout_ms": 1_000_u64,
+        "timeout_ms": TEST_SHELL_COMMAND_TIMEOUT_MS,
         "sandbox_permissions": SandboxPermissions::WithAdditionalPermissions,
         "additional_permissions": additional_permissions,
     });
@@ -121,7 +126,7 @@ fn request_permissions_tool_event(
 fn shell_command_event(call_id: &str, command: &str) -> Result<Value> {
     let args = json!({
         "command": command,
-        "timeout_ms": 1_000_u64,
+        "timeout_ms": TEST_SHELL_COMMAND_TIMEOUT_MS,
     });
     let args_str = serde_json::to_string(&args)?;
     Ok(ev_function_call(call_id, "shell_command", &args_str))
@@ -130,7 +135,7 @@ fn shell_command_event(call_id: &str, command: &str) -> Result<Value> {
 fn exec_command_event(call_id: &str, command: &str) -> Result<Value> {
     let args = json!({
         "cmd": command,
-        "yield_time_ms": 1_000_u64,
+        "yield_time_ms": TEST_UNIFIED_EXEC_YIELD_TIME_MS,
     });
     let args_str = serde_json::to_string(&args)?;
     Ok(ev_function_call(call_id, "exec_command", &args_str))
@@ -143,7 +148,7 @@ fn exec_command_event_with_request_permissions<S: serde::Serialize>(
 ) -> Result<Value> {
     let args = json!({
         "cmd": command,
-        "yield_time_ms": 1_000_u64,
+        "yield_time_ms": TEST_UNIFIED_EXEC_YIELD_TIME_MS,
         "sandbox_permissions": SandboxPermissions::WithAdditionalPermissions,
         "additional_permissions": additional_permissions,
     });
@@ -173,7 +178,7 @@ fn shell_event_with_raw_request_permissions(
     let args = json!({
         "command": command,
         "workdir": workdir,
-        "timeout_ms": 1_000_u64,
+        "timeout_ms": TEST_SHELL_COMMAND_TIMEOUT_MS,
         "sandbox_permissions": SandboxPermissions::WithAdditionalPermissions,
         "additional_permissions": additional_permissions,
     });

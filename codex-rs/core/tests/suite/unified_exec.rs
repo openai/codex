@@ -2693,7 +2693,10 @@ async fn unified_exec_runs_under_sandbox() -> Result<()> {
     let call_id = "uexec";
     let args = serde_json::json!({
         "cmd": "echo 'hello'",
-        "yield_time_ms": 500,
+        // Wait for the short command to complete even when sandbox startup is
+        // delayed by a fully loaded Bazel executor, without delaying session
+        // return for genuinely long-running commands.
+        "yield_time_ms": 5_000,
     });
 
     let responses = vec![

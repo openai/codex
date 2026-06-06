@@ -2397,7 +2397,9 @@ async fn spawned_subagent_execpolicy_amendment_propagates_to_parent_session() ->
 
     let child_cmd_args = serde_json::to_string(&json!({
         "command": "touch subagent-allow-prefix.txt",
-        "timeout_ms": 1_000,
+        // This test exercises propagation of the approved rule. Under full
+        // Bazel load, sandbox startup alone can exceed one second.
+        "timeout_ms": 10_000,
         "prefix_rule": ["touch", "subagent-allow-prefix.txt"],
     }))?;
     mount_sse_once_match(
