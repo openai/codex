@@ -1318,6 +1318,8 @@ fn stored_auth_mode_value(auth: &AuthDotJson) -> codex_app_server_protocol::Auth
     }
     if auth.openai_api_key.is_some() {
         codex_app_server_protocol::AuthMode::ApiKey
+    } else if auth.personal_access_token.is_some() {
+        codex_app_server_protocol::AuthMode::PersonalAccessToken
     } else {
         codex_app_server_protocol::AuthMode::Chatgpt
     }
@@ -3446,7 +3448,7 @@ mod tests {
     #[test]
     fn stored_auth_validation_handles_personal_access_token() {
         let mut auth = AuthDotJson {
-            auth_mode: Some(codex_app_server_protocol::AuthMode::PersonalAccessToken),
+            auth_mode: None,
             openai_api_key: None,
             tokens: None,
             last_refresh: None,
@@ -3457,6 +3459,7 @@ mod tests {
         assert_eq!(stored_auth_mode(&auth), "personal_access_token");
         assert!(stored_auth_issues(&auth, |_| false).is_empty());
 
+        auth.auth_mode = Some(codex_app_server_protocol::AuthMode::PersonalAccessToken);
         auth.personal_access_token = None;
         assert_eq!(
             stored_auth_issues(&auth, |_| false),
