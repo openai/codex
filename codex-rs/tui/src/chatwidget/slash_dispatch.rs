@@ -213,12 +213,16 @@ impl ChatWidget {
                     .send(AppEvent::OpenDesktopThread { thread_id });
             }
             SlashCommand::Init => {
-                let init_target = self.config.cwd.join(DEFAULT_AGENTS_MD_FILENAME);
-                if init_target.exists() {
-                    let message = format!(
-                        "{DEFAULT_AGENTS_MD_FILENAME} already exists here. Skipping /init to avoid overwriting it."
+                if self
+                    .instruction_source_paths
+                    .iter()
+                    .any(|path| path.parent().as_ref() == Some(&self.config.cwd))
+                {
+                    self.add_info_message(
+                        "Project instructions already exist here. Skipping /init to avoid overwriting them."
+                            .to_string(),
+                        /*hint*/ None,
                     );
-                    self.add_info_message(message, /*hint*/ None);
                     return;
                 }
                 const INIT_PROMPT: &str = include_str!("../../prompt_for_init_command.md");
@@ -662,7 +666,7 @@ impl ChatWidget {
                 }
                 self.session_telemetry
                     .counter("codex.thread.rename", /*inc*/ 1, &[]);
-                let Some(name) = crate::legacy_core::util::normalize_thread_name(&args) else {
+                let Some(name) = normalize_thread_name(&args) else {
                     self.add_error_message("Thread name cannot be empty.".to_string());
                     return;
                 };
