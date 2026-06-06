@@ -665,7 +665,12 @@ impl TurnRequestProcessor {
     ) -> Result<ThreadSettingsUpdateResponse, JSONRPCErrorError> {
         let (_, thread) = self.load_thread(&params.thread_id).await?;
         let cwd = resolve_request_cwd(params.cwd)?;
-        let environments = Self::build_environment_override(thread.as_ref(), cwd, None).await;
+        let environments = Self::build_environment_override(
+            thread.as_ref(),
+            cwd,
+            /*environment_selections*/ None,
+        )
+        .await;
         let thread_settings = self
             .build_thread_settings_overrides(
                 thread.as_ref(),

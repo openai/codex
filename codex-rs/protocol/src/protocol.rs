@@ -4963,6 +4963,7 @@ mod tests {
         );
     }
 
+    #[test]
     fn user_input_text_serializes_empty_text_elements() -> Result<()> {
         let input = UserInput::Text {
             text: "hello".to_string(),
