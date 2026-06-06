@@ -406,8 +406,9 @@ impl TurnRequestProcessor {
         let additional_context = map_additional_context(params.additional_context);
         let turn_has_input = !mapped_items.is_empty();
         let cwd = resolve_request_cwd(params.cwd)?;
-        let environments =
-            Self::build_environment_override(thread.as_ref(), cwd, environment_selections).await;
+        let environments = self
+            .build_environment_override(thread.as_ref(), cwd, environment_selections)
+            .await;
         let thread_settings = self
             .build_thread_settings_overrides(
                 thread.as_ref(),
@@ -480,6 +481,7 @@ impl TurnRequestProcessor {
     }
 
     async fn build_environment_override(
+        &self,
         thread: &CodexThread,
         cwd: Option<AbsolutePathBuf>,
         environment_selections: Option<Vec<TurnEnvironmentSelection>>,
@@ -492,10 +494,15 @@ impl TurnRequestProcessor {
         let environment_selections =
             environment_selections.unwrap_or_else(|| snapshot.environment_selections().to_vec());
         let legacy_fallback_cwd = cwd.unwrap_or_else(|| {
+            let environment_manager = self.thread_manager.environment_manager();
             environment_selections
                 .iter()
-                .find(|selection| selection.environment_id == LOCAL_ENVIRONMENT_ID)
-                .map(|selection| selection.cwd.clone())
+                .find_map(|selection| {
+                    environment_manager
+                        .get_environment(&selection.environment_id)
+                        .filter(|environment| !environment.is_remote())
+                        .map(|_| selection.cwd.clone())
+                })
                 .unwrap_or_else(|| snapshot.cwd().clone())
         });
         Some(TurnEnvironmentSelections::new(
@@ -665,7 +672,9 @@ impl TurnRequestProcessor {
     ) -> Result<ThreadSettingsUpdateResponse, JSONRPCErrorError> {
         let (_, thread) = self.load_thread(&params.thread_id).await?;
         let cwd = resolve_request_cwd(params.cwd)?;
-        let environments = Self::build_environment_override(thread.as_ref(), cwd, None).await;
+        let environments = self
+            .build_environment_override(thread.as_ref(), cwd, None)
+            .await;
         let thread_settings = self
             .build_thread_settings_overrides(
                 thread.as_ref(),
