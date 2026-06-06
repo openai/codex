@@ -617,14 +617,9 @@ impl PluginRequestProcessor {
         // TODO(remote plugins): Remove this once remote plugins are ready and vertical plugins are
         // served directly from the normal remote catalog.
         if include_vertical && !config.features.enabled(Feature::RemotePlugin) {
-            let remote_plugin_service_config = RemotePluginServiceConfig {
-                chatgpt_base_url: config.chatgpt_base_url.clone(),
-            };
-            match codex_core_plugins::remote::fetch_openai_curated_remote_collection_marketplace(
-                &remote_plugin_service_config,
-                auth.as_ref(),
-            )
-            .await
+            match plugins_manager
+                .fetch_openai_curated_remote_collection_marketplace(&plugins_input, auth.as_ref())
+                .await
             {
                 Ok(Some(remote_marketplace)) => {
                     data.push(remote_marketplace_to_info(remote_marketplace));
@@ -656,16 +651,9 @@ impl PluginRequestProcessor {
             remote_sources.push(RemoteMarketplaceSource::SharedWithMe);
         }
         if !remote_sources.is_empty() {
-            let remote_plugin_service_config = RemotePluginServiceConfig {
-                chatgpt_base_url: config.chatgpt_base_url.clone(),
-            };
-            match codex_core_plugins::remote::fetch_remote_marketplaces(
-                &remote_plugin_service_config,
-                auth.as_ref(),
-                &remote_sources,
-                /*global_catalog_cache_path*/ Some(config.codex_home.as_path()),
-            )
-            .await
+            match plugins_manager
+                .fetch_remote_marketplaces(&plugins_input, auth.as_ref(), &remote_sources)
+                .await
             {
                 Ok(remote_marketplaces) => {
                     for remote_marketplace in remote_marketplaces

@@ -37,6 +37,7 @@ use crate::marketplace_upgrade::ConfiguredMarketplaceUpgradeOutcome;
 use crate::marketplace_upgrade::configured_git_marketplace_names;
 use crate::marketplace_upgrade::upgrade_configured_git_marketplaces;
 use crate::remote::RemoteInstalledPlugin;
+use crate::remote::RemoteInstalledPluginsSnapshot;
 use crate::remote::RemotePluginCatalogError;
 use crate::remote::RemotePluginScope;
 use crate::remote::RemotePluginServiceConfig;
@@ -82,6 +83,8 @@ use tracing::warn;
 static CURATED_REPO_SYNC_STARTED: AtomicBool = AtomicBool::new(false);
 const FEATURED_PLUGIN_IDS_CACHE_TTL: std::time::Duration =
     std::time::Duration::from_secs(60 * 60 * 3);
+const REMOTE_INSTALLED_PLUGINS_SNAPSHOT_CACHE_TTL: std::time::Duration =
+    std::time::Duration::from_secs(60 * 5);
 
 #[derive(Debug, Clone)]
 pub struct PluginsConfigInput {
@@ -120,6 +123,21 @@ struct CachedFeaturedPluginIds {
     key: FeaturedPluginIdsCacheKey,
     expires_at: Instant,
     featured_plugin_ids: Vec<String>,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct RemoteInstalledPluginsSnapshotCacheKey {
+    chatgpt_base_url: String,
+    account_id: Option<String>,
+    chatgpt_user_id: Option<String>,
+    is_workspace_account: bool,
+}
+
+#[derive(Clone)]
+struct CachedRemoteInstalledPluginsSnapshot {
+    key: RemoteInstalledPluginsSnapshotCacheKey,
+    expires_at: Instant,
+    snapshot: RemoteInstalledPluginsSnapshot,
 }
 
 struct RemoteInstalledPluginsCacheRefreshRequest {
@@ -181,6 +199,18 @@ fn featured_plugin_ids_cache_key(
     auth: Option<&CodexAuth>,
 ) -> FeaturedPluginIdsCacheKey {
     FeaturedPluginIdsCacheKey {
+        chatgpt_base_url: config.chatgpt_base_url.clone(),
+        account_id: auth.and_then(CodexAuth::get_account_id),
+        chatgpt_user_id: auth.and_then(CodexAuth::get_chatgpt_user_id),
+        is_workspace_account: auth.is_some_and(CodexAuth::is_workspace_account),
+    }
+}
+
+fn remote_installed_plugins_snapshot_cache_key(
+    config: &RemotePluginServiceConfig,
+    auth: Option<&CodexAuth>,
+) -> RemoteInstalledPluginsSnapshotCacheKey {
+    RemoteInstalledPluginsSnapshotCacheKey {
         chatgpt_base_url: config.chatgpt_base_url.clone(),
         account_id: auth.and_then(CodexAuth::get_account_id),
         chatgpt_user_id: auth.and_then(CodexAuth::get_chatgpt_user_id),
@@ -301,6 +331,8 @@ pub struct PluginsManager {
     enabled_outcome_cache: RwLock<EnabledOutcomeCache>,
     enabled_outcome_load_semaphore: Semaphore,
     remote_installed_plugins_cache: RwLock<Option<Vec<RemoteInstalledPlugin>>>,
+    remote_installed_plugins_snapshot_cache: RwLock<Option<CachedRemoteInstalledPluginsSnapshot>>,
+    remote_installed_plugins_fetch_semaphore: Semaphore,
     remote_installed_plugins_cache_refresh_state: RwLock<RemoteInstalledPluginsCacheRefreshState>,
     restriction_product: Option<Product>,
     analytics_events_client: RwLock<Option<AnalyticsEventsClient>>,
@@ -352,6 +384,8 @@ impl PluginsManager {
             enabled_outcome_cache: RwLock::new(EnabledOutcomeCache::default()),
             enabled_outcome_load_semaphore: Semaphore::new(/*permits*/ 1),
             remote_installed_plugins_cache: RwLock::new(None),
+            remote_installed_plugins_snapshot_cache: RwLock::new(None),
+            remote_installed_plugins_fetch_semaphore: Semaphore::new(/*permits*/ 1),
             remote_installed_plugins_cache_refresh_state: RwLock::new(
                 RemoteInstalledPluginsCacheRefreshState::default(),
             ),
@@ -582,18 +616,158 @@ impl PluginsManager {
         visible_scopes: &[RemotePluginScope],
         on_effective_plugins_changed: Option<Arc<dyn Fn() + Send + Sync + 'static>>,
     ) -> Result<Vec<crate::remote::RemoteMarketplace>, RemotePluginCatalogError> {
-        let plugins = crate::remote::fetch_remote_installed_plugins(
-            &remote_plugin_service_config(config),
-            auth,
-        )
-        .await?;
+        let service_config = remote_plugin_service_config(config);
+        let (snapshot, changed) = self
+            .load_remote_installed_plugins_snapshot(
+                &service_config,
+                auth,
+                /*force_refresh*/ false,
+            )
+            .await?;
+        let plugins = snapshot.effective_plugins()?;
         let marketplaces =
             crate::remote::group_remote_installed_plugins_by_marketplaces(&plugins, visible_scopes);
-        let changed = self.write_remote_installed_plugins_cache(plugins);
         if changed && let Some(on_effective_plugins_changed) = on_effective_plugins_changed {
             on_effective_plugins_changed();
         }
         Ok(marketplaces)
+    }
+
+    pub async fn fetch_remote_marketplaces(
+        &self,
+        config: &PluginsConfigInput,
+        auth: Option<&CodexAuth>,
+        sources: &[crate::remote::RemoteMarketplaceSource],
+    ) -> Result<Vec<crate::remote::RemoteMarketplace>, RemotePluginCatalogError> {
+        let snapshot = self.remote_installed_plugins_snapshot(config, auth).await?;
+        crate::remote::fetch_remote_marketplaces_from_snapshot(
+            &remote_plugin_service_config(config),
+            auth,
+            sources,
+            Some(self.codex_home.as_path()),
+            &snapshot,
+        )
+        .await
+    }
+
+    pub async fn fetch_openai_curated_remote_collection_marketplace(
+        &self,
+        config: &PluginsConfigInput,
+        auth: Option<&CodexAuth>,
+    ) -> Result<Option<crate::remote::RemoteMarketplace>, RemotePluginCatalogError> {
+        let snapshot = self.remote_installed_plugins_snapshot(config, auth).await?;
+        crate::remote::fetch_openai_curated_remote_collection_marketplace_from_snapshot(
+            &remote_plugin_service_config(config),
+            auth,
+            &snapshot,
+        )
+        .await
+    }
+
+    pub(crate) async fn remote_installed_plugins_snapshot(
+        &self,
+        config: &PluginsConfigInput,
+        auth: Option<&CodexAuth>,
+    ) -> Result<RemoteInstalledPluginsSnapshot, RemotePluginCatalogError> {
+        let service_config = remote_plugin_service_config(config);
+        let (snapshot, _) = self
+            .load_remote_installed_plugins_snapshot(
+                &service_config,
+                auth,
+                /*force_refresh*/ false,
+            )
+            .await?;
+        Ok(snapshot)
+    }
+
+    async fn load_remote_installed_plugins_snapshot(
+        &self,
+        service_config: &RemotePluginServiceConfig,
+        auth: Option<&CodexAuth>,
+        force_refresh: bool,
+    ) -> Result<(RemoteInstalledPluginsSnapshot, bool), RemotePluginCatalogError> {
+        let cache_key = remote_installed_plugins_snapshot_cache_key(service_config, auth);
+        if !force_refresh
+            && let Some(snapshot) = self.cached_remote_installed_plugins_snapshot(&cache_key)
+        {
+            return Ok((snapshot, false));
+        }
+
+        let Ok(_fetch_permit) = self
+            .remote_installed_plugins_fetch_semaphore
+            .acquire()
+            .await
+        else {
+            return Err(RemotePluginCatalogError::UnexpectedResponse(
+                "remote installed plugins fetch semaphore closed".to_string(),
+            ));
+        };
+        if !force_refresh
+            && let Some(snapshot) = self.cached_remote_installed_plugins_snapshot(&cache_key)
+        {
+            return Ok((snapshot, false));
+        }
+
+        let snapshot = crate::remote::fetch_remote_installed_plugins(service_config, auth).await?;
+        let changed = self.write_remote_installed_plugins_snapshot(cache_key, snapshot.clone())?;
+        Ok((snapshot, changed))
+    }
+
+    fn cached_remote_installed_plugins_snapshot(
+        &self,
+        cache_key: &RemoteInstalledPluginsSnapshotCacheKey,
+    ) -> Option<RemoteInstalledPluginsSnapshot> {
+        {
+            let cache = match self.remote_installed_plugins_snapshot_cache.read() {
+                Ok(cache) => cache,
+                Err(err) => err.into_inner(),
+            };
+            let now = Instant::now();
+            if let Some(cached) = cache.as_ref()
+                && now < cached.expires_at
+                && cached.key == *cache_key
+            {
+                return Some(cached.snapshot.clone());
+            }
+        }
+
+        let mut cache = match self.remote_installed_plugins_snapshot_cache.write() {
+            Ok(cache) => cache,
+            Err(err) => err.into_inner(),
+        };
+        let now = Instant::now();
+        if cache
+            .as_ref()
+            .is_some_and(|cached| now >= cached.expires_at || cached.key != *cache_key)
+        {
+            *cache = None;
+        }
+        None
+    }
+
+    fn write_remote_installed_plugins_snapshot(
+        &self,
+        cache_key: RemoteInstalledPluginsSnapshotCacheKey,
+        snapshot: RemoteInstalledPluginsSnapshot,
+    ) -> Result<bool, RemotePluginCatalogError> {
+        let plugins = snapshot.effective_plugins()?;
+        match self.remote_installed_plugins_snapshot_cache.write() {
+            Ok(mut cache) => {
+                *cache = Some(CachedRemoteInstalledPluginsSnapshot {
+                    key: cache_key,
+                    expires_at: Instant::now() + REMOTE_INSTALLED_PLUGINS_SNAPSHOT_CACHE_TTL,
+                    snapshot,
+                });
+            }
+            Err(err) => {
+                *err.into_inner() = Some(CachedRemoteInstalledPluginsSnapshot {
+                    key: cache_key,
+                    expires_at: Instant::now() + REMOTE_INSTALLED_PLUGINS_SNAPSHOT_CACHE_TTL,
+                    snapshot,
+                });
+            }
+        }
+        Ok(self.write_remote_installed_plugins_cache(plugins))
     }
 
     fn write_remote_installed_plugins_cache(&self, plugins: Vec<RemoteInstalledPlugin>) -> bool {
@@ -611,6 +785,10 @@ impl PluginsManager {
     }
 
     pub fn clear_remote_installed_plugins_cache(&self) -> bool {
+        match self.remote_installed_plugins_snapshot_cache.write() {
+            Ok(mut cache) => *cache = None,
+            Err(err) => *err.into_inner() = None,
+        }
         let mut cache = match self.remote_installed_plugins_cache.write() {
             Ok(cache) => cache,
             Err(err) => err.into_inner(),
@@ -684,22 +862,31 @@ impl PluginsManager {
         }
 
         let manager = Arc::clone(self);
-        let config_for_refresh = config.clone();
-        let auth_for_refresh = auth.clone();
-        let on_local_cache_changed = Arc::new(move || {
-            manager.maybe_start_remote_installed_plugins_cache_refresh_after_mutation(
-                &config_for_refresh,
-                auth_for_refresh.clone(),
-                on_effective_plugins_changed.clone(),
-            );
+        let config = config.clone();
+        tokio::spawn(async move {
+            match manager
+                .remote_installed_plugins_snapshot(&config, auth.as_ref())
+                .await
+            {
+                Ok(snapshot) => {
+                    crate::remote::maybe_start_remote_installed_plugin_bundle_sync(
+                        manager.codex_home.clone(),
+                        snapshot,
+                        on_effective_plugins_changed,
+                    );
+                }
+                Err(
+                    RemotePluginCatalogError::AuthRequired
+                    | RemotePluginCatalogError::UnsupportedAuthMode,
+                ) => {}
+                Err(err) => {
+                    warn!(
+                        error = %err,
+                        "failed to load installed plugins for remote bundle sync"
+                    );
+                }
+            }
         });
-
-        crate::remote::maybe_start_remote_installed_plugin_bundle_sync(
-            self.codex_home.clone(),
-            remote_plugin_service_config(config),
-            auth,
-            Some(on_local_cache_changed),
-        );
     }
 
     pub fn maybe_start_plugin_list_background_tasks_for_config(
@@ -710,11 +897,6 @@ impl PluginsManager {
         on_effective_plugins_changed: Option<Arc<dyn Fn() + Send + Sync + 'static>>,
     ) {
         self.maybe_start_non_curated_plugin_cache_refresh(roots);
-        self.maybe_start_remote_installed_plugins_cache_refresh(
-            config,
-            auth.clone(),
-            on_effective_plugins_changed.clone(),
-        );
         self.maybe_start_remote_installed_plugin_bundle_sync(
             config,
             auth,
@@ -1299,11 +1481,6 @@ impl PluginsManager {
             let on_effective_plugins_changed = on_effective_plugins_changed.clone();
             tokio::spawn(async move {
                 let auth = auth_manager_for_remote_sync.auth().await;
-                manager.maybe_start_remote_installed_plugins_cache_refresh(
-                    &config_for_remote_sync,
-                    auth.clone(),
-                    on_effective_plugins_changed.clone(),
-                );
                 manager.maybe_start_remote_installed_plugin_bundle_sync(
                     &config_for_remote_sync,
                     auth.clone(),
@@ -1569,16 +1746,17 @@ impl PluginsManager {
                 }
             };
 
-            let installed_plugins = crate::remote::fetch_remote_installed_plugins(
-                &request.service_config,
-                request.auth.as_ref(),
-            )
-            .await;
+            let installed_plugins = self
+                .load_remote_installed_plugins_snapshot(
+                    &request.service_config,
+                    request.auth.as_ref(),
+                    /*force_refresh*/ true,
+                )
+                .await;
             match installed_plugins {
-                Ok(installed_plugins) => {
+                Ok((_, changed)) => {
                     // TODO(remote plugins): reconcile missing or stale local bundles before
                     // publishing remote installed state as effective local plugin config.
-                    let changed = self.write_remote_installed_plugins_cache(installed_plugins);
                     let should_notify = changed
                         || matches!(
                             request.notify,

@@ -127,6 +127,11 @@ pub struct RemoteInstalledPlugin {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub(crate) struct RemoteInstalledPluginsSnapshot {
+    plugins: Vec<RemotePluginInstalledItem>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct RemotePluginSummary {
     pub id: String,
     pub remote_plugin_id: String,
@@ -336,6 +341,8 @@ pub enum RemotePluginCatalogError {
 pub enum RemotePluginScope {
     #[serde(rename = "GLOBAL")]
     Global,
+    #[serde(rename = "USER")]
+    User,
     #[serde(rename = "WORKSPACE")]
     Workspace,
 }
@@ -344,6 +351,7 @@ impl RemotePluginScope {
     fn api_value(self) -> &'static str {
         match self {
             Self::Global => "GLOBAL",
+            Self::User => "USER",
             Self::Workspace => "WORKSPACE",
         }
     }
@@ -351,6 +359,7 @@ impl RemotePluginScope {
     fn marketplace_name(self) -> &'static str {
         match self {
             Self::Global => REMOTE_GLOBAL_MARKETPLACE_NAME,
+            Self::User => unreachable!("personal plugins do not map to a Codex marketplace"),
             Self::Workspace => REMOTE_WORKSPACE_MARKETPLACE_NAME,
         }
     }
@@ -358,6 +367,7 @@ impl RemotePluginScope {
     fn marketplace_display_name(self) -> &'static str {
         match self {
             Self::Global => REMOTE_GLOBAL_MARKETPLACE_DISPLAY_NAME,
+            Self::User => unreachable!("personal plugins do not map to a Codex marketplace"),
             Self::Workspace => REMOTE_WORKSPACE_MARKETPLACE_DISPLAY_NAME,
         }
     }
@@ -371,6 +381,33 @@ impl RemotePluginScope {
             | REMOTE_WORKSPACE_SHARED_WITH_ME_UNLISTED_MARKETPLACE_NAME => Some(Self::Workspace),
             _ => None,
         }
+    }
+}
+
+impl RemoteInstalledPluginsSnapshot {
+    fn plugins_for_scope(&self, scope: RemotePluginScope) -> Vec<RemotePluginInstalledItem> {
+        self.plugins
+            .iter()
+            .filter(|plugin| plugin.plugin.scope == scope)
+            .cloned()
+            .collect()
+    }
+
+    pub(crate) fn effective_plugins(
+        &self,
+    ) -> Result<Vec<RemoteInstalledPlugin>, RemotePluginCatalogError> {
+        let mut plugins = self
+            .plugins
+            .iter()
+            .filter(|plugin| plugin.plugin.scope != RemotePluginScope::User)
+            .map(remote_installed_plugin_to_cache_entry)
+            .collect::<Result<Vec<_>, _>>()?;
+        plugins.sort_by(|left, right| {
+            left.marketplace_name
+                .cmp(&right.marketplace_name)
+                .then_with(|| left.id.cmp(&right.id))
+        });
+        Ok(plugins)
     }
 }
 
@@ -496,6 +533,10 @@ fn remote_plugin_canonical_marketplace_name(
 ) -> Result<&'static str, RemotePluginCatalogError> {
     match plugin.scope {
         RemotePluginScope::Global => Ok(REMOTE_GLOBAL_MARKETPLACE_NAME),
+        RemotePluginScope::User => Err(RemotePluginCatalogError::UnexpectedResponse(format!(
+            "personal plugin `{}` does not map to a Codex marketplace",
+            plugin.id
+        ))),
         RemotePluginScope::Workspace => match workspace_plugin_discoverability(plugin)? {
             RemotePluginShareDiscoverability::Listed => Ok(REMOTE_WORKSPACE_MARKETPLACE_NAME),
             RemotePluginShareDiscoverability::Private
@@ -558,35 +599,42 @@ pub async fn fetch_remote_marketplaces(
     sources: &[RemoteMarketplaceSource],
     global_catalog_cache_path: Option<&Path>,
 ) -> Result<Vec<RemoteMarketplace>, RemotePluginCatalogError> {
+    let installed_plugins = fetch_remote_installed_plugins(config, auth).await?;
+    fetch_remote_marketplaces_from_snapshot(
+        config,
+        auth,
+        sources,
+        global_catalog_cache_path,
+        &installed_plugins,
+    )
+    .await
+}
+
+pub(crate) async fn fetch_remote_marketplaces_from_snapshot(
+    config: &RemotePluginServiceConfig,
+    auth: Option<&CodexAuth>,
+    sources: &[RemoteMarketplaceSource],
+    global_catalog_cache_path: Option<&Path>,
+    installed_plugins: &RemoteInstalledPluginsSnapshot,
+) -> Result<Vec<RemoteMarketplace>, RemotePluginCatalogError> {
     let auth = ensure_chatgpt_auth(auth)?;
     let mut marketplaces = Vec::new();
-    let needs_workspace_installed = sources.iter().any(|source| {
-        matches!(
-            source,
-            RemoteMarketplaceSource::WorkspaceDirectory | RemoteMarketplaceSource::SharedWithMe
-        )
-    });
-    let workspace_installed_plugins = if needs_workspace_installed {
-        Some(fetch_installed_plugins_for_scope(config, auth, RemotePluginScope::Workspace).await?)
-    } else {
-        None
-    };
+    let workspace_installed_plugins =
+        installed_plugins.plugins_for_scope(RemotePluginScope::Workspace);
 
     for source in sources {
         match source {
             RemoteMarketplaceSource::Global => {
                 let scope = RemotePluginScope::Global;
-                let (directory_plugins, installed_plugins) = tokio::try_join!(
-                    fetch_directory_plugins_for_scope(config, auth, scope),
-                    fetch_installed_plugins_for_scope(config, auth, scope),
-                )?;
+                let directory_plugins =
+                    fetch_directory_plugins_for_scope(config, auth, scope).await?;
                 let directory_plugins_for_cache =
                     global_catalog_cache_path.map(|_| directory_plugins.clone());
                 if let Some(marketplace) = build_remote_marketplace(
                     scope.marketplace_name(),
                     scope.marketplace_display_name(),
                     directory_plugins,
-                    installed_plugins,
+                    installed_plugins.plugins_for_scope(scope),
                     /*include_installed_only*/ true,
                 )? {
                     marketplaces.push(marketplace);
@@ -610,7 +658,7 @@ pub async fn fetch_remote_marketplaces(
                     scope.marketplace_name(),
                     scope.marketplace_display_name(),
                     directory_plugins,
-                    workspace_installed_plugins.clone().unwrap_or_default(),
+                    workspace_installed_plugins.clone(),
                     /*include_installed_only*/ false,
                 )? {
                     marketplaces.push(marketplace);
@@ -640,7 +688,7 @@ pub async fn fetch_remote_marketplaces(
                     REMOTE_WORKSPACE_SHARED_WITH_ME_PRIVATE_MARKETPLACE_NAME,
                     REMOTE_WORKSPACE_SHARED_WITH_ME_PRIVATE_MARKETPLACE_DISPLAY_NAME,
                     directly_shared_plugins,
-                    workspace_installed_plugins.clone().unwrap_or_default(),
+                    workspace_installed_plugins.clone(),
                     /*include_installed_only*/ false,
                 )? {
                     marketplaces.push(marketplace);
@@ -648,7 +696,6 @@ pub async fn fetch_remote_marketplaces(
 
                 let unlisted_installed_plugins = workspace_installed_plugins
                     .clone()
-                    .unwrap_or_default()
                     .into_iter()
                     .filter_map(
                         |plugin| match workspace_plugin_discoverability(&plugin.plugin) {
@@ -714,23 +761,35 @@ pub async fn fetch_openai_curated_remote_collection_marketplace(
     config: &RemotePluginServiceConfig,
     auth: Option<&CodexAuth>,
 ) -> Result<Option<RemoteMarketplace>, RemotePluginCatalogError> {
+    let installed_plugins = fetch_remote_installed_plugins(config, auth).await?;
+    fetch_openai_curated_remote_collection_marketplace_from_snapshot(
+        config,
+        auth,
+        &installed_plugins,
+    )
+    .await
+}
+
+pub(crate) async fn fetch_openai_curated_remote_collection_marketplace_from_snapshot(
+    config: &RemotePluginServiceConfig,
+    auth: Option<&CodexAuth>,
+    installed_plugins: &RemoteInstalledPluginsSnapshot,
+) -> Result<Option<RemoteMarketplace>, RemotePluginCatalogError> {
     let auth = ensure_chatgpt_auth(auth)?;
     let scope = RemotePluginScope::Global;
-    let (directory_plugins, installed_plugins) = tokio::try_join!(
-        fetch_directory_plugins_for_scope_with_collection(
-            config,
-            auth,
-            scope,
-            OPENAI_CURATED_REMOTE_COLLECTION_KEY,
-        ),
-        fetch_installed_plugins_for_scope(config, auth, scope),
-    )?;
+    let directory_plugins = fetch_directory_plugins_for_scope_with_collection(
+        config,
+        auth,
+        scope,
+        OPENAI_CURATED_REMOTE_COLLECTION_KEY,
+    )
+    .await?;
 
     build_remote_marketplace(
         REMOTE_GLOBAL_MARKETPLACE_NAME,
         REMOTE_GLOBAL_MARKETPLACE_DISPLAY_NAME,
         directory_plugins,
-        installed_plugins,
+        installed_plugins.plugins_for_scope(scope),
         /*include_installed_only*/ false,
     )
 }
@@ -786,31 +845,9 @@ fn build_remote_marketplace(
 pub(crate) async fn fetch_remote_installed_plugins(
     config: &RemotePluginServiceConfig,
     auth: Option<&CodexAuth>,
-) -> Result<Vec<RemoteInstalledPlugin>, RemotePluginCatalogError> {
+) -> Result<RemoteInstalledPluginsSnapshot, RemotePluginCatalogError> {
     let auth = ensure_chatgpt_auth(auth)?;
-    let global = async {
-        let scope = RemotePluginScope::Global;
-        let installed_plugins = fetch_installed_plugins_for_scope(config, auth, scope).await?;
-        Ok::<_, RemotePluginCatalogError>((scope, installed_plugins))
-    };
-    let workspace = async {
-        let scope = RemotePluginScope::Workspace;
-        let installed_plugins = fetch_installed_plugins_for_scope(config, auth, scope).await?;
-        Ok::<_, RemotePluginCatalogError>((scope, installed_plugins))
-    };
-
-    let (global, workspace) = tokio::try_join!(global, workspace)?;
-    let mut installed_plugins = [global, workspace]
-        .into_iter()
-        .flat_map(|(_scope, plugins)| plugins)
-        .map(|plugin| remote_installed_plugin_to_cache_entry(&plugin))
-        .collect::<Result<Vec<_>, _>>()?;
-    installed_plugins.sort_by(|left, right| {
-        left.marketplace_name
-            .cmp(&right.marketplace_name)
-            .then_with(|| left.id.cmp(&right.id))
-    });
-    Ok(installed_plugins)
+    fetch_installed_plugins(config, auth, /*include_download_urls*/ true).await
 }
 
 pub fn group_remote_installed_plugins_by_marketplaces(
@@ -1220,6 +1257,10 @@ fn remote_plugin_share_context(
 ) -> Result<Option<RemotePluginShareContext>, RemotePluginCatalogError> {
     match plugin.scope {
         RemotePluginScope::Global => Ok(None),
+        RemotePluginScope::User => Err(RemotePluginCatalogError::UnexpectedResponse(format!(
+            "personal plugin `{}` does not expose Codex share context",
+            plugin.id
+        ))),
         RemotePluginScope::Workspace => {
             let discoverability = workspace_plugin_discoverability(plugin)?;
             Ok(Some(RemotePluginShareContext {
@@ -1455,6 +1496,31 @@ async fn fetch_installed_plugins_for_scope(
     .await
 }
 
+async fn fetch_installed_plugins(
+    config: &RemotePluginServiceConfig,
+    auth: &CodexAuth,
+    include_download_urls: bool,
+) -> Result<RemoteInstalledPluginsSnapshot, RemotePluginCatalogError> {
+    let mut plugins = Vec::new();
+    let mut page_token = None;
+    loop {
+        let response = get_remote_plugin_installed_page(
+            config,
+            auth,
+            /*scope*/ None,
+            page_token.as_deref(),
+            include_download_urls,
+        )
+        .await?;
+        plugins.extend(response.plugins);
+        let Some(next_page_token) = response.pagination.next_page_token else {
+            break;
+        };
+        page_token = Some(next_page_token);
+    }
+    Ok(RemoteInstalledPluginsSnapshot { plugins })
+}
+
 async fn fetch_installed_plugins_for_scope_with_download_url(
     config: &RemotePluginServiceConfig,
     auth: &CodexAuth,
@@ -1467,7 +1533,7 @@ async fn fetch_installed_plugins_for_scope_with_download_url(
         let response = get_remote_plugin_installed_page(
             config,
             auth,
-            scope,
+            Some(scope),
             page_token.as_deref(),
             include_download_urls,
         )
@@ -1522,7 +1588,7 @@ async fn get_remote_shared_workspace_plugins_page(
 async fn get_remote_plugin_installed_page(
     config: &RemotePluginServiceConfig,
     auth: &CodexAuth,
-    scope: RemotePluginScope,
+    scope: Option<RemotePluginScope>,
     page_token: Option<&str>,
     include_download_urls: bool,
 ) -> Result<RemotePluginInstalledResponse, RemotePluginCatalogError> {
@@ -1530,7 +1596,9 @@ async fn get_remote_plugin_installed_page(
     let url = format!("{base_url}/ps/plugins/installed");
     let client = build_reqwest_client();
     let mut request = authenticated_request(client.get(&url), auth)?;
-    request = request.query(&[("scope", scope.api_value())]);
+    if let Some(scope) = scope {
+        request = request.query(&[("scope", scope.api_value())]);
+    }
     if include_download_urls {
         request = request.query(&[("includeDownloadUrls", true)]);
     }
