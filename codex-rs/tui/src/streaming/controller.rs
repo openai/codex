@@ -123,7 +123,6 @@ struct StablePrefixLenCache {
 struct PartialSourceLine {
     source_start: usize,
     source_end: usize,
-    emitted_source_end: usize,
     emitted_prefix: Vec<HyperlinkLine>,
 }
 
@@ -169,8 +168,11 @@ impl StreamCore {
         if delta.contains('\n')
             && let Some(committed_source) = self.state.collector.commit_complete_source()
         {
+            let previous_source_len = self.raw_source.len();
+            let previous_rendered_len = self.rendered_lines.len();
             self.raw_source.push_str(&committed_source);
             self.holdback_scanner.push_source_chunk(&committed_source);
+            self.cache_default_tail_prefix_after_append(previous_source_len, previous_rendered_len);
             self.recompute_streaming_render();
             enqueued = self.sync_stable_queue();
         }
@@ -291,6 +293,9 @@ impl StreamCore {
         } else {
             None
         };
+        let partial_queue_len = partial_line
+            .as_ref()
+            .map(|partial_line| self.partial_source_line_queue_len(partial_line));
         let emitted_source_boundary =
             self.source_boundary_after_rendered_len(self.emitted_stable_len);
         self.width = width;
@@ -300,8 +305,8 @@ impl StreamCore {
         }
 
         self.recompute_streaming_render();
-        if let Some(partial_line) = partial_line {
-            self.rebuild_stable_queue_preserving_partial_source_line(partial_line);
+        if let Some((partial_line, partial_queue_len)) = partial_line.zip(partial_queue_len) {
+            self.preserve_partial_source_line_queue(partial_line, partial_queue_len);
             return;
         }
         self.emitted_stable_len = self.rendered_len_for_source_boundary(emitted_source_boundary);
@@ -368,6 +373,9 @@ impl StreamCore {
         } else {
             None
         };
+        let partial_queue_len = partial_line
+            .as_ref()
+            .map(|partial_line| self.partial_source_line_queue_len(partial_line));
         let live_default_tail_source_start = if !had_pending_queue && !had_structural_tail {
             self.live_default_tail_source_start()
         } else {
@@ -382,8 +390,8 @@ impl StreamCore {
         }
 
         self.recompute_streaming_render();
-        if let Some(partial_line) = partial_line {
-            self.rebuild_stable_queue_preserving_partial_source_line(partial_line);
+        if let Some((partial_line, partial_queue_len)) = partial_line.zip(partial_queue_len) {
+            self.preserve_partial_source_line_queue(partial_line, partial_queue_len);
             return true;
         }
         self.emitted_stable_len = self.rendered_len_for_source_boundary(emitted_source_boundary);
@@ -463,40 +471,40 @@ impl StreamCore {
         self.enqueued_stable_len = target_stable_len;
     }
 
-    fn rebuild_stable_queue_preserving_partial_source_line(
+    fn partial_source_line_queue_len(&mut self, partial_line: &PartialSourceLine) -> usize {
+        if self.synthetic_queue_remaining > 0 {
+            return self.synthetic_queue_remaining.min(self.state.queued_len());
+        }
+
+        let source_line_end_len = self.rendered_len_for_source_boundary(partial_line.source_end);
+        source_line_end_len
+            .saturating_sub(self.emitted_stable_len)
+            .min(self.state.queued_len())
+    }
+
+    fn preserve_partial_source_line_queue(
         &mut self,
         partial_line: PartialSourceLine,
+        partial_queue_len: usize,
     ) {
         let source_line_start_len =
             self.rendered_len_for_source_boundary(partial_line.source_start);
         let source_line_end_len = self.rendered_len_for_source_boundary(partial_line.source_end);
         let target_stable_len = self.compute_target_stable_len();
 
-        self.clear_stable_queue();
+        // Keep the queued suffix built before the remap until this partially
+        // emitted source line drains. Rebuilding that suffix after resize or
+        // `/raw` requires parsing rendered rich markdown back into source
+        // bytes, which is fragile for inline Markdown and expensive on the UI
+        // thread.
         self.emitted_stable_len = source_line_start_len;
-
-        let mut queued = if self.render_mode == HistoryRenderMode::Raw {
-            plain_hyperlink_lines(raw_lines_from_source(
-                &self.raw_source[partial_line.emitted_source_end..partial_line.source_end],
-            ))
-        } else {
-            trim_rendered_prefix(
-                self.rendered_lines[source_line_start_len..source_line_end_len].to_vec(),
-                &partial_line.emitted_prefix,
-            )
-        };
-        let synthetic_len = queued.len();
-        if source_line_end_len < target_stable_len {
-            queued.extend(self.rendered_lines[source_line_end_len..target_stable_len].to_vec());
-        }
-        if !queued.is_empty() {
-            self.state.enqueue(queued);
-        }
         self.enqueued_stable_len = source_line_end_len.max(target_stable_len);
-        if synthetic_len > 0 {
-            self.synthetic_queue_remaining = synthetic_len;
+        if partial_queue_len > 0 {
+            self.synthetic_queue_remaining = partial_queue_len;
             self.synthetic_queue_target_emitted_len = Some(source_line_end_len);
             self.synthetic_queue_partial = Some(partial_line);
+        } else {
+            self.clear_synthetic_queue_accounting();
         }
     }
 
@@ -524,26 +532,10 @@ impl StreamCore {
         let mut ordinary_lines = step.len();
         if self.synthetic_queue_remaining > 0 {
             let synthetic_lines = ordinary_lines.min(self.synthetic_queue_remaining);
-            let mut emitted_prefix = None;
             if let Some(partial_line) = &mut self.synthetic_queue_partial {
                 partial_line
                     .emitted_prefix
                     .extend(step[..synthetic_lines].to_vec());
-                emitted_prefix = Some((
-                    partial_line.source_start,
-                    partial_line.source_end,
-                    partial_line.emitted_prefix.clone(),
-                ));
-            }
-            if let Some((source_start, source_end, emitted_prefix)) = emitted_prefix {
-                let emitted_source_end = self.source_boundary_after_rendered_prefix(
-                    source_start,
-                    source_end,
-                    &emitted_prefix,
-                );
-                if let Some(partial_line) = &mut self.synthetic_queue_partial {
-                    partial_line.emitted_source_end = emitted_source_end;
-                }
             }
             ordinary_lines -= synthetic_lines;
             self.synthetic_queue_remaining -= synthetic_lines;
@@ -694,15 +686,9 @@ impl StreamCore {
                 }
                 let emitted_prefix =
                     self.rendered_lines[source_start_rendered_len..rendered_len].to_vec();
-                let emitted_source_end = self.source_boundary_after_rendered_prefix(
-                    source_start,
-                    source_end,
-                    &emitted_prefix,
-                );
                 return Some(PartialSourceLine {
                     source_start,
                     source_end,
-                    emitted_source_end,
                     emitted_prefix,
                 });
             }
@@ -722,30 +708,6 @@ impl StreamCore {
             boundaries.push(self.raw_source.len());
         }
         boundaries
-    }
-
-    fn source_boundary_after_rendered_prefix(
-        &self,
-        source_start: usize,
-        source_end: usize,
-        emitted_prefix: &[HyperlinkLine],
-    ) -> usize {
-        if emitted_prefix.is_empty() {
-            return source_start;
-        }
-        let emitted_text = emitted_prefix
-            .iter()
-            .map(hyperlink_line_text)
-            .collect::<Vec<_>>();
-        let emitted_visible_text = emitted_text.join(" ");
-        if let Some(boundary) = visible_text_source_boundary(
-            &self.raw_source[source_start..source_end],
-            &emitted_visible_text,
-        ) {
-            return source_start + boundary;
-        }
-
-        source_start
     }
 
     fn default_tail_budget_lines(&mut self) -> usize {
@@ -769,198 +731,28 @@ impl StreamCore {
         tail_source_start(&self.raw_source, self.default_tail_lines)
     }
 
+    fn cache_default_tail_prefix_after_append(
+        &mut self,
+        previous_source_len: usize,
+        previous_rendered_len: usize,
+    ) {
+        if self.render_mode == HistoryRenderMode::Raw || self.default_tail_lines != 1 {
+            return;
+        }
+        if self.default_tail_source_start() != Some(previous_source_len) {
+            return;
+        }
+        self.stable_prefix_len_cache = Some(StablePrefixLenCache {
+            source_start: previous_source_len,
+            width: self.width,
+            stable_prefix_len: previous_rendered_len,
+        });
+    }
+
     fn requires_final_scrollback_reflow(&self) -> bool {
         self.render_mode != HistoryRenderMode::Raw
             && !matches!(self.holdback_scanner.state(), TableHoldbackState::None)
     }
-}
-
-fn visible_text_source_boundary(source: &str, visible_prefix: &str) -> Option<usize> {
-    if visible_prefix.is_empty() {
-        return Some(0);
-    }
-
-    let mut visible_chars = visible_prefix.chars().peekable();
-    let mut iter = source.char_indices().peekable();
-    let mut at_line_start = true;
-    while let Some((idx, ch)) = iter.next() {
-        if visible_chars.peek().is_none() {
-            return Some(idx);
-        }
-
-        if at_line_start && skip_line_marker(ch, &mut iter, visible_chars.peek().copied()) {
-            continue;
-        }
-
-        if ch == '&'
-            && let Some((entity_char, entity_end)) = markdown_entity_at(source, idx)
-        {
-            match visible_chars.peek().copied() {
-                Some(expected) if expected == entity_char => {
-                    visible_chars.next();
-                    if visible_chars.peek().is_none() {
-                        return Some(entity_end);
-                    }
-                    while let Some((next_idx, _)) = iter.peek().copied() {
-                        if next_idx < entity_end {
-                            iter.next();
-                        } else {
-                            break;
-                        }
-                    }
-                    at_line_start = false;
-                    continue;
-                }
-                _ => return None,
-            }
-        }
-
-        if ch == '[' {
-            let mut label_end = None;
-            let mut label_chars = Vec::new();
-            let mut depth = 1usize;
-            for (label_idx, label_ch) in iter.by_ref() {
-                if label_ch == ']' {
-                    depth = depth.saturating_sub(1);
-                    if depth == 0 {
-                        label_end = Some(label_idx + label_ch.len_utf8());
-                        break;
-                    }
-                    label_chars.push((label_idx, label_ch));
-                } else {
-                    if label_ch == '[' {
-                        depth += 1;
-                    }
-                    label_chars.push((label_idx, label_ch));
-                }
-            }
-            let label_end = label_end?;
-            for (label_idx, label_ch) in label_chars {
-                match visible_chars.peek().copied() {
-                    Some(expected) if expected == label_ch => {
-                        visible_chars.next();
-                        if visible_chars.peek().is_none() {
-                            return Some(
-                                skip_link_destination(source, label_end)
-                                    .unwrap_or(label_idx + label_ch.len_utf8()),
-                            );
-                        }
-                    }
-                    _ => return None,
-                }
-            }
-            if let Some(destination_end) = skip_link_destination(source, label_end) {
-                while let Some((next_idx, _)) = iter.peek().copied() {
-                    if next_idx < destination_end {
-                        iter.next();
-                    } else {
-                        break;
-                    }
-                }
-            }
-            at_line_start = false;
-            continue;
-        }
-
-        if matches!(ch, '*' | '_' | '`') && visible_chars.peek().copied() != Some(ch) {
-            continue;
-        }
-
-        match visible_chars.peek().copied() {
-            Some(expected) if expected == ch => {
-                visible_chars.next();
-                at_line_start = ch == '\n';
-                if visible_chars.peek().is_none() {
-                    return Some(idx + ch.len_utf8());
-                }
-            }
-            Some(_) if ch.is_ascii_punctuation() => continue,
-            _ => return None,
-        }
-    }
-
-    visible_chars.peek().is_none().then_some(source.len())
-}
-
-fn skip_line_marker(
-    ch: char,
-    iter: &mut std::iter::Peekable<std::str::CharIndices<'_>>,
-    expected: Option<char>,
-) -> bool {
-    if expected == Some(ch) {
-        return false;
-    }
-
-    if matches!(ch, '#' | '>' | '-' | '+' | '*') {
-        while let Some((_, next_ch)) = iter.peek().copied() {
-            if next_ch.is_whitespace() {
-                iter.next();
-            } else {
-                break;
-            }
-        }
-        return true;
-    }
-
-    if ch.is_ascii_digit() {
-        let mut clone = iter.clone();
-        while let Some((_, next_ch)) = clone.peek().copied() {
-            if next_ch.is_ascii_digit() {
-                clone.next();
-            } else {
-                break;
-            }
-        }
-        if let Some((_, '.' | ')')) = clone.next() {
-            while let Some((_, next_ch)) = clone.peek().copied() {
-                if next_ch.is_whitespace() {
-                    clone.next();
-                } else {
-                    break;
-                }
-            }
-            *iter = clone;
-            return true;
-        }
-    }
-
-    false
-}
-
-fn markdown_entity_at(source: &str, start: usize) -> Option<(char, usize)> {
-    for (entity, ch) in [
-        ("&amp;", '&'),
-        ("&lt;", '<'),
-        ("&gt;", '>'),
-        ("&quot;", '"'),
-        ("&#39;", '\''),
-    ] {
-        if source[start..].starts_with(entity) {
-            return Some((ch, start + entity.len()));
-        }
-    }
-    None
-}
-
-fn skip_link_destination(source: &str, label_end: usize) -> Option<usize> {
-    let after_label = source.get(label_end..)?;
-    if !after_label.starts_with('(') {
-        return None;
-    }
-    let mut depth = 0usize;
-    for (idx, ch) in after_label.char_indices() {
-        match ch {
-            '(' => depth += 1,
-            ')' => {
-                depth = depth.saturating_sub(1);
-                if depth == 0 {
-                    return Some(label_end + idx + ch.len_utf8());
-                }
-            }
-            _ => {}
-        }
-    }
-    None
 }
 
 fn trim_rendered_prefix(
@@ -1838,6 +1630,22 @@ mod tests {
             vec!["  tail stays visible".to_string()],
             "finalize should still flush the preserved default tail",
         );
+    }
+
+    #[test]
+    fn controller_default_tail_caches_single_line_append_prefix() {
+        let mut ctrl = stream_controller(Some(/*width*/ 80));
+        ctrl.push("alpha\n");
+        ctrl.push("beta\n");
+
+        let cache = ctrl
+            .core
+            .stable_prefix_len_cache
+            .as_ref()
+            .expect("expected default-tail prefix cache for single-line append");
+        assert_eq!(cache.source_start, "alpha\n".len());
+        assert_eq!(cache.width, Some(/*width*/ 80));
+        assert_eq!(cache.stable_prefix_len, 1);
     }
 
     #[test]
@@ -2894,7 +2702,7 @@ mod tests {
     }
 
     #[test]
-    fn controller_set_render_mode_rerenders_partial_suffix_in_raw_mode() {
+    fn controller_set_render_mode_preserves_queued_partial_suffix() {
         let mut ctrl = stream_controller(Some(/*width*/ 18));
         ctrl.push("**alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu**\n");
         ctrl.push("tail line\n");
@@ -2918,8 +2726,8 @@ mod tests {
             "finalize must not replay the already-visible rich prefix after raw toggle; emitted before toggle: {first_emit:?}, finalized after toggle: {joined:?}",
         );
         assert!(
-            joined.contains("**") && joined.contains("tail line"),
-            "pending suffix should be rendered from raw mode after toggle, not old rich rows; emitted before toggle: {first_emit:?}, finalized after toggle: {joined:?}",
+            joined.contains("lambda mu") && joined.contains("tail line"),
+            "pending suffix should finish draining without losing content after raw toggle; emitted before toggle: {first_emit:?}, finalized after toggle: {joined:?}",
         );
     }
 
@@ -2946,12 +2754,12 @@ mod tests {
         let first_emit = lines_to_plain_strings(&first_emit).join("\n");
         let joined = remaining.join("\n");
         assert!(
-            !joined.contains("https://example.com") && !joined.contains("](https://"),
-            "raw suffix must not start inside already-visible link markup; emitted before toggle: {first_emit:?}, finalized after toggle: {joined:?}",
+            !joined.contains("alpha beta"),
+            "suffix must not replay the already-visible link label after raw toggle; emitted before toggle: {first_emit:?}, finalized after toggle: {joined:?}",
         );
         assert!(
             joined.contains("gamma") && joined.contains("tail line"),
-            "raw suffix should preserve un-emitted source after the rendered link label; emitted before toggle: {first_emit:?}, finalized after toggle: {joined:?}",
+            "suffix should preserve un-emitted source after the rendered link label; emitted before toggle: {first_emit:?}, finalized after toggle: {joined:?}",
         );
     }
 
@@ -2978,12 +2786,12 @@ mod tests {
         let first_emit = lines_to_plain_strings(&first_emit).join("\n");
         let joined = remaining.join("\n");
         assert!(
-            !joined.contains("foo") && !joined.contains("/bar"),
-            "raw suffix must skip the full hidden destination with balanced parens; emitted before toggle: {first_emit:?}, finalized after toggle: {joined:?}",
+            !joined.contains("alpha beta"),
+            "suffix must not replay the already-visible link label with balanced parens; emitted before toggle: {first_emit:?}, finalized after toggle: {joined:?}",
         );
         assert!(
             joined.contains("gamma") && joined.contains("tail line"),
-            "raw suffix should resume after the link destination; emitted before toggle: {first_emit:?}, finalized after toggle: {joined:?}",
+            "suffix should preserve text after the link destination; emitted before toggle: {first_emit:?}, finalized after toggle: {joined:?}",
         );
     }
 
@@ -3008,12 +2816,12 @@ mod tests {
         let first_emit = lines_to_plain_strings(&first_emit).join("\n");
         let joined = remaining.join("\n");
         assert!(
-            !joined.contains("](https://example.com)") && !joined.contains("https://example.com"),
-            "raw suffix must not resume inside nested link markup; emitted before toggle: {first_emit:?}, finalized after toggle: {joined:?}",
+            !joined.contains("alpha [beta]"),
+            "suffix must not replay the already-visible nested link label after raw toggle; emitted before toggle: {first_emit:?}, finalized after toggle: {joined:?}",
         );
         assert!(
-            joined.contains("gamma") && joined.contains("tail line"),
-            "raw suffix should preserve text after the nested link label; emitted before toggle: {first_emit:?}, finalized after toggle: {joined:?}",
+            joined.contains("rest") && joined.contains("tail line"),
+            "suffix should preserve text after the nested link label; emitted before toggle: {first_emit:?}, finalized after toggle: {joined:?}",
         );
     }
 
