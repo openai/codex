@@ -6,10 +6,12 @@ use std::fs;
 use std::time::Duration;
 use std::time::Instant;
 
+use codex_features::Feature;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
@@ -27,12 +29,13 @@ use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
+use core_test_support::wait_for_event_with_timeout;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
 use tokio::sync::oneshot;
 
-async fn run_turn(test: &TestCodex, prompt: &str) -> anyhow::Result<()> {
+async fn submit_turn(test: &TestCodex, prompt: &str) -> anyhow::Result<()> {
     let session_model = test.session_configured.model.clone();
     let (sandbox_policy, permission_profile) =
         turn_permission_fields(PermissionProfile::Disabled, test.cwd.path());
@@ -64,6 +67,12 @@ async fn run_turn(test: &TestCodex, prompt: &str) -> anyhow::Result<()> {
         })
         .await?;
 
+    Ok(())
+}
+
+async fn run_turn(test: &TestCodex, prompt: &str) -> anyhow::Result<()> {
+    submit_turn(test, prompt).await?;
+
     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     Ok(())
@@ -81,8 +90,8 @@ async fn build_codex_with_test_tool(server: &wiremock::MockServer) -> anyhow::Re
     builder.build(server).await
 }
 
-fn assert_parallel_duration(actual: Duration) {
-    // Allow headroom for slow CI scheduling; barrier synchronization already enforces overlap.
+fn assert_test_tool_parallel_duration(actual: Duration) {
+    // Allow headroom for slow CI scheduling in tests that use the in-process test tool.
     assert!(
         actual < Duration::from_millis(1_600),
         "expected parallel execution to finish quickly, got {actual:?}"
@@ -146,7 +155,7 @@ async fn read_file_tools_run_in_parallel() -> anyhow::Result<()> {
     run_turn(&test, "warm up parallel tool").await?;
 
     let duration = run_turn_and_measure(&test, "exercise sync tool").await?;
-    assert_parallel_duration(duration);
+    assert_test_tool_parallel_duration(duration);
 
     Ok(())
 }
@@ -156,14 +165,24 @@ async fn shell_tools_run_in_parallel() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let mut builder = test_codex().with_model("gpt-5.4");
+    let mut builder = test_codex().with_model("gpt-5.4").with_config(|config| {
+        config
+            .features
+            .disable(Feature::UnifiedExec)
+            .expect("test config should allow feature update");
+    });
     let test = builder.build(&server).await?;
 
+    let command = if cfg!(windows) {
+        "Start-Sleep -Seconds 60"
+    } else {
+        "sleep 60"
+    };
     let shell_args = json!({
-        "command": "sleep 0.25",
-        // Avoid user-specific shell startup cost (e.g. zsh profile scripts) in timing assertions.
+        "command": command,
         "login": false,
-        "timeout_ms": 1_000,
+        "timeout_ms": 120_000,
+        "workdir": test.cwd.path(),
     });
     let args_one = serde_json::to_string(&shell_args)?;
     let args_two = serde_json::to_string(&shell_args)?;
@@ -174,14 +193,46 @@ async fn shell_tools_run_in_parallel() -> anyhow::Result<()> {
         ev_function_call("call-2", "shell_command", &args_two),
         ev_completed("resp-1"),
     ]);
-    let second_response = sse(vec![
-        ev_assistant_message("msg-1", "done"),
-        ev_completed("resp-2"),
-    ]);
-    mount_sse_sequence(&server, vec![first_response, second_response]).await;
+    mount_sse_once(&server, first_response).await;
 
-    let duration = run_turn_and_measure(&test, "run shell_command twice").await?;
-    assert_parallel_duration(duration);
+    submit_turn(&test, "run shell_command twice").await?;
+
+    let began_before_end = tokio::time::timeout(Duration::from_secs(30), async {
+        let mut began = [false; 2];
+        while !began.into_iter().all(|observed| observed) {
+            let event = test.codex.next_event().await?.msg;
+            match event {
+                EventMsg::ExecCommandBegin(event) if event.call_id == "call-1" => began[0] = true,
+                EventMsg::ExecCommandBegin(event) if event.call_id == "call-2" => began[1] = true,
+                EventMsg::ExecCommandEnd(event)
+                    if matches!(event.call_id.as_str(), "call-1" | "call-2") =>
+                {
+                    anyhow::bail!(
+                        "shell command {} ended before both commands began; observed begins: {began:?}",
+                        event.call_id
+                    );
+                }
+                _ => {}
+            }
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await;
+
+    test.codex.submit(Op::Interrupt).await?;
+    let aborted = wait_for_event_with_timeout(
+        &test.codex,
+        |event| matches!(event, EventMsg::TurnAborted(_)),
+        Duration::from_secs(30),
+    )
+    .await;
+    let EventMsg::TurnAborted(aborted) = aborted else {
+        unreachable!("event predicate only accepts turn-aborted events");
+    };
+    assert_eq!(aborted.reason, TurnAbortReason::Interrupted);
+
+    began_before_end
+        .map_err(|_| anyhow::anyhow!("timed out waiting for both shell commands to begin"))??;
 
     Ok(())
 }
@@ -217,7 +268,7 @@ async fn mixed_parallel_tools_run_in_parallel() -> anyhow::Result<()> {
     mount_sse_sequence(&server, vec![first_response, second_response]).await;
 
     let duration = run_turn_and_measure(&test, "mix tools").await?;
-    assert_parallel_duration(duration);
+    assert_test_tool_parallel_duration(duration);
 
     Ok(())
 }
