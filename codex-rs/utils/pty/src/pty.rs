@@ -30,6 +30,7 @@ use tokio::task::JoinHandle;
 
 use crate::process::ChildTerminator;
 use crate::process::ProcessHandle;
+use crate::process::ProcessSignal;
 use crate::process::PtyHandles;
 use crate::process::PtyMasterHandle;
 use crate::process::SpawnedProcess;
@@ -54,6 +55,19 @@ struct PtyChildTerminator {
 }
 
 impl ChildTerminator for PtyChildTerminator {
+    fn signal(&mut self, signal: ProcessSignal) -> std::io::Result<()> {
+        match signal {
+            ProcessSignal::Interrupt => {
+                #[cfg(unix)]
+                if let Some(process_group_id) = self.process_group_id {
+                    return crate::process_group::interrupt_process_group(process_group_id);
+                }
+
+                Ok(())
+            }
+        }
+    }
+
     fn kill(&mut self) -> std::io::Result<()> {
         #[cfg(unix)]
         if let Some(process_group_id) = self.process_group_id {
@@ -81,6 +95,14 @@ struct RawPidTerminator {
 
 #[cfg(unix)]
 impl ChildTerminator for RawPidTerminator {
+    fn signal(&mut self, signal: ProcessSignal) -> std::io::Result<()> {
+        match signal {
+            ProcessSignal::Interrupt => {
+                crate::process_group::interrupt_process_group(self.process_group_id)
+            }
+        }
+    }
+
     fn kill(&mut self) -> std::io::Result<()> {
         crate::process_group::kill_process_group(self.process_group_id)
     }

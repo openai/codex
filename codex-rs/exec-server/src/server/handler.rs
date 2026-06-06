@@ -42,6 +42,8 @@ use crate::protocol::InitializeParams;
 use crate::protocol::InitializeResponse;
 use crate::protocol::ReadParams;
 use crate::protocol::ReadResponse;
+use crate::protocol::SignalParams;
+use crate::protocol::SignalResponse;
 use crate::protocol::TerminateParams;
 use crate::protocol::TerminateResponse;
 use crate::protocol::WriteParams;
@@ -169,6 +171,14 @@ impl ExecServerHandler {
     ) -> Result<WriteResponse, JSONRPCErrorError> {
         let session = self.require_initialized_for("exec")?;
         session.process().exec_write(params).await
+    }
+
+    pub(crate) async fn signal(
+        &self,
+        params: SignalParams,
+    ) -> Result<SignalResponse, JSONRPCErrorError> {
+        let session = self.require_initialized_for("exec")?;
+        session.process().signal(params).await
     }
 
     pub(crate) async fn terminate(

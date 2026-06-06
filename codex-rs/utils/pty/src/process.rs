@@ -17,7 +17,14 @@ use tokio::sync::watch;
 use tokio::task::AbortHandle;
 use tokio::task::JoinHandle;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProcessSignal {
+    Interrupt,
+}
+
 pub(crate) trait ChildTerminator: Send + Sync {
+    fn signal(&mut self, signal: ProcessSignal) -> io::Result<()>;
+
     fn kill(&mut self) -> io::Result<()>;
 }
 
@@ -193,6 +200,17 @@ impl ProcessHandle {
         }
     }
 
+    pub fn signal(&self, signal: ProcessSignal) -> io::Result<()> {
+        let Ok(mut killer_opt) = self.killer.lock() else {
+            return Ok(());
+        };
+        let Some(killer) = killer_opt.as_mut() else {
+            return Ok(());
+        };
+
+        killer.signal(signal)
+    }
+
     /// Attempts to kill the child and abort helper tasks.
     pub fn terminate(&self) {
         self.request_terminate();
@@ -232,6 +250,10 @@ struct ClosureTerminator {
 }
 
 impl ChildTerminator for ClosureTerminator {
+    fn signal(&mut self, _signal: ProcessSignal) -> io::Result<()> {
+        Ok(())
+    }
+
     fn kill(&mut self) -> io::Result<()> {
         if let Some(inner) = self.inner.as_mut() {
             (inner)();

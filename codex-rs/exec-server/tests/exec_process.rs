@@ -13,6 +13,7 @@ use codex_exec_server::ExecParams;
 use codex_exec_server::ExecProcess;
 use codex_exec_server::ExecProcessEvent;
 use codex_exec_server::ProcessId;
+use codex_exec_server::ProcessSignal;
 use codex_exec_server::ReadResponse;
 use codex_exec_server::StartedExecProcess;
 use codex_exec_server::WriteStatus;
@@ -505,6 +506,60 @@ async fn assert_exec_process_rejects_write_without_pipe_stdin(use_remote: bool) 
     Ok(())
 }
 
+async fn assert_exec_process_signal_interrupts_process(use_remote: bool) -> Result<()> {
+    let context = create_process_context(use_remote).await?;
+    let process_id = "proc-signal".to_string();
+    let session = context
+        .backend
+        .start(ExecParams {
+            process_id: process_id.clone().into(),
+            argv: vec![
+                "/bin/sh".to_string(),
+                "-c".to_string(),
+                "trap 'printf \"signal:2\\n\"; exit 7' INT; printf 'ready\\n'; while :; do :; done".to_string(),
+            ],
+            cwd: std::env::current_dir()?,
+            env_policy: /*env_policy*/ None,
+            env: Default::default(),
+            tty: false,
+            pipe_stdin: false,
+            arg0: None,
+        })
+        .await?;
+    assert_eq!(session.process.process_id().as_str(), process_id);
+
+    let StartedExecProcess { process } = session;
+    let mut wake_rx = process.subscribe_wake();
+    let mut ready_output = String::new();
+    let mut after_seq = None;
+    loop {
+        let response =
+            read_process_until_change(Arc::clone(&process), &mut wake_rx, after_seq).await?;
+        for chunk in response.chunks {
+            ready_output.push_str(&String::from_utf8_lossy(&chunk.chunk.into_inner()));
+            after_seq = Some(chunk.seq);
+        }
+        if ready_output.contains("ready\n") {
+            break;
+        }
+        if response.closed {
+            anyhow::bail!("process closed before readiness marker: {ready_output:?}");
+        }
+        after_seq = response.next_seq.checked_sub(1).or(after_seq);
+    }
+
+    process.signal(ProcessSignal::Interrupt).await?;
+    let (output, exit_code, closed) = collect_process_output_from_reads(process, wake_rx).await?;
+
+    assert!(
+        output.contains("signal:2"),
+        "expected signal handler output, got {output:?}"
+    );
+    assert_eq!(exit_code, Some(7));
+    assert!(closed);
+    Ok(())
+}
+
 async fn assert_exec_process_preserves_queued_events_before_subscribe(
     use_remote: bool,
 ) -> Result<()> {
@@ -700,6 +755,15 @@ async fn exec_process_write_then_read_without_tty(use_remote: bool) -> Result<()
 #[serial_test::serial(remote_exec_server)]
 async fn exec_process_rejects_write_without_pipe_stdin(use_remote: bool) -> Result<()> {
     assert_exec_process_rejects_write_without_pipe_stdin(use_remote).await
+}
+
+#[test_case(false ; "local")]
+#[test_case(true ; "remote")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+// Serialize tests that launch a real exec-server process through the full CLI.
+#[serial_test::serial(remote_exec_server)]
+async fn exec_process_signal_interrupts_process(use_remote: bool) -> Result<()> {
+    assert_exec_process_signal_interrupts_process(use_remote).await
 }
 
 #[test_case(false ; "local")]

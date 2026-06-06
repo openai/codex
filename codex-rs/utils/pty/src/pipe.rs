@@ -19,6 +19,7 @@ use tokio::task::JoinHandle;
 
 use crate::process::ChildTerminator;
 use crate::process::ProcessHandle;
+use crate::process::ProcessSignal;
 use crate::process::SpawnedProcess;
 
 #[cfg(target_os = "linux")]
@@ -32,6 +33,22 @@ struct PipeChildTerminator {
 }
 
 impl ChildTerminator for PipeChildTerminator {
+    fn signal(&mut self, signal: ProcessSignal) -> io::Result<()> {
+        match signal {
+            ProcessSignal::Interrupt => {
+                #[cfg(unix)]
+                {
+                    crate::process_group::interrupt_process_group(self.process_group_id)
+                }
+
+                #[cfg(not(unix))]
+                {
+                    Ok(())
+                }
+            }
+        }
+    }
+
     fn kill(&mut self) -> io::Result<()> {
         #[cfg(unix)]
         {
