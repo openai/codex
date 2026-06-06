@@ -440,11 +440,11 @@ async fn codex_tool_passes_base_instructions() -> anyhow::Result<()> {
         developer_contents
             .iter()
             .any(|content| content.contains("`sandbox_mode`")),
-        "expected permissions developer message, got {developer_contents:?}"
+        "expected developer contents to contain text with \"`sandbox_mode`\"; observed: {developer_contents:?}"
     );
     assert!(
         developer_contents.contains(&"Foreshadow upcoming tool calls."),
-        "expected developer instructions in developer messages, got {developer_contents:?}"
+        "expected developer contents to contain \"Foreshadow upcoming tool calls.\"; observed: {developer_contents:?}"
     );
     let user_contents = request["input"]
         .as_array()
@@ -459,7 +459,7 @@ async fn codex_tool_passes_base_instructions() -> anyhow::Result<()> {
         user_contents
             .iter()
             .any(|content| content.contains("MCP global instructions")),
-        "expected CODEX_HOME instructions in user messages, got {user_contents:?}"
+        "expected user contents to contain text with \"MCP global instructions\"; observed: {user_contents:?}"
     );
 
     Ok(())

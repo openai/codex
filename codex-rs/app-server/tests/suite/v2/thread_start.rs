@@ -400,8 +400,7 @@ async fn thread_start_response_excludes_empty_project_instruction_source() -> Re
 }
 
 #[tokio::test]
-async fn thread_start_without_selected_environment_currently_excludes_instruction_sources()
--> Result<()> {
+async fn thread_start_without_selected_environment_excludes_instruction_sources() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     create_config_toml_without_approval_policy(codex_home.path(), &server.uri())?;

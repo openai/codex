@@ -240,16 +240,13 @@ fn assert_capture_eq(label: &str, legacy: &Capture, v2: &Capture) {
         &legacy_follow_up,
         &v2_follow_up,
     );
-    assert!(
-        legacy
-            .follow_up_body
-            .to_string()
-            .contains(USER_INSTRUCTIONS),
-        "legacy follow-up should retain the configured user instructions for {label}"
+    assert_single_user_instruction_message(
+        &legacy.follow_up_body,
+        &format!("legacy follow-up for {label}"),
     );
-    assert!(
-        v2.follow_up_body.to_string().contains(USER_INSTRUCTIONS),
-        "v2 follow-up should retain the configured user instructions for {label}"
+    assert_single_user_instruction_message(
+        &v2.follow_up_body,
+        &format!("v2 follow-up for {label}"),
     );
 
     assert_json_eq(
@@ -296,16 +293,13 @@ fn assert_follow_up_and_history_eq(label: &str, legacy: &Capture, v2: &Capture) 
         &legacy_follow_up,
         &v2_follow_up,
     );
-    assert!(
-        legacy
-            .follow_up_body
-            .to_string()
-            .contains(USER_INSTRUCTIONS),
-        "legacy follow-up should retain the configured user instructions for {label}"
+    assert_single_user_instruction_message(
+        &legacy.follow_up_body,
+        &format!("legacy follow-up for {label}"),
     );
-    assert!(
-        v2.follow_up_body.to_string().contains(USER_INSTRUCTIONS),
-        "v2 follow-up should retain the configured user instructions for {label}"
+    assert_single_user_instruction_message(
+        &v2.follow_up_body,
+        &format!("v2 follow-up for {label}"),
     );
 
     assert_json_eq(
@@ -795,6 +789,53 @@ fn follow_up_request_view(body: &Value) -> Value {
             .expect("follow-up request should include input"),
     );
     canonical_json(&normalize_value(selected))
+}
+
+fn assert_single_user_instruction_message(body: &Value, label: &str) {
+    let instruction_messages = body
+        .get("input")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|item| {
+            item.get("type").and_then(Value::as_str) == Some("message")
+                && item.get("role").and_then(Value::as_str) == Some("user")
+        })
+        .filter_map(|item| {
+            let content = item.get("content").and_then(Value::as_array)?;
+            let instruction_content = content
+                .iter()
+                .filter(|span| {
+                    span.get("type").and_then(Value::as_str) == Some("input_text")
+                        && span
+                            .get("text")
+                            .and_then(Value::as_str)
+                            .is_some_and(|text| text.starts_with("# AGENTS.md instructions for "))
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            (!instruction_content.is_empty()).then(|| {
+                json!({
+                    "role": item["role"].clone(),
+                    "instruction_content": instruction_content,
+                })
+            })
+        })
+        .collect::<Vec<_>>();
+    let expected_text = format!(
+        "# AGENTS.md instructions for {FIXED_CWD}\n\n<INSTRUCTIONS>\n{USER_INSTRUCTIONS}\n</INSTRUCTIONS>"
+    );
+    assert_eq!(
+        instruction_messages,
+        vec![json!({
+            "role": "user",
+            "instruction_content": [{
+                "type": "input_text",
+                "text": expected_text,
+            }],
+        })],
+        "{label} should contain exactly one structured user-instruction message"
+    );
 }
 
 fn replacement_history_from_rollout(path: &Path) -> Result<Value> {
