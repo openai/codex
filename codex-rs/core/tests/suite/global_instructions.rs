@@ -176,6 +176,14 @@ async fn fresh_thread_composes_global_before_project_and_reports_sources() -> Re
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn global_loading_warning_surfaces_during_thread_creation() -> Result<()> {
     let server = responses::start_mock_server().await;
+    let response_mock = responses::mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_response_created("warning-response"),
+            responses::ev_completed("warning-response"),
+        ]),
+    )
+    .await;
     let home = Arc::new(TempDir::new()?);
     let source = write_global(home.as_ref(), b"global\xFFinstructions")?;
 
@@ -197,10 +205,17 @@ async fn global_loading_warning_surfaces_during_thread_creation() -> Result<()> 
         warning.contains("invalid UTF-8"),
         "expected warning to contain \"invalid UTF-8\"; observed: {warning}"
     );
+    test.submit_turn("inspect lossy global instructions")
+        .await?;
+    let expected_fragment =
+        expected_instruction_fragment(&test.config.cwd, "global\u{FFFD}instructions");
+    assert_single_instruction_fragment(&response_mock.single_request(), &expected_fragment);
 
     Ok(())
 }
 
+// TODO(anp): Align cold-resume instruction sources with the historical instructions replayed to
+// the model so the API source list and model-visible context describe the same files.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cold_resume_replays_rendered_instructions_but_reports_current_config_sources() -> Result<()>
 {
