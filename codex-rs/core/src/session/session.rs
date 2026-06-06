@@ -31,7 +31,7 @@ pub(crate) struct Session {
     pub(super) managed_network_proxy_refresh_lock: Semaphore,
     /// Keeps the active app-server client profile and the host-owned Apps MCP
     /// client in sync when different clients resume the same thread.
-    pub(super) app_server_client_profile_update_lock: Mutex<()>,
+    pub(super) app_server_client_profile_update_lock: Semaphore,
     /// The set of enabled features should be invariant for the lifetime of the
     /// session.
     pub(super) features: ManagedFeatures,
@@ -1068,7 +1068,7 @@ impl Session {
                 out_of_band_elicitation_paused,
                 state: Mutex::new(state),
                 managed_network_proxy_refresh_lock: Semaphore::new(/*permits*/ 1),
-                app_server_client_profile_update_lock: Mutex::new(()),
+                app_server_client_profile_update_lock: Semaphore::new(/*permits*/ 1),
                 features: config.features.clone(),
                 multi_agent_version,
                 pending_mcp_server_refresh_config: Mutex::new(None),

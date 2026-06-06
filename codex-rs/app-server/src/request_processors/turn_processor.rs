@@ -58,6 +58,16 @@ struct ThreadSettingsBuildParams {
     personality: Option<Personality>,
 }
 
+struct DetachedReviewStartParams {
+    parent_thread_id: ThreadId,
+    parent_thread: Arc<CodexThread>,
+    review_request: ReviewRequest,
+    display_text: String,
+    app_server_client_name: Option<String>,
+    app_server_client_version: Option<String>,
+    mcp_client_capabilities: Option<McpClientCapabilities>,
+}
+
 impl TurnRequestProcessor {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
@@ -1077,14 +1087,17 @@ impl TurnRequestProcessor {
     async fn start_detached_review(
         &self,
         request_id: &ConnectionRequestId,
-        parent_thread_id: ThreadId,
-        parent_thread: Arc<CodexThread>,
-        review_request: ReviewRequest,
-        display_text: &str,
-        app_server_client_name: Option<String>,
-        app_server_client_version: Option<String>,
-        mcp_client_capabilities: Option<McpClientCapabilities>,
+        params: DetachedReviewStartParams,
     ) -> std::result::Result<(), JSONRPCErrorError> {
+        let DetachedReviewStartParams {
+            parent_thread_id,
+            parent_thread,
+            review_request,
+            display_text,
+            app_server_client_name,
+            app_server_client_version,
+            mcp_client_capabilities,
+        } = params;
         parent_thread.ensure_rollout_materialized().await;
         parent_thread.flush_rollout().await.map_err(|err| {
             internal_error(format!(
@@ -1188,7 +1201,7 @@ impl TurnRequestProcessor {
                 internal_error(format!("failed to start detached review turn: {err}"))
             })?;
 
-        let turn = Self::build_review_turn(turn_id, display_text);
+        let turn = Self::build_review_turn(turn_id, &display_text);
         let review_thread_id = thread_id.to_string();
         self.emit_review_started(request_id, turn, review_thread_id)
             .await;
@@ -1233,13 +1246,15 @@ impl TurnRequestProcessor {
             CoreReviewDelivery::Detached => {
                 self.start_detached_review(
                     request_id,
-                    parent_thread_id,
-                    parent_thread,
-                    review_request,
-                    &display_text,
-                    app_server_client_name,
-                    app_server_client_version,
-                    mcp_client_capabilities,
+                    DetachedReviewStartParams {
+                        parent_thread_id,
+                        parent_thread,
+                        review_request,
+                        display_text,
+                        app_server_client_name,
+                        app_server_client_version,
+                        mcp_client_capabilities,
+                    },
                 )
                 .await?;
             }

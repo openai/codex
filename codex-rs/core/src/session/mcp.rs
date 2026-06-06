@@ -380,6 +380,10 @@ impl Session {
         old_manager.shutdown().await;
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "Codex Apps client replacement must remain serialized with MCP manager updates"
+    )]
     pub(crate) async fn refresh_codex_apps_client(
         &self,
         client_capabilities: Option<McpClientCapabilities>,

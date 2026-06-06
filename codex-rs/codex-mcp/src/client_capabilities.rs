@@ -86,13 +86,12 @@ pub(crate) fn add_json_meta(
     if !meta.as_ref().is_some_and(JsonValue::is_object) {
         *meta = Some(JsonValue::Object(Map::new()));
     }
-    meta.as_mut()
-        .and_then(JsonValue::as_object_mut)
-        .expect("metadata was normalized to an object")
-        .insert(
+    if let Some(object) = meta.as_mut().and_then(JsonValue::as_object_mut) {
+        object.insert(
             MCP_CLIENT_CAPABILITIES_META.to_string(),
             as_json(capabilities),
         );
+    }
 }
 
 pub(crate) fn paginated_params(

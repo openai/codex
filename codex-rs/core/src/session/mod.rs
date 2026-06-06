@@ -788,11 +788,14 @@ impl Codex {
         mcp_elicitations_auto_deny: bool,
         mcp_client_capabilities: Option<McpClientCapabilities>,
     ) -> ConstraintResult<()> {
-        let _profile_update_guard = self
+        let Ok(_profile_update_guard) = self
             .session
             .app_server_client_profile_update_lock
-            .lock()
-            .await;
+            .acquire()
+            .await
+        else {
+            unreachable!("session-owned app-server client profile semaphore is never closed");
+        };
         let capabilities_changed = {
             let manager = self.session.services.mcp_connection_manager.read().await;
             manager.codex_apps_client_capabilities() != mcp_client_capabilities.as_ref()
