@@ -2923,6 +2923,8 @@ dependencies = [
  "codex-context-fragments",
  "codex-protocol",
  "codex-tools",
+ "pretty_assertions",
+ "tokio",
 ]
 
 [[package]]
