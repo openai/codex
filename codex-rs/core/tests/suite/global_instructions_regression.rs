@@ -1,34 +1,90 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::Result;
+use anyhow::anyhow;
 use codex_core::ForkSnapshot;
+use codex_features::Feature;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::built_in_model_providers;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use core_test_support::load_default_config_for_test;
 use core_test_support::responses;
+use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
 use pretty_assertions::assert_eq;
+use serde_json::json;
 use tempfile::TempDir;
 
 const GLOBAL_AGENTS_FILENAME: &str = "AGENTS.md";
+const GLOBAL_AGENTS_OVERRIDE_FILENAME: &str = "AGENTS.override.md";
+const GLOBAL_INSTRUCTIONS: &str = "global instructions";
+const NEW_GLOBAL_INSTRUCTIONS: &str = "new global instructions";
+const OLD_GLOBAL_INSTRUCTIONS: &str = "old global instructions";
+const PROJECT_INSTRUCTIONS: &str = "project instructions";
+const PROJECT_SEPARATOR: &str = "--- project-doc ---";
+const SPAWN_CALL_ID: &str = "spawn-global-instructions-child";
+const SPAWN_CHILD_PROMPT: &str = "inspect inherited global instructions";
+const SPAWN_PARENT_PROMPT: &str = "spawn a child with the parent context";
+const SPAWN_SEED_PROMPT: &str = "seed parent history";
 
 fn write_global(home: &TempDir, contents: impl AsRef<[u8]>) -> Result<AbsolutePathBuf> {
-    let path = home.path().join(GLOBAL_AGENTS_FILENAME);
+    write_global_file(home, GLOBAL_AGENTS_FILENAME, contents)
+}
+
+fn write_global_override(home: &TempDir, contents: impl AsRef<[u8]>) -> Result<AbsolutePathBuf> {
+    write_global_file(home, GLOBAL_AGENTS_OVERRIDE_FILENAME, contents)
+}
+
+fn write_global_file(
+    home: &TempDir,
+    filename: &str,
+    contents: impl AsRef<[u8]>,
+) -> Result<AbsolutePathBuf> {
+    let path = home.path().join(filename);
     std::fs::write(&path, contents)?;
     AbsolutePathBuf::try_from(path).map_err(Into::into)
 }
 
-fn user_instructions(request: &responses::ResponsesRequest) -> String {
+fn instruction_fragments(request: &responses::ResponsesRequest) -> Vec<String> {
     request
         .message_input_texts("user")
         .into_iter()
-        .find(|text| text.starts_with("# AGENTS.md instructions for "))
-        .expect("global instructions message")
+        .filter(|text| text.starts_with("# AGENTS.md instructions for "))
+        .collect()
+}
+
+fn expected_instruction_fragment(cwd: &AbsolutePathBuf, contents: &str) -> String {
+    let cwd = cwd.as_path().display();
+    format!("# AGENTS.md instructions for {cwd}\n\n<INSTRUCTIONS>\n{contents}\n</INSTRUCTIONS>")
+}
+
+fn assert_single_instruction_fragment(request: &responses::ResponsesRequest, expected: &str) {
+    assert_eq!(instruction_fragments(request), vec![expected.to_string()]);
+}
+
+fn request_body_contains(request: &wiremock::Request, text: &str) -> bool {
+    let is_zstd = request
+        .headers
+        .get("content-encoding")
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| {
+            value
+                .split(',')
+                .any(|entry| entry.trim().eq_ignore_ascii_case("zstd"))
+        });
+    let body = if is_zstd {
+        zstd::stream::decode_all(std::io::Cursor::new(&request.body)).ok()
+    } else {
+        Some(request.body.clone())
+    };
+    body.and_then(|body| String::from_utf8(body).ok())
+        .is_some_and(|body| body.contains(text))
 }
 
 fn local_compaction_provider(server: &wiremock::MockServer) -> ModelProviderInfo {
@@ -57,14 +113,14 @@ async fn fresh_thread_composes_global_before_project_and_reports_sources() -> Re
     )
     .await;
     let home = Arc::new(TempDir::new()?);
-    let global_source = write_global(home.as_ref(), "global instructions")?;
+    let global_source = write_global(home.as_ref(), GLOBAL_INSTRUCTIONS)?;
 
     let mut builder = test_codex()
         .with_home(Arc::clone(&home))
         .with_workspace_setup(|cwd, fs| async move {
             fs.write_file(
                 &cwd.join("AGENTS.md"),
-                b"project instructions".to_vec(),
+                PROJECT_INSTRUCTIONS.as_bytes().to_vec(),
                 /*sandbox*/ None,
             )
             .await?;
@@ -81,14 +137,32 @@ async fn fresh_thread_composes_global_before_project_and_reports_sources() -> Re
     test.submit_turn("second turn").await?;
 
     let requests = response_mock.requests();
-    let rendered = user_instructions(&requests[0]);
+    let expected_contents =
+        format!("{GLOBAL_INSTRUCTIONS}\n\n{PROJECT_SEPARATOR}\n\n{PROJECT_INSTRUCTIONS}");
+    let expected_fragment = expected_instruction_fragment(&test.config.cwd, &expected_contents);
+    let fragments = instruction_fragments(&requests[0]);
+    assert_eq!(fragments, vec![expected_fragment]);
+    let rendered = fragments
+        .into_iter()
+        .next()
+        .ok_or_else(|| anyhow!("expected one rendered instruction fragment"))?;
+    let global_position = rendered.find(GLOBAL_INSTRUCTIONS).ok_or_else(|| {
+        anyhow!(
+            "expected rendered instructions to contain {GLOBAL_INSTRUCTIONS:?}; observed: {rendered}"
+        )
+    })?;
+    let project_position = rendered.find(PROJECT_INSTRUCTIONS).ok_or_else(|| {
+        anyhow!(
+            "expected rendered instructions to contain {PROJECT_INSTRUCTIONS:?}; observed: {rendered}"
+        )
+    })?;
     assert!(
-        rendered.find("global instructions") < rendered.find("project instructions"),
+        global_position < project_position,
         "global instructions should precede project instructions: {rendered}"
     );
     assert!(
-        rendered.contains("--- project-doc ---"),
-        "global/project boundary should retain the project separator: {rendered}"
+        rendered.contains(PROJECT_SEPARATOR),
+        "expected rendered instructions to contain {PROJECT_SEPARATOR:?}; observed: {rendered}"
     );
     assert_eq!(
         &requests[1].input()[..requests[0].input().len()],
@@ -119,7 +193,10 @@ async fn global_loading_warning_surfaces_during_thread_creation() -> Result<()> 
         _ => None,
     })
     .await;
-    assert!(warning.contains("invalid UTF-8"));
+    assert!(
+        warning.contains("invalid UTF-8"),
+        "expected warning to contain \"invalid UTF-8\"; observed: {warning}"
+    );
 
     Ok(())
 }
@@ -143,7 +220,7 @@ async fn cold_resume_replays_rendered_instructions_but_reports_current_config_so
     )
     .await;
     let home = Arc::new(TempDir::new()?);
-    let old_source = write_global(home.as_ref(), "old global instructions")?;
+    let old_source = write_global(home.as_ref(), OLD_GLOBAL_INSTRUCTIONS)?;
 
     let mut initial_builder = test_codex().with_home(Arc::clone(&home));
     let initial = initial_builder.build(&server).await?;
@@ -159,8 +236,8 @@ async fn cold_resume_replays_rendered_instructions_but_reports_current_config_so
     })
     .await;
 
-    std::fs::remove_file(old_source.as_path())?;
-    let new_source = write_global(home.as_ref(), "new global instructions")?;
+    let new_source = write_global_override(home.as_ref(), NEW_GLOBAL_INSTRUCTIONS)?;
+    assert_ne!(old_source, new_source);
     let mut resume_builder = test_codex().with_home(Arc::clone(&home));
     let resumed = resume_builder
         .resume(&server, Arc::clone(&home), rollout_path)
@@ -169,14 +246,24 @@ async fn cold_resume_replays_rendered_instructions_but_reports_current_config_so
     assert_eq!(
         resumed.codex.instruction_sources().await,
         vec![new_source],
-        "resume currently reports sources from the newly loaded config"
+        "resume reports sources from the newly loaded config"
     );
 
     resumed.submit_turn("continue resumed thread").await?;
 
-    let resumed_request = response_mock.requests()[1].body_json().to_string();
-    assert!(resumed_request.contains("old global instructions"));
-    assert!(!resumed_request.contains("new global instructions"));
+    let requests = response_mock.requests();
+    assert_eq!(requests.len(), 2);
+    let initial_input = requests[0].input();
+    let resumed_input = requests[1].input();
+    assert_eq!(
+        resumed_input.get(..initial_input.len()),
+        Some(initial_input.as_slice()),
+        "cold resume should replay the original structured input prefix"
+    );
+    let expected_fragment =
+        expected_instruction_fragment(&initial.config.cwd, OLD_GLOBAL_INSTRUCTIONS);
+    assert_single_instruction_fragment(&requests[0], &expected_fragment);
+    assert_single_instruction_fragment(&requests[1], &expected_fragment);
 
     Ok(())
 }
@@ -199,7 +286,7 @@ async fn fork_replays_rendered_instructions_from_shared_history() -> Result<()> 
     )
     .await;
     let home = Arc::new(TempDir::new()?);
-    let source = write_global(home.as_ref(), "old global instructions")?;
+    let source = write_global(home.as_ref(), OLD_GLOBAL_INSTRUCTIONS)?;
     let mut builder = test_codex().with_home(Arc::clone(&home));
     let parent = builder.build(&server).await?;
     parent.submit_turn("persist instructions").await?;
@@ -207,17 +294,29 @@ async fn fork_replays_rendered_instructions_from_shared_history() -> Result<()> 
     parent.codex.flush_rollout().await?;
     let rollout_path = parent.codex.rollout_path().expect("rollout path");
 
-    std::fs::write(source.as_path(), "new global instructions")?;
+    let new_source = write_global_override(home.as_ref(), NEW_GLOBAL_INSTRUCTIONS)?;
+    assert_ne!(source, new_source);
+    let mut fork_config = load_default_config_for_test(home.as_ref()).await;
+    fork_config.cwd = parent.config.cwd.clone();
+    fork_config.model = parent.config.model.clone();
+    fork_config.model_provider = parent.config.model_provider.clone();
+    fork_config.model_catalog = parent.config.model_catalog.clone();
+    fork_config.codex_self_exe = parent.config.codex_self_exe.clone();
     let forked = parent
         .thread_manager
         .fork_thread(
             ForkSnapshot::Interrupted,
-            parent.config.clone(),
+            fork_config,
             rollout_path,
             /*thread_source*/ None,
             /*parent_trace*/ None,
         )
         .await?;
+    assert_eq!(
+        forked.thread.instruction_sources().await,
+        vec![new_source],
+        "fork config should reflect the newly loaded global source"
+    );
 
     forked
         .thread
@@ -238,9 +337,117 @@ async fn fork_replays_rendered_instructions_from_shared_history() -> Result<()> 
     })
     .await;
 
-    let rendered = user_instructions(&response_mock.requests()[1]);
-    assert!(rendered.contains("old global instructions"));
-    assert!(!rendered.contains("new global instructions"));
+    let requests = response_mock.requests();
+    assert_eq!(requests.len(), 2);
+    let parent_input = requests[0].input();
+    let fork_input = requests[1].input();
+    assert_eq!(
+        fork_input.get(..parent_input.len()),
+        Some(parent_input.as_slice()),
+        "fork should replay the parent's original structured input prefix"
+    );
+    let expected_fragment =
+        expected_instruction_fragment(&parent.config.cwd, OLD_GLOBAL_INSTRUCTIONS);
+    assert_single_instruction_fragment(&requests[0], &expected_fragment);
+    assert_single_instruction_fragment(&requests[1], &expected_fragment);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn forked_subagent_replays_one_creation_time_global_instruction_fragment() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let seed_mock = responses::mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| request_body_contains(request, SPAWN_SEED_PROMPT),
+        responses::sse(vec![
+            responses::ev_response_created("seed-response"),
+            responses::ev_assistant_message("seed-message", "seeded"),
+            responses::ev_completed("seed-response"),
+        ]),
+    )
+    .await;
+    let spawn_args = serde_json::to_string(&json!({
+        "message": SPAWN_CHILD_PROMPT,
+        "fork_context": true,
+    }))?;
+    responses::mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| request_body_contains(request, SPAWN_PARENT_PROMPT),
+        responses::sse(vec![
+            responses::ev_response_created("spawn-response"),
+            responses::ev_function_call_with_namespace(
+                SPAWN_CALL_ID,
+                "multi_agent_v1",
+                "spawn_agent",
+                &spawn_args,
+            ),
+            responses::ev_completed("spawn-response"),
+        ]),
+    )
+    .await;
+    let child_mock = responses::mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            request_body_contains(request, SPAWN_CHILD_PROMPT)
+                && !request_body_contains(request, SPAWN_CALL_ID)
+        },
+        responses::sse(vec![
+            responses::ev_response_created("child-response"),
+            responses::ev_assistant_message("child-message", "done"),
+            responses::ev_completed("child-response"),
+        ]),
+    )
+    .await;
+    responses::mount_sse_once_match(
+        &server,
+        |request: &wiremock::Request| request_body_contains(request, SPAWN_CALL_ID),
+        responses::sse(vec![
+            responses::ev_response_created("spawn-follow-up-response"),
+            responses::ev_assistant_message("spawn-follow-up-message", "child started"),
+            responses::ev_completed("spawn-follow-up-response"),
+        ]),
+    )
+    .await;
+
+    let home = Arc::new(TempDir::new()?);
+    write_global(home.as_ref(), OLD_GLOBAL_INSTRUCTIONS)?;
+    let mut builder = test_codex()
+        .with_home(Arc::clone(&home))
+        .with_config(|config| {
+            let _ = config.features.enable(Feature::Collab);
+            let _ = config.features.disable(Feature::EnableRequestCompression);
+        });
+    let test = builder.build(&server).await?;
+    test.submit_turn(SPAWN_SEED_PROMPT).await?;
+    let seed_request = seed_mock.single_request();
+
+    write_global_override(home.as_ref(), NEW_GLOBAL_INSTRUCTIONS)?;
+    test.submit_turn(SPAWN_PARENT_PROMPT).await?;
+    let child_request = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if let Some(request) = child_mock.requests().into_iter().next() {
+                break request;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .map_err(|_| anyhow!("timed out waiting for the forked subagent request"))?;
+
+    let expected_fragment =
+        expected_instruction_fragment(&test.config.cwd, OLD_GLOBAL_INSTRUCTIONS);
+    assert_single_instruction_fragment(&seed_request, &expected_fragment);
+    assert_single_instruction_fragment(&child_request, &expected_fragment);
+    let seed_input = seed_request.input();
+    let child_input = child_request.input();
+    assert_eq!(
+        child_input.get(..seed_input.len()),
+        Some(seed_input.as_slice()),
+        "forked subagent should replay the parent's original structured input prefix"
+    );
 
     Ok(())
 }
@@ -268,7 +475,7 @@ async fn manual_compaction_keeps_the_creation_time_global_instructions() -> Resu
     )
     .await;
     let home = Arc::new(TempDir::new()?);
-    let source = write_global(home.as_ref(), "old global instructions")?;
+    let source = write_global(home.as_ref(), OLD_GLOBAL_INSTRUCTIONS)?;
     let provider = local_compaction_provider(&server);
     let mut builder = test_codex()
         .with_home(Arc::clone(&home))
@@ -278,7 +485,7 @@ async fn manual_compaction_keeps_the_creation_time_global_instructions() -> Resu
     let test = builder.build(&server).await?;
 
     test.submit_turn("first turn").await?;
-    std::fs::write(source.as_path(), "new global instructions")?;
+    std::fs::write(source.as_path(), NEW_GLOBAL_INSTRUCTIONS)?;
 
     test.codex.submit(Op::Compact).await?;
     wait_for_event(&test.codex, |event| {
@@ -287,9 +494,10 @@ async fn manual_compaction_keeps_the_creation_time_global_instructions() -> Resu
     .await;
     test.submit_turn("after compact").await?;
 
-    let follow_up = user_instructions(&response_mock.requests()[2]);
-    assert!(follow_up.contains("old global instructions"));
-    assert!(!follow_up.contains("new global instructions"));
+    let requests = response_mock.requests();
+    let expected_fragment =
+        expected_instruction_fragment(&test.config.cwd, OLD_GLOBAL_INSTRUCTIONS);
+    assert_single_instruction_fragment(&requests[2], &expected_fragment);
 
     Ok(())
 }
@@ -316,7 +524,7 @@ async fn mid_turn_compaction_keeps_the_creation_time_global_instructions() -> Re
     )
     .await;
     let home = Arc::new(TempDir::new()?);
-    let source = write_global(home.as_ref(), "old global instructions")?;
+    let source = write_global(home.as_ref(), OLD_GLOBAL_INSTRUCTIONS)?;
     let provider = local_compaction_provider(&server);
     let mut builder = test_codex()
         .with_home(Arc::clone(&home))
@@ -327,12 +535,13 @@ async fn mid_turn_compaction_keeps_the_creation_time_global_instructions() -> Re
         });
     let test = builder.build(&server).await?;
 
-    std::fs::write(source.as_path(), "new global instructions")?;
+    std::fs::write(source.as_path(), NEW_GLOBAL_INSTRUCTIONS)?;
     test.submit_turn("trigger mid-turn compaction").await?;
 
-    let continuation = user_instructions(&response_mock.requests()[2]);
-    assert!(continuation.contains("old global instructions"));
-    assert!(!continuation.contains("new global instructions"));
+    let requests = response_mock.requests();
+    let expected_fragment =
+        expected_instruction_fragment(&test.config.cwd, OLD_GLOBAL_INSTRUCTIONS);
+    assert_single_instruction_fragment(&requests[2], &expected_fragment);
 
     Ok(())
 }
@@ -365,7 +574,7 @@ async fn legacy_resume_rebuilds_from_current_config_after_manual_compaction() ->
     .await;
     let provider = local_compaction_provider(&server);
     let home = Arc::new(TempDir::new()?);
-    let source = write_global(home.as_ref(), "old global instructions")?;
+    let source = write_global(home.as_ref(), OLD_GLOBAL_INSTRUCTIONS)?;
     let mut initial_builder = test_codex().with_home(Arc::clone(&home)).with_config({
         let provider = provider.clone();
         move |config| config.model_provider = provider
@@ -383,7 +592,7 @@ async fn legacy_resume_rebuilds_from_current_config_after_manual_compaction() ->
     })
     .await;
 
-    std::fs::write(source.as_path(), "new global instructions")?;
+    std::fs::write(source.as_path(), NEW_GLOBAL_INSTRUCTIONS)?;
     let mut resume_builder = test_codex()
         .with_home(Arc::clone(&home))
         .with_config(move |config| config.model_provider = provider);
@@ -391,9 +600,9 @@ async fn legacy_resume_rebuilds_from_current_config_after_manual_compaction() ->
         .resume(&server, Arc::clone(&home), rollout_path)
         .await?;
     resumed.submit_turn("resume legacy history").await?;
-    let resumed_rendered = response_mock.requests()[1].body_json().to_string();
-    assert!(resumed_rendered.contains("old global instructions"));
-    assert!(!resumed_rendered.contains("new global instructions"));
+    let requests = response_mock.requests();
+    let old_fragment = expected_instruction_fragment(&initial.config.cwd, OLD_GLOBAL_INSTRUCTIONS);
+    assert_single_instruction_fragment(&requests[1], &old_fragment);
 
     resumed.codex.submit(Op::Compact).await?;
     wait_for_event(&resumed.codex, |event| {
@@ -402,9 +611,9 @@ async fn legacy_resume_rebuilds_from_current_config_after_manual_compaction() ->
     .await;
     resumed.submit_turn("rebuild full context").await?;
 
-    let rebuilt = user_instructions(&response_mock.requests()[3]);
-    assert!(rebuilt.contains("new global instructions"));
-    assert!(!rebuilt.contains("old global instructions"));
+    let requests = response_mock.requests();
+    let new_fragment = expected_instruction_fragment(&resumed.config.cwd, NEW_GLOBAL_INSTRUCTIONS);
+    assert_single_instruction_fragment(&requests[3], &new_fragment);
 
     Ok(())
 }

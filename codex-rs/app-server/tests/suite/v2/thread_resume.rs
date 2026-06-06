@@ -333,6 +333,85 @@ async fn thread_resume_running_thread_uses_cached_instruction_sources() -> Resul
 }
 
 #[tokio::test]
+async fn thread_resume_cold_thread_reloads_instruction_sources() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+    let old_global_agents = codex_home.path().join("AGENTS.md");
+    std::fs::write(&old_global_agents, "old global instructions")?;
+    let workspace = TempDir::new()?;
+
+    let mut first_mcp = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, first_mcp.initialize()).await??;
+
+    let start_id = first_mcp
+        .send_thread_start_request(ThreadStartParams {
+            cwd: Some(workspace.path().display().to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let start_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        first_mcp.read_stream_until_response_message(RequestId::Integer(start_id)),
+    )
+    .await??;
+    let ThreadStartResponse {
+        thread,
+        instruction_sources,
+        ..
+    } = to_response::<ThreadStartResponse>(start_resp)?;
+    let old_global_agents = AbsolutePathBuf::try_from(std::fs::canonicalize(old_global_agents)?)?;
+    assert_eq!(instruction_sources, vec![old_global_agents]);
+
+    let turn_id = first_mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![UserInput::Text {
+                text: "materialize rollout".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        first_mcp.read_stream_until_response_message(RequestId::Integer(turn_id)),
+    )
+    .await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        first_mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+    drop(first_mcp);
+
+    let new_global_agents = codex_home.path().join("AGENTS.override.md");
+    std::fs::write(&new_global_agents, "new global instructions")?;
+
+    let mut second_mcp = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, second_mcp.initialize()).await??;
+    let resume_id = second_mcp
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: thread.id,
+            ..Default::default()
+        })
+        .await?;
+    let resume_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        second_mcp.read_stream_until_response_message(RequestId::Integer(resume_id)),
+    )
+    .await??;
+    let ThreadResumeResponse {
+        instruction_sources,
+        ..
+    } = to_response::<ThreadResumeResponse>(resume_resp)?;
+    let new_global_agents = AbsolutePathBuf::try_from(std::fs::canonicalize(new_global_agents)?)?;
+    assert_eq!(instruction_sources, vec![new_global_agents]);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn turn_start_updates_runtime_workspace_roots_for_loaded_thread() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
