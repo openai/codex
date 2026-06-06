@@ -174,7 +174,7 @@ impl PreparedResumeAction {
 
 /// Deliver SIGTSTP after restoring terminal state, then re-applies terminal modes once resumed.
 fn suspend_process() -> Result<()> {
-    super::restore()?;
+    super::restore_for_suspend()?;
     super::terminal_stderr::pause()?;
     unsafe {
         libc::kill(/*pid*/ 0, libc::SIGTSTP)

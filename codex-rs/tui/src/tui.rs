@@ -281,6 +281,14 @@ pub fn restore() -> Result<()> {
     restore_common(RawModeRestore::Disable, KeyboardRestore::PopStack)
 }
 
+/// Restore the terminal before yielding control to the parent process during suspend.
+///
+/// This must preserve keyboard enhancement stack entries owned by the parent, so it only pops
+/// the entry pushed by [`set_modes`] rather than using the exit-only keyboard reset.
+pub(super) fn restore_for_suspend() -> Result<()> {
+    restore_common(RawModeRestore::Disable, KeyboardRestore::PopStack)
+}
+
 /// Restore the terminal after Codex is exiting.
 ///
 /// Uses a stronger keyboard reset than [`restore`] so the parent shell recovers even if a
