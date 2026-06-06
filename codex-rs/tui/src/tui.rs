@@ -239,7 +239,7 @@ enum RawModeRestore {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum KeyboardRestore {
     PopStack,
-    ResetAfterExit,
+    ResetReporting,
 }
 
 fn restore_common(
@@ -250,7 +250,7 @@ fn restore_common(
 
     match keyboard_restore {
         KeyboardRestore::PopStack => keyboard_modes::restore_keyboard_enhancement_stack(),
-        KeyboardRestore::ResetAfterExit => keyboard_modes::reset_keyboard_reporting_after_exit(),
+        KeyboardRestore::ResetReporting => keyboard_modes::reset_keyboard_reporting(),
     }
 
     if let Err(err) = execute!(stdout(), DisableBracketedPaste) {
@@ -283,10 +283,11 @@ pub fn restore() -> Result<()> {
 
 /// Restore the terminal before yielding control to the parent process during suspend.
 ///
-/// This must preserve keyboard enhancement stack entries owned by the parent, so it only pops
-/// the entry pushed by [`set_modes`] rather than using the exit-only keyboard reset.
+/// Uses a stronger keyboard reset than [`restore`] so the parent shell recovers even if a
+/// terminal missed the stack pop that normally pairs with [`set_modes`]. After `fg`, suspend
+/// handling calls [`set_modes`] again to re-enable the TUI's keyboard reporting.
 pub(super) fn restore_for_suspend() -> Result<()> {
-    restore_common(RawModeRestore::Disable, KeyboardRestore::PopStack)
+    restore_common(RawModeRestore::Disable, KeyboardRestore::ResetReporting)
 }
 
 /// Restore the terminal after Codex is exiting.
@@ -295,7 +296,7 @@ pub(super) fn restore_for_suspend() -> Result<()> {
 /// terminal missed the stack pop that normally pairs with [`set_modes`].
 pub fn restore_after_exit() -> Result<()> {
     let mut first_error =
-        restore_common(RawModeRestore::Disable, KeyboardRestore::ResetAfterExit).err();
+        restore_common(RawModeRestore::Disable, KeyboardRestore::ResetReporting).err();
     if let Err(err) = terminal_stderr::finish() {
         first_error.get_or_insert(err);
     }
