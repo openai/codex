@@ -119,6 +119,19 @@ impl SessionState {
         self.history.reference_context_item()
     }
 
+    pub(crate) fn take_skip_global_instructions_refresh_on_first_turn(&mut self) -> bool {
+        std::mem::take(
+            &mut self
+                .session_configuration
+                .skip_global_instructions_refresh_on_first_turn,
+        )
+    }
+
+    pub(crate) fn require_global_instructions_refresh(&mut self) {
+        self.session_configuration
+            .skip_global_instructions_refresh_on_first_turn = false;
+    }
+
     // Token/rate limit helpers
     pub(crate) fn update_token_info_from_usage(
         &mut self,

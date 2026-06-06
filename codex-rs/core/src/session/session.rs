@@ -57,6 +57,10 @@ pub(crate) struct SessionConfiguration {
     /// files that supplied them.
     pub(super) user_instructions: Option<LoadedAgentsMd>,
 
+    /// The first regular turn uses the snapshot established during thread
+    /// creation, whether freshly resolved or inherited from shared history.
+    pub(crate) skip_global_instructions_refresh_on_first_turn: bool,
+
     /// Personality preference for the model.
     pub(super) personality: Option<Personality>,
 

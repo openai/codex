@@ -106,6 +106,8 @@ use codex_protocol::protocol::ConversationAudioParams;
 use codex_protocol::protocol::CreditsSnapshot;
 use codex_protocol::protocol::GranularApprovalConfig;
 use codex_protocol::protocol::InitialHistory;
+use codex_protocol::protocol::InstructionProvenance;
+use codex_protocol::protocol::InstructionSnapshot;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::NetworkApprovalProtocol;
@@ -129,6 +131,7 @@ use codex_protocol::protocol::TokenUsageInfo;
 use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::TurnCompleteEvent;
 use codex_protocol::protocol::TurnStartedEvent;
+use codex_protocol::protocol::UserInstructionsSnapshot;
 use codex_protocol::protocol::UserMessageEvent;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_rmcp_client::ElicitationAction;
@@ -2545,6 +2548,8 @@ async fn record_initial_history_forked_hydrates_previous_turn_settings() {
         multi_agent_version: None,
         realtime_active: Some(turn_context.realtime_active),
         effort: turn_context.reasoning_effort.clone(),
+        user_instructions: None,
+        establishes_context_baseline: None,
         summary: codex_protocol::config_types::ReasoningSummary::Auto,
     };
     let turn_id = previous_context_item
@@ -3145,7 +3150,8 @@ async fn set_rate_limits_retains_previous_credits() {
         collaboration_mode,
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
-        user_instructions: config.user_instructions.clone(),
+        user_instructions: None,
+        skip_global_instructions_refresh_on_first_turn: false,
         service_tier: None,
         personality: config.personality,
         base_instructions: config
@@ -3253,7 +3259,8 @@ async fn set_rate_limits_updates_plan_type_when_present() {
         collaboration_mode,
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
-        user_instructions: config.user_instructions.clone(),
+        user_instructions: None,
+        skip_global_instructions_refresh_on_first_turn: false,
         service_tier: None,
         personality: config.personality,
         base_instructions: config
@@ -3785,7 +3792,8 @@ pub(crate) async fn make_session_configuration_for_tests() -> SessionConfigurati
         collaboration_mode,
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
-        user_instructions: config.user_instructions.clone(),
+        user_instructions: None,
+        skip_global_instructions_refresh_on_first_turn: false,
         service_tier: None,
         personality: config.personality,
         base_instructions: config
@@ -4610,7 +4618,8 @@ async fn session_new_fails_when_zsh_fork_enabled_without_packaged_zsh() {
         collaboration_mode,
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
-        user_instructions: config.user_instructions.clone(),
+        user_instructions: None,
+        skip_global_instructions_refresh_on_first_turn: false,
         service_tier: None,
         personality: config.personality,
         base_instructions: config
@@ -4721,7 +4730,8 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         collaboration_mode,
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
-        user_instructions: config.user_instructions.clone(),
+        user_instructions: None,
+        skip_global_instructions_refresh_on_first_turn: false,
         service_tier: None,
         personality: config.personality,
         base_instructions: config
@@ -4957,7 +4967,8 @@ async fn make_session_with_config_and_rx(
         collaboration_mode,
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
-        user_instructions: config.user_instructions.clone(),
+        user_instructions: None,
+        skip_global_instructions_refresh_on_first_turn: false,
         service_tier: None,
         personality: config.personality,
         base_instructions: config
@@ -5032,6 +5043,13 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
     session_source: SessionSource,
     agent_control: AgentControl,
 ) -> anyhow::Result<(Arc<Session>, async_channel::Receiver<Event>)> {
+    let skip_global_instructions_refresh_on_first_turn = matches!(
+        initial_history,
+        InitialHistory::New | InitialHistory::Cleared
+    ) || initial_history
+        .get_rollout_items()
+        .iter()
+        .any(|item| matches!(item, RolloutItem::TurnContext(item) if item.user_instructions.is_some()));
     let codex_home = tempfile::tempdir().expect("create temp dir");
     let mut config = build_test_config(codex_home.path()).await;
     config.ephemeral = true;
@@ -5062,7 +5080,8 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
         collaboration_mode,
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
-        user_instructions: config.user_instructions.clone(),
+        user_instructions: None,
+        skip_global_instructions_refresh_on_first_turn,
         service_tier: None,
         personality: config.personality,
         base_instructions: config
@@ -5137,6 +5156,61 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
     .await?;
 
     Ok((session, rx_event))
+}
+
+#[tokio::test]
+async fn history_sharing_first_full_injection_uses_inherited_instruction_snapshot() {
+    let inherited_snapshot = UserInstructionsSnapshot {
+        instructions: vec![InstructionSnapshot {
+            contents: "inherited instructions".to_string(),
+            provenance: InstructionProvenance::Global,
+            source: None,
+        }],
+    };
+    let (session, _rx_event) = make_session_with_history_source_and_agent_control_and_rx(
+        InitialHistory::Forked(vec![RolloutItem::TurnContext(TurnContextItem {
+            turn_id: None,
+            cwd: PathBuf::from("/tmp"),
+            workspace_roots: None,
+            current_date: None,
+            timezone: None,
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            permission_profile: None,
+            network: None,
+            file_system_sandbox_policy: None,
+            model: "test-model".to_string(),
+            personality: None,
+            collaboration_mode: None,
+            multi_agent_version: None,
+            realtime_active: None,
+            effort: None,
+            user_instructions: Some(inherited_snapshot.clone()),
+            establishes_context_baseline: Some(false),
+            summary: ReasoningSummaryConfig::Auto,
+        })]),
+        SessionSource::Exec,
+        AgentControl::default(),
+    )
+    .await
+    .expect("forked session should start");
+
+    assert!(session.reference_context_item().await.is_none());
+
+    let first_turn = session.new_default_turn().await;
+    session
+        .record_context_updates_and_set_reference_context_item(first_turn.as_ref())
+        .await;
+
+    let first_turn_snapshot = {
+        let state = session.state.lock().await;
+        state
+            .session_configuration
+            .user_instructions
+            .as_ref()
+            .map(LoadedAgentsMd::snapshot)
+    };
+    assert_eq!(first_turn_snapshot, Some(inherited_snapshot));
 }
 
 #[tokio::test]
@@ -6798,7 +6872,8 @@ where
         collaboration_mode,
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
-        user_instructions: config.user_instructions.clone(),
+        user_instructions: None,
+        skip_global_instructions_refresh_on_first_turn: false,
         service_tier: None,
         personality: config.personality,
         base_instructions: config
@@ -7996,7 +8071,7 @@ async fn record_context_updates_and_set_reference_context_item_injects_full_cont
     let current_context = session.reference_context_item().await;
     assert_eq!(
         serde_json::to_value(current_context).expect("serialize current context item"),
-        serde_json::to_value(Some(turn_context.to_turn_context_item()))
+        serde_json::to_value(Some(session.turn_context_item(&turn_context).await))
             .expect("serialize expected context item")
     );
 }
@@ -8075,7 +8150,7 @@ async fn record_context_updates_and_set_reference_context_item_persists_baseline
     assert_eq!(
         serde_json::to_value(session.reference_context_item().await)
             .expect("serialize current context item"),
-        serde_json::to_value(Some(turn_context.to_turn_context_item()))
+        serde_json::to_value(Some(session.turn_context_item(&turn_context).await))
             .expect("serialize expected context item")
     );
     session.ensure_rollout_materialized().await;
@@ -8094,7 +8169,7 @@ async fn record_context_updates_and_set_reference_context_item_persists_baseline
     assert_eq!(
         serde_json::to_value(persisted_turn_context)
             .expect("serialize persisted turn context item"),
-        serde_json::to_value(Some(turn_context.to_turn_context_item()))
+        serde_json::to_value(Some(session.turn_context_item(&turn_context).await))
             .expect("serialize expected turn context item")
     );
 }
@@ -8213,7 +8288,7 @@ async fn record_context_updates_and_set_reference_context_item_persists_full_rei
     assert_eq!(
         serde_json::to_value(persisted_turn_context)
             .expect("serialize persisted turn context item"),
-        serde_json::to_value(Some(turn_context.to_turn_context_item()))
+        serde_json::to_value(Some(session.turn_context_item(&turn_context).await))
             .expect("serialize expected turn context item")
     );
 }

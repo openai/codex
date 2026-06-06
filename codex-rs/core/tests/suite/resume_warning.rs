@@ -42,6 +42,8 @@ fn resume_history(
         multi_agent_version: None,
         realtime_active: None,
         effort: config.model_reasoning_effort.clone(),
+        user_instructions: None,
+        establishes_context_baseline: None,
         summary: config
             .model_reasoning_summary
             .unwrap_or(ReasoningSummary::Auto),

@@ -435,6 +435,40 @@ impl AgentControl {
             forked_rollout_items =
                 truncate_rollout_to_last_n_fork_turns(&forked_rollout_items, *last_n_turns);
         }
+        let preserve_reference_context_item = matches!(fork_mode, SpawnAgentForkMode::FullHistory);
+        let inherited_instruction_snapshot = if preserve_reference_context_item {
+            None
+        } else if let Some(parent_thread) = parent_thread.as_ref() {
+            let turn_context = parent_thread.codex.session.new_default_turn().await;
+            let reconstructed = parent_thread
+                .codex
+                .session
+                .reconstruct_history_from_rollout(&turn_context, &forked_rollout_items)
+                .await;
+            reconstructed.user_instructions.and_then(|snapshot| {
+                forked_rollout_items
+                    .iter()
+                    .rev()
+                    .find_map(|item| match item {
+                        RolloutItem::TurnContext(item)
+                            if item.user_instructions.as_ref() == Some(&snapshot) =>
+                        {
+                            Some(item.clone())
+                        }
+                        _ => None,
+                    })
+            })
+        } else {
+            forked_rollout_items
+                .iter()
+                .rev()
+                .find_map(|item| match item {
+                    RolloutItem::TurnContext(item) if item.user_instructions.is_some() => {
+                        Some(item.clone())
+                    }
+                    _ => None,
+                })
+        };
         let multi_agent_v2_usage_hint_texts_to_filter: Vec<String> =
             if let Some(parent_thread) = parent_thread.as_ref() {
                 if multi_agent_version == MultiAgentVersion::V2 {
@@ -466,7 +500,6 @@ impl AgentControl {
             } else {
                 Vec::new()
             };
-        let preserve_reference_context_item = matches!(fork_mode, SpawnAgentForkMode::FullHistory);
         forked_rollout_items.retain(|item| {
             keep_forked_rollout_item(item, preserve_reference_context_item)
                 && !matches!(
@@ -478,6 +511,12 @@ impl AgentControl {
                         )
                 )
         });
+        if !preserve_reference_context_item
+            && let Some(mut instruction_snapshot) = inherited_instruction_snapshot
+        {
+            instruction_snapshot.establishes_context_baseline = Some(false);
+            forked_rollout_items.push(RolloutItem::TurnContext(instruction_snapshot));
+        }
         for item in &mut forked_rollout_items {
             if let RolloutItem::Compacted(compacted) = item
                 && let Some(replacement_history) = compacted.replacement_history.as_mut()

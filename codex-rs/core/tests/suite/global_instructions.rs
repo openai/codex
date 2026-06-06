@@ -129,6 +129,9 @@ fn rewrite_compaction_as_legacy(path: &Path) -> Result<()> {
             compacted.replacement_history = None;
             compacted_items += 1;
         }
+        if let RolloutItem::TurnContext(turn_context) = &mut entry.item {
+            turn_context.user_instructions = None;
+        }
         rewritten.push(serde_json::to_string(&entry)?);
     }
     if compacted_items != 1 {
@@ -372,11 +375,8 @@ async fn global_loading_warning_surfaces_during_thread_creation() -> Result<()> 
     Ok(())
 }
 
-// TODO(anp): Align cold-resume instruction sources with the historical instructions replayed to
-// the model so the API source list and model-visible context describe the same files.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn cold_resume_replays_rendered_instructions_but_reports_current_config_sources() -> Result<()>
-{
+async fn cold_resume_restores_persisted_instruction_sources() -> Result<()> {
     // Set up an initial turn and a later cold-resumed turn against the same rollout.
     let server = responses::start_mock_server().await;
     let response_mock = responses::mount_sse_sequence(
@@ -426,11 +426,11 @@ async fn cold_resume_replays_rendered_instructions_but_reports_current_config_so
         .resume(&server, Arc::clone(&home), rollout_path)
         .await?;
 
-    // Assert the API reports the new source while model history replays the old structured prefix.
+    // Assert the API and model history both retain the persisted creation-time source.
     assert_eq!(
         resumed.codex.instruction_sources().await,
-        vec![new_source],
-        "resume reports sources from the newly loaded config"
+        vec![old_source],
+        "resume should report sources inherited from persisted history"
     );
 
     resumed.submit_turn("continue resumed thread").await?;
@@ -452,8 +452,6 @@ async fn cold_resume_replays_rendered_instructions_but_reports_current_config_so
     Ok(())
 }
 
-// TODO(anp): Align fork instruction sources with the historical instructions replayed to the
-// model so the reported source list and model-visible context describe the same files.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fork_replays_rendered_instructions_from_shared_history() -> Result<()> {
     // Set up a parent turn and a later fork turn against the parent's rollout.
@@ -510,11 +508,11 @@ async fn fork_replays_rendered_instructions_from_shared_history() -> Result<()> 
         )
         .await?;
 
-    // Assert the fork reports the new source before issuing its first turn.
+    // Assert the fork reports the source inherited from persisted parent history.
     assert_eq!(
         forked.thread.instruction_sources().await,
-        vec![new_source],
-        "fork config should reflect the newly loaded global source"
+        vec![source],
+        "fork should report sources inherited from persisted history"
     );
 
     forked

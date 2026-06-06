@@ -25,7 +25,10 @@ use codex_exec_server::Environment;
 use codex_exec_server::ExecutorFileSystem;
 use codex_features::Feature;
 use codex_prompts::HIERARCHICAL_AGENTS_MESSAGE;
+use codex_protocol::protocol::InstructionSnapshot;
+use codex_protocol::protocol::UserInstructionsSnapshot;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_string::approx_bytes_for_tokens;
 use std::io;
 use toml::Value as TomlValue;
 use tracing::error;
@@ -38,6 +41,8 @@ pub const LOCAL_AGENTS_MD_FILENAME: &str = "AGENTS.override.md";
 /// When both user and project AGENTS.md docs are present, they will be
 /// concatenated with the following separator.
 const AGENTS_MD_SEPARATOR: &str = "\n\n--- project-doc ---\n\n";
+const MAX_USER_INSTRUCTIONS_TOKENS: usize = 8_000;
+const USER_INSTRUCTIONS_TRUNCATION_MARKER: &str = "\n[instructions truncated]";
 
 /// Resolves AGENTS.md files into model-visible user instructions and source
 /// paths.
@@ -80,41 +85,49 @@ impl<'a> AgentsMdManager<'a> {
         None
     }
 
-    /// Combines configured user instructions and AGENTS.md content into a
-    /// single model-visible instruction string.
+    /// Combines global instructions and project AGENTS.md content into a
+    /// single model-visible instruction snapshot.
     pub(crate) async fn user_instructions(
         &self,
-        environment: &Environment,
+        environment: Option<&Environment>,
+        loaded: LoadedAgentsMd,
         startup_warnings: &mut Vec<String>,
     ) -> Option<LoadedAgentsMd> {
-        let fs = environment.get_filesystem();
-        self.user_instructions_with_fs(fs.as_ref(), startup_warnings)
-            .await
+        if let Some(environment) = environment {
+            let fs = environment.get_filesystem();
+            return self
+                .user_instructions_with_loaded_fs(fs.as_ref(), loaded, startup_warnings)
+                .await;
+        }
+
+        self.finish_instructions(loaded)
     }
 
-    async fn user_instructions_with_fs(
+    async fn user_instructions_with_loaded_fs(
         &self,
         fs: &dyn ExecutorFileSystem,
+        mut loaded: LoadedAgentsMd,
         startup_warnings: &mut Vec<String>,
     ) -> Option<LoadedAgentsMd> {
-        let agents_md_docs = self.read_agents_md(fs, startup_warnings).await;
-
-        let mut loaded = self.config.user_instructions.clone().unwrap_or_default();
-
-        match agents_md_docs {
+        match self.read_agents_md(fs, startup_warnings).await {
             Ok(Some(docs)) => loaded.entries.extend(docs.entries),
             Ok(None) => {}
             Err(e) => {
                 error!("error trying to find AGENTS.md docs: {e:#}");
             }
-        };
+        }
 
+        self.finish_instructions(loaded)
+    }
+
+    fn finish_instructions(&self, mut loaded: LoadedAgentsMd) -> Option<LoadedAgentsMd> {
         if self.config.features.enabled(Feature::ChildAgentsMd) {
             loaded.entries.push(InstructionEntry {
                 contents: HIERARCHICAL_AGENTS_MESSAGE.to_string(),
                 provenance: InstructionProvenance::Internal,
             });
         }
+        loaded.enforce_model_context_limit();
 
         (!loaded.is_empty()).then_some(loaded)
     }
@@ -180,7 +193,7 @@ impl<'a> AgentsMdManager<'a> {
             if !text.trim().is_empty() {
                 loaded.entries.push(InstructionEntry {
                     contents: text,
-                    provenance: InstructionProvenance::Project(p),
+                    provenance: InstructionProvenance::Project(Some(p)),
                 });
                 remaining = remaining.saturating_sub(data.len() as u64);
             }
@@ -314,23 +327,20 @@ pub struct LoadedAgentsMd {
 }
 
 impl LoadedAgentsMd {
-    /// Creates loaded instructions containing one user-level AGENTS.md entry.
     pub fn new_user(contents: String, path: AbsolutePathBuf) -> Self {
         if contents.trim().is_empty() {
             return Self::default();
         }
-        Self {
+        let mut loaded = Self {
             entries: vec![InstructionEntry {
                 contents,
-                provenance: InstructionProvenance::User(path),
+                provenance: InstructionProvenance::Global(Some(path)),
             }],
-        }
+        };
+        loaded.enforce_model_context_limit();
+        loaded
     }
 
-    /// Creates source-less user instructions for tests.
-    ///
-    /// This cannot be gated with `#[cfg(test)]` because integration tests
-    /// compile `codex-core` as a normal dependency without that configuration.
     pub fn from_text_for_testing(contents: impl Into<String>) -> Self {
         let contents = contents.into();
         if contents.trim().is_empty() {
@@ -344,7 +354,67 @@ impl LoadedAgentsMd {
         }
     }
 
-    fn is_empty(&self) -> bool {
+    pub(crate) fn from_snapshot(snapshot: UserInstructionsSnapshot) -> Self {
+        let mut loaded = Self {
+            entries: snapshot
+                .instructions
+                .into_iter()
+                .map(|instruction| InstructionEntry {
+                    contents: instruction.contents,
+                    provenance: match instruction.provenance {
+                        codex_protocol::protocol::InstructionProvenance::Global => {
+                            InstructionProvenance::Global(instruction.source)
+                        }
+                        codex_protocol::protocol::InstructionProvenance::Project => {
+                            InstructionProvenance::Project(instruction.source)
+                        }
+                        codex_protocol::protocol::InstructionProvenance::Internal => {
+                            InstructionProvenance::Internal
+                        }
+                    },
+                })
+                .collect(),
+        };
+        loaded.enforce_model_context_limit();
+        loaded
+    }
+
+    pub(crate) fn snapshot(&self) -> UserInstructionsSnapshot {
+        UserInstructionsSnapshot {
+            instructions: self
+                .entries
+                .iter()
+                .map(|entry| InstructionSnapshot {
+                    contents: entry.contents.clone(),
+                    provenance: match entry.provenance {
+                        InstructionProvenance::Global(_) => {
+                            codex_protocol::protocol::InstructionProvenance::Global
+                        }
+                        InstructionProvenance::Project(_) => {
+                            codex_protocol::protocol::InstructionProvenance::Project
+                        }
+                        InstructionProvenance::Internal => {
+                            codex_protocol::protocol::InstructionProvenance::Internal
+                        }
+                    },
+                    source: entry.provenance.path().cloned(),
+                })
+                .collect(),
+        }
+    }
+
+    pub(crate) fn replace_global(&mut self, instructions: LoadedAgentsMd) {
+        let first_non_global = self
+            .entries
+            .iter()
+            .position(|entry| !matches!(entry.provenance, InstructionProvenance::Global(_)))
+            .unwrap_or(self.entries.len());
+        self.entries
+            .splice(..first_non_global, instructions.entries);
+        self.enforce_model_context_limit();
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
         self.entries
             .iter()
             .all(|entry| entry.contents.trim().is_empty())
@@ -361,7 +431,7 @@ impl LoadedAgentsMd {
                 // from user or internal instructions to project instructions.
                 let separator = match (previous_provenance, &entry.provenance) {
                     (
-                        InstructionProvenance::User(_) | InstructionProvenance::Internal,
+                        InstructionProvenance::Global(_) | InstructionProvenance::Internal,
                         InstructionProvenance::Project(_),
                     ) => AGENTS_MD_SEPARATOR,
                     _ => "\n\n",
@@ -380,6 +450,65 @@ impl LoadedAgentsMd {
             .iter()
             .filter_map(|entry| entry.provenance.path())
     }
+
+    fn enforce_model_context_limit(&mut self) {
+        let max_bytes = approx_bytes_for_tokens(MAX_USER_INSTRUCTIONS_TOKENS);
+        let mut remaining_bytes = max_bytes;
+        let mut bounded_entries = Vec::with_capacity(self.entries.len());
+
+        for mut entry in std::mem::take(&mut self.entries) {
+            let separator = bounded_entries
+                .last()
+                .map(|previous_entry: &InstructionEntry| {
+                    let previous_provenance = &previous_entry.provenance;
+                    match (previous_provenance, &entry.provenance) {
+                        (
+                            InstructionProvenance::Global(_) | InstructionProvenance::Internal,
+                            InstructionProvenance::Project(_),
+                        ) => AGENTS_MD_SEPARATOR,
+                        _ => "\n\n",
+                    }
+                });
+            if let Some(separator) = separator {
+                if separator.len() >= remaining_bytes {
+                    break;
+                }
+                remaining_bytes = remaining_bytes.saturating_sub(separator.len());
+            }
+
+            if entry.contents.len() > remaining_bytes {
+                entry.contents = truncate_instruction_contents(&entry.contents, remaining_bytes);
+                if !entry.contents.is_empty() {
+                    bounded_entries.push(entry);
+                }
+                break;
+            }
+
+            remaining_bytes = remaining_bytes.saturating_sub(entry.contents.len());
+            bounded_entries.push(entry);
+        }
+
+        self.entries = bounded_entries;
+    }
+}
+
+fn truncate_instruction_contents(contents: &str, max_bytes: usize) -> String {
+    if contents.len() <= max_bytes {
+        return contents.to_string();
+    }
+    if max_bytes <= USER_INSTRUCTIONS_TRUNCATION_MARKER.len() {
+        return USER_INSTRUCTIONS_TRUNCATION_MARKER[..max_bytes].to_string();
+    }
+
+    let prefix_budget = max_bytes.saturating_sub(USER_INSTRUCTIONS_TRUNCATION_MARKER.len());
+    let mut prefix_end = prefix_budget.min(contents.len());
+    while !contents.is_char_boundary(prefix_end) {
+        prefix_end = prefix_end.saturating_sub(1);
+    }
+    format!(
+        "{}{USER_INSTRUCTIONS_TRUNCATION_MARKER}",
+        &contents[..prefix_end]
+    )
 }
 
 /// One model-visible instruction and its provenance.
@@ -394,11 +523,11 @@ struct InstructionEntry {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum InstructionProvenance {
-    /// User-level instructions, normally loaded from CODEX_HOME.
-    User(AbsolutePathBuf),
+    /// Global instructions, normally loaded from CODEX_HOME.
+    Global(Option<AbsolutePathBuf>),
 
     /// Workspace instructions discovered from project AGENTS.md files.
-    Project(AbsolutePathBuf),
+    Project(Option<AbsolutePathBuf>),
 
     /// Instructions without a file source, including internally defined guidance.
     Internal,
@@ -407,7 +536,7 @@ enum InstructionProvenance {
 impl InstructionProvenance {
     fn path(&self) -> Option<&AbsolutePathBuf> {
         match self {
-            Self::User(path) | Self::Project(path) => Some(path),
+            Self::Global(path) | Self::Project(path) => path.as_ref(),
             Self::Internal => None,
         }
     }

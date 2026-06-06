@@ -135,6 +135,8 @@ fn reference_context_item() -> TurnContextItem {
         multi_agent_version: None,
         realtime_active: Some(false),
         effort: None,
+        user_instructions: None,
+        establishes_context_baseline: None,
         summary: codex_protocol::config_types::ReasoningSummary::Auto,
     }
 }

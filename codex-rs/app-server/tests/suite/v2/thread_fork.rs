@@ -252,7 +252,7 @@ async fn thread_fork_creates_new_thread_and_emits_started() -> Result<()> {
 }
 
 #[tokio::test]
-async fn thread_fork_reloads_instruction_sources() -> Result<()> {
+async fn thread_fork_inherits_persisted_instruction_sources() -> Result<()> {
     let server = responses::start_mock_server().await;
     let response_mock = responses::mount_sse_sequence(
         &server,
@@ -342,11 +342,7 @@ async fn thread_fork_reloads_instruction_sources() -> Result<()> {
         ..
     } = to_response::<ThreadForkResponse>(fork_resp)?;
 
-    assert_eq!(
-        instruction_sources,
-        Vec::<AbsolutePathBuf>::new(),
-        "fork reloads sources after the files have been removed"
-    );
+    assert_eq!(instruction_sources, expected_sources);
 
     let fork_turn_id = mcp
         .send_turn_start_request(TurnStartParams {

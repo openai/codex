@@ -1149,6 +1149,8 @@ async fn resume_candidate_matches_cwd_reads_latest_turn_context() -> std::io::Re
             multi_agent_version: None,
             realtime_active: None,
             effort: None,
+            user_instructions: None,
+            establishes_context_baseline: None,
             summary: codex_protocol::config_types::ReasoningSummary::Auto,
         }),
     };

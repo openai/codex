@@ -298,13 +298,17 @@ async fn run_compact_task_inner_impl(
         initial_context_injection,
         InitialContextInjection::BeforeLastUserMessage
     ) {
+        sess.refresh_global_instructions(turn_context.as_ref())
+            .await;
         let initial_context = sess.build_initial_context(turn_context.as_ref()).await;
         new_history =
             insert_initial_context_before_last_real_user_or_summary(new_history, initial_context);
     }
     let reference_context_item = match initial_context_injection {
         InitialContextInjection::DoNotInject => None,
-        InitialContextInjection::BeforeLastUserMessage => Some(turn_context.to_turn_context_item()),
+        InitialContextInjection::BeforeLastUserMessage => {
+            Some(sess.turn_context_item(turn_context.as_ref()).await)
+        }
     };
     let compacted_item = CompactedItem {
         message: summary_text.clone(),

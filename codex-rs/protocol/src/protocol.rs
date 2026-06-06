@@ -2858,6 +2858,27 @@ pub struct TurnContextNetworkItem {
     pub denied_domains: Vec<String>,
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum InstructionProvenance {
+    Global,
+    Project,
+    Internal,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema, TS)]
+pub struct InstructionSnapshot {
+    pub contents: String,
+    pub provenance: InstructionProvenance,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<AbsolutePathBuf>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq, JsonSchema, TS)]
+pub struct UserInstructionsSnapshot {
+    pub instructions: Vec<InstructionSnapshot>,
+}
+
 /// Persist once per real user turn after computing that turn's model-visible
 /// context updates, and again after mid-turn compaction when replacement
 /// history re-establishes full context, so resume/fork replay can recover the
@@ -2894,6 +2915,12 @@ pub struct TurnContextItem {
     pub realtime_active: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub effort: Option<ReasoningEffortConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_instructions: Option<UserInstructionsSnapshot>,
+    /// `false` carries durable metadata without claiming that the copied
+    /// history contains a complete context baseline.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub establishes_context_baseline: Option<bool>,
     // Compatibility-only field written with a default value so older Codex
     // versions can deserialize turn-context rollout items. It is no longer
     // read by context reconstruction and should be removed in a future schema
@@ -5137,6 +5164,8 @@ mod tests {
             multi_agent_version: None,
             realtime_active: None,
             effort: None,
+            user_instructions: None,
+            establishes_context_baseline: None,
             summary: ReasoningSummaryConfig::Auto,
         };
 

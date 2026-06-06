@@ -183,6 +183,8 @@ fn turn_context_item_filesystem_uses_workspace_roots_instead_of_cwd() {
         multi_agent_version: None,
         realtime_active: None,
         effort: None,
+        user_instructions: None,
+        establishes_context_baseline: None,
         summary: codex_protocol::config_types::ReasoningSummary::Auto,
     };
 

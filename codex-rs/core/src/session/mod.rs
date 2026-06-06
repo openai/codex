@@ -285,6 +285,7 @@ use crate::SkillLoadOutcome;
 use crate::SkillMetadata;
 use crate::SkillsManager;
 use crate::agents_md::AgentsMdManager;
+use crate::agents_md::LoadedAgentsMd;
 use crate::context::UserInstructions;
 use crate::exec_policy::ExecPolicyUpdateError;
 use crate::guardian::GuardianReviewSessionManager;
@@ -505,16 +506,28 @@ impl Codex {
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
 
-        let primary_environment = environment_selections.primary_environment();
-        let mut user_instruction_warnings = Vec::new();
-        let user_instructions = if let Some(primary_environment) = primary_environment {
-            AgentsMdManager::new(&config)
-                .user_instructions(primary_environment.as_ref(), &mut user_instruction_warnings)
-                .await
+        let fresh_history = matches!(
+            conversation_history,
+            InitialHistory::New | InitialHistory::Cleared
+        );
+        let user_instructions = if fresh_history {
+            if let Some(primary_environment) = environment_selections.primary_environment() {
+                let mut user_instruction_warnings = Vec::new();
+                let loaded = AgentsMdManager::new(&config)
+                    .user_instructions(
+                        Some(primary_environment.as_ref()),
+                        config.user_instructions.clone().unwrap_or_default(),
+                        &mut user_instruction_warnings,
+                    )
+                    .await;
+                config.startup_warnings.extend(user_instruction_warnings);
+                Some(loaded.unwrap_or_default())
+            } else {
+                None
+            }
         } else {
             None
         };
-        config.startup_warnings.extend(user_instruction_warnings);
 
         let exec_policy = if crate::guardian::is_guardian_reviewer_source(&session_source) {
             // Guardian review should rely on the built-in shell safety checks,
@@ -595,6 +608,7 @@ impl Codex {
             service_tier,
             developer_instructions: config.developer_instructions.clone(),
             user_instructions,
+            skip_global_instructions_refresh_on_first_turn: fresh_history,
             personality: config.personality,
             base_instructions,
             compact_prompt: config.compact_prompt.clone(),
@@ -1293,6 +1307,17 @@ impl Session {
         let reconstructed_rollout = self
             .reconstruct_history_from_rollout(turn_context, rollout_items)
             .await;
+        {
+            let mut state = self.state.lock().await;
+            state.session_configuration.user_instructions = reconstructed_rollout
+                .user_instructions
+                .clone()
+                .map(LoadedAgentsMd::from_snapshot);
+            state
+                .session_configuration
+                .skip_global_instructions_refresh_on_first_turn =
+                !reconstructed_rollout.refresh_global_instructions_on_next_full_context;
+        }
         let previous_turn_settings = reconstructed_rollout.previous_turn_settings.clone();
         self.replace_history(
             reconstructed_rollout.history,
@@ -2664,6 +2689,9 @@ impl Session {
         {
             let mut state = self.state.lock().await;
             state.replace_history(items, reference_context_item.clone());
+            if reference_context_item.is_none() {
+                state.require_global_instructions_refresh();
+            }
             state.start_next_auto_compact_window();
         }
 
@@ -2903,10 +2931,18 @@ impl Session {
                 }
             }
         }
-        if let Some(user_instructions) = turn_context.user_instructions.as_deref() {
+        let user_instructions = {
+            let state = self.state.lock().await;
+            state
+                .session_configuration
+                .user_instructions
+                .as_ref()
+                .and_then(|instructions| (!instructions.is_empty()).then(|| instructions.text()))
+        };
+        if let Some(user_instructions) = user_instructions {
             contextual_user_sections.push(
                 UserInstructions {
-                    text: user_instructions.to_string(),
+                    text: user_instructions,
                     #[allow(deprecated)]
                     directory: turn_context.cwd.to_string_lossy().into_owned(),
                 }
@@ -3006,19 +3042,25 @@ impl Session {
         &self,
         turn_context: &TurnContext,
     ) {
-        let reference_context_item = {
-            let state = self.state.lock().await;
-            state.reference_context_item()
+        let (reference_context_item, skip_refresh) = {
+            let mut state = self.state.lock().await;
+            (
+                state.reference_context_item(),
+                state.take_skip_global_instructions_refresh_on_first_turn(),
+            )
         };
         let should_inject_full_context = reference_context_item.is_none();
         let context_items = if should_inject_full_context {
+            if !skip_refresh {
+                self.refresh_global_instructions(turn_context).await;
+            }
             self.build_initial_context(turn_context).await
         } else {
             // Steady-state path: append only context diffs to minimize token overhead.
             self.build_settings_update_items(reference_context_item.as_ref(), turn_context)
                 .await
         };
-        let turn_context_item = turn_context.to_turn_context_item();
+        let turn_context_item = self.turn_context_item(turn_context).await;
         if !context_items.is_empty() {
             self.record_conversation_items(turn_context, &context_items)
                 .await;
@@ -3032,6 +3074,63 @@ impl Session {
         // context items. This keeps later runtime diffing aligned with the current turn state.
         let mut state = self.state.lock().await;
         state.set_reference_context_item(Some(turn_context_item));
+    }
+
+    pub(crate) async fn turn_context_item(&self, turn_context: &TurnContext) -> TurnContextItem {
+        let mut item = turn_context.to_turn_context_item();
+        let state = self.state.lock().await;
+        item.user_instructions = Some(
+            state
+                .session_configuration
+                .user_instructions
+                .as_ref()
+                .map_or_else(Default::default, LoadedAgentsMd::snapshot),
+        );
+        item
+    }
+
+    pub(crate) async fn refresh_global_instructions(&self, turn_context: &TurnContext) {
+        let configured_global = turn_context
+            .config
+            .user_instructions
+            .clone()
+            .unwrap_or_default();
+        let needs_full_resolution = {
+            let state = self.state.lock().await;
+            state.session_configuration.user_instructions.is_none()
+        };
+        if needs_full_resolution {
+            let Some(primary_environment) = turn_context.environments.primary_environment() else {
+                let mut state = self.state.lock().await;
+                state.session_configuration.user_instructions = Some(LoadedAgentsMd::default());
+                return;
+            };
+            let mut warnings = Vec::new();
+            let loaded = AgentsMdManager::new(turn_context.config.as_ref())
+                .user_instructions(
+                    Some(primary_environment.as_ref()),
+                    configured_global,
+                    &mut warnings,
+                )
+                .await
+                .unwrap_or_default();
+            for warning in warnings {
+                self.send_event(
+                    turn_context,
+                    EventMsg::Warning(WarningEvent { message: warning }),
+                )
+                .await;
+            }
+            let mut state = self.state.lock().await;
+            state.session_configuration.user_instructions = Some(loaded);
+            return;
+        }
+        let mut state = self.state.lock().await;
+        let instructions = state
+            .session_configuration
+            .user_instructions
+            .get_or_insert_with(LoadedAgentsMd::default);
+        instructions.replace_global(configured_global);
     }
 
     pub(crate) async fn update_token_usage_info(

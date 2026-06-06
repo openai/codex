@@ -4,10 +4,12 @@ use crate::context_manager::is_user_turn_boundary;
 // Return value of `Session::reconstruct_history_from_rollout`, bundling the rebuilt history with
 // the resume/fork hydration metadata derived from the same replay.
 #[derive(Debug)]
-pub(super) struct RolloutReconstruction {
-    pub(super) history: Vec<ResponseItem>,
-    pub(super) previous_turn_settings: Option<PreviousTurnSettings>,
-    pub(super) reference_context_item: Option<TurnContextItem>,
+pub(crate) struct RolloutReconstruction {
+    pub(crate) history: Vec<ResponseItem>,
+    pub(crate) previous_turn_settings: Option<PreviousTurnSettings>,
+    pub(crate) reference_context_item: Option<TurnContextItem>,
+    pub(crate) user_instructions: Option<codex_protocol::protocol::UserInstructionsSnapshot>,
+    pub(crate) refresh_global_instructions_on_next_full_context: bool,
 }
 
 #[derive(Debug, Default)]
@@ -32,6 +34,8 @@ struct ActiveReplaySegment<'a> {
     counts_as_user_turn: bool,
     previous_turn_settings: Option<PreviousTurnSettings>,
     reference_context_item: TurnReferenceContextItem,
+    user_instructions: Option<codex_protocol::protocol::UserInstructionsSnapshot>,
+    instruction_snapshot_inherits_without_refresh: bool,
     base_replacement_history: Option<&'a [ResponseItem]>,
 }
 
@@ -45,6 +49,8 @@ fn finalize_active_segment<'a>(
     base_replacement_history: &mut Option<&'a [ResponseItem]>,
     previous_turn_settings: &mut Option<PreviousTurnSettings>,
     reference_context_item: &mut TurnReferenceContextItem,
+    user_instructions: &mut Option<codex_protocol::protocol::UserInstructionsSnapshot>,
+    instruction_snapshot_inherits_without_refresh: &mut bool,
     pending_rollback_turns: &mut usize,
 ) {
     // Thread rollback drops the newest surviving real user-message boundaries. In replay, that
@@ -81,10 +87,18 @@ fn finalize_active_segment<'a>(
     {
         *reference_context_item = active_segment.reference_context_item;
     }
+
+    if user_instructions.is_none()
+        && let Some(segment_user_instructions) = active_segment.user_instructions
+    {
+        *user_instructions = Some(segment_user_instructions);
+        *instruction_snapshot_inherits_without_refresh =
+            active_segment.instruction_snapshot_inherits_without_refresh;
+    }
 }
 
 impl Session {
-    pub(super) async fn reconstruct_history_from_rollout(
+    pub(crate) async fn reconstruct_history_from_rollout(
         &self,
         turn_context: &TurnContext,
         rollout_items: &[RolloutItem],
@@ -97,6 +111,8 @@ impl Session {
         let mut base_replacement_history: Option<&[ResponseItem]> = None;
         let mut previous_turn_settings = None;
         let mut reference_context_item = TurnReferenceContextItem::NeverSet;
+        let mut user_instructions = None;
+        let mut instruction_snapshot_inherits_without_refresh = false;
         // Rollback is "drop the newest N user turns". While scanning in reverse, that becomes
         // "skip the next N user-turn segments we finalize".
         let mut pending_rollback_turns = 0usize;
@@ -175,12 +191,21 @@ impl Session {
                             model: ctx.model.clone(),
                             realtime_active: ctx.realtime_active,
                         });
-                        if matches!(
-                            active_segment.reference_context_item,
-                            TurnReferenceContextItem::NeverSet
-                        ) {
+                        if ctx.establishes_context_baseline.unwrap_or(true)
+                            && matches!(
+                                active_segment.reference_context_item,
+                                TurnReferenceContextItem::NeverSet
+                            )
+                        {
                             active_segment.reference_context_item =
                                 TurnReferenceContextItem::Latest(Box::new(ctx.clone()));
+                        }
+                        if active_segment.user_instructions.is_none()
+                            && let Some(snapshot) = &ctx.user_instructions
+                        {
+                            active_segment.user_instructions = Some(snapshot.clone());
+                            active_segment.instruction_snapshot_inherits_without_refresh =
+                                ctx.establishes_context_baseline == Some(false);
                         }
                     }
                 }
@@ -198,6 +223,8 @@ impl Session {
                             &mut base_replacement_history,
                             &mut previous_turn_settings,
                             &mut reference_context_item,
+                            &mut user_instructions,
+                            &mut instruction_snapshot_inherits_without_refresh,
                             &mut pending_rollback_turns,
                         );
                     }
@@ -213,6 +240,7 @@ impl Session {
             if base_replacement_history.is_some()
                 && previous_turn_settings.is_some()
                 && !matches!(reference_context_item, TurnReferenceContextItem::NeverSet)
+                && user_instructions.is_some()
             {
                 // At this point we have both eager resume metadata values and the replacement-
                 // history base for the surviving tail, so older rollout items cannot affect this
@@ -227,6 +255,8 @@ impl Session {
                 &mut base_replacement_history,
                 &mut previous_turn_settings,
                 &mut reference_context_item,
+                &mut user_instructions,
+                &mut instruction_snapshot_inherits_without_refresh,
                 &mut pending_rollback_turns,
             );
         }
@@ -280,6 +310,13 @@ impl Session {
             }
         }
 
+        let refresh_global_instructions_on_next_full_context =
+            saw_legacy_compaction_without_replacement_history
+                || (!instruction_snapshot_inherits_without_refresh
+                    && matches!(
+                        reference_context_item,
+                        TurnReferenceContextItem::NeverSet | TurnReferenceContextItem::Cleared
+                    ));
         let reference_context_item = match reference_context_item {
             TurnReferenceContextItem::NeverSet | TurnReferenceContextItem::Cleared => None,
             TurnReferenceContextItem::Latest(turn_reference_context_item) => {
@@ -296,6 +333,8 @@ impl Session {
             history: history.raw_items().to_vec(),
             previous_turn_settings,
             reference_context_item,
+            user_instructions,
+            refresh_global_instructions_on_next_full_context,
         }
     }
 }

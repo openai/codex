@@ -4524,7 +4524,6 @@ async fn build_agent_spawn_config_preserves_base_user_instructions() {
         "base-user".to_string(),
         base_config.codex_home.join("AGENTS.md"),
     ));
-    turn.user_instructions = Some("resolved-user".to_string());
     turn.config = Arc::new(base_config.clone());
     let base_instructions = BaseInstructions {
         text: "base".to_string(),

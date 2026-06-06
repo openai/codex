@@ -20,6 +20,8 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::CompactedItem;
 use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::InstructionProvenance;
+use codex_protocol::protocol::InstructionSnapshot;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
@@ -27,6 +29,7 @@ use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::TurnCompleteEvent;
 use codex_protocol::protocol::TurnStartedEvent;
+use codex_protocol::protocol::UserInstructionsSnapshot;
 use codex_thread_store::ArchiveThreadParams;
 use codex_thread_store::LocalThreadStore;
 use codex_thread_store::LocalThreadStoreConfig;
@@ -1277,6 +1280,7 @@ async fn spawn_agent_fork_last_n_turns_keeps_only_recent_turns() {
         .await;
     let spawn_turn_context = parent_thread.codex.session.new_default_turn().await;
     let parent_spawn_call_id = "spawn-call-last-n".to_string();
+    let inherited_source = harness.config.cwd.join("inherited-AGENTS.md");
     parent_thread
         .codex
         .session
@@ -1285,12 +1289,18 @@ async fn spawn_agent_fork_last_n_turns_keeps_only_recent_turns() {
             &[spawn_agent_call(&parent_spawn_call_id)],
         )
         .await;
+    let mut instruction_context_item = spawn_turn_context.to_turn_context_item();
+    instruction_context_item.user_instructions = Some(UserInstructionsSnapshot {
+        instructions: vec![InstructionSnapshot {
+            contents: "inherited bounded-fork instructions".to_string(),
+            provenance: InstructionProvenance::Global,
+            source: Some(inherited_source.clone()),
+        }],
+    });
     parent_thread
         .codex
         .session
-        .persist_rollout_items(&[RolloutItem::TurnContext(
-            spawn_turn_context.to_turn_context_item(),
-        )])
+        .persist_rollout_items(&[RolloutItem::TurnContext(instruction_context_item)])
         .await;
     parent_thread
         .codex
@@ -1357,6 +1367,10 @@ async fn spawn_agent_fork_last_n_turns_keeps_only_recent_turns() {
             .await
             .is_none(),
         "last-N forked child should rebuild context after truncating the cached prefix"
+    );
+    assert_eq!(
+        child_thread.instruction_sources().await,
+        vec![inherited_source]
     );
 
     let _ = harness
