@@ -407,7 +407,9 @@ async fn shell_command_enforces_glob_deny_read_policy() -> Result<()> {
     let args = json!({
         "command": command,
         "login": false,
-        "timeout_ms": 1_000,
+        // This test exercises glob deny/read behavior. Under full Bazel load,
+        // sandbox startup alone can exceed one second.
+        "timeout_ms": 10_000,
     });
 
     let responses = vec![
