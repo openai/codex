@@ -2,6 +2,7 @@
 
 use anyhow::Context as _;
 use anyhow::ensure;
+use core_test_support::test_codex::local_selections;
 use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::ffi::OsString;
@@ -132,9 +133,7 @@ fn user_turn_with_permission_profile(
         responsesapi_client_metadata: None,
         additional_context: Default::default(),
         thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-            environment_settings: Some(core_test_support::test_codex::local_environment_settings(
-                cwd,
-            )),
+            environments: Some(local_selections(cwd)),
             approval_policy: Some(AskForApproval::Never),
             sandbox_policy: Some(sandbox_policy),
             permission_profile,

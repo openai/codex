@@ -1,5 +1,6 @@
 #![allow(clippy::expect_used)]
 
+use core_test_support::test_codex::local_selections;
 use std::fs;
 
 use anyhow::Result;
@@ -3266,11 +3267,9 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_including_incoming_us
             core_test_support::submit_thread_settings(
                 &codex,
                 codex_protocol::protocol::ThreadSettingsOverrides {
-                    environment_settings: Some(
-                        core_test_support::test_codex::local_environment_settings(
-                            test_path_buf(PRETURN_CONTEXT_DIFF_CWD).abs(),
-                        ),
-                    ),
+                    environments: Some(local_selections(
+                        test_path_buf(PRETURN_CONTEXT_DIFF_CWD).abs(),
+                    )),
                     ..Default::default()
                 },
             )

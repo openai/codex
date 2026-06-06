@@ -1,6 +1,5 @@
 use super::input_queue::InputQueue;
 use super::*;
-use crate::TurnEnvironmentSelections;
 use crate::agents_md::LoadedAgentsMd;
 use crate::config::ConstraintError;
 use crate::skills::SkillError;
@@ -13,6 +12,7 @@ use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TurnEnvironmentSelection;
+use codex_protocol::protocol::TurnEnvironmentSelections;
 use std::sync::OnceLock;
 use tokio::sync::Semaphore;
 
@@ -181,7 +181,7 @@ impl SessionConfiguration {
             approvals_reviewer: self.approvals_reviewer,
             permission_profile: self.permission_profile(),
             active_permission_profile: self.active_permission_profile(),
-            environment_settings: self.environments.clone(),
+            environments: self.environments.clone(),
             workspace_roots: self.workspace_roots.clone(),
             profile_workspace_roots: self.profile_workspace_roots().to_vec(),
             ephemeral: self.original_config_do_not_use.ephemeral,

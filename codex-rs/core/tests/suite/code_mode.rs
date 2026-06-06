@@ -3093,12 +3093,10 @@ text(
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                environment_settings: Some(
-                    codex_protocol::protocol::ThreadEnvironmentSettingsOverride {
-                        cwd: cwd,
-                        environments: Vec::new(),
-                    },
-                ),
+                environments: Some(codex_protocol::protocol::TurnEnvironmentSelections::new(
+                    cwd,
+                    Vec::new(),
+                )),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,

@@ -535,20 +535,18 @@ impl TurnRequestProcessor {
 
         let runtime_workspace_roots =
             runtime_workspace_roots_request.map(resolve_runtime_workspace_roots);
-        let environment_settings = if has_environment_settings_override {
+        let environments = if has_environment_settings_override {
             let Some(snapshot) = snapshot.as_ref() else {
                 return Err(internal_error(format!(
                     "{method} environment settings missing thread snapshot"
                 )));
             };
-            Some(
-                codex_protocol::protocol::ThreadEnvironmentSettingsOverride {
-                    cwd: cwd.clone().unwrap_or_else(|| snapshot.cwd().clone()),
-                    environments: environment_selections
-                        .clone()
-                        .unwrap_or_else(|| snapshot.environment_selections().to_vec()),
-                },
-            )
+            Some(codex_protocol::protocol::TurnEnvironmentSelections::new(
+                cwd.clone().unwrap_or_else(|| snapshot.cwd().clone()),
+                environment_selections
+                    .clone()
+                    .unwrap_or_else(|| snapshot.environment_selections().to_vec()),
+            ))
         } else {
             None
         };
@@ -631,7 +629,7 @@ impl TurnRequestProcessor {
         }
 
         Ok(codex_protocol::protocol::ThreadSettingsOverrides {
-            environment_settings,
+            environments,
             workspace_roots: runtime_workspace_roots,
             profile_workspace_roots,
             approval_policy,

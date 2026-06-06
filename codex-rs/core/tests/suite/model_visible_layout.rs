@@ -1,5 +1,6 @@
 #![allow(clippy::expect_used)]
 
+use core_test_support::test_codex::local_selections;
 use std::fs;
 use std::sync::Arc;
 
@@ -128,9 +129,7 @@ async fn snapshot_model_visible_layout_turn_overrides() -> Result<()> {
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                environment_settings: Some(
-                    core_test_support::test_codex::local_environment_settings(first_turn_cwd),
-                ),
+                environments: Some(local_selections(first_turn_cwd)),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(first_sandbox_policy),
                 permission_profile: first_permission_profile,
@@ -165,11 +164,7 @@ async fn snapshot_model_visible_layout_turn_overrides() -> Result<()> {
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                environment_settings: Some(
-                    core_test_support::test_codex::local_environment_settings(
-                        preturn_context_diff_cwd,
-                    ),
-                ),
+                environments: Some(local_selections(preturn_context_diff_cwd)),
                 approval_policy: Some(AskForApproval::OnRequest),
                 sandbox_policy: Some(second_sandbox_policy),
                 permission_profile: second_permission_profile,
@@ -260,9 +255,7 @@ async fn snapshot_model_visible_layout_cwd_change_does_not_refresh_agents() -> R
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                environment_settings: Some(
-                    core_test_support::test_codex::local_environment_settings(cwd_one.clone()),
-                ),
+                environments: Some(local_selections(cwd_one.clone())),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(first_sandbox_policy),
                 permission_profile: first_permission_profile,
@@ -295,9 +288,7 @@ async fn snapshot_model_visible_layout_cwd_change_does_not_refresh_agents() -> R
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                environment_settings: Some(
-                    core_test_support::test_codex::local_environment_settings(cwd_two),
-                ),
+                environments: Some(local_selections(cwd_two)),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(second_sandbox_policy),
                 permission_profile: second_permission_profile,
@@ -422,9 +413,7 @@ async fn snapshot_model_visible_layout_resume_with_personality_change() -> Resul
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                environment_settings: Some(
-                    core_test_support::test_codex::local_environment_settings(resume_override_cwd),
-                ),
+                environments: Some(local_selections(resume_override_cwd)),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,
@@ -522,9 +511,7 @@ async fn snapshot_model_visible_layout_resume_override_matches_rollout_model() -
     core_test_support::submit_thread_settings(
         &resumed.codex,
         codex_protocol::protocol::ThreadSettingsOverrides {
-            environment_settings: Some(core_test_support::test_codex::local_environment_settings(
-                resume_override_cwd,
-            )),
+            environments: Some(local_selections(resume_override_cwd)),
             model: Some("gpt-5.2".to_string()),
             ..Default::default()
         },

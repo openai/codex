@@ -14,6 +14,7 @@ use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::test_codex::TestCodexHarness;
+use core_test_support::test_codex::local_selections;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
@@ -168,9 +169,7 @@ async fn run_snapshot_command_with_options(
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                environment_settings: Some(
-                    core_test_support::test_codex::local_environment_settings(cwd),
-                ),
+                environments: Some(local_selections(cwd)),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,
@@ -270,9 +269,7 @@ async fn run_shell_command_snapshot_with_options(
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                environment_settings: Some(
-                    core_test_support::test_codex::local_environment_settings(cwd),
-                ),
+                environments: Some(local_selections(cwd)),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,
@@ -352,9 +349,7 @@ async fn run_tool_turn_on_harness(
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                environment_settings: Some(
-                    core_test_support::test_codex::local_environment_settings(cwd),
-                ),
+                environments: Some(local_selections(cwd)),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,
@@ -597,9 +592,7 @@ async fn shell_command_snapshot_still_intercepts_apply_patch() -> Result<()> {
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                environment_settings: Some(
-                    core_test_support::test_codex::local_environment_settings(cwd.clone()),
-                ),
+                environments: Some(local_selections(cwd.clone())),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,

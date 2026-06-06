@@ -731,12 +731,10 @@ async fn run_review_on_session(
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                environment_settings: Some(
-                    codex_protocol::protocol::ThreadEnvironmentSettingsOverride {
-                        cwd: params.parent_turn.cwd.clone(),
-                        environments: params.parent_turn.environments.to_selections(),
-                    },
-                ),
+                environments: Some(codex_protocol::protocol::TurnEnvironmentSelections::new(
+                    params.parent_turn.cwd.clone(),
+                    params.parent_turn.environments.to_selections(),
+                )),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: None,
                 permission_profile: Some(guardian_permission_profile),

@@ -1,5 +1,6 @@
 #![cfg(not(target_os = "windows"))]
 
+use core_test_support::test_codex::local_selections;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -114,9 +115,7 @@ async fn refresh_models_on_models_etag_mismatch_and_avoid_duplicate_models_fetch
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                environment_settings: Some(
-                    core_test_support::test_codex::local_environment_settings(cwd_path),
-                ),
+                environments: Some(local_selections(cwd_path)),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,

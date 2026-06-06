@@ -7,6 +7,7 @@ use core_test_support::responses::ev_apply_patch_custom_tool_call;
 use core_test_support::responses::ev_apply_patch_shell_command_call_via_heredoc;
 use core_test_support::responses::ev_shell_command_call;
 use core_test_support::test_codex::ApplyPatchModelOutput;
+use core_test_support::test_codex::local_selections;
 use pretty_assertions::assert_eq;
 use std::fs;
 use std::path::PathBuf;
@@ -105,9 +106,7 @@ async fn submit_without_wait_with_turn_permissions(
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                environment_settings: Some(
-                    core_test_support::test_codex::local_environment_settings(harness.cwd_abs()),
-                ),
+                environments: Some(local_selections(harness.cwd_abs())),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,
@@ -1650,12 +1649,10 @@ async fn apply_patch_turn_diff_tracks_local_and_remote_environment_paths() -> Re
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                environment_settings: Some(
-                    codex_protocol::protocol::ThreadEnvironmentSettingsOverride {
-                        cwd: test.config.cwd.clone(),
-                        environments,
-                    },
-                ),
+                environments: Some(codex_protocol::protocol::TurnEnvironmentSelections::new(
+                    test.config.cwd.clone(),
+                    environments,
+                )),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,

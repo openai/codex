@@ -113,9 +113,38 @@ pub struct TurnEnvironmentSelection {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct ThreadEnvironmentSettingsOverride {
-    pub cwd: AbsolutePathBuf,
+pub struct TurnEnvironmentSelections {
+    pub legacy_fallback_cwd: AbsolutePathBuf,
     pub environments: Vec<TurnEnvironmentSelection>,
+}
+
+impl TurnEnvironmentSelections {
+    pub fn new(
+        legacy_fallback_cwd: AbsolutePathBuf,
+        environments: Vec<TurnEnvironmentSelection>,
+    ) -> Self {
+        let mut settings = Self {
+            legacy_fallback_cwd,
+            environments,
+        };
+        settings.sync_primary_environment_cwd();
+        settings
+    }
+
+    pub fn with_legacy_fallback_cwd(&self, legacy_fallback_cwd: AbsolutePathBuf) -> Self {
+        let mut settings = self.clone();
+        settings.legacy_fallback_cwd = legacy_fallback_cwd;
+        settings.sync_primary_environment_cwd();
+        settings
+    }
+
+    fn sync_primary_environment_cwd(&mut self) {
+        if let Some(turn_environment) = self.environments.first_mut()
+            && turn_environment.cwd != self.legacy_fallback_cwd
+        {
+            turn_environment.cwd = self.legacy_fallback_cwd.clone();
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema, TS)]
@@ -376,8 +405,8 @@ pub struct ConversationTextParams {
 /// on their own.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ThreadSettingsOverrides {
-    /// Updated `cwd` and environments supplied together as a complete pair.
-    pub environment_settings: Option<ThreadEnvironmentSettingsOverride>,
+    /// Updated fallback `cwd` and environments supplied together as a complete pair.
+    pub environments: Option<TurnEnvironmentSelections>,
 
     /// Updated runtime workspace roots used to materialize symbolic
     /// `:workspace_roots` filesystem permissions.

@@ -32,6 +32,7 @@ use codex_protocol::protocol::ThreadMemoryMode;
 use codex_protocol::protocol::ThreadSource;
 use codex_protocol::protocol::TokenUsageInfo;
 use codex_protocol::protocol::TurnEnvironmentSelection;
+use codex_protocol::protocol::TurnEnvironmentSelections;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_protocol::user_input::UserInput;
 use codex_thread_store::StoredThread;
@@ -50,41 +51,6 @@ use tokio::sync::watch;
 
 use codex_rollout::state_db::StateDbHandle;
 
-#[derive(Clone, Debug, PartialEq)]
-pub struct TurnEnvironmentSelections {
-    pub legacy_fallback_cwd: AbsolutePathBuf,
-    pub environments: Vec<TurnEnvironmentSelection>,
-}
-
-impl TurnEnvironmentSelections {
-    pub fn new(
-        legacy_fallback_cwd: AbsolutePathBuf,
-        environments: Vec<TurnEnvironmentSelection>,
-    ) -> Self {
-        let mut settings = Self {
-            legacy_fallback_cwd,
-            environments,
-        };
-        settings.sync_primary_environment_cwd();
-        settings
-    }
-
-    pub fn with_legacy_fallback_cwd(&self, legacy_fallback_cwd: AbsolutePathBuf) -> Self {
-        let mut settings = self.clone();
-        settings.legacy_fallback_cwd = legacy_fallback_cwd;
-        settings.sync_primary_environment_cwd();
-        settings
-    }
-
-    fn sync_primary_environment_cwd(&mut self) {
-        if let Some(turn_environment) = self.environments.first_mut()
-            && turn_environment.cwd != self.legacy_fallback_cwd
-        {
-            turn_environment.cwd = self.legacy_fallback_cwd.clone();
-        }
-    }
-}
-
 #[derive(Clone, Debug)]
 pub struct ThreadConfigSnapshot {
     pub model: String,
@@ -94,7 +60,7 @@ pub struct ThreadConfigSnapshot {
     pub approvals_reviewer: ApprovalsReviewer,
     pub permission_profile: PermissionProfile,
     pub active_permission_profile: Option<ActivePermissionProfile>,
-    pub environment_settings: TurnEnvironmentSelections,
+    pub environments: TurnEnvironmentSelections,
     pub workspace_roots: Vec<AbsolutePathBuf>,
     pub profile_workspace_roots: Vec<AbsolutePathBuf>,
     pub ephemeral: bool,
@@ -150,11 +116,11 @@ impl TryStartTurnIfIdleError {
 
 impl ThreadConfigSnapshot {
     pub fn cwd(&self) -> &AbsolutePathBuf {
-        &self.environment_settings.legacy_fallback_cwd
+        &self.environments.legacy_fallback_cwd
     }
 
     pub fn environment_selections(&self) -> &[TurnEnvironmentSelection] {
-        &self.environment_settings.environments
+        &self.environments.environments
     }
 
     pub fn sandbox_policy(&self) -> SandboxPolicy {

@@ -14,7 +14,6 @@ use crate::session::TurnInput;
 use crate::session::session::Session;
 use crate::session::session::SessionSettingsUpdate;
 
-use crate::TurnEnvironmentSelections;
 use crate::config::Config;
 use crate::realtime_context::REALTIME_TURN_TOKEN_BUDGET;
 use crate::realtime_context::truncate_realtime_text_to_token_budget;
@@ -43,7 +42,6 @@ use codex_protocol::protocol::RealtimeVoicesList;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::RolloutItem;
-use codex_protocol::protocol::ThreadEnvironmentSettingsOverride;
 use codex_protocol::protocol::ThreadMemoryMode;
 use codex_protocol::protocol::ThreadRolledBackEvent;
 use codex_protocol::protocol::ThreadSettingsAppliedEvent;
@@ -124,7 +122,7 @@ async fn thread_settings_update(
     thread_settings: ThreadSettingsOverrides,
 ) -> SessionSettingsUpdate {
     let ThreadSettingsOverrides {
-        environment_settings,
+        environments,
         workspace_roots,
         profile_workspace_roots,
         approval_policy,
@@ -140,10 +138,6 @@ async fn thread_settings_update(
         collaboration_mode,
         personality,
     } = thread_settings;
-    let environments =
-        environment_settings.map(|ThreadEnvironmentSettingsOverride { cwd, environments }| {
-            TurnEnvironmentSelections::new(cwd, environments)
-        });
     let collaboration_mode = match collaboration_mode {
         Some(collaboration_mode) => collaboration_mode,
         None => {

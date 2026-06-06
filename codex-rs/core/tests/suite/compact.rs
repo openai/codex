@@ -31,6 +31,7 @@ use core_test_support::hooks::trust_discovered_hooks;
 use core_test_support::responses::ev_reasoning_item;
 use core_test_support::responses::mount_models_once;
 use core_test_support::skip_if_no_network;
+use core_test_support::test_codex::local_selections;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::test_path_buf;
@@ -100,9 +101,7 @@ fn disabled_permission_user_turn(text: impl Into<String>, cwd: PathBuf, model: S
         responsesapi_client_metadata: None,
         additional_context: Default::default(),
         thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-            environment_settings: Some(core_test_support::test_codex::local_environment_settings(
-                cwd.abs(),
-            )),
+            environments: Some(local_selections(cwd.abs())),
             approval_policy: Some(AskForApproval::Never),
             sandbox_policy: Some(sandbox_policy),
             permission_profile,
@@ -3673,7 +3672,7 @@ async fn snapshot_request_shape_pre_turn_compaction_including_incoming_user_mess
     core_test_support::submit_thread_settings(
         &codex,
         codex_protocol::protocol::ThreadSettingsOverrides {
-            environment_settings: Some(core_test_support::test_codex::local_environment_settings(
+            environments: Some(local_selections(
                 test_path_buf(PRETURN_CONTEXT_DIFF_CWD).abs(),
             )),
             ..Default::default()

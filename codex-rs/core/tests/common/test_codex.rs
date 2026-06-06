@@ -37,8 +37,8 @@ use codex_protocol::protocol::RealtimeConversationVersion as RealtimeWsVersion;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionSource;
-use codex_protocol::protocol::ThreadEnvironmentSettingsOverride;
 use codex_protocol::protocol::TurnEnvironmentSelection;
+use codex_protocol::protocol::TurnEnvironmentSelections;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use futures::future::BoxFuture;
@@ -76,11 +76,8 @@ pub fn local(cwd: AbsolutePathBuf) -> TurnEnvironmentSelection {
     }
 }
 
-pub fn local_environment_settings(cwd: AbsolutePathBuf) -> ThreadEnvironmentSettingsOverride {
-    ThreadEnvironmentSettingsOverride {
-        cwd: cwd.clone(),
-        environments: vec![local(cwd)],
-    }
+pub fn local_selections(cwd: AbsolutePathBuf) -> TurnEnvironmentSelections {
+    TurnEnvironmentSelections::new(cwd.clone(), vec![local(cwd)])
 }
 
 #[derive(Debug)]
@@ -776,11 +773,8 @@ impl TestCodex {
         let (sandbox_policy, permission_profile) =
             turn_permission_fields(permission_profile, self.config.cwd.as_path());
         let session_model = self.session_configured.model.clone();
-        let environment_settings = environments.map(|environments| {
-            codex_protocol::protocol::ThreadEnvironmentSettingsOverride {
-                cwd: self.config.cwd.clone(),
-                environments,
-            }
+        let turn_environment_selections = environments.map(|environments| {
+            TurnEnvironmentSelections::new(self.config.cwd.clone(), environments)
         });
         self.codex
             .submit(Op::UserInput {
@@ -792,7 +786,7 @@ impl TestCodex {
                 responsesapi_client_metadata: None,
                 additional_context: Default::default(),
                 thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                    environment_settings,
+                    environments: turn_environment_selections,
                     approval_policy: Some(approval_policy),
                     sandbox_policy: Some(sandbox_policy),
                     permission_profile,

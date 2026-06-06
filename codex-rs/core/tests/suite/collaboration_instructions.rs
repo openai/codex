@@ -13,6 +13,7 @@ use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
+use core_test_support::test_codex::local_selections;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
@@ -171,11 +172,7 @@ async fn collaboration_instructions_added_on_user_turn() -> Result<()> {
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                environment_settings: Some(
-                    core_test_support::test_codex::local_environment_settings(
-                        test.config.cwd.clone(),
-                    ),
-                ),
+                environments: Some(local_selections(test.config.cwd.clone())),
                 approval_policy: Some(test.config.permissions.approval_policy.value()),
                 sandbox_policy: Some(test.config.legacy_sandbox_policy()),
                 summary: Some(
@@ -225,11 +222,7 @@ async fn collaboration_instructions_omitted_when_disabled() -> Result<()> {
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                environment_settings: Some(
-                    core_test_support::test_codex::local_environment_settings(
-                        test.config.cwd.clone(),
-                    ),
-                ),
+                environments: Some(local_selections(test.config.cwd.clone())),
                 approval_policy: Some(test.config.permissions.approval_policy.value()),
                 sandbox_policy: Some(test.config.legacy_sandbox_policy()),
                 summary: Some(
@@ -336,11 +329,7 @@ async fn user_turn_overrides_collaboration_instructions_after_override() -> Resu
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                environment_settings: Some(
-                    core_test_support::test_codex::local_environment_settings(
-                        test.config.cwd.clone(),
-                    ),
-                ),
+                environments: Some(local_selections(test.config.cwd.clone())),
                 approval_policy: Some(test.config.permissions.approval_policy.value()),
                 sandbox_policy: Some(test.config.legacy_sandbox_policy()),
                 summary: Some(
