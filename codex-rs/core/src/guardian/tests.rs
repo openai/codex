@@ -6,8 +6,12 @@ use crate::config::ManagedFeatures;
 use crate::config::NetworkProxySpec;
 use crate::config::test_config;
 use crate::guardian::approval_request::guardian_request_target_item_id;
+use crate::session::TurnInput;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
+use crate::state::TaskKind;
+use crate::tasks::SessionTask;
+use crate::tasks::SessionTaskContext;
 use crate::test_support;
 use codex_analytics::GuardianApprovalRequestSource;
 use codex_config::ConfigLayerStack;
@@ -47,6 +51,7 @@ use codex_protocol::protocol::GuardianRiskLevel;
 use codex_protocol::protocol::GuardianUserAuthorization;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnCompleteEvent;
 use core_test_support::PathBufExt;
 use core_test_support::TempDirExt;
@@ -77,6 +82,30 @@ use tokio_util::sync::CancellationToken;
 fn fixed_guardian_parent_session_id() -> ThreadId {
     ThreadId::from_string("11111111-1111-4111-8111-111111111111")
         .expect("fixed parent session id should be a valid UUID")
+}
+
+#[derive(Clone, Copy)]
+struct GuardianNeverEndingTask;
+
+impl SessionTask for GuardianNeverEndingTask {
+    fn kind(&self) -> TaskKind {
+        TaskKind::Regular
+    }
+
+    fn span_name(&self) -> &'static str {
+        "session_task.guardian_never_ending"
+    }
+
+    async fn run(
+        self: Arc<Self>,
+        _session: Arc<SessionTaskContext>,
+        _ctx: Arc<TurnContext>,
+        _input: Vec<TurnInput>,
+        cancellation_token: CancellationToken,
+    ) -> Option<String> {
+        cancellation_token.cancelled().await;
+        None
+    }
 }
 
 #[test]
@@ -1076,6 +1105,143 @@ async fn cancelled_guardian_review_emits_terminal_abort_without_warning() {
     assert!(warnings.is_empty());
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn interrupting_parent_turn_cancels_active_guardian_review() -> anyhow::Result<()> {
+    let (_gate_tx, gate_rx) = tokio::sync::oneshot::channel();
+    let (server, _) = start_streaming_sse_server(vec![vec![
+        StreamingSseChunk {
+            gate: None,
+            body: sse(vec![ev_response_created("resp-guardian-cancel")]),
+        },
+        StreamingSseChunk {
+            gate: Some(gate_rx),
+            body: sse(vec![
+                ev_assistant_message(
+                    "msg-guardian-cancel",
+                    &serde_json::json!({
+                        "risk_level": "low",
+                        "user_authorization": "high",
+                        "outcome": "allow",
+                        "rationale": "would have completed if not cancelled",
+                    })
+                    .to_string(),
+                ),
+                ev_completed("resp-guardian-cancel"),
+            ]),
+        },
+    ]])
+    .await;
+
+    let (mut session, mut turn, rx) =
+        crate::session::tests::make_session_and_context_with_rx().await;
+    let session_mut = Arc::get_mut(&mut session).expect("single session ref");
+    let turn_mut = Arc::get_mut(&mut turn).expect("single turn ref");
+    let mut config = (*turn_mut.config).clone();
+    config.model_provider.base_url = Some(format!("{}/v1", server.uri()));
+    config.user_instructions = None;
+    let config = Arc::new(config);
+    session_mut.services.models_manager = test_support::models_manager_with_provider(
+        config.codex_home.to_path_buf(),
+        Arc::clone(&session_mut.services.auth_manager),
+        config.model_provider.clone(),
+    );
+    turn_mut.config = Arc::clone(&config);
+    turn_mut.provider =
+        create_model_provider(config.model_provider.clone(), turn_mut.auth_manager.clone());
+    turn_mut.user_instructions = None;
+    seed_guardian_parent_history(&session, &turn).await;
+    session
+        .spawn_task(Arc::clone(&turn), Vec::new(), GuardianNeverEndingTask)
+        .await;
+
+    let review_session = Arc::clone(&session);
+    let review_turn = Arc::clone(&turn);
+    let mut review = tokio::spawn(async move {
+        review_approval_request(
+            &review_session,
+            &review_turn,
+            "review-shell-guardian-cancel".to_string(),
+            GuardianApprovalRequest::Shell {
+                id: "shell-guardian-cancel".to_string(),
+                command: vec!["git".to_string(), "push".to_string()],
+                cwd: test_path_buf("/repo/codex-rs/core").abs(),
+                sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
+                additional_permissions: None,
+                justification: Some("Push the docs fix.".to_string()),
+            },
+            /*retry_reason*/ None,
+        )
+        .await
+    });
+
+    tokio::select! {
+        wait_result = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                let review_count = session
+                    .guardian_review_session
+                    .active_review_count_for_turn_for_test(&turn.sub_id)
+                    .await;
+                if review_count == 1 {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        }) => {
+            wait_result.expect("guardian review should register as active");
+        }
+        decision = &mut review => {
+            panic!("guardian review completed before cancellation: {decision:?}");
+        }
+    }
+
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if !server.requests().await.is_empty() {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("guardian review request should start");
+
+    session.interrupt_task().await;
+    let decision = tokio::time::timeout(Duration::from_secs(10), review)
+        .await
+        .expect("guardian review should abort")?;
+    assert_eq!(decision, ReviewDecision::Abort);
+    assert_eq!(
+        session
+            .guardian_review_session
+            .active_review_count_for_turn_for_test(&turn.sub_id)
+            .await,
+        0
+    );
+
+    let mut guardian_statuses = Vec::new();
+    let mut turn_aborted = false;
+    while let Ok(event) = rx.try_recv() {
+        match event.msg {
+            EventMsg::GuardianAssessment(event) => guardian_statuses.push(event.status),
+            EventMsg::TurnAborted(event) => {
+                turn_aborted = event.reason == TurnAbortReason::Interrupted;
+            }
+            _ => {}
+        }
+    }
+
+    assert_eq!(
+        guardian_statuses,
+        vec![
+            GuardianAssessmentStatus::InProgress,
+            GuardianAssessmentStatus::Aborted,
+        ]
+    );
+    assert!(turn_aborted, "expected parent turn to be interrupted");
+
+    Ok(())
+}
+
 #[test]
 fn guardian_timeout_message_distinguishes_timeout_from_policy_denial() {
     let message = guardian_timeout_message();
@@ -1332,6 +1498,7 @@ async fn guardian_request_model_for_auto_review_override(
     let outcome = run_guardian_review_session_for_test(
         Arc::clone(&session),
         turn,
+        "review-shell-model".to_string(),
         GuardianApprovalRequest::Shell {
             id: "shell-1".to_string(),
             command: vec!["git".to_string(), "push".to_string()],
@@ -1450,6 +1617,7 @@ async fn guardian_review_request_layout_matches_model_visible_request_snapshot()
     let outcome = run_guardian_review_session_for_test(
         Arc::clone(&session),
         Arc::clone(&turn),
+        "review-shell-layout".to_string(),
         request,
         Some("Sandbox denied outbound git push to github.com.".to_string()),
         guardian_output_schema(),
@@ -1628,6 +1796,7 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
     let first_outcome = run_guardian_review_session_for_test(
         Arc::clone(&session),
         Arc::clone(&turn),
+        "review-shell-1".to_string(),
         first_request,
         Some("First retry reason".to_string()),
         guardian_output_schema(),
@@ -1672,6 +1841,7 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
     let second_outcome = run_guardian_review_session_for_test(
         Arc::clone(&session),
         Arc::clone(&turn),
+        "review-shell-2".to_string(),
         second_request,
         Some("Second retry reason".to_string()),
         guardian_output_schema(),
@@ -1712,6 +1882,7 @@ async fn guardian_reuses_prompt_cache_key_and_appends_prior_reviews() -> anyhow:
     let third_outcome = run_guardian_review_session_for_test(
         Arc::clone(&session),
         Arc::clone(&turn),
+        "review-shell-3".to_string(),
         third_request,
         Some("Third retry reason".to_string()),
         guardian_output_schema(),
@@ -1896,6 +2067,7 @@ async fn guardian_reused_trunk_ignores_stale_prior_turn_completion() -> anyhow::
     let first_outcome = run_guardian_review_session_for_test(
         Arc::clone(&session),
         Arc::clone(&turn),
+        "review-shell-stale-1".to_string(),
         GuardianApprovalRequest::Shell {
             id: "shell-1".to_string(),
             command: vec!["git".to_string(), "push".to_string()],
@@ -1938,6 +2110,7 @@ async fn guardian_reused_trunk_ignores_stale_prior_turn_completion() -> anyhow::
     let second_outcome = run_guardian_review_session_for_test(
         Arc::clone(&session),
         Arc::clone(&turn),
+        "review-shell-stale-2".to_string(),
         GuardianApprovalRequest::Shell {
             id: "shell-2".to_string(),
             command: vec!["git".to_string(), "push".to_string()],

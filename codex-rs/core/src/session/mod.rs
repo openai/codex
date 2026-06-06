@@ -6,6 +6,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
+use std::time::Duration;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
@@ -3315,8 +3316,33 @@ impl Session {
 
     pub async fn interrupt_task(self: &Arc<Self>) {
         info!("interrupt received: abort current task, if any");
-        let had_active_turn = self.active_turn.lock().await.is_some();
+        let (had_active_turn, active_turn_id) = {
+            let active_turn = self.active_turn.lock().await;
+            (
+                active_turn.is_some(),
+                active_turn
+                    .as_ref()
+                    .and_then(|turn| turn.task.as_ref())
+                    .map(|task| task.turn_context.sub_id.clone()),
+            )
+        };
+        if let Some(active_turn_id) = active_turn_id.as_deref() {
+            let cancelled_guardian_review_count = self
+                .guardian_review_session
+                .cancel_active_reviews_for_turn(active_turn_id)
+                .await;
+            if cancelled_guardian_review_count > 0 {
+                self.guardian_review_session
+                    .wait_for_no_active_reviews_for_turn(active_turn_id, Duration::from_secs(5))
+                    .await;
+            }
+        }
         self.abort_all_tasks(TurnAbortReason::Interrupted).await;
+        if let Some(active_turn_id) = active_turn_id {
+            self.guardian_review_session
+                .shutdown_active_reviews_for_turn(&active_turn_id)
+                .await;
+        }
         if !had_active_turn {
             self.cancel_mcp_startup().await;
         }

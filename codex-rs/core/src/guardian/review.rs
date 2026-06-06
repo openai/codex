@@ -338,6 +338,7 @@ async fn run_guardian_review(
     let (outcome, analytics_result) = Box::pin(run_guardian_review_session(
         session.clone(),
         turn.clone(),
+        review_id.clone(),
         request,
         retry_reason.clone(),
         schema,
@@ -660,6 +661,7 @@ pub(crate) fn spawn_approval_request_review(
 pub(super) async fn run_guardian_review_session(
     session: Arc<Session>,
     turn: Arc<TurnContext>,
+    review_id: String,
     request: GuardianApprovalRequest,
     retry_reason: Option<String>,
     schema: serde_json::Value,
@@ -744,6 +746,7 @@ pub(super) async fn run_guardian_review_session(
             .run_review(GuardianReviewSessionParams {
                 parent_session: Arc::clone(&session),
                 parent_turn: turn.clone(),
+                review_id,
                 spawn_config: guardian_config,
                 request,
                 retry_reason,
