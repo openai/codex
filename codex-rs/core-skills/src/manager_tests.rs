@@ -7,6 +7,7 @@ use codex_config::CONFIG_TOML_FILE;
 use codex_config::ConfigLayerEntry;
 use codex_config::ConfigLayerStack;
 use codex_config::ConfigRequirementsToml;
+use codex_exec_server::EnvironmentPathRef;
 use codex_exec_server::LOCAL_FS;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::test_support::PathBufExt;
@@ -71,6 +72,11 @@ fn plugin_skill_root_for_skill_path(skill_path: &Path, plugin_id: &str) -> Plugi
 }
 
 fn test_skill(name: &str, path: PathBuf) -> SkillMetadata {
+    let path_to_skills_md = path
+        .abs()
+        .canonicalize()
+        .expect("skill path should canonicalize");
+
     SkillMetadata {
         name: name.to_string(),
         description: "test".to_string(),
@@ -78,10 +84,8 @@ fn test_skill(name: &str, path: PathBuf) -> SkillMetadata {
         interface: None,
         dependencies: None,
         policy: None,
-        path_to_skills_md: path
-            .abs()
-            .canonicalize()
-            .expect("skill path should canonicalize"),
+        source_path: EnvironmentPathRef::local(path_to_skills_md.clone()),
+        path_to_skills_md,
         scope: SkillScope::User,
         plugin_id: None,
     }

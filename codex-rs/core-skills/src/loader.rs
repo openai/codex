@@ -13,6 +13,7 @@ use codex_config::ConfigLayerStackOrdering;
 use codex_config::default_project_root_markers;
 use codex_config::merge_toml_values;
 use codex_config::project_root_markers_from_config;
+use codex_exec_server::EnvironmentPathRef;
 use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::LOCAL_FS;
 use codex_protocol::protocol::Product;
@@ -173,7 +174,7 @@ where
         let fs = root.file_system;
         let skills_before_root = outcome.skills.len();
         discover_skills_under_root(
-            fs.as_ref(),
+            Arc::clone(&fs),
             &root_path,
             root.scope,
             root.plugin_id.as_deref(),
@@ -476,7 +477,7 @@ fn canonicalize_for_skill_identity(path: &AbsolutePathBuf) -> AbsolutePathBuf {
 }
 
 async fn discover_skills_under_root(
-    fs: &dyn ExecutorFileSystem,
+    fs: Arc<dyn ExecutorFileSystem>,
     root: &AbsolutePathBuf,
     scope: SkillScope,
     plugin_id: Option<&str>,
@@ -594,7 +595,8 @@ async fn discover_skills_under_root(
             }
 
             if metadata.is_file && file_name == SKILLS_FILENAME {
-                match parse_skill_file(fs, &path, scope, plugin_id, plugin_root.as_ref()).await {
+                let source_path = EnvironmentPathRef::new(Arc::clone(&fs), path.clone());
+                match parse_skill_file(source_path, scope, plugin_id, plugin_root.as_ref()).await {
                     Ok(skill) => {
                         outcome.skills.push(skill);
                     }
@@ -621,12 +623,13 @@ async fn discover_skills_under_root(
 }
 
 async fn parse_skill_file(
-    fs: &dyn ExecutorFileSystem,
-    path: &AbsolutePathBuf,
+    source_path: EnvironmentPathRef,
     scope: SkillScope,
     plugin_id: Option<&str>,
     plugin_root: Option<&AbsolutePathBuf>,
 ) -> Result<SkillMetadata, SkillParseError> {
+    let fs = source_path.file_system();
+    let path = source_path.path();
     let contents = fs
         .read_file_text(path, /*sandbox*/ None)
         .await
@@ -643,7 +646,7 @@ async fn parse_skill_file(
         .map(sanitize_single_line)
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| default_skill_name(path));
-    let name = namespaced_skill_name(fs, path, &base_name).await;
+    let name = namespaced_skill_name(fs.as_ref(), path, &base_name).await;
     let description = parsed
         .description
         .as_deref()
@@ -659,7 +662,7 @@ async fn parse_skill_file(
         interface,
         dependencies,
         policy,
-    } = load_skill_metadata(fs, path, plugin_root).await;
+    } = load_skill_metadata(fs.as_ref(), path, plugin_root).await;
 
     validate_len(&base_name, MAX_NAME_LEN, "name")?;
     validate_len(&name, MAX_QUALIFIED_NAME_LEN, "qualified name")?;
@@ -681,7 +684,8 @@ async fn parse_skill_file(
         interface,
         dependencies,
         policy,
-        path_to_skills_md: resolved_path,
+        path_to_skills_md: resolved_path.clone(),
+        source_path: source_path.with_path(resolved_path),
         scope,
         plugin_id: plugin_id.map(str::to_string),
     })

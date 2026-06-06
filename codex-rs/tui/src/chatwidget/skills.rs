@@ -18,6 +18,7 @@ use codex_core_skills::model::SkillDependencies;
 use codex_core_skills::model::SkillInterface;
 use codex_core_skills::model::SkillMetadata;
 use codex_core_skills::model::SkillToolDependency;
+use codex_exec_server::EnvironmentPathRef;
 use codex_features::Feature;
 use codex_protocol::parse_command::ParsedCommand;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -241,6 +242,9 @@ fn protocol_skill_to_core(skill: &ProtocolSkillMetadata) -> Option<SkillMetadata
                     .collect(),
             }),
         policy: None,
+        // TUI only uses listed skills for display and raw-path mention payloads. `skills/list`
+        // does not carry source authority yet, so this placeholder must not be used for reads.
+        source_path: EnvironmentPathRef::local(skill.path.clone()),
         path_to_skills_md: skill.path.clone(),
         scope,
         plugin_id: None,

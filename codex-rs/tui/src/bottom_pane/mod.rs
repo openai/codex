@@ -1793,6 +1793,7 @@ impl Renderable for BottomPane {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_exec_server::EnvironmentPathRef;
     use crate::app::app_server_requests::ResolvedAppServerRequest;
     use crate::app_command::AppCommand as Op;
     use crate::app_event::AppEvent;
@@ -2582,6 +2583,7 @@ mod tests {
                 interface: None,
                 dependencies: None,
                 policy: None,
+                source_path: EnvironmentPathRef::local(test_path_buf("/tmp/test-skill/SKILL.md").abs()),
                 path_to_skills_md: test_path_buf("/tmp/test-skill/SKILL.md").abs(),
                 scope: crate::test_support::skill_scope_user(),
                 plugin_id: None,

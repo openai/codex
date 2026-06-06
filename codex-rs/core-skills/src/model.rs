@@ -4,6 +4,7 @@ use std::fmt;
 use std::io;
 use std::sync::Arc;
 
+use codex_exec_server::EnvironmentPathRef;
 use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::LOCAL_FS;
 use codex_protocol::protocol::Product;
@@ -18,8 +19,10 @@ pub struct SkillMetadata {
     pub interface: Option<SkillInterface>,
     pub dependencies: Option<SkillDependencies>,
     pub policy: Option<SkillPolicy>,
-    /// Path to the SKILLS.md file that declares this skill.
+    /// Best-effort resolved raw path used for display, wire payloads, and config selectors.
     pub path_to_skills_md: AbsolutePathBuf,
+    /// Same resolved path bound to the filesystem that loaded this skill.
+    pub source_path: EnvironmentPathRef,
     pub scope: SkillScope,
     pub plugin_id: Option<String>,
 }

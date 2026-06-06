@@ -1,5 +1,6 @@
 use super::*;
 use crate::app_event::ConnectorsSnapshot;
+use codex_exec_server::EnvironmentPathRef;
 use codex_protocol::models::ManagedFileSystemPermissions;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
@@ -549,6 +550,7 @@ async fn submission_prefers_selected_duplicate_skill_path() {
             interface: None,
             dependencies: None,
             policy: None,
+            source_path: EnvironmentPathRef::local(repo_skill_path.clone()),
             path_to_skills_md: repo_skill_path,
             scope: crate::test_support::skill_scope_repo(),
             plugin_id: None,
@@ -560,6 +562,7 @@ async fn submission_prefers_selected_duplicate_skill_path() {
             interface: None,
             dependencies: None,
             policy: None,
+            source_path: EnvironmentPathRef::local(user_skill_path.clone()),
             path_to_skills_md: user_skill_path.clone(),
             scope: crate::test_support::skill_scope_user(),
             plugin_id: None,

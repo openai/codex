@@ -22,6 +22,7 @@ use codex_config::RequirementSource;
 use codex_config::Sourced;
 use codex_config::loader::project_trust_key;
 use codex_config::types::ToolSuggestDisabledTool;
+use codex_exec_server::EnvironmentPathRef;
 
 use codex_features::Feature;
 use codex_login::CodexAuth;
@@ -7602,6 +7603,7 @@ async fn build_initial_context_trims_skill_metadata_from_context_window_budget()
             interface: None,
             dependencies: None,
             policy: None,
+            source_path: EnvironmentPathRef::local(test_path_buf("/tmp/admin-skill/SKILL.md").abs()),
             path_to_skills_md: test_path_buf("/tmp/admin-skill/SKILL.md").abs(),
             scope: SkillScope::Admin,
             plugin_id: None,
@@ -7613,6 +7615,7 @@ async fn build_initial_context_trims_skill_metadata_from_context_window_budget()
             interface: None,
             dependencies: None,
             policy: None,
+            source_path: EnvironmentPathRef::local(test_path_buf("/tmp/repo-skill/SKILL.md").abs()),
             path_to_skills_md: test_path_buf("/tmp/repo-skill/SKILL.md").abs(),
             scope: SkillScope::Repo,
             plugin_id: None,
@@ -7649,6 +7652,7 @@ fn emit_thread_start_skill_metrics_records_enabled_kept_and_truncated_values() {
         interface: None,
         dependencies: None,
         policy: None,
+        source_path: EnvironmentPathRef::local(test_path_buf("/tmp/repo-skill/SKILL.md").abs()),
         path_to_skills_md: test_path_buf("/tmp/repo-skill/SKILL.md").abs(),
         scope: SkillScope::Repo,
         plugin_id: None,
@@ -7694,6 +7698,7 @@ fn emit_thread_start_skill_metrics_records_description_truncated_chars_without_o
         interface: None,
         dependencies: None,
         policy: None,
+        source_path: EnvironmentPathRef::local(test_path_buf("/tmp/alpha-skill/SKILL.md").abs()),
         path_to_skills_md: test_path_buf("/tmp/alpha-skill/SKILL.md").abs(),
         scope: SkillScope::Repo,
         plugin_id: None,
@@ -7705,6 +7710,7 @@ fn emit_thread_start_skill_metrics_records_description_truncated_chars_without_o
         interface: None,
         dependencies: None,
         policy: None,
+        source_path: EnvironmentPathRef::local(test_path_buf("/tmp/beta-skill/SKILL.md").abs()),
         path_to_skills_md: test_path_buf("/tmp/beta-skill/SKILL.md").abs(),
         scope: SkillScope::Repo,
         plugin_id: None,
@@ -7753,6 +7759,7 @@ async fn build_initial_context_emits_thread_start_skill_warning_on_repeated_buil
             interface: None,
             dependencies: None,
             policy: None,
+            source_path: EnvironmentPathRef::local(test_path_buf("/tmp/admin-skill/SKILL.md").abs()),
             path_to_skills_md: test_path_buf("/tmp/admin-skill/SKILL.md").abs(),
             scope: SkillScope::Admin,
             plugin_id: None,
@@ -7764,6 +7771,7 @@ async fn build_initial_context_emits_thread_start_skill_warning_on_repeated_buil
             interface: None,
             dependencies: None,
             policy: None,
+            source_path: EnvironmentPathRef::local(test_path_buf("/tmp/repo-skill/SKILL.md").abs()),
             path_to_skills_md: test_path_buf("/tmp/repo-skill/SKILL.md").abs(),
             scope: SkillScope::Repo,
             plugin_id: None,

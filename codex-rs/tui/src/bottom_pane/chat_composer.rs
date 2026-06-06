@@ -4467,6 +4467,7 @@ impl ChatComposer {
 mod tests {
     use super::attachment_state::AttachedImage;
     use super::*;
+    use codex_exec_server::EnvironmentPathRef;
     use crate::test_support::PathBufExt;
     use crate::test_support::test_path_buf;
     use image::ImageBuffer;
@@ -6270,6 +6271,7 @@ mod tests {
             interface: None,
             dependencies: None,
             policy: None,
+            source_path: EnvironmentPathRef::local(skill_path.clone()),
             path_to_skills_md: skill_path.clone(),
             scope: crate::test_support::skill_scope_user(),
             plugin_id: None,
@@ -6313,6 +6315,7 @@ mod tests {
             }),
             dependencies: None,
             policy: None,
+            source_path: EnvironmentPathRef::local(skill_path.clone()),
             path_to_skills_md: skill_path.clone(),
             scope: crate::test_support::skill_scope_repo(),
             plugin_id: None,
@@ -6405,6 +6408,7 @@ mod tests {
                     }),
                     dependencies: None,
                     policy: None,
+                    source_path: EnvironmentPathRef::local(test_path_buf("/tmp/repo/google-calendar/SKILL.md").abs()),
                     path_to_skills_md: test_path_buf("/tmp/repo/google-calendar/SKILL.md").abs(),
                     scope: crate::test_support::skill_scope_repo(),
                     plugin_id: None,
