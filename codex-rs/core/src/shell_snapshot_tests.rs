@@ -80,6 +80,18 @@ fn assert_posix_snapshot_sections(snapshot: &str) {
     assert!(snapshot.contains("setopts "));
 }
 
+#[cfg(unix)]
+fn snapshot_exports(snapshot: &str) -> &str {
+    let exports = snapshot
+        .split_once("\n# exports ")
+        .expect("snapshot should include an exports section")
+        .1;
+    exports
+        .split_once('\n')
+        .expect("exports section should include a count")
+        .1
+}
+
 async fn get_snapshot(shell_type: ShellType) -> Result<String> {
     let dir = tempdir()?;
     let path = dir.path().join("snapshot.sh");
@@ -182,6 +194,65 @@ fn bash_snapshot_preserves_multiline_exports() -> Result<()> {
         validate.status.success(),
         "snapshot validation failed: {}",
         String::from_utf8_lossy(&validate.stderr)
+    );
+
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn bash_snapshot_runs_direnv_hook_before_capture() -> Result<()> {
+    let home = tempdir()?;
+    std::fs::write(
+        home.path().join(".bashrc"),
+        "_direnv_hook() { export CODEX_DIRENV_TEST=loaded; }\n",
+    )?;
+
+    let output = Command::new("/bin/bash")
+        .arg("-c")
+        .arg(bash_snapshot_script())
+        .env("HOME", home.path())
+        .env_remove("BASH_ENV")
+        .output()?;
+
+    assert!(
+        output.status.success(),
+        "snapshot command failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        snapshot_exports(&stdout).contains("CODEX_DIRENV_TEST"),
+        "snapshot should capture exports from the direnv hook"
+    );
+
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn zsh_snapshot_runs_direnv_hook_before_capture() -> Result<()> {
+    let zdotdir = tempdir()?;
+    std::fs::write(
+        zdotdir.path().join(".zshrc"),
+        "_direnv_hook() { export CODEX_DIRENV_TEST=loaded; }\n",
+    )?;
+
+    let output = Command::new("/bin/zsh")
+        .arg("-c")
+        .arg(zsh_snapshot_script())
+        .env("ZDOTDIR", zdotdir.path())
+        .output()?;
+
+    assert!(
+        output.status.success(),
+        "snapshot command failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        snapshot_exports(&stdout).contains("CODEX_DIRENV_TEST"),
+        "snapshot should capture exports from the direnv hook"
     );
 
     Ok(())

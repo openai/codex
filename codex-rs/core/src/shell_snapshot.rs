@@ -321,6 +321,10 @@ else
   rc="$HOME/.zshrc"
 fi
 [[ -r "$rc" ]] && . "$rc"
+# Starting in the workspace does not trigger direnv's chpwd or precmd hook.
+if (( $+functions[_direnv_hook] )); then
+  _direnv_hook
+fi
 print '# Snapshot file'
 print '# Unset all aliases to avoid conflicts with functions'
 print 'unalias -a 2>/dev/null || true'
@@ -361,6 +365,10 @@ fn bash_snapshot_script() -> String {
     let excluded = excluded_exports_regex();
     let script = r##"if [ -z "$BASH_ENV" ] && [ -r "$HOME/.bashrc" ]; then
   . "$HOME/.bashrc"
+fi
+# Starting in the workspace does not trigger direnv's prompt hook.
+if declare -F _direnv_hook >/dev/null; then
+  _direnv_hook
 fi
 echo '# Snapshot file'
 echo '# Unset all aliases to avoid conflicts with functions'
