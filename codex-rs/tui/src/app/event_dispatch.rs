@@ -498,6 +498,20 @@ impl App {
             AppEvent::PluginsLoaded { cwd, result } => {
                 self.chat_widget.on_plugins_loaded(cwd, result);
             }
+            AppEvent::OpenPluginsList { cwd, response } => {
+                self.chat_widget.open_plugins_list(cwd, response);
+            }
+            AppEvent::PluginRemoteSectionsLoaded {
+                cwd,
+                marketplaces,
+                section_errors,
+            } => {
+                self.chat_widget.on_plugin_remote_sections_loaded(
+                    cwd,
+                    marketplaces,
+                    section_errors,
+                );
+            }
             AppEvent::HooksLoaded { cwd, result } => {
                 self.chat_widget.on_hooks_loaded(cwd, result);
             }
