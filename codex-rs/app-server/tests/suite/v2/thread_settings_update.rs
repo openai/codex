@@ -356,21 +356,6 @@ async fn read_thread_with_turns(
     to_response(response)
 }
 
-async fn read_thread(mcp: &mut TestAppServer, thread_id: &str) -> Result<ThreadReadResponse> {
-    let request_id = mcp
-        .send_thread_read_request(ThreadReadParams {
-            thread_id: thread_id.to_string(),
-            include_turns: false,
-        })
-        .await?;
-    let response: JSONRPCResponse = timeout(
-        DEFAULT_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
-    )
-    .await??;
-    to_response(response)
-}
-
 async fn read_thread_settings_updated(
     mcp: &mut TestAppServer,
 ) -> Result<ThreadSettingsUpdatedNotification> {
