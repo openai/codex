@@ -3386,6 +3386,7 @@ async fn side_thread_ignores_global_mcp_startup_notifications() {
 async fn cancelling_pending_side_start_restores_message() {
     let mut app = make_test_app().await;
     app.pending_side_start = Some(PendingSideStart {
+        request_id: Uuid::new_v4(),
         parent_thread_id: ThreadId::new(),
         user_message: Some(crate::chatwidget::UserMessage::from("side question")),
     });
@@ -3397,6 +3398,23 @@ async fn cancelling_pending_side_start_restores_message() {
     assert_eq!(
         app.chat_widget.composer_text_with_pending(),
         "side question"
+    );
+}
+
+#[tokio::test]
+async fn side_completion_only_consumes_its_own_pending_start() {
+    let mut app = make_test_app().await;
+    let current_request_id = Uuid::new_v4();
+    app.pending_side_start = Some(PendingSideStart {
+        request_id: current_request_id,
+        parent_thread_id: ThreadId::new(),
+        user_message: None,
+    });
+
+    assert!(app.take_pending_side_start(Uuid::new_v4()).is_none());
+    assert_eq!(
+        app.pending_side_start.as_ref().unwrap().request_id,
+        current_request_id
     );
 }
 

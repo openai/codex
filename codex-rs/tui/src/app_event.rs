@@ -48,6 +48,7 @@ use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_realtime_webrtc::RealtimeWebrtcEvent;
 use codex_realtime_webrtc::RealtimeWebrtcSessionHandle;
+use uuid::Uuid;
 
 use crate::history_cell::HistoryCell;
 
@@ -147,7 +148,10 @@ pub(crate) enum AppEvent {
         user_message: Option<UserMessage>,
     },
     /// Finish preparing a transient side conversation off the TUI event loop.
-    SideThreadPrepared(Result<AppServerStartedThread, String>),
+    SideThreadPrepared {
+        request_id: Uuid,
+        result: Result<AppServerStartedThread, String>,
+    },
 
     /// Submit an op to the specified thread, regardless of current focus.
     SubmitThreadOp {

@@ -1723,8 +1723,8 @@ impl App {
                 self.handle_start_side(app_server, parent_thread_id, user_message)
                     .await;
             }
-            AppEvent::SideThreadPrepared(result) => {
-                self.handle_side_thread_prepared(tui, app_server, result)
+            AppEvent::SideThreadPrepared { request_id, result } => {
+                self.handle_side_thread_prepared(tui, app_server, request_id, result)
                     .await?;
             }
             AppEvent::OpenSkillsList => {

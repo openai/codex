@@ -197,6 +197,7 @@ pub(super) struct SideThreadState {
 }
 
 pub(super) struct PendingSideStart {
+    pub(super) request_id: Uuid,
     pub(super) parent_thread_id: ThreadId,
     pub(super) user_message: Option<crate::chatwidget::UserMessage>,
 }
@@ -501,6 +502,11 @@ impl App {
         self.restore_side_user_message(user_message);
     }
 
+    pub(super) fn take_pending_side_start(&mut self, request_id: Uuid) -> Option<PendingSideStart> {
+        self.pending_side_start
+            .take_if(|pending| pending.request_id == request_id)
+    }
+
     pub(super) fn install_side_thread_snapshot(
         store: &mut ThreadEventStore,
         mut session: ThreadSessionState,
@@ -561,7 +567,9 @@ impl App {
         self.refresh_in_memory_config_from_disk_best_effort("starting a side conversation")
             .await;
 
+        let request_id = Uuid::new_v4();
         self.pending_side_start = Some(PendingSideStart {
+            request_id,
             parent_thread_id,
             user_message,
         });
@@ -583,7 +591,7 @@ impl App {
             )
             .await
             .map_err(|err| format!("{err:#}"));
-            app_event_tx.send(AppEvent::SideThreadPrepared(result));
+            app_event_tx.send(AppEvent::SideThreadPrepared { request_id, result });
         });
     }
 
@@ -591,25 +599,27 @@ impl App {
         &mut self,
         tui: &mut tui::Tui,
         app_server: &mut AppServerSession,
+        request_id: Uuid,
         result: std::result::Result<AppServerStartedThread, String>,
     ) -> Result<()> {
         let Some(PendingSideStart {
             parent_thread_id,
             mut user_message,
-        }) = self.pending_side_start.take()
+            ..
+        }) = self.take_pending_side_start(request_id)
         else {
             if let Ok(started) = result {
-                // Esc and session teardown only cancel the UI transition; close a child that
-                // finishes after its pending state has been abandoned.
                 let thread_id = started.session.thread_id;
+                // ThreadStarted may have created local state before this preparation was canceled.
+                self.discard_thread_local_state(thread_id).await;
                 let request_handle = app_server.request_handle();
                 tokio::spawn(async move {
                     if let Err(err) =
-                        super::side_server::unsubscribe_side_thread(request_handle, thread_id).await
+                        super::side_server::cleanup_side_thread(request_handle, thread_id).await
                     {
                         tracing::warn!(
                             thread_id = %thread_id,
-                            "failed to unsubscribe abandoned side thread: {err}"
+                            "failed to clean up abandoned side thread: {err}"
                         );
                     }
                 });
