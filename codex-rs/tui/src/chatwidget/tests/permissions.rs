@@ -295,7 +295,7 @@ async fn preset_matching_accepts_workspace_write_with_extra_roots() {
         .find(|p| p.id == "auto")
         .expect("auto preset exists");
     let current_profile = app_server_workspace_write_profile(test_path_buf("/tmp/extra").abs());
-    let cwd = test_path_buf("/tmp/project").abs();
+    let cwd = test_project_path().abs();
 
     assert!(
         ChatWidget::preset_matches_current(
@@ -343,7 +343,7 @@ async fn preset_matching_does_not_treat_non_cwd_writable_profile_as_read_only() 
             glob_scan_max_depth: None,
         },
     };
-    let cwd = test_path_buf("/tmp/project").abs();
+    let cwd = test_project_path().abs();
 
     assert!(
         !ChatWidget::preset_matches_current(
