@@ -13,7 +13,6 @@ use crossterm::event::KeyCode;
 use crossterm::terminal::EnterAlternateScreen;
 use crossterm::terminal::LeaveAlternateScreen;
 use ratatui::crossterm::execute;
-use ratatui::layout::Position;
 use ratatui::layout::Rect;
 
 use crate::key_hint;
@@ -81,23 +80,22 @@ impl SuspendContext {
     /// resumes; returns `None` when there was no pending suspend intent.
     pub(crate) fn prepare_resume_action(
         &self,
-        terminal: &mut Terminal,
         alt_saved_viewport: &mut Option<Rect>,
     ) -> Option<PreparedResumeAction> {
         let action = self.take_resume_action()?;
         match action {
             ResumeAction::RealignInline => {
-                let cursor_pos = terminal
-                    .get_cursor_position()
-                    .unwrap_or(terminal.last_known_cursor_pos);
-                let viewport = Rect::new(0, cursor_pos.y, 0, 0);
+                let viewport = Rect::new(
+                    /*x*/ 0,
+                    self.cursor_y(),
+                    /*width*/ 0,
+                    /*height*/ 0,
+                );
                 Some(PreparedResumeAction::RealignViewport(viewport))
             }
             ResumeAction::RestoreAlt => {
-                if let Ok(Position { y, .. }) = terminal.get_cursor_position()
-                    && let Some(saved) = alt_saved_viewport.as_mut()
-                {
-                    saved.y = y;
+                if let Some(saved) = alt_saved_viewport.as_mut() {
+                    saved.y = self.cursor_y();
                 }
                 Some(PreparedResumeAction::RestoreAltScreen)
             }
@@ -110,6 +108,10 @@ impl SuspendContext {
     /// position to restore before yielding.
     pub(crate) fn set_cursor_y(&self, value: u16) {
         self.suspend_cursor_y.store(value, Ordering::Relaxed);
+    }
+
+    fn cursor_y(&self) -> u16 {
+        self.suspend_cursor_y.load(Ordering::Relaxed)
     }
 
     /// Record a pending resume action to apply after SIGTSTP returns control.
@@ -182,5 +184,6 @@ fn suspend_process() -> Result<()> {
     // After the process resumes, reapply terminal modes so drawing can continue.
     super::terminal_stderr::resume()?;
     super::set_modes()?;
+    super::flush_terminal_input_buffer();
     Ok(())
 }
