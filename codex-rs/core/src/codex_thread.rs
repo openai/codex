@@ -134,7 +134,7 @@ impl ThreadConfigSnapshot {
 /// Thread settings overrides that app-server validates before starting a turn.
 #[derive(Clone, Default)]
 pub struct CodexThreadSettingsOverrides {
-    pub cwd: Option<AbsolutePathBuf>,
+    pub environments: Option<TurnEnvironmentSelections>,
     pub workspace_roots: Option<Vec<AbsolutePathBuf>>,
     pub profile_workspace_roots: Option<Vec<AbsolutePathBuf>>,
     pub approval_policy: Option<AskForApproval>,
@@ -333,7 +333,7 @@ impl CodexThread {
         overrides: CodexThreadSettingsOverrides,
     ) -> SessionSettingsUpdate {
         let CodexThreadSettingsOverrides {
-            cwd,
+            environments,
             workspace_roots,
             profile_workspace_roots,
             approval_policy,
@@ -357,16 +357,6 @@ impl CodexThread {
                 .collaboration_mode()
                 .await
                 .with_updates(model, effort, /*developer_instructions*/ None)
-        };
-        let environments = match cwd {
-            Some(cwd) => {
-                let snapshot = self.codex.thread_config_snapshot().await;
-                Some(TurnEnvironmentSelections::new(
-                    cwd,
-                    snapshot.environment_selections().to_vec(),
-                ))
-            }
-            None => None,
         };
 
         SessionSettingsUpdate {
