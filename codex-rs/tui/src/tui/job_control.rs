@@ -176,14 +176,39 @@ impl PreparedResumeAction {
 
 /// Deliver SIGTSTP after restoring terminal state, then re-applies terminal modes once resumed.
 fn suspend_process() -> Result<()> {
+    tracing::trace!(
+        event = "tui_suspend_stage_changed",
+        stage = "restoring_terminal",
+        "restoring terminal before suspend"
+    );
     super::restore_for_suspend()?;
     super::terminal_stderr::pause()?;
+    tracing::trace!(
+        event = "tui_suspend_stage_changed",
+        stage = "sending_sigtstp",
+        "sending SIGTSTP to process group"
+    );
     unsafe {
         libc::kill(/*pid*/ 0, libc::SIGTSTP)
     };
+    tracing::trace!(
+        event = "tui_suspend_stage_changed",
+        stage = "resumed",
+        "process resumed after SIGTSTP"
+    );
     // After the process resumes, reapply terminal modes so drawing can continue.
     super::terminal_stderr::resume()?;
     super::set_modes()?;
+    tracing::trace!(
+        event = "tui_suspend_stage_changed",
+        stage = "terminal_modes_reenabled",
+        "re-enabled terminal modes after resume"
+    );
     super::flush_terminal_input_buffer();
+    tracing::trace!(
+        event = "tui_suspend_stage_changed",
+        stage = "terminal_input_flushed",
+        "flushed terminal input after resume"
+    );
     Ok(())
 }
