@@ -131,13 +131,6 @@ impl TurnEnvironmentSelections {
         settings
     }
 
-    pub fn with_legacy_fallback_cwd(&self, legacy_fallback_cwd: AbsolutePathBuf) -> Self {
-        let mut settings = self.clone();
-        settings.legacy_fallback_cwd = legacy_fallback_cwd;
-        settings.sync_primary_environment_cwd();
-        settings
-    }
-
     fn sync_primary_environment_cwd(&mut self) {
         if let Some(turn_environment) = self.environments.first_mut()
             && turn_environment.cwd != self.legacy_fallback_cwd
