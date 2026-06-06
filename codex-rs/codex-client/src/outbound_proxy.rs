@@ -375,7 +375,6 @@ fn default_port_for_scheme(scheme: &str) -> Option<u16> {
 
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[allow(dead_code)]
 enum SystemProxyDecision {
     Direct,
     Proxy { url: String },
