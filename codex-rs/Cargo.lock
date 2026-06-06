@@ -4152,6 +4152,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-utils-path-uri"
+version = "0.0.0"
+dependencies = [
+ "codex-utils-absolute-path",
+ "pretty_assertions",
+ "schemars 0.8.22",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "ts-rs",
+ "url",
+ "urlencoding",
+]
+
+[[package]]
 name = "codex-utils-plugins"
 version = "0.0.0"
 dependencies = [

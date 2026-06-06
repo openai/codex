@@ -1,0 +1,379 @@
+//! Typed URIs for paths on the current host and in configured Codex environments.
+//!
+//! `file:` URI paths are stored in normalized URI syntax, so they can be parsed
+//! independently of the current host.
+//! Remote paths use `codex-env:` URIs containing an environment identifier and
+//! a normalized hierarchical path. Like [VS Code resources][vscode-resources],
+//! environment paths always use `/` separators, so basename, parent, join, and
+//! comparison operations do not depend on the operating system running Codex.
+//!
+//! Native Windows paths are normalized at construction: backslashes become
+//! slashes, drive letters become lowercase, and `C:\src` becomes `/c:/src`.
+//! UNC paths retain a leading `//`. POSIX paths already use the canonical form.
+//!
+//! This follows VS Code's split between URI-level path operations and
+//! environment-aware native conversion. The tradeoff is that normalization
+//! intentionally loses original separator spelling, repeated separators, dot
+//! segments, and Windows drive-letter casing. Converting a canonical path back
+//! to native syntax, validating platform-specific names, and deciding path case
+//! sensitivity require metadata from the environment. Filesystem-dependent
+//! operations such as canonicalizing symlinks still require the environment.
+//!
+//! [`file:` URIs][rfc-8089] remain host-specific because they can only be
+//! dependably converted to paths when local to the interpreting host.
+//!
+//! [rfc-8089]: https://www.rfc-editor.org/rfc/rfc8089.html
+//! [vscode-resources]: https://github.com/microsoft/vscode/blob/main/src/vs/base/common/resources.ts
+
+mod environment_path;
+
+use codex_utils_absolute_path::AbsolutePathBuf;
+use schemars::JsonSchema;
+use serde::Deserialize;
+use serde::Deserializer;
+use serde::Serialize;
+use serde::Serializer;
+use std::fmt;
+use std::str::FromStr;
+use thiserror::Error;
+use ts_rs::TS;
+use url::Url;
+
+pub use environment_path::EnvironmentPath;
+pub use environment_path::EnvironmentPathError;
+pub use environment_path::PathFlavor;
+
+pub const FILE_SCHEME: &str = "file";
+pub const CODEX_ENVIRONMENT_SCHEME: &str = "codex-env";
+
+/// Reserved so paths on the current host have one canonical representation:
+/// `file:`. Allowing `codex-env:///local/...` as well would give the same local
+/// path two URI identities and blur whether environment path rules apply.
+const LOCAL_ENVIRONMENT_ID: &str = "local";
+const MAX_ENVIRONMENT_ID_LEN: usize = 256;
+
+/// A URI that can identify a path in the current host or another environment.
+///
+/// Construction is fallible and only succeeds for schemes understood by this
+/// version of the crate. This keeps [`PathUri::view`] infallible and exhaustive.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Deserialize, TS)]
+#[serde(try_from = "String")]
+#[ts(type = "string")]
+pub struct PathUri(Url);
+
+/// A closed view over the path URI schemes understood by this crate.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PathUriView {
+    File(FileUriView),
+    Environment(EnvironmentUriView),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FileUriView {
+    path: EnvironmentPath,
+}
+
+impl FileUriView {
+    pub fn path(&self) -> &EnvironmentPath {
+        &self.path
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EnvironmentUriView {
+    environment_id: EnvironmentId,
+    path: EnvironmentPath,
+}
+
+impl EnvironmentUriView {
+    pub fn environment_id(&self) -> &EnvironmentId {
+        &self.environment_id
+    }
+
+    pub fn path(&self) -> &EnvironmentPath {
+        &self.path
+    }
+}
+
+/// An identifier for a configured remote environment.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, JsonSchema, TS)]
+#[serde(transparent)]
+#[schemars(with = "String")]
+#[ts(type = "string")]
+pub struct EnvironmentId(String);
+
+impl EnvironmentId {
+    pub fn new(id: impl Into<String>) -> Result<Self, EnvironmentIdError> {
+        let id = id.into();
+        validate_environment_id(&id)?;
+        Ok(Self(id))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for EnvironmentId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl AsRef<str> for EnvironmentId {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl FromStr for EnvironmentId {
+    type Err = EnvironmentIdError;
+
+    fn from_str(id: &str) -> Result<Self, Self::Err> {
+        Self::new(id)
+    }
+}
+
+impl<'de> Deserialize<'de> for EnvironmentId {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        String::deserialize(deserializer)?
+            .parse()
+            .map_err(serde::de::Error::custom)
+    }
+}
+
+impl PathUri {
+    pub fn parse(uri: &str) -> Result<Self, PathUriParseError> {
+        Url::parse(uri)?.try_into()
+    }
+
+    pub fn from_file_path(path: &AbsolutePathBuf) -> Result<Self, PathUriParseError> {
+        let url = Url::from_file_path(path.as_path())
+            .map_err(|()| PathUriParseError::PathCannotBeRepresentedAsFileUri)?;
+        Self::try_from(url)
+    }
+
+    pub fn from_environment_path(
+        environment_id: &EnvironmentId,
+        path: &EnvironmentPath,
+    ) -> Result<Self, PathUriParseError> {
+        let url = environment_url(environment_id, path)?;
+        Self::try_from(url)
+    }
+
+    pub fn scheme(&self) -> &str {
+        self.0.scheme()
+    }
+
+    pub fn view(&self) -> PathUriView {
+        if self.scheme() == FILE_SCHEME {
+            return PathUriView::File(FileUriView {
+                path: EnvironmentPath::from_normalized(decode_uri_path(self.0.path())),
+            });
+        }
+
+        let decoded = decode_uri_path(self.0.path());
+        let path = decoded.strip_prefix('/').unwrap_or_default();
+        let (environment_id, path) = path.split_once('/').unwrap_or_default();
+        PathUriView::Environment(EnvironmentUriView {
+            environment_id: EnvironmentId(environment_id.to_string()),
+            path: EnvironmentPath::from_normalized(format!("/{path}")),
+        })
+    }
+
+    pub fn to_url(&self) -> Result<Url, PathUriParseError> {
+        Ok(self.0.clone())
+    }
+}
+
+impl TryFrom<Url> for PathUri {
+    type Error = PathUriParseError;
+
+    fn try_from(url: Url) -> Result<Self, Self::Error> {
+        let url = match url.scheme() {
+            FILE_SCHEME => file_url(&parse_file_path(&url)?)?,
+            CODEX_ENVIRONMENT_SCHEME => {
+                let (environment_id, path) = parse_environment_path(&url)?;
+                environment_url(&environment_id, &path)?
+            }
+            scheme => return Err(PathUriParseError::UnsupportedScheme(scheme.to_string())),
+        };
+        Ok(Self(url))
+    }
+}
+
+impl TryFrom<String> for PathUri {
+    type Error = PathUriParseError;
+
+    fn try_from(uri: String) -> Result<Self, Self::Error> {
+        Self::parse(&uri)
+    }
+}
+
+impl FromStr for PathUri {
+    type Err = PathUriParseError;
+
+    fn from_str(uri: &str) -> Result<Self, Self::Err> {
+        Self::parse(uri)
+    }
+}
+
+impl fmt::Display for PathUri {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl Serialize for PathUri {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(self.0.as_str())
+    }
+}
+
+impl JsonSchema for PathUri {
+    fn schema_name() -> String {
+        "PathUri".to_string()
+    }
+
+    fn json_schema(generator: &mut schemars::r#gen::SchemaGenerator) -> schemars::schema::Schema {
+        String::json_schema(generator)
+    }
+}
+
+fn parse_file_path(url: &Url) -> Result<EnvironmentPath, PathUriParseError> {
+    validate_common_known_uri(url)?;
+    if url.host_str().is_some_and(|host| host != "localhost") {
+        return Err(PathUriParseError::FileUriMustReferenceCurrentHost);
+    }
+    let path =
+        urlencoding::decode(url.path()).map_err(|_| PathUriParseError::InvalidFileUriPath)?;
+    EnvironmentPath::new(path.into_owned()).map_err(|_| PathUriParseError::InvalidFileUriPath)
+}
+
+fn parse_environment_path(
+    url: &Url,
+) -> Result<(EnvironmentId, EnvironmentPath), PathUriParseError> {
+    validate_common_known_uri(url)?;
+    if url.host().is_some() {
+        return Err(PathUriParseError::EnvironmentUriMustNotHaveAuthority);
+    }
+
+    let path = url
+        .path()
+        .strip_prefix('/')
+        .ok_or(PathUriParseError::InvalidEnvironmentUriPath)?;
+    let (environment_id, path) = path
+        .split_once('/')
+        .ok_or(PathUriParseError::InvalidEnvironmentUriPath)?;
+    let environment_id = EnvironmentId::new(environment_id)?;
+    let path = format!("/{path}");
+    let path =
+        urlencoding::decode(&path).map_err(|_| PathUriParseError::InvalidEnvironmentUriPath)?;
+    let path = EnvironmentPath::new(path.into_owned())?;
+    Ok((environment_id, path))
+}
+
+fn file_url(path: &EnvironmentPath) -> Result<Url, PathUriParseError> {
+    let mut url = Url::parse("file:///")?;
+    url.set_path(path.as_str());
+    Ok(url)
+}
+
+fn environment_url(
+    environment_id: &EnvironmentId,
+    path: &EnvironmentPath,
+) -> Result<Url, PathUriParseError> {
+    let mut url = Url::parse(&format!("{CODEX_ENVIRONMENT_SCHEME}:///"))?;
+    url.set_path(&format!("/{environment_id}{}", path.as_str()));
+    Ok(url)
+}
+
+fn decode_uri_path(path: &str) -> String {
+    String::from_utf8_lossy(&urlencoding::decode_binary(path.as_bytes())).into_owned()
+}
+
+fn validate_common_known_uri(url: &Url) -> Result<(), PathUriParseError> {
+    if !url.username().is_empty() || url.password().is_some() || url.port().is_some() {
+        return Err(PathUriParseError::CredentialsOrPortNotAllowed);
+    }
+    if url.query().is_some() {
+        return Err(PathUriParseError::QueryNotAllowed);
+    }
+    if url.fragment().is_some() {
+        return Err(PathUriParseError::FragmentNotAllowed);
+    }
+    Ok(())
+}
+
+fn validate_environment_id(id: &str) -> Result<(), EnvironmentIdError> {
+    if id.is_empty() {
+        return Err(EnvironmentIdError::Empty);
+    }
+    if id == LOCAL_ENVIRONMENT_ID || id.eq_ignore_ascii_case("none") {
+        return Err(EnvironmentIdError::Reserved(id.to_string()));
+    }
+    if id.len() > MAX_ENVIRONMENT_ID_LEN {
+        return Err(EnvironmentIdError::TooLong {
+            length: id.len(),
+            max_length: MAX_ENVIRONMENT_ID_LEN,
+        });
+    }
+    if !id
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
+    {
+        return Err(EnvironmentIdError::InvalidCharacter(id.to_string()));
+    }
+    Ok(())
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Error)]
+pub enum EnvironmentIdError {
+    #[error("environment id cannot be empty")]
+    Empty,
+    #[error("environment id `{0}` is reserved")]
+    Reserved(String),
+    #[error("environment id is {length} bytes; maximum length is {max_length}")]
+    TooLong { length: usize, max_length: usize },
+    #[error("environment id `{0}` must contain only ASCII letters, numbers, '-' or '_'")]
+    InvalidCharacter(String),
+}
+
+#[derive(Debug, Error)]
+pub enum PathUriParseError {
+    #[error("invalid URI: {0}")]
+    InvalidUri(#[from] url::ParseError),
+    #[error("unsupported path URI scheme `{0}`")]
+    UnsupportedScheme(String),
+    #[error("path cannot be represented as a file URI")]
+    PathCannotBeRepresentedAsFileUri,
+    #[error("file URI must reference the current host")]
+    FileUriMustReferenceCurrentHost,
+    #[error("file URI contains an invalid absolute path")]
+    InvalidFileUriPath,
+    #[error("environment URI must not have an authority")]
+    EnvironmentUriMustNotHaveAuthority,
+    #[error("environment URI must contain an environment id and absolute path")]
+    InvalidEnvironmentUriPath,
+    #[error("credentials and ports are not allowed in path URIs")]
+    CredentialsOrPortNotAllowed,
+    #[error("query parameters are not allowed in path URIs")]
+    QueryNotAllowed,
+    #[error("fragments are not allowed in path URIs")]
+    FragmentNotAllowed,
+    #[error(transparent)]
+    InvalidEnvironmentId(#[from] EnvironmentIdError),
+    #[error(transparent)]
+    InvalidEnvironmentPath(#[from] EnvironmentPathError),
+}
+
+#[cfg(test)]
+#[path = "tests.rs"]
+mod tests;
