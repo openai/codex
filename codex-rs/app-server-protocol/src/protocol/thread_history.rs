@@ -54,6 +54,12 @@ use codex_protocol::protocol::UserMessageEvent;
 use codex_protocol::protocol::ViewImageToolCallEvent;
 use codex_protocol::protocol::WebSearchBeginEvent;
 use codex_protocol::protocol::WebSearchEndEvent;
+use codex_thread_store_protocol::StoredThreadItem;
+use codex_thread_store_protocol::StoredThreadItemProjectionState;
+use codex_thread_store_protocol::StoredTurn;
+use codex_thread_store_protocol::StoredTurnError;
+use codex_thread_store_protocol::StoredTurnStatus;
+use codex_thread_store_protocol::StoredTurnSummaryProjectionState;
 use std::collections::HashMap;
 use tracing::warn;
 use uuid::Uuid;
@@ -164,6 +170,29 @@ impl ThreadHistoryState {
                 .with_status(TurnStatus::InProgress)
                 .opened_explicitly(),
         );
+    }
+
+    pub(super) fn restore_materialized_turns(
+        &mut self,
+        turns: Vec<Turn>,
+        current_turn_id: Option<&str>,
+        next_item_index: i64,
+    ) {
+        self.turns.clear();
+        self.current_turn = None;
+        self.next_item_index = next_item_index.max(1);
+        for turn in turns {
+            if current_turn_id == Some(turn.id.as_str()) {
+                self.current_turn = Some(PendingTurn::from(turn));
+            } else {
+                self.turns.push(turn);
+            }
+        }
+        if let Some(current_turn_id) = current_turn_id
+            && self.current_turn.is_none()
+        {
+            self.restore_current_turn(current_turn_id.to_string());
+        }
     }
 
     /// Shared reducer for persisted rollout replay and in-memory current-turn
@@ -1206,6 +1235,23 @@ impl From<PendingTurn> for Turn {
     }
 }
 
+impl From<Turn> for PendingTurn {
+    fn from(value: Turn) -> Self {
+        Self {
+            id: value.id,
+            items: value.items,
+            error: value.error,
+            status: value.status,
+            started_at: value.started_at,
+            completed_at: value.completed_at,
+            duration_ms: value.duration_ms,
+            opened_explicitly: true,
+            saw_compaction: false,
+            rollout_start_index: 0,
+        }
+    }
+}
+
 impl From<&PendingTurn> for Turn {
     fn from(value: &PendingTurn) -> Self {
         Self {
@@ -1218,6 +1264,76 @@ impl From<&PendingTurn> for Turn {
             completed_at: value.completed_at,
             duration_ms: value.duration_ms,
         }
+    }
+}
+
+pub(super) fn materialized_turns_from_stored_thread_item_projection_state(
+    state: &StoredThreadItemProjectionState,
+) -> Result<Vec<Turn>, serde_json::Error> {
+    state
+        .turns
+        .iter()
+        .map(|stored_turn| {
+            let mut stored_items = state
+                .items
+                .iter()
+                .filter(|item| item.turn_id == stored_turn.turn_id)
+                .collect::<Vec<_>>();
+            stored_items.sort_by_key(|item| item.item_ordinal);
+            materialized_turn_from_stored_items(stored_turn, stored_items)
+        })
+        .collect()
+}
+
+pub(super) fn materialized_turns_from_stored_turn_summary_projection_state(
+    state: &StoredTurnSummaryProjectionState,
+) -> Result<Vec<Turn>, serde_json::Error> {
+    state
+        .turns
+        .iter()
+        .map(|stored_turn| {
+            materialized_turn_from_stored_items(stored_turn, stored_turn.items.iter().collect())
+        })
+        .collect()
+}
+
+fn materialized_turn_from_stored_items(
+    stored_turn: &StoredTurn,
+    stored_items: Vec<&StoredThreadItem>,
+) -> Result<Turn, serde_json::Error> {
+    Ok(Turn {
+        id: stored_turn.turn_id.clone(),
+        items: stored_items
+            .into_iter()
+            .map(stored_thread_item)
+            .collect::<Result<Vec<_>, _>>()?,
+        items_view: TurnItemsView::Full,
+        error: stored_turn.error.as_ref().map(turn_error_from_stored),
+        status: turn_status_from_stored(stored_turn.status),
+        started_at: stored_turn.started_at,
+        completed_at: stored_turn.completed_at,
+        duration_ms: stored_turn.duration_ms,
+    })
+}
+
+fn stored_thread_item(item: &StoredThreadItem) -> Result<ThreadItem, serde_json::Error> {
+    serde_json::from_value(item.item.clone())
+}
+
+fn turn_status_from_stored(status: StoredTurnStatus) -> TurnStatus {
+    match status {
+        StoredTurnStatus::Completed => TurnStatus::Completed,
+        StoredTurnStatus::Interrupted => TurnStatus::Interrupted,
+        StoredTurnStatus::Failed => TurnStatus::Failed,
+        StoredTurnStatus::InProgress => TurnStatus::InProgress,
+    }
+}
+
+fn turn_error_from_stored(error: &StoredTurnError) -> TurnError {
+    TurnError {
+        message: error.message.clone(),
+        codex_error_info: None,
+        additional_details: error.additional_details.clone(),
     }
 }
 

@@ -136,9 +136,11 @@ use codex_terminal_detection::user_agent;
 use codex_thread_store::CreateThreadParams;
 use codex_thread_store::LiveThread;
 use codex_thread_store::LiveThreadInitGuard;
+use codex_thread_store::LoadThreadHistoryProjectionStateParams;
 use codex_thread_store::LocalThreadStore;
 use codex_thread_store::ReadThreadParams;
 use codex_thread_store::ResumeThreadParams;
+use codex_thread_store::ThreadHistoryProjectionObserver;
 use codex_thread_store::ThreadPersistenceMetadata;
 use codex_thread_store::ThreadStore;
 use codex_utils_output_truncation::TruncationPolicy;
@@ -1262,6 +1264,8 @@ impl Session {
 
                 // If persisting, persist all rollout items as-is (the store filters).
                 if !rollout_items.is_empty() {
+                    // TODO(wiltzius): Projection-aware stores need fork bootstrap mutations here,
+                    // derived from source stored projection state plus fork-only synthetic deltas.
                     self.persist_rollout_items(&rollout_items).await;
                 }
 

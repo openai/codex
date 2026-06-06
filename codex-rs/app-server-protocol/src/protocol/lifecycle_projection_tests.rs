@@ -6,6 +6,7 @@ use codex_protocol::protocol::ThreadRolledBackEvent;
 use codex_protocol::protocol::TurnCompleteEvent;
 use codex_protocol::protocol::TurnStartedEvent;
 use codex_protocol::protocol::UserMessageEvent;
+use codex_thread_store_protocol::StoredLifecycleProjectionState;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 
@@ -107,6 +108,34 @@ fn emits_turn_failed_for_turn_affecting_errors() {
                 },
             }),
         ]
+    );
+}
+
+#[test]
+fn restores_current_turn_for_later_turn_failure() {
+    let mut observer =
+        LifecycleProjectionObserver::from_stored_state(&StoredLifecycleProjectionState {
+            current_turn_id: Some("turn-a".into()),
+        });
+
+    let mutations = observer.observe_append(
+        &[],
+        &[RolloutItem::EventMsg(EventMsg::Error(ErrorEvent {
+            message: "boom".into(),
+            codex_error_info: None,
+        }))],
+    );
+
+    assert_eq!(
+        lifecycle_payloads(mutations),
+        vec![json!({
+            "eventType": "turn.failed",
+            "turnId": "turn-a",
+            "payload": {
+                "message": "boom",
+                "codexErrorInfo": null,
+            },
+        })]
     );
 }
 

@@ -1,8 +1,10 @@
 use crate::protocol::thread_history::ThreadHistoryState;
+use crate::protocol::thread_history::materialized_turns_from_stored_turn_summary_projection_state;
 use crate::protocol::v2::ThreadItem;
 use crate::protocol::v2::Turn;
 use crate::protocol::v2::TurnStatus;
 use codex_protocol::protocol::RolloutItem;
+use codex_thread_store_protocol::StoredTurnSummaryProjectionState;
 use codex_thread_store_protocol::ThreadHistoryMutation;
 use codex_thread_store_protocol::ThreadHistoryMutationMetadata;
 use codex_thread_store_protocol::ThreadHistoryProjectionObserver;
@@ -32,6 +34,23 @@ impl TurnSummaryProjectionObserver {
             reducer: ThreadHistoryState::new(),
             summaries: HashMap::new(),
         }
+    }
+
+    pub fn from_stored_state(
+        state: &StoredTurnSummaryProjectionState,
+    ) -> Result<Self, serde_json::Error> {
+        let turns = materialized_turns_from_stored_turn_summary_projection_state(state)?;
+        let summaries = turns
+            .iter()
+            .map(|turn| (turn.id.clone(), TurnSummaryState::from_turn(turn)))
+            .collect();
+        let mut reducer = ThreadHistoryState::new();
+        reducer.restore_materialized_turns(
+            turns,
+            state.current_turn_id.as_deref(),
+            state.next_generated_thread_item_id_index,
+        );
+        Ok(Self { reducer, summaries })
     }
 
     pub fn observe_append(

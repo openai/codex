@@ -594,15 +594,28 @@ impl Session {
                         .await?
                     }
                 };
-                let thread_history_projection_observers: Vec<
-                    Box<dyn codex_thread_store::ThreadHistoryProjectionObserver>,
-                > = vec![
-                    Box::new(codex_app_server_protocol::ThreadItemProjectionObserver::new()),
-                    Box::new(codex_app_server_protocol::TurnSummaryProjectionObserver::new()),
-                    Box::new(codex_app_server_protocol::LifecycleProjectionObserver::new()),
-                ];
-                // TODO(wiltzius): Once stores persist projections, restore each observer from the
-                // stored projection checkpoint on resume instead of always starting fresh.
+                let thread_history_projection_observers = match &initial_history {
+                    InitialHistory::Resumed(resumed_history) => match thread_store
+                        .load_thread_history_projection_state(
+                            LoadThreadHistoryProjectionStateParams {
+                                thread_id: resumed_history.conversation_id,
+                                include_archived: true,
+                            },
+                        )
+                        .await
+                    {
+                        Ok(state) => thread_history_projection_observers_from_stored_state(&state)?,
+                        Err(codex_thread_store::ThreadStoreError::Unsupported { .. }) => {
+                            // Stores without durable projections, including LocalThreadStore today,
+                            // preserve the existing fresh-observer resume behavior.
+                            new_thread_history_projection_observers()
+                        }
+                        Err(err) => return Err(err.into()),
+                    },
+                    InitialHistory::New | InitialHistory::Cleared | InitialHistory::Forked(_) => {
+                        new_thread_history_projection_observers()
+                    }
+                };
                 Ok(Some(live_thread.with_thread_history_projection_observers(
                     thread_history_projection_observers,
                 )))
@@ -1262,4 +1275,34 @@ impl Session {
             }
         }
     }
+}
+
+fn new_thread_history_projection_observers() -> Vec<Box<dyn ThreadHistoryProjectionObserver>> {
+    vec![
+        Box::new(codex_app_server_protocol::ThreadItemProjectionObserver::new()),
+        Box::new(codex_app_server_protocol::TurnSummaryProjectionObserver::new()),
+        Box::new(codex_app_server_protocol::LifecycleProjectionObserver::new()),
+    ]
+}
+
+fn thread_history_projection_observers_from_stored_state(
+    state: &codex_thread_store::StoredThreadHistoryProjectionState,
+) -> anyhow::Result<Vec<Box<dyn ThreadHistoryProjectionObserver>>> {
+    Ok(vec![
+        Box::new(
+            codex_app_server_protocol::ThreadItemProjectionObserver::from_stored_state(
+                &state.thread_items,
+            )?,
+        ),
+        Box::new(
+            codex_app_server_protocol::TurnSummaryProjectionObserver::from_stored_state(
+                &state.turn_summaries,
+            )?,
+        ),
+        Box::new(
+            codex_app_server_protocol::LifecycleProjectionObserver::from_stored_state(
+                &state.lifecycle,
+            ),
+        ),
+    ])
 }

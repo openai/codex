@@ -1,6 +1,7 @@
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::RolloutItem;
 use codex_thread_store_protocol::LifecycleMutation;
+use codex_thread_store_protocol::StoredLifecycleProjectionState;
 use codex_thread_store_protocol::ThreadHistoryMutation;
 use codex_thread_store_protocol::ThreadHistoryMutationMetadata;
 use codex_thread_store_protocol::ThreadHistoryProjectionObserver;
@@ -12,8 +13,6 @@ mod tests;
 
 /// Observes append batches and emits only thread lifecycle mutations.
 pub struct LifecycleProjectionObserver {
-    // TODO(wiltzius): Persist this in a lifecycle projection checkpoint once stores persist
-    // lifecycle mutations, so a resumed observer can restore its prior in-memory state.
     current_turn_id: Option<String>,
 }
 
@@ -27,6 +26,12 @@ impl LifecycleProjectionObserver {
     pub fn new() -> Self {
         Self {
             current_turn_id: None,
+        }
+    }
+
+    pub fn from_stored_state(state: &StoredLifecycleProjectionState) -> Self {
+        Self {
+            current_turn_id: state.current_turn_id.clone(),
         }
     }
 

@@ -10,12 +10,14 @@ use crate::ListItemsParams;
 use crate::ListThreadsParams;
 use crate::ListTurnsParams;
 use crate::LoadThreadHistoryParams;
+use crate::LoadThreadHistoryProjectionStateParams;
 use crate::ReadThreadByRolloutPathParams;
 use crate::ReadThreadParams;
 use crate::ResumeThreadParams;
 use crate::SearchThreadsParams;
 use crate::StoredThread;
 use crate::StoredThreadHistory;
+use crate::StoredThreadHistoryProjectionState;
 use crate::ThreadPage;
 use crate::ThreadSearchPage;
 use crate::ThreadStoreError;
@@ -63,6 +65,18 @@ pub trait ThreadStore: Any + Send + Sync {
         &self,
         params: LoadThreadHistoryParams,
     ) -> ThreadStoreResult<StoredThreadHistory>;
+
+    /// Loads store-owned current state for each thread-history projection observer.
+    ///
+    /// Stores that do not persist these projections yet may leave this unsupported.
+    async fn load_thread_history_projection_state(
+        &self,
+        _params: LoadThreadHistoryProjectionStateParams,
+    ) -> ThreadStoreResult<StoredThreadHistoryProjectionState> {
+        Err(ThreadStoreError::Unsupported {
+            operation: "load_thread_history_projection_state",
+        })
+    }
 
     /// Reads a thread summary and optionally its persisted history.
     async fn read_thread(&self, params: ReadThreadParams) -> ThreadStoreResult<StoredThread>;

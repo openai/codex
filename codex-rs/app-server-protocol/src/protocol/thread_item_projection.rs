@@ -1,4 +1,5 @@
 use crate::protocol::thread_history::ThreadHistoryState;
+use crate::protocol::thread_history::materialized_turns_from_stored_thread_item_projection_state;
 use crate::protocol::v2::CollabAgentToolCallStatus;
 use crate::protocol::v2::CommandExecutionStatus;
 use crate::protocol::v2::DynamicToolCallStatus;
@@ -7,6 +8,7 @@ use crate::protocol::v2::PatchApplyStatus;
 use crate::protocol::v2::ThreadItem;
 use crate::protocol::v2::Turn;
 use codex_protocol::protocol::RolloutItem;
+use codex_thread_store_protocol::StoredThreadItemProjectionState;
 use codex_thread_store_protocol::ThreadHistoryMutation;
 use codex_thread_store_protocol::ThreadHistoryMutationMetadata;
 use codex_thread_store_protocol::ThreadHistoryProjectionObserver;
@@ -25,9 +27,6 @@ mod tests;
 /// Persisting it lets the next append reuse stable item ordinals and update non-terminal
 /// ThreadItems without replaying the full rollout history first.
 ///
-/// TODO(wiltzius): Before stores persist or restore this checkpoint, include enough reducer state
-/// to resume reasoning coalescing, complete open items from any turn, and tombstone rolled-back
-/// closed items after restart.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct ThreadItemProjectionCheckpoint {
     pub next_thread_item_ordinal: i64,
@@ -160,6 +159,34 @@ impl ThreadItemProjectionObserver {
             checkpoint,
             item_ordinals,
         }
+    }
+
+    pub fn from_stored_state(
+        state: &StoredThreadItemProjectionState,
+    ) -> Result<Self, serde_json::Error> {
+        let mut reducer = ThreadItemProjectionReducer::new();
+        reducer.state.restore_materialized_turns(
+            materialized_turns_from_stored_thread_item_projection_state(state)?,
+            state.current_turn_id.as_deref(),
+            state.next_generated_thread_item_id_index,
+        );
+        let mut observer = Self {
+            reducer,
+            checkpoint: ThreadItemProjectionCheckpoint {
+                next_thread_item_ordinal: state.next_thread_item_ordinal.max(1),
+                next_generated_thread_item_id_index: state
+                    .next_generated_thread_item_id_index
+                    .max(1),
+                ..Default::default()
+            },
+            item_ordinals: state
+                .items
+                .iter()
+                .map(|item| (item.item_key.clone(), item.item_ordinal))
+                .collect(),
+        };
+        observer.refresh_checkpoint();
+        Ok(observer)
     }
 
     pub fn checkpoint(&self) -> &ThreadItemProjectionCheckpoint {
