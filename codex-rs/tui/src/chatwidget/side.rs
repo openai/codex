@@ -7,6 +7,13 @@
 use super::*;
 
 impl ChatWidget {
+    pub(crate) fn set_side_start_pending(&mut self, pending: bool) {
+        let placeholder =
+            pending.then(|| "Preparing side conversation... Press Esc to cancel.".to_string());
+        self.bottom_pane
+            .set_composer_input_enabled(!pending, placeholder);
+    }
+
     pub(crate) fn submit_user_message_as_plain_user_turn(
         &mut self,
         user_message: UserMessage,

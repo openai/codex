@@ -62,8 +62,6 @@ use codex_app_server_protocol::ThreadGoalGetResponse;
 use codex_app_server_protocol::ThreadGoalSetParams;
 use codex_app_server_protocol::ThreadGoalSetResponse;
 use codex_app_server_protocol::ThreadGoalStatus;
-use codex_app_server_protocol::ThreadInjectItemsParams;
-use codex_app_server_protocol::ThreadInjectItemsResponse;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadListResponse;
 use codex_app_server_protocol::ThreadLoadedListParams;
@@ -116,7 +114,6 @@ use codex_protocol::approvals::GuardianAssessmentEvent;
 use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
 use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::models::PermissionProfile;
-use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelAvailabilityNux;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelServiceTier;
@@ -476,7 +473,7 @@ impl AppServerSession {
         self.thread_params_mode
     }
 
-    fn session_config_with_effective_service_tier(&self, config: &Config) -> Config {
+    pub(crate) fn session_config_with_effective_service_tier(&self, config: &Config) -> Config {
         let Some(model) = config.model.as_deref().or(self.default_model.as_deref()) else {
             return config.clone();
         };
@@ -657,29 +654,6 @@ impl AppServerSession {
             }
             Err(err) => Err(err).wrap_err("thread/settings/update failed in TUI"),
         }
-    }
-
-    pub(crate) async fn thread_inject_items(
-        &mut self,
-        thread_id: ThreadId,
-        items: Vec<ResponseItem>,
-    ) -> Result<ThreadInjectItemsResponse> {
-        let items = items
-            .into_iter()
-            .map(serde_json::to_value)
-            .collect::<std::result::Result<Vec<_>, _>>()
-            .wrap_err("failed to encode thread/inject_items payload")?;
-        let request_id = self.next_request_id();
-        self.client
-            .request_typed(ClientRequest::ThreadInjectItems {
-                request_id,
-                params: ThreadInjectItemsParams {
-                    thread_id: thread_id.to_string(),
-                    items,
-                },
-            })
-            .await
-            .wrap_err("thread/inject_items failed during TUI side conversation setup")
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1154,6 +1128,28 @@ pub(crate) async fn start_thread_with_request_handle(
         .await
         .map_err(|err| bootstrap_request_error("thread/start failed during TUI bootstrap", err))?;
     started_thread_from_start_response(response, &config, thread_params_mode).await
+}
+
+pub(crate) async fn fork_thread_with_request_handle(
+    request_handle: AppServerRequestHandle,
+    config: Config,
+    thread_id: ThreadId,
+    thread_params_mode: ThreadParamsMode,
+    remote_cwd_override: Option<PathBuf>,
+) -> Result<AppServerStartedThread> {
+    let response: ThreadForkResponse = request_handle
+        .request_typed(ClientRequest::ThreadFork {
+            request_id: RequestId::String(format!("side-thread-fork-{}", Uuid::new_v4())),
+            params: thread_fork_params_from_config(
+                config.clone(),
+                thread_id,
+                thread_params_mode,
+                remote_cwd_override.as_deref(),
+            ),
+        })
+        .await
+        .map_err(|err| bootstrap_request_error("thread/fork failed during TUI bootstrap", err))?;
+    started_thread_from_fork_response(response, &config, thread_params_mode).await
 }
 
 fn thread_realtime_start_params(

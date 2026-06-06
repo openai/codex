@@ -104,6 +104,7 @@ impl ChatWidget {
         parent_thread_id: ThreadId,
         user_message: Option<UserMessage>,
     ) {
+        self.set_side_start_pending(/*pending*/ true);
         self.set_side_conversation_context_label(Some(SIDE_STARTING_CONTEXT_LABEL.to_string()));
         self.request_redraw();
         self.app_event_tx.send(AppEvent::StartSide {

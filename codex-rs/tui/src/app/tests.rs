@@ -3383,12 +3383,17 @@ async fn side_thread_ignores_global_mcp_startup_notifications() {
 }
 
 #[tokio::test]
-async fn side_restore_user_message_puts_inline_question_back_in_composer() {
+async fn cancelling_pending_side_start_restores_message() {
     let mut app = make_test_app().await;
-    let user_message = crate::chatwidget::UserMessage::from("side question");
+    app.pending_side_start = Some(PendingSideStart {
+        parent_thread_id: ThreadId::new(),
+        user_message: Some(crate::chatwidget::UserMessage::from("side question")),
+    });
+    app.chat_widget.set_side_start_pending(/*pending*/ true);
 
-    app.restore_side_user_message(Some(user_message));
+    app.cancel_pending_side_start();
 
+    assert!(app.pending_side_start.is_none());
     assert_eq!(
         app.chat_widget.composer_text_with_pending(),
         "side question"
@@ -3802,6 +3807,7 @@ async fn make_test_app() -> App {
         thread_event_listener_tasks: HashMap::new(),
         agent_navigation: AgentNavigationState::default(),
         side_threads: HashMap::new(),
+        pending_side_start: None,
         active_thread_id: None,
         active_thread_rx: None,
         primary_thread_id: None,
@@ -3866,6 +3872,7 @@ async fn make_test_app_with_channels() -> (
             thread_event_listener_tasks: HashMap::new(),
             agent_navigation: AgentNavigationState::default(),
             side_threads: HashMap::new(),
+            pending_side_start: None,
             active_thread_id: None,
             active_thread_rx: None,
             primary_thread_id: None,

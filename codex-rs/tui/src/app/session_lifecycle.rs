@@ -290,9 +290,12 @@ impl App {
             return Ok(());
         }
 
-        if !self
-            .refresh_agent_picker_thread_liveness(app_server, thread_id)
-            .await
+        // Side-thread preparation already attached the listener and cached the full snapshot.
+        // Avoid a backend round trip when switching to that freshly prepared local state.
+        if !self.side_threads.contains_key(&thread_id)
+            && !self
+                .refresh_agent_picker_thread_liveness(app_server, thread_id)
+                .await
         {
             self.chat_widget
                 .add_error_message(format!("Agent thread {thread_id} is no longer available."));
@@ -412,6 +415,7 @@ impl App {
         self.thread_event_channels.clear();
         self.agent_navigation.clear();
         self.side_threads.clear();
+        self.pending_side_start = None;
         self.active_thread_id = None;
         self.active_thread_rx = None;
         self.primary_thread_id = None;
@@ -420,6 +424,7 @@ impl App {
         self.pending_primary_events.clear();
         self.pending_app_server_requests.clear();
         self.pending_startup_thread_start = false;
+        self.chat_widget.set_side_start_pending(/*pending*/ false);
         self.chat_widget.set_pending_thread_approvals(Vec::new());
         self.sync_active_agent_label();
     }
