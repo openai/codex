@@ -246,7 +246,7 @@ impl TestGlobalInstructionsContributor {
 
     pub fn static_instructions(contents: impl Into<String>) -> Self {
         Self::new(vec![Ok(GlobalInstructions {
-            instructions: vec![GlobalInstruction::new(contents, None)],
+            instructions: vec![GlobalInstruction::new(contents, /*source*/ None)],
             warnings: Vec::new(),
         })])
     }

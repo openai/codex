@@ -5174,7 +5174,10 @@ impl GlobalInstructionsContributor for CountingGlobalInstructionsContributor {
     fn contribute(&self) -> GlobalInstructionsFuture<'_> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         Box::pin(std::future::ready(Ok(GlobalInstructions {
-            instructions: vec![GlobalInstruction::new("refreshed instructions", None)],
+            instructions: vec![GlobalInstruction::new(
+                "refreshed instructions",
+                /*source*/ None,
+            )],
             warnings: Vec::new(),
         })))
     }
