@@ -2701,6 +2701,7 @@ dependencies = [
  "codex-exec-server",
  "codex-extension-api",
  "codex-features",
+ "codex-home",
  "codex-login",
  "codex-model-provider-info",
  "codex-models-manager",
@@ -3068,6 +3069,17 @@ dependencies = [
  "codex-core",
  "codex-extension-api",
  "codex-protocol",
+]
+
+[[package]]
+name = "codex-home"
+version = "0.0.0"
+dependencies = [
+ "codex-extension-api",
+ "codex-utils-absolute-path",
+ "pretty_assertions",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]

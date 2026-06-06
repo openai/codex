@@ -37,6 +37,7 @@ members = [
     "core-api",
     "core-plugins",
     "core-skills",
+    "home",
     "hooks",
     "secrets",
     "exec",
@@ -169,6 +170,7 @@ codex-execpolicy = { path = "execpolicy" }
 codex-extension-api = { path = "ext/extension-api" }
 codex-goal-extension = { path = "ext/goal" }
 codex-guardian = { path = "ext/guardian" }
+codex-home = { path = "home" }
 codex-image-generation-extension = { path = "ext/image-generation" }
 codex-external-agent-migration = { path = "external-agent-migration" }
 codex-external-agent-sessions = { path = "external-agent-sessions" }
