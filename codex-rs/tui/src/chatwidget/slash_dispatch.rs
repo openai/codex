@@ -213,18 +213,6 @@ impl ChatWidget {
                     .send(AppEvent::OpenDesktopThread { thread_id });
             }
             SlashCommand::Init => {
-                if self
-                    .instruction_source_paths
-                    .iter()
-                    .any(|path| path.parent().as_ref() == Some(&self.config.cwd))
-                {
-                    self.add_info_message(
-                        "Project instructions already exist here. Skipping /init to avoid overwriting them."
-                            .to_string(),
-                        /*hint*/ None,
-                    );
-                    return;
-                }
                 const INIT_PROMPT: &str = include_str!("../../prompt_for_init_command.md");
                 self.submit_user_message(INIT_PROMPT.to_string().into());
             }
