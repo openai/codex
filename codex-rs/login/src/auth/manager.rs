@@ -901,8 +901,8 @@ async fn load_auth(
                     chatgpt_base_url,
                     auth_route_config,
                 )
-                    .await
-                    .map(Some)
+                .await
+                .map(Some)
             }
         };
     }

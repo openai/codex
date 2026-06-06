@@ -367,6 +367,7 @@ fn default_port_for_scheme(scheme: &str) -> Option<u16> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(dead_code)]
 enum SystemProxyDecision {
     Direct,
     Proxy { url: String },
