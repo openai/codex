@@ -1723,6 +1723,7 @@ async fn plugin_list_includes_remote_marketplaces_when_remote_plugin_enabled() -
         .and(query_param("limit", "200"))
         .and(header("authorization", "Bearer chatgpt-token"))
         .and(header("chatgpt-account-id", "account-123"))
+        .and(header("oai-product-sku", "codex"))
         .respond_with(ResponseTemplate::new(200).set_body_string(global_directory_body))
         .mount(&server)
         .await;
@@ -1732,6 +1733,7 @@ async fn plugin_list_includes_remote_marketplaces_when_remote_plugin_enabled() -
         .and(query_param("limit", "200"))
         .and(header("authorization", "Bearer chatgpt-token"))
         .and(header("chatgpt-account-id", "account-123"))
+        .and(header("oai-product-sku", "codex"))
         .respond_with(ResponseTemplate::new(200).set_body_string(empty_page_body))
         .mount(&server)
         .await;
@@ -1740,6 +1742,7 @@ async fn plugin_list_includes_remote_marketplaces_when_remote_plugin_enabled() -
         .and(query_param("scope", "GLOBAL"))
         .and(header("authorization", "Bearer chatgpt-token"))
         .and(header("chatgpt-account-id", "account-123"))
+        .and(header("oai-product-sku", "codex"))
         .respond_with(ResponseTemplate::new(200).set_body_string(global_installed_body))
         .mount(&server)
         .await;
@@ -1748,6 +1751,7 @@ async fn plugin_list_includes_remote_marketplaces_when_remote_plugin_enabled() -
         .and(query_param("scope", "WORKSPACE"))
         .and(header("authorization", "Bearer chatgpt-token"))
         .and(header("chatgpt-account-id", "account-123"))
+        .and(header("oai-product-sku", "codex"))
         .respond_with(ResponseTemplate::new(200).set_body_string(empty_page_body))
         .mount(&server)
         .await;
