@@ -351,8 +351,7 @@ pub(crate) async fn list_tools_for_client_uncached(
     server_instructions: Option<&str>,
     client_capabilities: Option<&McpClientCapabilities>,
 ) -> Result<Vec<ToolInfo>> {
-    let params =
-        client_capabilities::paginated_params(/* cursor */ None, client_capabilities);
+    let params = client_capabilities::paginated_params(/* cursor */ None, client_capabilities);
     let resp = client
         .list_tools_with_connector_ids(params, timeout)
         .await?;
