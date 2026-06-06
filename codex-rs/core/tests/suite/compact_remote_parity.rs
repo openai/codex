@@ -29,6 +29,7 @@ const FIXED_CWD: &str = "/tmp/codex_remote_compaction_parity_workspace";
 const IMAGE_URL: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
 const SUMMARY: &str = "REMOTE_COMPACTION_PARITY_ENCRYPTED_SUMMARY";
 const DUMMY_FUNCTION_NAME: &str = "test_tool";
+const USER_INSTRUCTIONS: &str = "PARITY_USER_INSTRUCTIONS";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Mode {
@@ -239,6 +240,17 @@ fn assert_capture_eq(label: &str, legacy: &Capture, v2: &Capture) {
         &legacy_follow_up,
         &v2_follow_up,
     );
+    assert!(
+        legacy
+            .follow_up_body
+            .to_string()
+            .contains(USER_INSTRUCTIONS),
+        "legacy follow-up should retain the configured user instructions for {label}"
+    );
+    assert!(
+        v2.follow_up_body.to_string().contains(USER_INSTRUCTIONS),
+        "v2 follow-up should retain the configured user instructions for {label}"
+    );
 
     assert_json_eq(
         &format!("replacement history parity mismatch for {label}"),
@@ -283,6 +295,17 @@ fn assert_follow_up_and_history_eq(label: &str, legacy: &Capture, v2: &Capture) 
         &format!("post-compact follow-up request parity mismatch for {label}"),
         &legacy_follow_up,
         &v2_follow_up,
+    );
+    assert!(
+        legacy
+            .follow_up_body
+            .to_string()
+            .contains(USER_INSTRUCTIONS),
+        "legacy follow-up should retain the configured user instructions for {label}"
+    );
+    assert!(
+        v2.follow_up_body.to_string().contains(USER_INSTRUCTIONS),
+        "v2 follow-up should retain the configured user instructions for {label}"
     );
 
     assert_json_eq(
@@ -518,9 +541,7 @@ async fn build_harness_inner(
             FIXED_CWD,
         ))
         .expect("fixed cwd should be absolute");
-        config.user_instructions = Some(LoadedAgentsMd::from_text_for_testing(
-            "PARITY_USER_INSTRUCTIONS",
-        ));
+        config.user_instructions = Some(LoadedAgentsMd::from_text_for_testing(USER_INSTRUCTIONS));
         config.developer_instructions = Some("PARITY_DEVELOPER_INSTRUCTIONS".to_string());
         if settings.service_tier_fast {
             config.service_tier = Some(ServiceTier::Fast.request_value().to_string());

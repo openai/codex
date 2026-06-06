@@ -1,5 +1,4 @@
 use anyhow::Result;
-use codex_core::LoadedAgentsMd;
 use codex_core::build_prompt_input;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
@@ -13,7 +12,11 @@ use tempfile::TempDir;
 async fn build_prompt_input_includes_context_and_user_message() -> Result<()> {
     let codex_home = TempDir::new()?;
     let cwd = TempDir::new()?;
-    let mut config = ConfigBuilder::default()
+    std::fs::write(
+        codex_home.path().join("AGENTS.md"),
+        "Project-specific test instructions",
+    )?;
+    let config = ConfigBuilder::default()
         .codex_home(codex_home.path().to_path_buf())
         .harness_overrides(ConfigOverrides {
             cwd: Some(cwd.path().to_path_buf()),
@@ -22,10 +25,6 @@ async fn build_prompt_input_includes_context_and_user_message() -> Result<()> {
         })
         .build()
         .await?;
-    config.user_instructions = Some(LoadedAgentsMd::from_text_for_testing(
-        "Project-specific test instructions",
-    ));
-
     let input = build_prompt_input(
         config,
         vec![UserInput::Text {
