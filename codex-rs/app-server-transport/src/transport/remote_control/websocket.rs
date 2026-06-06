@@ -1725,7 +1725,7 @@ mod tests {
 
         for (body, expected) in cases {
             let response = tungstenite::http::Response::builder()
-                .status(404)
+                .status(/*status*/ 404)
                 .body(body)
                 .expect("response should build");
             assert_eq!(
@@ -1735,7 +1735,7 @@ mod tests {
         }
 
         let response = tungstenite::http::Response::builder()
-            .status(503)
+            .status(/*status*/ 503)
             .body(Some(
                 br#"{"detail":"Remote app server not found"}"#.to_vec(),
             ))

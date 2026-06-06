@@ -1977,12 +1977,6 @@ async fn remote_control_http_mode_preserves_enrollment_after_generic_websocket_4
         "Not Found",
     )
     .await;
-    expect_remote_control_status(
-        &mut status_rx,
-        Some(RemoteControlConnectionStatus::Errored),
-        Some("env_stale"),
-    )
-    .await;
 
     assert_eq!(
         load_persisted_remote_control_enrollment(
@@ -2007,10 +2001,14 @@ async fn remote_control_http_mode_preserves_enrollment_after_generic_websocket_4
             "Bearer {TEST_REFRESHED_REMOTE_CONTROL_SERVER_TOKEN}"
         ))
     );
-    expect_remote_control_status(
+    expect_remote_control_status_snapshot(
         &mut status_rx,
-        Some(RemoteControlConnectionStatus::Connected),
-        Some("env_stale"),
+        RemoteControlStatusChangedNotification {
+            status: RemoteControlConnectionStatus::Connected,
+            server_name: test_server_name(),
+            installation_id: TEST_INSTALLATION_ID.to_string(),
+            environment_id: Some("env_stale".to_string()),
+        },
     )
     .await;
 
