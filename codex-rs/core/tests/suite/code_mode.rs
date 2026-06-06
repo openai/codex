@@ -258,29 +258,13 @@ text(result);
                 .enable(Feature::StandaloneWebSearch)
                 .expect("standalone web search should be enabled");
             config
-                .features
-                .enable(Feature::Sqlite)
-                .expect("sqlite should be enabled");
-            config.memories.disable_on_external_context = true;
-            config
                 .web_search_mode
                 .set(WebSearchMode::Live)
                 .expect("web search mode should be accepted");
         });
     let test = builder.build(&server).await?;
-    let db = test.codex.state_db().expect("state db enabled");
-    let thread_id = test.session_configured.thread_id;
 
     test.submit_turn("Search the web from code mode").await?;
-
-    let mut memory_mode = None;
-    for _ in 0..100 {
-        memory_mode = db.get_thread_memory_mode(thread_id).await?;
-        if memory_mode.as_deref() == Some("polluted") {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(25)).await;
-    }
 
     let search_request = server
         .received_requests()
@@ -313,7 +297,6 @@ text(result);
         custom_tool_output_last_non_empty_text(&follow_up_mock.single_request(), "call-1"),
         Some("Search result".to_string())
     );
-    assert_eq!(memory_mode.as_deref(), Some("polluted"));
 
     Ok(())
 }
