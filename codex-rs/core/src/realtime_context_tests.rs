@@ -21,6 +21,7 @@ use codex_protocol::protocol::SessionSource;
 use codex_thread_store::StoredThread;
 use core_test_support::PathBufExt;
 use core_test_support::PathExt;
+use core_test_support::tempdir_with_git_boundary;
 use pretty_assertions::assert_eq;
 use std::fs;
 use std::path::PathBuf;
@@ -236,9 +237,11 @@ fn fixed_section_budgets_apply_per_section_without_total_blob_truncation() {
 
 #[tokio::test]
 async fn workspace_section_requires_meaningful_structure() {
-    let cwd = TempDir::new().expect("tempdir");
+    let root = tempdir_with_git_boundary().expect("tempdir");
+    let cwd = root.path().join("cwd");
+    fs::create_dir(&cwd).expect("create cwd");
     assert_eq!(
-        build_workspace_section_with_user_root(&cwd.path().abs(), /*user_root*/ None).await,
+        build_workspace_section_with_user_root(&cwd.abs(), /*user_root*/ None).await,
         None
     );
 }
@@ -282,12 +285,14 @@ async fn workspace_section_includes_user_root_tree_when_distinct() {
 
 #[tokio::test]
 async fn recent_work_section_groups_threads_by_cwd() {
-    let root = TempDir::new().expect("tempdir");
-    let repo = root.path().join("repo");
+    let tmp = tempdir_with_git_boundary().expect("tempdir");
+    let root = tmp.path().join("fixture");
+    let repo = root.join("repo");
     let workspace_a = repo.join("workspace-a");
     let workspace_b = repo.join("workspace-b");
-    let outside = root.path().join("outside");
+    let outside = root.join("outside");
 
+    fs::create_dir(&root).expect("create fixture root");
     fs::create_dir(&repo).expect("create repo dir");
     Command::new("git")
         .env("GIT_CONFIG_GLOBAL", "/dev/null")

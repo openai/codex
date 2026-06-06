@@ -135,6 +135,18 @@ impl TempDirExt for TempDir {
     }
 }
 
+/// Creates a temporary parent that stops `.git` ancestor searches from escaping
+/// into shared temporary-directory state.
+///
+/// Tests should place their fixture in a child of the returned directory. The
+/// invalid `.git` file acts as an ancestor-search boundary without resolving as
+/// a Git repository.
+pub fn tempdir_with_git_boundary() -> std::io::Result<TempDir> {
+    let temp_dir = TempDir::new()?;
+    std::fs::write(temp_dir.path().join(".git"), "test fixture boundary\n")?;
+    Ok(temp_dir)
+}
+
 pub fn test_tmp_path() -> AbsolutePathBuf {
     test_absolute_path_with_windows("/tmp", Some(r"C:\Users\codex\AppData\Local\Temp"))
 }

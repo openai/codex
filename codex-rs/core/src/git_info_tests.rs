@@ -9,8 +9,8 @@ use codex_git_utils::recent_commits;
 use codex_git_utils::resolve_root_git_project_for_trust;
 use codex_utils_path::normalize_for_path_comparison;
 use core_test_support::PathBufExt;
-use core_test_support::PathExt;
 use core_test_support::skip_if_sandbox;
+use core_test_support::tempdir_with_git_boundary;
 use std::fs;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
@@ -479,9 +479,11 @@ async fn test_get_git_working_tree_state_branch_fallback() {
 
 #[tokio::test]
 async fn resolve_root_git_project_for_trust_returns_none_outside_repo() {
-    let tmp = TempDir::new().expect("tempdir");
+    let tmp = tempdir_with_git_boundary().expect("tempdir");
+    let outside = tmp.path().join("outside");
+    fs::create_dir(&outside).expect("create outside dir");
     assert!(
-        resolve_root_git_project_for_trust(LOCAL_FS.as_ref(), &tmp.path().abs())
+        resolve_root_git_project_for_trust(LOCAL_FS.as_ref(), &outside.abs())
             .await
             .is_none()
     );

@@ -36,6 +36,7 @@ use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use core_test_support::tempdir_with_git_boundary;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -2671,8 +2672,8 @@ async fn project_layer_is_added_when_dot_codex_exists_without_config_toml() -> s
 
 #[tokio::test]
 async fn codex_home_is_not_loaded_as_project_layer_from_home_dir() -> std::io::Result<()> {
-    let tmp = tempdir()?;
-    let home_dir = tmp.path().join("home");
+    let tmp = tempdir_with_git_boundary()?;
+    let home_dir = tmp.path().join("fixture/home");
     let codex_home = home_dir.join(".codex");
     tokio::fs::create_dir_all(&codex_home).await?;
     tokio::fs::write(
@@ -2789,10 +2790,12 @@ async fn codex_home_within_project_tree_is_not_double_loaded() -> std::io::Resul
 
 #[tokio::test]
 async fn project_layers_disabled_when_untrusted_or_unknown() -> std::io::Result<()> {
-    let tmp = tempdir()?;
-    let project_root = tmp.path().join("project");
+    let tmp = tempdir_with_git_boundary()?;
+    let fixture_root = tmp.path().join("fixture");
+    let project_root = fixture_root.join("project");
     let nested = project_root.join("child");
     tokio::fs::create_dir_all(nested.join(".codex")).await?;
+    tokio::fs::create_dir(project_root.join(".git")).await?;
     tokio::fs::write(
         nested.join(".codex").join(CONFIG_TOML_FILE),
         r#"foo = "child"
@@ -2803,7 +2806,7 @@ profile = "ignored"
 
     let cwd = AbsolutePathBuf::from_absolute_path(&nested)?;
 
-    let codex_home_untrusted = tmp.path().join("home_untrusted");
+    let codex_home_untrusted = fixture_root.join("home_untrusted");
     tokio::fs::create_dir_all(&codex_home_untrusted).await?;
     make_config_for_test(
         &codex_home_untrusted,
@@ -2860,7 +2863,7 @@ profile = "ignored"
     let empty_warnings: &[String] = &[];
     assert_eq!(layers_untrusted.startup_warnings(), Some(empty_warnings));
 
-    let codex_home_unknown = tmp.path().join("home_unknown");
+    let codex_home_unknown = fixture_root.join("home_unknown");
     tokio::fs::create_dir_all(&codex_home_unknown).await?;
     tokio::fs::write(
         codex_home_unknown.join(CONFIG_TOML_FILE),
