@@ -37,6 +37,7 @@ use codex_rollout::append_rollout_item_to_path;
 use codex_rollout::append_thread_name;
 use codex_rollout::read_session_meta_line;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use core_test_support::responses;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
@@ -252,7 +253,21 @@ async fn thread_fork_creates_new_thread_and_emits_started() -> Result<()> {
 
 #[tokio::test]
 async fn thread_fork_reloads_instruction_sources() -> Result<()> {
-    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let server = responses::start_mock_server().await;
+    let response_mock = responses::mount_sse_sequence(
+        &server,
+        vec![
+            responses::sse(vec![
+                responses::ev_response_created("parent-response"),
+                responses::ev_completed("parent-response"),
+            ]),
+            responses::sse(vec![
+                responses::ev_response_created("fork-response"),
+                responses::ev_completed("fork-response"),
+            ]),
+        ],
+    )
+    .await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
     let global_agents = codex_home.path().join("AGENTS.md");
@@ -322,6 +337,7 @@ async fn thread_fork_reloads_instruction_sources() -> Result<()> {
     )
     .await??;
     let ThreadForkResponse {
+        thread: forked_thread,
         instruction_sources,
         ..
     } = to_response::<ThreadForkResponse>(fork_resp)?;
@@ -331,6 +347,46 @@ async fn thread_fork_reloads_instruction_sources() -> Result<()> {
         Vec::<AbsolutePathBuf>::new(),
         "fork reloads sources after the files have been removed"
     );
+
+    let fork_turn_id = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: forked_thread.id,
+            input: vec![UserInput::Text {
+                text: "inspect inherited instructions".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(fork_turn_id)),
+    )
+    .await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let expected_instruction = format!(
+        "# AGENTS.md instructions for {}\n\n<INSTRUCTIONS>\nglobal instructions\n\n--- project-doc ---\n\nproject instructions\n</INSTRUCTIONS>",
+        workspace.path().display()
+    );
+    let requests = response_mock.requests();
+    assert_eq!(requests.len(), 2);
+    for request in requests {
+        let instruction_fragments = request
+            .message_input_texts("user")
+            .into_iter()
+            .filter(|text| text.starts_with("# AGENTS.md instructions for "))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            instruction_fragments,
+            vec![expected_instruction.clone()],
+            "parent and fork requests should contain the same historical instruction fragment"
+        );
+    }
 
     Ok(())
 }
