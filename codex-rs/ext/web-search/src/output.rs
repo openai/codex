@@ -3,20 +3,21 @@ use codex_extension_api::ToolPayload;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
+use serde_json::Value;
 
-pub(crate) struct EncryptedSearchOutput {
-    encrypted_output: String,
+pub(crate) struct SearchOutput {
+    output: String,
 }
 
-impl EncryptedSearchOutput {
-    pub(crate) fn new(encrypted_output: String) -> Self {
-        Self { encrypted_output }
+impl SearchOutput {
+    pub(crate) fn new(output: String) -> Self {
+        Self { output }
     }
 }
 
-impl ToolOutput for EncryptedSearchOutput {
+impl ToolOutput for SearchOutput {
     fn log_preview(&self) -> String {
-        "[encrypted standalone web search output]".to_string()
+        "[standalone web search output]".to_string()
     }
 
     fn success_for_logging(&self) -> bool {
@@ -29,11 +30,15 @@ impl ToolOutput for EncryptedSearchOutput {
         ResponseInputItem::FunctionCallOutput {
             call_id: call_id.to_string(),
             output: FunctionCallOutputPayload::from_content_items(vec![
-                FunctionCallOutputContentItem::EncryptedContent {
-                    encrypted_content: self.encrypted_output.clone(),
+                FunctionCallOutputContentItem::InputText {
+                    text: self.output.clone(),
                 },
             ]),
         }
+    }
+
+    fn code_mode_result(&self, _payload: &ToolPayload) -> Value {
+        Value::String(self.output.clone())
     }
 }
 
@@ -45,12 +50,12 @@ mod tests {
     use codex_protocol::models::ResponseInputItem;
     use pretty_assertions::assert_eq;
 
-    use super::EncryptedSearchOutput;
+    use super::SearchOutput;
     use super::ToolOutput;
 
     #[test]
-    fn emits_encrypted_function_call_output() {
-        let output = EncryptedSearchOutput::new("encrypted-search-output".to_string());
+    fn emits_plaintext_function_call_output() {
+        let output = SearchOutput::new("search output".to_string());
 
         assert_eq!(
             output.to_response_item(
@@ -62,8 +67,8 @@ mod tests {
             ResponseInputItem::FunctionCallOutput {
                 call_id: "call-1".to_string(),
                 output: FunctionCallOutputPayload::from_content_items(vec![
-                    FunctionCallOutputContentItem::EncryptedContent {
-                        encrypted_content: "encrypted-search-output".to_string(),
+                    FunctionCallOutputContentItem::InputText {
+                        text: "search output".to_string(),
                     },
                 ]),
             }
