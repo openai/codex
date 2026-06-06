@@ -16,6 +16,7 @@ use codex_core_api::AskForApproval;
 use codex_core_api::AuthCredentialsStoreMode;
 use codex_core_api::AuthManager;
 use codex_core_api::AutoCompactTokenLimitScope;
+use codex_core_api::CodexHomeInstructionsContributor;
 use codex_core_api::CodexThread;
 use codex_core_api::Config;
 use codex_core_api::ConfigLayerStack;
@@ -23,6 +24,7 @@ use codex_core_api::Constrained;
 use codex_core_api::EnvironmentManager;
 use codex_core_api::EventMsg;
 use codex_core_api::ExecServerRuntimePaths;
+use codex_core_api::ExtensionRegistryBuilder;
 use codex_core_api::Features;
 use codex_core_api::GhostSnapshotConfig;
 use codex_core_api::History;
@@ -54,7 +56,6 @@ use codex_core_api::UserInput;
 use codex_core_api::WebSearchMode;
 use codex_core_api::arg0_dispatch_or_else;
 use codex_core_api::built_in_model_providers;
-use codex_core_api::empty_extension_registry;
 use codex_core_api::find_codex_home;
 use codex_core_api::init_state_db;
 use codex_core_api::item_event_to_server_notification;
@@ -120,12 +121,16 @@ async fn run_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             .await?,
     );
     let installation_id = resolve_installation_id(&config.codex_home).await?;
+    let mut extension_builder = ExtensionRegistryBuilder::<Config>::new();
+    extension_builder.global_instructions_contributor(Arc::new(
+        CodexHomeInstructionsContributor::new(config.codex_home.clone()),
+    ));
     let thread_manager = ThreadManager::new(
         &config,
         auth_manager,
         SessionSource::Exec,
         environment_manager,
-        empty_extension_registry(),
+        Arc::new(extension_builder.build()),
         /*analytics_events_client*/ None,
         Arc::clone(&thread_store),
         state_db,
@@ -184,7 +189,6 @@ fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::R
         enforce_residency: Constrained::allow_any(/*initial_value*/ None),
         hide_agent_reasoning: false,
         show_raw_agent_reasoning: false,
-        user_instructions: None,
         base_instructions: None,
         developer_instructions: None,
         guardian_policy_config: None,

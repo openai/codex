@@ -14,12 +14,14 @@ use codex_extension_api::ExtensionEventSink;
 use codex_extension_api::ExtensionRegistry;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_goal_extension::GoalService;
+use codex_home::CodexHomeInstructionsContributor;
 use codex_login::AuthManager;
 use codex_protocol::ThreadId;
 use codex_protocol::error::CodexErr;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_rollout::state_db::StateDbHandle;
+use codex_utils_absolute_path::AbsolutePathBuf;
 
 use crate::outgoing_message::OutgoingMessageSender;
 use crate::thread_state::ThreadListenerCommand;
@@ -32,11 +34,15 @@ pub(crate) fn thread_extensions<S>(
     state_db: Option<StateDbHandle>,
     thread_manager: Weak<ThreadManager>,
     goal_service: Arc<GoalService>,
+    codex_home: AbsolutePathBuf,
 ) -> Arc<ExtensionRegistry<Config>>
 where
     S: AgentSpawner<StartThreadOptions, Spawned = NewThread, Error = CodexErr> + 'static,
 {
     let mut builder = ExtensionRegistryBuilder::<Config>::with_event_sink(event_sink);
+    builder.global_instructions_contributor(Arc::new(CodexHomeInstructionsContributor::new(
+        codex_home,
+    )));
     if let Some(state_db) = state_db {
         codex_goal_extension::install_with_backend(
             &mut builder,

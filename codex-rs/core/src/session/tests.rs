@@ -23,6 +23,11 @@ use codex_config::Sourced;
 use codex_config::loader::project_trust_key;
 use codex_config::types::ToolSuggestDisabledTool;
 
+use codex_extension_api::ExtensionRegistry;
+use codex_extension_api::GlobalInstruction;
+use codex_extension_api::GlobalInstructions;
+use codex_extension_api::GlobalInstructionsContributor;
+use codex_extension_api::GlobalInstructionsFuture;
 use codex_features::Feature;
 use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderInfo;
@@ -170,6 +175,8 @@ use serde_json::json;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::OnceLock;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 use std::time::Duration as StdDuration;
 
 mod guardian_tests;
@@ -5042,6 +5049,7 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
     initial_history: InitialHistory,
     session_source: SessionSource,
     agent_control: AgentControl,
+    extensions: Arc<ExtensionRegistry<Config>>,
 ) -> anyhow::Result<(Arc<Session>, async_channel::Receiver<Event>)> {
     let skip_global_instructions_refresh_on_first_turn = matches!(
         initial_history,
@@ -5134,7 +5142,7 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
         skills_manager,
         plugins_manager,
         mcp_manager,
-        Arc::new(codex_extension_api::ExtensionRegistryBuilder::new().build()),
+        extensions,
         agent_control,
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         /*analytics_events_client*/ None,
@@ -5158,6 +5166,20 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
     Ok((session, rx_event))
 }
 
+struct CountingGlobalInstructionsContributor {
+    calls: AtomicUsize,
+}
+
+impl GlobalInstructionsContributor for CountingGlobalInstructionsContributor {
+    fn contribute(&self) -> GlobalInstructionsFuture<'_> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        Box::pin(std::future::ready(Ok(GlobalInstructions {
+            instructions: vec![GlobalInstruction::new("refreshed instructions", None)],
+            warnings: Vec::new(),
+        })))
+    }
+}
+
 #[tokio::test]
 async fn history_sharing_first_full_injection_uses_inherited_instruction_snapshot() {
     let inherited_snapshot = UserInstructionsSnapshot {
@@ -5167,6 +5189,12 @@ async fn history_sharing_first_full_injection_uses_inherited_instruction_snapsho
             source: None,
         }],
     };
+    let contributor = Arc::new(CountingGlobalInstructionsContributor {
+        calls: AtomicUsize::new(0),
+    });
+    let mut extension_builder = codex_extension_api::ExtensionRegistryBuilder::<Config>::new();
+    extension_builder.global_instructions_contributor(contributor.clone());
+    let extensions = Arc::new(extension_builder.build());
     let (session, _rx_event) = make_session_with_history_source_and_agent_control_and_rx(
         InitialHistory::Forked(vec![RolloutItem::TurnContext(TurnContextItem {
             turn_id: None,
@@ -5191,10 +5219,12 @@ async fn history_sharing_first_full_injection_uses_inherited_instruction_snapsho
         })]),
         SessionSource::Exec,
         AgentControl::default(),
+        extensions,
     )
     .await
     .expect("forked session should start");
 
+    assert_eq!(contributor.calls.load(Ordering::SeqCst), 0);
     assert!(session.reference_context_item().await.is_none());
 
     let first_turn = session.new_default_turn().await;
@@ -5211,6 +5241,80 @@ async fn history_sharing_first_full_injection_uses_inherited_instruction_snapsho
             .map(LoadedAgentsMd::snapshot)
     };
     assert_eq!(first_turn_snapshot, Some(inherited_snapshot));
+    assert_eq!(contributor.calls.load(Ordering::SeqCst), 0);
+
+    {
+        let mut state = session.state.lock().await;
+        state.set_reference_context_item(/*item*/ None);
+    }
+    let later_turn = session.new_default_turn().await;
+    session
+        .record_context_updates_and_set_reference_context_item(later_turn.as_ref())
+        .await;
+
+    let refreshed_snapshot = {
+        let state = session.state.lock().await;
+        state
+            .session_configuration
+            .user_instructions
+            .as_ref()
+            .map(LoadedAgentsMd::snapshot)
+    };
+    assert_eq!(
+        refreshed_snapshot,
+        Some(UserInstructionsSnapshot {
+            instructions: vec![InstructionSnapshot {
+                contents: "refreshed instructions".to_string(),
+                provenance: InstructionProvenance::Global,
+                source: None,
+            }],
+        })
+    );
+    assert_eq!(contributor.calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn legacy_history_refreshes_when_first_turn_requires_full_context() {
+    let contributor = Arc::new(CountingGlobalInstructionsContributor {
+        calls: AtomicUsize::new(0),
+    });
+    let mut extension_builder = codex_extension_api::ExtensionRegistryBuilder::<Config>::new();
+    extension_builder.global_instructions_contributor(contributor.clone());
+    let (session, _rx_event) = make_session_with_history_source_and_agent_control_and_rx(
+        InitialHistory::Forked(Vec::new()),
+        SessionSource::Exec,
+        AgentControl::default(),
+        Arc::new(extension_builder.build()),
+    )
+    .await
+    .expect("legacy forked session should start");
+
+    assert_eq!(contributor.calls.load(Ordering::SeqCst), 0);
+
+    let turn_context = session.new_default_turn().await;
+    session
+        .record_context_updates_and_set_reference_context_item(turn_context.as_ref())
+        .await;
+
+    let snapshot = {
+        let state = session.state.lock().await;
+        state
+            .session_configuration
+            .user_instructions
+            .as_ref()
+            .map(LoadedAgentsMd::snapshot)
+    };
+    assert_eq!(
+        snapshot,
+        Some(UserInstructionsSnapshot {
+            instructions: vec![InstructionSnapshot {
+                contents: "refreshed instructions".to_string(),
+                provenance: InstructionProvenance::Global,
+                source: None,
+            }],
+        })
+    );
+    assert_eq!(contributor.calls.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test]
@@ -5224,6 +5328,7 @@ async fn resumed_root_session_uses_thread_id_as_session_id() {
         }),
         SessionSource::Exec,
         AgentControl::default(),
+        Arc::new(codex_extension_api::ExtensionRegistryBuilder::new().build()),
     )
     .await
     .expect("resume should succeed");
@@ -5259,6 +5364,7 @@ async fn resumed_subagent_session_keeps_inherited_session_id() {
         }),
         session_source,
         AgentControl::default().with_session_id(parent_session_id, /*max_threads*/ usize::MAX),
+        Arc::new(codex_extension_api::ExtensionRegistryBuilder::new().build()),
     )
     .await
     .expect("resume should succeed");

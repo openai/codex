@@ -511,20 +511,27 @@ impl Codex {
             InitialHistory::New | InitialHistory::Cleared
         );
         let user_instructions = if fresh_history {
-            if let Some(primary_environment) = environment_selections.primary_environment() {
-                let mut user_instruction_warnings = Vec::new();
-                let loaded = AgentsMdManager::new(&config)
-                    .user_instructions(
-                        Some(primary_environment.as_ref()),
-                        config.user_instructions.clone().unwrap_or_default(),
-                        &mut user_instruction_warnings,
-                    )
-                    .await;
-                config.startup_warnings.extend(user_instruction_warnings);
-                Some(loaded.unwrap_or_default())
-            } else {
-                None
-            }
+            let global_instructions =
+                if let Some(contributor) = extensions.global_instructions_contributor() {
+                    contributor.contribute().await.map_err(|err| {
+                        CodexErr::Fatal(format!("failed to resolve global instructions: {err}"))
+                    })?
+                } else {
+                    codex_extension_api::GlobalInstructions::default()
+                };
+            config
+                .startup_warnings
+                .extend(global_instructions.warnings.clone());
+            let mut user_instruction_warnings = Vec::new();
+            let loaded = AgentsMdManager::new(&config)
+                .user_instructions(
+                    environment_selections.primary_environment().as_deref(),
+                    LoadedAgentsMd::from_global(global_instructions),
+                    &mut user_instruction_warnings,
+                )
+                .await;
+            config.startup_warnings.extend(user_instruction_warnings);
+            Some(loaded.unwrap_or_default())
         } else {
             None
         };
@@ -3090,47 +3097,70 @@ impl Session {
     }
 
     pub(crate) async fn refresh_global_instructions(&self, turn_context: &TurnContext) {
-        let configured_global = turn_context
-            .config
-            .user_instructions
-            .clone()
-            .unwrap_or_default();
-        let needs_full_resolution = {
-            let state = self.state.lock().await;
-            state.session_configuration.user_instructions.is_none()
+        let contributor = self
+            .services
+            .extensions
+            .global_instructions_contributor()
+            .cloned();
+        let resolved = match contributor {
+            Some(contributor) => contributor.contribute().await,
+            None => Ok(codex_extension_api::GlobalInstructions::default()),
         };
-        if needs_full_resolution {
-            let Some(primary_environment) = turn_context.environments.primary_environment() else {
+        match resolved {
+            Ok(global_instructions) => {
+                for warning in &global_instructions.warnings {
+                    self.send_event(
+                        turn_context,
+                        EventMsg::Warning(WarningEvent {
+                            message: warning.clone(),
+                        }),
+                    )
+                    .await;
+                }
+                let needs_full_resolution = {
+                    let state = self.state.lock().await;
+                    state.session_configuration.user_instructions.is_none()
+                };
+                if needs_full_resolution {
+                    let mut warnings = Vec::new();
+                    let loaded = AgentsMdManager::new(turn_context.config.as_ref())
+                        .user_instructions(
+                            turn_context.environments.primary_environment().as_deref(),
+                            LoadedAgentsMd::from_global(global_instructions),
+                            &mut warnings,
+                        )
+                        .await
+                        .unwrap_or_default();
+                    for warning in warnings {
+                        self.send_event(
+                            turn_context,
+                            EventMsg::Warning(WarningEvent { message: warning }),
+                        )
+                        .await;
+                    }
+                    let mut state = self.state.lock().await;
+                    state.session_configuration.user_instructions = Some(loaded);
+                    return;
+                }
                 let mut state = self.state.lock().await;
-                state.session_configuration.user_instructions = Some(LoadedAgentsMd::default());
-                return;
-            };
-            let mut warnings = Vec::new();
-            let loaded = AgentsMdManager::new(turn_context.config.as_ref())
-                .user_instructions(
-                    Some(primary_environment.as_ref()),
-                    configured_global,
-                    &mut warnings,
-                )
-                .await
-                .unwrap_or_default();
-            for warning in warnings {
+                let instructions = state
+                    .session_configuration
+                    .user_instructions
+                    .get_or_insert_with(LoadedAgentsMd::default);
+                instructions.replace_global(global_instructions);
+            }
+            Err(err) => {
                 self.send_event(
                     turn_context,
-                    EventMsg::Warning(WarningEvent { message: warning }),
+                    EventMsg::Warning(WarningEvent {
+                        message: format!(
+                            "Failed to refresh global instructions; continuing with the previous snapshot: {err}"
+                        ),
+                    }),
                 )
                 .await;
             }
-            let mut state = self.state.lock().await;
-            state.session_configuration.user_instructions = Some(loaded);
-            return;
         }
-        let mut state = self.state.lock().await;
-        let instructions = state
-            .session_configuration
-            .user_instructions
-            .get_or_insert_with(LoadedAgentsMd::default);
-        instructions.replace_global(configured_global);
     }
 
     pub(crate) async fn update_token_usage_info(

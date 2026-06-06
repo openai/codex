@@ -4,9 +4,14 @@ use std::fs;
 use std::io::ErrorKind;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use anyhow::Result;
-use codex_core::LoadedAgentsMd;
+use codex_core::config::Config;
+use codex_extension_api::ExtensionRegistry;
+use codex_extension_api::ExtensionRegistryBuilder;
+use codex_extension_api::GlobalInstruction;
+use codex_extension_api::GlobalInstructions;
 use codex_features::Feature;
 use codex_login::CodexAuth;
 use codex_protocol::config_types::ServiceTier;
@@ -21,6 +26,7 @@ use core_test_support::responses::ResponseMock;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodexBuilder;
 use core_test_support::test_codex::TestCodexHarness;
+use core_test_support::test_codex::TestGlobalInstructionsContributor;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
@@ -34,7 +40,8 @@ const FIXED_CWD: &str = "/tmp/codex_remote_compaction_parity_workspace";
 const IMAGE_URL: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
 const SUMMARY: &str = "REMOTE_COMPACTION_PARITY_ENCRYPTED_SUMMARY";
 const DUMMY_FUNCTION_NAME: &str = "test_tool";
-const USER_INSTRUCTIONS: &str = "PARITY_USER_INSTRUCTIONS";
+const INITIAL_USER_INSTRUCTIONS: &str = "PARITY_USER_INSTRUCTIONS";
+const REFRESHED_USER_INSTRUCTIONS: &str = "PARITY_REFRESHED_USER_INSTRUCTIONS";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Mode {
@@ -327,11 +334,11 @@ fn assert_capture_eq(
         &legacy_follow_up,
         &v2_follow_up,
     );
-    assert_single_user_instruction_message(
+    assert_single_refreshed_user_instruction_message(
         &legacy.follow_up_body,
         &format!("legacy follow-up for {label}"),
     );
-    assert_single_user_instruction_message(
+    assert_single_refreshed_user_instruction_message(
         &v2.follow_up_body,
         &format!("v2 follow-up for {label}"),
     );
@@ -403,11 +410,11 @@ fn assert_follow_up_and_history_eq(
         &legacy_follow_up,
         &v2_follow_up,
     );
-    assert_single_user_instruction_message(
+    assert_single_refreshed_user_instruction_message(
         &legacy.follow_up_body,
         &format!("legacy follow-up for {label}"),
     );
-    assert_single_user_instruction_message(
+    assert_single_refreshed_user_instruction_message(
         &v2.follow_up_body,
         &format!("v2 follow-up for {label}"),
     );
@@ -734,6 +741,7 @@ async fn build_harness_inner(
     prepare_fixed_cwd()?;
     TestCodexHarness::with_builder(
         parity_builder(mode, settings, hooks)
+            .with_extensions(global_instruction_extensions())
             .with_config(move |config| config.model_auto_compact_token_limit = auto_compact_limit),
     )
     .await
@@ -749,7 +757,6 @@ fn parity_builder(mode: Mode, settings: RunSettings, hooks: bool) -> TestCodexBu
             FIXED_CWD,
         ))
         .expect("fixed cwd should be absolute");
-        config.user_instructions = Some(LoadedAgentsMd::from_text_for_testing(USER_INSTRUCTIONS));
         config.developer_instructions = Some("PARITY_DEVELOPER_INSTRUCTIONS".to_string());
         if settings.service_tier_fast {
             config.service_tier = Some(ServiceTier::Fast.request_value().to_string());
@@ -773,6 +780,28 @@ fn prepare_fixed_cwd() -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn global_instruction_extensions() -> Arc<ExtensionRegistry<Config>> {
+    let contributor = TestGlobalInstructionsContributor::new(vec![
+        Ok(GlobalInstructions {
+            instructions: vec![GlobalInstruction::new(
+                INITIAL_USER_INSTRUCTIONS,
+                /*source*/ None,
+            )],
+            warnings: Vec::new(),
+        }),
+        Ok(GlobalInstructions {
+            instructions: vec![GlobalInstruction::new(
+                REFRESHED_USER_INSTRUCTIONS,
+                /*source*/ None,
+            )],
+            warnings: Vec::new(),
+        }),
+    ]);
+    let mut builder = ExtensionRegistryBuilder::new();
+    builder.global_instructions_contributor(Arc::new(contributor));
+    Arc::new(builder.build())
 }
 
 fn rollout_path(harness: &TestCodexHarness) -> PathBuf {
@@ -1017,21 +1046,48 @@ fn follow_up_request_view(body: &Value) -> Value {
 }
 
 fn assert_single_user_instruction_message(body: &Value, label: &str) {
+    assert_single_user_instruction_message_with_contents(body, label, INITIAL_USER_INSTRUCTIONS);
+}
+
+fn assert_single_refreshed_user_instruction_message(body: &Value, label: &str) {
+    assert_single_user_instruction_message_with_contents(body, label, REFRESHED_USER_INSTRUCTIONS);
+}
+
+fn assert_single_user_instruction_message_with_contents(
+    body: &Value,
+    label: &str,
+    expected_instructions: &str,
+) {
     let input = body
         .get("input")
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
-    assert_user_instruction_messages_in_items(
+    assert_user_instruction_messages_in_items_with_contents(
         &Value::Array(input),
         label,
         /*expected_count*/ 1,
+        expected_instructions,
     );
 }
 
 fn assert_user_instruction_messages_in_items(items: &Value, label: &str, expected_count: usize) {
+    assert_user_instruction_messages_in_items_with_contents(
+        items,
+        label,
+        expected_count,
+        INITIAL_USER_INSTRUCTIONS,
+    );
+}
+
+fn assert_user_instruction_messages_in_items_with_contents(
+    items: &Value,
+    label: &str,
+    expected_count: usize,
+    expected_instructions: &str,
+) {
     let expected_text = format!(
-        "# AGENTS.md instructions for {FIXED_CWD}\n\n<INSTRUCTIONS>\n{USER_INSTRUCTIONS}\n</INSTRUCTIONS>"
+        "# AGENTS.md instructions for {FIXED_CWD}\n\n<INSTRUCTIONS>\n{expected_instructions}\n</INSTRUCTIONS>"
     );
     let instruction_messages = items
         .as_array()

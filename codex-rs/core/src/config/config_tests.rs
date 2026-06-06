@@ -1,5 +1,3 @@
-use crate::agents_md::DEFAULT_AGENTS_MD_FILENAME;
-use crate::agents_md::LOCAL_AGENTS_MD_FILENAME;
 use crate::config::edit::ConfigEdit;
 use crate::config::edit::ConfigEditsBuilder;
 use crate::config::edit::apply_blocking;
@@ -202,61 +200,6 @@ async fn load_config_normalizes_relative_cwd_override() -> std::io::Result<()> {
     .await?;
 
     assert_eq!(config.cwd, expected_cwd);
-    Ok(())
-}
-
-#[tokio::test]
-async fn load_config_loads_global_agents_instructions() -> std::io::Result<()> {
-    let codex_home = tempdir()?;
-    let global_agents_path = codex_home.abs().join(DEFAULT_AGENTS_MD_FILENAME);
-    std::fs::write(&global_agents_path, "\n  global instructions  \n")?;
-
-    let mut config = Config::load_from_base_config_with_overrides(
-        ConfigToml::default(),
-        ConfigOverrides::default(),
-        codex_home.abs(),
-    )
-    .await?;
-    let _ = config.features.enable(Feature::MemoryTool);
-
-    let user_instructions = config
-        .user_instructions
-        .as_ref()
-        .expect("global instructions expected");
-    assert_eq!(user_instructions.text(), "global instructions");
-    assert_eq!(
-        user_instructions.sources().collect::<Vec<_>>(),
-        vec![&global_agents_path]
-    );
-    Ok(())
-}
-
-#[tokio::test]
-async fn load_config_prefers_global_agents_override_instructions() -> std::io::Result<()> {
-    let codex_home = tempdir()?;
-    std::fs::write(
-        codex_home.path().join(DEFAULT_AGENTS_MD_FILENAME),
-        "global instructions",
-    )?;
-    let global_agents_override_path = codex_home.abs().join(LOCAL_AGENTS_MD_FILENAME);
-    std::fs::write(&global_agents_override_path, "local override instructions")?;
-
-    let config = Config::load_from_base_config_with_overrides(
-        ConfigToml::default(),
-        ConfigOverrides::default(),
-        codex_home.abs(),
-    )
-    .await?;
-
-    let user_instructions = config
-        .user_instructions
-        .as_ref()
-        .expect("global override instructions expected");
-    assert_eq!(user_instructions.text(), "local override instructions");
-    assert_eq!(
-        user_instructions.sources().collect::<Vec<_>>(),
-        vec![&global_agents_override_path]
-    );
     Ok(())
 }
 

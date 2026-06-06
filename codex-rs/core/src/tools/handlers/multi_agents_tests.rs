@@ -1,5 +1,4 @@
 use super::*;
-use crate::LoadedAgentsMd;
 use crate::ThreadManager;
 use crate::config::AgentRoleConfig;
 use crate::config::DEFAULT_AGENT_MAX_DEPTH;
@@ -4514,24 +4513,6 @@ async fn build_agent_spawn_config_uses_turn_context_values() {
         .set_permission_profile(permission_profile)
         .expect("permission profile set");
     assert_eq!(config, expected);
-}
-
-#[tokio::test]
-async fn build_agent_spawn_config_preserves_base_user_instructions() {
-    let (_session, mut turn) = make_session_and_context().await;
-    let mut base_config = (*turn.config).clone();
-    base_config.user_instructions = Some(LoadedAgentsMd::new_user(
-        "base-user".to_string(),
-        base_config.codex_home.join("AGENTS.md"),
-    ));
-    turn.config = Arc::new(base_config.clone());
-    let base_instructions = BaseInstructions {
-        text: "base".to_string(),
-    };
-
-    let config = build_agent_spawn_config(&base_instructions, &turn).expect("spawn config");
-
-    assert_eq!(config.user_instructions, base_config.user_instructions);
 }
 
 #[tokio::test]

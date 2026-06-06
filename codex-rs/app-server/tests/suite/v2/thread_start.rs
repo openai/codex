@@ -30,6 +30,7 @@ use codex_login::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
 use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::openai_models::ReasoningEffort;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
@@ -400,11 +401,13 @@ async fn thread_start_response_excludes_empty_project_instruction_source() -> Re
 }
 
 #[tokio::test]
-async fn thread_start_without_selected_environment_excludes_instruction_sources() -> Result<()> {
+async fn thread_start_without_selected_environment_includes_global_instruction_source() -> Result<()>
+{
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
     create_config_toml_without_approval_policy(codex_home.path(), &server.uri())?;
-    std::fs::write(codex_home.path().join("AGENTS.md"), "global instructions")?;
+    let global_agents_path = codex_home.path().join("AGENTS.md");
+    std::fs::write(&global_agents_path, "global instructions")?;
     let workspace = TempDir::new()?;
     std::fs::write(workspace.path().join("AGENTS.md"), "project instructions")?;
 
@@ -428,7 +431,12 @@ async fn thread_start_without_selected_environment_excludes_instruction_sources(
         ..
     } = to_response::<ThreadStartResponse>(response)?;
 
-    assert!(instruction_sources.is_empty());
+    assert_eq!(
+        instruction_sources,
+        vec![AbsolutePathBuf::try_from(std::fs::canonicalize(
+            global_agents_path
+        )?)?]
+    );
 
     Ok(())
 }

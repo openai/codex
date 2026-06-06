@@ -55,36 +55,6 @@ impl<'a> AgentsMdManager<'a> {
         Self { config }
     }
 
-    pub(crate) async fn load_global_instructions(
-        fs: &dyn ExecutorFileSystem,
-        codex_dir: Option<&AbsolutePathBuf>,
-        startup_warnings: &mut Vec<String>,
-    ) -> Option<LoadedAgentsMd> {
-        let base = codex_dir?;
-        for candidate in [LOCAL_AGENTS_MD_FILENAME, DEFAULT_AGENTS_MD_FILENAME] {
-            let path = base.join(candidate);
-            let data = match fs.read_file(&path, /*sandbox*/ None).await {
-                Ok(data) => data,
-                Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
-                Err(err) if err.kind() == io::ErrorKind::IsADirectory => continue,
-                Err(err) => {
-                    startup_warnings.push(format!(
-                        "Failed to read global AGENTS.md instructions from `{}`: {err}",
-                        path.display()
-                    ));
-                    continue;
-                }
-            };
-            warn_invalid_utf8(&path, &data, "Global", startup_warnings);
-            let contents = String::from_utf8_lossy(&data);
-            let trimmed = contents.trim();
-            if !trimmed.is_empty() {
-                return Some(LoadedAgentsMd::new_user(trimmed.to_string(), path));
-            }
-        }
-        None
-    }
-
     /// Combines global instructions and project AGENTS.md content into a
     /// single model-visible instruction snapshot.
     pub(crate) async fn user_instructions(
@@ -321,27 +291,25 @@ impl<'a> AgentsMdManager<'a> {
 /// Model-visible instructions loaded from AGENTS.md files and internal
 /// guidance.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct LoadedAgentsMd {
+pub(crate) struct LoadedAgentsMd {
     /// Ordered instructions and their provenance.
     entries: Vec<InstructionEntry>,
 }
 
 impl LoadedAgentsMd {
-    pub fn new_user(contents: String, path: AbsolutePathBuf) -> Self {
-        if contents.trim().is_empty() {
-            return Self::default();
-        }
-        let mut loaded = Self {
-            entries: vec![InstructionEntry {
+    #[cfg(test)]
+    pub(crate) fn new_user(contents: String, path: AbsolutePathBuf) -> Self {
+        Self::from_global(codex_extension_api::GlobalInstructions {
+            instructions: vec![codex_extension_api::GlobalInstruction::new(
                 contents,
-                provenance: InstructionProvenance::Global(Some(path)),
-            }],
-        };
-        loaded.enforce_model_context_limit();
-        loaded
+                Some(path),
+            )],
+            warnings: Vec::new(),
+        })
     }
 
-    pub fn from_text_for_testing(contents: impl Into<String>) -> Self {
+    #[cfg(test)]
+    pub(crate) fn from_text_for_testing(contents: impl Into<String>) -> Self {
         let contents = contents.into();
         if contents.trim().is_empty() {
             return Self::default();
@@ -352,6 +320,22 @@ impl LoadedAgentsMd {
                 provenance: InstructionProvenance::Global(None),
             }],
         }
+    }
+
+    pub(crate) fn from_global(instructions: codex_extension_api::GlobalInstructions) -> Self {
+        let mut loaded = Self {
+            entries: instructions
+                .instructions
+                .into_iter()
+                .filter(|instruction| !instruction.contents.trim().is_empty())
+                .map(|instruction| InstructionEntry {
+                    contents: instruction.contents,
+                    provenance: InstructionProvenance::Global(instruction.source),
+                })
+                .collect(),
+        };
+        loaded.enforce_model_context_limit();
+        loaded
     }
 
     pub(crate) fn from_snapshot(snapshot: UserInstructionsSnapshot) -> Self {
@@ -403,14 +387,14 @@ impl LoadedAgentsMd {
         }
     }
 
-    pub(crate) fn replace_global(&mut self, instructions: LoadedAgentsMd) {
+    pub(crate) fn replace_global(&mut self, instructions: codex_extension_api::GlobalInstructions) {
         let first_non_global = self
             .entries
             .iter()
             .position(|entry| !matches!(entry.provenance, InstructionProvenance::Global(_)))
             .unwrap_or(self.entries.len());
         self.entries
-            .splice(..first_non_global, instructions.entries);
+            .splice(..first_non_global, Self::from_global(instructions).entries);
         self.enforce_model_context_limit();
     }
 
@@ -421,7 +405,7 @@ impl LoadedAgentsMd {
     }
 
     /// Returns the concatenated model-visible instruction text.
-    pub fn text(&self) -> String {
+    pub(crate) fn text(&self) -> String {
         let mut output = String::new();
         let mut previous_provenance: Option<&InstructionProvenance> = None;
         for entry in &self.entries {
@@ -445,7 +429,7 @@ impl LoadedAgentsMd {
     }
 
     /// Returns the AGENTS.md files that supplied instruction entries.
-    pub fn sources(&self) -> impl Iterator<Item = &AbsolutePathBuf> {
+    pub(crate) fn sources(&self) -> impl Iterator<Item = &AbsolutePathBuf> {
         self.entries
             .iter()
             .filter_map(|entry| entry.provenance.path())

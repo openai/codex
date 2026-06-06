@@ -1,6 +1,5 @@
 #![allow(clippy::unwrap_used)]
 
-use codex_core::LoadedAgentsMd;
 use codex_core::shell::default_user_shell;
 use codex_features::Feature;
 use codex_prompts::APPLY_PATCH_TOOL_INSTRUCTIONS;
@@ -122,10 +121,8 @@ async fn prompt_tools_are_consistent_across_requests() -> anyhow::Result<()> {
         thread_manager,
         ..
     } = test_codex()
+        .with_global_instructions("be consistent and helpful")
         .with_config(|config| {
-            config.user_instructions = Some(LoadedAgentsMd::from_text_for_testing(
-                "be consistent and helpful",
-            ));
             config.model = Some("gpt-5.2".to_string());
             // Keep tool expectations stable when the default web_search mode changes.
             config
@@ -236,10 +233,8 @@ async fn gpt_5_tools_without_apply_patch_append_apply_patch_instructions() -> an
     .await;
 
     let TestCodex { codex, .. } = test_codex()
+        .with_global_instructions("be consistent and helpful")
         .with_config(|config| {
-            config.user_instructions = Some(LoadedAgentsMd::from_text_for_testing(
-                "be consistent and helpful",
-            ));
             config
                 .features
                 .enable(Feature::CollaborationModes)
@@ -320,10 +315,8 @@ async fn prefixes_context_and_instructions_once_and_consistently_across_requests
     .await;
 
     let TestCodex { codex, config, .. } = test_codex()
+        .with_global_instructions("be consistent and helpful")
         .with_config(|config| {
-            config.user_instructions = Some(LoadedAgentsMd::from_text_for_testing(
-                "be consistent and helpful",
-            ));
             config
                 .features
                 .enable(Feature::CollaborationModes)
@@ -420,10 +413,8 @@ async fn overrides_turn_context_but_keeps_cached_prefix_and_key_constant() -> an
     .await;
 
     let TestCodex { codex, config, .. } = test_codex()
+        .with_global_instructions("be consistent and helpful")
         .with_config(|config| {
-            config.user_instructions = Some(LoadedAgentsMd::from_text_for_testing(
-                "be consistent and helpful",
-            ));
             config
                 .features
                 .enable(Feature::CollaborationModes)
@@ -714,10 +705,8 @@ async fn per_turn_overrides_keep_cached_prefix_and_key_constant() -> anyhow::Res
     .await;
 
     let TestCodex { codex, .. } = test_codex()
+        .with_global_instructions("be consistent and helpful")
         .with_config(|config| {
-            config.user_instructions = Some(LoadedAgentsMd::from_text_for_testing(
-                "be consistent and helpful",
-            ));
             config
                 .features
                 .enable(Feature::CollaborationModes)
@@ -851,10 +840,8 @@ async fn send_user_turn_with_no_changes_does_not_send_environment_context() -> a
         session_configured,
         ..
     } = test_codex()
+        .with_global_instructions("be consistent and helpful")
         .with_config(|config| {
-            config.user_instructions = Some(LoadedAgentsMd::from_text_for_testing(
-                "be consistent and helpful",
-            ));
             config
                 .features
                 .enable(Feature::CollaborationModes)
@@ -994,10 +981,8 @@ async fn send_user_turn_with_changes_sends_environment_context() -> anyhow::Resu
         session_configured,
         ..
     } = test_codex()
+        .with_global_instructions("be consistent and helpful")
         .with_config(|config| {
-            config.user_instructions = Some(LoadedAgentsMd::from_text_for_testing(
-                "be consistent and helpful",
-            ));
             config
                 .features
                 .enable(Feature::CollaborationModes)

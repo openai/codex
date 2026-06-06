@@ -188,15 +188,15 @@ fn loaded_instructions_with_only_empty_or_whitespace_entries_are_empty() {
 }
 
 #[test]
-fn configured_and_persisted_instructions_are_bounded_for_model_context() {
+fn contributor_and_persisted_instructions_are_bounded_for_model_context() {
     let oversized = "x".repeat(approx_bytes_for_tokens(MAX_USER_INSTRUCTIONS_TOKENS + 100));
-    let mut global = LoadedAgentsMd {
-        entries: vec![InstructionEntry {
-            contents: oversized.clone(),
-            provenance: InstructionProvenance::Global(None),
-        }],
-    };
-    global.enforce_model_context_limit();
+    let global = LoadedAgentsMd::from_global(codex_extension_api::GlobalInstructions {
+        instructions: vec![codex_extension_api::GlobalInstruction::new(
+            oversized.clone(),
+            /*source*/ None,
+        )],
+        warnings: Vec::new(),
+    });
     let restored = LoadedAgentsMd::from_snapshot(UserInstructionsSnapshot {
         instructions: vec![InstructionSnapshot {
             contents: oversized,
@@ -227,7 +227,13 @@ fn replacing_global_instructions_preserves_project_entries_within_the_bound() {
         provenance: InstructionProvenance::Project(Some(project_source.clone())),
     });
 
-    loaded.replace_global(LoadedAgentsMd::from_text_for_testing("new global"));
+    loaded.replace_global(codex_extension_api::GlobalInstructions {
+        instructions: vec![codex_extension_api::GlobalInstruction::new(
+            "new global",
+            /*source*/ None,
+        )],
+        warnings: Vec::new(),
+    });
 
     assert_eq!(
         loaded,

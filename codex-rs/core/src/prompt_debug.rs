@@ -19,7 +19,8 @@ use crate::session::turn::built_tools;
 use crate::state_db_bridge::StateDbHandle;
 use crate::thread_manager::ThreadManager;
 use crate::thread_manager::thread_store_from_config;
-use codex_extension_api::empty_extension_registry;
+use codex_extension_api::ExtensionRegistryBuilder;
+use codex_home::CodexHomeInstructionsContributor;
 
 /// Build the model-visible `input` list for a single debug turn.
 #[doc(hidden)]
@@ -40,6 +41,10 @@ pub async fn build_prompt_input(
 
     let thread_store = thread_store_from_config(&config, state_db.clone());
     let installation_id = resolve_installation_id(&config.codex_home).await?;
+    let mut extension_builder = ExtensionRegistryBuilder::<Config>::new();
+    extension_builder.global_instructions_contributor(Arc::new(
+        CodexHomeInstructionsContributor::new(config.codex_home.clone()),
+    ));
     let thread_manager = ThreadManager::new(
         &config,
         Arc::clone(&auth_manager),
@@ -52,7 +57,7 @@ pub async fn build_prompt_input(
             .await
             .map_err(|err| CodexErr::Fatal(err.to_string()))?,
         ),
-        empty_extension_registry(),
+        Arc::new(extension_builder.build()),
         /*analytics_events_client*/ None,
         thread_store,
         state_db.clone(),

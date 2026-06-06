@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
+use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
@@ -24,6 +25,11 @@ use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::RemoveOptions;
 use codex_extension_api::ExtensionRegistry;
+use codex_extension_api::ExtensionRegistryBuilder;
+use codex_extension_api::GlobalInstruction;
+use codex_extension_api::GlobalInstructions;
+use codex_extension_api::GlobalInstructionsContributor;
+use codex_extension_api::GlobalInstructionsFuture;
 use codex_extension_api::empty_extension_registry;
 use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderInfo;
@@ -221,6 +227,48 @@ pub struct TestCodexBuilder {
     extensions: Arc<ExtensionRegistry<Config>>,
 }
 
+pub struct TestGlobalInstructionsContributor {
+    responses: Vec<std::result::Result<GlobalInstructions, String>>,
+    calls: AtomicUsize,
+}
+
+impl TestGlobalInstructionsContributor {
+    pub fn new(responses: Vec<std::result::Result<GlobalInstructions, String>>) -> Self {
+        assert!(
+            !responses.is_empty(),
+            "test contributor requires at least one response"
+        );
+        Self {
+            responses,
+            calls: AtomicUsize::new(0),
+        }
+    }
+
+    pub fn static_instructions(contents: impl Into<String>) -> Self {
+        Self::new(vec![Ok(GlobalInstructions {
+            instructions: vec![GlobalInstruction::new(contents, None)],
+            warnings: Vec::new(),
+        })])
+    }
+
+    pub fn calls(&self) -> usize {
+        self.calls.load(Ordering::SeqCst)
+    }
+}
+
+impl GlobalInstructionsContributor for TestGlobalInstructionsContributor {
+    fn contribute(&self) -> GlobalInstructionsFuture<'_> {
+        let call = self.calls.fetch_add(1, Ordering::SeqCst);
+        let response = self
+            .responses
+            .get(call)
+            .or_else(|| self.responses.last())
+            .expect("test contributor responses are non-empty")
+            .clone();
+        Box::pin(std::future::ready(response))
+    }
+}
+
 impl TestCodexBuilder {
     pub fn with_config<T>(mut self, mutator: T) -> Self
     where
@@ -306,6 +354,14 @@ impl TestCodexBuilder {
     pub fn with_extensions(mut self, extensions: Arc<ExtensionRegistry<Config>>) -> Self {
         self.extensions = extensions;
         self
+    }
+
+    pub fn with_global_instructions(self, contents: impl Into<String>) -> Self {
+        let mut builder = ExtensionRegistryBuilder::<Config>::new();
+        builder.global_instructions_contributor(Arc::new(
+            TestGlobalInstructionsContributor::static_instructions(contents),
+        ));
+        self.with_extensions(Arc::new(builder.build()))
     }
 
     pub fn with_windows_cmd_shell(self) -> Self {

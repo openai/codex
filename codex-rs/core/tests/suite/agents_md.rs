@@ -1,5 +1,8 @@
 use anyhow::Result;
+use codex_core::config::Config;
 use codex_exec_server::CreateDirectoryOptions;
+use codex_extension_api::ExtensionRegistryBuilder;
+use codex_home::CodexHomeInstructionsContributor;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use core_test_support::create_directory_symlink;
 use core_test_support::responses::ev_completed;
@@ -236,9 +239,16 @@ async fn selected_environment_sources_match_model_visible_instructions() -> Resu
     let home = Arc::new(TempDir::new()?);
     let global_agents = home.path().join("AGENTS.md");
     std::fs::write(&global_agents, "global doc")?;
+    let mut extension_builder = ExtensionRegistryBuilder::<Config>::new();
+    extension_builder.global_instructions_contributor(Arc::new(
+        CodexHomeInstructionsContributor::new(AbsolutePathBuf::try_from(
+            home.path().to_path_buf(),
+        )?),
+    ));
 
     let mut builder = test_codex()
         .with_home(home)
+        .with_extensions(Arc::new(extension_builder.build()))
         .with_workspace_setup(|cwd, fs| async move {
             fs.write_file(
                 &cwd.join("AGENTS.md"),

@@ -20,9 +20,9 @@ codex-analytics = { workspace = true }
 codex-config = { workspace = true }
 codex-core = { workspace = true }
 codex-extension-api = { workspace = true }
+codex-home = { workspace = true }
 codex-exec-server = { workspace = true }
 codex-features = { workspace = true }
-codex-home = { workspace = true }
 codex-login = { workspace = true }
 codex-model-provider-info = { workspace = true }
 codex-models-manager = { workspace = true }
