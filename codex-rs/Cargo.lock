@@ -2922,6 +2922,7 @@ dependencies = [
  "codex-context-fragments",
  "codex-protocol",
  "codex-tools",
+ "codex-utils-absolute-path",
 ]
 
 [[package]]

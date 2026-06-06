@@ -1,4 +1,5 @@
 use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use codex_context_fragments::ContextualUserFragment;
@@ -7,6 +8,7 @@ use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::TokenUsageInfo;
 use codex_tools::ToolCall;
 use codex_tools::ToolExecutor;
+use codex_utils_absolute_path::AbsolutePathBuf;
 
 use crate::ExtensionData;
 
@@ -33,6 +35,42 @@ pub use turn_lifecycle::TurnAbortInput;
 pub use turn_lifecycle::TurnErrorInput;
 pub use turn_lifecycle::TurnStartInput;
 pub use turn_lifecycle::TurnStopInput;
+
+/// One model-visible global instruction and its optional source path.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GlobalInstruction {
+    pub contents: String,
+    pub source: Option<AbsolutePathBuf>,
+}
+
+impl GlobalInstruction {
+    pub fn new(contents: impl Into<String>, source: Option<AbsolutePathBuf>) -> Self {
+        Self {
+            contents: contents.into(),
+            source,
+        }
+    }
+}
+
+/// Global instructions resolved by a host-installed contributor.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct GlobalInstructions {
+    pub instructions: Vec<GlobalInstruction>,
+    pub warnings: Vec<String>,
+}
+
+/// Future returned while resolving global instructions.
+pub type GlobalInstructionsFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<GlobalInstructions, String>> + Send + 'a>>;
+
+/// Resolves model-visible instructions that apply globally to a thread.
+///
+/// Implementations should resolve their backing source only when this method
+/// is called. Recoverable source issues may be returned in `warnings`; an
+/// error indicates that the requested resolution could not be completed.
+pub trait GlobalInstructionsContributor: Send + Sync {
+    fn contribute(&self) -> GlobalInstructionsFuture<'_>;
+}
 
 /// Extension contribution that adds prompt fragments during prompt assembly.
 pub trait ContextContributor: Send + Sync {

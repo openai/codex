@@ -7,6 +7,7 @@ use crate::ConfigContributor;
 use crate::ContextContributor;
 use crate::ExtensionData;
 use crate::ExtensionEventSink;
+use crate::GlobalInstructionsContributor;
 use crate::NoopExtensionEventSink;
 use crate::ThreadLifecycleContributor;
 use crate::TokenUsageContributor;
@@ -19,6 +20,7 @@ use crate::TurnLifecycleContributor;
 /// Mutable registry used while hosts register typed runtime contributions.
 pub struct ExtensionRegistryBuilder<C: Sync> {
     event_sink: Arc<dyn ExtensionEventSink>,
+    global_instructions_contributor: Option<Arc<dyn GlobalInstructionsContributor>>,
     thread_lifecycle_contributors: Vec<Arc<dyn ThreadLifecycleContributor<C>>>,
     turn_lifecycle_contributors: Vec<Arc<dyn TurnLifecycleContributor>>,
     config_contributors: Vec<Arc<dyn ConfigContributor<C>>>,
@@ -35,6 +37,7 @@ impl<C: Sync> Default for ExtensionRegistryBuilder<C> {
     fn default() -> Self {
         Self {
             event_sink: Arc::new(NoopExtensionEventSink),
+            global_instructions_contributor: None,
             thread_lifecycle_contributors: Vec::new(),
             turn_lifecycle_contributors: Vec::new(),
             config_contributors: Vec::new(),
@@ -66,6 +69,14 @@ impl<C: Sync> ExtensionRegistryBuilder<C> {
     /// Returns the host event sink to pass into extension constructors.
     pub fn event_sink(&self) -> Arc<dyn ExtensionEventSink> {
         Arc::clone(&self.event_sink)
+    }
+
+    /// Registers the contributor that resolves global model instructions.
+    pub fn global_instructions_contributor(
+        &mut self,
+        contributor: Arc<dyn GlobalInstructionsContributor>,
+    ) {
+        self.global_instructions_contributor = Some(contributor);
     }
 
     /// Registers one approval-review contributor.
@@ -125,6 +136,7 @@ impl<C: Sync> ExtensionRegistryBuilder<C> {
     pub fn build(self) -> ExtensionRegistry<C> {
         ExtensionRegistry {
             event_sink: self.event_sink,
+            global_instructions_contributor: self.global_instructions_contributor,
             thread_lifecycle_contributors: self.thread_lifecycle_contributors,
             turn_lifecycle_contributors: self.turn_lifecycle_contributors,
             config_contributors: self.config_contributors,
@@ -142,6 +154,7 @@ impl<C: Sync> ExtensionRegistryBuilder<C> {
 /// Immutable typed registry produced after extensions are installed.
 pub struct ExtensionRegistry<C: Sync> {
     event_sink: Arc<dyn ExtensionEventSink>,
+    global_instructions_contributor: Option<Arc<dyn GlobalInstructionsContributor>>,
     thread_lifecycle_contributors: Vec<Arc<dyn ThreadLifecycleContributor<C>>>,
     turn_lifecycle_contributors: Vec<Arc<dyn TurnLifecycleContributor>>,
     config_contributors: Vec<Arc<dyn ConfigContributor<C>>>,
@@ -158,6 +171,13 @@ impl<C: Sync> ExtensionRegistry<C> {
     /// Returns the host event sink retained by this registry.
     pub fn event_sink(&self) -> Arc<dyn ExtensionEventSink> {
         Arc::clone(&self.event_sink)
+    }
+
+    /// Returns the contributor that resolves global model instructions.
+    pub fn global_instructions_contributor(
+        &self,
+    ) -> Option<&Arc<dyn GlobalInstructionsContributor>> {
+        self.global_instructions_contributor.as_ref()
     }
 
     /// Returns the registered thread-lifecycle contributors.
