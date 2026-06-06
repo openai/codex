@@ -207,7 +207,6 @@ async fn code_mode_can_call_standalone_web_search() -> Result<()> {
     Mock::given(method("POST"))
         .and(path("/v1/alpha/search"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "encrypted_output": "ciphertext",
             "output": "Search result",
         })))
         .expect(1)

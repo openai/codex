@@ -3,7 +3,6 @@ use codex_extension_api::ToolPayload;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
-use serde_json::Value;
 
 pub(crate) struct SearchOutput {
     output: String,
@@ -35,10 +34,6 @@ impl ToolOutput for SearchOutput {
                 },
             ]),
         }
-    }
-
-    fn code_mode_result(&self, _payload: &ToolPayload) -> Value {
-        Value::String(self.output.clone())
     }
 }
 
