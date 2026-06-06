@@ -660,7 +660,7 @@ impl ModelClient {
     fn build_ws_client_metadata(
         &self,
         turn_metadata_header: Option<&str>,
-        model_info: &ModelInfo,
+        use_responses_lite: bool,
     ) -> HashMap<String, String> {
         let mut client_metadata = HashMap::new();
         client_metadata.insert(
@@ -688,7 +688,7 @@ impl ModelClient {
                 turn_metadata.to_string(),
             );
         }
-        if model_info.use_responses_lite {
+        if use_responses_lite {
             client_metadata.insert(
                 WS_REQUEST_HEADER_RESPONSES_LITE_CLIENT_METADATA_KEY.to_string(),
                 "true".to_string(),
@@ -1411,10 +1411,10 @@ impl ModelClientSession {
             )?;
             let mut ws_payload = ResponseCreateWsRequest {
                 client_metadata: response_create_client_metadata(
-                    Some(
-                        self.client
-                            .build_ws_client_metadata(turn_metadata_header, model_info),
-                    ),
+                    Some(self.client.build_ws_client_metadata(
+                        turn_metadata_header,
+                        model_info.use_responses_lite,
+                    )),
                     request_trace.as_ref(),
                 ),
                 ..ResponseCreateWsRequest::from(&request)
