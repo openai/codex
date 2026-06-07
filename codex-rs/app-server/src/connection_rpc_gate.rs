@@ -1,7 +1,6 @@
 use std::future::Future;
-use std::sync::Mutex;
-use std::sync::PoisonError;
 
+use tokio::sync::Mutex;
 use tokio_util::task::TaskTracker;
 
 /// Per-connection gate for initialized RPC handler execution.
@@ -28,10 +27,7 @@ impl ConnectionRpcGate {
         F: Future<Output = ()>,
     {
         let token = {
-            let accepting = self
-                .accepting
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner);
+            let accepting = self.accepting.lock().await;
             if !*accepting {
                 return;
             }
@@ -42,26 +38,20 @@ impl ConnectionRpcGate {
         drop(token);
     }
 
-    pub(crate) fn close(&self) {
-        let mut accepting = self
-            .accepting
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
+    pub(crate) async fn close(&self) {
+        let mut accepting = self.accepting.lock().await;
         *accepting = false;
         self.tasks.close();
     }
 
     pub(crate) async fn shutdown(&self) {
-        self.close();
+        self.close().await;
         self.tasks.wait().await;
     }
 
     #[cfg(test)]
-    fn is_accepting(&self) -> bool {
-        *self
-            .accepting
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+    async fn is_accepting(&self) -> bool {
+        *self.accepting.lock().await
     }
 
     #[cfg(test)]
@@ -104,7 +94,7 @@ mod tests {
     #[tokio::test]
     async fn run_drops_future_without_polling_after_close() {
         let gate = ConnectionRpcGate::new();
-        gate.close();
+        gate.close().await;
         let polled = Arc::new(AtomicBool::new(/*v*/ false));
         let polled_clone = Arc::clone(&polled);
 
@@ -114,7 +104,7 @@ mod tests {
         .await;
 
         assert!(!polled.load(Ordering::Acquire));
-        assert!(!gate.is_accepting());
+        assert!(!gate.is_accepting().await);
     }
 
     #[tokio::test]
@@ -133,8 +123,8 @@ mod tests {
         });
 
         started_rx.await.expect("run should start");
-        gate.close();
-        assert!(!gate.is_accepting());
+        gate.close().await;
+        assert!(!gate.is_accepting().await);
         assert_eq!(gate.inflight_count(), 1);
 
         finish_tx

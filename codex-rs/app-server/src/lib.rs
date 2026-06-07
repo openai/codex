@@ -909,7 +909,7 @@ pub async fn run_main_with_transport_options(
                                 let Some(connection_state) = connections.remove(&connection_id) else {
                                     continue;
                                 };
-                                connection_state.session.rpc_gate.close();
+                                connection_state.session.rpc_gate.close().await;
                                 let outbound_closed = outbound_control_tx
                                     .send(OutboundControlEvent::Closed { connection_id })
                                     .await
