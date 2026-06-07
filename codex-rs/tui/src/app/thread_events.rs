@@ -240,7 +240,7 @@ impl ThreadEventStore {
             .has_pending_thread_approvals()
     }
 
-    pub(super) fn side_parent_pending_status(&self) -> Option<SideParentStatus> {
+    pub(super) fn side_parent_status(&self) -> Option<SideParentStatus> {
         if self
             .pending_interactive_replay
             .has_pending_thread_user_input()
@@ -252,7 +252,20 @@ impl ThreadEventStore {
         {
             Some(SideParentStatus::NeedsApproval)
         } else {
-            None
+            self.buffer
+                .iter()
+                .rev()
+                .find_map(|event| {
+                    let ThreadBufferedEvent::Notification(notification) = event else {
+                        return None;
+                    };
+                    match SideParentStatusChange::for_notification(notification) {
+                        Some(SideParentStatusChange::Set(status)) => Some(Some(status)),
+                        Some(SideParentStatusChange::Clear) => Some(None),
+                        Some(SideParentStatusChange::ClearActionable) | None => None,
+                    }
+                })
+                .flatten()
         }
     }
 
@@ -505,6 +518,22 @@ mod tests {
             TurnStatus::Interrupted,
         ));
         assert_eq!(store.active_turn_id(), None);
+    }
+
+    #[test]
+    fn thread_event_store_reports_latest_side_parent_status() {
+        let mut store = ThreadEventStore::new(/*capacity*/ 8);
+        let thread_id = ThreadId::new();
+
+        store.push_notification(turn_completed_notification(
+            thread_id,
+            "turn-1",
+            TurnStatus::Failed,
+        ));
+        assert_eq!(store.side_parent_status(), Some(SideParentStatus::Failed));
+
+        store.push_notification(turn_started_notification(thread_id, "turn-2"));
+        assert_eq!(store.side_parent_status(), None);
     }
 
     #[test]

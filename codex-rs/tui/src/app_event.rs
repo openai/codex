@@ -52,6 +52,12 @@ use uuid::Uuid;
 
 use crate::history_cell::HistoryCell;
 
+#[derive(Debug)]
+pub(crate) struct SideThreadPrepareError {
+    pub(crate) thread_id: Option<ThreadId>,
+    pub(crate) message: String,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RealtimeAudioDeviceKind {
     Microphone,
@@ -150,7 +156,7 @@ pub(crate) enum AppEvent {
     /// Finish preparing a transient side conversation off the TUI event loop.
     SideThreadPrepared {
         request_id: Uuid,
-        result: Result<AppServerStartedThread, String>,
+        result: Result<AppServerStartedThread, SideThreadPrepareError>,
     },
 
     /// Submit an op to the specified thread, regardless of current focus.

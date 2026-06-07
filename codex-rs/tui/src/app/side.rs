@@ -203,6 +203,7 @@ pub(super) struct PendingSideStart {
 }
 
 impl SideThreadState {
+    #[cfg(test)]
     pub(super) fn new(parent_thread_id: ThreadId) -> Self {
         Self {
             parent_thread_id,
@@ -571,6 +572,8 @@ impl App {
             parent_thread_id,
             user_message,
         });
+        self.refresh_in_memory_config_from_disk_best_effort("starting a side conversation")
+            .await;
         let request_handle = app_server.request_handle();
         let thread_params_mode = app_server.thread_params_mode();
         let remote_cwd_override = app_server.remote_cwd_override().map(Path::to_path_buf);
@@ -587,8 +590,7 @@ impl App {
                 thread_params_mode,
                 remote_cwd_override,
             )
-            .await
-            .map_err(|err| format!("{err:#}"));
+            .await;
             app_event_tx.send(AppEvent::SideThreadPrepared { request_id, result });
         });
     }
@@ -598,7 +600,10 @@ impl App {
         tui: &mut tui::Tui,
         app_server: &mut AppServerSession,
         request_id: Uuid,
-        result: std::result::Result<AppServerStartedThread, String>,
+        result: std::result::Result<
+            AppServerStartedThread,
+            crate::app_event::SideThreadPrepareError,
+        >,
     ) -> Result<()> {
         let Some(PendingSideStart {
             parent_thread_id,
@@ -606,21 +611,25 @@ impl App {
             ..
         }) = self.take_pending_side_start(request_id)
         else {
-            if let Ok(started) = result {
-                let thread_id = started.session.thread_id;
+            if let Some(thread_id) = match &result {
+                Ok(started) => Some(started.session.thread_id),
+                Err(err) => err.thread_id,
+            } {
                 // ThreadStarted may have created local state before this preparation was canceled.
                 self.discard_thread_local_state(thread_id).await;
-                let request_handle = app_server.request_handle();
-                tokio::spawn(async move {
-                    if let Err(err) =
-                        super::side_server::cleanup_side_thread(request_handle, thread_id).await
-                    {
-                        tracing::warn!(
-                            thread_id = %thread_id,
-                            "failed to clean up abandoned side thread: {err}"
-                        );
-                    }
-                });
+                if result.is_ok() {
+                    let request_handle = app_server.request_handle();
+                    tokio::spawn(async move {
+                        if let Err(err) =
+                            super::side_server::cleanup_side_thread(request_handle, thread_id).await
+                        {
+                            tracing::warn!(
+                                thread_id = %thread_id,
+                                "failed to clean up abandoned side thread: {err}"
+                            );
+                        }
+                    });
+                }
             }
             return Ok(());
         };
@@ -633,8 +642,19 @@ impl App {
                     let mut store = channel.store.lock().await;
                     Self::install_side_thread_snapshot(&mut store, started.session, started.turns);
                 }
-                self.side_threads
-                    .insert(child_thread_id, SideThreadState::new(parent_thread_id));
+                let parent_status =
+                    if let Some(channel) = self.thread_event_channels.get(&parent_thread_id) {
+                        channel.store.lock().await.side_parent_status()
+                    } else {
+                        None
+                    };
+                self.side_threads.insert(
+                    child_thread_id,
+                    SideThreadState {
+                        parent_thread_id,
+                        parent_status,
+                    },
+                );
                 self.upsert_agent_picker_thread(
                     child_thread_id,
                     /*agent_nickname*/ None,
@@ -683,11 +703,14 @@ impl App {
                 }
             }
             Err(err) => {
+                if let Some(thread_id) = err.thread_id {
+                    self.discard_thread_local_state(thread_id).await;
+                }
                 self.restore_side_user_message(user_message.take());
                 self.chat_widget
                     .set_side_conversation_context_label(/*label*/ None);
                 self.chat_widget
-                    .add_error_message(Self::side_start_error_message(&err));
+                    .add_error_message(Self::side_start_error_message(&err.message));
             }
         }
         Ok(())

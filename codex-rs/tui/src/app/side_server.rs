@@ -1,4 +1,5 @@
 use super::*;
+use crate::app_event::SideThreadPrepareError;
 use crate::app_server_session::ThreadParamsMode;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ThreadInjectItemsParams;
@@ -14,7 +15,13 @@ pub(super) async fn prepare_side_thread(
     parent_thread_id: ThreadId,
     thread_params_mode: ThreadParamsMode,
     remote_cwd_override: Option<PathBuf>,
-) -> Result<AppServerStartedThread> {
+) -> std::result::Result<AppServerStartedThread, SideThreadPrepareError> {
+    let boundary_item = serde_json::to_value(App::side_boundary_prompt_item()).map_err(|err| {
+        SideThreadPrepareError {
+            thread_id: None,
+            message: format!("failed to encode thread/inject_items payload: {err}"),
+        }
+    })?;
     let started = crate::app_server_session::fork_thread_with_request_handle(
         request_handle.clone(),
         config,
@@ -22,10 +29,12 @@ pub(super) async fn prepare_side_thread(
         thread_params_mode,
         remote_cwd_override,
     )
-    .await?;
+    .await
+    .map_err(|err| SideThreadPrepareError {
+        thread_id: None,
+        message: format!("{err:#}"),
+    })?;
     let child_thread_id = started.session.thread_id;
-    let boundary_item = serde_json::to_value(App::side_boundary_prompt_item())
-        .wrap_err("failed to encode thread/inject_items payload")?;
 
     // Keep fork and boundary injection in one background operation so the App never observes a
     // side thread that can run before its inherited history is marked reference-only.
@@ -46,7 +55,12 @@ pub(super) async fn prepare_side_thread(
                 "failed to clean up side thread after inject failure: {cleanup_err}"
             );
         }
-        return Err(err).wrap_err("thread/inject_items failed during TUI side conversation setup");
+        return Err(SideThreadPrepareError {
+            thread_id: Some(child_thread_id),
+            message: format!(
+                "thread/inject_items failed during TUI side conversation setup: {err}"
+            ),
+        });
     }
     Ok(started)
 }
