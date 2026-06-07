@@ -365,26 +365,17 @@ def find_open_pr() -> str | None:
 
 def merge_pr(pr_number: str, change: PublicChange, body_file: Path) -> None:
     sync_head = output(["git", "rev-parse", f"origin/{SYNC_BRANCH}"])
-    # This repository does not allow rebase merges, so GitHub creates the final
-    # squash commit. Set the squash author email to the public commit author so
-    # the imported commit is not authored by github-actions[bot].
     run(
         [
             "gh",
             "pr",
             "merge",
             pr_number,
-            "--squash",
+            "--rebase",
             "--admin",
             "--delete-branch",
             "--match-head-commit",
             sync_head,
-            "--author-email",
-            change.author.email,
-            "--subject",
-            change.title,
-            "--body-file",
-            str(body_file),
         ]
     )
     print(f"Merged sync PR #{pr_number} for {change.rev}.")
