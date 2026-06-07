@@ -284,6 +284,8 @@ async fn fresh_thread_composes_global_before_project_and_reports_sources() -> Re
     Ok(())
 }
 
+// TODO(anp): Enforce an independent hard limit for the global instruction context item, then
+// update this characterization to assert that oversized global instructions are bounded.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn global_instruction_context_item_is_currently_not_limited_by_project_doc_budget()
 -> Result<()> {
