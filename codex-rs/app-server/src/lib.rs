@@ -74,6 +74,8 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::registry::Registry;
 use tracing_subscriber::util::SubscriberInitExt;
 
+const SQLITE_RECOVERY_CONFIG_WARNING_SUMMARY: &str = "Codex rebuilt its local database.";
+
 mod analytics_utils;
 mod app_server_tracing;
 mod attestation;
@@ -533,8 +535,8 @@ pub async fn run_main_with_transport_options(
         }
         _ => None,
     };
-    let state_db = match rollout_state_db::try_init(&config).await {
-        Ok(state_db) => Some(state_db),
+    let state_db_init = match init_sqlite_state_db_with_fresh_start_on_corruption(&config).await {
+        Ok(state_db_init) => state_db_init,
         Err(err) => {
             return Err(std::io::Error::other(format!(
                 "failed to initialize sqlite state runtime under {}: {err}",
@@ -542,6 +544,18 @@ pub async fn run_main_with_transport_options(
             )));
         }
     };
+    let state_db = state_db_init.state_db;
+    if let Some(recovery_notice) = state_db_init.recovery_notice {
+        config_warnings.push(ConfigWarningNotification {
+            summary: SQLITE_RECOVERY_CONFIG_WARNING_SUMMARY.to_string(),
+            details: Some(format!(
+                "Database path: {}\nBackup folder: {}",
+                recovery_notice.database_path, recovery_notice.backup_folder
+            )),
+            path: None,
+            range: None,
+        });
+    }
 
     if should_run_personality_migration {
         let effective_toml = config.config_layer_stack.effective_config();
@@ -1097,6 +1111,92 @@ pub async fn run_main_with_transport_options(
     }
 
     Ok(())
+}
+
+struct SqliteRecoveryNotice {
+    database_path: String,
+    backup_folder: String,
+}
+
+struct StateDbInitResult {
+    state_db: Option<rollout_state_db::StateDbHandle>,
+    recovery_notice: Option<SqliteRecoveryNotice>,
+}
+
+async fn init_sqlite_state_db_with_fresh_start_on_corruption(
+    config: &Config,
+) -> anyhow::Result<StateDbInitResult> {
+    let err = match rollout_state_db::try_init(config).await {
+        Ok(state_db) => {
+            return Ok(StateDbInitResult {
+                state_db: Some(state_db),
+                recovery_notice: None,
+            });
+        }
+        Err(err) => err,
+    };
+    if !codex_state::is_sqlite_corruption_error(&err) {
+        return Err(err);
+    }
+
+    let original_error = err.to_string();
+    emit_state_db_backup_warning(&format!(
+        "Codex local database at {} appears damaged. Moving it into a backup folder so the app server can rebuild it from saved data.",
+        config.sqlite_home.display()
+    ));
+    let backups = codex_state::backup_runtime_dbs_for_fresh_start(config.sqlite_home.as_path())
+        .await
+        .map_err(|backup_err| {
+            anyhow::anyhow!(
+                "failed to move damaged sqlite state database files into a backup folder: {backup_err}; original error: {original_error}"
+            )
+        })?;
+    for backup in &backups {
+        emit_state_db_backup_warning(&format!(
+            "Moved damaged Codex local database file {} to {}",
+            backup.original_path.display(),
+            backup.backup_path.display()
+        ));
+    }
+
+    let state_db = rollout_state_db::try_init(config)
+        .await
+        .map(Some)
+        .map_err(|retry_err| {
+            anyhow::anyhow!(
+                "failed to initialize sqlite state runtime after moving damaged database files into a backup folder: {retry_err}; original error: {original_error}"
+            )
+        })?;
+    let recovery_notice = if let Some(first_backup) = backups.first()
+        && let Some(backup_folder) = first_backup.backup_path.parent()
+    {
+        emit_state_db_backup_warning(SQLITE_RECOVERY_CONFIG_WARNING_SUMMARY);
+        emit_state_db_backup_warning(&format!(
+            "Database path: {}",
+            first_backup.original_path.display()
+        ));
+        emit_state_db_backup_warning(&format!("Backup folder: {}", backup_folder.display()));
+        Some(SqliteRecoveryNotice {
+            database_path: first_backup.original_path.display().to_string(),
+            backup_folder: backup_folder.display().to_string(),
+        })
+    } else {
+        None
+    };
+    Ok(StateDbInitResult {
+        state_db,
+        recovery_notice,
+    })
+}
+
+fn emit_state_db_backup_warning(message: &str) {
+    warn!("{message}");
+    if !tracing::dispatcher::has_been_set() {
+        #[allow(clippy::print_stderr)]
+        {
+            eprintln!("{message}");
+        }
+    }
 }
 
 fn analytics_rpc_transport(transport: &AppServerTransport) -> AppServerRpcTransport {

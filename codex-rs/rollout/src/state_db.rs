@@ -5,6 +5,7 @@ use crate::list::SortDirection;
 use crate::list::ThreadSortKey;
 use crate::metadata;
 use crate::sqlite_metrics;
+use anyhow::Context;
 use chrono::DateTime;
 use chrono::Utc;
 use codex_protocol::ThreadId;
@@ -109,9 +110,9 @@ async fn try_init_with_roots_inner(
     let runtime =
         codex_state::StateRuntime::init(sqlite_home.clone(), default_model_provider_id.clone())
             .await
-            .map_err(|err| {
-                anyhow::anyhow!(
-                    "failed to initialize state runtime at {}: {err}",
+            .with_context(|| {
+                format!(
+                    "failed to initialize state runtime at {}",
                     sqlite_home.display()
                 )
             })?;

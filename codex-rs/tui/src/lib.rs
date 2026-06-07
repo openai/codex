@@ -354,7 +354,7 @@ async fn init_state_db_for_app_server_target(
         AppServerTarget::Embedded => state_db::try_init(config).await.map(Some).map_err(|err| {
             std::io::Error::other(LocalStateDbStartupError::new(
                 codex_state::state_db_path(config.sqlite_home.as_path()),
-                err.to_string(),
+                format!("{err:#}"),
             ))
         }),
         AppServerTarget::LocalDaemon { .. } | AppServerTarget::Remote { .. } => {
@@ -2990,6 +2990,38 @@ mod tests {
         );
         Ok(())
     }
+
+    #[tokio::test]
+    async fn embedded_state_db_corruption_preserves_sqlite_cause_for_cli_recovery()
+    -> color_eyre::Result<()> {
+        let temp_dir = TempDir::new()?;
+        let mut config = build_config(&temp_dir).await?;
+        let sqlite_home = temp_dir.path().join("sqlite-home");
+        std::fs::create_dir_all(&sqlite_home)?;
+        std::fs::write(
+            codex_state::state_db_path(&sqlite_home),
+            "not a sqlite database",
+        )?;
+        config.sqlite_home = sqlite_home;
+
+        let err =
+            match init_state_db_for_app_server_target(&config, &AppServerTarget::Embedded).await {
+                Ok(_) => panic!("embedded startup should surface state db init failures"),
+                Err(err) => err,
+            };
+        let startup_error = err
+            .get_ref()
+            .and_then(|err| err.downcast_ref::<LocalStateDbStartupError>())
+            .expect("state db startup failure should retain its typed context");
+
+        assert!(
+            codex_state::sqlite_error_detail_is_corruption(startup_error.detail()),
+            "startup error should preserve the SQLite corruption cause, got: {}",
+            startup_error.detail()
+        );
+        Ok(())
+    }
+
     #[tokio::test]
     #[serial]
     async fn windows_shows_trust_prompt_with_sandbox() -> std::io::Result<()> {
