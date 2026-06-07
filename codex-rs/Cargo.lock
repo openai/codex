@@ -213,7 +213,7 @@ dependencies = [
  "lazy_static",
  "nom 7.1.3",
  "pin-project",
- "rand 0.8.5",
+ "rand 0.8.6",
  "rust-embed",
  "scrypt",
  "sha2 0.10.9",
@@ -234,7 +234,7 @@ dependencies = [
  "hkdf 0.12.4",
  "io_tee",
  "nom 7.1.3",
- "rand 0.8.5",
+ "rand 0.8.6",
  "secrecy",
  "sha2 0.10.9",
 ]
@@ -786,7 +786,7 @@ dependencies = [
  "hex",
  "http 1.4.0",
  "p256",
- "rand 0.8.5",
+ "rand 0.8.6",
  "ring",
  "sha2 0.10.9",
  "time",
@@ -4287,7 +4287,7 @@ dependencies = [
  "dunce",
  "glob",
  "pretty_assertions",
- "rand 0.8.5",
+ "rand 0.8.6",
  "serde",
  "serde_json",
  "tempfile",
@@ -9394,7 +9394,7 @@ dependencies = [
  "chrono",
  "getrandom 0.2.17",
  "http 1.4.0",
- "rand 0.8.5",
+ "rand 0.8.6",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
@@ -11033,9 +11033,9 @@ dependencies = [
 
 [[package]]
 name = "rand"
-version = "0.8.5"
+version = "0.8.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "34af8d1a0e25924bc5b7c43c079c942339d8f0a8b57c39049bef581b46327404"
+checksum = "5ca0ecfa931c29007047d1bc58e623ab12e5590e8c7cc53200d5202b69266d8a"
 dependencies = [
  "libc",
  "rand_chacha 0.3.1",
@@ -11901,7 +11901,7 @@ dependencies = [
  "hkdf 0.12.4",
  "num",
  "once_cell",
- "rand 0.8.5",
+ "rand 0.8.6",
  "serde",
  "sha2 0.10.9",
  "zbus",
@@ -15566,7 +15566,7 @@ dependencies = [
  "hex",
  "nix 0.29.0",
  "ordered-stream",
- "rand 0.8.5",
+ "rand 0.8.6",
  "serde",
  "serde_repr",
  "sha1 0.10.6",
