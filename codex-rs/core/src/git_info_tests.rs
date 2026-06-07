@@ -342,7 +342,7 @@ async fn test_get_has_changes_with_untracked_change_returns_true() {
 
 #[cfg(unix)]
 #[tokio::test]
-async fn test_get_has_changes_ignores_repo_fsmonitor_config() {
+async fn test_get_has_changes_does_not_execute_repo_fsmonitor_helper() {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     let repo_path = create_test_git_repo(&temp_dir).await;
     let helper_path = repo_path.join("fsmonitor-helper.sh");

@@ -12,7 +12,8 @@ use serde::Deserialize;
 use serde::Serialize;
 use tokio::process::Command;
 use tokio::time::Duration as TokioDuration;
-use tokio::time::timeout;
+use tokio::time::Instant as TokioInstant;
+use tokio::time::timeout_at;
 use ts_rs::TS;
 
 use crate::GitSha;
@@ -390,16 +391,55 @@ pub async fn git_diff_to_remote(cwd: &Path) -> Option<GitDiffToRemote> {
 
 /// Run a git command with a timeout to prevent blocking on large repositories
 async fn run_git_command_with_timeout(args: &[&str], cwd: &Path) -> Option<std::process::Output> {
+    // Only commands that inspect the worktree can recover the cost of probing.
+    // Built-in fsmonitor avoids worktree and untracked-file scans:
+    // https://github.com/git/git/blob/94f057755b7941b321fd11fec1b2e3ca5313a4e0/Documentation/git-fsmonitor--daemon.adoc#L49-L57
+    // https://github.com/git/git/blob/94f057755b7941b321fd11fec1b2e3ca5313a4e0/Documentation/git-update-index.adoc#L545-L550
+    let benefits_from_fsmonitor = matches!(args.first(), Some(&"status"))
+        || matches!(args.first(), Some(&"ls-files"))
+        || (matches!(args.first(), Some(&"diff")) && !args.contains(&"--no-index"));
+    let deadline = TokioInstant::now() + GIT_COMMAND_TIMEOUT;
+    let fsmonitor_enabled = benefits_from_fsmonitor && {
+        // Do not cache this decision. Effective Git config is layered, can use
+        // conditional includes, and can change while Codex is running.
+        // https://git-scm.com/docs/git-config#SCOPES
+        // https://git-scm.com/docs/git-config#_conditional_includes
+        let mut probe = Command::new("git");
+        probe
+            .env("GIT_OPTIONAL_LOCKS", "0")
+            .env("LC_ALL", "C")
+            .args(["config", "--type=bool", "--get", "core.fsmonitor"])
+            .current_dir(cwd)
+            .kill_on_drop(true);
+        let configured = match timeout_at(deadline, probe.output()).await {
+            Ok(Ok(output)) => Some(output),
+            _ => None,
+        };
+        match configured {
+            None => false,
+            Some(output) => match (output.status.code(), output.stdout.as_slice().trim_ascii()) {
+                // `git config --get` returns 1 when the key is absent.
+                // https://git-scm.com/docs/git-config#Documentation/git-config.txt-get
+                (Some(1), _) | (Some(0), b"false") => false,
+                (Some(0), b"true") => true,
+                // `--type=bool` rejects hook pathnames. Keep helpers and any
+                // malformed or unreadable configuration disabled.
+                _ => false,
+            },
+        }
+    };
+
     let mut command = Command::new("git");
     command
         .env("GIT_OPTIONAL_LOCKS", "0")
-        // Keep internal Git helper commands independent of configured hook directories.
+        // Keep internal Git commands independent of repository-selected hooks
+        // and fsmonitor helpers while preserving built-in fsmonitor acceleration.
         .args(["-c", &format!("core.hooksPath={DISABLED_HOOKS_PATH}")])
-        .args(["-c", "core.fsmonitor=false"])
+        .args(["-c", &format!("core.fsmonitor={fsmonitor_enabled}")])
         .args(args)
         .current_dir(cwd)
         .kill_on_drop(true);
-    let result = timeout(GIT_COMMAND_TIMEOUT, command.output()).await;
+    let result = timeout_at(deadline, command.output()).await;
 
     match result {
         Ok(Ok(output)) => Some(output),
