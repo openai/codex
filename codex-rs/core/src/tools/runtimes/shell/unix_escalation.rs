@@ -17,6 +17,7 @@ use crate::shell::ShellType;
 use crate::tools::runtimes::build_sandbox_command;
 use crate::tools::runtimes::exec_env_for_sandbox_permissions;
 use crate::tools::runtimes::prepend_zsh_fork_bin_to_path;
+use crate::tools::sandboxing::ExecApprovalRequirement;
 use crate::tools::sandboxing::PermissionRequestPayload;
 use crate::tools::sandboxing::SandboxAttempt;
 use crate::tools::sandboxing::ToolCtx;
@@ -97,6 +98,19 @@ fn approval_sandbox_permissions(
     } else {
         sandbox_permissions
     }
+}
+
+fn parent_approved_sandbox_override(
+    sandbox_permissions: SandboxPermissions,
+    additional_permissions_preapproved: bool,
+    exec_approval_requirement: &ExecApprovalRequirement,
+) -> bool {
+    sandbox_permissions.requests_sandbox_override()
+        && (additional_permissions_preapproved
+            || matches!(
+                exec_approval_requirement,
+                ExecApprovalRequirement::NeedsApproval { .. }
+            ))
 }
 
 pub(super) async fn try_run_zsh_fork(
@@ -226,6 +240,11 @@ pub(super) async fn try_run_zsh_fork(
         sandbox_permissions: req.sandbox_permissions,
         approval_sandbox_permissions,
         prompt_permissions: req.additional_permissions.clone(),
+        parent_sandbox_override_approved: parent_approved_sandbox_override(
+            req.sandbox_permissions,
+            req.additional_permissions_preapproved,
+            &req.exec_approval_requirement,
+        ),
         stopwatch: stopwatch.clone(),
     };
 
@@ -301,6 +320,11 @@ pub(crate) async fn prepare_unified_exec_zsh_fork(
             req.additional_permissions_preapproved,
         ),
         prompt_permissions: req.additional_permissions.clone(),
+        parent_sandbox_override_approved: parent_approved_sandbox_override(
+            req.sandbox_permissions,
+            req.additional_permissions_preapproved,
+            &req.exec_approval_requirement,
+        ),
         stopwatch: Stopwatch::unlimited(),
     };
 
@@ -332,6 +356,7 @@ struct CoreShellActionProvider {
     sandbox_permissions: SandboxPermissions,
     approval_sandbox_permissions: SandboxPermissions,
     prompt_permissions: Option<AdditionalPermissionProfile>,
+    parent_sandbox_override_approved: bool,
     stopwatch: Stopwatch,
 }
 
@@ -630,9 +655,24 @@ impl EscalationPolicy for CoreShellActionProvider {
         let decision_driven_by_policy =
             Self::decision_driven_by_policy(&evaluation.matched_rules, evaluation.decision);
         let unsandboxed_allowed = unsandboxed_execution_allowed(&self.file_system_sandbox_policy);
-        let needs_escalation = unsandboxed_allowed
-            && (self.sandbox_permissions.requires_escalated_permissions()
-                || decision_driven_by_policy);
+        let needs_escalation = match self.sandbox_permissions {
+            SandboxPermissions::UseDefault => unsandboxed_allowed && decision_driven_by_policy,
+            SandboxPermissions::RequireEscalated => unsandboxed_allowed,
+            SandboxPermissions::WithAdditionalPermissions => true,
+        };
+        // The parent shell/unified-exec approval already covered unmatched
+        // prompts caused by its sandbox override. Explicit exec-policy rules
+        // still keep their own decisions. Guardian-routed turns keep the
+        // prompt so Guardian can review each intercepted execve independently.
+        let decision = if self.parent_sandbox_override_approved
+            && !routes_approval_to_guardian(&self.turn)
+            && evaluation.decision == Decision::Prompt
+            && !decision_driven_by_policy
+        {
+            Decision::Allow
+        } else {
+            evaluation.decision
+        };
 
         let decision_source = if decision_driven_by_policy {
             DecisionSource::PrefixRule
@@ -650,7 +690,7 @@ impl EscalationPolicy for CoreShellActionProvider {
             ),
         };
         self.process_decision(
-            evaluation.decision,
+            decision,
             needs_escalation,
             program,
             argv,
@@ -858,7 +898,7 @@ impl ShellCommandExecutor for CoreShellCommandExecutor {
             EscalationExecution::Unsandboxed => PreparedExec {
                 command,
                 cwd: workdir.to_path_buf(),
-                env,
+                env: exec_env_for_sandbox_permissions(&env, SandboxPermissions::RequireEscalated),
                 arg0: Some(first_arg.clone()),
             },
             EscalationExecution::TurnDefault => {
