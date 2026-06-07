@@ -389,7 +389,7 @@ When `nextCursor` is `null`, you’ve reached the final page.
 
 ### Example: List direct child threads
 
-Use `thread/list` with `parentThreadId` and `capabilities.experimentalApi = true` to page through a thread's direct persisted children. The filter reads persisted spawn edges without requiring rollout files, does not recursively include grandchildren, and includes every source kind when `sourceKinds` is omitted.
+Enable `capabilities.experimentalApi` during initialization, then use `thread/list` with `parentThreadId` to page through a thread's direct children. Results do not recursively include grandchildren. When `sourceKinds` is omitted, parent-filtered requests include every source kind.
 
 ```json
 { "method": "thread/list", "id": 21, "params": {
