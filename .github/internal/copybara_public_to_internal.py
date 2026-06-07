@@ -14,6 +14,7 @@ PUBLIC_REPO_URL = "https://github.com/openai/codex.git"
 INTERNAL_REPO_URL = "https://github.com/openai/codex-internal"
 SYNC_BRANCH = os.environ.get("SYNC_BRANCH", "copybara/public-to-internal")
 TRAILER = "Codex-Public-RevId"
+CARGO_LOCKFILE = Path("codex-rs/Cargo.lock")
 
 
 @dataclass(frozen=True)
@@ -65,7 +66,14 @@ def main() -> int:
 
         change = load_public_change(public_change_rev)
         body_file, message_file = write_metadata_files(change)
-        migrate_change(copybara_jar, last_public_rev, change, message_file)
+        internal_cargo_lockfile = save_internal_cargo_lockfile(change)
+        migrate_change(
+            copybara_jar,
+            last_public_rev,
+            change,
+            message_file,
+            internal_cargo_lockfile,
+        )
         pr_number = open_or_update_pr(change, body_file)
         merge_pr(pr_number, change, body_file)
         wait_for_imported_rev(change.rev)
@@ -242,11 +250,37 @@ def write_metadata_files(change: PublicChange) -> tuple[Path, Path]:
     return body_file, message_file
 
 
+def save_internal_cargo_lockfile(change: PublicChange) -> Path | None:
+    if public_change_touched_path(change.rev, CARGO_LOCKFILE):
+        print(
+            f"{CARGO_LOCKFILE} changed in {change.rev}; "
+            "using the public lockfile as the base."
+        )
+        return None
+
+    runner_temp = Path(os.environ.get("RUNNER_TEMP", tempfile.gettempdir()))
+    cargo_lockfile = runner_temp / f"internal-cargo-lock-{change.rev[:12]}.lock"
+    cargo_lockfile.write_text(
+        run(["git", "show", f"HEAD:{CARGO_LOCKFILE}"], capture=True).stdout,
+        encoding="utf-8",
+    )
+    print(f"Saved current internal {CARGO_LOCKFILE} for lockfile regeneration.")
+    return cargo_lockfile
+
+
+def public_change_touched_path(public_change_rev: str, path: Path) -> bool:
+    changed_paths = output(
+        ["git", "diff-tree", "--no-commit-id", "--name-only", "-r", public_change_rev]
+    ).splitlines()
+    return path.as_posix() in changed_paths
+
+
 def migrate_change(
     copybara_jar: str,
     last_public_rev: str,
     change: PublicChange,
     message_file: Path,
+    internal_cargo_lockfile: Path | None,
 ) -> None:
     run(
         [
@@ -265,7 +299,7 @@ def migrate_change(
 
     fetch_sync_branch()
     run(["git", "checkout", "--detach", f"origin/{SYNC_BRANCH}"])
-    regenerate_cargo_lockfile()
+    regenerate_cargo_lockfile(internal_cargo_lockfile)
     run(
         [
             "git",
@@ -292,9 +326,14 @@ def migrate_change(
     )
 
 
-def regenerate_cargo_lockfile() -> None:
+def regenerate_cargo_lockfile(internal_cargo_lockfile: Path | None) -> None:
+    if internal_cargo_lockfile is not None:
+        CARGO_LOCKFILE.write_text(
+            internal_cargo_lockfile.read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
     run(["cargo", "generate-lockfile", "--manifest-path", "codex-rs/Cargo.toml"])
-    run(["git", "add", "codex-rs/Cargo.lock"])
+    run(["git", "add", CARGO_LOCKFILE.as_posix()])
 
 
 def open_or_update_pr(change: PublicChange, body_file: Path) -> str:

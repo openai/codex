@@ -14,7 +14,7 @@ jobs:
   build-test:
     name: Internal to public projection build-test
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 45
     env:
       NODE_OPTIONS: --max-old-space-size=4096
     steps:
@@ -56,6 +56,81 @@ jobs:
         working-directory: ${{ env.PUBLIC_PROJECTION }}
         run: python3 .github/scripts/verify_bazel_clippy_lints.py
 
+      - name: Install just
+        uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2.62.49
+        with:
+          tool: just@1.51.0
+
+      - name: Check rusty_v8 MODULE.bazel checksums
+        working-directory: ${{ env.PUBLIC_PROJECTION }}
+        run: |
+          python3 .github/scripts/rusty_v8_bazel.py check-module-bazel
+          just test-github-scripts
+
+      - name: Prepare Bazel CI
+        id: prepare_bazel
+        uses: ./.github/actions/prepare-bazel-ci
+        with:
+          target: x86_64-unknown-linux-gnu
+          cache-scope: public-projection-bazel-${{ github.job }}
+          install-test-prereqs: "true"
+
+      - name: Check MODULE.bazel.lock is up to date
+        working-directory: ${{ env.PUBLIC_PROJECTION }}
+        run: ./scripts/check-module-bazel-lock.sh
+
+      - name: Bazel test //...
+        working-directory: ${{ env.PUBLIC_PROJECTION }}
+        env:
+          BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
+        run: |
+          bazel_targets=(
+            //...
+            # Keep standalone V8 library targets out of the ordinary Bazel CI
+            # path. V8 consumers under `//codex-rs/...` still participate
+            # transitively through `//...`.
+            -//third_party/v8:all
+            # Keep V8-backed code-mode tests out of the ordinary Linux leg;
+            # the public Bazel matrix exercises these on authenticated Windows
+            # cross-compiled shards.
+            -//codex-rs/code-mode:code-mode-unit-tests
+            -//codex-rs/v8-poc:v8-poc-unit-tests
+          )
+
+          bazel_wrapper_args=(
+            --print-failed-action-summary
+            --print-failed-test-logs
+          )
+          bazel_test_args=(
+            test
+            --test_tag_filters=-argument-comment-lint
+            --test_verbose_timeout_warnings
+            --build_metadata=COMMIT_SHA=${GITHUB_SHA}
+          )
+          ./.github/scripts/run-bazel-ci.sh \
+            "${bazel_wrapper_args[@]}" \
+            -- \
+            "${bazel_test_args[@]}" \
+            -- \
+            "${bazel_targets[@]}"
+
+      - name: Upload Bazel execution logs
+        if: always() && !cancelled()
+        continue-on-error: true
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: bazel-execution-logs-public-projection-linux
+          path: ${{ runner.temp }}/bazel-execution-logs
+          if-no-files-found: ignore
+
+      - name: Save bazel repository cache
+        if: always() && !cancelled() && steps.prepare_bazel.outputs.repository-cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: ${{ steps.prepare_bazel.outputs.repository-cache-path }}
+          key: ${{ steps.prepare_bazel.outputs.repository-cache-key }}
+
       - name: Test Codex package builder
         working-directory: ${{ env.PUBLIC_PROJECTION }}
         run: python3 -m unittest discover -s scripts/codex_package -p 'test_*.py'
@@ -96,10 +171,6 @@ jobs:
       - name: Check root README ToC
         working-directory: ${{ env.PUBLIC_PROJECTION }}
         run: python3 scripts/readme_toc.py README.md
-
-      - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2.62.49
-        with:
-          tool: just@1.51.0
 
       - name: Install uv
         uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
