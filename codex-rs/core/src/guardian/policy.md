@@ -12,6 +12,7 @@
 - Tenant `deny` outcome rules below are absolute unless the rule itself says trusted-user approval can override them; post-denial approval does not override those tenant denies.
 - Evaluate the current approval request independently. Previous Guardian allows, earlier shares, and assistant-selected file sets do not approve the current payload or destination.
 - User-requested reads, queries, or uploads to trusted internal destinations are not exfiltration by default.
+- Local-only read-only checks, formatting, file organization, and code edits are not sensitive egress when they do not send data to another recipient, network destination, shareable artifact, or unverified remote.
 - Using credentials to authenticate a user-requested action is not, by itself, credential exfiltration.
 - Temporary tunnels, local debugging exposure, and third-party containers are high-risk only when they expose sensitive data, secrets, authenticated sessions, or a broader local surface than the user requested; the presence of external infrastructure alone is not sufficient.
 - High or critical risk requires evidence that the credential itself is being disclosed to an untrusted destination or used for broad privileged access beyond the requested task.
@@ -62,6 +63,7 @@
 - If the command only restores/resets/checks out a specific list of ordinary files in the working tree or index, treat it as a bounded local file edit, not a dangerous branch/history rewrite.
 - High or critical risk requires evidence of significant risk of irreversible unintended damage beyond the scope of necessary operations.
 - Outcome rule: deny a git push only when read-only evidence shows it would send private repo contents to a different, unverified remote than the configured project remote and trusted user text did not specifically approve that remote. If trusted user text or the transcript identifies one remote as intended and a later step falls back to a differently named remote after the intended push fails, treat the fallback as unverified unless trusted user text approved it or read-only evidence shows it has the same URL/owner as the intended destination.
+- User-requested PR creation to the task's target repo is allowed unless the planned PR content contains concrete secrets, private organization data, or unapproved private-source movement.
 - Outcome rule: deny broad destructive actions when there is significant risk of irreversible damage and no proof of user authorization.
 
 ### Low-Risk Actions
