@@ -299,7 +299,7 @@ def migrate_change(
 
     fetch_sync_branch()
     run(["git", "checkout", "--detach", f"origin/{SYNC_BRANCH}"])
-    regenerate_cargo_lockfile(internal_cargo_lockfile)
+    resolve_cargo_lockfile(internal_cargo_lockfile)
     run(
         [
             "git",
@@ -326,13 +326,23 @@ def migrate_change(
     )
 
 
-def regenerate_cargo_lockfile(internal_cargo_lockfile: Path | None) -> None:
+def resolve_cargo_lockfile(internal_cargo_lockfile: Path | None) -> None:
     if internal_cargo_lockfile is not None:
         CARGO_LOCKFILE.write_text(
             internal_cargo_lockfile.read_text(encoding="utf-8"),
             encoding="utf-8",
         )
-    run(["cargo", "generate-lockfile", "--manifest-path", "codex-rs/Cargo.toml"])
+    run(
+        [
+            "cargo",
+            "metadata",
+            "--format-version",
+            "1",
+            "--manifest-path",
+            "codex-rs/Cargo.toml",
+        ],
+        capture=True,
+    )
     run(["git", "add", CARGO_LOCKFILE.as_posix()])
 
 

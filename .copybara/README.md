@@ -30,9 +30,11 @@ imported public revision.
 The public-to-internal Copybara workflow uses `merge_import` for shared files
 listed in `INTERNAL_ONLY_MARKER_FILES`. Copybara runs a three-way merge for
 those files so destination-only internal lines can survive public imports.
-After Copybara creates the sync branch, the Actions workflow regenerates
-`codex-rs/Cargo.lock` and amends the generated sync commit so the internal
-projection's lockfile reflects any internal workspace crates.
+After Copybara creates the sync branch, the Actions workflow restores the
+previous internal `codex-rs/Cargo.lock` unless the public change touched that
+file, then asks Cargo to resolve the workspace from that baseline and amends the
+generated sync commit. This keeps internal workspace crate entries available
+without eagerly refreshing unrelated third-party package versions.
 
 If multiple public changes are pending, the workflow opens one internal sync PR
 for the oldest pending public change and merges it immediately, without waiting
@@ -105,11 +107,11 @@ needs these markers, add that file to `INTERNAL_ONLY_MARKER_FILES` in
 
 Do not use line markers in generated files. In particular, `codex-rs/Cargo.lock`
 is projection-sensitive once internal workspace crates add lockfile entries.
-Keep it out of `INTERNAL_ONLY_FILES`: public-to-internal imports regenerate it
-for the internal projection, and the internal-to-public helper command
-regenerates it in the local `openai/codex` clone before creating the public PR.
-Do not export a lockfile that contains `codex-internal-*` packages or private
-sources.
+Keep it out of `INTERNAL_ONLY_FILES`: public-to-internal imports resolve it for
+the internal projection from the prior internal lockfile when possible, and the
+internal-to-public helper command regenerates it in the local `openai/codex`
+clone before creating the public PR. Do not export a lockfile that contains
+`codex-internal-*` packages or private sources.
 
 Public-owned paths should not depend on internal-only paths unless the Copybara
 transformations also remove or replace that dependency before export.
