@@ -22,13 +22,18 @@ impl EnvironmentPath {
     pub fn new(path: impl Into<String>) -> Result<Self, EnvironmentPathError> {
         let path = path.into();
         validate_environment_path(&path)?;
-        let path = normalize_environment_path(&path);
+        let path = normalize_environment_path(&path, PathNormalization::InferWindowsRoots);
         validate_environment_path(&path)?;
         Ok(Self(path))
     }
 
     pub fn posix(path: impl Into<String>) -> Result<Self, EnvironmentPathError> {
-        Self::new(path)
+        let path = path.into();
+        validate_posix_path(&path)?;
+        Ok(Self(normalize_environment_path(
+            &path,
+            PathNormalization::Posix,
+        )))
     }
 
     pub fn windows(path: impl Into<String>) -> Result<Self, EnvironmentPathError> {
@@ -36,7 +41,10 @@ impl EnvironmentPath {
         validate_windows_path(&path)?;
         let path = path.replace('\\', "/");
         if path.starts_with("//") {
-            return Ok(Self(normalize_environment_path(&path)));
+            return Ok(Self(normalize_environment_path(
+                &path,
+                PathNormalization::InferWindowsRoots,
+            )));
         }
 
         Self::new(format!("/{path}"))
@@ -47,16 +55,35 @@ impl EnvironmentPath {
     }
 
     /// Converts this canonical URI path to the requested native path syntax.
-    pub fn to_native_path(&self, flavor: PathFlavor) -> String {
+    ///
+    /// Windows conversion only succeeds for a fully qualified drive or UNC
+    /// path. This avoids returning root-relative paths whose meaning depends on
+    /// the process's current drive.
+    pub fn to_native_path(&self, flavor: PathFlavor) -> Result<String, EnvironmentPathError> {
         match flavor {
-            PathFlavor::Posix => self.0.clone(),
+            PathFlavor::Posix => Ok(self.0.clone()),
             PathFlavor::Windows => {
-                let path = if is_windows_drive_path(self.as_str()) {
-                    &self.as_str()[1..]
+                if has_unsupported_windows_namespace(self.as_str()) {
+                    return Err(EnvironmentPathError::UnsupportedWindowsNamespace(
+                        self.to_string(),
+                    ));
+                }
+                let path = self.as_str().replace('\\', "/");
+                if !(is_windows_drive_path(&path)
+                    || path.starts_with("//") && is_valid_unc_path(&path))
+                {
+                    return Err(EnvironmentPathError::IncompatiblePathFlavor {
+                        path: self.to_string(),
+                        flavor,
+                    });
+                }
+                let path = normalize_environment_path(&path, PathNormalization::InferWindowsRoots);
+                let path = if is_windows_drive_path(&path) {
+                    &path[1..]
                 } else {
-                    self.as_str()
+                    &path
                 };
-                path.replace('/', "\\")
+                Ok(path.replace('/', "\\"))
             }
         }
     }
@@ -79,7 +106,11 @@ impl EnvironmentPath {
             return None;
         }
         components.pop();
-        Some(Self(format_environment_path(self.as_str(), &components)))
+        Some(Self(format_environment_path(
+            self.as_str(),
+            &components,
+            PathNormalization::InferWindowsRoots,
+        )))
     }
 
     /// Lexically joins a relative normalized URI path onto this path.
@@ -120,15 +151,7 @@ impl EnvironmentPath {
 }
 
 fn validate_environment_path(path: &str) -> Result<(), EnvironmentPathError> {
-    if path.is_empty() {
-        return Err(EnvironmentPathError::Empty);
-    }
-    if path.contains('\0') {
-        return Err(EnvironmentPathError::ContainsNull);
-    }
-    if !path.starts_with('/') {
-        return Err(EnvironmentPathError::NotAbsolute(path.to_string()));
-    }
+    validate_posix_path(path)?;
     if has_unsupported_windows_namespace(path) {
         return Err(EnvironmentPathError::UnsupportedWindowsNamespace(
             path.to_string(),
@@ -138,6 +161,19 @@ fn validate_environment_path(path: &str) -> Result<(), EnvironmentPathError> {
         return Err(EnvironmentPathError::InvalidWindowsUncPath(
             path.to_string(),
         ));
+    }
+    Ok(())
+}
+
+fn validate_posix_path(path: &str) -> Result<(), EnvironmentPathError> {
+    if path.is_empty() {
+        return Err(EnvironmentPathError::Empty);
+    }
+    if path.contains('\0') {
+        return Err(EnvironmentPathError::ContainsNull);
+    }
+    if !path.starts_with('/') {
+        return Err(EnvironmentPathError::NotAbsolute(path.to_string()));
     }
     Ok(())
 }
@@ -190,16 +226,28 @@ fn has_unsupported_windows_namespace(path: &str) -> bool {
     path.starts_with("//?/") || path.starts_with("//./")
 }
 
-fn normalize_environment_path(path: &str) -> String {
+#[derive(Clone, Copy)]
+enum PathNormalization {
+    Posix,
+    InferWindowsRoots,
+}
+
+fn normalize_environment_path(path: &str, normalization: PathNormalization) -> String {
     let mut path = path.to_string();
-    if matches!(
-        path.as_bytes(),
-        [b'/', drive, b':', b'/', ..] if drive.is_ascii_alphabetic()
-    ) {
+    if matches!(normalization, PathNormalization::InferWindowsRoots)
+        && matches!(
+            path.as_bytes(),
+            [b'/', drive, b':'] | [b'/', drive, b':', b'/', ..]
+                if drive.is_ascii_alphabetic()
+        )
+    {
         path[1..2].make_ascii_lowercase();
     }
 
-    let root_depth = environment_path_root_depth(&path);
+    let root_depth = match normalization {
+        PathNormalization::Posix => 0,
+        PathNormalization::InferWindowsRoots => environment_path_root_depth(&path),
+    };
     let mut components = Vec::new();
     for component in environment_path_components(&path) {
         match component {
@@ -211,7 +259,7 @@ fn normalize_environment_path(path: &str) -> String {
             component => components.push(component),
         }
     }
-    format_environment_path(&path, &components)
+    format_environment_path(&path, &components, normalization)
 }
 
 fn environment_path_root_depth(path: &str) -> usize {
@@ -238,13 +286,19 @@ fn environment_path_components(path: &str) -> Vec<&str> {
         .collect()
 }
 
-fn format_environment_path(original: &str, components: &[&str]) -> String {
+fn format_environment_path(
+    original: &str,
+    components: &[&str],
+    normalization: PathNormalization,
+) -> String {
     if original.starts_with("//") && !original.starts_with("///") {
         return format!("//{}", components.join("/"));
     }
 
     let path = format!("/{}", components.join("/"));
-    if components.len() == 1
+    if matches!(normalization, PathNormalization::InferWindowsRoots)
+        && (original.ends_with('/') || is_windows_drive_path(original))
+        && components.len() == 1
         && components[0].len() == 2
         && components[0].ends_with(':')
         && components[0].as_bytes()[0].is_ascii_alphabetic()
@@ -269,6 +323,8 @@ pub enum EnvironmentPathError {
     InvalidWindowsUncPath(String),
     #[error("path `{0}` must be relative when joining an environment path")]
     JoinPathMustBeRelative(String),
+    #[error("path `{path}` cannot be represented using {flavor:?} path syntax")]
+    IncompatiblePathFlavor { path: String, flavor: PathFlavor },
 }
 
 #[cfg(test)]

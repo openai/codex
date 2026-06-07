@@ -1,5 +1,16 @@
 use super::*;
+use codex_utils_absolute_path::AbsolutePathBufGuard;
 use pretty_assertions::assert_eq;
+#[cfg(unix)]
+use std::os::unix::ffi::OsStringExt;
+#[cfg(unix)]
+use std::path::PathBuf;
+
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
+struct LegacyFilePathField {
+    #[serde(with = "legacy_file_path_serde")]
+    path: PathUri,
+}
 
 #[test]
 fn file_uri_round_trips_an_absolute_path() {
@@ -21,7 +32,7 @@ fn file_uri_round_trips_an_absolute_path() {
     );
     assert_eq!(
         view.path().to_native_path(PathFlavor::Posix),
-        view.path().as_str()
+        Ok(view.path().as_str().to_string())
     );
 }
 
@@ -33,10 +44,14 @@ fn file_uri_parses_a_windows_path_on_any_host() {
     let PathUriView::File(view) = uri.view() else {
         panic!("expected file view");
     };
-    assert_eq!(view.path().as_str(), "/c:/Users/Alice Smith/src/main.rs");
+    assert_eq!(view.path().as_str(), "/C:/Users/Alice Smith/src/main.rs");
     assert_eq!(
         uri.to_string(),
-        "file:///c:/Users/Alice%20Smith/src/main.rs"
+        "file:///C:/Users/Alice%20Smith/src/main.rs"
+    );
+    assert_eq!(
+        view.path().to_native_path(PathFlavor::Windows),
+        Ok(r"c:\Users\Alice Smith\src\main.rs".to_string())
     );
 }
 
@@ -50,6 +65,84 @@ fn file_uri_parses_a_posix_path_on_any_host() {
     };
     assert_eq!(view.path().as_str(), "/home/alice/src/main.rs");
     assert_eq!(uri.to_string(), "file:///home/alice/src/main.rs");
+}
+
+#[test]
+#[cfg(unix)]
+fn file_uri_round_trips_posix_paths_that_resemble_windows_paths() {
+    for input in ["/C:/Project", "/C:"] {
+        let path = AbsolutePathBuf::from_absolute_path_checked(input).expect("absolute POSIX path");
+        let uri = PathUri::from_file_path(&path).expect("path should convert to a file URI");
+        let reparsed = PathUri::parse(&uri.to_string()).expect("file URI should reparse");
+        let PathUriView::File(view) = uri.view() else {
+            panic!("expected file view");
+        };
+
+        assert_eq!(view.path().as_str(), input);
+        assert_eq!(reparsed, uri);
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn file_uri_accepts_non_utf8_posix_paths() {
+    let path = PathBuf::from(std::ffi::OsString::from_vec(b"/tmp/non-utf8-\xff".to_vec()));
+    let path = AbsolutePathBuf::from_absolute_path_checked(path).expect("absolute POSIX path");
+
+    let uri = PathUri::from_file_path(&path).expect("non-UTF-8 path should convert to a file URI");
+    let PathUriView::File(view) = uri.view() else {
+        panic!("expected file view");
+    };
+    assert_eq!(
+        view.to_native_path()
+            .expect("URI should convert to native path"),
+        path
+    );
+    assert_eq!(
+        PathUri::parse(&uri.to_string()).expect("non-UTF-8 URI should reparse"),
+        uri
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn file_uri_round_trips_literal_percent_characters() {
+    let path =
+        AbsolutePathBuf::from_absolute_path_checked("/tmp/100%/file").expect("absolute POSIX path");
+    let uri = PathUri::from_file_path(&path).expect("path should convert to a file URI");
+
+    assert_eq!(uri.to_string(), "file:///tmp/100%25/file");
+    let PathUriView::File(view) = uri.view() else {
+        panic!("expected file view");
+    };
+    assert_eq!(
+        view.to_native_path()
+            .expect("URI should convert to native path"),
+        path
+    );
+}
+
+#[test]
+#[cfg(windows)]
+fn file_uri_round_trips_windows_unc_paths() {
+    let path = AbsolutePathBuf::from_absolute_path_checked(r"\\server\share\src\main.rs")
+        .expect("absolute UNC path");
+    let uri = PathUri::from_file_path(&path).expect("UNC path should convert to a file URI");
+    let PathUriView::File(view) = uri.view() else {
+        panic!("expected file view");
+    };
+
+    assert_eq!(view.path().as_str(), "//server/share/src/main.rs");
+}
+
+#[test]
+fn file_uri_path_view_retains_unc_authority() {
+    let url = Url::parse("file://server/share/src/main.rs").expect("valid file URI");
+
+    assert_eq!(
+        decode_file_uri_path(&url),
+        "//server/share/src/main.rs".to_string()
+    );
 }
 
 #[test]
@@ -153,11 +246,63 @@ fn path_uri_serializes_as_a_string() {
 }
 
 #[test]
+fn path_uri_deserializes_legacy_absolute_paths() {
+    let uri: PathUri =
+        serde_json::from_str(r#""/workspace/src""#).expect("legacy absolute path should parse");
+
+    assert_eq!(uri.to_string(), "file:///workspace/src");
+}
+
+#[test]
+fn path_uri_deserializes_legacy_relative_paths_with_absolute_path_guard() {
+    let base = AbsolutePathBuf::current_dir().expect("current directory");
+    let _guard = AbsolutePathBufGuard::new(base.as_path());
+    let uri: PathUri =
+        serde_json::from_str(r#""src/lib.rs""#).expect("legacy relative path should parse");
+
+    assert_eq!(
+        uri,
+        PathUri::from_file_path(&base.join("src/lib.rs")).expect("expected file URI")
+    );
+}
+
+#[test]
+fn legacy_file_path_serde_preserves_the_existing_wire_format() {
+    let base = AbsolutePathBuf::current_dir().expect("current directory");
+    let uri = PathUri::from_file_path(&base.join("src/lib.rs")).expect("file URI");
+    let field = LegacyFilePathField { path: uri };
+
+    let json = serde_json::to_string(&field).expect("legacy field should serialize");
+    let _guard = AbsolutePathBufGuard::new(base.as_path());
+    let reparsed: LegacyFilePathField =
+        serde_json::from_str(&json).expect("legacy field should deserialize");
+
+    assert_eq!(reparsed, field);
+    assert!(!json.contains("file:"));
+}
+
+#[test]
 fn parsed_uri_serializes_from_typed_components() {
     let uri = PathUri::parse("codex-env:///devbox/C:/workspace/./src/../lib.rs")
         .expect("valid environment URI");
 
     assert_eq!(uri.to_string(), "codex-env:///devbox/c:/workspace/lib.rs");
+}
+
+#[test]
+fn environment_uri_dot_segments_cannot_change_the_environment_id() {
+    for input in [
+        "codex-env:///devbox/../prod/secret",
+        "codex-env:///devbox/%2e%2e/prod/secret",
+    ] {
+        let uri = PathUri::parse(input).expect("environment URI should parse");
+        let PathUriView::Environment(view) = uri.view() else {
+            panic!("expected environment view");
+        };
+
+        assert_eq!(view.environment_id().as_str(), "devbox", "parsing {input}");
+        assert_eq!(view.path().as_str(), "/prod/secret", "parsing {input}");
+    }
 }
 
 #[test]
@@ -258,7 +403,6 @@ fn path_uris_reject_percent_encoded_path_separators() {
 #[test]
 fn path_uris_reject_non_utf8_percent_encoding() {
     for input in [
-        "file:///tmp/%FF",
         "file:///tmp/%00",
         "file:///tmp/%ZZ",
         "codex-env:///devbox/tmp/%F0%28%8C%28",
@@ -294,16 +438,45 @@ fn double_encoded_separator_remains_filename_text() {
 }
 
 #[test]
-fn environment_id_validates_the_current_exec_server_shape() {
-    let valid = EnvironmentId::new("dev_box-1").expect("valid environment id");
+fn environment_id_accepts_opaque_values_up_to_the_shared_limit() {
+    let path = EnvironmentPath::posix("/workspace").expect("valid path");
+    for id in [
+        "dev_box-1",
+        "local",
+        "none",
+        "dev.box",
+        "日本語/environment",
+        "a?b#c%d",
+    ] {
+        let environment_id = EnvironmentId::new(id).expect("valid opaque id");
+        let uri = PathUri::from_environment_path(&environment_id, &path)
+            .expect("opaque environment id should serialize");
+        let reparsed = PathUri::parse(&uri.to_string()).expect("environment URI should reparse");
+        let PathUriView::Environment(view) = reparsed.view() else {
+            panic!("expected environment view");
+        };
 
-    assert_eq!(valid.as_str(), "dev_box-1");
+        assert_eq!(
+            view.environment_id(),
+            &environment_id,
+            "round-tripping {id}"
+        );
+    }
     assert_eq!(
-        EnvironmentId::new("local"),
-        Err(EnvironmentIdError::Reserved("local".to_string()))
+        EnvironmentId::new("x".repeat(MAX_ENVIRONMENT_ID_LEN)),
+        Ok(EnvironmentId("x".repeat(MAX_ENVIRONMENT_ID_LEN)))
     );
     assert_eq!(
-        EnvironmentId::new("dev.box"),
-        Err(EnvironmentIdError::InvalidCharacter("dev.box".to_string()))
+        EnvironmentId::new("x".repeat(MAX_ENVIRONMENT_ID_LEN + 1)),
+        Err(EnvironmentIdError::TooLong {
+            length: MAX_ENVIRONMENT_ID_LEN + 1,
+            max_length: MAX_ENVIRONMENT_ID_LEN,
+        })
     );
+    for id in [".", ".."] {
+        assert_eq!(
+            EnvironmentId::new(id),
+            Err(EnvironmentIdError::DotSegment(id.to_string()))
+        );
+    }
 }

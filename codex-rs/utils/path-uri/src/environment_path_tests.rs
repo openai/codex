@@ -35,11 +35,28 @@ fn normalization_is_idempotent() {
     for input in [
         "/",
         "/workspace/src",
+        "/C:",
         "/c:/Users/Alice",
         "//server/share/src",
     ] {
         let path = EnvironmentPath::new(input).expect("valid path");
         assert_eq!(EnvironmentPath::new(path.as_str()), Ok(path));
+    }
+}
+
+#[test]
+fn posix_paths_preserve_windows_looking_names() {
+    for (input, expected) in [
+        ("/C:", "/C:"),
+        ("/C:/Project", "/C:/Project"),
+        ("/C:/../Project", "/Project"),
+        ("//server", "//server"),
+    ] {
+        assert_eq!(
+            EnvironmentPath::posix(input),
+            Ok(canonical(expected)),
+            "normalizing {input}"
+        );
     }
 }
 
@@ -103,9 +120,48 @@ fn native_path_conversion_uses_the_requested_flavor() {
         ),
     ] {
         let path = EnvironmentPath::new(path).expect("valid canonical path");
-        assert_eq!(path.to_native_path(PathFlavor::Posix), posix);
-        assert_eq!(path.to_native_path(PathFlavor::Windows), windows);
+        assert_eq!(
+            path.to_native_path(PathFlavor::Posix),
+            Ok(posix.to_string())
+        );
+        if path.as_str() == "/workspace/src" {
+            assert_eq!(
+                path.to_native_path(PathFlavor::Windows),
+                Err(EnvironmentPathError::IncompatiblePathFlavor {
+                    path: path.to_string(),
+                    flavor: PathFlavor::Windows,
+                })
+            );
+        } else {
+            assert_eq!(
+                path.to_native_path(PathFlavor::Windows),
+                Ok(windows.to_string())
+            );
+        }
     }
+}
+
+#[test]
+fn windows_conversion_normalizes_embedded_backslash_segments() {
+    let path = EnvironmentPath::new(r"/c:/workspace/a\..\..\secret").expect("valid URI path");
+
+    assert_eq!(
+        path.to_native_path(PathFlavor::Windows),
+        Ok(r"c:\secret".to_string())
+    );
+}
+
+#[test]
+fn windows_conversion_does_not_return_drive_relative_paths() {
+    let path = EnvironmentPath::new("/workspace/src").expect("valid URI path");
+
+    assert_eq!(
+        path.to_native_path(PathFlavor::Windows),
+        Err(EnvironmentPathError::IncompatiblePathFlavor {
+            path: "/workspace/src".to_string(),
+            flavor: PathFlavor::Windows,
+        })
+    );
 }
 
 #[test]

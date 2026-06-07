@@ -1,7 +1,9 @@
 //! Typed URIs for paths on the current host and in configured Codex environments.
 //!
-//! `file:` URI paths are stored in normalized URI syntax, so they can be parsed
-//! independently of the current host.
+//! `file:` URI paths are stored in URI syntax, so they can be parsed
+//! independently of the current host. Their path spelling stays lexical because
+//! `/C:/src` can mean either a Windows drive path or a valid POSIX path; native
+//! conversion is the point where host path rules are applied.
 //! Remote paths use `codex-env:` URIs containing an environment identifier and
 //! a normalized hierarchical path. Like [VS Code resources][vscode-resources],
 //! environment paths always use `/` separators, so basename, parent, join, and
@@ -18,8 +20,10 @@
 //! to native syntax, validating platform-specific names, and deciding path case
 //! sensitivity require metadata from the environment. Filesystem-dependent
 //! operations such as canonicalizing symlinks still require the environment.
-//! URI identity is lexical and UTF-8-only: case, Unicode normalization, hard
-//! links, and filesystem aliases are not folded together.
+//! Environment URI identity is lexical and UTF-8-only: case, Unicode
+//! normalization, hard links, and filesystem aliases are not folded together.
+//! `file:` URIs may additionally retain percent-encoded non-UTF-8 bytes so
+//! local POSIX paths can round-trip without loss.
 //!
 //! [`file:` URIs][rfc-8089] remain host-specific because they can only be
 //! dependably converted to paths when local to the interpreting host.
@@ -49,20 +53,71 @@ pub use environment_path::PathFlavor;
 pub const FILE_SCHEME: &str = "file";
 pub const CODEX_ENVIRONMENT_SCHEME: &str = "codex-env";
 
-/// Reserved so paths on the current host have one canonical representation:
-/// `file:`. Allowing `codex-env:///local/...` as well would give the same local
-/// path two URI identities and blur whether environment path rules apply.
-const LOCAL_ENVIRONMENT_ID: &str = "local";
-const MAX_ENVIRONMENT_ID_LEN: usize = 256;
+/// Maximum encoded environment identifier length accepted at Codex boundaries.
+pub const MAX_ENVIRONMENT_ID_LEN: usize = 64;
 
 /// A URI that can identify a path in the current host or another environment.
 ///
 /// Construction is fallible and only succeeds for schemes understood by this
 /// version of the crate. This keeps [`PathUri::view`] infallible and exhaustive.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Deserialize, TS)]
-#[serde(try_from = "String")]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, TS)]
 #[ts(type = "string")]
 pub struct PathUri(Url);
+
+impl PathUri {
+    pub fn parse(uri: &str) -> Result<Self, PathUriParseError> {
+        if uri_scheme(uri)
+            .is_some_and(|scheme| scheme.eq_ignore_ascii_case(CODEX_ENVIRONMENT_SCHEME))
+        {
+            return parse_environment_uri(uri);
+        }
+        Url::parse(uri)?.try_into()
+    }
+
+    pub fn from_file_path(path: &AbsolutePathBuf) -> Result<Self, PathUriParseError> {
+        let url = Url::from_file_path(path.as_path())
+            .map_err(|()| PathUriParseError::PathCannotBeRepresentedAsFileUri)?;
+        #[cfg(windows)]
+        if url.host().is_none()
+            && let Some(path) = path.as_path().to_str()
+        {
+            return Ok(Self(file_url(&EnvironmentPath::windows(path)?)?));
+        }
+        Self::try_from(url)
+    }
+
+    pub fn from_environment_path(
+        environment_id: &EnvironmentId,
+        path: &EnvironmentPath,
+    ) -> Result<Self, PathUriParseError> {
+        let url = environment_url(environment_id, path)?;
+        Self::try_from(url)
+    }
+
+    pub fn scheme(&self) -> &str {
+        self.0.scheme()
+    }
+
+    pub fn view(&self) -> PathUriView {
+        if self.scheme() == FILE_SCHEME {
+            return PathUriView::File(FileUriView {
+                path: EnvironmentPath::from_normalized(decode_file_uri_path(&self.0)),
+                url: self.0.clone(),
+            });
+        }
+
+        let path = self.0.path().strip_prefix('/').unwrap_or_default();
+        let (environment_id, path) = path.split_once('/').unwrap_or_default();
+        PathUriView::Environment(EnvironmentUriView {
+            environment_id: EnvironmentId(decode_uri_path(environment_id)),
+            path: EnvironmentPath::from_normalized(decode_uri_path(&format!("/{path}"))),
+        })
+    }
+
+    pub fn to_url(&self) -> Result<Url, PathUriParseError> {
+        Ok(self.0.clone())
+    }
+}
 
 /// A closed view over the path URI schemes understood by this crate.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -75,11 +130,22 @@ pub enum PathUriView {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FileUriView {
     path: EnvironmentPath,
+    url: Url,
 }
 
 impl FileUriView {
     pub fn path(&self) -> &EnvironmentPath {
         &self.path
+    }
+
+    /// Converts this file URI to a path using the current host's path rules.
+    pub fn to_native_path(&self) -> Result<AbsolutePathBuf, PathUriParseError> {
+        let path = self
+            .url
+            .to_file_path()
+            .map_err(|()| PathUriParseError::InvalidFileUriPath)?;
+        AbsolutePathBuf::from_absolute_path_checked(path)
+            .map_err(|_| PathUriParseError::InvalidFileUriPath)
     }
 }
 
@@ -99,7 +165,10 @@ impl EnvironmentUriView {
     }
 }
 
-/// An identifier for a configured remote environment.
+/// An opaque identifier for a configured remote environment.
+///
+/// The URI path dot segments `.` and `..` are excluded because URL parsers
+/// normalize them before this crate can recover the identifier.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, JsonSchema, TS)]
 #[serde(transparent)]
 #[schemars(with = "String")]
@@ -149,56 +218,15 @@ impl<'de> Deserialize<'de> for EnvironmentId {
     }
 }
 
-impl PathUri {
-    pub fn parse(uri: &str) -> Result<Self, PathUriParseError> {
-        Url::parse(uri)?.try_into()
-    }
-
-    pub fn from_file_path(path: &AbsolutePathBuf) -> Result<Self, PathUriParseError> {
-        let url = Url::from_file_path(path.as_path())
-            .map_err(|()| PathUriParseError::PathCannotBeRepresentedAsFileUri)?;
-        Self::try_from(url)
-    }
-
-    pub fn from_environment_path(
-        environment_id: &EnvironmentId,
-        path: &EnvironmentPath,
-    ) -> Result<Self, PathUriParseError> {
-        let url = environment_url(environment_id, path)?;
-        Self::try_from(url)
-    }
-
-    pub fn scheme(&self) -> &str {
-        self.0.scheme()
-    }
-
-    pub fn view(&self) -> PathUriView {
-        if self.scheme() == FILE_SCHEME {
-            return PathUriView::File(FileUriView {
-                path: EnvironmentPath::from_normalized(decode_uri_path(self.0.path())),
-            });
-        }
-
-        let decoded = decode_uri_path(self.0.path());
-        let path = decoded.strip_prefix('/').unwrap_or_default();
-        let (environment_id, path) = path.split_once('/').unwrap_or_default();
-        PathUriView::Environment(EnvironmentUriView {
-            environment_id: EnvironmentId(environment_id.to_string()),
-            path: EnvironmentPath::from_normalized(format!("/{path}")),
-        })
-    }
-
-    pub fn to_url(&self) -> Result<Url, PathUriParseError> {
-        Ok(self.0.clone())
-    }
-}
-
 impl TryFrom<Url> for PathUri {
     type Error = PathUriParseError;
 
     fn try_from(url: Url) -> Result<Self, Self::Error> {
         let url = match url.scheme() {
-            FILE_SCHEME => file_url(&parse_file_path(&url)?)?,
+            FILE_SCHEME => {
+                parse_file_path(&url)?;
+                canonical_file_url(url)?
+            }
             CODEX_ENVIRONMENT_SCHEME => {
                 let (environment_id, path) = parse_environment_path(&url)?;
                 environment_url(&environment_id, &path)?
@@ -214,6 +242,23 @@ impl TryFrom<String> for PathUri {
 
     fn try_from(uri: String) -> Result<Self, Self::Error> {
         Self::parse(&uri)
+    }
+}
+
+impl<'de> Deserialize<'de> for PathUri {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        if looks_like_uri(&value) {
+            return Self::parse(&value).map_err(serde::de::Error::custom);
+        }
+
+        let path = AbsolutePathBuf::deserialize(
+            serde::de::value::StringDeserializer::<D::Error>::new(value),
+        )?;
+        Self::from_file_path(&path).map_err(serde::de::Error::custom)
     }
 }
 
@@ -250,17 +295,45 @@ impl JsonSchema for PathUri {
     }
 }
 
+/// Serde adapter for fields that still use the legacy native file-path wire format.
+///
+/// Deserialization accepts either the legacy native path or a [`PathUri`].
+/// Serialization only accepts `file:` URIs and emits the current host's native
+/// path spelling. New URI-native fields should use [`PathUri`]'s own serde
+/// implementation instead.
+pub mod legacy_file_path_serde {
+    use super::*;
+
+    pub fn serialize<S>(uri: &PathUri, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let PathUriView::File(view) = uri.view() else {
+            return Err(serde::ser::Error::custom(
+                "codex-env URI cannot use legacy file-path serialization",
+            ));
+        };
+        view.to_native_path()
+            .map_err(serde::ser::Error::custom)?
+            .serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<PathUri, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        PathUri::deserialize(deserializer)
+    }
+}
+
 fn parse_file_path(url: &Url) -> Result<EnvironmentPath, PathUriParseError> {
-    validate_common_known_uri(url)?;
+    validate_file_url(url)?;
     if url.host_str().is_some_and(|host| host != "localhost") {
-        return Err(PathUriParseError::FileUriMustReferenceCurrentHost);
+        return EnvironmentPath::new(decode_file_uri_path(url))
+            .map_err(|_| PathUriParseError::InvalidFileUriPath);
     }
-    if has_invalid_percent_encoding(url.path()) || contains_percent_encoded_slash(url.path()) {
-        return Err(PathUriParseError::InvalidFileUriPath);
-    }
-    let path =
-        urlencoding::decode(url.path()).map_err(|_| PathUriParseError::InvalidFileUriPath)?;
-    EnvironmentPath::new(path.into_owned()).map_err(|_| PathUriParseError::InvalidFileUriPath)
+    EnvironmentPath::posix(decode_uri_path(url.path()))
+        .map_err(|_| PathUriParseError::InvalidFileUriPath)
 }
 
 fn parse_environment_path(
@@ -270,7 +343,7 @@ fn parse_environment_path(
     if url.host().is_some() {
         return Err(PathUriParseError::EnvironmentUriMustNotHaveAuthority);
     }
-    if has_invalid_percent_encoding(url.path()) || contains_percent_encoded_slash(url.path()) {
+    if has_invalid_percent_encoding(url.path()) {
         return Err(PathUriParseError::InvalidEnvironmentUriPath);
     }
 
@@ -281,7 +354,12 @@ fn parse_environment_path(
     let (environment_id, path) = path
         .split_once('/')
         .ok_or(PathUriParseError::InvalidEnvironmentUriPath)?;
-    let environment_id = EnvironmentId::new(environment_id)?;
+    if contains_percent_encoded_slash(path) {
+        return Err(PathUriParseError::InvalidEnvironmentUriPath);
+    }
+    let environment_id = urlencoding::decode(environment_id)
+        .map_err(|_| PathUriParseError::InvalidEnvironmentUriPath)?;
+    let environment_id = EnvironmentId::new(environment_id.into_owned())?;
     let path = format!("/{path}");
     let path =
         urlencoding::decode(&path).map_err(|_| PathUriParseError::InvalidEnvironmentUriPath)?;
@@ -289,14 +367,18 @@ fn parse_environment_path(
     Ok((environment_id, path))
 }
 
+#[cfg(windows)]
 fn file_url(path: &EnvironmentPath) -> Result<Url, PathUriParseError> {
     let mut url = Url::parse("file:///")?;
-    let Ok(mut segments) = url.path_segments_mut() else {
-        unreachable!("file URLs support hierarchical path segments");
-    };
-    segments.clear();
-    append_path_segments(&mut segments, path);
-    drop(segments);
+    url.set_path(&path.as_str().replace('%', "%25"));
+    Ok(url)
+}
+
+fn canonical_file_url(mut url: Url) -> Result<Url, PathUriParseError> {
+    if url.host_str() == Some("localhost") {
+        url.set_host(None)
+            .map_err(|_| PathUriParseError::InvalidFileUriPath)?;
+    }
     Ok(url)
 }
 
@@ -323,10 +405,9 @@ fn append_path_segments(segments: &mut PathSegmentsMut<'_>, path: &EnvironmentPa
 }
 
 fn decode_uri_path(path: &str) -> String {
-    let Ok(path) = urlencoding::decode(path) else {
-        unreachable!("PathUri validates UTF-8 percent encoding during construction");
-    };
-    path.into_owned()
+    urlencoding::decode(path)
+        .map(std::borrow::Cow::into_owned)
+        .unwrap_or_else(|_| path.to_string())
 }
 
 fn contains_percent_encoded_slash(path: &str) -> bool {
@@ -367,24 +448,98 @@ fn validate_common_known_uri(url: &Url) -> Result<(), PathUriParseError> {
     Ok(())
 }
 
+fn validate_file_url(url: &Url) -> Result<(), PathUriParseError> {
+    validate_common_known_uri(url)?;
+    if url.host_str().is_some_and(|host| host != "localhost") && !cfg!(windows) {
+        return Err(PathUriParseError::FileUriMustReferenceCurrentHost);
+    }
+    if has_invalid_percent_encoding(url.path()) || contains_percent_encoded_slash(url.path()) {
+        return Err(PathUriParseError::InvalidFileUriPath);
+    }
+    if urlencoding::decode_binary(url.path().as_bytes()).contains(&0) {
+        return Err(PathUriParseError::InvalidFileUriPath);
+    }
+    Ok(())
+}
+
+fn decode_file_uri_path(url: &Url) -> String {
+    let path = decode_uri_path(url.path());
+    if let Some(host) = url.host_str().filter(|host| *host != "localhost") {
+        format!("//{host}{path}")
+    } else {
+        path
+    }
+}
+
+fn parse_environment_uri(uri: &str) -> Result<PathUri, PathUriParseError> {
+    let (_, remainder) = uri
+        .split_once(':')
+        .ok_or(PathUriParseError::InvalidEnvironmentUriPath)?;
+    if remainder.contains('?') {
+        return Err(PathUriParseError::QueryNotAllowed);
+    }
+    if remainder.contains('#') {
+        return Err(PathUriParseError::FragmentNotAllowed);
+    }
+    let Some(path) = remainder.strip_prefix("///") else {
+        if remainder.starts_with("//") {
+            return Err(PathUriParseError::EnvironmentUriMustNotHaveAuthority);
+        }
+        return Err(PathUriParseError::InvalidEnvironmentUriPath);
+    };
+    let (environment_id, path) = path
+        .split_once('/')
+        .ok_or(PathUriParseError::InvalidEnvironmentUriPath)?;
+    if has_invalid_percent_encoding(environment_id) || has_invalid_percent_encoding(path) {
+        return Err(PathUriParseError::InvalidEnvironmentUriPath);
+    }
+    if contains_percent_encoded_slash(path) {
+        return Err(PathUriParseError::InvalidEnvironmentUriPath);
+    }
+    let environment_id = urlencoding::decode(environment_id)
+        .map_err(|_| PathUriParseError::InvalidEnvironmentUriPath)?;
+    let environment_id = EnvironmentId::new(environment_id.into_owned())?;
+    let path = format!("/{path}");
+    let path =
+        urlencoding::decode(&path).map_err(|_| PathUriParseError::InvalidEnvironmentUriPath)?;
+    let path = EnvironmentPath::new(path.into_owned())?;
+    Ok(PathUri(environment_url(&environment_id, &path)?))
+}
+
+fn uri_scheme(uri: &str) -> Option<&str> {
+    let (scheme, _) = uri.split_once(':')?;
+    (!scheme.is_empty()
+        && scheme.bytes().enumerate().all(|(index, byte)| {
+            byte.is_ascii_alphabetic()
+                || (index > 0 && (byte.is_ascii_digit() || matches!(byte, b'+' | b'-' | b'.')))
+        }))
+    .then_some(scheme)
+}
+
+fn looks_like_uri(value: &str) -> bool {
+    let Some(scheme) = uri_scheme(value) else {
+        return false;
+    };
+    !(scheme.len() == 1
+        && scheme.as_bytes()[0].is_ascii_alphabetic()
+        && value
+            .as_bytes()
+            .get(2)
+            .is_some_and(|separator| matches!(separator, b'/' | b'\\')))
+}
+
 fn validate_environment_id(id: &str) -> Result<(), EnvironmentIdError> {
     if id.is_empty() {
         return Err(EnvironmentIdError::Empty);
     }
-    if id == LOCAL_ENVIRONMENT_ID || id.eq_ignore_ascii_case("none") {
-        return Err(EnvironmentIdError::Reserved(id.to_string()));
+    if matches!(id, "." | "..") {
+        return Err(EnvironmentIdError::DotSegment(id.to_string()));
     }
     if id.len() > MAX_ENVIRONMENT_ID_LEN {
         return Err(EnvironmentIdError::TooLong {
             length: id.len(),
             max_length: MAX_ENVIRONMENT_ID_LEN,
         });
-    }
-    if !id
-        .chars()
-        .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
-    {
-        return Err(EnvironmentIdError::InvalidCharacter(id.to_string()));
     }
     Ok(())
 }
@@ -393,12 +548,10 @@ fn validate_environment_id(id: &str) -> Result<(), EnvironmentIdError> {
 pub enum EnvironmentIdError {
     #[error("environment id cannot be empty")]
     Empty,
-    #[error("environment id `{0}` is reserved")]
-    Reserved(String),
+    #[error("environment id `{0}` cannot be a URI path dot segment")]
+    DotSegment(String),
     #[error("environment id is {length} bytes; maximum length is {max_length}")]
     TooLong { length: usize, max_length: usize },
-    #[error("environment id `{0}` must contain only ASCII letters, numbers, '-' or '_'")]
-    InvalidCharacter(String),
 }
 
 #[derive(Debug, Error)]
