@@ -35,6 +35,7 @@ STRIP_INTERNAL_ONLY_MARKERS = core.transform(
             paths = INTERNAL_ONLY_MARKER_FILES,
         ),
     ],
+    reversal = [],
     noop_behavior = "IGNORE_NOOP",
 )
 
