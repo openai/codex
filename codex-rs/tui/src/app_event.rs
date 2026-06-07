@@ -38,6 +38,7 @@ use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::StatusLineItem;
 use crate::bottom_pane::TerminalTitleItem;
 use crate::chatwidget::UserMessage;
+use crate::session_state::ThreadSessionState;
 use codex_app_server_protocol::AskForApproval;
 use codex_config::types::ApprovalsReviewer;
 use codex_features::Feature;
@@ -55,7 +56,7 @@ use crate::history_cell::HistoryCell;
 #[derive(Debug)]
 pub(crate) struct SideThreadPrepareError {
     pub(crate) thread_id: Option<ThreadId>,
-    pub(crate) message: String,
+    pub(crate) error: color_eyre::Report,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -154,7 +155,7 @@ pub(crate) enum AppEvent {
         user_message: Option<UserMessage>,
     },
     /// Finish preparing a transient side conversation off the TUI event loop.
-    SideThreadPrepared(Uuid, Result<AppServerStartedThread, SideThreadPrepareError>),
+    SideThreadPrepared(Uuid, Result<ThreadSessionState, SideThreadPrepareError>),
     /// Finish removing a canceled or failed side conversation off the TUI event loop.
     SideThreadCleanupFinished(ThreadId, Result<(), String>),
 

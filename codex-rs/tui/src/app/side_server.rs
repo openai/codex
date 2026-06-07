@@ -15,11 +15,11 @@ pub(super) async fn prepare_side_thread(
     parent_thread_id: ThreadId,
     thread_params_mode: ThreadParamsMode,
     remote_cwd_override: Option<PathBuf>,
-) -> std::result::Result<AppServerStartedThread, SideThreadPrepareError> {
+) -> std::result::Result<ThreadSessionState, SideThreadPrepareError> {
     let boundary_item = serde_json::to_value(App::side_boundary_prompt_item()).map_err(|err| {
         SideThreadPrepareError {
             thread_id: None,
-            message: format!("failed to encode thread/inject_items payload: {err}"),
+            error: color_eyre::eyre::eyre!("failed to encode thread/inject_items payload: {err}"),
         }
     })?;
     let started = crate::app_server_session::fork_thread_with_request_handle(
@@ -32,7 +32,7 @@ pub(super) async fn prepare_side_thread(
     .await
     .map_err(|err| SideThreadPrepareError {
         thread_id: None,
-        message: format!("{err:#}"),
+        error: err,
     })?;
     let child_thread_id = started.session.thread_id;
 
@@ -50,19 +50,19 @@ pub(super) async fn prepare_side_thread(
     if let Err(err) = inject_result {
         return Err(SideThreadPrepareError {
             thread_id: Some(child_thread_id),
-            message: format!(
+            error: color_eyre::eyre::eyre!(
                 "thread/inject_items failed during TUI side conversation setup: {err}"
             ),
         });
     }
-    Ok(started)
+    Ok(started.session)
 }
 
 pub(super) async fn cleanup_side_thread(
     request_handle: AppServerRequestHandle,
     thread_id: ThreadId,
 ) -> std::result::Result<(), String> {
-    let interrupt_result = request_handle
+    request_handle
         .request_typed::<TurnInterruptResponse>(ClientRequest::TurnInterrupt {
             request_id: RequestId::String(format!("side-thread-interrupt-{}", Uuid::new_v4())),
             params: TurnInterruptParams {
@@ -70,23 +70,16 @@ pub(super) async fn cleanup_side_thread(
                 turn_id: String::new(),
             },
         })
-        .await;
-    let unsubscribe_result = request_handle
+        .await
+        .map_err(|err| format!("turn/interrupt failed: {err}"))?;
+    request_handle
         .request_typed::<ThreadUnsubscribeResponse>(ClientRequest::ThreadUnsubscribe {
             request_id: RequestId::String(format!("side-thread-unsubscribe-{}", Uuid::new_v4())),
             params: ThreadUnsubscribeParams {
                 thread_id: thread_id.to_string(),
             },
         })
-        .await;
-    match (interrupt_result, unsubscribe_result) {
-        (Ok(_), Ok(_)) => Ok(()),
-        (Err(interrupt_err), Ok(_)) => Err(format!("turn/interrupt failed: {interrupt_err}")),
-        (Ok(_), Err(unsubscribe_err)) => {
-            Err(format!("thread/unsubscribe failed: {unsubscribe_err}"))
-        }
-        (Err(interrupt_err), Err(unsubscribe_err)) => Err(format!(
-            "turn/interrupt failed: {interrupt_err}; thread/unsubscribe failed: {unsubscribe_err}"
-        )),
-    }
+        .await
+        .map(|_| ())
+        .map_err(|err| format!("thread/unsubscribe failed: {err}"))
 }

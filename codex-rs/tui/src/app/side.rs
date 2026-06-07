@@ -128,18 +128,22 @@ mod tests {
 
     #[test]
     fn side_start_error_message_explains_missing_first_prompt() {
-        let err = "thread/fork failed during TUI bootstrap: thread/fork failed: no rollout found for thread id 019da1a1-bed9-7a43-88a2-b49d43915021";
+        let err = color_eyre::eyre::eyre!(
+            "thread/fork failed during TUI bootstrap: thread/fork failed: no rollout found for thread id 019da1a1-bed9-7a43-88a2-b49d43915021"
+        );
 
         assert_eq!(
-            App::side_start_error_message(err),
+            App::side_start_error_message(&err),
             "'/side' is unavailable until the current conversation has started. Send a message first, then try /side again."
         );
     }
 
     #[test]
     fn side_start_error_message_uses_generic_start_wording() {
+        let err = color_eyre::eyre::eyre!("transport disconnected");
+
         assert_eq!(
-            App::side_start_error_message("transport disconnected"),
+            App::side_start_error_message(&err),
             "Failed to start side conversation: transport disconnected"
         );
     }
@@ -482,10 +486,12 @@ impl App {
         }
     }
 
-    pub(super) fn side_start_error_message(err: &str) -> String {
-        if err.contains("no rollout found for thread id")
-            || err.contains("includeTurns is unavailable before first user message")
-        {
+    pub(super) fn side_start_error_message(err: &color_eyre::Report) -> String {
+        if err.chain().any(|cause| {
+            let message = cause.to_string();
+            message.contains("no rollout found for thread id")
+                || message.contains("includeTurns is unavailable before first user message")
+        }) {
             SIDE_NO_STARTED_CONVERSATION_MESSAGE.to_string()
         } else {
             format!("Failed to start side conversation: {err}")
@@ -602,14 +608,15 @@ impl App {
         app_server: &AppServerSession,
         thread_id: ThreadId,
     ) {
-        // Hide the canceled thread while cleanup is pending, but retain enough local state to
-        // restore it in /agent if the server refuses to unsubscribe it.
+        // Hide the canceled thread while cleanup runs; failures restore it to /agent.
         self.agent_navigation.remove(thread_id);
         let request_handle = app_server.request_handle();
         let app_event_tx = self.app_event_tx.clone();
         tokio::spawn(async move {
-            let result = super::side_server::cleanup_side_thread(request_handle, thread_id).await;
-            app_event_tx.send(AppEvent::SideThreadCleanupFinished(thread_id, result));
+            app_event_tx.send(AppEvent::SideThreadCleanupFinished(
+                thread_id,
+                super::side_server::cleanup_side_thread(request_handle, thread_id).await,
+            ));
         });
     }
 
@@ -618,16 +625,18 @@ impl App {
         thread_id: ThreadId,
         result: std::result::Result<(), String>,
     ) {
-        self.discard_thread_local_state(thread_id).await;
-        if let Err(err) = result {
-            self.upsert_agent_picker_thread(
-                thread_id, /*agent_nickname*/ None, /*agent_role*/ None,
-                /*is_closed*/ false,
-            );
-            self.chat_widget.add_error_message(format!(
-                "Failed to close side conversation {thread_id}; it remains available in /agent: \
-                 {err}"
-            ));
+        match result {
+            Ok(()) => self.discard_thread_local_state(thread_id).await,
+            Err(err) => {
+                self.agent_navigation.upsert(
+                    thread_id, /*agent_nickname*/ None, /*agent_role*/ None,
+                    /*is_closed*/ false,
+                );
+                self.chat_widget.add_error_message(format!(
+                    "Failed to close side conversation {thread_id}; it remains available in \
+                     /agent: {err}"
+                ));
+            }
         }
     }
 
@@ -636,10 +645,7 @@ impl App {
         tui: &mut tui::Tui,
         app_server: &mut AppServerSession,
         request_id: Uuid,
-        result: std::result::Result<
-            AppServerStartedThread,
-            crate::app_event::SideThreadPrepareError,
-        >,
+        result: std::result::Result<ThreadSessionState, crate::app_event::SideThreadPrepareError>,
     ) -> Result<()> {
         let Some(PendingSideStart {
             side_state,
@@ -650,7 +656,7 @@ impl App {
             .take_if(|pending| pending.request_id == request_id)
         else {
             if let Some(thread_id) = match result {
-                Ok(started) => Some(started.session.thread_id),
+                Ok(session) => Some(session.thread_id),
                 Err(err) => err.thread_id,
             } {
                 self.cleanup_side_thread_in_background(app_server, thread_id);
@@ -660,12 +666,12 @@ impl App {
         let parent_thread_id = side_state.parent_thread_id;
         self.chat_widget.set_side_start_pending(/*pending*/ false);
         match result {
-            Ok(started) => {
-                let child_thread_id = started.session.thread_id;
+            Ok(session) => {
+                let child_thread_id = session.thread_id;
                 let channel = self.ensure_thread_channel(child_thread_id);
                 {
                     let mut store = channel.store.lock().await;
-                    Self::install_side_thread_snapshot(&mut store, started.session, started.turns);
+                    Self::install_side_thread_snapshot(&mut store, session, Vec::new());
                 }
                 self.side_threads.insert(child_thread_id, side_state);
                 // Prepared side threads switch through the selector's local replay path.
@@ -707,7 +713,7 @@ impl App {
                 self.chat_widget
                     .set_side_conversation_context_label(/*label*/ None);
                 self.chat_widget
-                    .add_error_message(Self::side_start_error_message(&err.message));
+                    .add_error_message(Self::side_start_error_message(&err.error));
             }
         }
         Ok(())

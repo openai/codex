@@ -1253,20 +1253,16 @@ See the Codex keymap documentation for supported actions and examples."
 
         // Keep rendering while /side prepares, but freeze input so drafts and shortcuts cannot
         // race the pending transition. Esc remains available to cancel the preparation.
-        if self.pending_side_start.is_some() {
-            match &event {
-                TuiEvent::Key(key_event) => {
-                    if matches!(key_event.code, KeyCode::Esc)
-                        && matches!(key_event.kind, KeyEventKind::Press | KeyEventKind::Repeat)
-                    {
-                        self.cancel_pending_side_start();
-                        tui.frame_requester().schedule_frame();
-                    }
-                    return Ok(AppRunControl::Continue);
-                }
-                TuiEvent::Paste(_) => return Ok(AppRunControl::Continue),
-                TuiEvent::Draw | TuiEvent::Resize => {}
+        if self.pending_side_start.is_some() && !matches!(event, TuiEvent::Draw | TuiEvent::Resize)
+        {
+            if let TuiEvent::Key(key_event) = &event
+                && matches!(key_event.code, KeyCode::Esc)
+                && matches!(key_event.kind, KeyEventKind::Press | KeyEventKind::Repeat)
+            {
+                self.cancel_pending_side_start();
+                tui.frame_requester().schedule_frame();
             }
+            return Ok(AppRunControl::Continue);
         }
 
         if self.overlay.is_some() {

@@ -190,18 +190,10 @@ impl ThreadParamsMode {
     }
 }
 
+#[derive(Debug)]
 pub(crate) struct AppServerStartedThread {
     pub(crate) session: ThreadSessionState,
     pub(crate) turns: Vec<Turn>,
-}
-
-impl std::fmt::Debug for AppServerStartedThread {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("AppServerStartedThread")
-            .field("session", &self.session)
-            .field("turn_count", &self.turns.len())
-            .finish()
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

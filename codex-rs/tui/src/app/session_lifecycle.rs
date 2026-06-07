@@ -138,6 +138,9 @@ impl App {
         app_server: &mut AppServerSession,
         thread_id: ThreadId,
     ) -> bool {
+        if self.side_threads.contains_key(&thread_id) {
+            return true;
+        }
         let existing_entry = self.agent_navigation.get(&thread_id).cloned();
         let has_replay_channel = self.thread_event_channels.contains_key(&thread_id);
         match app_server
@@ -290,12 +293,9 @@ impl App {
             return Ok(());
         }
 
-        // Side-thread preparation already attached the listener and cached the full snapshot.
-        // Avoid a backend round trip when switching to that freshly prepared local state.
-        if !self.side_threads.contains_key(&thread_id)
-            && !self
-                .refresh_agent_picker_thread_liveness(app_server, thread_id)
-                .await
+        if !self
+            .refresh_agent_picker_thread_liveness(app_server, thread_id)
+            .await
         {
             self.chat_widget
                 .add_error_message(format!("Agent thread {thread_id} is no longer available."));
