@@ -419,7 +419,7 @@ fn double_encoded_separator_remains_filename_text() {
 }
 
 #[test]
-fn environment_id_accepts_opaque_values_up_to_the_shared_limit() {
+fn environment_uri_round_trips_opaque_environment_ids() {
     let path = EnvironmentPath::posix("/workspace").expect("valid path");
     for id in [
         "dev_box-1",
@@ -441,23 +441,6 @@ fn environment_id_accepts_opaque_values_up_to_the_shared_limit() {
             view.environment_id(),
             &environment_id,
             "round-tripping {id}"
-        );
-    }
-    assert_eq!(
-        EnvironmentId::new("x".repeat(MAX_ENVIRONMENT_ID_LEN)),
-        Ok(EnvironmentId("x".repeat(MAX_ENVIRONMENT_ID_LEN)))
-    );
-    assert_eq!(
-        EnvironmentId::new("x".repeat(MAX_ENVIRONMENT_ID_LEN + 1)),
-        Err(EnvironmentIdError::TooLong {
-            length: MAX_ENVIRONMENT_ID_LEN + 1,
-            max_length: MAX_ENVIRONMENT_ID_LEN,
-        })
-    );
-    for id in [".", ".."] {
-        assert_eq!(
-            EnvironmentId::new(id),
-            Err(EnvironmentIdError::DotSegment(id.to_string()))
         );
     }
 }

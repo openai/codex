@@ -12,8 +12,27 @@ pub enum PathFlavor {
 
 /// A normalized absolute URI path in a configured environment.
 ///
-/// The stored representation always uses `/` separators. Use [`Self::posix`]
-/// or [`Self::windows`] when converting a native path into this representation.
+/// The stored representation is host-independent and always uses `/`
+/// separators:
+///
+/// - A POSIX path such as `/srv/app/main.rs` keeps that spelling.
+/// - A Windows drive path such as `C:\Users\Alice` becomes
+///   `/c:/Users/Alice`. Drive letters are lowercased.
+/// - A Windows UNC path such as `\\server\share\src` becomes
+///   `//server/share/src`. UNC, or Universal Naming Convention, paths address a
+///   network share by server and share name rather than by drive letter.
+///
+/// Construction is lexical: repeated separators and `.` components are
+/// removed, while `..` components are resolved without escaping the POSIX,
+/// drive, or UNC root. Original separator spelling and drive-letter case are
+/// therefore not preserved. Filesystem aliases, symlinks, case sensitivity,
+/// reserved names, and Unicode normalization are intentionally not resolved.
+///
+/// Use [`Self::posix`] or [`Self::windows`] for native input so a POSIX filename
+/// that happens to resemble a drive or UNC path is not assigned Windows root
+/// semantics. [`Self::new`] accepts the canonical URI representation and
+/// recognizes canonical drive and UNC roots. Converting back to native syntax
+/// requires an explicit [`PathFlavor`].
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct EnvironmentPath(String);
 

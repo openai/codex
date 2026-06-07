@@ -34,6 +34,8 @@
 mod environment_path;
 
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_environment_id::EnvironmentId;
+use codex_utils_environment_id::EnvironmentIdError;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Deserializer;
@@ -52,9 +54,6 @@ pub use environment_path::PathFlavor;
 
 pub const FILE_SCHEME: &str = "file";
 pub const CODEX_ENVIRONMENT_SCHEME: &str = "codex-env";
-
-/// Maximum encoded environment identifier length accepted at Codex boundaries.
-pub const MAX_ENVIRONMENT_ID_LEN: usize = 64;
 
 /// A URI that can identify a path in the current host or another environment.
 ///
@@ -77,6 +76,10 @@ impl PathUri {
     pub fn from_file_path(path: &AbsolutePathBuf) -> Result<Self, PathUriParseError> {
         let url = Url::from_file_path(path.as_path())
             .map_err(|()| PathUriParseError::PathCannotBeRepresentedAsFileUri)?;
+        // `url` preserves the spelling of a Windows drive path. Rebuild local
+        // drive URLs through `EnvironmentPath` so drive case and separators
+        // match the cross-platform canonical form. UNC paths already use the
+        // URL authority for their server name and must retain that structure.
         #[cfg(windows)]
         if url.host().is_none()
             && let Some(path) = path.as_path().to_str()
@@ -108,8 +111,11 @@ impl PathUri {
 
         let path = self.0.path().strip_prefix('/').unwrap_or_default();
         let (environment_id, path) = path.split_once('/').unwrap_or_default();
+        let Ok(environment_id) = EnvironmentId::new(decode_uri_path(environment_id)) else {
+            unreachable!("PathUri construction validates the environment id");
+        };
         PathUriView::Environment(EnvironmentUriView {
-            environment_id: EnvironmentId(decode_uri_path(environment_id)),
+            environment_id,
             path: EnvironmentPath::from_normalized(decode_uri_path(&format!("/{path}"))),
         })
     }
@@ -139,6 +145,11 @@ impl FileUriView {
     }
 
     /// Converts this file URI to a path using the current host's path rules.
+    ///
+    /// This fails when the URI describes a path form that the current host
+    /// cannot represent, such as a Windows UNC authority on POSIX, or when the
+    /// converted path is not absolute under the current host's rules. The URI
+    /// and [`Self::path`] remain usable for lexical operations in those cases.
     pub fn to_native_path(&self) -> Result<AbsolutePathBuf, PathUriParseError> {
         let path = self
             .url
@@ -162,59 +173,6 @@ impl EnvironmentUriView {
 
     pub fn path(&self) -> &EnvironmentPath {
         &self.path
-    }
-}
-
-/// An opaque identifier for a configured remote environment.
-///
-/// The URI path dot segments `.` and `..` are excluded because URL parsers
-/// normalize them before this crate can recover the identifier.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, JsonSchema, TS)]
-#[serde(transparent)]
-#[schemars(with = "String")]
-#[ts(type = "string")]
-pub struct EnvironmentId(String);
-
-impl EnvironmentId {
-    pub fn new(id: impl Into<String>) -> Result<Self, EnvironmentIdError> {
-        let id = id.into();
-        validate_environment_id(&id)?;
-        Ok(Self(id))
-    }
-
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl fmt::Display for EnvironmentId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-impl AsRef<str> for EnvironmentId {
-    fn as_ref(&self) -> &str {
-        self.as_str()
-    }
-}
-
-impl FromStr for EnvironmentId {
-    type Err = EnvironmentIdError;
-
-    fn from_str(id: &str) -> Result<Self, Self::Err> {
-        Self::new(id)
-    }
-}
-
-impl<'de> Deserialize<'de> for EnvironmentId {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        String::deserialize(deserializer)?
-            .parse()
-            .map_err(serde::de::Error::custom)
     }
 }
 
@@ -522,32 +480,6 @@ fn looks_like_uri(value: &str) -> bool {
             .as_bytes()
             .get(2)
             .is_some_and(|separator| matches!(separator, b'/' | b'\\')))
-}
-
-fn validate_environment_id(id: &str) -> Result<(), EnvironmentIdError> {
-    if id.is_empty() {
-        return Err(EnvironmentIdError::Empty);
-    }
-    if matches!(id, "." | "..") {
-        return Err(EnvironmentIdError::DotSegment(id.to_string()));
-    }
-    if id.len() > MAX_ENVIRONMENT_ID_LEN {
-        return Err(EnvironmentIdError::TooLong {
-            length: id.len(),
-            max_length: MAX_ENVIRONMENT_ID_LEN,
-        });
-    }
-    Ok(())
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Error)]
-pub enum EnvironmentIdError {
-    #[error("environment id cannot be empty")]
-    Empty,
-    #[error("environment id `{0}` cannot be a URI path dot segment")]
-    DotSegment(String),
-    #[error("environment id is {length} bytes; maximum length is {max_length}")]
-    TooLong { length: usize, max_length: usize },
 }
 
 #[derive(Debug, Error)]

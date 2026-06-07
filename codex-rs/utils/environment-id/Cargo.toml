@@ -1,5 +1,5 @@
 [package]
-name = "codex-utils-path-uri"
+name = "codex-utils-environment-id"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -8,14 +8,10 @@ license.workspace = true
 workspace = true
 
 [dependencies]
-codex-utils-absolute-path = { workspace = true }
-codex-utils-environment-id = { workspace = true }
 schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 thiserror = { workspace = true }
 ts-rs = { workspace = true, features = ["no-serde-warnings"] }
-url = { workspace = true }
-urlencoding = { workspace = true }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }
