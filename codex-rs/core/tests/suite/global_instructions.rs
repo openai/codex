@@ -25,6 +25,7 @@ const GLOBAL_AGENTS_FILENAME: &str = "AGENTS.md";
 const GLOBAL_AGENTS_OVERRIDE_FILENAME: &str = "AGENTS.override.md";
 const GLOBAL_INSTRUCTIONS: &str = "global instructions";
 const NEW_GLOBAL_INSTRUCTIONS: &str = "new global instructions";
+const NEW_PROJECT_INSTRUCTIONS: &str = "new project instructions";
 const OLD_GLOBAL_INSTRUCTIONS: &str = "old global instructions";
 const PROJECT_INSTRUCTIONS: &str = "project instructions";
 const PROJECT_SEPARATOR: &str = "--- project-doc ---";
@@ -97,6 +98,7 @@ fn local_compaction_provider(server: &wiremock::MockServer) -> ModelProviderInfo
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fresh_thread_composes_global_before_project_and_reports_sources() -> Result<()> {
+    // Set up one global source, one project source, and two ordinary model turns.
     let server = responses::start_mock_server().await;
     let response_mock = responses::mount_sse_sequence(
         &server,
@@ -127,21 +129,39 @@ async fn fresh_thread_composes_global_before_project_and_reports_sources() -> Re
             Ok(())
         });
     let test = builder.build_with_remote_env(&server).await?;
+    let project_source = test.config.cwd.join(GLOBAL_AGENTS_FILENAME);
+    let creation_sources = vec![global_source, project_source];
 
-    assert_eq!(
-        test.codex.instruction_sources().await,
-        vec![global_source, test.config.cwd.join("AGENTS.md")]
-    );
+    // Confirm the thread records both creation-time sources in composition order.
+    assert_eq!(test.codex.instruction_sources().await, creation_sources);
 
+    // Materialize the initial snapshot, then add global and project overrides before another turn.
     test.submit_turn("first turn").await?;
+    let new_global_source = write_global_override(home.as_ref(), NEW_GLOBAL_INSTRUCTIONS)?;
+    let new_project_source = test.config.cwd.join(GLOBAL_AGENTS_OVERRIDE_FILENAME);
+    test.fs()
+        .write_file(
+            &new_project_source,
+            NEW_PROJECT_INSTRUCTIONS.as_bytes().to_vec(),
+            /*sandbox*/ None,
+        )
+        .await?;
+    let replacement_sources = vec![new_global_source, new_project_source];
+    assert_ne!(
+        creation_sources, replacement_sources,
+        "the mutation should change both resolved source paths"
+    );
     test.submit_turn("second turn").await?;
 
+    // Assert the running thread keeps its original sources, rendering, and structured prefix.
     let requests = response_mock.requests();
+    assert_eq!(requests.len(), 2);
     let expected_contents =
         format!("{GLOBAL_INSTRUCTIONS}\n\n{PROJECT_SEPARATOR}\n\n{PROJECT_INSTRUCTIONS}");
     let expected_fragment = expected_instruction_fragment(&test.config.cwd, &expected_contents);
     let fragments = instruction_fragments(&requests[0]);
-    assert_eq!(fragments, vec![expected_fragment]);
+    assert_eq!(fragments, vec![expected_fragment.clone()]);
+    assert_single_instruction_fragment(&requests[1], &expected_fragment);
     let rendered = fragments
         .into_iter()
         .next()
@@ -165,8 +185,15 @@ async fn fresh_thread_composes_global_before_project_and_reports_sources() -> Re
         "expected rendered instructions to contain {PROJECT_SEPARATOR:?}; observed: {rendered}"
     );
     assert_eq!(
-        &requests[1].input()[..requests[0].input().len()],
-        requests[0].input(),
+        test.codex.instruction_sources().await,
+        creation_sources,
+        "ordinary turns retain the creation-time source list"
+    );
+    let first_input = requests[0].input();
+    let second_input = requests[1].input();
+    assert_eq!(
+        second_input.get(..first_input.len()),
+        Some(first_input.as_slice()),
         "the ordinary second turn should retain the cached prefix"
     );
 
@@ -175,6 +202,7 @@ async fn fresh_thread_composes_global_before_project_and_reports_sources() -> Re
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn global_loading_warning_surfaces_during_thread_creation() -> Result<()> {
+    // Set up a malformed global instruction file and one model response.
     let server = responses::start_mock_server().await;
     let response_mock = responses::mount_sse_once(
         &server,
@@ -187,10 +215,9 @@ async fn global_loading_warning_surfaces_during_thread_creation() -> Result<()> 
     let home = Arc::new(TempDir::new()?);
     let source = write_global(home.as_ref(), b"global\xFFinstructions")?;
 
+    // Create the thread, capture its load warning, and submit one turn for rendered output.
     let mut builder = test_codex().with_home(home);
     let test = builder.build(&server).await?;
-    assert_eq!(test.codex.instruction_sources().await, vec![source.clone()]);
-
     let warning = wait_for_event_match(&test.codex, |event| match event {
         EventMsg::Warning(warning)
             if warning
@@ -202,12 +229,15 @@ async fn global_loading_warning_surfaces_during_thread_creation() -> Result<()> 
         _ => None,
     })
     .await;
+    test.submit_turn("inspect lossy global instructions")
+        .await?;
+
+    // Assert the source is reported, the warning is specific, and rendering is lossily decoded.
+    assert_eq!(test.codex.instruction_sources().await, vec![source.clone()]);
     assert!(
         warning.contains("invalid UTF-8"),
         "expected warning to contain \"invalid UTF-8\"; observed: {warning}"
     );
-    test.submit_turn("inspect lossy global instructions")
-        .await?;
     let expected_fragment =
         expected_instruction_fragment(&test.config.cwd, "global\u{FFFD}instructions");
     assert_single_instruction_fragment(&response_mock.single_request(), &expected_fragment);
@@ -220,6 +250,7 @@ async fn global_loading_warning_surfaces_during_thread_creation() -> Result<()> 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cold_resume_replays_rendered_instructions_but_reports_current_config_sources() -> Result<()>
 {
+    // Set up an initial turn and a later cold-resumed turn against the same rollout.
     let server = responses::start_mock_server().await;
     let response_mock = responses::mount_sse_sequence(
         &server,
@@ -238,8 +269,11 @@ async fn cold_resume_replays_rendered_instructions_but_reports_current_config_so
     let home = Arc::new(TempDir::new()?);
     let old_source = write_global(home.as_ref(), OLD_GLOBAL_INSTRUCTIONS)?;
 
+    // Create the initial thread and persist its creation-time instruction snapshot.
     let mut initial_builder = test_codex().with_home(Arc::clone(&home));
     let initial = initial_builder.build(&server).await?;
+
+    // Assert the pre-resume thread reports the source used to create its snapshot.
     assert_eq!(
         initial.codex.instruction_sources().await,
         vec![old_source.clone()],
@@ -257,6 +291,7 @@ async fn cold_resume_replays_rendered_instructions_but_reports_current_config_so
     })
     .await;
 
+    // Add a preferred override source, then cold-resume with freshly loaded configuration.
     let new_source = write_global_override(home.as_ref(), NEW_GLOBAL_INSTRUCTIONS)?;
     assert_ne!(old_source, new_source);
     let mut resume_builder = test_codex().with_home(Arc::clone(&home));
@@ -264,6 +299,7 @@ async fn cold_resume_replays_rendered_instructions_but_reports_current_config_so
         .resume(&server, Arc::clone(&home), rollout_path)
         .await?;
 
+    // Assert the API reports the new source while model history replays the old structured prefix.
     assert_eq!(
         resumed.codex.instruction_sources().await,
         vec![new_source],
@@ -293,6 +329,7 @@ async fn cold_resume_replays_rendered_instructions_but_reports_current_config_so
 // model so the reported source list and model-visible context describe the same files.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fork_replays_rendered_instructions_from_shared_history() -> Result<()> {
+    // Set up a parent turn and a later fork turn against the parent's rollout.
     let server = responses::start_mock_server().await;
     let response_mock = responses::mount_sse_sequence(
         &server,
@@ -310,8 +347,12 @@ async fn fork_replays_rendered_instructions_from_shared_history() -> Result<()> 
     .await;
     let home = Arc::new(TempDir::new()?);
     let source = write_global(home.as_ref(), OLD_GLOBAL_INSTRUCTIONS)?;
+
+    // Create the parent and persist its creation-time instruction snapshot.
     let mut builder = test_codex().with_home(Arc::clone(&home));
     let parent = builder.build(&server).await?;
+
+    // Assert the parent reports the source used to create its snapshot.
     assert_eq!(
         parent.codex.instruction_sources().await,
         vec![source.clone()],
@@ -322,6 +363,7 @@ async fn fork_replays_rendered_instructions_from_shared_history() -> Result<()> 
     parent.codex.flush_rollout().await?;
     let rollout_path = parent.codex.rollout_path().expect("rollout path");
 
+    // Add a preferred override source, then fork with freshly loaded configuration.
     let new_source = write_global_override(home.as_ref(), NEW_GLOBAL_INSTRUCTIONS)?;
     assert_ne!(source, new_source);
     let mut fork_config = load_default_config_for_test(home.as_ref()).await;
@@ -340,6 +382,8 @@ async fn fork_replays_rendered_instructions_from_shared_history() -> Result<()> 
             /*parent_trace*/ None,
         )
         .await?;
+
+    // Assert the fork reports the new source before issuing its first turn.
     assert_eq!(
         forked.thread.instruction_sources().await,
         vec![new_source],
@@ -365,6 +409,7 @@ async fn fork_replays_rendered_instructions_from_shared_history() -> Result<()> 
     })
     .await;
 
+    // Assert the forked model request replays the parent's exact structured history.
     let requests = response_mock.requests();
     assert_eq!(requests.len(), 2);
     let parent_input = requests[0].input();
@@ -386,6 +431,7 @@ async fn fork_replays_rendered_instructions_from_shared_history() -> Result<()> 
 async fn forked_subagent_replays_one_creation_time_global_instruction_fragment() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
+    // Set up matched responses for the parent seed, spawn call, child turn, and parent follow-up.
     let server = responses::start_mock_server().await;
     let seed_mock = responses::mount_sse_once_match(
         &server,
@@ -440,6 +486,7 @@ async fn forked_subagent_replays_one_creation_time_global_instruction_fragment()
     )
     .await;
 
+    // Create the parent thread, record its source, and seed the history inherited by the child.
     let home = Arc::new(TempDir::new()?);
     let source = write_global(home.as_ref(), OLD_GLOBAL_INSTRUCTIONS)?;
     let mut builder = test_codex()
@@ -449,6 +496,8 @@ async fn forked_subagent_replays_one_creation_time_global_instruction_fragment()
             let _ = config.features.disable(Feature::EnableRequestCompression);
         });
     let test = builder.build(&server).await?;
+
+    // Assert the parent reports the creation-time source before spawning.
     assert_eq!(
         test.codex.instruction_sources().await,
         vec![source.clone()],
@@ -457,9 +506,15 @@ async fn forked_subagent_replays_one_creation_time_global_instruction_fragment()
     test.submit_turn(SPAWN_SEED_PROMPT).await?;
     let seed_request = seed_mock.single_request();
 
+    // Add a preferred override, then spawn a full-history child while observing its thread ID.
     let new_source = write_global_override(home.as_ref(), NEW_GLOBAL_INSTRUCTIONS)?;
     assert_ne!(source, new_source);
+    let mut created_threads = test.thread_manager.subscribe_thread_created();
     test.submit_turn(SPAWN_PARENT_PROMPT).await?;
+    let child_thread_id = tokio::time::timeout(Duration::from_secs(10), created_threads.recv())
+        .await
+        .map_err(|_| anyhow!("timed out waiting for the forked subagent thread"))??;
+    let child_thread = test.thread_manager.get_thread(child_thread_id).await?;
     let spawn_request = spawn_mock.single_request();
     let child_request = tokio::time::timeout(Duration::from_secs(10), async {
         loop {
@@ -472,6 +527,7 @@ async fn forked_subagent_replays_one_creation_time_global_instruction_fragment()
     .await
     .map_err(|_| anyhow!("timed out waiting for the forked subagent request"))?;
 
+    // Assert parent and child report and render the inherited creation-time snapshot exactly once.
     let expected_fragment =
         expected_instruction_fragment(&test.config.cwd, OLD_GLOBAL_INSTRUCTIONS);
     assert_single_instruction_fragment(&seed_request, &expected_fragment);
@@ -479,8 +535,13 @@ async fn forked_subagent_replays_one_creation_time_global_instruction_fragment()
     assert_single_instruction_fragment(&child_request, &expected_fragment);
     assert_eq!(
         test.codex.instruction_sources().await,
-        vec![source],
+        vec![source.clone()],
         "running parent retains the creation-time global source after spawning"
+    );
+    assert_eq!(
+        child_thread.instruction_sources().await,
+        vec![source],
+        "forked subagent reports the inherited creation-time source"
     );
     let seed_input = seed_request.input();
     let child_input = child_request.input();
@@ -495,6 +556,7 @@ async fn forked_subagent_replays_one_creation_time_global_instruction_fragment()
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn manual_compaction_keeps_the_creation_time_global_instructions() -> Result<()> {
+    // Set up an initial turn, a manual compaction response, and a post-compaction turn.
     let server = responses::start_mock_server().await;
     let response_mock = responses::mount_sse_sequence(
         &server,
@@ -518,20 +580,26 @@ async fn manual_compaction_keeps_the_creation_time_global_instructions() -> Resu
     let home = Arc::new(TempDir::new()?);
     let source = write_global(home.as_ref(), OLD_GLOBAL_INSTRUCTIONS)?;
     let provider = local_compaction_provider(&server);
+
+    // Create the thread with the old global source loaded into its instruction snapshot.
     let mut builder = test_codex()
         .with_home(Arc::clone(&home))
         .with_config(move |config| {
             config.model_provider = provider;
         });
     let test = builder.build(&server).await?;
+
+    // Assert the pre-compaction source list points at the creation-time file.
     assert_eq!(
         test.codex.instruction_sources().await,
         vec![source.clone()],
         "thread reports the creation-time global source before compaction"
     );
 
+    // Materialize the old snapshot, add a preferred override, and manually compact the thread.
     test.submit_turn("first turn").await?;
-    std::fs::write(source.as_path(), NEW_GLOBAL_INSTRUCTIONS)?;
+    let new_source = write_global_override(home.as_ref(), NEW_GLOBAL_INSTRUCTIONS)?;
+    assert_ne!(source, new_source);
 
     test.codex.submit(Op::Compact).await?;
     wait_for_event(&test.codex, |event| {
@@ -540,6 +608,7 @@ async fn manual_compaction_keeps_the_creation_time_global_instructions() -> Resu
     .await;
     test.submit_turn("after compact").await?;
 
+    // Assert every phase keeps the old rendering and the thread keeps the old reported source.
     let requests = response_mock.requests();
     assert_eq!(requests.len(), 3);
     let expected_fragment =
@@ -558,6 +627,7 @@ async fn manual_compaction_keeps_the_creation_time_global_instructions() -> Resu
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn mid_turn_compaction_keeps_the_creation_time_global_instructions() -> Result<()> {
+    // Set up a turn that crosses the auto-compaction limit and a post-compaction response.
     let server = responses::start_mock_server().await;
     let response_mock = responses::mount_sse_sequence(
         &server,
@@ -580,6 +650,8 @@ async fn mid_turn_compaction_keeps_the_creation_time_global_instructions() -> Re
     let home = Arc::new(TempDir::new()?);
     let source = write_global(home.as_ref(), OLD_GLOBAL_INSTRUCTIONS)?;
     let provider = local_compaction_provider(&server);
+
+    // Create the thread with the old global source loaded into its instruction snapshot.
     let mut builder = test_codex()
         .with_home(Arc::clone(&home))
         .with_config(move |config| {
@@ -588,15 +660,20 @@ async fn mid_turn_compaction_keeps_the_creation_time_global_instructions() -> Re
             config.model_auto_compact_token_limit = Some(90);
         });
     let test = builder.build(&server).await?;
+
+    // Assert the pre-compaction source list points at the creation-time file.
     assert_eq!(
         test.codex.instruction_sources().await,
         vec![source.clone()],
         "thread reports the creation-time global source before mid-turn compaction"
     );
 
-    std::fs::write(source.as_path(), NEW_GLOBAL_INSTRUCTIONS)?;
+    // Add a preferred override before the turn triggers automatic mid-turn compaction.
+    let new_source = write_global_override(home.as_ref(), NEW_GLOBAL_INSTRUCTIONS)?;
+    assert_ne!(source, new_source);
     test.submit_turn("trigger mid-turn compaction").await?;
 
+    // Assert the initial, compact, and resumed requests all keep the old snapshot and source.
     let requests = response_mock.requests();
     assert_eq!(requests.len(), 3);
     let expected_fragment =
@@ -613,8 +690,11 @@ async fn mid_turn_compaction_keeps_the_creation_time_global_instructions() -> Re
     Ok(())
 }
 
+// TODO(anp): Align legacy-resume instruction sources with the historical instructions replayed
+// before compaction so the reported source list and model-visible context describe the same files.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn legacy_resume_rebuilds_from_current_config_after_manual_compaction() -> Result<()> {
+    // Set up initial, resumed, manual-compaction, and rebuilt-context model responses.
     let server = responses::start_mock_server().await;
     let response_mock = responses::mount_sse_sequence(
         &server,
@@ -642,11 +722,15 @@ async fn legacy_resume_rebuilds_from_current_config_after_manual_compaction() ->
     let provider = local_compaction_provider(&server);
     let home = Arc::new(TempDir::new()?);
     let source = write_global(home.as_ref(), OLD_GLOBAL_INSTRUCTIONS)?;
+
+    // Create the initial thread and persist the old instruction snapshot to its rollout.
     let mut initial_builder = test_codex().with_home(Arc::clone(&home)).with_config({
         let provider = provider.clone();
         move |config| config.model_provider = provider
     });
     let initial = initial_builder.build(&server).await?;
+
+    // Assert the initial thread reports the source used for its historical snapshot.
     assert_eq!(
         initial.codex.instruction_sources().await,
         vec![source.clone()],
@@ -664,16 +748,19 @@ async fn legacy_resume_rebuilds_from_current_config_after_manual_compaction() ->
     })
     .await;
 
-    std::fs::write(source.as_path(), NEW_GLOBAL_INSTRUCTIONS)?;
+    // Add a preferred override, then cold-resume with the new source in current configuration.
+    let new_source = write_global_override(home.as_ref(), NEW_GLOBAL_INSTRUCTIONS)?;
+    assert_ne!(source, new_source);
     let mut resume_builder = test_codex()
         .with_home(Arc::clone(&home))
         .with_config(move |config| config.model_provider = provider);
     let resumed = resume_builder
         .resume(&server, Arc::clone(&home), rollout_path)
         .await?;
+    // Assert resume reports the new source while the first resumed turn replays old history.
     assert_eq!(
         resumed.codex.instruction_sources().await,
-        vec![source.clone()],
+        vec![new_source.clone()],
         "resumed thread reports the current global source"
     );
     resumed.submit_turn("resume legacy history").await?;
@@ -682,6 +769,7 @@ async fn legacy_resume_rebuilds_from_current_config_after_manual_compaction() ->
     assert_single_instruction_fragment(&requests[0], &old_fragment);
     assert_single_instruction_fragment(&requests[1], &old_fragment);
 
+    // Compact the resumed thread so legacy reconstruction can inject the current configuration.
     resumed.codex.submit(Op::Compact).await?;
     wait_for_event(&resumed.codex, |event| {
         matches!(event, EventMsg::TurnComplete(_))
@@ -689,6 +777,7 @@ async fn legacy_resume_rebuilds_from_current_config_after_manual_compaction() ->
     .await;
     resumed.submit_turn("rebuild full context").await?;
 
+    // Assert compaction sees old history, then the rebuilt context uses the new source contents.
     let requests = response_mock.requests();
     assert_eq!(requests.len(), 4);
     let new_fragment = expected_instruction_fragment(&resumed.config.cwd, NEW_GLOBAL_INSTRUCTIONS);
@@ -696,7 +785,7 @@ async fn legacy_resume_rebuilds_from_current_config_after_manual_compaction() ->
     assert_single_instruction_fragment(&requests[3], &new_fragment);
     assert_eq!(
         resumed.codex.instruction_sources().await,
-        vec![source],
+        vec![new_source],
         "resumed thread retains the current global source after compaction"
     );
 
