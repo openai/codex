@@ -80,6 +80,9 @@ jobs:
     permissions:
       contents: read
       actions: read
+    environment:
+      name: bazel
+      deployment: false
     strategy:
       fail-fast: false
       matrix:
