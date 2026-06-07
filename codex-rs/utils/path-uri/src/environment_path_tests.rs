@@ -44,6 +44,13 @@ fn normalization_is_idempotent() {
 }
 
 #[test]
+fn canonical_paths_reject_unc_roots_with_dot_segments() {
+    for input in ["//./share", "//../share", "//server/../file"] {
+        assert!(EnvironmentPath::new(input).is_err(), "accepting {input}");
+    }
+}
+
+#[test]
 fn posix_paths_preserve_backslashes_and_unicode_as_filename_characters() {
     assert_eq!(
         EnvironmentPath::posix("/workspace/a\\b/日本語.rs"),
@@ -153,9 +160,25 @@ fn windows_constructor_rejects_device_and_verbatim_namespaces() {
         r"\\.\C:\src",
         r"\\?\UNC\server\share",
         r"\\.\PhysicalDrive0",
+        "//?/C:/src",
+        "//./pipe/name",
+        r"\\?/C:\src",
+        r"\\./pipe\name",
     ] {
         assert_eq!(
             EnvironmentPath::windows(input),
+            Err(EnvironmentPathError::UnsupportedWindowsNamespace(
+                input.to_string()
+            ))
+        );
+    }
+}
+
+#[test]
+fn canonical_constructor_rejects_windows_namespaces() {
+    for input in ["//?/C:/src", "//./pipe/name", "//?/UNC/server/share"] {
+        assert_eq!(
+            EnvironmentPath::new(input),
             Err(EnvironmentPathError::UnsupportedWindowsNamespace(
                 input.to_string()
             ))
@@ -236,4 +259,23 @@ fn join_rejects_absolute_and_null_paths() {
         base.join("src\0file"),
         Err(EnvironmentPathError::ContainsNull)
     );
+}
+
+#[test]
+fn lexical_identity_preserves_case_unicode_and_windows_specific_names() {
+    let paths = [
+        EnvironmentPath::new("/workspace/Foo").expect("valid path"),
+        EnvironmentPath::new("/workspace/foo").expect("valid path"),
+        EnvironmentPath::new("/workspace/\u{00e9}").expect("valid path"),
+        EnvironmentPath::new("/workspace/e\u{301}").expect("valid path"),
+        EnvironmentPath::new("/c:/CON.txt").expect("valid path"),
+        EnvironmentPath::new("/c:/file:stream").expect("valid path"),
+        EnvironmentPath::new("/c:/trailing. ").expect("valid path"),
+    ];
+
+    for (index, left) in paths.iter().enumerate() {
+        for right in &paths[index + 1..] {
+            assert_ne!(left, right);
+        }
+    }
 }

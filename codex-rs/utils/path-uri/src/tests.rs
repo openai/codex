@@ -53,6 +53,18 @@ fn file_uri_parses_a_posix_path_on_any_host() {
 }
 
 #[test]
+fn file_uri_spelling_aliases_have_one_canonical_form() {
+    for input in [
+        "FILE:///workspace/src",
+        "file:/workspace/src",
+        "file://localhost/workspace/src",
+    ] {
+        let uri = PathUri::parse(input).expect("file URI alias should parse");
+        assert_eq!(uri.to_string(), "file:///workspace/src", "parsing {input}");
+    }
+}
+
+#[test]
 fn environment_uri_round_trips_a_unix_path() {
     let environment_id = EnvironmentId::new("dev_box-1").expect("valid environment id");
     let path = EnvironmentPath::posix("/workspace/a path/file.rs").expect("valid POSIX path");
@@ -162,13 +174,26 @@ fn unsupported_scheme_is_rejected_during_deserialization() {
 
 #[test]
 fn file_uri_rejects_a_different_host() {
-    let error = PathUri::parse("file://other-host/tmp/file.rs")
-        .expect_err("remote file URI should be rejected");
+    for input in [
+        "file://other-host/tmp/file.rs",
+        "file://127.0.0.1/tmp/file.rs",
+        "file://[::1]/tmp/file.rs",
+        "file://localhost./tmp/file.rs",
+    ] {
+        let error = PathUri::parse(input).expect_err("non-localhost authority should be rejected");
 
-    assert!(matches!(
-        error,
-        PathUriParseError::FileUriMustReferenceCurrentHost
-    ));
+        assert!(matches!(
+            error,
+            PathUriParseError::FileUriMustReferenceCurrentHost
+        ));
+    }
+
+    assert_eq!(
+        PathUri::parse("file://LOCALHOST/tmp/file.rs")
+            .expect("localhost authority should parse")
+            .to_string(),
+        "file:///tmp/file.rs"
+    );
 }
 
 #[test]
@@ -216,6 +241,56 @@ fn known_path_uris_reject_queries_and_fragments() {
         fragment_error,
         PathUriParseError::FragmentNotAllowed
     ));
+}
+
+#[test]
+fn path_uris_reject_percent_encoded_path_separators() {
+    for input in [
+        "file:///tmp/a%2Fb",
+        "file:///tmp/a%2fb",
+        "codex-env:///devbox/tmp/a%2Fb",
+        "codex-env:///devbox/tmp/a%2fb",
+    ] {
+        assert!(PathUri::parse(input).is_err(), "accepting {input}");
+    }
+}
+
+#[test]
+fn path_uris_reject_non_utf8_percent_encoding() {
+    for input in [
+        "file:///tmp/%FF",
+        "file:///tmp/%00",
+        "file:///tmp/%ZZ",
+        "codex-env:///devbox/tmp/%F0%28%8C%28",
+        "codex-env:///devbox/tmp/%00",
+        "codex-env:///devbox/tmp/%",
+    ] {
+        assert!(PathUri::parse(input).is_err(), "accepting {input}");
+    }
+}
+
+#[test]
+fn encoded_filename_characters_round_trip_without_becoming_uri_metadata() {
+    let uri = PathUri::parse("codex-env:///devbox/tmp/a%3Fb%23c%25d")
+        .expect("encoded filename characters should parse");
+
+    assert_eq!(uri.to_string(), "codex-env:///devbox/tmp/a%3Fb%23c%25d");
+    let PathUriView::Environment(view) = uri.view() else {
+        panic!("expected environment view");
+    };
+    assert_eq!(view.path().as_str(), "/tmp/a?b#c%d");
+}
+
+#[test]
+fn double_encoded_separator_remains_filename_text() {
+    let uri = PathUri::parse("codex-env:///devbox/tmp/a%252Fb")
+        .expect("double-encoded separator should parse as filename text");
+
+    assert_eq!(uri.to_string(), "codex-env:///devbox/tmp/a%252Fb");
+    let PathUriView::Environment(view) = uri.view() else {
+        panic!("expected environment view");
+    };
+    assert_eq!(view.path().as_str(), "/tmp/a%2Fb");
 }
 
 #[test]

@@ -22,7 +22,9 @@ impl EnvironmentPath {
     pub fn new(path: impl Into<String>) -> Result<Self, EnvironmentPathError> {
         let path = path.into();
         validate_environment_path(&path)?;
-        Ok(Self(normalize_environment_path(&path)))
+        let path = normalize_environment_path(&path);
+        validate_environment_path(&path)?;
+        Ok(Self(path))
     }
 
     pub fn posix(path: impl Into<String>) -> Result<Self, EnvironmentPathError> {
@@ -127,6 +129,11 @@ fn validate_environment_path(path: &str) -> Result<(), EnvironmentPathError> {
     if !path.starts_with('/') {
         return Err(EnvironmentPathError::NotAbsolute(path.to_string()));
     }
+    if has_unsupported_windows_namespace(path) {
+        return Err(EnvironmentPathError::UnsupportedWindowsNamespace(
+            path.to_string(),
+        ));
+    }
     if path.starts_with("//") && !path.starts_with("///") && !is_valid_unc_path(path) {
         return Err(EnvironmentPathError::InvalidWindowsUncPath(
             path.to_string(),
@@ -142,7 +149,7 @@ fn validate_windows_path(path: &str) -> Result<(), EnvironmentPathError> {
     if path.contains('\0') {
         return Err(EnvironmentPathError::ContainsNull);
     }
-    if path.starts_with(r"\\?\") || path.starts_with(r"\\.\") {
+    if has_unsupported_windows_namespace(path) {
         return Err(EnvironmentPathError::UnsupportedWindowsNamespace(
             path.to_string(),
         ));
@@ -170,7 +177,17 @@ fn is_valid_unc_path(path: &str) -> bool {
     let mut components = path[2..]
         .split('/')
         .filter(|component| !component.is_empty());
-    components.next().is_some() && components.next().is_some()
+    components
+        .next()
+        .is_some_and(|component| !matches!(component, "." | ".."))
+        && components
+            .next()
+            .is_some_and(|component| !matches!(component, "." | ".."))
+}
+
+fn has_unsupported_windows_namespace(path: &str) -> bool {
+    let path = path.replace('\\', "/");
+    path.starts_with("//?/") || path.starts_with("//./")
 }
 
 fn normalize_environment_path(path: &str) -> String {

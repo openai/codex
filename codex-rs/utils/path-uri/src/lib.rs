@@ -18,6 +18,8 @@
 //! to native syntax, validating platform-specific names, and deciding path case
 //! sensitivity require metadata from the environment. Filesystem-dependent
 //! operations such as canonicalizing symlinks still require the environment.
+//! URI identity is lexical and UTF-8-only: case, Unicode normalization, hard
+//! links, and filesystem aliases are not folded together.
 //!
 //! [`file:` URIs][rfc-8089] remain host-specific because they can only be
 //! dependably converted to paths when local to the interpreting host.
@@ -37,6 +39,7 @@ use std::fmt;
 use std::str::FromStr;
 use thiserror::Error;
 use ts_rs::TS;
+use url::PathSegmentsMut;
 use url::Url;
 
 pub use environment_path::EnvironmentPath;
@@ -252,6 +255,9 @@ fn parse_file_path(url: &Url) -> Result<EnvironmentPath, PathUriParseError> {
     if url.host_str().is_some_and(|host| host != "localhost") {
         return Err(PathUriParseError::FileUriMustReferenceCurrentHost);
     }
+    if has_invalid_percent_encoding(url.path()) || contains_percent_encoded_slash(url.path()) {
+        return Err(PathUriParseError::InvalidFileUriPath);
+    }
     let path =
         urlencoding::decode(url.path()).map_err(|_| PathUriParseError::InvalidFileUriPath)?;
     EnvironmentPath::new(path.into_owned()).map_err(|_| PathUriParseError::InvalidFileUriPath)
@@ -263,6 +269,9 @@ fn parse_environment_path(
     validate_common_known_uri(url)?;
     if url.host().is_some() {
         return Err(PathUriParseError::EnvironmentUriMustNotHaveAuthority);
+    }
+    if has_invalid_percent_encoding(url.path()) || contains_percent_encoded_slash(url.path()) {
+        return Err(PathUriParseError::InvalidEnvironmentUriPath);
     }
 
     let path = url
@@ -282,7 +291,12 @@ fn parse_environment_path(
 
 fn file_url(path: &EnvironmentPath) -> Result<Url, PathUriParseError> {
     let mut url = Url::parse("file:///")?;
-    url.set_path(path.as_str());
+    let Ok(mut segments) = url.path_segments_mut() else {
+        unreachable!("file URLs support hierarchical path segments");
+    };
+    segments.clear();
+    append_path_segments(&mut segments, path);
+    drop(segments);
     Ok(url)
 }
 
@@ -291,12 +305,53 @@ fn environment_url(
     path: &EnvironmentPath,
 ) -> Result<Url, PathUriParseError> {
     let mut url = Url::parse(&format!("{CODEX_ENVIRONMENT_SCHEME}:///"))?;
-    url.set_path(&format!("/{environment_id}{}", path.as_str()));
+    let Ok(mut segments) = url.path_segments_mut() else {
+        unreachable!("codex-env URLs support hierarchical path segments");
+    };
+    segments.clear();
+    segments.push(environment_id.as_str());
+    append_path_segments(&mut segments, path);
+    drop(segments);
     Ok(url)
 }
 
+fn append_path_segments(segments: &mut PathSegmentsMut<'_>, path: &EnvironmentPath) {
+    let path = path.as_str().strip_prefix('/').unwrap_or_default();
+    for component in path.split('/') {
+        segments.push(component);
+    }
+}
+
 fn decode_uri_path(path: &str) -> String {
-    String::from_utf8_lossy(&urlencoding::decode_binary(path.as_bytes())).into_owned()
+    let Ok(path) = urlencoding::decode(path) else {
+        unreachable!("PathUri validates UTF-8 percent encoding during construction");
+    };
+    path.into_owned()
+}
+
+fn contains_percent_encoded_slash(path: &str) -> bool {
+    path.as_bytes()
+        .windows(3)
+        .any(|bytes| bytes[0] == b'%' && bytes[1] == b'2' && matches!(bytes[2], b'f' | b'F'))
+}
+
+fn has_invalid_percent_encoding(path: &str) -> bool {
+    let bytes = path.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] != b'%' {
+            index += 1;
+            continue;
+        }
+        if bytes
+            .get(index + 1..index + 3)
+            .is_none_or(|digits| !digits.iter().all(u8::is_ascii_hexdigit))
+        {
+            return true;
+        }
+        index += 3;
+    }
+    false
 }
 
 fn validate_common_known_uri(url: &Url) -> Result<(), PathUriParseError> {
