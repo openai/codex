@@ -7,6 +7,7 @@ use codex_protocol::ThreadId;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AgentMessageEvent;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::CompactedItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
@@ -439,6 +440,80 @@ async fn recorder_materializes_on_flush_with_pending_items() -> std::io::Result<
     assert_eq!(text_after_second_persist, text);
 
     recorder.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn recorder_persists_response_item_ids_in_rollout_history() -> std::io::Result<()> {
+    let home = TempDir::new().expect("temp dir");
+    let config = test_config(home.path());
+    let thread_id = ThreadId::new();
+    let recorder = RolloutRecorder::new(
+        &config,
+        RolloutRecorderParams::new(
+            thread_id,
+            /*forked_from_id*/ None,
+            /*parent_thread_id*/ None,
+            SessionSource::Exec,
+            /*thread_source*/ None,
+            BaseInstructions::default(),
+            Vec::new(),
+        ),
+    )
+    .await?;
+    let rollout_path = recorder.rollout_path().to_path_buf();
+    let top_level = ResponseItem::Message {
+        id: Some("msg_top_level".to_string()),
+        role: "assistant".to_string(),
+        content: Vec::new(),
+        phase: None,
+    };
+    let historical_user = ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: Vec::new(),
+        phase: None,
+    };
+    let compacted = RolloutItem::Compacted(CompactedItem {
+        message: "summary".to_string(),
+        replacement_history: Some(vec![
+            ResponseItem::Message {
+                id: Some("msg_replacement".to_string()),
+                role: "assistant".to_string(),
+                content: Vec::new(),
+                phase: None,
+            },
+            ResponseItem::Compaction {
+                id: Some("cmp_replacement".to_string()),
+                encrypted_content: "opaque".to_string(),
+            },
+        ]),
+    });
+
+    recorder
+        .record_canonical_items(&[
+            RolloutItem::ResponseItem(top_level),
+            RolloutItem::ResponseItem(historical_user),
+            compacted,
+        ])
+        .await?;
+    recorder.flush().await?;
+
+    let lines = fs::read_to_string(&rollout_path)?
+        .lines()
+        .map(serde_json::from_str::<serde_json::Value>)
+        .collect::<Result<Vec<_>, _>>()?;
+    assert_eq!(lines[1]["payload"]["id"], "msg_top_level");
+    assert_eq!(lines[2]["payload"].get("id"), None);
+    assert_eq!(
+        lines[3]["payload"]["replacement_history"][0]["id"],
+        "msg_replacement"
+    );
+    assert_eq!(
+        lines[3]["payload"]["replacement_history"][1]["id"],
+        "cmp_replacement"
+    );
+
     Ok(())
 }
 

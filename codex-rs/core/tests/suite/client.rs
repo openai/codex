@@ -290,14 +290,15 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
 
     // Prior item: user message (should be delivered)
     let prior_user = codex_protocol::models::ResponseItem::Message {
-        id: None,
+        id: Some("msg_resumed_user".to_string()),
         role: "user".to_string(),
         content: vec![codex_protocol::models::ContentItem::InputText {
             text: "resumed user message".to_string(),
         }],
         phase: None,
     };
-    let prior_user_json = serde_json::to_value(&prior_user).unwrap();
+    let mut prior_user_json = serde_json::to_value(&prior_user).unwrap();
+    prior_user.attach_id_to_json(&mut prior_user_json);
     writeln!(
         f,
         "{}",
@@ -311,14 +312,15 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
 
     // Prior item: system message (excluded from API history)
     let prior_system = codex_protocol::models::ResponseItem::Message {
-        id: None,
+        id: Some("msg_resumed_system".to_string()),
         role: "system".to_string(),
         content: vec![codex_protocol::models::ContentItem::OutputText {
             text: "resumed system instruction".to_string(),
         }],
         phase: None,
     };
-    let prior_system_json = serde_json::to_value(&prior_system).unwrap();
+    let mut prior_system_json = serde_json::to_value(&prior_system).unwrap();
+    prior_system.attach_id_to_json(&mut prior_system_json);
     writeln!(
         f,
         "{}",
@@ -332,14 +334,15 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
 
     // Prior item: assistant message
     let prior_item = codex_protocol::models::ResponseItem::Message {
-        id: None,
+        id: Some("msg_resumed_assistant".to_string()),
         role: "assistant".to_string(),
         content: vec![codex_protocol::models::ContentItem::OutputText {
             text: "resumed assistant message".to_string(),
         }],
         phase: Some(MessagePhase::Commentary),
     };
-    let prior_item_json = serde_json::to_value(&prior_item).unwrap();
+    let mut prior_item_json = serde_json::to_value(&prior_item).unwrap();
+    prior_item.attach_id_to_json(&mut prior_item_json);
     writeln!(
         f,
         "{}",
@@ -403,6 +406,15 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
     let request = resp_mock.single_request();
     let request_body = request.body_json();
     let input = request_body["input"].as_array().expect("input array");
+    let message_item = |role: &str, text: &str| {
+        input
+            .iter()
+            .find(|item| {
+                item.get("role").and_then(|role| role.as_str()) == Some(role)
+                    && message_input_texts(item).contains(&text)
+            })
+            .expect("message item")
+    };
     let mut messages: Vec<(String, String)> = Vec::new();
     for item in input {
         let Some(role) = item.get("role").and_then(|role| role.as_str()) else {
@@ -420,19 +432,23 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
         .iter()
         .position(|(role, text)| role == "assistant" && text == "resumed assistant message")
         .expect("prior assistant message");
-    let prior_assistant = input
-        .iter()
-        .find(|item| {
-            item.get("role").and_then(|role| role.as_str()) == Some("assistant")
-                && item
-                    .get("content")
-                    .and_then(|content| content.as_array())
-                    .and_then(|content| content.first())
-                    .and_then(|entry| entry.get("text"))
-                    .and_then(|text| text.as_str())
-                    == Some("resumed assistant message")
-        })
-        .expect("resumed assistant message request item");
+    let prior_user = message_item("user", "resumed user message");
+    let prior_assistant = message_item("assistant", "resumed assistant message");
+    let new_user = message_item("user", "hello");
+    assert_eq!(
+        prior_user.get("id").and_then(|id| id.as_str()),
+        Some("msg_resumed_user")
+    );
+    assert_eq!(
+        prior_assistant.get("id").and_then(|id| id.as_str()),
+        Some("msg_resumed_assistant")
+    );
+    assert!(
+        new_user
+            .get("id")
+            .and_then(|id| id.as_str())
+            .is_some_and(|id| id.starts_with("msg_"))
+    );
     assert_eq!(
         prior_assistant
             .get("phase")
@@ -507,6 +523,7 @@ async fn resume_replays_legacy_js_repl_image_rollout_shapes() {
         RolloutLine {
             timestamp: "2024-01-01T00:00:02.000Z".to_string(),
             item: RolloutItem::ResponseItem(ResponseItem::CustomToolCallOutput {
+                id: None,
                 call_id: "legacy-js-call".to_string(),
                 name: None,
                 output: FunctionCallOutputPayload::from_text("legacy js_repl stdout".to_string()),
@@ -644,6 +661,7 @@ async fn resume_replays_image_tool_outputs_with_detail() {
         RolloutLine {
             timestamp: "2024-01-01T00:00:01.500Z".to_string(),
             item: RolloutItem::ResponseItem(ResponseItem::FunctionCallOutput {
+                id: None,
                 call_id: function_call_id.to_string(),
                 output: FunctionCallOutputPayload::from_content_items(vec![
                     FunctionCallOutputContentItem::InputImage {
@@ -666,6 +684,7 @@ async fn resume_replays_image_tool_outputs_with_detail() {
         RolloutLine {
             timestamp: "2024-01-01T00:00:02.500Z".to_string(),
             item: RolloutItem::ResponseItem(ResponseItem::CustomToolCallOutput {
+                id: None,
                 call_id: custom_call_id.to_string(),
                 name: None,
                 output: FunctionCallOutputPayload::from_content_items(vec![
@@ -2437,6 +2456,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         call_id: "function-call-id".into(),
     });
     prompt.input.push(ResponseItem::FunctionCallOutput {
+        id: None,
         call_id: "function-call-id".into(),
         output: FunctionCallOutputPayload::from_text("ok".into()),
     });
@@ -2460,6 +2480,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         input: "{}".into(),
     });
     prompt.input.push(ResponseItem::CustomToolCallOutput {
+        id: None,
         call_id: "custom-tool-call-id".into(),
         name: None,
         output: FunctionCallOutputPayload::from_text("ok".into()),
@@ -3105,8 +3126,7 @@ async fn history_dedupes_streamed_and_final_messages_across_turns() {
     // each time: a few deltas, then a final assistant message, then completed.
     let server = MockServer::start().await;
 
-    // Build a small SSE stream with deltas and a final assistant message.
-    // We emit the same body for all 3 turns.
+    // Build small SSE streams with deltas and distinct final assistant items.
     let sse1 = sse(vec![
         ev_message_item_added("msg-1", ""),
         ev_output_text_delta("Hey "),
@@ -3115,8 +3135,24 @@ async fn history_dedupes_streamed_and_final_messages_across_turns() {
         ev_assistant_message("msg-1", "Hey there!\n"),
         ev_completed("resp1"),
     ]);
+    let sse2 = sse(vec![
+        ev_message_item_added("msg-2", ""),
+        ev_output_text_delta("Second "),
+        ev_output_text_delta("reply"),
+        ev_output_text_delta("!\n"),
+        ev_assistant_message("msg-2", "Second reply!\n"),
+        ev_completed("resp2"),
+    ]);
+    let sse3 = sse(vec![
+        ev_message_item_added("msg-3", ""),
+        ev_output_text_delta("Third "),
+        ev_output_text_delta("reply"),
+        ev_output_text_delta("!\n"),
+        ev_assistant_message("msg-3", "Third reply!\n"),
+        ev_completed("resp3"),
+    ]);
 
-    let request_log = mount_sse_sequence(&server, vec![sse1.clone(), sse1.clone(), sse1]).await;
+    let request_log = mount_sse_sequence(&server, vec![sse1, sse2, sse3]).await;
 
     let mut builder = test_codex().with_auth(CodexAuth::from_api_key("Test API Key"));
     let codex = builder
@@ -3180,47 +3216,63 @@ async fn history_dedupes_streamed_and_final_messages_across_turns() {
         assert_eq!(request.path(), "/v1/responses");
     }
 
-    // Replace full-array compare with tail-only raw JSON compare using a single hard-coded value.
-    let r3_tail_expected = json!([
-        {
-            "type": "message",
-            "role": "user",
-            "content": [{"type":"input_text","text":"U1"}]
-        },
-        {
-            "type": "message",
-            "role": "assistant",
-            "content": [{"type":"output_text","text":"Hey there!\n"}]
-        },
-        {
-            "type": "message",
-            "role": "user",
-            "content": [{"type":"input_text","text":"U2"}]
-        },
-        {
-            "type": "message",
-            "role": "assistant",
-            "content": [{"type":"output_text","text":"Hey there!\n"}]
-        },
-        {
-            "type": "message",
-            "role": "user",
-            "content": [{"type":"input_text","text":"U3"}]
-        }
-    ]);
+    let message_id = |request: &ResponsesRequest, role: &str, text: &str| {
+        request
+            .inputs_of_type("message")
+            .into_iter()
+            .find(|item| {
+                item.get("role").and_then(serde_json::Value::as_str) == Some(role)
+                    && item
+                        .get("content")
+                        .and_then(serde_json::Value::as_array)
+                        .is_some_and(|content| {
+                            content.iter().any(|entry| {
+                                entry.get("text").and_then(serde_json::Value::as_str) == Some(text)
+                            })
+                        })
+            })
+            .and_then(|item| item.get("id").cloned())
+            .and_then(|id| id.as_str().map(str::to_string))
+            .expect("message id")
+    };
+    let message_ids_by_role = |request: &ResponsesRequest, role: &str| {
+        request
+            .inputs_of_type("message")
+            .into_iter()
+            .filter(|item| item.get("role").and_then(serde_json::Value::as_str) == Some(role))
+            .map(|item| {
+                item.get("id")
+                    .and_then(serde_json::Value::as_str)
+                    .expect("message id")
+                    .to_string()
+            })
+            .collect::<Vec<_>>()
+    };
+    let u1_id = message_id(&requests[0], "user", "U1");
+    let u2_id = message_id(&requests[1], "user", "U2");
+    let u3_id = message_id(&requests[2], "user", "U3");
+    let developer_ids = message_ids_by_role(&requests[0], "developer");
 
-    let r3_input_array = requests[2]
-        .body_json()
-        .get("input")
-        .and_then(|v| v.as_array())
-        .cloned()
-        .expect("r3 missing input array");
-    // skipping earlier context and developer messages
-    let tail_len = r3_tail_expected.as_array().unwrap().len();
-    let actual_tail = &r3_input_array[r3_input_array.len() - tail_len..];
+    assert!(u1_id.starts_with("msg_"));
+    assert!(u2_id.starts_with("msg_"));
+    assert!(u3_id.starts_with("msg_"));
+    assert!(!developer_ids.is_empty());
+    assert!(developer_ids.iter().all(|id| id.starts_with("msg_")));
+    assert!(message_ids_by_role(&requests[1], "developer").starts_with(&developer_ids));
+    assert!(message_ids_by_role(&requests[2], "developer").starts_with(&developer_ids));
+    assert_eq!(message_id(&requests[1], "user", "U1"), u1_id);
+    assert_eq!(message_id(&requests[2], "user", "U1"), u1_id);
+    assert_eq!(message_id(&requests[2], "user", "U2"), u2_id);
     assert_eq!(
-        serde_json::Value::Array(actual_tail.to_vec()),
-        r3_tail_expected,
-        "request 3 tail mismatch",
+        message_id(&requests[1], "assistant", "Hey there!\n"),
+        "msg-1"
+    );
+    assert_eq!(
+        message_id(&requests[2], "assistant", "Hey there!\n"),
+        "msg-1"
+    );
+    assert_eq!(
+        message_id(&requests[2], "assistant", "Second reply!\n"),
+        "msg-2"
     );
 }

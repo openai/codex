@@ -287,14 +287,12 @@ mod tests {
         let turn_id = turn.sub_id.clone();
         let model = turn.model_info.slug.clone();
         let truncation_policy = turn.truncation_policy;
-        let history_item = ResponseItem::Message {
-            id: None,
-            role: "user".to_string(),
-            content: vec![ContentItem::InputText {
+        let history_item = ResponseItem::new_message(
+            "user",
+            vec![ContentItem::InputText {
                 text: "extension history".to_string(),
             }],
-            phase: None,
-        };
+        );
         session
             .record_conversation_items(&turn, std::slice::from_ref(&history_item))
             .await;
@@ -331,9 +329,18 @@ mod tests {
         );
         assert_eq!(captured_call.model, model);
         assert_eq!(captured_call.truncation_policy, truncation_policy);
+        let history_item_id = captured_call.conversation_history.items()[0]
+            .id()
+            .expect("recorded history item should have an id");
+        assert!(history_item_id.starts_with("msg_"));
+        let mut expected_history_item = history_item;
+        let ResponseItem::Message { id, .. } = &mut expected_history_item else {
+            panic!("test history item should be a message");
+        };
+        *id = Some(history_item_id.to_string());
         assert_eq!(
             captured_call.conversation_history.items(),
-            std::slice::from_ref(&history_item)
+            std::slice::from_ref(&expected_history_item)
         );
         match captured_call.payload {
             ToolPayload::Function { arguments } => {

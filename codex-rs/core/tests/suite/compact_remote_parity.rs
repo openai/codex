@@ -762,13 +762,13 @@ fn compact_request_view(body: &Value, mode: Mode) -> Value {
     }
 
     let mut selected = selected_request_fields(body, SelectedFieldsMode::Compact);
-    selected["input"] = normalize_value(Value::Array(input));
+    selected["input"] = normalize_response_items(Value::Array(input));
     canonical_json(&normalize_value(selected))
 }
 
 fn follow_up_request_view(body: &Value) -> Value {
     let mut selected = selected_request_fields(body, SelectedFieldsMode::FollowUp);
-    selected["input"] = normalize_value(
+    selected["input"] = normalize_response_items(
         body.get("input")
             .cloned()
             .expect("follow-up request should include input"),
@@ -800,7 +800,9 @@ fn replacement_history_from_rollout(path: &Path) -> Result<Value> {
     }
     let replacement_history =
         replacement_history.expect("expected compacted rollout replacement history");
-    Ok(canonical_json(&normalize_value(replacement_history)))
+    Ok(canonical_json(&normalize_response_items(
+        replacement_history,
+    )))
 }
 
 fn write_manual_compact_hooks(home: &Path) {
@@ -929,6 +931,16 @@ fn normalize_value(value: Value) -> Value {
         ),
         Value::Null | Value::Bool(_) | Value::Number(_) => value,
     }
+}
+
+fn normalize_response_items(mut value: Value) -> Value {
+    let Value::Array(items) = &mut value else {
+        panic!("response items should be an array");
+    };
+    for item in items {
+        remove_object_field(item, "id");
+    }
+    normalize_value(value)
 }
 
 fn normalize_string(value: &str) -> String {

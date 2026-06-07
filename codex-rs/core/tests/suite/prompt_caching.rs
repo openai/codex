@@ -47,6 +47,19 @@ fn text_user_input_parts(texts: Vec<String>) -> serde_json::Value {
     })
 }
 
+fn generated_message_id(item: &serde_json::Value) -> &str {
+    let Some(id) = item["id"].as_str() else {
+        panic!("message id");
+    };
+    assert!(id.starts_with("msg_"));
+    id
+}
+
+fn with_message_id(mut item: serde_json::Value, id: &str) -> serde_json::Value {
+    item["id"] = serde_json::json!(id);
+    item
+}
+
 fn assert_default_env_context(text: &str, cwd: &str) {
     assert_env_context_fragment(text);
     assert!(
@@ -383,7 +396,13 @@ async fn prefixes_context_and_instructions_once_and_consistently_across_requests
         Some("input_text"),
         "expected environment context bundled after UI message in cached contextual message"
     );
-    assert_eq!(input1[2], text_user_input("hello 1".to_string()));
+    assert_eq!(
+        input1[2],
+        with_message_id(
+            text_user_input("hello 1".to_string()),
+            generated_message_id(&input1[2]),
+        )
+    );
 
     let body2 = req2.single_request().body_json();
     let input2 = body2["input"].as_array().expect("input array");
@@ -392,7 +411,13 @@ async fn prefixes_context_and_instructions_once_and_consistently_across_requests
         input1.as_slice(),
         "expected cached prefix to be reused"
     );
-    assert_eq!(input2[input1.len()], text_user_input("hello 2".to_string()));
+    assert_eq!(
+        input2[input1.len()],
+        with_message_id(
+            text_user_input("hello 2".to_string()),
+            generated_message_id(&input2[input1.len()]),
+        )
+    );
 
     Ok(())
 }
@@ -492,13 +517,16 @@ async fn overrides_turn_context_but_keeps_cached_prefix_and_key_constant() -> an
 
     // The entire prefix from the first request should be identical and reused
     // as the prefix of the second request, ensuring cache hit potential.
-    let expected_user_message_2 = serde_json::json!({
-        "type": "message",
-        "role": "user",
-        "content": [ { "type": "input_text", "text": "hello 2" } ]
-    });
     let expected_permissions_msg = body1["input"][0].clone();
     let body1_input = body1["input"].as_array().expect("input array");
+    let expected_user_message_2 = with_message_id(
+        serde_json::json!({
+            "type": "message",
+            "role": "user",
+            "content": [ { "type": "input_text", "text": "hello 2" } ]
+        }),
+        generated_message_id(&body2["input"][body1_input.len() + 2]),
+    );
     // After overriding the thread settings, emit one updated permissions message.
     let expected_permissions_msg_2 = body2["input"][body1_input.len()].clone();
     assert_ne!(
@@ -780,13 +808,16 @@ async fn per_turn_overrides_keep_cached_prefix_and_key_constant() -> anyhow::Res
 
     // The entire prefix from the first request should be identical and reused
     // as the prefix of the second request.
-    let expected_user_message_2 = serde_json::json!({
-        "type": "message",
-        "role": "user",
-        "content": [ { "type": "input_text", "text": "hello 2" } ]
-    });
     let expected_permissions_msg = body1["input"][0].clone();
     let body1_input = body1["input"].as_array().expect("input array");
+    let expected_user_message_2 = with_message_id(
+        serde_json::json!({
+            "type": "message",
+            "role": "user",
+            "content": [ { "type": "input_text", "text": "hello 2" } ]
+        }),
+        generated_message_id(&body2["input"][body1_input.len() + 2]),
+    );
     let expected_settings_update_msg = body2["input"][body1_input.len()].clone();
     assert_ne!(
         expected_settings_update_msg, expected_permissions_msg,
@@ -931,14 +962,20 @@ async fn send_user_turn_with_no_changes_does_not_send_environment_context() -> a
         .to_string();
     assert_default_env_context(&expected_env_text_1, &default_cwd_lossy);
 
-    let expected_contextual_user_msg_1 = text_user_input_parts(vec![
-        expected_ui_msg["content"][0]["text"]
-            .as_str()
-            .expect("cached user instructions text")
-            .to_string(),
-        expected_env_text_1,
-    ]);
-    let expected_user_message_1 = text_user_input("hello 1".to_string());
+    let expected_contextual_user_msg_1 = with_message_id(
+        text_user_input_parts(vec![
+            expected_ui_msg["content"][0]["text"]
+                .as_str()
+                .expect("cached user instructions text")
+                .to_string(),
+            expected_env_text_1,
+        ]),
+        generated_message_id(&expected_ui_msg),
+    );
+    let expected_user_message_1 = with_message_id(
+        text_user_input("hello 1".to_string()),
+        generated_message_id(&body1["input"][2]),
+    );
 
     let expected_input_1 = serde_json::Value::Array(vec![
         expected_permissions_msg.clone(),
@@ -947,7 +984,10 @@ async fn send_user_turn_with_no_changes_does_not_send_environment_context() -> a
     ]);
     assert_eq!(body1["input"], expected_input_1);
 
-    let expected_user_message_2 = text_user_input("hello 2".to_string());
+    let expected_user_message_2 = with_message_id(
+        text_user_input("hello 2".to_string()),
+        generated_message_id(&body2["input"][3]),
+    );
     let expected_input_2 = serde_json::Value::Array(vec![
         expected_permissions_msg,
         expected_contextual_user_msg_1,
@@ -1073,14 +1113,20 @@ async fn send_user_turn_with_changes_sends_environment_context() -> anyhow::Resu
         .expect("cached environment context text")
         .to_string();
     assert_default_env_context(&expected_env_text_1, &default_cwd.to_string_lossy());
-    let expected_contextual_user_msg_1 = text_user_input_parts(vec![
-        expected_ui_msg["content"][0]["text"]
-            .as_str()
-            .expect("cached user instructions text")
-            .to_string(),
-        expected_env_text_1,
-    ]);
-    let expected_user_message_1 = text_user_input("hello 1".to_string());
+    let expected_contextual_user_msg_1 = with_message_id(
+        text_user_input_parts(vec![
+            expected_ui_msg["content"][0]["text"]
+                .as_str()
+                .expect("cached user instructions text")
+                .to_string(),
+            expected_env_text_1,
+        ]),
+        generated_message_id(&expected_ui_msg),
+    );
+    let expected_user_message_1 = with_message_id(
+        text_user_input("hello 1".to_string()),
+        generated_message_id(&body1["input"][2]),
+    );
     let expected_input_1 = serde_json::Value::Array(vec![
         expected_permissions_msg.clone(),
         expected_contextual_user_msg_1.clone(),
@@ -1116,7 +1162,10 @@ async fn send_user_turn_with_changes_sends_environment_context() -> anyhow::Resu
         ),
         "expected disabled filesystem profile in environment context: {expected_env_update_text}"
     );
-    let expected_user_message_2 = text_user_input("hello 2".to_string());
+    let expected_user_message_2 = with_message_id(
+        text_user_input("hello 2".to_string()),
+        generated_message_id(&body2["input"][body1_input.len() + 2]),
+    );
     let expected_input_2 = serde_json::Value::Array(vec![
         expected_permissions_msg,
         expected_contextual_user_msg_1,

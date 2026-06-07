@@ -43,6 +43,7 @@ use crate::models::ResponseInputItem;
 use crate::models::ResponseItem;
 use crate::models::SandboxEnforcement;
 use crate::models::WebSearchAction;
+use crate::models::attach_all_response_item_ids;
 use crate::num_format::format_with_separators;
 use crate::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use crate::parse_command::ParsedCommand;
@@ -705,15 +706,22 @@ impl InterAgentCommunication {
         }
     }
 
-    pub fn to_model_input_item(&self) -> ResponseItem {
+    pub fn to_model_input_item(&self, source_message_id: Option<&str>) -> ResponseItem {
         match &self.encrypted_content {
-            Some(encrypted_content) => ResponseItem::AgentMessage {
-                author: self.author.to_string(),
-                recipient: self.recipient.to_string(),
-                content: vec![AgentMessageInputContent::EncryptedContent {
-                    encrypted_content: encrypted_content.clone(),
-                }],
-            },
+            Some(encrypted_content) => {
+                let id = source_message_id
+                    .and_then(|id| id.strip_prefix("msg_"))
+                    .filter(|suffix| !suffix.is_empty())
+                    .map(|suffix| format!("amsg_{suffix}"));
+                ResponseItem::AgentMessage {
+                    id,
+                    author: self.author.to_string(),
+                    recipient: self.recipient.to_string(),
+                    content: vec![AgentMessageInputContent::EncryptedContent {
+                        encrypted_content: encrypted_content.clone(),
+                    }],
+                }
+            }
             None => self.to_response_input_item().into(),
         }
     }
@@ -2857,6 +2865,34 @@ pub enum RolloutItem {
     EventMsg(EventMsg),
 }
 
+impl RolloutItem {
+    pub fn attach_response_item_ids_to_json(&self, value: &mut Value) {
+        let Some(payload) = value.get_mut("payload") else {
+            return;
+        };
+
+        match self {
+            Self::ResponseItem(item) => item.attach_id_to_json(payload),
+            Self::Compacted(CompactedItem {
+                replacement_history: Some(items),
+                ..
+            }) => {
+                let Some(Value::Array(values)) = payload.get_mut("replacement_history") else {
+                    return;
+                };
+                attach_all_response_item_ids(values, items);
+            }
+            Self::SessionMeta(_)
+            | Self::Compacted(CompactedItem {
+                replacement_history: None,
+                ..
+            })
+            | Self::TurnContext(_)
+            | Self::EventMsg(_) => {}
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, JsonSchema, TS)]
 pub struct CompactedItem {
     pub message: String,
@@ -4081,6 +4117,41 @@ mod tests {
                     text: serde_json::to_string(&communication).expect("serialize communication"),
                 }],
                 phase: Some(MessagePhase::Commentary),
+            }
+        );
+    }
+
+    #[test]
+    fn encrypted_inter_agent_communication_model_input_uses_source_message_id() {
+        let communication = InterAgentCommunication::new_encrypted(
+            AgentPath::root(),
+            AgentPath::root().join("reviewer").expect("recipient path"),
+            Vec::new(),
+            "encrypted-payload".to_string(),
+            /*trigger_turn*/ true,
+        );
+        let expected = ResponseItem::AgentMessage {
+            id: Some("amsg_stable".to_string()),
+            author: "/root".to_string(),
+            recipient: "/root/reviewer".to_string(),
+            content: vec![AgentMessageInputContent::EncryptedContent {
+                encrypted_content: "encrypted-payload".to_string(),
+            }],
+        };
+
+        assert_eq!(
+            communication.to_model_input_item(Some("msg_stable")),
+            expected
+        );
+        assert_eq!(
+            communication.to_model_input_item(/*source_message_id*/ None),
+            ResponseItem::AgentMessage {
+                id: None,
+                author: "/root".to_string(),
+                recipient: "/root/reviewer".to_string(),
+                content: vec![AgentMessageInputContent::EncryptedContent {
+                    encrypted_content: "encrypted-payload".to_string(),
+                }],
             }
         );
     }

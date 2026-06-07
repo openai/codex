@@ -1678,12 +1678,13 @@ impl JsonlWriter {
         let timestamp = OffsetDateTime::now_utc()
             .format(timestamp_format)
             .map_err(|e| IoError::other(format!("failed to format timestamp: {e}")))?;
-
         let line = RolloutLineRef {
             timestamp,
             item: rollout_item,
         };
-        self.write_line(&line).await
+        let mut value = serde_json::to_value(line)?;
+        rollout_item.attach_response_item_ids_to_json(&mut value);
+        self.write_line(&value).await
     }
     async fn write_line(&mut self, item: &impl serde::Serialize) -> std::io::Result<()> {
         let mut json = serde_json::to_string(item)?;

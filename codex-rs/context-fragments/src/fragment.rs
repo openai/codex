@@ -76,25 +76,21 @@ pub trait ContextualUserFragment {
     where
         Self: Sized,
     {
-        ResponseItem::Message {
-            id: None,
-            role: self.role().to_string(),
-            content: vec![ContentItem::InputText {
+        ResponseItem::new_message(
+            self.role(),
+            vec![ContentItem::InputText {
                 text: self.render(),
             }],
-            phase: None,
-        }
+        )
     }
 
     fn into_boxed_response_item(self: Box<Self>) -> ResponseItem {
-        ResponseItem::Message {
-            id: None,
-            role: self.role().to_string(),
-            content: vec![ContentItem::InputText {
+        ResponseItem::new_message(
+            self.role(),
+            vec![ContentItem::InputText {
                 text: self.render(),
             }],
-            phase: None,
-        }
+        )
     }
 
     fn into_response_input_item(self) -> ResponseInputItem

@@ -58,7 +58,10 @@ impl Prompt {
             .iter()
             .cloned()
             .map(|item| {
-                let ResponseItem::Message { role, content, .. } = &item else {
+                let ResponseItem::Message {
+                    id, role, content, ..
+                } = &item
+                else {
                     return item;
                 };
                 if role != "assistant" {
@@ -66,7 +69,7 @@ impl Prompt {
                 }
                 InterAgentCommunication::from_message_content(content)
                     .filter(|communication| communication.encrypted_content.is_some())
-                    .map(|communication| communication.to_model_input_item())
+                    .map(|communication| communication.to_model_input_item(id.as_deref()))
                     .unwrap_or(item)
             })
             .collect()

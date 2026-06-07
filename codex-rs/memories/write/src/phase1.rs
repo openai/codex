@@ -721,6 +721,7 @@ mod tests {
         let serialized =
             job::serialize_filtered_rollout_response_items(&[RolloutItem::ResponseItem(
                 ResponseItem::FunctionCallOutput {
+                    id: None,
                     call_id: "call_123".to_string(),
                     output: codex_protocol::models::FunctionCallOutputPayload {
                         body: codex_protocol::models::FunctionCallOutputBody::Text(

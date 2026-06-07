@@ -164,8 +164,14 @@ async fn standalone_web_search_round_trips_output() -> Result<()> {
         }))
     );
 
+    let function_call_output = requests[1].function_call_output(call_id);
+    let function_call_output_id = function_call_output["id"]
+        .as_str()
+        .context("function call output should have an id")?
+        .to_string();
+    assert!(function_call_output_id.starts_with("fco_"));
     assert_eq!(
-        requests[1].function_call_output(call_id),
+        function_call_output,
         json!({
             "type": "function_call_output",
             "call_id": call_id,
@@ -173,6 +179,7 @@ async fn standalone_web_search_round_trips_output() -> Result<()> {
                 "type": "input_text",
                 "text": "Search result",
             }],
+            "id": function_call_output_id,
         })
     );
     assert_eq!(

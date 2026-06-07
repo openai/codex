@@ -1451,6 +1451,7 @@ async fn resumed_thread_runs_resume_then_compact_session_start_hooks() -> Result
             phase: None,
         },
         ResponseItem::Compaction {
+            id: None,
             encrypted_content: "encrypted compact summary".to_string(),
         },
     ];

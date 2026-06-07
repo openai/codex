@@ -300,12 +300,38 @@ mod tests {
             .enqueue_mailbox_communication(mail_two.clone())
             .await;
 
+        let actual = input_queue.drain_mailbox_input_items().await;
+        assert!(
+            actual
+                .iter()
+                .all(|item| item.id().is_some_and(|id| id.starts_with("msg_")))
+        );
+        let without_message_id = |item| match item {
+            ResponseItem::Message {
+                role,
+                content,
+                phase,
+                ..
+            } => ResponseItem::Message {
+                id: None,
+                role,
+                content,
+                phase,
+            },
+            item => item,
+        };
         assert_eq!(
-            input_queue.drain_mailbox_input_items().await,
+            actual
+                .into_iter()
+                .map(without_message_id)
+                .collect::<Vec<_>>(),
             vec![
                 ResponseItem::from(mail_one.to_response_input_item()),
                 ResponseItem::from(mail_two.to_response_input_item())
             ]
+            .into_iter()
+            .map(without_message_id)
+            .collect::<Vec<_>>()
         );
         assert!(!input_queue.has_pending_mailbox_items().await);
     }

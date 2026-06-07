@@ -298,11 +298,11 @@ impl CoreTurnHost {
         }
         self.exec
             .session
-            .inject_if_running(vec![ResponseItem::CustomToolCallOutput {
+            .inject_if_running(vec![ResponseItem::new_named_custom_tool_call_output(
                 call_id,
-                name: Some(PUBLIC_TOOL_NAME.to_string()),
-                output: FunctionCallOutputPayload::from_text(text),
-            }])
+                PUBLIC_TOOL_NAME,
+                FunctionCallOutputPayload::from_text(text),
+            )])
             .await
             .map_err(|_| {
                 format!("failed to inject exec notify message for cell {cell_id}: no active turn")

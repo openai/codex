@@ -31,10 +31,10 @@ pub(crate) fn ensure_call_outputs_present(items: &mut Vec<ResponseItem>) {
                     info!("Function call output is missing for call id: {call_id}");
                     missing_outputs_to_insert.push((
                         idx,
-                        ResponseItem::FunctionCallOutput {
-                            call_id: call_id.clone(),
-                            output: FunctionCallOutputPayload::from_text("aborted".to_string()),
-                        },
+                        ResponseItem::new_function_call_output(
+                            call_id.clone(),
+                            FunctionCallOutputPayload::from_text("aborted".to_string()),
+                        ),
                     ));
                 }
             }
@@ -54,12 +54,12 @@ pub(crate) fn ensure_call_outputs_present(items: &mut Vec<ResponseItem>) {
                     info!("Tool search output is missing for call id: {call_id}");
                     missing_outputs_to_insert.push((
                         idx,
-                        ResponseItem::ToolSearchOutput {
-                            call_id: Some(call_id.clone()),
-                            status: "completed".to_string(),
-                            execution: "client".to_string(),
-                            tools: Vec::new(),
-                        },
+                        ResponseItem::new_tool_search_output(
+                            call_id.clone(),
+                            "completed",
+                            "client",
+                            Vec::new(),
+                        ),
                     ));
                 }
             }
@@ -77,11 +77,10 @@ pub(crate) fn ensure_call_outputs_present(items: &mut Vec<ResponseItem>) {
                     ));
                     missing_outputs_to_insert.push((
                         idx,
-                        ResponseItem::CustomToolCallOutput {
-                            call_id: call_id.clone(),
-                            name: None,
-                            output: FunctionCallOutputPayload::from_text("aborted".to_string()),
-                        },
+                        ResponseItem::new_custom_tool_call_output(
+                            call_id.clone(),
+                            FunctionCallOutputPayload::from_text("aborted".to_string()),
+                        ),
                     ));
                 }
             }
@@ -101,10 +100,10 @@ pub(crate) fn ensure_call_outputs_present(items: &mut Vec<ResponseItem>) {
                         ));
                         missing_outputs_to_insert.push((
                             idx,
-                            ResponseItem::FunctionCallOutput {
-                                call_id: call_id.clone(),
-                                output: FunctionCallOutputPayload::from_text("aborted".to_string()),
-                            },
+                            ResponseItem::new_function_call_output(
+                                call_id.clone(),
+                                FunctionCallOutputPayload::from_text("aborted".to_string()),
+                            ),
                         ));
                     }
                 }
