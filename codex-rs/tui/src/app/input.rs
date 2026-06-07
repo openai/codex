@@ -97,10 +97,9 @@ impl App {
         app_server: &mut AppServerSession,
         key_event: KeyEvent,
     ) {
-        // The composer is read-only while /side prepares, but global shortcuts are handled here
-        // before input reaches the composer. Freeze the whole visible thread so navigation and
-        // commands cannot race the pending transition; Esc is the one escape hatch.
-        if self.side_start_active() {
+        // Freeze shortcuts as well as the composer while /side prepares so nothing can race the
+        // pending transition. Esc is the one escape hatch.
+        if self.pending_side_start.is_some() {
             if matches!(key_event.code, KeyCode::Esc)
                 && matches!(key_event.kind, KeyEventKind::Press | KeyEventKind::Repeat)
             {

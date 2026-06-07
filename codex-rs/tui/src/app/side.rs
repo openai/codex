@@ -198,12 +198,11 @@ pub(super) struct SideThreadState {
 
 pub(super) struct PendingSideStart {
     pub(super) request_id: Uuid,
-    pub(super) parent_thread_id: ThreadId,
+    pub(super) side_state: SideThreadState,
     pub(super) user_message: Option<crate::chatwidget::UserMessage>,
 }
 
 impl SideThreadState {
-    #[cfg(test)]
     pub(super) fn new(parent_thread_id: ThreadId) -> Self {
         Self {
             parent_thread_id,
@@ -266,6 +265,11 @@ impl App {
         parent_thread_id: ThreadId,
         status: Option<SideParentStatus>,
     ) {
+        if let Some(pending) = self.pending_side_start.as_mut()
+            && pending.side_state.parent_thread_id == parent_thread_id
+        {
+            pending.side_state.parent_status = status;
+        }
         let mut changed = false;
         for state in self
             .side_threads
@@ -283,6 +287,15 @@ impl App {
     }
 
     pub(super) fn clear_side_parent_action_status(&mut self, parent_thread_id: ThreadId) {
+        if let Some(pending) = self.pending_side_start.as_mut()
+            && pending.side_state.parent_thread_id == parent_thread_id
+            && pending
+                .side_state
+                .parent_status
+                .is_some_and(SideParentStatus::is_actionable)
+        {
+            pending.side_state.parent_status = None;
+        }
         let mut changed = false;
         for state in self
             .side_threads
@@ -469,10 +482,6 @@ impl App {
         }
     }
 
-    pub(super) fn side_start_active(&self) -> bool {
-        self.pending_side_start.is_some()
-    }
-
     pub(super) fn side_start_error_message(err: &str) -> String {
         if err.contains("no rollout found for thread id")
             || err.contains("includeTurns is unavailable before first user message")
@@ -501,11 +510,6 @@ impl App {
         self.chat_widget
             .set_side_conversation_context_label(/*label*/ None);
         self.restore_side_user_message(user_message);
-    }
-
-    pub(super) fn take_pending_side_start(&mut self, request_id: Uuid) -> Option<PendingSideStart> {
-        self.pending_side_start
-            .take_if(|pending| pending.request_id == request_id)
     }
 
     pub(super) fn install_side_thread_snapshot(
@@ -569,7 +573,7 @@ impl App {
         let request_id = Uuid::new_v4();
         self.pending_side_start = Some(PendingSideStart {
             request_id,
-            parent_thread_id,
+            side_state: SideThreadState::new(parent_thread_id),
             user_message,
         });
         self.refresh_in_memory_config_from_disk_best_effort("starting a side conversation")
@@ -580,8 +584,8 @@ impl App {
         let fork_config =
             app_server.session_config_with_effective_service_tier(&self.side_fork_config());
         let app_event_tx = self.app_event_tx.clone();
-        // App-server responses share the same bounded transport as notifications. Awaiting this
-        // request on the TUI loop would stop notification draining and can deadlock both sides.
+        // Awaiting this on the TUI loop would stop draining the bounded notification transport and
+        // can deadlock the fork response behind notifications.
         tokio::spawn(async move {
             let result = super::side_server::prepare_side_thread(
                 request_handle,
@@ -591,7 +595,7 @@ impl App {
                 remote_cwd_override,
             )
             .await;
-            app_event_tx.send(AppEvent::SideThreadPrepared { request_id, result });
+            app_event_tx.send(AppEvent::SideThreadPrepared(request_id, result));
         });
     }
 
@@ -606,10 +610,12 @@ impl App {
         >,
     ) -> Result<()> {
         let Some(PendingSideStart {
-            parent_thread_id,
+            side_state,
             mut user_message,
             ..
-        }) = self.take_pending_side_start(request_id)
+        }) = self
+            .pending_side_start
+            .take_if(|pending| pending.request_id == request_id)
         else {
             if let Some(thread_id) = match &result {
                 Ok(started) => Some(started.session.thread_id),
@@ -619,20 +625,15 @@ impl App {
                 self.discard_thread_local_state(thread_id).await;
                 if result.is_ok() {
                     let request_handle = app_server.request_handle();
-                    tokio::spawn(async move {
-                        if let Err(err) =
-                            super::side_server::cleanup_side_thread(request_handle, thread_id).await
-                        {
-                            tracing::warn!(
-                                thread_id = %thread_id,
-                                "failed to clean up abandoned side thread: {err}"
-                            );
-                        }
-                    });
+                    tokio::spawn(super::side_server::cleanup_side_thread(
+                        request_handle,
+                        thread_id,
+                    ));
                 }
             }
             return Ok(());
         };
+        let parent_thread_id = side_state.parent_thread_id;
         self.chat_widget.set_side_start_pending(/*pending*/ false);
         match result {
             Ok(started) => {
@@ -642,34 +643,13 @@ impl App {
                     let mut store = channel.store.lock().await;
                     Self::install_side_thread_snapshot(&mut store, started.session, started.turns);
                 }
-                let parent_status =
-                    if let Some(channel) = self.thread_event_channels.get(&parent_thread_id) {
-                        channel.store.lock().await.side_parent_status()
-                    } else {
-                        None
-                    };
-                self.side_threads.insert(
-                    child_thread_id,
-                    SideThreadState {
-                        parent_thread_id,
-                        parent_status,
-                    },
-                );
-                self.upsert_agent_picker_thread(
-                    child_thread_id,
-                    /*agent_nickname*/ None,
-                    /*agent_role*/ None,
-                    /*is_closed*/ false,
-                );
-                // Known side threads take the selector's local replay path, so this does not wait
-                // for another app-server response on the TUI loop.
+                self.side_threads.insert(child_thread_id, side_state);
+                // Prepared side threads switch through the selector's local replay path.
                 if let Err(err) = self
                     .select_agent_thread(tui, app_server, child_thread_id)
                     .await
                 {
-                    let discarded = self.discard_side_thread(app_server, child_thread_id).await;
-                    if discarded
-                        && self.active_thread_id != Some(parent_thread_id)
+                    if self.discard_side_thread(app_server, child_thread_id).await
                         && let Err(restore_err) = self
                             .select_agent_thread(tui, app_server, parent_thread_id)
                             .await
@@ -678,13 +658,6 @@ impl App {
                             "failed to restore parent thread after side switch failure: \
                              {restore_err}"
                         );
-                    } else if !discarded {
-                        self.keep_side_thread_visible_after_cleanup_failure(
-                            tui,
-                            app_server,
-                            child_thread_id,
-                        )
-                        .await;
                     }
                     self.restore_side_user_message(user_message.take());
                     self.chat_widget.add_error_message(format!(

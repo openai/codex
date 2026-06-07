@@ -817,7 +817,7 @@ impl App {
         };
         let status = {
             let store = channel.store.lock().await;
-            store.side_parent_status()
+            store.side_parent_pending_status()
         };
         if let Some(status) = status {
             self.set_side_parent_status(thread_id, Some(status));
@@ -858,7 +858,7 @@ impl App {
                 guard.session = Some(session);
             }
             guard.push_notification(notification.clone());
-            (guard.active, guard.side_parent_status())
+            (guard.active, guard.side_parent_pending_status())
         };
         let notification_status_change = SideParentStatusChange::for_notification(&notification);
 
@@ -976,7 +976,7 @@ impl App {
         let (should_send, pending_status) = {
             let mut guard = store.lock().await;
             guard.push_request(request.clone());
-            (guard.active, guard.side_parent_status())
+            (guard.active, guard.side_parent_pending_status())
         };
         let request_status = SideParentStatus::for_request(&request);
 

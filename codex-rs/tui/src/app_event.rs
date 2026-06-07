@@ -154,10 +154,7 @@ pub(crate) enum AppEvent {
         user_message: Option<UserMessage>,
     },
     /// Finish preparing a transient side conversation off the TUI event loop.
-    SideThreadPrepared {
-        request_id: Uuid,
-        result: Result<AppServerStartedThread, SideThreadPrepareError>,
-    },
+    SideThreadPrepared(Uuid, Result<AppServerStartedThread, SideThreadPrepareError>),
 
     /// Submit an op to the specified thread, regardless of current focus.
     SubmitThreadOp {

@@ -1259,7 +1259,7 @@ See the Codex keymap documentation for supported actions and examples."
                     self.handle_key_event(tui, app_server, key_event).await;
                 }
                 TuiEvent::Paste(pasted) => {
-                    if self.side_start_active() {
+                    if self.pending_side_start.is_some() {
                         return Ok(AppRunControl::Continue);
                     }
                     // Many terminals convert newlines to \r when pasting (e.g., iTerm2),
