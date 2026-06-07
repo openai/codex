@@ -1,6 +1,7 @@
 use std::future::Future;
+use std::sync::Mutex;
+use std::sync::PoisonError;
 
-use tokio::sync::Mutex;
 use tokio_util::task::TaskTracker;
 
 /// Per-connection gate for initialized RPC handler execution.
@@ -27,7 +28,10 @@ impl ConnectionRpcGate {
         F: Future<Output = ()>,
     {
         let token = {
-            let accepting = self.accepting.lock().await;
+            let accepting = self
+                .accepting
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
             if !*accepting {
                 return;
             }
@@ -38,18 +42,26 @@ impl ConnectionRpcGate {
         drop(token);
     }
 
+    pub(crate) fn close(&self) {
+        let mut accepting = self
+            .accepting
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        *accepting = false;
+        self.tasks.close();
+    }
+
     pub(crate) async fn shutdown(&self) {
-        {
-            let mut accepting = self.accepting.lock().await;
-            *accepting = false;
-            self.tasks.close();
-        }
+        self.close();
         self.tasks.wait().await;
     }
 
     #[cfg(test)]
-    async fn is_accepting(&self) -> bool {
-        *self.accepting.lock().await
+    fn is_accepting(&self) -> bool {
+        *self
+            .accepting
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
     }
 
     #[cfg(test)]
@@ -90,9 +102,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn run_drops_future_without_polling_after_shutdown() {
+    async fn run_drops_future_without_polling_after_close() {
         let gate = ConnectionRpcGate::new();
-        gate.shutdown().await;
+        gate.close();
         let polled = Arc::new(AtomicBool::new(/*v*/ false));
         let polled_clone = Arc::clone(&polled);
 
@@ -102,7 +114,34 @@ mod tests {
         .await;
 
         assert!(!polled.load(Ordering::Acquire));
-        assert!(!gate.is_accepting().await);
+        assert!(!gate.is_accepting());
+    }
+
+    #[tokio::test]
+    async fn close_returns_while_started_run_remains_active() {
+        let gate = Arc::new(ConnectionRpcGate::new());
+        let (started_tx, started_rx) = oneshot::channel();
+        let (finish_tx, finish_rx) = oneshot::channel();
+        let gate_for_run = Arc::clone(&gate);
+        let run_task = tokio::spawn(async move {
+            gate_for_run
+                .run(async move {
+                    started_tx.send(()).expect("receiver should be open");
+                    let _ = finish_rx.await;
+                })
+                .await;
+        });
+
+        started_rx.await.expect("run should start");
+        gate.close();
+        assert!(!gate.is_accepting());
+        assert_eq!(gate.inflight_count(), 1);
+
+        finish_tx
+            .send(())
+            .expect("running future should be waiting");
+        run_task.await.expect("run task should complete");
+        gate.shutdown().await;
     }
 
     #[tokio::test]
