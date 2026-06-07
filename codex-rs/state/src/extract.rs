@@ -50,7 +50,6 @@ fn apply_session_meta_from_item(metadata: &mut ThreadMetadata, meta_line: &Sessi
     }
     metadata.id = meta_line.meta.id;
     metadata.source = enum_to_string(&meta_line.meta.source);
-    metadata.parent_thread_id = meta_line.meta.parent_thread_id;
     metadata.thread_source = meta_line.meta.thread_source.clone();
     metadata.agent_nickname = meta_line.meta.agent_nickname.clone();
     metadata.agent_role = meta_line.meta.agent_role.clone();
@@ -480,11 +479,9 @@ mod tests {
     }
 
     #[test]
-    fn session_meta_sets_parent_but_not_model_or_reasoning_effort() {
+    fn session_meta_does_not_set_model_or_reasoning_effort() {
         let mut metadata = metadata_for_test();
         let thread_id = metadata.id;
-        let parent_thread_id =
-            ThreadId::from_string(&Uuid::from_u128(43).to_string()).expect("thread id");
 
         apply_rollout_item(
             &mut metadata,
@@ -492,7 +489,7 @@ mod tests {
                 meta: SessionMeta {
                     id: thread_id,
                     forked_from_id: None,
-                    parent_thread_id: Some(parent_thread_id),
+                    parent_thread_id: None,
                     timestamp: "2026-02-26T00:00:00.000Z".to_string(),
                     cwd: PathBuf::from("/workspace"),
                     originator: "codex_cli_rs".to_string(),
@@ -515,7 +512,6 @@ mod tests {
 
         assert_eq!(metadata.model, None);
         assert_eq!(metadata.reasoning_effort, None);
-        assert_eq!(metadata.parent_thread_id, Some(parent_thread_id));
     }
 
     fn metadata_for_test() -> ThreadMetadata {
@@ -527,7 +523,6 @@ mod tests {
             created_at,
             updated_at: created_at,
             source: "cli".to_string(),
-            parent_thread_id: None,
             thread_source: None,
             agent_path: None,
             agent_nickname: None,

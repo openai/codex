@@ -176,7 +176,6 @@ SELECT
     threads.created_at_ms AS created_at,
     threads.updated_at_ms AS updated_at,
     threads.source,
-    threads.parent_thread_id,
     threads.thread_source,
     threads.agent_path,
     threads.agent_nickname,
@@ -210,7 +209,6 @@ FROM threads
                 sort_key: SortKey::UpdatedAt,
                 sort_direction: SortDirection::Desc,
                 search_term: None,
-                parent_thread_id: None,
             },
         );
         builder.push(" AND threads.memory_mode = 'enabled'");
@@ -548,7 +546,6 @@ SELECT
     threads.created_at_ms AS created_at,
     threads.updated_at_ms AS updated_at,
     threads.source,
-    threads.parent_thread_id,
     threads.thread_source,
     threads.agent_nickname,
     threads.agent_role,

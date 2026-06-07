@@ -117,7 +117,7 @@ pub(super) async fn list_rollout_threads(
     sort_direction: codex_rollout::SortDirection,
 ) -> ThreadStoreResult<codex_rollout::ThreadsPage> {
     if let Some(parent_thread_id) = params.parent_thread_id {
-        return Ok(codex_rollout::state_db::list_threads_db(
+        let page = codex_rollout::state_db::list_threads_db(
             state_db.as_deref(),
             config.codex_home.as_path(),
             params.page_size,
@@ -132,8 +132,14 @@ pub(super) async fn list_rollout_threads(
             params.search_term.as_deref(),
         )
         .await
-        .map(Into::into)
-        .unwrap_or_default());
+        .ok_or_else(|| ThreadStoreError::Internal {
+            message: "state DB unavailable for parent-filtered thread listing".to_string(),
+        })?;
+        let mut page: codex_rollout::ThreadsPage = page.into();
+        for item in &mut page.items {
+            item.parent_thread_id = Some(parent_thread_id);
+        }
+        return Ok(page);
     }
 
     let page = if params.use_state_db_only && params.archived {

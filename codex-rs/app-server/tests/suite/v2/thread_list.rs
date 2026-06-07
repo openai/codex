@@ -35,6 +35,7 @@ use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::SessionSource as CoreSessionSource;
 use codex_protocol::protocol::SubAgentSource;
+use codex_state::DirectionalThreadSpawnEdgeStatus;
 use core_test_support::responses;
 use pretty_assertions::assert_eq;
 use std::cmp::Reverse;
@@ -981,42 +982,64 @@ sqlite = true
 async fn thread_list_parent_filter_reads_direct_children_from_state_db() -> Result<()> {
     let codex_home = TempDir::new()?;
     create_minimal_config(codex_home.path())?;
-    let parent_id = ThreadId::from_string(&Uuid::from_u128(201).to_string())?;
-
-    let older_child_id = create_fake_parented_rollout_with_source(
-        codex_home.path(),
-        "2025-02-01T10-00-00",
-        "2025-02-01T10:00:00Z",
-        "agent job child",
-        Some("mock_provider"),
-        /*git_info*/ None,
-        CoreSessionSource::SubAgent(SubAgentSource::Other("agent_job:job-1".to_string())),
-        parent_id,
-    )?;
-    let newer_child_id = create_fake_parented_rollout_with_source(
-        codex_home.path(),
-        "2025-02-01T11-00-00",
-        "2025-02-01T11:00:00Z",
-        "direct child",
-        Some("mock_provider"),
-        /*git_info*/ None,
-        CoreSessionSource::Cli,
-        parent_id,
-    )?;
-    let newer_child_thread_id = ThreadId::from_string(&newer_child_id)?;
-    create_fake_parented_rollout_with_source(
-        codex_home.path(),
-        "2025-02-01T12-00-00",
-        "2025-02-01T12:00:00Z",
-        "grandchild",
-        Some("mock_provider"),
-        /*git_info*/ None,
-        CoreSessionSource::SubAgent(SubAgentSource::Other("agent_job:job-2".to_string())),
-        newer_child_thread_id,
-    )?;
-
+    let parent_id = ThreadId::new();
+    let older_child_id = ThreadId::new();
+    let newer_child_id = ThreadId::new();
+    let grandchild_id = ThreadId::new();
+    let state_db = codex_state::StateRuntime::init(
+        codex_home.path().to_path_buf(),
+        "mock_provider".to_string(),
+    )
+    .await?;
+    for (thread_id, created_at, source) in [
+        (
+            older_child_id,
+            "2025-02-01T10:00:00Z",
+            CoreSessionSource::SubAgent(SubAgentSource::Other("agent_job:job-1".to_string())),
+        ),
+        (
+            newer_child_id,
+            "2025-02-01T11:00:00Z",
+            CoreSessionSource::Cli,
+        ),
+        (
+            grandchild_id,
+            "2025-02-01T12:00:00Z",
+            CoreSessionSource::SubAgent(SubAgentSource::Other("agent_job:job-2".to_string())),
+        ),
+    ] {
+        let created_at = DateTime::parse_from_rfc3339(created_at)?.with_timezone(&Utc);
+        let mut builder = codex_state::ThreadMetadataBuilder::new(
+            thread_id,
+            codex_home.path().join(format!("{thread_id}.jsonl")),
+            created_at,
+            source,
+        );
+        builder.model_provider = Some("mock_provider".to_string());
+        builder.cwd = codex_home.path().to_path_buf();
+        builder.cli_version = Some("0.0.0".to_string());
+        let mut metadata = builder.build("mock_provider");
+        metadata.preview = Some("child thread".to_string());
+        metadata.first_user_message = metadata.preview.clone();
+        state_db.upsert_thread(&metadata).await?;
+    }
+    for (parent_thread_id, child_thread_id) in [
+        (parent_id, older_child_id),
+        (parent_id, newer_child_id),
+        (newer_child_id, grandchild_id),
+    ] {
+        state_db
+            .upsert_thread_spawn_edge(
+                parent_thread_id,
+                child_thread_id,
+                DirectionalThreadSpawnEdgeStatus::Open,
+            )
+            .await?;
+    }
+    state_db
+        .mark_backfill_complete(/*last_watermark*/ None)
+        .await?;
     let mut mcp = init_mcp(codex_home.path()).await?;
-    fs::remove_dir_all(codex_home.path().join("sessions"))?;
 
     let first_page =
         list_threads_for_parent(&mut mcp, parent_id, /*cursor*/ None, /*limit*/ 1).await?;
@@ -1032,17 +1055,17 @@ async fn thread_list_parent_filter_reads_direct_children_from_state_db() -> Resu
         first_page
             .data
             .iter()
-            .map(|thread| thread.id.as_str())
+            .map(|thread| thread.id.clone())
             .collect::<Vec<_>>(),
-        vec![newer_child_id.as_str()]
+        vec![newer_child_id.to_string()]
     );
     assert_eq!(
         second_page
             .data
             .iter()
-            .map(|thread| thread.id.as_str())
+            .map(|thread| thread.id.clone())
             .collect::<Vec<_>>(),
-        vec![older_child_id.as_str()]
+        vec![older_child_id.to_string()]
     );
     assert_eq!(second_page.next_cursor, None);
     let expected_parent_id = parent_id.to_string();

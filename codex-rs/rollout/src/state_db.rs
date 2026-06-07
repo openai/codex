@@ -368,7 +368,6 @@ pub async fn list_threads_db(
     search_term: Option<&str>,
 ) -> Option<codex_state::ThreadsPage> {
     let ctx = context?;
-    let is_parent_filtered = parent_thread_id.is_some();
     if ctx.codex_home() != codex_home {
         warn!(
             "state db codex_home mismatch: expected {}, got {}",
@@ -393,31 +392,33 @@ pub async fn list_threads_db(
             .map(|cwd| normalize_cwd_for_state_db(cwd))
             .collect::<Vec<_>>()
     });
-    match ctx
-        .list_threads(
-            page_size,
-            codex_state::ThreadFilterOptions {
-                archived_only: archived,
-                allowed_sources: allowed_sources.as_slice(),
-                model_providers: model_providers.as_deref(),
-                cwd_filters: normalized_cwd_filters.as_deref(),
-                parent_thread_id,
-                anchor: anchor.as_ref(),
-                sort_key: match sort_key {
-                    ThreadSortKey::CreatedAt => codex_state::SortKey::CreatedAt,
-                    ThreadSortKey::UpdatedAt => codex_state::SortKey::UpdatedAt,
-                },
-                sort_direction: match sort_direction {
-                    SortDirection::Asc => codex_state::SortDirection::Asc,
-                    SortDirection::Desc => codex_state::SortDirection::Desc,
-                },
-                search_term,
-            },
-        )
-        .await
-    {
+    let filters = codex_state::ThreadFilterOptions {
+        archived_only: archived,
+        allowed_sources: allowed_sources.as_slice(),
+        model_providers: model_providers.as_deref(),
+        cwd_filters: normalized_cwd_filters.as_deref(),
+        anchor: anchor.as_ref(),
+        sort_key: match sort_key {
+            ThreadSortKey::CreatedAt => codex_state::SortKey::CreatedAt,
+            ThreadSortKey::UpdatedAt => codex_state::SortKey::UpdatedAt,
+        },
+        sort_direction: match sort_direction {
+            SortDirection::Asc => codex_state::SortDirection::Asc,
+            SortDirection::Desc => codex_state::SortDirection::Desc,
+        },
+        search_term,
+    };
+    let page = match parent_thread_id {
+        Some(parent_thread_id) => {
+            ctx.list_threads_by_parent(page_size, parent_thread_id, filters)
+                .await
+        }
+        None => ctx.list_threads(page_size, filters).await,
+    };
+    match page {
         Ok(mut page) => {
-            if is_parent_filtered {
+            // Parent-filtered listings intentionally treat persisted state as authoritative.
+            if parent_thread_id.is_some() {
                 return Some(page);
             }
             let mut valid_items = Vec::with_capacity(page.items.len());
