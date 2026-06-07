@@ -1,3 +1,5 @@
+use std::fs;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -5,10 +7,13 @@ use anyhow::Result;
 use anyhow::anyhow;
 use codex_core::ForkSnapshot;
 use codex_features::Feature;
+use codex_login::CodexAuth;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::built_in_model_providers;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::RolloutLine;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use core_test_support::load_default_config_for_test;
@@ -18,6 +23,7 @@ use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
 use pretty_assertions::assert_eq;
+use serde_json::Value;
 use serde_json::json;
 use tempfile::TempDir;
 
@@ -29,8 +35,10 @@ const NEW_PROJECT_INSTRUCTIONS: &str = "new project instructions";
 const OLD_GLOBAL_INSTRUCTIONS: &str = "old global instructions";
 const PROJECT_INSTRUCTIONS: &str = "project instructions";
 const PROJECT_SEPARATOR: &str = "--- project-doc ---";
+const REMOTE_V2_SUMMARY: &str = "global-instructions-remote-v2-summary";
 const SPAWN_CALL_ID: &str = "spawn-global-instructions-child";
 const SPAWN_CHILD_PROMPT: &str = "inspect inherited global instructions";
+const SPAWN_FRESH_PARENT_PROMPT: &str = "spawn a child with fresh context";
 const SPAWN_PARENT_PROMPT: &str = "spawn a child with the parent context";
 const SPAWN_SEED_PROMPT: &str = "seed parent history";
 
@@ -60,6 +68,21 @@ fn instruction_fragments(request: &responses::ResponsesRequest) -> Vec<String> {
         .collect()
 }
 
+fn instruction_fragments_in_items(items: &[Value]) -> Vec<String> {
+    items
+        .iter()
+        .filter(|item| {
+            item.get("type").and_then(Value::as_str) == Some("message")
+                && item.get("role").and_then(Value::as_str) == Some("user")
+        })
+        .filter_map(|item| item.get("content").and_then(Value::as_array))
+        .flatten()
+        .filter_map(|span| span.get("text").and_then(Value::as_str))
+        .filter(|text| text.starts_with("# AGENTS.md instructions for "))
+        .map(str::to_string)
+        .collect()
+}
+
 fn expected_instruction_fragment(cwd: &AbsolutePathBuf, contents: &str) -> String {
     let cwd = cwd.as_path().display();
     format!("# AGENTS.md instructions for {cwd}\n\n<INSTRUCTIONS>\n{contents}\n</INSTRUCTIONS>")
@@ -67,6 +90,67 @@ fn expected_instruction_fragment(cwd: &AbsolutePathBuf, contents: &str) -> Strin
 
 fn assert_single_instruction_fragment(request: &responses::ResponsesRequest, expected: &str) {
     assert_eq!(instruction_fragments(request), vec![expected.to_string()]);
+}
+
+fn replacement_history_from_rollout(path: &Path) -> Result<Vec<Value>> {
+    let rollout_text = fs::read_to_string(path)?;
+    let mut replacement_history = None;
+    for line in rollout_text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+    {
+        let entry: RolloutLine = serde_json::from_str(line)?;
+        if let RolloutItem::Compacted(compacted) = entry.item
+            && let Some(items) = compacted.replacement_history
+        {
+            replacement_history = Some(
+                items
+                    .into_iter()
+                    .map(serde_json::to_value)
+                    .collect::<std::result::Result<Vec<_>, _>>()?,
+            );
+        }
+    }
+    replacement_history.ok_or_else(|| anyhow!("expected rollout replacement history"))
+}
+
+fn rewrite_compaction_as_legacy(path: &Path) -> Result<()> {
+    let rollout_text = fs::read_to_string(path)?;
+    let mut rewritten = Vec::new();
+    let mut compacted_items = 0;
+    for line in rollout_text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+    {
+        let mut entry: RolloutLine = serde_json::from_str(line)?;
+        if let RolloutItem::Compacted(compacted) = &mut entry.item {
+            compacted.replacement_history = None;
+            compacted_items += 1;
+        }
+        rewritten.push(serde_json::to_string(&entry)?);
+    }
+    if compacted_items != 1 {
+        return Err(anyhow!(
+            "expected exactly one compaction to rewrite as legacy; observed {compacted_items}"
+        ));
+    }
+    fs::write(path, format!("{}\n", rewritten.join("\n")))?;
+    Ok(())
+}
+
+fn remote_v2_compaction_response() -> String {
+    responses::sse(vec![
+        json!({
+            "type": "response.output_item.done",
+            "item": {
+                "type": "compaction",
+                "encrypted_content": REMOTE_V2_SUMMARY,
+            }
+        }),
+        responses::ev_completed("remote-v2-compact-response"),
+    ])
 }
 
 fn request_body_contains(request: &wiremock::Request, text: &str) -> bool {
@@ -130,30 +214,30 @@ async fn fresh_thread_composes_global_before_project_and_reports_sources() -> Re
         });
     let test = builder.build_with_remote_env(&server).await?;
     let project_source = test.config.cwd.join(GLOBAL_AGENTS_FILENAME);
-    let creation_sources = vec![global_source, project_source];
+    let creation_sources = vec![global_source.clone(), project_source.clone()];
 
     // Confirm the thread records both creation-time sources in composition order.
     assert_eq!(test.codex.instruction_sources().await, creation_sources);
 
-    // Materialize the initial snapshot, then add global and project overrides before another turn.
+    // Materialize the initial snapshot, then rewrite both selected files in place before another
+    // ordinary turn.
     test.submit_turn("first turn").await?;
-    let new_global_source = write_global_override(home.as_ref(), NEW_GLOBAL_INSTRUCTIONS)?;
-    let new_project_source = test.config.cwd.join(GLOBAL_AGENTS_OVERRIDE_FILENAME);
+    let rewritten_global_source = write_global(home.as_ref(), NEW_GLOBAL_INSTRUCTIONS)?;
     test.fs()
         .write_file(
-            &new_project_source,
+            &project_source,
             NEW_PROJECT_INSTRUCTIONS.as_bytes().to_vec(),
             /*sandbox*/ None,
         )
         .await?;
-    let replacement_sources = vec![new_global_source, new_project_source];
-    assert_ne!(
-        creation_sources, replacement_sources,
-        "the mutation should change both resolved source paths"
+    assert_eq!(
+        rewritten_global_source, global_source,
+        "same-path mutation should retain the selected global source path"
     );
     test.submit_turn("second turn").await?;
 
-    // Assert the running thread keeps its original sources, rendering, and structured prefix.
+    // Assert the running thread keeps its original rendering and structured prefix even though
+    // both files at the reported source paths now contain different text.
     let requests = response_mock.requests();
     assert_eq!(requests.len(), 2);
     let expected_contents =
@@ -195,6 +279,47 @@ async fn fresh_thread_composes_global_before_project_and_reports_sources() -> Re
         second_input.get(..first_input.len()),
         Some(first_input.as_slice()),
         "the ordinary second turn should retain the cached prefix"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn global_instruction_context_item_is_currently_not_limited_by_project_doc_budget()
+-> Result<()> {
+    // Set a one-byte project-doc budget, then create a much larger global instruction file.
+    let server = responses::start_mock_server().await;
+    let response_mock = responses::mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_response_created("oversized-global-response"),
+            responses::ev_completed("oversized-global-response"),
+        ]),
+    )
+    .await;
+    let home = Arc::new(TempDir::new()?);
+    let oversized_global = vec!["global instruction item remains uncapped"; 512].join("\n");
+    let source = write_global(home.as_ref(), &oversized_global)?;
+    let mut builder = test_codex()
+        .with_home(Arc::clone(&home))
+        .with_config(|config| config.project_doc_max_bytes = 1);
+    let test = builder.build(&server).await?;
+
+    // Submit a turn so the complete global instruction item is rendered into model input.
+    test.submit_turn("inspect current global item limit behavior")
+        .await?;
+
+    // Characterize the current gap: the project-doc budget does not cap the global item.
+    assert_eq!(
+        test.codex.instruction_sources().await,
+        vec![source],
+        "the oversized global file should still be selected as the sole source"
+    );
+    let expected_fragment = expected_instruction_fragment(&test.config.cwd, &oversized_global);
+    assert_single_instruction_fragment(&response_mock.single_request(), &expected_fragment);
+    assert!(
+        expected_fragment.len() > test.config.project_doc_max_bytes,
+        "characterization requires a global item larger than the configured project-doc budget"
     );
 
     Ok(())
@@ -430,9 +555,23 @@ async fn fork_replays_rendered_instructions_from_shared_history() -> Result<()> 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn forked_subagent_replays_one_creation_time_global_instruction_fragment() -> Result<()> {
     skip_if_no_network!(Ok(()));
+    run_subagent_global_instruction_case(/*fork_context*/ true).await
+}
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fresh_subagent_uses_creation_time_instructions_without_parent_history() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    run_subagent_global_instruction_case(/*fork_context*/ false).await
+}
+
+async fn run_subagent_global_instruction_case(fork_context: bool) -> Result<()> {
     // Set up matched responses for the parent seed, spawn call, child turn, and parent follow-up.
     let server = responses::start_mock_server().await;
+    let parent_prompt = if fork_context {
+        SPAWN_PARENT_PROMPT
+    } else {
+        SPAWN_FRESH_PARENT_PROMPT
+    };
     let seed_mock = responses::mount_sse_once_match(
         &server,
         |request: &wiremock::Request| request_body_contains(request, SPAWN_SEED_PROMPT),
@@ -445,11 +584,11 @@ async fn forked_subagent_replays_one_creation_time_global_instruction_fragment()
     .await;
     let spawn_args = serde_json::to_string(&json!({
         "message": SPAWN_CHILD_PROMPT,
-        "fork_context": true,
+        "fork_context": fork_context,
     }))?;
     let spawn_mock = responses::mount_sse_once_match(
         &server,
-        |request: &wiremock::Request| request_body_contains(request, SPAWN_PARENT_PROMPT),
+        move |request: &wiremock::Request| request_body_contains(request, parent_prompt),
         responses::sse(vec![
             responses::ev_response_created("spawn-response"),
             responses::ev_function_call_with_namespace(
@@ -510,24 +649,29 @@ async fn forked_subagent_replays_one_creation_time_global_instruction_fragment()
     let new_source = write_global_override(home.as_ref(), NEW_GLOBAL_INSTRUCTIONS)?;
     assert_ne!(source, new_source);
     let mut created_threads = test.thread_manager.subscribe_thread_created();
-    test.submit_turn(SPAWN_PARENT_PROMPT).await?;
+    test.submit_turn(parent_prompt).await?;
     let child_thread_id = tokio::time::timeout(Duration::from_secs(10), created_threads.recv())
         .await
-        .map_err(|_| anyhow!("timed out waiting for the forked subagent thread"))??;
+        .map_err(|_| anyhow!("timed out waiting for the subagent thread"))??;
     let child_thread = test.thread_manager.get_thread(child_thread_id).await?;
     let spawn_request = spawn_mock.single_request();
     let child_request = tokio::time::timeout(Duration::from_secs(10), async {
         loop {
-            if let Some(request) = child_mock.requests().into_iter().next() {
+            if let Some(request) = child_mock.requests().into_iter().find(|request| {
+                request
+                    .message_input_texts("user")
+                    .iter()
+                    .any(|text| text == SPAWN_CHILD_PROMPT)
+            }) {
                 break request;
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
     })
     .await
-    .map_err(|_| anyhow!("timed out waiting for the forked subagent request"))?;
+    .map_err(|_| anyhow!("timed out waiting for the subagent request"))?;
 
-    // Assert parent and child report and render the inherited creation-time snapshot exactly once.
+    // Assert parent and child report and render the parent's creation-time snapshot exactly once.
     let expected_fragment =
         expected_instruction_fragment(&test.config.cwd, OLD_GLOBAL_INSTRUCTIONS);
     assert_single_instruction_fragment(&seed_request, &expected_fragment);
@@ -541,15 +685,35 @@ async fn forked_subagent_replays_one_creation_time_global_instruction_fragment()
     assert_eq!(
         child_thread.instruction_sources().await,
         vec![source],
-        "forked subagent reports the inherited creation-time source"
+        "subagent reports the parent's creation-time source"
     );
-    let seed_input = seed_request.input();
-    let child_input = child_request.input();
-    assert_eq!(
-        child_input.get(..seed_input.len()),
-        Some(seed_input.as_slice()),
-        "forked subagent should replay the parent's original structured input prefix"
-    );
+    if fork_context {
+        let seed_input = seed_request.input();
+        let child_input = child_request.input();
+        assert_eq!(
+            child_input.get(..seed_input.len()),
+            Some(seed_input.as_slice()),
+            "forked subagent should replay the parent's original structured input prefix"
+        );
+    } else {
+        let child_user_texts = child_request.message_input_texts("user");
+        assert_eq!(
+            child_user_texts
+                .iter()
+                .filter(|text| text.as_str() == SPAWN_SEED_PROMPT)
+                .count(),
+            0,
+            "fresh-context subagent should omit parent user history; observed: {child_user_texts:?}"
+        );
+        assert_eq!(
+            child_user_texts
+                .iter()
+                .filter(|text| text.as_str() == SPAWN_CHILD_PROMPT)
+                .count(),
+            1,
+            "fresh-context subagent should contain its own prompt exactly once; observed: {child_user_texts:?}"
+        );
+    }
 
     Ok(())
 }
@@ -596,10 +760,10 @@ async fn manual_compaction_keeps_the_creation_time_global_instructions() -> Resu
         "thread reports the creation-time global source before compaction"
     );
 
-    // Materialize the old snapshot, add a preferred override, and manually compact the thread.
+    // Materialize the old snapshot, rewrite the selected file in place, and manually compact.
     test.submit_turn("first turn").await?;
-    let new_source = write_global_override(home.as_ref(), NEW_GLOBAL_INSTRUCTIONS)?;
-    assert_ne!(source, new_source);
+    let rewritten_source = write_global(home.as_ref(), NEW_GLOBAL_INSTRUCTIONS)?;
+    assert_eq!(source, rewritten_source);
 
     test.codex.submit(Op::Compact).await?;
     wait_for_event(&test.codex, |event| {
@@ -608,7 +772,8 @@ async fn manual_compaction_keeps_the_creation_time_global_instructions() -> Resu
     .await;
     test.submit_turn("after compact").await?;
 
-    // Assert every phase keeps the old rendering and the thread keeps the old reported source.
+    // Assert ordinary and compact turns keep the old rendering even though the reported source
+    // path now contains new text.
     let requests = response_mock.requests();
     assert_eq!(requests.len(), 3);
     let expected_fragment =
@@ -690,11 +855,13 @@ async fn mid_turn_compaction_keeps_the_creation_time_global_instructions() -> Re
     Ok(())
 }
 
-// TODO(anp): Align legacy-resume instruction sources with the historical instructions replayed
-// before compaction so the reported source list and model-visible context describe the same files.
+// TODO(anp): Preserve the persisted model-visible instruction item across later full-context
+// rebuilds. Reloading file contents into historical context rewrites model-visible history and
+// invalidates the cached prefix; future behavior should keep the original item stable.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn legacy_resume_rebuilds_from_current_config_after_manual_compaction() -> Result<()> {
-    // Set up initial, resumed, manual-compaction, and rebuilt-context model responses.
+async fn cold_resume_then_full_context_rebuild_uses_current_instructions() -> Result<()> {
+    // Set up an initial turn, a cold-resumed turn, manual compaction, and the later full-context
+    // rebuild.
     let server = responses::start_mock_server().await;
     let response_mock = responses::mount_sse_sequence(
         &server,
@@ -723,7 +890,7 @@ async fn legacy_resume_rebuilds_from_current_config_after_manual_compaction() ->
     let home = Arc::new(TempDir::new()?);
     let source = write_global(home.as_ref(), OLD_GLOBAL_INSTRUCTIONS)?;
 
-    // Create the initial thread and persist the old instruction snapshot to its rollout.
+    // Create the initial thread and persist its creation-time instruction snapshot.
     let mut initial_builder = test_codex().with_home(Arc::clone(&home)).with_config({
         let provider = provider.clone();
         move |config| config.model_provider = provider
@@ -736,7 +903,7 @@ async fn legacy_resume_rebuilds_from_current_config_after_manual_compaction() ->
         vec![source.clone()],
         "initial thread reports the creation-time global source"
     );
-    initial.submit_turn("persist legacy history").await?;
+    initial.submit_turn("persist resume history").await?;
     let rollout_path = initial
         .session_configured
         .rollout_path
@@ -748,28 +915,43 @@ async fn legacy_resume_rebuilds_from_current_config_after_manual_compaction() ->
     })
     .await;
 
-    // Add a preferred override, then cold-resume with the new source in current configuration.
-    let new_source = write_global_override(home.as_ref(), NEW_GLOBAL_INSTRUCTIONS)?;
-    assert_ne!(source, new_source);
+    // Rewrite the selected AGENTS.md in place, then cold-resume with freshly loaded configuration.
+    let rewritten_source = write_global(home.as_ref(), NEW_GLOBAL_INSTRUCTIONS)?;
+    assert_eq!(source, rewritten_source);
     let mut resume_builder = test_codex()
         .with_home(Arc::clone(&home))
         .with_config(move |config| config.model_provider = provider);
     let resumed = resume_builder
         .resume(&server, Arc::clone(&home), rollout_path)
         .await?;
-    // Assert resume reports the new source while the first resumed turn replays old history.
+
+    // Assert the same source path now resolves new file contents while cold resume replays the
+    // exact old historical prefix.
     assert_eq!(
         resumed.codex.instruction_sources().await,
-        vec![new_source.clone()],
-        "resumed thread reports the current global source"
+        vec![source.clone()],
+        "resumed thread reports the same file path after in-place mutation"
     );
-    resumed.submit_turn("resume legacy history").await?;
+    assert_eq!(
+        fs::read_to_string(source.as_path())?,
+        NEW_GLOBAL_INSTRUCTIONS,
+        "the reported source path should contain the rewritten text"
+    );
+    resumed.submit_turn("resume historical context").await?;
     let requests = response_mock.requests();
+    assert_eq!(requests.len(), 2);
     let old_fragment = expected_instruction_fragment(&initial.config.cwd, OLD_GLOBAL_INSTRUCTIONS);
     assert_single_instruction_fragment(&requests[0], &old_fragment);
     assert_single_instruction_fragment(&requests[1], &old_fragment);
+    let initial_input = requests[0].input();
+    let resumed_input = requests[1].input();
+    assert_eq!(
+        resumed_input.get(..initial_input.len()),
+        Some(initial_input.as_slice()),
+        "cold resume should replay the original structured input prefix"
+    );
 
-    // Compact the resumed thread so legacy reconstruction can inject the current configuration.
+    // Compact the resumed thread, then issue a turn that rebuilds full context.
     resumed.codex.submit(Op::Compact).await?;
     wait_for_event(&resumed.codex, |event| {
         matches!(event, EventMsg::TurnComplete(_))
@@ -777,7 +959,8 @@ async fn legacy_resume_rebuilds_from_current_config_after_manual_compaction() ->
     .await;
     resumed.submit_turn("rebuild full context").await?;
 
-    // Assert compaction sees old history, then the rebuilt context uses the new source contents.
+    // Characterize the current cache-breaking behavior: compaction sees old history, but the
+    // following full-context rebuild injects the newly loaded same-path contents.
     let requests = response_mock.requests();
     assert_eq!(requests.len(), 4);
     let new_fragment = expected_instruction_fragment(&resumed.config.cwd, NEW_GLOBAL_INSTRUCTIONS);
@@ -785,8 +968,216 @@ async fn legacy_resume_rebuilds_from_current_config_after_manual_compaction() ->
     assert_single_instruction_fragment(&requests[3], &new_fragment);
     assert_eq!(
         resumed.codex.instruction_sources().await,
-        vec![new_source],
-        "resumed thread retains the current global source after compaction"
+        vec![source],
+        "resumed thread retains the same current source path after compaction"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn legacy_compaction_without_replacement_history_rebuilds_current_instructions_on_resume()
+-> Result<()> {
+    // Create a current-format compacted rollout that can be rewritten to the legacy shape.
+    let server = responses::start_mock_server().await;
+    let response_mock = responses::mount_sse_sequence(
+        &server,
+        vec![
+            responses::sse(vec![
+                responses::ev_response_created("legacy-initial-response"),
+                responses::ev_completed("legacy-initial-response"),
+            ]),
+            responses::sse(vec![
+                responses::ev_response_created("legacy-compact-response"),
+                responses::ev_assistant_message("legacy-compact-message", "legacy summary"),
+                responses::ev_completed("legacy-compact-response"),
+            ]),
+            responses::sse(vec![
+                responses::ev_response_created("legacy-resumed-response"),
+                responses::ev_completed("legacy-resumed-response"),
+            ]),
+        ],
+    )
+    .await;
+    let provider = local_compaction_provider(&server);
+    let home = Arc::new(TempDir::new()?);
+    let source = write_global(home.as_ref(), OLD_GLOBAL_INSTRUCTIONS)?;
+    let mut initial_builder = test_codex().with_home(Arc::clone(&home)).with_config({
+        let provider = provider.clone();
+        move |config| config.model_provider = provider
+    });
+    let initial = initial_builder.build(&server).await?;
+
+    // Persist one compaction, shut down, and remove its replacement history to emulate an older
+    // rollout whose compacted item contains only the summary message.
+    initial.submit_turn("persist legacy-shaped history").await?;
+    initial.codex.submit(Op::Compact).await?;
+    wait_for_event(&initial.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    let rollout_path = initial
+        .session_configured
+        .rollout_path
+        .clone()
+        .expect("rollout path");
+    initial.codex.submit(Op::Shutdown).await?;
+    wait_for_event(&initial.codex, |event| {
+        matches!(event, EventMsg::ShutdownComplete)
+    })
+    .await;
+    rewrite_compaction_as_legacy(&rollout_path)?;
+
+    // Rewrite the selected file in place and cold-resume with current configuration.
+    let rewritten_source = write_global(home.as_ref(), NEW_GLOBAL_INSTRUCTIONS)?;
+    assert_eq!(source, rewritten_source);
+    let mut resume_builder = test_codex()
+        .with_home(Arc::clone(&home))
+        .with_config(move |config| config.model_provider = provider);
+    let resumed = resume_builder
+        .resume(&server, Arc::clone(&home), rollout_path)
+        .await?;
+    resumed.submit_turn("resume legacy compaction").await?;
+
+    // Legacy reconstruction has no complete historical checkpoint, so it injects the newly loaded
+    // same-path instructions rather than replaying the old item.
+    let requests = response_mock.requests();
+    assert_eq!(requests.len(), 3);
+    let old_fragment = expected_instruction_fragment(&initial.config.cwd, OLD_GLOBAL_INSTRUCTIONS);
+    let new_fragment = expected_instruction_fragment(&resumed.config.cwd, NEW_GLOBAL_INSTRUCTIONS);
+    assert_single_instruction_fragment(&requests[0], &old_fragment);
+    assert_single_instruction_fragment(&requests[1], &old_fragment);
+    assert_single_instruction_fragment(&requests[2], &new_fragment);
+    assert_eq!(
+        resumed.codex.instruction_sources().await,
+        vec![source],
+        "legacy resume reports the rewritten same-path source"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_v2_compaction_keeps_creation_time_instructions_after_same_path_mutation()
+-> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    // Set up an ordinary turn, a remote-v2 compact response, and a post-compaction turn.
+    let server = responses::start_mock_server().await;
+    let response_mock = responses::mount_sse_sequence(
+        &server,
+        vec![
+            responses::sse(vec![
+                responses::ev_response_created("remote-v2-initial-response"),
+                responses::ev_completed("remote-v2-initial-response"),
+            ]),
+            remote_v2_compaction_response(),
+            responses::sse(vec![
+                responses::ev_response_created("remote-v2-follow-up-response"),
+                responses::ev_completed("remote-v2-follow-up-response"),
+            ]),
+            responses::sse(vec![
+                responses::ev_response_created("remote-v2-resumed-response"),
+                responses::ev_completed("remote-v2-resumed-response"),
+            ]),
+        ],
+    )
+    .await;
+    let home = Arc::new(TempDir::new()?);
+    let source = write_global(home.as_ref(), OLD_GLOBAL_INSTRUCTIONS)?;
+    let mut builder = test_codex()
+        .with_home(Arc::clone(&home))
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(|config| {
+            let _ = config.features.enable(Feature::RemoteCompactionV2);
+        });
+    let test = builder.build(&server).await?;
+
+    // Materialize the old snapshot, rewrite the selected file in place, and compact remotely.
+    test.submit_turn("before remote v2 compaction").await?;
+    let rewritten_source = write_global(home.as_ref(), NEW_GLOBAL_INSTRUCTIONS)?;
+    assert_eq!(source, rewritten_source);
+    test.codex.submit(Op::Compact).await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    test.submit_turn("after remote v2 compaction").await?;
+    test.codex.flush_rollout().await?;
+
+    // Assert the compact request, installed replacement history, and follow-up all keep the
+    // creation-time item despite the file-backed source now containing new text.
+    let requests = response_mock.requests();
+    assert_eq!(requests.len(), 3);
+    let old_fragment = expected_instruction_fragment(&test.config.cwd, OLD_GLOBAL_INSTRUCTIONS);
+    assert_single_instruction_fragment(&requests[0], &old_fragment);
+    assert_single_instruction_fragment(&requests[1], &old_fragment);
+    assert_single_instruction_fragment(&requests[2], &old_fragment);
+    assert_eq!(
+        requests[1].input().last(),
+        Some(&json!({"type": "compaction_trigger"})),
+        "remote-v2 compact request should append exactly one compaction trigger"
+    );
+    let rollout_path = test.codex.rollout_path().expect("rollout path");
+    let replacement_history = replacement_history_from_rollout(&rollout_path)?;
+    assert_eq!(
+        instruction_fragments_in_items(&replacement_history),
+        Vec::<String>::new(),
+        "remote-v2 replacement history currently omits the global-instruction fragment"
+    );
+    assert_eq!(
+        test.codex.instruction_sources().await,
+        vec![source.clone()],
+        "running thread retains the selected same-path source"
+    );
+    assert_eq!(
+        fs::read_to_string(source.as_path())?,
+        NEW_GLOBAL_INSTRUCTIONS,
+        "the selected source path should contain the rewritten text"
+    );
+
+    // Cold-resume the persisted replacement history with freshly loaded same-path configuration.
+    test.codex.submit(Op::Shutdown).await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::ShutdownComplete)
+    })
+    .await;
+    let resumed_cwd = test.config.cwd.clone();
+    let mut resume_builder = test_codex()
+        .with_home(Arc::clone(&home))
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(move |config| {
+            config.cwd = resumed_cwd;
+            let _ = config.features.enable(Feature::RemoteCompactionV2);
+        });
+    let resumed = resume_builder
+        .resume(&server, Arc::clone(&home), rollout_path)
+        .await?;
+    resumed
+        .submit_turn("after remote v2 compaction cold resume")
+        .await?;
+
+    // Modern replacement-history resume replays the persisted checkpoint and its later old-context
+    // suffix even though the same source path now contains new text.
+    let requests = response_mock.requests();
+    assert_eq!(requests.len(), 4);
+    assert_single_instruction_fragment(&requests[3], &old_fragment);
+    let resumed_input = requests[3].input();
+    assert_eq!(
+        resumed_input.get(..replacement_history.len()),
+        Some(replacement_history.as_slice()),
+        "remote-v2 cold resume should replay persisted replacement history verbatim"
+    );
+    let post_compact_input = requests[2].input();
+    assert_eq!(
+        resumed_input.get(..post_compact_input.len()),
+        Some(post_compact_input.as_slice()),
+        "remote-v2 cold resume should replay the complete post-compaction structured prefix"
+    );
+    assert_eq!(
+        resumed.codex.instruction_sources().await,
+        vec![source],
+        "cold-resumed thread reports the same rewritten source path"
     );
 
     Ok(())
