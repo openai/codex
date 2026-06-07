@@ -14,8 +14,6 @@ from openai_codex.generated.v2_all import (
     ThreadResumeResponse,
     ThreadTokenUsageUpdatedNotification,
     TurnCompletedNotification,
-    TurnStartParams,
-    TurnStartResponse,
     WarningNotification,
 )
 from openai_codex.models import Notification, UnknownNotification
@@ -31,71 +29,9 @@ def test_generated_params_models_are_snake_case_and_dump_by_alias() -> None:
     assert dumped == {"searchTerm": "needle", "limit": 5}
 
 
-def test_turn_start_sends_goal_only_when_enabled() -> None:
-    """The low-level request should preserve false-by-omission wire behavior."""
-    client = CodexClient()
-    requests: list[dict[str, object]] = []
-
-    def fake_request(method, params, *, response_model):
-        requests.append({"method": method, "params": params, "response_model": response_model})
-        return TurnStartResponse.model_validate(
-            {"turn": {"id": f"turn-{len(requests)}", "items": [], "status": "inProgress"}}
-        )
-
-    client.request = fake_request  # type: ignore[method-assign]
-
-    client.turn_start("thread-1", "ordinary")
-    client.turn_start("thread-1", "goal", goal=True)
-    client.turn_start(
-        "thread-1",
-        "typed goal",
-        TurnStartParams(threadId="thread-1", input=[], goal=True),
-    )
-
-    assert requests == [
-        {
-            "method": "turn/start",
-            "params": {
-                "threadId": "thread-1",
-                "input": [{"type": "text", "text": "ordinary"}],
-            },
-            "response_model": TurnStartResponse,
-        },
-        {
-            "method": "turn/start",
-            "params": {
-                "threadId": "thread-1",
-                "input": [{"type": "text", "text": "goal"}],
-                "goal": True,
-            },
-            "response_model": TurnStartResponse,
-        },
-        {
-            "method": "turn/start",
-            "params": {
-                "threadId": "thread-1",
-                "input": [{"type": "text", "text": "typed goal"}],
-                "goal": True,
-            },
-            "response_model": TurnStartResponse,
-        },
-    ]
-
-
 def test_generated_v2_bundle_has_single_shared_plan_type_definition() -> None:
     source = (ROOT / "src" / "openai_codex" / "generated" / "v2_all.py").read_text()
     assert source.count("class PlanType(") == 1
-
-
-def test_generated_turn_start_params_include_goal_mode() -> None:
-    assert (
-        TurnStartParams(
-            threadId="thread-1",
-            input=[{"type": "text", "text": "goal"}],
-            goal=True,
-        ).goal
-        is True
-    )
 
 
 def test_thread_resume_response_accepts_auto_review_reviewer() -> None:

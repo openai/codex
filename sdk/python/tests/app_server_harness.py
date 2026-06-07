@@ -204,13 +204,20 @@ class MockResponsesServer:
 
 
 class AppServerHarness:
-    """Test fixture that points a pinned runtime app-server at MockResponsesServer."""
+    """Test fixture that points an app-server process at MockResponsesServer."""
 
-    def __init__(self, tmp_path: Path, *, requires_openai_auth: bool = False) -> None:
+    def __init__(
+        self,
+        tmp_path: Path,
+        *,
+        requires_openai_auth: bool = False,
+        enable_goals: bool = False,
+    ) -> None:
         self.tmp_path = tmp_path
         self.codex_home = tmp_path / "codex-home"
         self.workspace = tmp_path / "workspace"
         self.requires_openai_auth = requires_openai_auth
+        self.enable_goals = enable_goals
         self.responses = MockResponsesServer()
 
     def __enter__(self) -> AppServerHarness:
@@ -225,9 +232,10 @@ class AppServerHarness:
         shutil.rmtree(self.codex_home, ignore_errors=True)
         shutil.rmtree(self.workspace, ignore_errors=True)
 
-    def app_server_config(self) -> CodexConfig:
-        """Build SDK config for an isolated pinned-runtime app-server process."""
+    def app_server_config(self, *, codex_bin: str | None = None) -> CodexConfig:
+        """Build SDK config for an isolated app-server process."""
         return CodexConfig(
+            codex_bin=codex_bin,
             cwd=str(self.workspace),
             env={
                 "CODEX_HOME": str(self.codex_home),
@@ -240,6 +248,7 @@ class AppServerHarness:
         """Write config.toml that routes model calls to the mock server."""
         config_toml = self.codex_home / "config.toml"
         requires_openai_auth = "requires_openai_auth = true\n" if self.requires_openai_auth else ""
+        goals = "[features]\ngoals = true\n\n" if self.enable_goals else ""
         config_toml.write_text(
             f"""
 model = "mock-model"
@@ -248,7 +257,7 @@ sandbox_mode = "read-only"
 
 model_provider = "mock_provider"
 
-[model_providers.mock_provider]
+{goals}[model_providers.mock_provider]
 name = "Mock provider for Python SDK tests"
 base_url = "{self.responses.url}/v1"
 wire_api = "responses"

@@ -45,7 +45,7 @@ jobs:
     runs-on:
       group: codex-runners
       labels: codex-linux-x64
-    timeout-minutes: 10
+    timeout-minutes: 15
     environment:
       name: bazel
       deployment: false
@@ -140,6 +140,16 @@ jobs:
         run: |
           set -euo pipefail
           "${CODEX_EXEC_PATH}" --version
+
+      - name: Test Python goal turns against source Codex
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m venv /tmp/codex-python-sdk-uv
+          /tmp/codex-python-sdk-uv/bin/python -m pip install uv==0.11.3
+          cd sdk/python
+          /tmp/codex-python-sdk-uv/bin/uv sync --extra dev --frozen
+          /tmp/codex-python-sdk-uv/bin/uv run --extra dev pytest tests/test_app_server_goal_turns.py
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
