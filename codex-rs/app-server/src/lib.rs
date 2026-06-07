@@ -1019,7 +1019,7 @@ pub async fn run_main_with_transport_options(
                             }
                         }
                     }
-                    _ = connection_cleanup_tasks.reap_next(), if !connection_cleanup_tasks.is_empty() => {}
+                    _ = connection_cleanup_tasks.reap_next() => {}
                     changed = remote_control_status_rx.changed() => {
                         if changed.is_err() {
                             continue;

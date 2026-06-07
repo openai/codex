@@ -1,4 +1,5 @@
 use std::future::Future;
+use std::future::pending;
 
 use tokio::task::JoinError;
 use tokio::task::JoinSet;
@@ -19,11 +20,10 @@ impl ConnectionCleanupTasks {
         self.tasks.spawn(future);
     }
 
-    pub(crate) fn is_empty(&self) -> bool {
-        self.tasks.is_empty()
-    }
-
     pub(crate) async fn reap_next(&mut self) {
+        if self.tasks.is_empty() {
+            pending::<()>().await;
+        }
         if let Some(result) = self.tasks.join_next().await {
             log_cleanup_result(result);
         }
