@@ -334,7 +334,21 @@ async fn thread_resume_running_thread_uses_cached_instruction_sources() -> Resul
 
 #[tokio::test]
 async fn thread_resume_cold_thread_reloads_instruction_sources() -> Result<()> {
-    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let server = responses::start_mock_server().await;
+    let response_mock = responses::mount_sse_sequence(
+        &server,
+        vec![
+            responses::sse(vec![
+                responses::ev_response_created("initial-response"),
+                responses::ev_completed("initial-response"),
+            ]),
+            responses::sse(vec![
+                responses::ev_response_created("resumed-response"),
+                responses::ev_completed("resumed-response"),
+            ]),
+        ],
+    )
+    .await;
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
     let old_global_agents = codex_home.path().join("AGENTS.md");
@@ -361,7 +375,7 @@ async fn thread_resume_cold_thread_reloads_instruction_sources() -> Result<()> {
         ..
     } = to_response::<ThreadStartResponse>(start_resp)?;
     let old_global_agents = AbsolutePathBuf::try_from(std::fs::canonicalize(old_global_agents)?)?;
-    assert_eq!(instruction_sources, vec![old_global_agents]);
+    assert_eq!(instruction_sources, vec![old_global_agents.clone()]);
 
     let turn_id = first_mcp
         .send_turn_start_request(TurnStartParams {
@@ -402,11 +416,60 @@ async fn thread_resume_cold_thread_reloads_instruction_sources() -> Result<()> {
     )
     .await??;
     let ThreadResumeResponse {
+        thread: resumed_thread,
         instruction_sources,
         ..
     } = to_response::<ThreadResumeResponse>(resume_resp)?;
     let new_global_agents = AbsolutePathBuf::try_from(std::fs::canonicalize(new_global_agents)?)?;
     assert_eq!(instruction_sources, vec![new_global_agents]);
+
+    let resumed_turn_id = second_mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: resumed_thread.id,
+            input: vec![UserInput::Text {
+                text: "inspect resumed instructions".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        second_mcp.read_stream_until_response_message(RequestId::Integer(resumed_turn_id)),
+    )
+    .await??;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        second_mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let expected_instruction = format!(
+        "# AGENTS.md instructions for {}\n\n<INSTRUCTIONS>\nold global instructions\n</INSTRUCTIONS>",
+        workspace.path().display()
+    );
+    let requests = response_mock.requests();
+    assert_eq!(requests.len(), 2);
+    let initial_instruction_fragments = requests[0]
+        .message_input_texts("user")
+        .into_iter()
+        .filter(|text| text.starts_with("# AGENTS.md instructions for "))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        initial_instruction_fragments,
+        vec![expected_instruction.clone()],
+        "initial model request should contain the creation-time instruction fragment"
+    );
+    let resumed_instruction_fragments = requests[1]
+        .message_input_texts("user")
+        .into_iter()
+        .filter(|text| text.starts_with("# AGENTS.md instructions for "))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        resumed_instruction_fragments,
+        vec![expected_instruction],
+        "cold-resumed model request should replay the creation-time instruction fragment"
+    );
 
     Ok(())
 }

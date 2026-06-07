@@ -189,6 +189,7 @@ async fn global_loading_warning_surfaces_during_thread_creation() -> Result<()> 
 
     let mut builder = test_codex().with_home(home);
     let test = builder.build(&server).await?;
+    assert_eq!(test.codex.instruction_sources().await, vec![source.clone()]);
 
     let warning = wait_for_event_match(&test.codex, |event| match event {
         EventMsg::Warning(warning)
@@ -239,6 +240,11 @@ async fn cold_resume_replays_rendered_instructions_but_reports_current_config_so
 
     let mut initial_builder = test_codex().with_home(Arc::clone(&home));
     let initial = initial_builder.build(&server).await?;
+    assert_eq!(
+        initial.codex.instruction_sources().await,
+        vec![old_source.clone()],
+        "initial thread reports the creation-time global source"
+    );
     initial.submit_turn("persist instructions").await?;
     let rollout_path = initial
         .session_configured
@@ -304,6 +310,11 @@ async fn fork_replays_rendered_instructions_from_shared_history() -> Result<()> 
     let source = write_global(home.as_ref(), OLD_GLOBAL_INSTRUCTIONS)?;
     let mut builder = test_codex().with_home(Arc::clone(&home));
     let parent = builder.build(&server).await?;
+    assert_eq!(
+        parent.codex.instruction_sources().await,
+        vec![source.clone()],
+        "parent reports the creation-time global source"
+    );
     parent.submit_turn("persist instructions").await?;
     parent.codex.ensure_rollout_materialized().await;
     parent.codex.flush_rollout().await?;
@@ -388,7 +399,7 @@ async fn forked_subagent_replays_one_creation_time_global_instruction_fragment()
         "message": SPAWN_CHILD_PROMPT,
         "fork_context": true,
     }))?;
-    responses::mount_sse_once_match(
+    let spawn_mock = responses::mount_sse_once_match(
         &server,
         |request: &wiremock::Request| request_body_contains(request, SPAWN_PARENT_PROMPT),
         responses::sse(vec![
@@ -428,7 +439,7 @@ async fn forked_subagent_replays_one_creation_time_global_instruction_fragment()
     .await;
 
     let home = Arc::new(TempDir::new()?);
-    write_global(home.as_ref(), OLD_GLOBAL_INSTRUCTIONS)?;
+    let source = write_global(home.as_ref(), OLD_GLOBAL_INSTRUCTIONS)?;
     let mut builder = test_codex()
         .with_home(Arc::clone(&home))
         .with_config(|config| {
@@ -436,11 +447,18 @@ async fn forked_subagent_replays_one_creation_time_global_instruction_fragment()
             let _ = config.features.disable(Feature::EnableRequestCompression);
         });
     let test = builder.build(&server).await?;
+    assert_eq!(
+        test.codex.instruction_sources().await,
+        vec![source.clone()],
+        "parent reports the creation-time global source before spawning"
+    );
     test.submit_turn(SPAWN_SEED_PROMPT).await?;
     let seed_request = seed_mock.single_request();
 
-    write_global_override(home.as_ref(), NEW_GLOBAL_INSTRUCTIONS)?;
+    let new_source = write_global_override(home.as_ref(), NEW_GLOBAL_INSTRUCTIONS)?;
+    assert_ne!(source, new_source);
     test.submit_turn(SPAWN_PARENT_PROMPT).await?;
+    let spawn_request = spawn_mock.single_request();
     let child_request = tokio::time::timeout(Duration::from_secs(10), async {
         loop {
             if let Some(request) = child_mock.requests().into_iter().next() {
@@ -455,7 +473,13 @@ async fn forked_subagent_replays_one_creation_time_global_instruction_fragment()
     let expected_fragment =
         expected_instruction_fragment(&test.config.cwd, OLD_GLOBAL_INSTRUCTIONS);
     assert_single_instruction_fragment(&seed_request, &expected_fragment);
+    assert_single_instruction_fragment(&spawn_request, &expected_fragment);
     assert_single_instruction_fragment(&child_request, &expected_fragment);
+    assert_eq!(
+        test.codex.instruction_sources().await,
+        vec![source],
+        "running parent retains the creation-time global source after spawning"
+    );
     let seed_input = seed_request.input();
     let child_input = child_request.input();
     assert_eq!(
@@ -498,6 +522,11 @@ async fn manual_compaction_keeps_the_creation_time_global_instructions() -> Resu
             config.model_provider = provider;
         });
     let test = builder.build(&server).await?;
+    assert_eq!(
+        test.codex.instruction_sources().await,
+        vec![source.clone()],
+        "thread reports the creation-time global source before compaction"
+    );
 
     test.submit_turn("first turn").await?;
     std::fs::write(source.as_path(), NEW_GLOBAL_INSTRUCTIONS)?;
@@ -510,9 +539,17 @@ async fn manual_compaction_keeps_the_creation_time_global_instructions() -> Resu
     test.submit_turn("after compact").await?;
 
     let requests = response_mock.requests();
+    assert_eq!(requests.len(), 3);
     let expected_fragment =
         expected_instruction_fragment(&test.config.cwd, OLD_GLOBAL_INSTRUCTIONS);
+    assert_single_instruction_fragment(&requests[0], &expected_fragment);
+    assert_single_instruction_fragment(&requests[1], &expected_fragment);
     assert_single_instruction_fragment(&requests[2], &expected_fragment);
+    assert_eq!(
+        test.codex.instruction_sources().await,
+        vec![source],
+        "thread retains the creation-time global source after compaction"
+    );
 
     Ok(())
 }
@@ -549,14 +586,27 @@ async fn mid_turn_compaction_keeps_the_creation_time_global_instructions() -> Re
             config.model_auto_compact_token_limit = Some(90);
         });
     let test = builder.build(&server).await?;
+    assert_eq!(
+        test.codex.instruction_sources().await,
+        vec![source.clone()],
+        "thread reports the creation-time global source before mid-turn compaction"
+    );
 
     std::fs::write(source.as_path(), NEW_GLOBAL_INSTRUCTIONS)?;
     test.submit_turn("trigger mid-turn compaction").await?;
 
     let requests = response_mock.requests();
+    assert_eq!(requests.len(), 3);
     let expected_fragment =
         expected_instruction_fragment(&test.config.cwd, OLD_GLOBAL_INSTRUCTIONS);
+    assert_single_instruction_fragment(&requests[0], &expected_fragment);
+    assert_single_instruction_fragment(&requests[1], &expected_fragment);
     assert_single_instruction_fragment(&requests[2], &expected_fragment);
+    assert_eq!(
+        test.codex.instruction_sources().await,
+        vec![source],
+        "thread retains the creation-time global source after mid-turn compaction"
+    );
 
     Ok(())
 }
@@ -595,6 +645,11 @@ async fn legacy_resume_rebuilds_from_current_config_after_manual_compaction() ->
         move |config| config.model_provider = provider
     });
     let initial = initial_builder.build(&server).await?;
+    assert_eq!(
+        initial.codex.instruction_sources().await,
+        vec![source.clone()],
+        "initial thread reports the creation-time global source"
+    );
     initial.submit_turn("persist legacy history").await?;
     let rollout_path = initial
         .session_configured
@@ -614,9 +669,15 @@ async fn legacy_resume_rebuilds_from_current_config_after_manual_compaction() ->
     let resumed = resume_builder
         .resume(&server, Arc::clone(&home), rollout_path)
         .await?;
+    assert_eq!(
+        resumed.codex.instruction_sources().await,
+        vec![source.clone()],
+        "resumed thread reports the current global source"
+    );
     resumed.submit_turn("resume legacy history").await?;
     let requests = response_mock.requests();
     let old_fragment = expected_instruction_fragment(&initial.config.cwd, OLD_GLOBAL_INSTRUCTIONS);
+    assert_single_instruction_fragment(&requests[0], &old_fragment);
     assert_single_instruction_fragment(&requests[1], &old_fragment);
 
     resumed.codex.submit(Op::Compact).await?;
@@ -627,8 +688,15 @@ async fn legacy_resume_rebuilds_from_current_config_after_manual_compaction() ->
     resumed.submit_turn("rebuild full context").await?;
 
     let requests = response_mock.requests();
+    assert_eq!(requests.len(), 4);
     let new_fragment = expected_instruction_fragment(&resumed.config.cwd, NEW_GLOBAL_INSTRUCTIONS);
+    assert_single_instruction_fragment(&requests[2], &old_fragment);
     assert_single_instruction_fragment(&requests[3], &new_fragment);
+    assert_eq!(
+        resumed.codex.instruction_sources().await,
+        vec![source],
+        "resumed thread retains the current global source after compaction"
+    );
 
     Ok(())
 }
