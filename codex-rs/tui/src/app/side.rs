@@ -608,8 +608,7 @@ impl App {
         let request_handle = app_server.request_handle();
         let app_event_tx = self.app_event_tx.clone();
         tokio::spawn(async move {
-            let result =
-                super::side_server::unsubscribe_side_thread(request_handle, thread_id).await;
+            let result = super::side_server::cleanup_side_thread(request_handle, thread_id).await;
             app_event_tx.send(AppEvent::SideThreadCleanupFinished(thread_id, result));
         });
     }

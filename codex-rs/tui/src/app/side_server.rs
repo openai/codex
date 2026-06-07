@@ -6,6 +6,8 @@ use codex_app_server_protocol::ThreadInjectItemsParams;
 use codex_app_server_protocol::ThreadInjectItemsResponse;
 use codex_app_server_protocol::ThreadUnsubscribeParams;
 use codex_app_server_protocol::ThreadUnsubscribeResponse;
+use codex_app_server_protocol::TurnInterruptParams;
+use codex_app_server_protocol::TurnInterruptResponse;
 
 pub(super) async fn prepare_side_thread(
     request_handle: AppServerRequestHandle,
@@ -56,18 +58,35 @@ pub(super) async fn prepare_side_thread(
     Ok(started)
 }
 
-pub(super) async fn unsubscribe_side_thread(
+pub(super) async fn cleanup_side_thread(
     request_handle: AppServerRequestHandle,
     thread_id: ThreadId,
 ) -> std::result::Result<(), String> {
-    request_handle
+    let interrupt_result = request_handle
+        .request_typed::<TurnInterruptResponse>(ClientRequest::TurnInterrupt {
+            request_id: RequestId::String(format!("side-thread-interrupt-{}", Uuid::new_v4())),
+            params: TurnInterruptParams {
+                thread_id: thread_id.to_string(),
+                turn_id: String::new(),
+            },
+        })
+        .await;
+    let unsubscribe_result = request_handle
         .request_typed::<ThreadUnsubscribeResponse>(ClientRequest::ThreadUnsubscribe {
             request_id: RequestId::String(format!("side-thread-unsubscribe-{}", Uuid::new_v4())),
             params: ThreadUnsubscribeParams {
                 thread_id: thread_id.to_string(),
             },
         })
-        .await
-        .map(|_| ())
-        .map_err(|err| format!("thread/unsubscribe failed in TUI: {err}"))
+        .await;
+    match (interrupt_result, unsubscribe_result) {
+        (Ok(_), Ok(_)) => Ok(()),
+        (Err(interrupt_err), Ok(_)) => Err(format!("turn/interrupt failed: {interrupt_err}")),
+        (Ok(_), Err(unsubscribe_err)) => {
+            Err(format!("thread/unsubscribe failed: {unsubscribe_err}"))
+        }
+        (Err(interrupt_err), Err(unsubscribe_err)) => Err(format!(
+            "turn/interrupt failed: {interrupt_err}; thread/unsubscribe failed: {unsubscribe_err}"
+        )),
+    }
 }
