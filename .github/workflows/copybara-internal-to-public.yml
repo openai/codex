@@ -1,0 +1,83 @@
+name: Copybara Internal To Public
+
+on:
+  workflow_dispatch:
+    inputs:
+      internal_ref:
+        description: "openai/codex-internal ref or SHA to export"
+        required: false
+        default: "main"
+
+permissions:
+  contents: read
+
+env:
+  PUBLIC_BASE: ${{ runner.temp }}/codex-public-base
+  PUBLIC_PROJECTION: ${{ runner.temp }}/codex-public-export
+
+concurrency:
+  group: copybara-internal-to-public
+  cancel-in-progress: false
+
+jobs:
+  export:
+    if: ${{ github.repository == 'openai/codex-internal' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ inputs.internal_ref }}
+
+      - name: Set up Java
+        uses: actions/setup-java@be666c2fcd27ec809703dec50e508c2fdc7f6654 # v5
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Install Copybara
+        id: copybara
+        run: .github/internal/install_copybara.sh
+
+      - name: Create public patch artifact
+        env:
+          COPYBARA_JAR: ${{ steps.copybara.outputs.copybara_jar }}
+          INTERNAL_REF: ${{ inputs.internal_ref }}
+        run: |
+          set -euo pipefail
+
+          java -jar "${COPYBARA_JAR}" migrate .copybara/copy.bara.sky internal_to_public_projection "${GITHUB_WORKSPACE}" \
+            --folder-dir="${PUBLIC_PROJECTION}" \
+            --force-author="github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>" \
+            --force-message="Export openai/codex-internal ${INTERNAL_REF}"
+
+          git clone --depth 1 https://github.com/openai/codex.git "${PUBLIC_BASE}"
+          rsync -a --delete --exclude .git "${PUBLIC_PROJECTION}/" "${PUBLIC_BASE}/"
+
+          patch_path="${RUNNER_TEMP}/codex-public-export.patch"
+          git -C "${PUBLIC_BASE}" diff --binary > "${patch_path}"
+          if [[ ! -s "${patch_path}" ]]; then
+            echo "Copybara produced no public tree changes."
+            rm "${patch_path}"
+            exit 0
+          fi
+
+          echo "Uploading ${patch_path}. This workflow does not push to openai/codex."
+
+          run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          branch="copybara/internal-to-public-${GITHUB_RUN_ID}"
+          body="Generated from openai/codex-internal ${INTERNAL_REF} by ${run_url}."
+          body_arg="$(printf '%q' "${body}")"
+
+          echo
+          echo "After this workflow completes, run this from a clean local clone of openai/codex:"
+          echo "tmp=\"\$(mktemp -d)\" branch=\"${branch}\" body=${body_arg} && gh run download ${GITHUB_RUN_ID} -R ${GITHUB_REPOSITORY} -n codex-public-export.patch -D \"\$tmp\" && git fetch origin main && git switch main && git pull --ff-only origin main && git switch -c \"\$branch\" && git apply \"\$tmp/codex-public-export.patch\" && cargo generate-lockfile --manifest-path codex-rs/Cargo.toml && git add -A && git commit -m \"Export openai/codex-internal changes\" -m \"\$body\" && git push -u origin \"\$branch\" && gh pr create -R openai/codex --base main --head \"\$branch\" --title \"Export openai/codex-internal changes\" --body \"\$body\""
+
+      - name: Upload public export patch
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: codex-public-export.patch
+          path: ${{ runner.temp }}/codex-public-export.patch
+          if-no-files-found: ignore

@@ -1,0 +1,115 @@
+name: Copybara Internal To Public Check
+
+on:
+  pull_request: {}
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  PUBLIC_PROJECTION: ${{ runner.temp }}/codex-public-projection
+
+jobs:
+  build-test:
+    name: Internal to public projection build-test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      NODE_OPTIONS: --max-old-space-size=4096
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Set up Java
+        uses: actions/setup-java@be666c2fcd27ec809703dec50e508c2fdc7f6654 # v5
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Install Copybara
+        id: copybara
+        run: .github/internal/install_copybara.sh
+
+      - name: Create public projection
+        env:
+          COPYBARA_JAR: ${{ steps.copybara.outputs.copybara_jar }}
+        run: |
+          set -euo pipefail
+          java -jar "${COPYBARA_JAR}" migrate .copybara/copy.bara.sky internal_to_public_projection "${GITHUB_WORKSPACE}" \
+            --folder-dir="${PUBLIC_PROJECTION}" \
+            --force-author="github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>" \
+            --force-message="Validate public projection"
+
+      - name: Verify codex-rs Cargo manifests inherit workspace settings
+        working-directory: ${{ env.PUBLIC_PROJECTION }}
+        run: python3 .github/scripts/verify_cargo_workspace_manifests.py
+
+      - name: Verify codex-tui does not import codex-core directly
+        working-directory: ${{ env.PUBLIC_PROJECTION }}
+        run: python3 .github/scripts/verify_tui_core_boundary.py
+
+      - name: Verify Bazel clippy flags match Cargo workspace lints
+        working-directory: ${{ env.PUBLIC_PROJECTION }}
+        run: python3 .github/scripts/verify_bazel_clippy_lints.py
+
+      - name: Test Codex package builder
+        working-directory: ${{ env.PUBLIC_PROJECTION }}
+        run: python3 -m unittest discover -s scripts/codex_package -p 'test_*.py'
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@a8198c4bff370c8506180b035930dea56dbd5288 # v5
+        with:
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        working-directory: ${{ env.PUBLIC_PROJECTION }}
+        run: pnpm install --frozen-lockfile
+
+      - name: Stage npm package
+        working-directory: ${{ env.PUBLIC_PROJECTION }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          CODEX_VERSION=0.133.0-alpha.4
+          WORKFLOW_URL="https://github.com/openai/codex/actions/runs/26201494185"
+          OUTPUT_DIR="${RUNNER_TEMP}"
+          python3 ./scripts/stage_npm_packages.py \
+            --release-version "$CODEX_VERSION" \
+            --workflow-url "$WORKFLOW_URL" \
+            --package codex \
+            --output-dir "$OUTPUT_DIR"
+
+      - name: Ensure root README.md contains only ASCII and certain Unicode code points
+        working-directory: ${{ env.PUBLIC_PROJECTION }}
+        run: ./scripts/asciicheck.py README.md
+
+      - name: Check root README ToC
+        working-directory: ${{ env.PUBLIC_PROJECTION }}
+        run: python3 scripts/readme_toc.py README.md
+
+      - uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2.62.49
+        with:
+          tool: just@1.51.0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.3"
+
+      - name: Check formatting (run `just fmt` to fix)
+        working-directory: ${{ env.PUBLIC_PROJECTION }}
+        run: just fmt-check
+
+      - name: Prettier (run `pnpm run format:fix` to fix)
+        working-directory: ${{ env.PUBLIC_PROJECTION }}
+        run: pnpm run format
