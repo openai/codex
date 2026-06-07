@@ -46,8 +46,6 @@ pub(super) async fn prepare_side_thread(
         })
         .await;
     if let Err(err) = inject_result {
-        // The caller only receives fully prepared threads, so clean up this partial fork here.
-        unsubscribe_side_thread(request_handle, child_thread_id).await;
         return Err(SideThreadPrepareError {
             thread_id: Some(child_thread_id),
             message: format!(
@@ -61,19 +59,15 @@ pub(super) async fn prepare_side_thread(
 pub(super) async fn unsubscribe_side_thread(
     request_handle: AppServerRequestHandle,
     thread_id: ThreadId,
-) {
-    let unsubscribe_result = request_handle
+) -> std::result::Result<(), String> {
+    request_handle
         .request_typed::<ThreadUnsubscribeResponse>(ClientRequest::ThreadUnsubscribe {
             request_id: RequestId::String(format!("side-thread-unsubscribe-{}", Uuid::new_v4())),
             params: ThreadUnsubscribeParams {
                 thread_id: thread_id.to_string(),
             },
         })
-        .await;
-    if let Err(err) = unsubscribe_result {
-        tracing::warn!(
-            thread_id = %thread_id,
-            "failed to unsubscribe side thread during cleanup: {err}"
-        );
-    }
+        .await
+        .map(|_| ())
+        .map_err(|err| format!("thread/unsubscribe failed in TUI: {err}"))
 }

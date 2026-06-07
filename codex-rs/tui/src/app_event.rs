@@ -155,6 +155,8 @@ pub(crate) enum AppEvent {
     },
     /// Finish preparing a transient side conversation off the TUI event loop.
     SideThreadPrepared(Uuid, Result<AppServerStartedThread, SideThreadPrepareError>),
+    /// Finish removing a canceled or failed side conversation off the TUI event loop.
+    SideThreadCleanupFinished(ThreadId, Result<(), String>),
 
     /// Submit an op to the specified thread, regardless of current focus.
     SubmitThreadOp {

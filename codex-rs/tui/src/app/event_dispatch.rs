@@ -1720,12 +1720,15 @@ impl App {
                 parent_thread_id,
                 user_message,
             } => {
-                self.handle_start_side(app_server, parent_thread_id, user_message)
-                    .await;
+                self.handle_start_side(app_server, parent_thread_id, user_message);
             }
             AppEvent::SideThreadPrepared(request_id, result) => {
                 self.handle_side_thread_prepared(tui, app_server, request_id, result)
                     .await?;
+            }
+            AppEvent::SideThreadCleanupFinished(thread_id, result) => {
+                self.handle_side_thread_cleanup_finished(thread_id, result)
+                    .await;
             }
             AppEvent::OpenSkillsList => {
                 self.chat_widget.open_skills_list();

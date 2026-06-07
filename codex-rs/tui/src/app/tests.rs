@@ -3402,6 +3402,19 @@ async fn cancelling_pending_side_start_restores_message() {
 }
 
 #[tokio::test]
+async fn failed_side_cleanup_restores_thread_to_agent_picker() {
+    let mut app = make_test_app().await;
+    let thread_id = ThreadId::new();
+    app.ensure_thread_channel(thread_id);
+
+    app.handle_side_thread_cleanup_finished(thread_id, Err("transport disconnected".to_string()))
+        .await;
+
+    assert!(!app.thread_event_channels.contains_key(&thread_id));
+    assert!(app.agent_navigation.get(&thread_id).is_some());
+}
+
+#[tokio::test]
 async fn side_discard_selection_keeps_current_side_thread() {
     let mut app = make_test_app().await;
     let parent_thread_id = ThreadId::new();

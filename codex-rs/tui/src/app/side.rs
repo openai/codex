@@ -550,7 +550,7 @@ impl App {
         Ok(())
     }
 
-    pub(super) async fn handle_start_side(
+    pub(super) fn handle_start_side(
         &mut self,
         app_server: &AppServerSession,
         parent_thread_id: ThreadId,
@@ -576,8 +576,6 @@ impl App {
             side_state: SideThreadState::new(parent_thread_id),
             user_message,
         });
-        self.refresh_in_memory_config_from_disk_best_effort("starting a side conversation")
-            .await;
         let request_handle = app_server.request_handle();
         let thread_params_mode = app_server.thread_params_mode();
         let remote_cwd_override = app_server.remote_cwd_override().map(Path::to_path_buf);
@@ -599,6 +597,41 @@ impl App {
         });
     }
 
+    fn cleanup_side_thread_in_background(
+        &mut self,
+        app_server: &AppServerSession,
+        thread_id: ThreadId,
+    ) {
+        // Hide the canceled thread while cleanup is pending, but retain enough local state to
+        // restore it in /agent if the server refuses to unsubscribe it.
+        self.agent_navigation.remove(thread_id);
+        let request_handle = app_server.request_handle();
+        let app_event_tx = self.app_event_tx.clone();
+        tokio::spawn(async move {
+            let result =
+                super::side_server::unsubscribe_side_thread(request_handle, thread_id).await;
+            app_event_tx.send(AppEvent::SideThreadCleanupFinished(thread_id, result));
+        });
+    }
+
+    pub(super) async fn handle_side_thread_cleanup_finished(
+        &mut self,
+        thread_id: ThreadId,
+        result: std::result::Result<(), String>,
+    ) {
+        self.discard_thread_local_state(thread_id).await;
+        if let Err(err) = result {
+            self.upsert_agent_picker_thread(
+                thread_id, /*agent_nickname*/ None, /*agent_role*/ None,
+                /*is_closed*/ false,
+            );
+            self.chat_widget.add_error_message(format!(
+                "Failed to close side conversation {thread_id}; it remains available in /agent: \
+                 {err}"
+            ));
+        }
+    }
+
     pub(super) async fn handle_side_thread_prepared(
         &mut self,
         tui: &mut tui::Tui,
@@ -617,19 +650,11 @@ impl App {
             .pending_side_start
             .take_if(|pending| pending.request_id == request_id)
         else {
-            if let Some(thread_id) = match &result {
+            if let Some(thread_id) = match result {
                 Ok(started) => Some(started.session.thread_id),
                 Err(err) => err.thread_id,
             } {
-                // ThreadStarted may have created local state before this preparation was canceled.
-                self.discard_thread_local_state(thread_id).await;
-                if result.is_ok() {
-                    let request_handle = app_server.request_handle();
-                    tokio::spawn(super::side_server::unsubscribe_side_thread(
-                        request_handle,
-                        thread_id,
-                    ));
-                }
+                self.cleanup_side_thread_in_background(app_server, thread_id);
             }
             return Ok(());
         };
@@ -677,7 +702,7 @@ impl App {
             }
             Err(err) => {
                 if let Some(thread_id) = err.thread_id {
-                    self.discard_thread_local_state(thread_id).await;
+                    self.cleanup_side_thread_in_background(app_server, thread_id);
                 }
                 self.restore_side_user_message(user_message.take());
                 self.chat_widget
