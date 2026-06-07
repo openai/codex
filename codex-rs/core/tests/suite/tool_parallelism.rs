@@ -6,6 +6,7 @@ use std::fs;
 use std::time::Duration;
 use std::time::Instant;
 
+use codex_core::test_support::wait_on_test_sync_barrier;
 use codex_features::Feature;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
@@ -242,17 +243,38 @@ async fn mixed_parallel_tools_run_in_parallel() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    let test = build_codex_with_test_tool(&server).await?;
+    // Exercise the standalone async shell handler alongside the sync test tool.
+    let mut builder = test_codex()
+        .with_model("test-gpt-5.1-codex")
+        .with_config(|config| {
+            config
+                .features
+                .disable(Feature::UnifiedExec)
+                .expect("test config should allow feature update");
+        });
+    let test = builder.build(&server).await?;
 
+    const BARRIER_ID: &str = "mixed-parallel-test-sync";
+    const SHELL_STARTED_FILE: &str = "mixed-parallel-shell-started";
     let sync_args = json!({
-        "sleep_after_ms": 300
+        "barrier": {
+            "id": BARRIER_ID,
+            "participants": 2,
+            "timeout_ms": 60_000,
+        }
     })
     .to_string();
+    let shell_started = test.cwd.path().join(SHELL_STARTED_FILE);
+    let command = if cfg!(windows) {
+        format!("Set-Content -Path '{SHELL_STARTED_FILE}' -Value started; Start-Sleep -Seconds 60")
+    } else {
+        format!("touch '{SHELL_STARTED_FILE}' && sleep 60")
+    };
     let shell_args = serde_json::to_string(&json!({
-        "command": "sleep 0.25",
-        // Avoid user-specific shell startup cost in timing assertions.
+        "command": command,
         "login": false,
-        "timeout_ms": 1_000,
+        "timeout_ms": 120_000,
+        "workdir": test.cwd.path(),
     }))?;
 
     let first_response = sse(vec![
@@ -261,16 +283,34 @@ async fn mixed_parallel_tools_run_in_parallel() -> anyhow::Result<()> {
         ev_function_call("call-2", "shell_command", &shell_args),
         ev_completed("resp-1"),
     ]);
-    let second_response = sse(vec![
-        ev_assistant_message("msg-1", "done"),
-        ev_completed("resp-2"),
-    ]);
-    mount_sse_sequence(&server, vec![first_response, second_response]).await;
+    mount_sse_once(&server, first_response).await;
 
-    let duration = run_turn_and_measure(&test, "mix tools").await?;
-    assert_test_tool_parallel_duration(duration);
+    submit_turn(&test, "mix tools").await?;
 
-    Ok(())
+    let overlap_result = tokio::time::timeout(Duration::from_secs(30), async {
+        while !shell_started.exists() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+
+        wait_on_test_sync_barrier(BARRIER_ID, /*participants*/ 2, Duration::from_secs(60))
+            .await
+            .map_err(anyhow::Error::msg)
+    })
+    .await;
+
+    test.codex.submit(Op::Interrupt).await?;
+    let aborted = wait_for_event_with_timeout(
+        &test.codex,
+        |event| matches!(event, EventMsg::TurnAborted(_)),
+        Duration::from_secs(30),
+    )
+    .await;
+    let EventMsg::TurnAborted(aborted) = aborted else {
+        unreachable!("event predicate only accepts turn-aborted events");
+    };
+    assert_eq!(aborted.reason, TurnAbortReason::Interrupted);
+
+    overlap_result.map_err(|_| anyhow::anyhow!("timed out waiting for mixed tools to overlap"))?
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

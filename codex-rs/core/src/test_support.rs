@@ -6,6 +6,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use codex_exec_server::EnvironmentManager;
 use codex_login::AuthManager;
@@ -25,6 +26,7 @@ use once_cell::sync::Lazy;
 use crate::ThreadManager;
 use crate::config::Config;
 use crate::thread_manager;
+use crate::tools::handlers::TestSyncHandler;
 use crate::unified_exec;
 
 static TEST_MODEL_PRESETS: Lazy<Vec<ModelPreset>> = Lazy::new(|| {
@@ -42,6 +44,16 @@ pub fn set_thread_manager_test_mode(enabled: bool) {
 
 pub fn set_deterministic_process_ids(enabled: bool) {
     unified_exec::set_deterministic_process_ids_for_tests(enabled);
+}
+
+pub async fn wait_on_test_sync_barrier(
+    id: &str,
+    participants: usize,
+    timeout: Duration,
+) -> Result<(), String> {
+    TestSyncHandler::wait_on_barrier_for_tests(id, participants, timeout)
+        .await
+        .map_err(|err| err.to_string())
 }
 
 pub fn auth_manager_from_auth(auth: CodexAuth) -> Arc<AuthManager> {

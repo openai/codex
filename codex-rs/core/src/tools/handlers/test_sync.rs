@@ -95,7 +95,12 @@ impl ToolExecutor<ToolInvocation> for TestSyncHandler {
         }
 
         if let Some(barrier) = args.barrier {
-            wait_on_barrier(barrier).await?;
+            wait_on_barrier(
+                barrier.id,
+                barrier.participants,
+                Duration::from_millis(barrier.timeout_ms),
+            )
+            .await?;
         }
 
         if let Some(delay) = args.sleep_after_ms
@@ -113,26 +118,39 @@ impl ToolExecutor<ToolInvocation> for TestSyncHandler {
 
 impl CoreToolRuntime for TestSyncHandler {}
 
-async fn wait_on_barrier(args: BarrierArgs) -> Result<(), FunctionCallError> {
-    if args.participants == 0 {
+impl TestSyncHandler {
+    pub(crate) async fn wait_on_barrier_for_tests(
+        id: &str,
+        participants: usize,
+        timeout: Duration,
+    ) -> Result<(), FunctionCallError> {
+        wait_on_barrier(id.to_string(), participants, timeout).await
+    }
+}
+
+async fn wait_on_barrier(
+    barrier_id: String,
+    participants: usize,
+    timeout: Duration,
+) -> Result<(), FunctionCallError> {
+    if participants == 0 {
         return Err(FunctionCallError::RespondToModel(
             "barrier participants must be greater than zero".to_string(),
         ));
     }
 
-    if args.timeout_ms == 0 {
+    if timeout.is_zero() {
         return Err(FunctionCallError::RespondToModel(
             "barrier timeout must be greater than zero".to_string(),
         ));
     }
 
-    let barrier_id = args.id.clone();
     let barrier = {
         let mut map = barrier_map().lock().await;
         match map.entry(barrier_id.clone()) {
             Entry::Occupied(entry) => {
                 let state = entry.get();
-                if state.participants != args.participants {
+                if state.participants != participants {
                     let existing = state.participants;
                     return Err(FunctionCallError::RespondToModel(format!(
                         "barrier {barrier_id} already registered with {existing} participants"
@@ -141,17 +159,16 @@ async fn wait_on_barrier(args: BarrierArgs) -> Result<(), FunctionCallError> {
                 state.barrier.clone()
             }
             Entry::Vacant(entry) => {
-                let barrier = Arc::new(Barrier::new(args.participants));
+                let barrier = Arc::new(Barrier::new(participants));
                 entry.insert(BarrierState {
                     barrier: barrier.clone(),
-                    participants: args.participants,
+                    participants,
                 });
                 barrier
             }
         }
     };
 
-    let timeout = Duration::from_millis(args.timeout_ms);
     let wait_result = tokio::time::timeout(timeout, barrier.wait())
         .await
         .map_err(|_| {
