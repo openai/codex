@@ -199,19 +199,11 @@ pub(crate) fn log_inbound_app_event(event: &AppEvent) {
         }
         // Noise or control flow – record variant only
         other => {
-            let variant = match other {
-                AppEvent::SideThreadPrepared(..) => "SideThreadPrepared".to_string(),
-                _ => format!("{other:?}")
-                    .split('(')
-                    .next()
-                    .unwrap_or("app_event")
-                    .to_string(),
-            };
             let value = json!({
                 "ts": now_ts(),
                 "dir": "to_tui",
                 "kind": "app_event",
-                "variant": variant,
+                "variant": format!("{other:?}").split('(').next().unwrap_or("app_event"),
             });
             LOGGER.write_json_line(value);
         }

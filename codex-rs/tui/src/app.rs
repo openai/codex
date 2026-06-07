@@ -1251,6 +1251,24 @@ See the Codex keymap documentation for supported actions and examples."
             }
         }
 
+        // Keep rendering while /side prepares, but freeze input so drafts and shortcuts cannot
+        // race the pending transition. Esc remains available to cancel the preparation.
+        if self.pending_side_start.is_some() {
+            match &event {
+                TuiEvent::Key(key_event) => {
+                    if matches!(key_event.code, KeyCode::Esc)
+                        && matches!(key_event.kind, KeyEventKind::Press | KeyEventKind::Repeat)
+                    {
+                        self.cancel_pending_side_start();
+                        tui.frame_requester().schedule_frame();
+                    }
+                    return Ok(AppRunControl::Continue);
+                }
+                TuiEvent::Paste(_) => return Ok(AppRunControl::Continue),
+                TuiEvent::Draw | TuiEvent::Resize => {}
+            }
+        }
+
         if self.overlay.is_some() {
             let _ = self.handle_backtrack_overlay_event(tui, event).await?;
         } else {
@@ -1259,9 +1277,6 @@ See the Codex keymap documentation for supported actions and examples."
                     self.handle_key_event(tui, app_server, key_event).await;
                 }
                 TuiEvent::Paste(pasted) => {
-                    if self.pending_side_start.is_some() {
-                        return Ok(AppRunControl::Continue);
-                    }
                     // Many terminals convert newlines to \r when pasting (e.g., iTerm2),
                     // but tui-textarea expects \n. Normalize CR to LF.
                     // [tui-textarea]: https://github.com/rhysd/tui-textarea/blob/4d18622eeac13b309e0ff6a55a46ac6706da68cf/src/textarea.rs#L782-L783

@@ -625,7 +625,7 @@ impl App {
                 self.discard_thread_local_state(thread_id).await;
                 if result.is_ok() {
                     let request_handle = app_server.request_handle();
-                    tokio::spawn(super::side_server::cleanup_side_thread(
+                    tokio::spawn(super::side_server::unsubscribe_side_thread(
                         request_handle,
                         thread_id,
                     ));

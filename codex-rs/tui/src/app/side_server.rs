@@ -6,8 +6,6 @@ use codex_app_server_protocol::ThreadInjectItemsParams;
 use codex_app_server_protocol::ThreadInjectItemsResponse;
 use codex_app_server_protocol::ThreadUnsubscribeParams;
 use codex_app_server_protocol::ThreadUnsubscribeResponse;
-use codex_app_server_protocol::TurnInterruptParams;
-use codex_app_server_protocol::TurnInterruptResponse;
 
 pub(super) async fn prepare_side_thread(
     request_handle: AppServerRequestHandle,
@@ -49,7 +47,7 @@ pub(super) async fn prepare_side_thread(
         .await;
     if let Err(err) = inject_result {
         // The caller only receives fully prepared threads, so clean up this partial fork here.
-        cleanup_side_thread(request_handle, child_thread_id).await;
+        unsubscribe_side_thread(request_handle, child_thread_id).await;
         return Err(SideThreadPrepareError {
             thread_id: Some(child_thread_id),
             message: format!(
@@ -60,19 +58,10 @@ pub(super) async fn prepare_side_thread(
     Ok(started)
 }
 
-pub(super) async fn cleanup_side_thread(
+pub(super) async fn unsubscribe_side_thread(
     request_handle: AppServerRequestHandle,
     thread_id: ThreadId,
 ) {
-    let interrupt_result = request_handle
-        .request_typed::<TurnInterruptResponse>(ClientRequest::TurnInterrupt {
-            request_id: RequestId::String(format!("side-thread-interrupt-{}", Uuid::new_v4())),
-            params: TurnInterruptParams {
-                thread_id: thread_id.to_string(),
-                turn_id: String::new(),
-            },
-        })
-        .await;
     let unsubscribe_result = request_handle
         .request_typed::<ThreadUnsubscribeResponse>(ClientRequest::ThreadUnsubscribe {
             request_id: RequestId::String(format!("side-thread-unsubscribe-{}", Uuid::new_v4())),
@@ -81,12 +70,6 @@ pub(super) async fn cleanup_side_thread(
             },
         })
         .await;
-    if let Err(err) = interrupt_result {
-        tracing::warn!(
-            thread_id = %thread_id,
-            "failed to interrupt side thread during cleanup: {err}"
-        );
-    }
     if let Err(err) = unsubscribe_result {
         tracing::warn!(
             thread_id = %thread_id,

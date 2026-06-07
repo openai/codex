@@ -97,18 +97,6 @@ impl App {
         app_server: &mut AppServerSession,
         key_event: KeyEvent,
     ) {
-        // Freeze shortcuts as well as the composer while /side prepares so nothing can race the
-        // pending transition. Esc is the one escape hatch.
-        if self.pending_side_start.is_some() {
-            if matches!(key_event.code, KeyCode::Esc)
-                && matches!(key_event.kind, KeyEventKind::Press | KeyEventKind::Repeat)
-            {
-                self.cancel_pending_side_start();
-                tui.frame_requester().schedule_frame();
-            }
-            return;
-        }
-
         // Some terminals, especially on macOS, encode Option+Left/Right as Option+b/f unless
         // enhanced keyboard reporting is available. We only treat those word-motion fallbacks as
         // agent-switch shortcuts when the composer is empty so we never steal the expected
