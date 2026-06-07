@@ -363,10 +363,12 @@ pub async fn list_threads_db(
     allowed_sources: &[SessionSource],
     model_providers: Option<&[String]>,
     cwd_filters: Option<&[PathBuf]>,
+    parent_thread_id: Option<ThreadId>,
     archived: bool,
     search_term: Option<&str>,
 ) -> Option<codex_state::ThreadsPage> {
     let ctx = context?;
+    let is_parent_filtered = parent_thread_id.is_some();
     if ctx.codex_home() != codex_home {
         warn!(
             "state db codex_home mismatch: expected {}, got {}",
@@ -399,6 +401,7 @@ pub async fn list_threads_db(
                 allowed_sources: allowed_sources.as_slice(),
                 model_providers: model_providers.as_deref(),
                 cwd_filters: normalized_cwd_filters.as_deref(),
+                parent_thread_id,
                 anchor: anchor.as_ref(),
                 sort_key: match sort_key {
                     ThreadSortKey::CreatedAt => codex_state::SortKey::CreatedAt,
@@ -414,6 +417,9 @@ pub async fn list_threads_db(
         .await
     {
         Ok(mut page) => {
+            if is_parent_filtered {
+                return Some(page);
+            }
             let mut valid_items = Vec::with_capacity(page.items.len());
             for item in page.items {
                 if let Some(existing_path) =

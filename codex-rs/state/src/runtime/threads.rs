@@ -13,6 +13,7 @@ SELECT
     threads.created_at_ms AS created_at,
     threads.updated_at_ms AS updated_at,
     threads.source,
+    threads.parent_thread_id,
     threads.thread_source,
     threads.agent_nickname,
     threads.agent_role,
@@ -372,6 +373,7 @@ ON CONFLICT(child_thread_id) DO NOTHING
                 sort_key: crate::SortKey::UpdatedAt,
                 sort_direction: SortDirection::Desc,
                 search_term: None,
+                parent_thread_id: None,
             },
         );
         builder.push(" AND threads.title = ");
@@ -447,6 +449,7 @@ ON CONFLICT(child_thread_id) DO NOTHING
                 sort_key,
                 sort_direction: SortDirection::Desc,
                 search_term: None,
+                parent_thread_id: None,
             },
         );
         push_thread_order_and_limit(
@@ -488,6 +491,7 @@ INSERT INTO threads (
     created_at_ms,
     updated_at_ms,
     source,
+    parent_thread_id,
     thread_source,
     agent_nickname,
     agent_role,
@@ -509,7 +513,7 @@ INSERT INTO threads (
     git_branch,
     git_origin_url,
     memory_mode
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO NOTHING
             "#,
         )
@@ -520,6 +524,7 @@ ON CONFLICT(id) DO NOTHING
         .bind(datetime_to_epoch_millis(metadata.created_at))
         .bind(datetime_to_epoch_millis(updated_at))
         .bind(metadata.source.as_str())
+        .bind(metadata.parent_thread_id.map(|id| id.to_string()))
         .bind(
             metadata
                 .thread_source
@@ -695,6 +700,7 @@ INSERT INTO threads (
     created_at_ms,
     updated_at_ms,
     source,
+    parent_thread_id,
     thread_source,
     agent_nickname,
     agent_role,
@@ -716,7 +722,7 @@ INSERT INTO threads (
     git_branch,
     git_origin_url,
     memory_mode
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
     rollout_path = excluded.rollout_path,
     created_at = excluded.created_at,
@@ -724,6 +730,7 @@ ON CONFLICT(id) DO UPDATE SET
     created_at_ms = excluded.created_at_ms,
     updated_at_ms = excluded.updated_at_ms,
     source = excluded.source,
+    parent_thread_id = excluded.parent_thread_id,
     thread_source = excluded.thread_source,
     agent_nickname = excluded.agent_nickname,
     agent_role = excluded.agent_role,
@@ -753,6 +760,7 @@ ON CONFLICT(id) DO UPDATE SET
         .bind(datetime_to_epoch_millis(metadata.created_at))
         .bind(datetime_to_epoch_millis(updated_at))
         .bind(metadata.source.as_str())
+        .bind(metadata.parent_thread_id.map(|id| id.to_string()))
         .bind(
             metadata
                 .thread_source
@@ -1051,6 +1059,7 @@ SELECT
     threads.created_at_ms AS created_at,
     threads.updated_at_ms AS updated_at,
     threads.source,
+    threads.parent_thread_id,
     threads.thread_source,
     threads.agent_nickname,
     threads.agent_role,
@@ -1100,6 +1109,7 @@ pub struct ThreadFilterOptions<'a> {
     pub sort_key: SortKey,
     pub sort_direction: SortDirection,
     pub search_term: Option<&'a str>,
+    pub parent_thread_id: Option<ThreadId>,
 }
 
 pub(super) fn push_thread_filters<'a>(
@@ -1115,6 +1125,7 @@ pub(super) fn push_thread_filters<'a>(
         sort_key,
         sort_direction,
         search_term,
+        parent_thread_id,
     } = options;
     builder.push(" WHERE 1 = 1");
     if archived_only {
@@ -1123,6 +1134,11 @@ pub(super) fn push_thread_filters<'a>(
         builder.push(" AND threads.archived = 0");
     }
     builder.push(" AND threads.preview <> ''");
+    if let Some(parent_thread_id) = parent_thread_id {
+        builder
+            .push(" AND threads.parent_thread_id = ")
+            .push_bind(parent_thread_id.to_string());
+    }
     if !allowed_sources.is_empty() {
         builder.push(" AND threads.source IN (");
         let mut separated = builder.separated(", ");
@@ -1505,6 +1521,7 @@ mod tests {
                     sort_key: SortKey::UpdatedAt,
                     sort_direction: SortDirection::Asc,
                     search_term: None,
+                    parent_thread_id: None,
                 },
             )
             .await
@@ -1532,6 +1549,7 @@ mod tests {
                     sort_key: SortKey::UpdatedAt,
                     sort_direction: SortDirection::Asc,
                     search_term: None,
+                    parent_thread_id: None,
                 },
             )
             .await
@@ -1585,6 +1603,7 @@ mod tests {
                     sort_key: SortKey::UpdatedAt,
                     sort_direction: SortDirection::Desc,
                     search_term: None,
+                    parent_thread_id: None,
                 },
             )
             .await
@@ -1641,6 +1660,7 @@ mod tests {
                     sort_key: SortKey::UpdatedAt,
                     sort_direction: SortDirection::Desc,
                     search_term: None,
+                    parent_thread_id: None,
                 },
             )
             .await
@@ -1699,6 +1719,7 @@ mod tests {
                         sort_key,
                         sort_direction: SortDirection::Desc,
                         search_term: None,
+                        parent_thread_id: None,
                     },
                     /*limit*/ 201,
                 );
@@ -1726,6 +1747,82 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[tokio::test]
+    async fn list_threads_filters_direct_children_with_keyset_pagination() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
+            .await
+            .expect("state db should initialize");
+        let parent_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000201").expect("thread id");
+        let first_child_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000202").expect("thread id");
+        let second_child_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000203").expect("thread id");
+        let grandchild_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000204").expect("thread id");
+        let unrelated_id =
+            ThreadId::from_string("00000000-0000-0000-0000-000000000205").expect("thread id");
+
+        for (thread_id, parent_thread_id, created_at) in [
+            (first_child_id, Some(parent_id), 1_700_000_100),
+            (second_child_id, Some(parent_id), 1_700_000_200),
+            (grandchild_id, Some(first_child_id), 1_700_000_300),
+            (unrelated_id, None, 1_700_000_400),
+        ] {
+            let mut metadata = test_thread_metadata(&codex_home, thread_id, codex_home.clone());
+            metadata.parent_thread_id = parent_thread_id;
+            metadata.created_at =
+                DateTime::<Utc>::from_timestamp(created_at, 0).expect("valid timestamp");
+            metadata.updated_at = metadata.created_at;
+            runtime
+                .upsert_thread(&metadata)
+                .await
+                .expect("thread insert should succeed");
+        }
+
+        let filters = |anchor| ThreadFilterOptions {
+            archived_only: false,
+            allowed_sources: &[],
+            model_providers: None,
+            cwd_filters: None,
+            anchor,
+            sort_key: SortKey::CreatedAt,
+            sort_direction: SortDirection::Desc,
+            search_term: None,
+            parent_thread_id: Some(parent_id),
+        };
+        let first_page = runtime
+            .list_threads(/*page_size*/ 1, filters(None))
+            .await
+            .expect("first page should succeed");
+        let second_page = runtime
+            .list_threads(
+                /*page_size*/ 1,
+                filters(first_page.next_anchor.as_ref()),
+            )
+            .await
+            .expect("second page should succeed");
+
+        assert_eq!(
+            first_page
+                .items
+                .iter()
+                .map(|item| item.id)
+                .collect::<Vec<_>>(),
+            vec![second_child_id]
+        );
+        assert_eq!(
+            second_page
+                .items
+                .iter()
+                .map(|item| item.id)
+                .collect::<Vec<_>>(),
+            vec![first_child_id]
+        );
+        assert_eq!(second_page.next_anchor, None);
     }
 
     #[tokio::test]

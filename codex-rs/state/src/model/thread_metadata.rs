@@ -69,6 +69,8 @@ pub struct ThreadMetadata {
     pub updated_at: DateTime<Utc>,
     /// The session source (stringified enum).
     pub source: String,
+    /// The direct parent thread, when this thread was spawned by another thread.
+    pub parent_thread_id: Option<ThreadId>,
     /// Optional analytics source classification for this thread.
     pub thread_source: Option<ThreadSource>,
     /// Optional random unique nickname assigned to an AgentControl-spawned sub-agent.
@@ -122,6 +124,8 @@ pub struct ThreadMetadataBuilder {
     pub updated_at: Option<DateTime<Utc>>,
     /// The session source.
     pub source: SessionSource,
+    /// The direct parent thread, when this thread was spawned by another thread.
+    pub parent_thread_id: Option<ThreadId>,
     /// Optional analytics source classification for this thread.
     pub thread_source: Option<ThreadSource>,
     /// Optional random unique nickname assigned to the session.
@@ -163,6 +167,7 @@ impl ThreadMetadataBuilder {
             rollout_path,
             created_at,
             updated_at: None,
+            parent_thread_id: source.parent_thread_id(),
             source,
             thread_source: None,
             agent_nickname: None,
@@ -196,6 +201,7 @@ impl ThreadMetadataBuilder {
             created_at,
             updated_at,
             source,
+            parent_thread_id: self.parent_thread_id,
             thread_source: self.thread_source.clone(),
             agent_nickname: self.agent_nickname.clone(),
             agent_role: self.agent_role.clone(),
@@ -341,6 +347,7 @@ pub(crate) struct ThreadRow {
     created_at: i64,
     updated_at: i64,
     source: String,
+    parent_thread_id: Option<String>,
     thread_source: Option<String>,
     agent_nickname: Option<String>,
     agent_role: Option<String>,
@@ -370,6 +377,7 @@ impl ThreadRow {
             created_at: row.try_get("created_at")?,
             updated_at: row.try_get("updated_at")?,
             source: row.try_get("source")?,
+            parent_thread_id: row.try_get("parent_thread_id")?,
             thread_source: row.try_get("thread_source")?,
             agent_nickname: row.try_get("agent_nickname")?,
             agent_role: row.try_get("agent_role")?,
@@ -403,6 +411,7 @@ impl TryFrom<ThreadRow> for ThreadMetadata {
             created_at,
             updated_at,
             source,
+            parent_thread_id,
             thread_source,
             agent_nickname,
             agent_role,
@@ -433,6 +442,7 @@ impl TryFrom<ThreadRow> for ThreadMetadata {
             created_at: epoch_millis_to_datetime(created_at)?,
             updated_at: epoch_millis_to_datetime(updated_at)?,
             source,
+            parent_thread_id: parent_thread_id.map(ThreadId::try_from).transpose()?,
             thread_source,
             agent_nickname,
             agent_role,
@@ -520,6 +530,7 @@ mod tests {
             created_at: 1_700_000_000,
             updated_at: 1_700_000_100,
             source: "cli".to_string(),
+            parent_thread_id: None,
             thread_source: None,
             agent_nickname: None,
             agent_role: None,
@@ -550,6 +561,7 @@ mod tests {
             created_at: DateTime::<Utc>::from_timestamp(1_700_000_000, 0).expect("timestamp"),
             updated_at: DateTime::<Utc>::from_timestamp(1_700_000_100, 0).expect("timestamp"),
             source: "cli".to_string(),
+            parent_thread_id: None,
             thread_source: None,
             agent_nickname: None,
             agent_role: None,

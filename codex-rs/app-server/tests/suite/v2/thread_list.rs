@@ -95,6 +95,7 @@ async fn list_threads_with_sort(
             cwd: None,
             use_state_db_only: false,
             search_term: None,
+            parent_thread_id: None,
         })
         .await?;
     let resp: JSONRPCResponse = timeout(
@@ -103,6 +104,35 @@ async fn list_threads_with_sort(
     )
     .await??;
     to_response::<ThreadListResponse>(resp)
+}
+
+async fn list_threads_for_parent(
+    mcp: &mut TestAppServer,
+    parent_thread_id: ThreadId,
+    cursor: Option<String>,
+    limit: u32,
+) -> Result<ThreadListResponse> {
+    let request_id = mcp
+        .send_thread_list_request(codex_app_server_protocol::ThreadListParams {
+            cursor,
+            limit: Some(limit),
+            sort_key: None,
+            sort_direction: None,
+            model_providers: Some(Vec::new()),
+            source_kinds: None,
+            archived: None,
+            cwd: None,
+            use_state_db_only: false,
+            search_term: None,
+            parent_thread_id: Some(parent_thread_id.to_string()),
+        })
+        .await?;
+    let response = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    to_response::<ThreadListResponse>(response)
 }
 
 fn create_fake_rollouts<F, G>(
@@ -537,6 +567,7 @@ async fn thread_list_respects_cwd_filters() -> Result<()> {
             ])),
             use_state_db_only: false,
             search_term: None,
+            parent_thread_id: None,
         })
         .await?;
     let resp: JSONRPCResponse = timeout(
@@ -646,6 +677,7 @@ sqlite = true
             cwd: None,
             use_state_db_only: false,
             search_term: Some("needle".to_string()),
+            parent_thread_id: None,
         })
         .await?;
     let resp: JSONRPCResponse = timeout(
@@ -862,6 +894,7 @@ sqlite = true
             cwd: None,
             use_state_db_only: false,
             search_term: None,
+            parent_thread_id: None,
         })
         .await?;
     let resp: JSONRPCResponse = timeout(
@@ -900,6 +933,7 @@ sqlite = true
             )),
             use_state_db_only: true,
             search_term: None,
+            parent_thread_id: None,
         })
         .await?;
     let resp: JSONRPCResponse = timeout(
@@ -929,6 +963,7 @@ sqlite = true
             )),
             use_state_db_only: false,
             search_term: None,
+            parent_thread_id: None,
         })
         .await?;
     let resp: JSONRPCResponse = timeout(
@@ -938,6 +973,115 @@ sqlite = true
     .await??;
     let scanned_response = to_response::<ThreadListResponse>(resp)?;
     assert_eq!(scanned_response.data.len(), 0);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_list_parent_filter_reads_direct_children_from_state_db() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    create_minimal_config(codex_home.path())?;
+    let parent_id = ThreadId::from_string(&Uuid::from_u128(201).to_string())?;
+
+    let older_child_id = create_fake_parented_rollout_with_source(
+        codex_home.path(),
+        "2025-02-01T10-00-00",
+        "2025-02-01T10:00:00Z",
+        "agent job child",
+        Some("mock_provider"),
+        /*git_info*/ None,
+        CoreSessionSource::SubAgent(SubAgentSource::Other("agent_job:job-1".to_string())),
+        parent_id,
+    )?;
+    let newer_child_id = create_fake_parented_rollout_with_source(
+        codex_home.path(),
+        "2025-02-01T11-00-00",
+        "2025-02-01T11:00:00Z",
+        "direct child",
+        Some("mock_provider"),
+        /*git_info*/ None,
+        CoreSessionSource::Cli,
+        parent_id,
+    )?;
+    let newer_child_thread_id = ThreadId::from_string(&newer_child_id)?;
+    create_fake_parented_rollout_with_source(
+        codex_home.path(),
+        "2025-02-01T12-00-00",
+        "2025-02-01T12:00:00Z",
+        "grandchild",
+        Some("mock_provider"),
+        /*git_info*/ None,
+        CoreSessionSource::SubAgent(SubAgentSource::Other("agent_job:job-2".to_string())),
+        newer_child_thread_id,
+    )?;
+
+    let mut mcp = init_mcp(codex_home.path()).await?;
+    fs::remove_dir_all(codex_home.path().join("sessions"))?;
+
+    let first_page =
+        list_threads_for_parent(&mut mcp, parent_id, /*cursor*/ None, /*limit*/ 1).await?;
+    let second_page = list_threads_for_parent(
+        &mut mcp,
+        parent_id,
+        first_page.next_cursor.clone(),
+        /*limit*/ 1,
+    )
+    .await?;
+
+    assert_eq!(
+        first_page
+            .data
+            .iter()
+            .map(|thread| thread.id.as_str())
+            .collect::<Vec<_>>(),
+        vec![newer_child_id.as_str()]
+    );
+    assert_eq!(
+        second_page
+            .data
+            .iter()
+            .map(|thread| thread.id.as_str())
+            .collect::<Vec<_>>(),
+        vec![older_child_id.as_str()]
+    );
+    assert_eq!(second_page.next_cursor, None);
+    let expected_parent_id = parent_id.to_string();
+    assert!(
+        first_page
+            .data
+            .iter()
+            .chain(&second_page.data)
+            .all(|thread| thread.parent_thread_id.as_deref() == Some(expected_parent_id.as_str()))
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_list_parent_filter_rejects_malformed_thread_id() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    create_minimal_config(codex_home.path())?;
+    let mut mcp = init_mcp(codex_home.path()).await?;
+    let request_id = mcp
+        .send_thread_list_request(codex_app_server_protocol::ThreadListParams {
+            cursor: None,
+            limit: Some(10),
+            sort_key: None,
+            sort_direction: None,
+            model_providers: None,
+            source_kinds: None,
+            archived: None,
+            cwd: None,
+            use_state_db_only: false,
+            search_term: None,
+            parent_thread_id: Some("not-a-thread-id".to_string()),
+        })
+        .await?;
+    let error = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    assert_eq!(error.error.code, -32600);
 
     Ok(())
 }
@@ -1629,6 +1773,7 @@ async fn thread_list_backwards_cursor_can_seed_forward_delta_sync() -> Result<()
                 cwd: None,
                 use_state_db_only: false,
                 search_term: None,
+                parent_thread_id: None,
             })
             .await?;
         let resp: JSONRPCResponse = timeout(
@@ -1671,6 +1816,7 @@ async fn thread_list_backwards_cursor_can_seed_forward_delta_sync() -> Result<()
                 cwd: None,
                 use_state_db_only: false,
                 search_term: None,
+                parent_thread_id: None,
             })
             .await?;
         let resp: JSONRPCResponse = timeout(
@@ -1909,6 +2055,7 @@ async fn thread_list_invalid_cursor_returns_error() -> Result<()> {
             cwd: None,
             use_state_db_only: false,
             search_term: None,
+            parent_thread_id: None,
         })
         .await?;
     let error: JSONRPCError = timeout(
