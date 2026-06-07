@@ -17,8 +17,16 @@ TRAILER = "Codex-Public-RevId"
 
 
 @dataclass(frozen=True)
+class GitAuthor:
+    name: str
+    email: str
+    date: str
+
+
+@dataclass(frozen=True)
 class PublicChange:
     rev: str
+    author: GitAuthor
     title: str
     body: str
     url: str | None
@@ -57,7 +65,7 @@ def main() -> int:
 
         change = load_public_change(public_change_rev)
         body_file, message_file = write_metadata_files(change)
-        migrate_change(copybara_jar, last_public_rev, change.rev, message_file)
+        migrate_change(copybara_jar, last_public_rev, change, message_file)
         pr_number = open_or_update_pr(change, body_file)
         merge_pr(pr_number, change, body_file)
         wait_for_imported_rev(change.rev)
@@ -167,6 +175,7 @@ def next_public_change(last_public_rev: str, target_public_rev: str) -> str | No
 
 
 def load_public_change(public_change_rev: str) -> PublicChange:
+    author = load_public_author(public_change_rev)
     pulls_json = output(
         [
             "gh",
@@ -181,6 +190,7 @@ def load_public_change(public_change_rev: str) -> PublicChange:
         pull = pulls[0]
         return PublicChange(
             rev=public_change_rev,
+            author=author,
             title=pull["title"],
             body=pull.get("body") or "",
             url=pull["html_url"],
@@ -190,11 +200,24 @@ def load_public_change(public_change_rev: str) -> PublicChange:
     short_rev = public_change_rev[:12]
     return PublicChange(
         rev=public_change_rev,
+        author=author,
         title=f"Sync openai/codex {short_rev}",
         body="",
         url=f"https://github.com/openai/codex/commit/{public_change_rev}",
         number=None,
     )
+
+
+def load_public_author(public_change_rev: str) -> GitAuthor:
+    raw_author = output(
+        ["git", "show", "--no-patch", "--format=%an%x00%ae%x00%aI", public_change_rev]
+    )
+    parts = raw_author.split("\0")
+    if len(parts) != 3 or not all(parts):
+        raise RuntimeError(
+            f"Unable to read author metadata for public commit {public_change_rev}."
+        )
+    return GitAuthor(name=parts[0], email=parts[1], date=parts[2])
 
 
 def write_metadata_files(change: PublicChange) -> tuple[Path, Path]:
@@ -222,7 +245,7 @@ def write_metadata_files(change: PublicChange) -> tuple[Path, Path]:
 def migrate_change(
     copybara_jar: str,
     last_public_rev: str,
-    public_change_rev: str,
+    change: PublicChange,
     message_file: Path,
 ) -> None:
     run(
@@ -233,7 +256,7 @@ def migrate_change(
             "migrate",
             ".copybara/copy.bara.sky",
             "public_to_internal",
-            public_change_rev,
+            change.rev,
             f"--last-rev={last_public_rev}",
             "--iterative-limit-changes=1",
             "--git-destination-non-fast-forward",
@@ -250,6 +273,10 @@ def migrate_change(
             "--amend",
             "--allow-empty",
             "--no-verify",
+            "--author",
+            f"{change.author.name} <{change.author.email}>",
+            "--date",
+            change.author.date,
             "--file",
             str(message_file),
         ]
