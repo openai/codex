@@ -349,7 +349,7 @@ impl LoadedAgentsMd {
         Self {
             entries: vec![InstructionEntry {
                 contents,
-                provenance: InstructionProvenance::Internal,
+                provenance: InstructionProvenance::Global(None),
             }],
         }
     }

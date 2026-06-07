@@ -221,25 +221,13 @@ fn configured_and_persisted_instructions_are_bounded_for_model_context() {
 fn replacing_global_instructions_preserves_project_entries_within_the_bound() {
     let project_source =
         AbsolutePathBuf::from_absolute_path("/tmp/project/AGENTS.md").expect("absolute path");
-    let mut loaded = LoadedAgentsMd {
-        entries: vec![
-            InstructionEntry {
-                contents: "old global".to_string(),
-                provenance: InstructionProvenance::Global(None),
-            },
-            InstructionEntry {
-                contents: "project".to_string(),
-                provenance: InstructionProvenance::Project(Some(project_source.clone())),
-            },
-        ],
-    };
-
-    loaded.replace_global(LoadedAgentsMd {
-        entries: vec![InstructionEntry {
-            contents: "new global".to_string(),
-            provenance: InstructionProvenance::Global(None),
-        }],
+    let mut loaded = LoadedAgentsMd::from_text_for_testing("old global");
+    loaded.entries.push(InstructionEntry {
+        contents: "project".to_string(),
+        provenance: InstructionProvenance::Project(Some(project_source.clone())),
     });
+
+    loaded.replace_global(LoadedAgentsMd::from_text_for_testing("new global"));
 
     assert_eq!(
         loaded,
