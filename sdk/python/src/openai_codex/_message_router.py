@@ -4,8 +4,9 @@ import queue
 import threading
 from collections import deque
 
+from ._goal import _GoalOperationState
 from .errors import CodexError, map_jsonrpc_error
-from .generated.notification_registry import notification_turn_id
+from .generated.notification_registry import notification_thread_id, notification_turn_id
 from .generated.v2_all import AccountLoginCompletedNotification
 from .models import JsonValue, Notification, UnknownNotification
 
@@ -30,6 +31,7 @@ class MessageRouter:
         self._pending_login_notifications: dict[str, deque[Notification]] = {}
         self._turn_notifications: dict[str, queue.Queue[NotificationQueueItem]] = {}
         self._pending_turn_notifications: dict[str, deque[Notification]] = {}
+        self._goal_operations: dict[str, _GoalOperationState] = {}
         self._global_notifications: queue.Queue[NotificationQueueItem] = queue.Queue()
 
     def create_response_waiter(self, request_id: str) -> queue.Queue[ResponseQueueItem]:
@@ -116,6 +118,21 @@ class MessageRouter:
             raise item
         return item
 
+    def register_goal(self, thread_id: str) -> _GoalOperationState:
+        """Register one thread-scoped logical goal operation before it starts."""
+        state = _GoalOperationState(thread_id=thread_id)
+        with self._lock:
+            if thread_id in self._goal_operations:
+                raise RuntimeError(f"thread {thread_id!r} already has an active goal operation")
+            self._goal_operations[thread_id] = state
+        return state
+
+    def unregister_goal(self, state: _GoalOperationState) -> None:
+        """Stop routing notifications to a completed logical goal operation."""
+        with self._lock:
+            if self._goal_operations.get(state.thread_id) is state:
+                self._goal_operations.pop(state.thread_id)
+
     def route_response(self, msg: dict[str, JsonValue]) -> None:
         """Deliver a JSON-RPC response or error to its request waiter."""
 
@@ -157,6 +174,17 @@ class MessageRouter:
             return
 
         turn_id = self._notification_turn_id(notification)
+        thread_id = self._notification_thread_id(notification)
+        if thread_id is not None:
+            with self._lock:
+                goal_state = self._goal_operations.get(thread_id)
+            if goal_state is not None and (
+                turn_id is not None or notification.method.startswith("thread/goal/")
+            ):
+                goal_state.observe(notification)
+                if goal_state.is_finished():
+                    self.unregister_goal(goal_state)
+                return
         if turn_id is None:
             self._global_notifications.put(notification)
             return
@@ -182,6 +210,8 @@ class MessageRouter:
             self._pending_login_notifications.clear()
             turn_queues = list(self._turn_notifications.values())
             self._pending_turn_notifications.clear()
+            goal_operations = list(self._goal_operations.values())
+            self._goal_operations.clear()
         # Put the same transport failure into every queue so no SDK call blocks
         # forever waiting for a response that cannot arrive.
         for waiter in response_waiters:
@@ -190,6 +220,8 @@ class MessageRouter:
             login_queue.put(exc)
         for turn_queue in turn_queues:
             turn_queue.put(exc)
+        for goal_operation in goal_operations:
+            goal_operation.fail(exc)
         self._global_notifications.put(exc)
 
     def _notification_login_id(self, notification: Notification) -> str | None:
@@ -220,3 +252,11 @@ class MessageRouter:
                     return raw_nested_turn_id
             return None
         return notification_turn_id(payload)
+
+    def _notification_thread_id(self, notification: Notification) -> str | None:
+        """Extract thread ids from known generated payloads or raw payloads."""
+        payload = notification.payload
+        if isinstance(payload, UnknownNotification):
+            raw_thread_id = payload.params.get("threadId")
+            return raw_thread_id if isinstance(raw_thread_id, str) else None
+        return notification_thread_id(payload)

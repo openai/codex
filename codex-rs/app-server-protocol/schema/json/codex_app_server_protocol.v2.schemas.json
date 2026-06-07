@@ -16673,6 +16673,10 @@
           ],
           "description": "Override the reasoning effort for this turn and subsequent turns."
         },
+        "goal": {
+          "description": "Replace the thread's active goal with an objective derived from this turn's text input.",
+          "type": "boolean"
+        },
         "input": {
           "items": {
             "$ref": "#/definitions/UserInput"

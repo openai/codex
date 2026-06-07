@@ -11,6 +11,9 @@ import type { SandboxPolicy } from "./SandboxPolicy";
 import type { UserInput } from "./UserInput";
 
 export type TurnStartParams = {threadId: string, clientUserMessageId?: string | null, input: Array<UserInput>, /**
+ * Replace the thread's active goal with an objective derived from this turn's text input.
+ */
+goal?: boolean, /**
  * Override the working directory for this turn and subsequent turns.
  */
 cwd?: string | null, /**

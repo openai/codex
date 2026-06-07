@@ -9,6 +9,7 @@ use std::sync::atomic::AtomicU64;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
+use self::initial_goal::InitialGoalStartError;
 use crate::agent::AgentControl;
 use crate::agent::AgentStatus;
 use crate::agent::agent_status_from_event;
@@ -196,6 +197,7 @@ use codex_protocol::exec_output::StreamOutput;
 
 mod config_lock;
 mod handlers;
+mod initial_goal;
 mod inject;
 mod input_queue;
 mod mcp;
@@ -337,6 +339,7 @@ use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecApprovalRequestEvent;
+use codex_protocol::protocol::InitialGoal;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::McpServerRefreshConfig;
 use codex_protocol::protocol::ModelRerouteEvent;
@@ -378,6 +381,17 @@ pub struct Codex {
     // Shared future for the background submission loop completion so multiple
     // callers can wait for shutdown.
     pub(crate) session_loop_termination: SessionLoopTermination,
+}
+
+struct InitialGoalStartAckGuard {
+    session: Arc<Session>,
+    turn_id: String,
+}
+
+impl Drop for InitialGoalStartAckGuard {
+    fn drop(&mut self) {
+        self.session.cancel_initial_goal_start(&self.turn_id);
+    }
 }
 
 pub(crate) type SessionLoopTermination = Shared<BoxFuture<'static, ()>>;
@@ -687,6 +701,7 @@ impl Codex {
             id: id.clone(),
             op,
             client_user_message_id: None,
+            initial_goal: None,
             trace,
         };
         self.submit_with_id(sub).await?;
@@ -698,16 +713,43 @@ impl Codex {
         op: Op,
         trace: Option<W3cTraceContext>,
         client_user_message_id: Option<String>,
+        initial_goal: Option<InitialGoal>,
     ) -> CodexResult<String> {
         debug_assert!(matches!(op, Op::UserInput { .. }));
         let id = Uuid::now_v7().to_string();
+        let mut _goal_start_ack_guard = None;
+        let goal_start_ack = if initial_goal.is_some() {
+            let receiver = self.session.register_initial_goal_start_ack(id.clone());
+            _goal_start_ack_guard = Some(InitialGoalStartAckGuard {
+                session: Arc::clone(&self.session),
+                turn_id: id.clone(),
+            });
+            Some(receiver)
+        } else {
+            None
+        };
         let sub = Submission {
             id: id.clone(),
             op,
             client_user_message_id,
+            initial_goal,
             trace,
         };
         self.submit_with_id(sub).await?;
+        if let Some(goal_start_ack) = goal_start_ack {
+            let goal_start_result = tokio::select! {
+                result = goal_start_ack => {
+                    result.map_err(|_| CodexErr::InternalAgentDied)?
+                }
+                () = self.session_loop_termination.clone() => {
+                    return Err(CodexErr::InternalAgentDied);
+                }
+            };
+            goal_start_result.map_err(|err| match err {
+                InitialGoalStartError::InvalidRequest(message) => CodexErr::InvalidRequest(message),
+                InitialGoalStartError::Internal(message) => CodexErr::Fatal(message),
+            })?;
+        }
         Ok(id)
     }
 
@@ -1126,6 +1168,7 @@ impl Session {
             },
             /*mirror_user_text_to_realtime*/ None,
             /*client_user_message_id*/ None,
+            /*initial_goal*/ None,
         )
         .await;
     }

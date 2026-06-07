@@ -362,6 +362,7 @@ use codex_models_manager::collaboration_mode_presets::builtin_collaboration_mode
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ForcedLoginMethod;
+use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::TrustLevel;
@@ -386,6 +387,7 @@ use codex_protocol::protocol::ConversationTextParams;
 use codex_protocol::protocol::EventMsg;
 #[cfg(test)]
 use codex_protocol::protocol::GitInfo as CoreGitInfo;
+use codex_protocol::protocol::InitialGoal;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::McpAuthStatus as CoreMcpAuthStatus;
 use codex_protocol::protocol::Op;
@@ -402,6 +404,7 @@ use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::protocol::USER_MESSAGE_BEGIN;
 use codex_protocol::protocol::W3cTraceContext;
+use codex_protocol::protocol::validate_thread_goal_objective;
 use codex_protocol::user_input::MAX_USER_INPUT_TEXT_CHARS;
 use codex_protocol::user_input::UserInput as CoreInputItem;
 use codex_rmcp_client::perform_oauth_login_return_url;

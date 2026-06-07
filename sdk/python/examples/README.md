@@ -89,3 +89,5 @@ python examples/01_quickstart_constructor/async.py
   - separate `steer()` and `interrupt()` demos with concise summaries
 - `15_login_and_account/`
   - browser-login handle lifecycle, cancellation, and account inspection
+- `16_goal_turns/`
+  - run a longer autonomous objective as one logical turn

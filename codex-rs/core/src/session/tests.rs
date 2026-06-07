@@ -4899,6 +4899,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         conversation: Arc::new(RealtimeConversationManager::new()),
         active_turn: Mutex::new(None),
         input_queue: super::input_queue::InputQueue::new(),
+        initial_goal_start_acks: super::initial_goal::InitialGoalStartAcks::default(),
         guardian_review_session: crate::guardian::GuardianReviewSessionManager::default(),
         services,
         next_internal_sub_id: AtomicU64::new(0),
@@ -5825,6 +5826,7 @@ async fn submit_with_id_captures_current_span_trace_context() {
                 id: "sub-1".into(),
                 op: Op::Interrupt,
                 client_user_message_id: None,
+                initial_goal: None,
                 trace: None,
             })
             .await
@@ -5897,6 +5899,7 @@ fn submission_dispatch_span_prefers_submission_trace_context() {
             id: "sub-1".into(),
             op: Op::Interrupt,
             client_user_message_id: None,
+            initial_goal: None,
             trace: Some(submission_trace),
         })
     });
@@ -5924,6 +5927,7 @@ fn submission_dispatch_span_uses_debug_for_realtime_audio() {
             },
         }),
         client_user_message_id: None,
+        initial_goal: None,
         trace: None,
     });
 
@@ -5992,6 +5996,7 @@ async fn user_turn_updates_approvals_reviewer() {
             },
         },
         /*client_user_message_id*/ None,
+        /*initial_goal*/ None,
     )
     .await;
 
@@ -6286,6 +6291,7 @@ async fn spawn_task_turn_span_inherits_dispatch_trace_context() {
         id: "sub-1".into(),
         op: Op::Interrupt,
         client_user_message_id: None,
+        initial_goal: None,
         trace: Some(submission_trace.clone()),
     });
     let dispatch_span_id = dispatch_span.context().span().span_context().span_id();
@@ -6976,6 +6982,7 @@ where
         conversation: Arc::new(RealtimeConversationManager::new()),
         active_turn: Mutex::new(None),
         input_queue: super::input_queue::InputQueue::new(),
+        initial_goal_start_acks: super::initial_goal::InitialGoalStartAcks::default(),
         guardian_review_session: crate::guardian::GuardianReviewSessionManager::default(),
         services,
         next_internal_sub_id: AtomicU64::new(0),

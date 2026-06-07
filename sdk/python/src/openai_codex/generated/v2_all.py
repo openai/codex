@@ -6956,6 +6956,12 @@ class TurnStartParams(BaseModel):
         ReasoningEffort | None,
         Field(description="Override the reasoning effort for this turn and subsequent turns."),
     ] = None
+    goal: Annotated[
+        bool | None,
+        Field(
+            description="Replace the thread's active goal with an objective derived from this turn's text input."
+        ),
+    ] = False
     input: list[UserInput]
     model: Annotated[
         str | None, Field(description="Override the model for this turn and subsequent turns.")

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from dataclasses import dataclass
 from typing import AsyncIterator, Iterator
 
@@ -8,6 +9,11 @@ from ._approval_mode import (
     ApprovalMode as ApprovalMode,
     _approval_mode_override_settings,
     _approval_mode_settings,
+)
+from ._goal import (
+    _AsyncGoalNotificationStream,
+    _GoalNotificationStream,
+    _GoalOperationState,
 )
 from ._initialize_metadata import validate_initialize_metadata
 from ._inputs import (
@@ -40,6 +46,7 @@ from ._run import (
 from ._sandbox import Sandbox as Sandbox, _sandbox_mode, _sandbox_policy
 from .async_client import AsyncCodexClient
 from .client import CodexClient, CodexConfig
+from .errors import InvalidRequestError
 from .generated.v2_all import (
     ApiKeyLoginAccountParams,
     GetAccountParams,
@@ -70,6 +77,19 @@ from .generated.v2_all import (
     TurnSteerResponse,
 )
 from .models import InitializeResponse, JsonObject, Notification
+
+
+def _active_turn_id_from_error(exc: InvalidRequestError) -> str | None:
+    match = re.search(r" but found `?([^`]+)`?$", exc.message)
+    return match.group(1) if match is not None else None
+
+
+def _inactive_turn_error() -> InvalidRequestError:
+    return InvalidRequestError(-32600, "no active turn to steer")
+
+
+def _inactive_interrupt_error() -> InvalidRequestError:
+    return InvalidRequestError(-32600, "no active turn to interrupt")
 
 
 class Codex:
@@ -541,6 +561,7 @@ class Thread:
         self,
         input: RunInput,
         *,
+        goal: bool = False,
         approval_mode: ApprovalMode | None = None,
         cwd: str | None = None,
         effort: ReasoningEffort | None = None,
@@ -554,6 +575,7 @@ class Thread:
         """Run a complete turn and collect its final result."""
         turn = self.turn(
             input,
+            goal=goal,
             approval_mode=approval_mode,
             cwd=cwd,
             effort=effort,
@@ -575,6 +597,7 @@ class Thread:
         self,
         input: RunInput,
         *,
+        goal: bool = False,
         approval_mode: ApprovalMode | None = None,
         cwd: str | None = None,
         effort: ReasoningEffort | None = None,
@@ -602,8 +625,16 @@ class Thread:
             service_tier=service_tier,
             summary=summary,
         )
-        turn = self._client.turn_start(self.id, wire_input, params=params)
-        return TurnHandle(self._client, self.id, turn.turn.id)
+        goal_state = self._client.register_goal_operation(self.id) if goal else None
+        try:
+            turn = self._client.turn_start(self.id, wire_input, params=params, goal=goal)
+        except BaseException:
+            if goal_state is not None:
+                self._client.unregister_goal_operation(goal_state)
+            raise
+        if goal_state is not None:
+            self._client.bind_goal_operation(goal_state, turn.turn.id)
+        return TurnHandle(self._client, self.id, turn.turn.id, _goal=goal_state)
 
     # END GENERATED: Thread.flat_methods
 
@@ -629,6 +660,7 @@ class AsyncThread:
         self,
         input: RunInput,
         *,
+        goal: bool = False,
         approval_mode: ApprovalMode | None = None,
         cwd: str | None = None,
         effort: ReasoningEffort | None = None,
@@ -642,6 +674,7 @@ class AsyncThread:
         """Run a complete turn asynchronously and collect its final result."""
         turn = await self.turn(
             input,
+            goal=goal,
             approval_mode=approval_mode,
             cwd=cwd,
             effort=effort,
@@ -663,6 +696,7 @@ class AsyncThread:
         self,
         input: RunInput,
         *,
+        goal: bool = False,
         approval_mode: ApprovalMode | None = None,
         cwd: str | None = None,
         effort: ReasoningEffort | None = None,
@@ -691,12 +725,21 @@ class AsyncThread:
             service_tier=service_tier,
             summary=summary,
         )
-        turn = await self._codex._client.turn_start(
-            self.id,
-            wire_input,
-            params=params,
-        )
-        return AsyncTurnHandle(self._codex, self.id, turn.turn.id)
+        goal_state = self._codex._client.register_goal_operation(self.id) if goal else None
+        try:
+            turn = await self._codex._client.turn_start(
+                self.id,
+                wire_input,
+                params=params,
+                goal=goal,
+            )
+        except BaseException:
+            if goal_state is not None:
+                self._codex._client.unregister_goal_operation(goal_state)
+            raise
+        if goal_state is not None:
+            self._codex._client.bind_goal_operation(goal_state, turn.turn.id)
+        return AsyncTurnHandle(self._codex, self.id, turn.turn.id, _goal=goal_state)
 
     # END GENERATED: AsyncThread.flat_methods
 
@@ -721,9 +764,30 @@ class TurnHandle:
     _client: CodexClient
     thread_id: str
     id: str
+    _goal: _GoalOperationState | None = None
 
     def steer(self, input: RunInput) -> TurnSteerResponse:
         """Send additional input to this active turn."""
+        if self._goal is not None:
+            wire_input = _to_wire_input(_normalize_run_input(input))
+            turn_id = self._goal.active_turn()
+            if turn_id is None:
+                raise _inactive_turn_error()
+            try:
+                response = self._client.turn_steer(self.thread_id, turn_id, wire_input)
+            except InvalidRequestError as exc:
+                if not (
+                    exc.message == "no active turn to steer"
+                    or exc.message.startswith("expected active turn id")
+                ):
+                    raise
+                next_turn_id = _active_turn_id_from_error(exc)
+                if next_turn_id is None:
+                    next_turn_id = self._goal.active_turn(after=turn_id)
+                if next_turn_id is None:
+                    raise _inactive_turn_error() from exc
+                response = self._client.turn_steer(self.thread_id, next_turn_id, wire_input)
+            return response.model_copy(update={"turn_id": self.id})
         return self._client.turn_steer(
             self.thread_id,
             self.id,
@@ -732,23 +796,61 @@ class TurnHandle:
 
     def interrupt(self) -> TurnInterruptResponse:
         """Request interruption of this active turn."""
+        if self._goal is not None:
+            if not self._goal.begin_interrupt():
+                raise _inactive_interrupt_error()
+            try:
+                self._client.pause_goal(self.thread_id)
+            except BaseException:
+                self._goal.cancel_interrupt()
+                raise
+            self._goal.confirm_interrupt()
+            turn_id = self._goal.current_turn()
+            if turn_id is None:
+                return TurnInterruptResponse()
+            try:
+                return self._client.turn_interrupt(self.thread_id, turn_id)
+            except InvalidRequestError as exc:
+                if exc.message == "no active turn to interrupt":
+                    return TurnInterruptResponse()
+                if exc.message.startswith("expected active turn id"):
+                    next_turn_id = _active_turn_id_from_error(exc) or self._goal.current_turn()
+                    if next_turn_id is None or next_turn_id == turn_id:
+                        return TurnInterruptResponse()
+                    try:
+                        return self._client.turn_interrupt(self.thread_id, next_turn_id)
+                    except InvalidRequestError as retry_exc:
+                        if retry_exc.message == "no active turn to interrupt":
+                            return TurnInterruptResponse()
+                        raise
+                raise
         return self._client.turn_interrupt(self.thread_id, self.id)
 
     def stream(self) -> Iterator[Notification]:
         """Yield only notifications routed to this turn handle."""
-        self._client.register_turn_notifications(self.id)
-        try:
-            while True:
-                event = self._client.next_turn_notification(self.id)
-                yield event
-                if (
-                    event.method == "turn/completed"
-                    and isinstance(event.payload, TurnCompletedNotification)
-                    and event.payload.turn.id == self.id
-                ):
-                    break
-        finally:
-            self._client.unregister_turn_notifications(self.id)
+        if self._goal is not None:
+            return _GoalNotificationStream(
+                self._goal,
+                lambda: self._client.next_goal_notification(self._goal),
+                lambda: self._client.unregister_goal_operation(self._goal),
+            )
+
+        def ordinary_stream() -> Iterator[Notification]:
+            self._client.register_turn_notifications(self.id)
+            try:
+                while True:
+                    event = self._client.next_turn_notification(self.id)
+                    yield event
+                    if (
+                        event.method == "turn/completed"
+                        and isinstance(event.payload, TurnCompletedNotification)
+                        and event.payload.turn.id == self.id
+                    ):
+                        break
+            finally:
+                self._client.unregister_turn_notifications(self.id)
+
+        return ordinary_stream()
 
     def run(self) -> TurnResult:
         """Consume the turn stream and return its completed result."""
@@ -766,10 +868,39 @@ class AsyncTurnHandle:
     _codex: AsyncCodex
     thread_id: str
     id: str
+    _goal: _GoalOperationState | None = None
 
     async def steer(self, input: RunInput) -> TurnSteerResponse:
         """Send additional input to this active turn."""
         await self._codex._ensure_initialized()
+        if self._goal is not None:
+            wire_input = _to_wire_input(_normalize_run_input(input))
+            turn_id = await asyncio.to_thread(self._goal.active_turn)
+            if turn_id is None:
+                raise _inactive_turn_error()
+            try:
+                response = await self._codex._client.turn_steer(
+                    self.thread_id,
+                    turn_id,
+                    wire_input,
+                )
+            except InvalidRequestError as exc:
+                if not (
+                    exc.message == "no active turn to steer"
+                    or exc.message.startswith("expected active turn id")
+                ):
+                    raise
+                next_turn_id = _active_turn_id_from_error(exc)
+                if next_turn_id is None:
+                    next_turn_id = await asyncio.to_thread(self._goal.active_turn, after=turn_id)
+                if next_turn_id is None:
+                    raise _inactive_turn_error() from exc
+                response = await self._codex._client.turn_steer(
+                    self.thread_id,
+                    next_turn_id,
+                    wire_input,
+                )
+            return response.model_copy(update={"turn_id": self.id})
         return await self._codex._client.turn_steer(
             self.thread_id,
             self.id,
@@ -779,24 +910,70 @@ class AsyncTurnHandle:
     async def interrupt(self) -> TurnInterruptResponse:
         """Request interruption of this active turn."""
         await self._codex._ensure_initialized()
+        if self._goal is not None:
+            if not self._goal.begin_interrupt():
+                raise _inactive_interrupt_error()
+            try:
+                await self._codex._client.pause_goal(self.thread_id)
+            except BaseException:
+                self._goal.cancel_interrupt()
+                raise
+            self._goal.confirm_interrupt()
+            turn_id = self._goal.current_turn()
+            if turn_id is None:
+                return TurnInterruptResponse()
+            try:
+                return await self._codex._client.turn_interrupt(self.thread_id, turn_id)
+            except InvalidRequestError as exc:
+                if exc.message == "no active turn to interrupt":
+                    return TurnInterruptResponse()
+                if exc.message.startswith("expected active turn id"):
+                    next_turn_id = _active_turn_id_from_error(exc) or self._goal.current_turn()
+                    if next_turn_id is None or next_turn_id == turn_id:
+                        return TurnInterruptResponse()
+                    try:
+                        return await self._codex._client.turn_interrupt(
+                            self.thread_id,
+                            next_turn_id,
+                        )
+                    except InvalidRequestError as retry_exc:
+                        if retry_exc.message == "no active turn to interrupt":
+                            return TurnInterruptResponse()
+                        raise
+                raise
         return await self._codex._client.turn_interrupt(self.thread_id, self.id)
 
-    async def stream(self) -> AsyncIterator[Notification]:
+    def stream(self) -> AsyncIterator[Notification]:
         """Yield only notifications routed to this async turn handle."""
-        await self._codex._ensure_initialized()
-        self._codex._client.register_turn_notifications(self.id)
-        try:
-            while True:
-                event = await self._codex._client.next_turn_notification(self.id)
-                yield event
-                if (
-                    event.method == "turn/completed"
-                    and isinstance(event.payload, TurnCompletedNotification)
-                    and event.payload.turn.id == self.id
-                ):
-                    break
-        finally:
-            self._codex._client.unregister_turn_notifications(self.id)
+        if self._goal is not None:
+
+            async def next_goal_notification() -> Notification:
+                await self._codex._ensure_initialized()
+                return await self._codex._client.next_goal_notification(self._goal)
+
+            return _AsyncGoalNotificationStream(
+                self._goal,
+                next_goal_notification,
+                lambda: self._codex._client.unregister_goal_operation(self._goal),
+            )
+
+        async def ordinary_stream() -> AsyncIterator[Notification]:
+            await self._codex._ensure_initialized()
+            self._codex._client.register_turn_notifications(self.id)
+            try:
+                while True:
+                    event = await self._codex._client.next_turn_notification(self.id)
+                    yield event
+                    if (
+                        event.method == "turn/completed"
+                        and isinstance(event.payload, TurnCompletedNotification)
+                        and event.payload.turn.id == self.id
+                    ):
+                        break
+            finally:
+                self._codex._client.unregister_turn_notifications(self.id)
+
+        return ordinary_stream()
 
     async def run(self) -> TurnResult:
         """Consume the turn stream and return its completed result."""

@@ -540,6 +540,7 @@ impl MessageProcessor {
                 id: request_id_string,
                 op: codex_protocol::protocol::Op::Interrupt,
                 client_user_message_id: None,
+                initial_goal: None,
                 trace: None,
             })
             .await

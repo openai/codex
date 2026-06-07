@@ -185,6 +185,19 @@ def test_turn_input_methods_accept_string_shortcut() -> None:
     )
 
 
+def test_turn_result_producers_expose_goal_mode() -> None:
+    """Goal mode belongs to APIs that produce a turn result or handle."""
+    funcs = [Thread.run, Thread.turn, AsyncThread.run, AsyncThread.turn]
+
+    assert {
+        fn: (
+            inspect.signature(fn).parameters["goal"].annotation,
+            inspect.signature(fn).parameters["goal"].default,
+        )
+        for fn in funcs
+    } == dict.fromkeys(funcs, ("bool", False))
+
+
 def test_root_exports_approval_mode() -> None:
     """The root package should expose the high-level approval mode enum."""
     assert [(mode.name, mode.value) for mode in ApprovalMode] == [
@@ -370,6 +383,7 @@ def test_generated_public_signatures_are_snake_case_and_typed() -> None:
             "thread_source",
         ],
         Thread.turn: [
+            "goal",
             "approval_mode",
             "cwd",
             "effort",
@@ -381,6 +395,7 @@ def test_generated_public_signatures_are_snake_case_and_typed() -> None:
             "summary",
         ],
         Thread.run: [
+            "goal",
             "approval_mode",
             "cwd",
             "effort",
@@ -445,6 +460,7 @@ def test_generated_public_signatures_are_snake_case_and_typed() -> None:
             "thread_source",
         ],
         AsyncThread.turn: [
+            "goal",
             "approval_mode",
             "cwd",
             "effort",
@@ -456,6 +472,7 @@ def test_generated_public_signatures_are_snake_case_and_typed() -> None:
             "summary",
         ],
         AsyncThread.run: [
+            "goal",
             "approval_mode",
             "cwd",
             "effort",

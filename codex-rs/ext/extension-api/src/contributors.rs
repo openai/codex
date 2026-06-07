@@ -10,12 +10,16 @@ use codex_tools::ToolExecutor;
 
 use crate::ExtensionData;
 
+mod initial_goal;
 mod prompt;
 mod thread_lifecycle;
 mod tool_lifecycle;
 mod turn_input;
 mod turn_lifecycle;
 
+pub use initial_goal::InitialGoalContributor;
+pub use initial_goal::InitialGoalError;
+pub use initial_goal::InitialGoalInput;
 pub use prompt::PromptFragment;
 pub use prompt::PromptSlot;
 pub use thread_lifecycle::ThreadIdleInput;

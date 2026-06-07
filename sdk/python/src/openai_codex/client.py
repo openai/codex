@@ -10,6 +10,7 @@ from typing import Callable, Iterator, TypeVar
 
 from pydantic import BaseModel
 
+from ._goal import _GoalOperationState
 from ._message_router import MessageRouter
 from ._version import __version__ as SDK_VERSION
 from .errors import CodexError, TransportClosedError
@@ -30,6 +31,8 @@ from .generated.v2_all import (
     ThreadCompactStartResponse,
     ThreadForkParams as V2ThreadForkParams,
     ThreadForkResponse,
+    ThreadGoalSetResponse,
+    ThreadGoalStatus,
     ThreadListParams as V2ThreadListParams,
     ThreadListResponse,
     ThreadReadResponse,
@@ -352,6 +355,23 @@ class CodexClient:
         """Return the next routed notification for the requested turn id."""
         return self._router.next_turn_notification(turn_id)
 
+    def register_goal_operation(self, thread_id: str) -> _GoalOperationState:
+        """Register a private thread-scoped route for a logical goal turn."""
+        return self._router.register_goal(thread_id)
+
+    def bind_goal_operation(self, state: _GoalOperationState, turn_id: str) -> None:
+        """Bind a pending goal route to its stable logical turn id."""
+        state.bind(turn_id)
+        self.unregister_turn_notifications(turn_id)
+
+    def unregister_goal_operation(self, state: _GoalOperationState) -> None:
+        """Release routing state for one logical goal turn."""
+        self._router.unregister_goal(state)
+
+    def next_goal_notification(self, state: _GoalOperationState) -> Notification:
+        """Wait for the next notification in a logical goal turn."""
+        return state.next_notification()
+
     def account_login_start(
         self,
         params: V2LoginAccountParams | JsonObject,
@@ -452,11 +472,21 @@ class CodexClient:
             response_model=ThreadCompactStartResponse,
         )
 
+    def pause_goal(self, thread_id: str) -> ThreadGoalSetResponse:
+        """Pause the active goal used by a logical goal turn."""
+        return self.request(
+            "thread/goal/set",
+            {"threadId": thread_id, "status": ThreadGoalStatus.paused.value},
+            response_model=ThreadGoalSetResponse,
+        )
+
     def turn_start(
         self,
         thread_id: str,
         input_items: list[JsonObject] | JsonObject | str,
         params: V2TurnStartParams | JsonObject | None = None,
+        *,
+        goal: bool = False,
     ) -> TurnStartResponse:
         """Start a turn and register its notification queue as early as possible."""
         payload = {
@@ -464,6 +494,11 @@ class CodexClient:
             "threadId": thread_id,
             "input": self._normalize_input_items(input_items),
         }
+        params_goal = payload.pop("goal", False)
+        if not isinstance(params_goal, bool):
+            raise TypeError("turn/start goal must be a bool")
+        if goal or params_goal:
+            payload["goal"] = True
         started = self.request("turn/start", payload, response_model=TurnStartResponse)
         self.register_turn_notifications(started.turn.id)
         return started

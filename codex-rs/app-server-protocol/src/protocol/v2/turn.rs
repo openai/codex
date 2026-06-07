@@ -68,6 +68,9 @@ pub struct TurnStartParams {
     #[ts(optional = nullable)]
     pub client_user_message_id: Option<String>,
     pub input: Vec<UserInput>,
+    /// Replace the thread's active goal with an objective derived from this turn's text input.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub goal: bool,
     /// Optional turn-scoped Responses API client metadata.
     #[experimental("turn/start.responsesapiClientMetadata")]
     #[ts(optional = nullable)]

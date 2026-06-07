@@ -7,6 +7,9 @@ use codex_extension_api::ConfigContributor;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionEventSink;
 use codex_extension_api::ExtensionRegistryBuilder;
+use codex_extension_api::InitialGoalContributor;
+use codex_extension_api::InitialGoalError;
+use codex_extension_api::InitialGoalInput;
 use codex_extension_api::ThreadIdleInput;
 use codex_extension_api::ThreadLifecycleContributor;
 use codex_extension_api::ThreadResumeInput;
@@ -178,6 +181,59 @@ where
         if let Some(runtime) = goal_runtime_handle(thread_store) {
             runtime.set_enabled(enabled);
         }
+    }
+}
+
+impl<C> InitialGoalContributor for GoalExtension<C>
+where
+    C: Send + Sync + 'static,
+{
+    fn replace_for_turn<'a>(
+        &'a self,
+        input: InitialGoalInput<'a>,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<(), InitialGoalError>> + Send + 'a>,
+    > {
+        Box::pin(async move {
+            let Some(runtime) = goal_runtime_handle(input.thread_store) else {
+                return Err(InitialGoalError::Internal(
+                    "goal runtime is unavailable for this thread".to_string(),
+                ));
+            };
+            if !runtime.is_enabled() {
+                return Err(InitialGoalError::InvalidRequest(
+                    "goals feature is disabled".to_string(),
+                ));
+            }
+            if input.collaboration_mode.mode == codex_protocol::config_types::ModeKind::Plan {
+                return Err(InitialGoalError::InvalidRequest(
+                    "goal turns do not support plan mode".to_string(),
+                ));
+            }
+
+            let outcome = self
+                .goal_service
+                .replace_goal_for_turn_start(
+                    &self.state_dbs,
+                    runtime.thread_id(),
+                    &input.goal.objective,
+                )
+                .await
+                .map_err(|err| match err {
+                    crate::api::GoalServiceError::InvalidRequest(message) => {
+                        InitialGoalError::InvalidRequest(message)
+                    }
+                    crate::api::GoalServiceError::Internal(message) => {
+                        InitialGoalError::Internal(message)
+                    }
+                })?;
+            self.event_emitter.thread_goal_updated(
+                input.turn_id,
+                Some(input.turn_id.to_string()),
+                outcome.goal,
+            );
+            Ok(())
+        })
     }
 }
 
@@ -443,6 +499,7 @@ pub fn install_with_backend<C>(
         goals_enabled,
     ));
     registry.thread_lifecycle_contributor(extension.clone());
+    registry.initial_goal_contributor(extension.clone());
     registry.config_contributor(extension.clone());
     registry.turn_lifecycle_contributor(extension.clone());
     registry.token_usage_contributor(extension.clone());

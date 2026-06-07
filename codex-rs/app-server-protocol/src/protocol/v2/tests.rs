@@ -3602,7 +3602,10 @@ fn turn_start_params_preserve_explicit_null_service_tier() {
         "serviceTier": null
     }))
     .expect("params should deserialize");
-    assert_eq!(params.service_tier, Some(None));
+    assert_eq!(
+        (params.service_tier.clone(), params.goal),
+        (Some(None), false)
+    );
 
     let serialized = serde_json::to_value(&params).expect("params should serialize");
     assert_eq!(
@@ -3614,6 +3617,7 @@ fn turn_start_params_preserve_explicit_null_service_tier() {
         thread_id: "thread_123".to_string(),
         client_user_message_id: None,
         input: vec![],
+        goal: false,
         responsesapi_client_metadata: None,
         additional_context: None,
         environments: None,
@@ -3633,7 +3637,13 @@ fn turn_start_params_preserve_explicit_null_service_tier() {
     };
     let serialized_without_override =
         serde_json::to_value(&without_override).expect("params should serialize");
-    assert_eq!(serialized_without_override.get("serviceTier"), None);
+    assert_eq!(
+        (
+            serialized_without_override.get("serviceTier"),
+            serialized_without_override.get("goal"),
+        ),
+        (None, None)
+    );
 }
 
 #[test]

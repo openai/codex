@@ -169,6 +169,53 @@ NESTED_TURN_NOTIFICATION_TYPES: tuple[type[BaseModel], ...] = (
     TurnStartedNotification,
 )
 
+DIRECT_THREAD_ID_NOTIFICATION_TYPES: tuple[type[BaseModel], ...] = (
+    AgentMessageDeltaNotification,
+    CommandExecutionOutputDeltaNotification,
+    ContextCompactedNotification,
+    ErrorNotification,
+    FileChangeOutputDeltaNotification,
+    FileChangePatchUpdatedNotification,
+    GuardianWarningNotification,
+    HookCompletedNotification,
+    HookStartedNotification,
+    ItemCompletedNotification,
+    ItemGuardianApprovalReviewCompletedNotification,
+    ItemGuardianApprovalReviewStartedNotification,
+    ItemStartedNotification,
+    McpToolCallProgressNotification,
+    ModelReroutedNotification,
+    ModelVerificationNotification,
+    PlanDeltaNotification,
+    ReasoningSummaryPartAddedNotification,
+    ReasoningSummaryTextDeltaNotification,
+    ReasoningTextDeltaNotification,
+    ServerRequestResolvedNotification,
+    TerminalInteractionNotification,
+    ThreadArchivedNotification,
+    ThreadClosedNotification,
+    ThreadGoalClearedNotification,
+    ThreadGoalUpdatedNotification,
+    ThreadNameUpdatedNotification,
+    ThreadRealtimeClosedNotification,
+    ThreadRealtimeErrorNotification,
+    ThreadRealtimeItemAddedNotification,
+    ThreadRealtimeOutputAudioDeltaNotification,
+    ThreadRealtimeSdpNotification,
+    ThreadRealtimeStartedNotification,
+    ThreadRealtimeTranscriptDeltaNotification,
+    ThreadRealtimeTranscriptDoneNotification,
+    ThreadSettingsUpdatedNotification,
+    ThreadStatusChangedNotification,
+    ThreadTokenUsageUpdatedNotification,
+    ThreadUnarchivedNotification,
+    TurnCompletedNotification,
+    TurnDiffUpdatedNotification,
+    TurnPlanUpdatedNotification,
+    TurnStartedNotification,
+    WarningNotification,
+)
+
 
 def notification_turn_id(payload: BaseModel) -> str | None:
     """Return the turn id carried by generated notification payload metadata."""
@@ -176,4 +223,11 @@ def notification_turn_id(payload: BaseModel) -> str | None:
         return payload.turn_id if isinstance(payload.turn_id, str) else None
     if isinstance(payload, NESTED_TURN_NOTIFICATION_TYPES):
         return payload.turn.id
+    return None
+
+
+def notification_thread_id(payload: BaseModel) -> str | None:
+    """Return the thread id carried by generated notification payload metadata."""
+    if isinstance(payload, DIRECT_THREAD_ID_NOTIFICATION_TYPES):
+        return payload.thread_id
     return None

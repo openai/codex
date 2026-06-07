@@ -150,16 +150,16 @@ attempt. API-key login completes synchronously and does not return a handle.
 
 ### Thread
 
-- `run(input: str | Input, *, approval_mode=None, cwd=None, effort=None, model=None, output_schema=None, personality=None, sandbox: Sandbox | None = None, service_tier=None, summary=None) -> TurnResult`
-- `turn(input: str | Input, *, approval_mode=None, cwd=None, effort=None, model=None, output_schema=None, personality=None, sandbox: Sandbox | None = None, service_tier=None, summary=None) -> TurnHandle`
+- `run(input: str | Input, *, goal: bool = False, approval_mode=None, cwd=None, effort=None, model=None, output_schema=None, personality=None, sandbox: Sandbox | None = None, service_tier=None, summary=None) -> TurnResult`
+- `turn(input: str | Input, *, goal: bool = False, approval_mode=None, cwd=None, effort=None, model=None, output_schema=None, personality=None, sandbox: Sandbox | None = None, service_tier=None, summary=None) -> TurnHandle`
 - `read(*, include_turns: bool = False) -> ThreadReadResponse`
 - `set_name(name: str) -> ThreadSetNameResponse`
 - `compact() -> ThreadCompactStartResponse`
 
 ### AsyncThread
 
-- `run(input: str | Input, *, approval_mode=None, cwd=None, effort=None, model=None, output_schema=None, personality=None, sandbox: Sandbox | None = None, service_tier=None, summary=None) -> Awaitable[TurnResult]`
-- `turn(input: str | Input, *, approval_mode=None, cwd=None, effort=None, model=None, output_schema=None, personality=None, sandbox: Sandbox | None = None, service_tier=None, summary=None) -> Awaitable[AsyncTurnHandle]`
+- `run(input: str | Input, *, goal: bool = False, approval_mode=None, cwd=None, effort=None, model=None, output_schema=None, personality=None, sandbox: Sandbox | None = None, service_tier=None, summary=None) -> Awaitable[TurnResult]`
+- `turn(input: str | Input, *, goal: bool = False, approval_mode=None, cwd=None, effort=None, model=None, output_schema=None, personality=None, sandbox: Sandbox | None = None, service_tier=None, summary=None) -> Awaitable[AsyncTurnHandle]`
 - `read(*, include_turns: bool = False) -> Awaitable[ThreadReadResponse]`
 - `set_name(name: str) -> Awaitable[ThreadSetNameResponse]`
 - `compact() -> Awaitable[ThreadCompactStartResponse]`
@@ -183,6 +183,10 @@ phase-less assistant message item.
 
 Use `turn(...)` when you need low-level turn control (`stream()`, `steer()`,
 `interrupt()`) before collecting the turn result.
+
+Pass `goal=True` to either method for an objective that can continue through
+multiple internal turns. Streaming, steering, interruption, and the returned
+`TurnResult` still present one logical turn with one stable ID.
 
 ## Sandbox
 
