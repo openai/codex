@@ -396,7 +396,7 @@ def fetch_sync_branch() -> None:
             "git",
             "fetch",
             "origin",
-            f"refs/heads/{SYNC_BRANCH}:refs/remotes/origin/{SYNC_BRANCH}",
+            f"+refs/heads/{SYNC_BRANCH}:refs/remotes/origin/{SYNC_BRANCH}",
         ]
     )
 
