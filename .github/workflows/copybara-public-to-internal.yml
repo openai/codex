@@ -11,7 +11,9 @@ on:
     branches:
       - main
   schedule:
-    - cron: "*/10 * * * *"
+    # Offset from common 10-minute boundaries because GitHub may delay or drop
+    # scheduled workflows during high-load periods.
+    - cron: "7,17,27,37,47,57 * * * *"
 
 permissions:
   contents: write
