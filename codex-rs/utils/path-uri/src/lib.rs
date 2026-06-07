@@ -255,9 +255,8 @@ impl<'de> Deserialize<'de> for PathUri {
             return Self::parse(&value).map_err(serde::de::Error::custom);
         }
 
-        let path = AbsolutePathBuf::deserialize(
-            serde::de::value::StringDeserializer::<D::Error>::new(value),
-        )?;
+        let path =
+            AbsolutePathBuf::from_absolute_path_checked(value).map_err(serde::de::Error::custom)?;
         Self::from_file_path(&path).map_err(serde::de::Error::custom)
     }
 }
@@ -297,7 +296,7 @@ impl JsonSchema for PathUri {
 
 /// Serde adapter for fields that still use the legacy native file-path wire format.
 ///
-/// Deserialization accepts either the legacy native path or a [`PathUri`].
+/// Deserialization accepts either an absolute legacy native path or a [`PathUri`].
 /// Serialization only accepts `file:` URIs and emits the current host's native
 /// path spelling. New URI-native fields should use [`PathUri`]'s own serde
 /// implementation instead.
@@ -450,9 +449,6 @@ fn validate_common_known_uri(url: &Url) -> Result<(), PathUriParseError> {
 
 fn validate_file_url(url: &Url) -> Result<(), PathUriParseError> {
     validate_common_known_uri(url)?;
-    if url.host_str().is_some_and(|host| host != "localhost") && !cfg!(windows) {
-        return Err(PathUriParseError::FileUriMustReferenceCurrentHost);
-    }
     if has_invalid_percent_encoding(url.path()) || contains_percent_encoded_slash(url.path()) {
         return Err(PathUriParseError::InvalidFileUriPath);
     }
@@ -562,8 +558,6 @@ pub enum PathUriParseError {
     UnsupportedScheme(String),
     #[error("path cannot be represented as a file URI")]
     PathCannotBeRepresentedAsFileUri,
-    #[error("file URI must reference the current host")]
-    FileUriMustReferenceCurrentHost,
     #[error("file URI contains an invalid absolute path")]
     InvalidFileUriPath,
     #[error("environment URI must not have an authority")]

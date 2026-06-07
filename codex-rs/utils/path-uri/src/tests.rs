@@ -137,12 +137,13 @@ fn file_uri_round_trips_windows_unc_paths() {
 
 #[test]
 fn file_uri_path_view_retains_unc_authority() {
-    let url = Url::parse("file://server/share/src/main.rs").expect("valid file URI");
+    let uri = PathUri::parse("file://server/share/src/main.rs").expect("valid file URI");
+    let PathUriView::File(view) = uri.view() else {
+        panic!("expected file view");
+    };
 
-    assert_eq!(
-        decode_file_uri_path(&url),
-        "//server/share/src/main.rs".to_string()
-    );
+    assert_eq!(view.path().as_str(), "//server/share/src/main.rs");
+    assert_eq!(uri.to_string(), "file://server/share/src/main.rs");
 }
 
 #[test]
@@ -151,6 +152,7 @@ fn file_uri_spelling_aliases_have_one_canonical_form() {
         "FILE:///workspace/src",
         "file:/workspace/src",
         "file://localhost/workspace/src",
+        "file://LOCALHOST/workspace/src",
     ] {
         let uri = PathUri::parse(input).expect("file URI alias should parse");
         assert_eq!(uri.to_string(), "file:///workspace/src", "parsing {input}");
@@ -247,23 +249,26 @@ fn path_uri_serializes_as_a_string() {
 
 #[test]
 fn path_uri_deserializes_legacy_absolute_paths() {
-    let uri: PathUri =
-        serde_json::from_str(r#""/workspace/src""#).expect("legacy absolute path should parse");
-
-    assert_eq!(uri.to_string(), "file:///workspace/src");
-}
-
-#[test]
-fn path_uri_deserializes_legacy_relative_paths_with_absolute_path_guard() {
-    let base = AbsolutePathBuf::current_dir().expect("current directory");
-    let _guard = AbsolutePathBufGuard::new(base.as_path());
-    let uri: PathUri =
-        serde_json::from_str(r#""src/lib.rs""#).expect("legacy relative path should parse");
+    let path = AbsolutePathBuf::current_dir()
+        .expect("current directory")
+        .join("workspace/src");
+    let json = serde_json::to_string(&path).expect("absolute path should serialize");
+    let uri: PathUri = serde_json::from_str(&json).expect("legacy absolute path should parse");
 
     assert_eq!(
         uri,
-        PathUri::from_file_path(&base.join("src/lib.rs")).expect("expected file URI")
+        PathUri::from_file_path(&path).expect("expected file URI")
     );
+}
+
+#[test]
+fn path_uri_rejects_legacy_relative_paths_with_absolute_path_guard() {
+    let base = AbsolutePathBuf::current_dir().expect("current directory");
+    let _guard = AbsolutePathBufGuard::new(base.as_path());
+    let error = serde_json::from_str::<PathUri>(r#""src/lib.rs""#)
+        .expect_err("legacy relative path should be rejected");
+
+    assert!(error.to_string().contains("path is not absolute"));
 }
 
 #[test]
@@ -314,30 +319,6 @@ fn unsupported_scheme_is_rejected_during_deserialization() {
         error
             .to_string()
             .contains("unsupported path URI scheme `artifact`")
-    );
-}
-
-#[test]
-fn file_uri_rejects_a_different_host() {
-    for input in [
-        "file://other-host/tmp/file.rs",
-        "file://127.0.0.1/tmp/file.rs",
-        "file://[::1]/tmp/file.rs",
-        "file://localhost./tmp/file.rs",
-    ] {
-        let error = PathUri::parse(input).expect_err("non-localhost authority should be rejected");
-
-        assert!(matches!(
-            error,
-            PathUriParseError::FileUriMustReferenceCurrentHost
-        ));
-    }
-
-    assert_eq!(
-        PathUri::parse("file://LOCALHOST/tmp/file.rs")
-            .expect("localhost authority should parse")
-            .to_string(),
-        "file:///tmp/file.rs"
     );
 }
 
