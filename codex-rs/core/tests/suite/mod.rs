@@ -115,6 +115,8 @@ mod tools;
 mod truncation;
 mod turn_state;
 mod unified_exec;
+#[cfg(unix)]
+mod unified_exec_zsh_fork_approvals;
 mod unstable_features_warning;
 mod user_notification;
 mod user_shell_cmd;
