@@ -289,6 +289,8 @@ async fn cold_resume_replays_rendered_instructions_but_reports_current_config_so
     Ok(())
 }
 
+// TODO(anp): Align fork instruction sources with the historical instructions replayed to the
+// model so the reported source list and model-visible context describe the same files.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fork_replays_rendered_instructions_from_shared_history() -> Result<()> {
     let server = responses::start_mock_server().await;
