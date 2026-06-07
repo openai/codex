@@ -564,8 +564,6 @@ impl App {
             /*inc*/ 1,
             &[("source", "slash_command")],
         );
-        self.refresh_in_memory_config_from_disk_best_effort("starting a side conversation")
-            .await;
 
         let request_id = Uuid::new_v4();
         self.pending_side_start = Some(PendingSideStart {
@@ -645,8 +643,35 @@ impl App {
                 );
                 // Known side threads take the selector's local replay path, so this does not wait
                 // for another app-server response on the TUI loop.
-                self.select_agent_thread(tui, app_server, child_thread_id)
-                    .await?;
+                if let Err(err) = self
+                    .select_agent_thread(tui, app_server, child_thread_id)
+                    .await
+                {
+                    let discarded = self.discard_side_thread(app_server, child_thread_id).await;
+                    if discarded
+                        && self.active_thread_id != Some(parent_thread_id)
+                        && let Err(restore_err) = self
+                            .select_agent_thread(tui, app_server, parent_thread_id)
+                            .await
+                    {
+                        tracing::warn!(
+                            "failed to restore parent thread after side switch failure: \
+                             {restore_err}"
+                        );
+                    } else if !discarded {
+                        self.keep_side_thread_visible_after_cleanup_failure(
+                            tui,
+                            app_server,
+                            child_thread_id,
+                        )
+                        .await;
+                    }
+                    self.restore_side_user_message(user_message.take());
+                    self.chat_widget.add_error_message(format!(
+                        "Failed to switch into side conversation {child_thread_id}: {err}"
+                    ));
+                    return Ok(());
+                }
                 if self.active_thread_id == Some(child_thread_id)
                     && let Some(user_message) = user_message.take()
                 {
