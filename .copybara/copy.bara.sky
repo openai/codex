@@ -14,8 +14,30 @@ INTERNAL_ONLY_MARKER_FILES = glob([
     "codex-rs/Cargo.toml",
 ])
 
-STRIP_INTERNAL_ONLY_MARKERS = core.transform(
+PROJECT_INTERNAL_ONLY_MARKERS_TO_PUBLIC = core.transform(
     [
+        core.replace(
+            before = "${internal}${public}${end}",
+            after = "${public}",
+            multiline = True,
+            regex_groups = {
+                "internal": "(?m)^.*copybara:replace-for-public begin.*\\n[\\w\\W]*?^.*copybara:replace-for-public with.*\\n",
+                "public": "(?m)(?:^[ \\t]*#[ \\t]*copybara:public(?:[ \\t].*)?\\n?)+",
+                "end": "(?m)^.*copybara:replace-for-public end.*\\n?",
+            },
+            paths = INTERNAL_ONLY_MARKER_FILES,
+        ),
+        core.replace(
+            before = "${indent}#${space}copybara:public${separator}${line}",
+            after = "${indent}${line}",
+            regex_groups = {
+                "indent": "[ \\t]*",
+                "space": "[ \\t]*",
+                "separator": "[ \\t]?",
+                "line": ".*",
+            },
+            paths = INTERNAL_ONLY_MARKER_FILES,
+        ),
         core.replace(
             before = "${block}",
             after = "",
@@ -33,6 +55,12 @@ STRIP_INTERNAL_ONLY_MARKERS = core.transform(
                 "line": "(?m)^.*copybara:strip-for-public.*\\n?",
             },
             paths = INTERNAL_ONLY_MARKER_FILES,
+        ),
+        core.verify_match(
+            "copybara:replace-for-public|copybara:public",
+            paths = INTERNAL_ONLY_MARKER_FILES,
+            verify_no_match = True,
+            failure_message = "Malformed copybara replacement marker remained after internal-to-public transforms.",
         ),
     ],
     reversal = [],
@@ -79,7 +107,7 @@ core.workflow(
     destination_files = PUBLIC_FILES,
     authoring = authoring.pass_thru(SYNC_AUTHOR),
     mode = "SQUASH",
-    transformations = [STRIP_INTERNAL_ONLY_MARKERS],
+    transformations = [PROJECT_INTERNAL_ONLY_MARKERS_TO_PUBLIC],
 )
 
 core.workflow(
@@ -90,5 +118,5 @@ core.workflow(
     destination_files = glob(["**"]),
     authoring = authoring.pass_thru(SYNC_AUTHOR),
     mode = "SQUASH",
-    transformations = [STRIP_INTERNAL_ONLY_MARKERS],
+    transformations = [PROJECT_INTERNAL_ONLY_MARKERS_TO_PUBLIC],
 )

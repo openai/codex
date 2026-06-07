@@ -88,6 +88,34 @@ dependency entries or other single-line edits in files listed in
 codex-internal-foo = { path = "internal-foo" } # copybara:strip-for-public
 ```
 
+When an internal crate replaces a public crate implementation, keep consuming
+crates on the public dependency name and centralize the projection difference in
+`[workspace.dependencies]`. The internal side should be live TOML. Store the
+public replacement as `# copybara:public` payload lines:
+
+```toml
+[workspace.dependencies]
+# copybara:replace-for-public begin
+codex-otel = { package = "codex-internal-otel", path = "internal-otel" }
+# copybara:replace-for-public with
+# copybara:public codex-otel = { path = "otel" }
+# copybara:replace-for-public end
+```
+
+The internal projection sees the `codex-internal-otel` package through the
+stable `codex-otel` dependency name. The public projection receives:
+
+```toml
+codex-otel = { path = "otel" }
+```
+
+Consumer crates should still depend on the workspace dependency by its stable
+public name:
+
+```toml
+codex-otel = { workspace = true }
+```
+
 For multi-line edits, use a marked block:
 
 ```toml
@@ -103,7 +131,10 @@ imports should preserve destination-only marked lines unless the public change
 edits the same hunk. If that happens, resolve the merge conflict by keeping the
 public change and reapplying the marked internal lines. If another shared file
 needs these markers, add that file to `INTERNAL_ONLY_MARKER_FILES` in
-`copy.bara.sky` so imports three-way merge it and exports strip the markers.
+`copy.bara.sky` so imports three-way merge it and exports strip or replace the
+markers. Replacement blocks currently expect TOML-style `# copybara:public`
+payload lines; add a file-specific transform before using replacement blocks in
+a language with different comment syntax.
 
 Do not use line markers in generated files. In particular, `codex-rs/Cargo.lock`
 is projection-sensitive once internal workspace crates add lockfile entries.
