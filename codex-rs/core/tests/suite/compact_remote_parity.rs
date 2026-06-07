@@ -1,6 +1,7 @@
 #![allow(clippy::expect_used)]
 
 use std::fs;
+use std::io::ErrorKind;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -18,6 +19,7 @@ use core_test_support::hooks::trust_discovered_hooks;
 use core_test_support::responses;
 use core_test_support::responses::ResponseMock;
 use core_test_support::skip_if_no_network;
+use core_test_support::test_codex::TestCodexBuilder;
 use core_test_support::test_codex::TestCodexHarness;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
@@ -108,6 +110,13 @@ struct Capture {
     compact_requests: usize,
 }
 
+#[derive(Debug)]
+struct PersistedResumeCapture {
+    compact_body: Value,
+    replacement_history: Value,
+    resumed_body: Value,
+}
+
 const ASSISTANT_ONLY: &[Step] = &[Step::Assistant];
 const REASONING_IMAGE: &[Step] = &[Step::ReasoningAssistant, Step::ImageAssistant];
 const TOOL_MIX: &[Step] = &[Step::Assistant, Step::FunctionTool, Step::ShellTool];
@@ -177,7 +186,12 @@ async fn remote_compaction_parity_v2_api_key_sends_service_tier_upgrade() -> Res
     );
 
     assert_compact_requests_eq_except_v2_service_tier("api-key service tier", &legacy, &v2);
-    assert_follow_up_and_history_eq("api-key service tier", &legacy, &v2);
+    assert_follow_up_and_history_eq(
+        "api-key service tier",
+        &legacy,
+        &v2,
+        /*replacement_instruction_messages*/ 0,
+    );
     Ok(())
 }
 
@@ -197,7 +211,12 @@ async fn remote_compaction_parity_pre_turn_auto() -> Result<()> {
 
     let legacy = run_pre_turn_auto_session(Mode::Legacy).await?;
     let v2 = run_pre_turn_auto_session(Mode::V2).await?;
-    assert_capture_eq("pre-turn auto", &legacy, &v2);
+    assert_capture_eq(
+        "pre-turn auto",
+        &legacy,
+        &v2,
+        /*replacement_instruction_messages*/ 0,
+    );
     Ok(())
 }
 
@@ -207,18 +226,75 @@ async fn remote_compaction_parity_mid_turn_auto() -> Result<()> {
 
     let legacy = run_mid_turn_auto_session(Mode::Legacy).await?;
     let v2 = run_mid_turn_auto_session(Mode::V2).await?;
-    assert_capture_eq("mid-turn auto", &legacy, &v2);
+    assert_capture_eq(
+        "mid-turn auto",
+        &legacy,
+        &v2,
+        /*replacement_instruction_messages*/ 1,
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_compaction_parity_persisted_history_cold_resume() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let legacy = run_persisted_history_resume(Mode::Legacy).await?;
+    let v2 = run_persisted_history_resume(Mode::V2).await?;
+
+    assert_single_user_instruction_message(
+        &legacy.compact_body,
+        "legacy compact request before cold resume",
+    );
+    assert_single_user_instruction_message(
+        &v2.compact_body,
+        "v2 compact request before cold resume",
+    );
+    assert_user_instruction_messages_in_items(
+        &legacy.replacement_history,
+        "legacy persisted replacement history",
+        /*expected_count*/ 0,
+    );
+    assert_user_instruction_messages_in_items(
+        &v2.replacement_history,
+        "v2 persisted replacement history",
+        /*expected_count*/ 0,
+    );
+    assert_single_user_instruction_message(&legacy.resumed_body, "legacy cold-resumed request");
+    assert_single_user_instruction_message(&v2.resumed_body, "v2 cold-resumed request");
+
+    assert_json_eq(
+        "cold-resume replacement history parity mismatch",
+        &legacy.replacement_history,
+        &v2.replacement_history,
+    );
+    assert_json_eq(
+        "cold-resume request parity mismatch",
+        &follow_up_request_view(&legacy.resumed_body),
+        &follow_up_request_view(&v2.resumed_body),
+    );
+
     Ok(())
 }
 
 async fn compare_manual_scenario(scenario: &Scenario, settings: RunSettings) -> Result<()> {
     let legacy = run_manual_session(scenario, Mode::Legacy, settings).await?;
     let v2 = run_manual_session(scenario, Mode::V2, settings).await?;
-    assert_capture_eq(scenario.name, &legacy, &v2);
+    assert_capture_eq(
+        scenario.name,
+        &legacy,
+        &v2,
+        /*replacement_instruction_messages*/ 0,
+    );
     Ok(())
 }
 
-fn assert_capture_eq(label: &str, legacy: &Capture, v2: &Capture) {
+fn assert_capture_eq(
+    label: &str,
+    legacy: &Capture,
+    v2: &Capture,
+    replacement_instruction_messages: usize,
+) {
     assert_eq!(
         legacy.compact_requests, 1,
         "legacy compact endpoint should be called exactly once for {label}",
@@ -234,6 +310,14 @@ fn assert_capture_eq(label: &str, legacy: &Capture, v2: &Capture) {
         &format!("compact request parity mismatch for {label}"),
         &legacy_compact,
         &v2_compact,
+    );
+    assert_single_user_instruction_message(
+        &legacy.compact_body,
+        &format!("legacy compact request for {label}"),
+    );
+    assert_single_user_instruction_message(
+        &v2.compact_body,
+        &format!("v2 compact request for {label}"),
     );
 
     let legacy_follow_up = follow_up_request_view(&legacy.follow_up_body);
@@ -256,6 +340,16 @@ fn assert_capture_eq(label: &str, legacy: &Capture, v2: &Capture) {
         &format!("replacement history parity mismatch for {label}"),
         &legacy.replacement_history,
         &v2.replacement_history,
+    );
+    assert_user_instruction_messages_in_items(
+        &legacy.replacement_history,
+        &format!("legacy replacement history for {label}"),
+        replacement_instruction_messages,
+    );
+    assert_user_instruction_messages_in_items(
+        &v2.replacement_history,
+        &format!("v2 replacement history for {label}"),
+        replacement_instruction_messages,
     );
 
     println!(
@@ -286,9 +380,22 @@ fn assert_compact_requests_eq_except_v2_service_tier(label: &str, legacy: &Captu
         &legacy_compact,
         &v2_compact,
     );
+    assert_single_user_instruction_message(
+        &legacy.compact_body,
+        &format!("legacy compact request for {label}"),
+    );
+    assert_single_user_instruction_message(
+        &v2.compact_body,
+        &format!("v2 compact request for {label}"),
+    );
 }
 
-fn assert_follow_up_and_history_eq(label: &str, legacy: &Capture, v2: &Capture) {
+fn assert_follow_up_and_history_eq(
+    label: &str,
+    legacy: &Capture,
+    v2: &Capture,
+    replacement_instruction_messages: usize,
+) {
     let legacy_follow_up = follow_up_request_view(&legacy.follow_up_body);
     let v2_follow_up = follow_up_request_view(&v2.follow_up_body);
     assert_json_eq(
@@ -309,6 +416,16 @@ fn assert_follow_up_and_history_eq(label: &str, legacy: &Capture, v2: &Capture) 
         &format!("replacement history parity mismatch for {label}"),
         &legacy.replacement_history,
         &v2.replacement_history,
+    );
+    assert_user_instruction_messages_in_items(
+        &legacy.replacement_history,
+        &format!("legacy replacement history for {label}"),
+        replacement_instruction_messages,
+    );
+    assert_user_instruction_messages_in_items(
+        &v2.replacement_history,
+        &format!("v2 replacement history for {label}"),
+        replacement_instruction_messages,
     );
 }
 
@@ -465,6 +582,92 @@ async fn run_mid_turn_auto_session(mode: Mode) -> Result<Capture> {
     .await
 }
 
+async fn run_persisted_history_resume(mode: Mode) -> Result<PersistedResumeCapture> {
+    let response_bodies = match mode {
+        Mode::Legacy => vec![
+            responses::sse(vec![
+                responses::ev_assistant_message(
+                    "persisted-history-first-message",
+                    "PERSISTED_HISTORY_FIRST_REPLY",
+                ),
+                responses::ev_completed("persisted-history-first-response"),
+            ]),
+            after_compact_response_body("persisted_history_resume"),
+        ],
+        Mode::V2 => vec![
+            responses::sse(vec![
+                responses::ev_assistant_message(
+                    "persisted-history-first-message",
+                    "PERSISTED_HISTORY_FIRST_REPLY",
+                ),
+                responses::ev_completed("persisted-history-first-response"),
+            ]),
+            compaction_v2_response_body(),
+            after_compact_response_body("persisted_history_resume"),
+        ],
+    };
+    let settings = RunSettings::default();
+    let harness = build_harness(mode, settings, /*hooks*/ false).await?;
+    let rollout_path = rollout_path(&harness);
+    let home = harness.test().home.clone();
+    let codex = harness.test().codex.clone();
+    let responses_mock = responses::mount_sse_sequence(harness.server(), response_bodies).await;
+    let compact_mock = mount_legacy_compact_if_needed(&harness, mode).await;
+
+    submit_user_input(
+        &codex,
+        vec![UserInput::Text {
+            text: "persisted history before compact".to_string(),
+            text_elements: Vec::new(),
+        }],
+    )
+    .await?;
+    codex.submit(Op::Compact).await?;
+    wait_for_turn_complete(&codex).await;
+    codex.submit(Op::Shutdown).await?;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::ShutdownComplete)).await;
+
+    let response_requests = responses_mock.requests();
+    let compact_body = match (mode, compact_mock.as_ref()) {
+        (Mode::Legacy, Some(compact_mock)) => compact_mock.single_request().body_json(),
+        (Mode::V2, None) => response_requests
+            .last()
+            .expect("v2 compact request should be present")
+            .body_json(),
+        (Mode::Legacy, None) | (Mode::V2, Some(_)) => panic!("unexpected compact mock state"),
+    };
+    let replacement_history = replacement_history_from_rollout(&rollout_path)?;
+
+    let mut resume_builder = parity_builder(mode, settings, /*hooks*/ false);
+    let resumed = resume_builder
+        .resume(harness.server(), home, rollout_path)
+        .await?;
+    submit_user_input(
+        &resumed.codex,
+        vec![UserInput::Text {
+            text: "persisted history after cold resume".to_string(),
+            text_elements: Vec::new(),
+        }],
+    )
+    .await?;
+    let resumed_body = responses_mock
+        .requests()
+        .last()
+        .expect("cold-resumed request should be present")
+        .body_json();
+    resumed.codex.submit(Op::Shutdown).await?;
+    wait_for_event(&resumed.codex, |ev| {
+        matches!(ev, EventMsg::ShutdownComplete)
+    })
+    .await;
+
+    Ok(PersistedResumeCapture {
+        compact_body,
+        replacement_history,
+        resumed_body,
+    })
+}
+
 async fn run_manual_hook_session(mode: Mode) -> Result<Value> {
     let response_bodies = match mode {
         Mode::Legacy => vec![responses::sse(vec![
@@ -528,12 +731,20 @@ async fn build_harness_inner(
     hooks: bool,
     auto_compact_limit: Option<i64>,
 ) -> Result<TestCodexHarness> {
-    fs::create_dir_all(FIXED_CWD)?;
+    prepare_fixed_cwd()?;
+    TestCodexHarness::with_builder(
+        parity_builder(mode, settings, hooks)
+            .with_config(move |config| config.model_auto_compact_token_limit = auto_compact_limit),
+    )
+    .await
+}
+
+fn parity_builder(mode: Mode, settings: RunSettings, hooks: bool) -> TestCodexBuilder {
     let mut builder = test_codex().with_auth(settings.auth.build());
     if hooks {
         builder = builder.with_pre_build_hook(write_manual_compact_hooks);
     }
-    TestCodexHarness::with_builder(builder.with_config(move |config| {
+    builder.with_config(move |config| {
         config.cwd = codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(PathBuf::from(
             FIXED_CWD,
         ))
@@ -543,15 +754,25 @@ async fn build_harness_inner(
         if settings.service_tier_fast {
             config.service_tier = Some(ServiceTier::Fast.request_value().to_string());
         }
-        config.model_auto_compact_token_limit = auto_compact_limit;
         if hooks {
             trust_discovered_hooks(config);
         }
         if mode == Mode::V2 {
             let _ = config.features.enable(Feature::RemoteCompactionV2);
         }
-    }))
-    .await
+    })
+}
+
+fn prepare_fixed_cwd() -> Result<()> {
+    fs::create_dir_all(FIXED_CWD)?;
+    for filename in ["AGENTS.md", "AGENTS.override.md"] {
+        match fs::remove_file(Path::new(FIXED_CWD).join(filename)) {
+            Ok(()) => {}
+            Err(err) if err.kind() == ErrorKind::NotFound => {}
+            Err(err) => return Err(err.into()),
+        }
+    }
+    Ok(())
 }
 
 fn rollout_path(harness: &TestCodexHarness) -> PathBuf {
@@ -795,9 +1016,24 @@ fn follow_up_request_view(body: &Value) -> Value {
 }
 
 fn assert_single_user_instruction_message(body: &Value, label: &str) {
-    let instruction_messages = body
+    let input = body
         .get("input")
         .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    assert_user_instruction_messages_in_items(
+        &Value::Array(input),
+        label,
+        /*expected_count*/ 1,
+    );
+}
+
+fn assert_user_instruction_messages_in_items(items: &Value, label: &str, expected_count: usize) {
+    let expected_text = format!(
+        "# AGENTS.md instructions for {FIXED_CWD}\n\n<INSTRUCTIONS>\n{USER_INSTRUCTIONS}\n</INSTRUCTIONS>"
+    );
+    let instruction_messages = items
+        .as_array()
         .into_iter()
         .flatten()
         .filter(|item| {
@@ -806,38 +1042,74 @@ fn assert_single_user_instruction_message(body: &Value, label: &str) {
         })
         .filter_map(|item| {
             let content = item.get("content").and_then(Value::as_array)?;
-            let instruction_content = content
+            content
                 .iter()
-                .filter(|span| {
+                .any(|span| {
                     span.get("type").and_then(Value::as_str) == Some("input_text")
                         && span
                             .get("text")
                             .and_then(Value::as_str)
                             .is_some_and(|text| text.starts_with("# AGENTS.md instructions for "))
                 })
-                .cloned()
-                .collect::<Vec<_>>();
-            (!instruction_content.is_empty()).then(|| {
-                json!({
-                    "role": item["role"].clone(),
-                    "instruction_content": instruction_content,
+                .then(|| {
+                    json!({
+                        "role": item["role"].clone(),
+                        "content": item["content"].clone(),
+                    })
                 })
-            })
         })
         .collect::<Vec<_>>();
-    let expected_text = format!(
-        "# AGENTS.md instructions for {FIXED_CWD}\n\n<INSTRUCTIONS>\n{USER_INSTRUCTIONS}\n</INSTRUCTIONS>"
+    if expected_count == 0 {
+        assert_eq!(
+            instruction_messages,
+            Vec::<Value>::new(),
+            "{label} should omit global-instruction messages"
+        );
+        return;
+    }
+    assert_eq!(
+        expected_count, 1,
+        "instruction assertion helper only supports exact counts of zero or one"
     );
+    let expected_content = instruction_messages
+        .first()
+        .and_then(|message| message.get("content"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|span| {
+            span.get("type").and_then(Value::as_str) == Some("input_text")
+                && span
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .is_some_and(|text| {
+                        text == expected_text
+                            || (text.starts_with("<environment_context>")
+                                && text.ends_with("</environment_context>"))
+                    })
+        })
+        .cloned()
+        .collect::<Vec<_>>();
     assert_eq!(
         instruction_messages,
         vec![json!({
             "role": "user",
-            "instruction_content": [{
-                "type": "input_text",
-                "text": expected_text,
-            }],
+            "content": expected_content,
         })],
-        "{label} should contain exactly one structured user-instruction message"
+        "{label} should contain exactly one dedicated contextual user-instruction message"
+    );
+    assert_eq!(
+        instruction_messages[0]["content"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|span| {
+                span.get("type").and_then(Value::as_str) == Some("input_text")
+                    && span.get("text").and_then(Value::as_str) == Some(expected_text.as_str())
+            })
+            .count(),
+        1,
+        "{label} should contain the exact instruction span once"
     );
 }
 
