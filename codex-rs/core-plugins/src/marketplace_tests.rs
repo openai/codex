@@ -65,6 +65,7 @@ fn find_marketplace_plugin_finds_repo_marketplace_plugin() {
             },
             interface: None,
             manifest: None,
+            keywords: Vec::new(),
         }
     );
 }
@@ -108,6 +109,7 @@ fn find_marketplace_plugin_supports_alternate_layout_and_string_local_source() {
             },
             interface: None,
             manifest: None,
+            keywords: Vec::new(),
         }
     );
 }
@@ -162,6 +164,7 @@ fn find_marketplace_plugin_supports_git_subdir_sources() {
             },
             interface: None,
             manifest: None,
+            keywords: Vec::new(),
         }
     );
 }
@@ -1071,6 +1074,9 @@ fn list_marketplaces_keeps_remote_and_local_plugin_sources() {
     },
     {
       "name": "url-plugin",
+      "displayName": "URL Plugin",
+      "description": "Install a plugin from another repository.",
+      "keywords": ["remote", "plugin"],
       "source": {
         "source": "url",
         "url": "https://github.com/example/plugin"
@@ -1130,8 +1136,25 @@ fn list_marketplaces_keeps_remote_and_local_plugin_sources() {
                     authentication: MarketplacePluginAuthPolicy::OnInstall,
                     products: None,
                 },
-                interface: None,
-                keywords: Vec::new(),
+                interface: Some(PluginManifestInterface {
+                    display_name: Some("URL Plugin".to_string()),
+                    short_description: Some(
+                        "Install a plugin from another repository.".to_string(),
+                    ),
+                    long_description: None,
+                    developer_name: None,
+                    category: None,
+                    capabilities: Vec::new(),
+                    website_url: None,
+                    privacy_policy_url: None,
+                    terms_of_service_url: None,
+                    default_prompt: None,
+                    brand_color: None,
+                    composer_icon: None,
+                    logo: None,
+                    screenshots: Vec::new(),
+                }),
+                keywords: vec!["remote".to_string(), "plugin".to_string()],
             },
             MarketplacePlugin {
                 name: "git-subdir-plugin".to_string(),

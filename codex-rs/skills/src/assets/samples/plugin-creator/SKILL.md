@@ -118,7 +118,8 @@ See `references/installing-and-updating.md` for the expected cachebuster and rei
 - In either location, the generated source path remains `./plugins/<plugin-name>`.
 - Marketplace root metadata supports top-level `name` plus optional `interface.displayName`.
 - Treat plugin order in `plugins[]` as render order in Codex. Append new entries unless a user explicitly asks to reorder the list.
-- `displayName` belongs inside the marketplace `interface` object, not individual `plugins[]` entries.
+- For local plugin entries, presentation metadata comes from the plugin's `.codex-plugin/plugin.json`.
+- For Git-source plugin entries, add plugin-entry `displayName`, `description`, and `keywords` when the plugin is not installed yet and Codex cannot read its plugin manifest.
 - Each generated marketplace entry must include all of:
   - `policy.installation`
   - `policy.authentication`

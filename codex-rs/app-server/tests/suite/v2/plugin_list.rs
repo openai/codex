@@ -1342,6 +1342,86 @@ async fn plugin_list_accepts_legacy_string_default_prompt() -> Result<()> {
 }
 
 #[tokio::test]
+async fn plugin_list_returns_git_source_marketplace_metadata_before_install() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let repo_root = TempDir::new()?;
+    std::fs::create_dir_all(repo_root.path().join(".git"))?;
+    std::fs::create_dir_all(repo_root.path().join(".agents/plugins"))?;
+    write_plugins_enabled_config(codex_home.path())?;
+    std::fs::write(
+        repo_root.path().join(".agents/plugins/marketplace.json"),
+        r#"{
+  "name": "debug",
+  "plugins": [
+    {
+      "name": "plans-md",
+      "displayName": "PLANS.md",
+      "description": "Make Codex get work done with durable plan files.",
+      "keywords": ["planning", "agents"],
+      "source": {
+        "source": "url",
+        "url": "AaronFriel/plans.md",
+        "ref": "main",
+        "sha": "abc123"
+      }
+    }
+  ]
+}"#,
+    )?;
+
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_plugin_list_request(PluginListParams {
+            cwds: Some(vec![AbsolutePathBuf::try_from(repo_root.path())?]),
+            marketplace_kinds: None,
+        })
+        .await?;
+
+    let response: JSONRPCResponse = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let response: PluginListResponse = to_response(response)?;
+
+    let plugin = response
+        .marketplaces
+        .iter()
+        .flat_map(|marketplace| marketplace.plugins.iter())
+        .find(|plugin| plugin.name == "plans-md")
+        .expect("expected plans-md entry");
+
+    assert_eq!(plugin.id, "plans-md@debug");
+    assert_eq!(plugin.installed, false);
+    assert_eq!(
+        plugin.source,
+        PluginSource::Git {
+            url: "https://github.com/AaronFriel/plans.md.git".to_string(),
+            path: None,
+            ref_name: Some("main".to_string()),
+            sha: Some("abc123".to_string()),
+        }
+    );
+    assert_eq!(
+        plugin.keywords,
+        vec!["planning".to_string(), "agents".to_string()]
+    );
+    assert_eq!(
+        plugin.interface.as_ref().map(|interface| (
+            interface.display_name.as_deref(),
+            interface.short_description.as_deref(),
+        )),
+        Some((
+            Some("PLANS.md"),
+            Some("Make Codex get work done with durable plan files."),
+        ))
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn plugin_list_returns_installed_git_source_interface_from_cache() -> Result<()> {
     let codex_home = TempDir::new()?;
     let repo_root = TempDir::new()?;
@@ -1359,6 +1439,9 @@ async fn plugin_list_returns_installed_git_source_interface_from_cache() -> Resu
   "plugins": [
     {{
       "name": "toolkit",
+      "displayName": "Marketplace Toolkit",
+      "description": "Marketplace fallback description",
+      "keywords": ["marketplace-keyword"],
       "source": {{
         "source": "git-subdir",
         "url": "{missing_remote_repo_url}",
@@ -1376,6 +1459,7 @@ async fn plugin_list_returns_installed_git_source_interface_from_cache() -> Resu
         cached_plugin_root.join(".codex-plugin/plugin.json"),
         r##"{
   "name": "toolkit",
+  "keywords": ["cache-keyword"],
   "interface": {
     "displayName": "Toolkit",
     "shortDescription": "Search cached data",
@@ -1423,6 +1507,7 @@ enabled = true
     assert_eq!(plugin.id, "toolkit@debug");
     assert_eq!(plugin.installed, true);
     assert_eq!(plugin.enabled, true);
+    assert_eq!(plugin.keywords, vec!["cache-keyword".to_string()]);
     assert_eq!(
         plugin.source,
         PluginSource::Git {

@@ -141,14 +141,20 @@ personal marketplace unless the caller explicitly requests a repo-local destinat
 ### Plugin entry fields
 
 - `name` (`string`): Plugin identifier. Match the plugin folder name and `plugin.json` `name`.
+- `displayName` (`string`, optional): User-facing title for Git-source entries before the plugin is installed.
+- `description` (`string`, optional): Short description for Git-source entries before the plugin is installed.
+- `keywords` (`array` of `string`, optional): Search/discovery tags for Git-source entries before the plugin is installed.
 - `source` (`object`): Plugin source descriptor.
-  - `source` (`string`): Use `local` for this repo workflow.
-  - `path` (`string`): Relative plugin path based on the marketplace root.
+  - `source` (`string`): Use `local` for plugins in this marketplace repo, `url` for a plugin in another Git repo, or `git-subdir` for a plugin in a subdirectory of another Git repo.
+  - `path` (`string`): Relative plugin path based on the marketplace root for local sources, or the plugin subdirectory for `git-subdir` sources.
     - Personal plugin in `~/.agents/plugins/marketplace.json`: `./plugins/<plugin-name>`
     - Repo/team plugin: `./plugins/<plugin-name>`
   - The same relative path convention is used for both personal and repo/team marketplaces.
     - Example: with `~/.agents/plugins/marketplace.json`, `./plugins/<plugin-name>` resolves to
       `~/plugins/<plugin-name>`.
+  - `url` (`string`): Git repository URL or GitHub `owner/repo` shorthand for `url` and `git-subdir` sources.
+  - `ref` (`string`, optional): Git ref to install from.
+  - `sha` (`string`, optional): Expected commit SHA for the source.
 - `policy` (`object`): Marketplace policy block. Always include it.
   - `installation` (`string`): Availability policy.
     - Allowed values: `NOT_AVAILABLE`, `AVAILABLE`, `INSTALLED_BY_DEFAULT`
@@ -161,7 +167,8 @@ personal marketplace unless the caller explicitly requests a repo-local destinat
 
 ### Marketplace generation rules
 
-- `displayName` belongs under the top-level `interface` object, not individual plugin entries.
+- `displayName` belongs under the top-level `interface` object for the marketplace title.
+- Git-source plugin entries may also include `displayName`, `description`, and `keywords` so Codex can render useful metadata before the plugin is installed.
 - When creating a new marketplace file from scratch, seed `interface.displayName` alongside top-level `name`.
 - Always include `policy.installation`, `policy.authentication`, and `category` on every generated or updated plugin entry.
 - Treat `policy.products` as an override and omit it unless explicitly requested.

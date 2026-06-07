@@ -983,6 +983,7 @@ impl PluginsManager {
                         let enabled = enabled_plugins.contains(&plugin_key);
                         let mut interface = plugin.interface;
                         let mut local_version = plugin.local_version;
+                        let mut keywords = plugin.keywords;
                         if installed
                             && matches!(&plugin.source, MarketplacePluginSource::Git { .. })
                             && let Some(plugin_id) = plugin_id.as_ref()
@@ -990,6 +991,7 @@ impl PluginsManager {
                             && let Some(manifest) = load_plugin_manifest(plugin_root.as_path())
                         {
                             local_version = manifest.version.clone();
+                            keywords = manifest.keywords;
                             let marketplace_category = interface
                                 .as_ref()
                                 .and_then(|interface| interface.category.clone());
@@ -1011,7 +1013,7 @@ impl PluginsManager {
                             local_version,
                             source: plugin.source,
                             policy: plugin.policy,
-                            keywords: plugin.keywords,
+                            keywords,
                             interface,
                         })
                     })

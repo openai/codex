@@ -28,6 +28,7 @@ pub struct ResolvedMarketplacePlugin {
     pub policy: MarketplacePluginPolicy,
     pub interface: Option<PluginManifestInterface>,
     pub manifest: Option<crate::manifest::PluginManifest>,
+    pub keywords: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -303,18 +304,13 @@ pub fn load_marketplace(path: &AbsolutePathBuf) -> Result<Marketplace, Marketpla
             .manifest
             .as_ref()
             .and_then(|manifest| manifest.version.clone());
-        let keywords = plugin
-            .manifest
-            .map(|manifest| manifest.keywords)
-            .unwrap_or_default();
-
         plugins.push(MarketplacePlugin {
             name: plugin.plugin_id.plugin_name,
             local_version,
             source: plugin.source,
             policy: plugin.policy,
             interface: plugin.interface,
-            keywords,
+            keywords: plugin.keywords,
         });
     }
 
@@ -412,8 +408,11 @@ fn resolve_marketplace_plugin_entry(
     let RawMarketplaceManifestPlugin {
         name,
         source,
+        display_name,
+        description,
         policy,
         category,
+        keywords,
     } = plugin;
     let Some(source) = resolve_supported_plugin_source(marketplace_path, &name, source) else {
         return Ok(None);
@@ -423,12 +422,18 @@ fn resolve_marketplace_plugin_entry(
         MarketplacePluginSource::Local { path } => load_plugin_manifest(path.as_path()),
         MarketplacePluginSource::Git { .. } => None,
     };
-    let interface = plugin_interface_with_marketplace_category(
+    let interface = plugin_interface_with_marketplace_metadata(
         manifest
             .as_ref()
             .and_then(|manifest| manifest.interface.clone()),
+        display_name,
+        description,
         category,
     );
+    let keywords = match manifest.as_ref() {
+        Some(manifest) if !manifest.keywords.is_empty() => manifest.keywords.clone(),
+        _ => keywords,
+    };
 
     Ok(Some(ResolvedMarketplacePlugin {
         plugin_id: PluginId::new(name, marketplace_name.to_string()).map_err(|err| match err {
@@ -442,6 +447,7 @@ fn resolve_marketplace_plugin_entry(
         },
         interface,
         manifest,
+        keywords,
     }))
 }
 
@@ -698,6 +704,27 @@ pub fn plugin_interface_with_marketplace_category(
     interface
 }
 
+fn plugin_interface_with_marketplace_metadata(
+    mut interface: Option<PluginManifestInterface>,
+    display_name: Option<String>,
+    description: Option<String>,
+    category: Option<String>,
+) -> Option<PluginManifestInterface> {
+    if let Some(display_name) = display_name {
+        let interface = interface.get_or_insert_with(PluginManifestInterface::default);
+        if interface.display_name.is_none() {
+            interface.display_name = Some(display_name);
+        }
+    }
+    if let Some(description) = description {
+        let interface = interface.get_or_insert_with(PluginManifestInterface::default);
+        if interface.short_description.is_none() {
+            interface.short_description = Some(description);
+        }
+    }
+    plugin_interface_with_marketplace_category(interface, category)
+}
+
 #[doc(hidden)]
 pub fn marketplace_root_dir(
     marketplace_path: &AbsolutePathBuf,
@@ -736,9 +763,15 @@ struct RawMarketplaceManifestPlugin {
     name: String,
     source: RawMarketplaceManifestPluginSource,
     #[serde(default)]
+    display_name: Option<String>,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
     policy: RawMarketplaceManifestPluginPolicy,
     #[serde(default)]
     category: Option<String>,
+    #[serde(default)]
+    keywords: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
