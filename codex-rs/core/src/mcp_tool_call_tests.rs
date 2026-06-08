@@ -1681,7 +1681,7 @@ fn guardian_mcp_review_request_includes_invocation_metadata() {
         Some("Navigate"),
         Some("Open a page"),
     );
-    metadata.connected_account_email = Some("owner@openai.com".to_string());
+    metadata.connected_account_email = Some("owner@example.com".to_string());
     let request = build_guardian_mcp_tool_review_request("call-1", &invocation, Some(&metadata));
 
     assert_eq!(
@@ -1696,7 +1696,7 @@ fn guardian_mcp_review_request_includes_invocation_metadata() {
             connector_id: Some("playwright".to_string()),
             connector_name: Some("Playwright".to_string()),
             connector_description: Some("Browser automation".to_string()),
-            connected_account_email: Some("owner@openai.com".to_string()),
+            connected_account_email: Some("owner@example.com".to_string()),
             tool_title: Some("Navigate".to_string()),
             tool_description: Some("Open a page".to_string()),
             annotations: None,
