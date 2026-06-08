@@ -3106,6 +3106,7 @@ dependencies = [
  "codex-protocol",
  "codex-tools",
  "codex-utils-absolute-path",
+ "codex-utils-image",
  "http 1.4.0",
  "pretty_assertions",
  "schemars 0.8.22",
