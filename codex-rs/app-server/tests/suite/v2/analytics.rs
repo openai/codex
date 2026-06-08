@@ -7,7 +7,6 @@ use codex_config::types::OtelExporterKind;
 use codex_config::types::OtelHttpProtocol;
 use codex_core::config::ConfigBuilder;
 use pretty_assertions::assert_eq;
-use serde::Deserialize;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::Path;
@@ -211,35 +210,52 @@ pub(crate) fn assert_basic_thread_initialized_event(
 }
 
 pub(crate) fn assert_thread_initialization_profile(event: &Value) {
-    let profile = parse_thread_initialization_profile(event);
+    let profile = &event["event_params"];
+    let value = |name: &str| {
+        profile[name]
+            .as_u64()
+            .unwrap_or_else(|| panic!("thread initialization profile should include {name}"))
+    };
     assert_eq!(
-        (profile.duration_ms, profile.core_duration_ms),
+        (value("duration_ms"), value("core_duration_ms")),
         (
-            profile
-                .app_server_duration_ms
-                .saturating_add(profile.core_duration_ms),
-            profile
-                .existing_thread_lookup_ms
-                .saturating_add(profile.configuration_resolution_ms)
-                .saturating_add(profile.session_dependency_loading_ms)
-                .saturating_add(profile.session_construction_ms)
-                .saturating_add(profile.mcp_startup_ms)
-                .saturating_add(profile.session_activation_ms)
-                .saturating_add(profile.thread_registration_ms),
+            value("app_server_duration_ms").saturating_add(value("core_duration_ms")),
+            value("existing_thread_lookup_ms")
+                .saturating_add(value("configuration_resolution_ms"))
+                .saturating_add(value("session_dependency_loading_ms"))
+                .saturating_add(value("session_construction_ms"))
+                .saturating_add(value("mcp_startup_ms"))
+                .saturating_add(value("session_activation_ms"))
+                .saturating_add(value("thread_registration_ms")),
         )
     );
 }
 
 pub(crate) fn assert_loaded_resume_thread_initialization_profile(event: &Value) {
-    let profile = parse_thread_initialization_profile(event);
-    let expected = CapturedThreadInitializationProfile {
-        duration_ms: profile.duration_ms,
-        app_server_duration_ms: profile.app_server_duration_ms,
-        core_duration_ms: profile.existing_thread_lookup_ms,
-        existing_thread_lookup_ms: profile.existing_thread_lookup_ms,
-        ..Default::default()
-    };
-    assert_eq!(profile, expected);
+    let profile = &event["event_params"];
+    let lookup_ms = profile["existing_thread_lookup_ms"]
+        .as_u64()
+        .expect("loaded resume should include existing thread lookup timing");
+    assert_eq!(
+        (
+            profile["core_duration_ms"].as_u64(),
+            profile["configuration_resolution_ms"].as_u64(),
+            profile["session_dependency_loading_ms"].as_u64(),
+            profile["session_construction_ms"].as_u64(),
+            profile["mcp_startup_ms"].as_u64(),
+            profile["session_activation_ms"].as_u64(),
+            profile["thread_registration_ms"].as_u64(),
+        ),
+        (
+            Some(lookup_ms),
+            Some(0),
+            Some(0),
+            Some(0),
+            Some(0),
+            Some(0),
+            Some(0)
+        )
+    );
 }
 
 pub(crate) async fn wait_for_thread_initialized_events(
@@ -269,29 +285,4 @@ pub(crate) async fn wait_for_thread_initialized_events(
         }
     })
     .await?
-}
-
-#[derive(Debug, Default, Deserialize, PartialEq, Eq)]
-struct CapturedThreadInitializationProfile {
-    duration_ms: u64,
-    app_server_duration_ms: u64,
-    core_duration_ms: u64,
-    existing_thread_lookup_ms: u64,
-    configuration_resolution_ms: u64,
-    session_dependency_loading_ms: u64,
-    session_construction_ms: u64,
-    mcp_startup_ms: u64,
-    session_activation_ms: u64,
-    thread_registration_ms: u64,
-    thread_persistence_ms: u64,
-    state_db_loading_ms: u64,
-    auth_and_mcp_discovery_ms: u64,
-    plugin_and_skill_warmup_ms: u64,
-}
-
-fn parse_thread_initialization_profile(event: &Value) -> CapturedThreadInitializationProfile {
-    match serde_json::from_value(event["event_params"].clone()) {
-        Ok(profile) => profile,
-        Err(error) => panic!("thread initialized event should include a complete profile: {error}"),
-    }
 }

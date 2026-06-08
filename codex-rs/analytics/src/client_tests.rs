@@ -20,9 +20,7 @@ use codex_app_server_protocol::ThreadArchiveParams;
 use codex_app_server_protocol::ThreadArchiveResponse;
 use codex_app_server_protocol::ThreadForkResponse;
 use codex_app_server_protocol::ThreadResumeResponse;
-use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
-use codex_app_server_protocol::ThreadStartSource;
 use codex_app_server_protocol::ThreadStatus as AppServerThreadStatus;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnStartParams;
@@ -93,16 +91,6 @@ fn sample_turn_start_request() -> ClientRequest {
             thread_id: "thread-1".to_string(),
             client_user_message_id: None,
             input: Vec::new(),
-            ..Default::default()
-        },
-    }
-}
-
-fn sample_thread_start_request() -> ClientRequest {
-    ClientRequest::ThreadStart {
-        request_id: RequestId::Integer(0),
-        params: ThreadStartParams {
-            session_start_source: Some(ThreadStartSource::Clear),
             ..Default::default()
         },
     }
@@ -234,7 +222,6 @@ fn track_request_only_enqueues_analytics_relevant_requests() {
     let (client, mut receiver) = client_with_receiver();
 
     for (request_id, request) in [
-        (RequestId::Integer(0), sample_thread_start_request()),
         (RequestId::Integer(1), sample_turn_start_request()),
         (RequestId::Integer(2), sample_turn_steer_request()),
     ] {
@@ -265,10 +252,7 @@ fn track_response_only_enqueues_analytics_relevant_responses() {
         (RequestId::Integer(4), sample_turn_start_response()),
         (RequestId::Integer(5), sample_turn_steer_response()),
     ] {
-        client.track_response(
-            /*connection_id*/ 7, request_id, response,
-            /*thread_initialization_profile*/ None,
-        );
+        client.track_response(/*connection_id*/ 7, request_id, response);
         assert!(matches!(
             receiver.try_recv(),
             Ok(AnalyticsFact::ClientResponse { .. })
@@ -279,7 +263,6 @@ fn track_response_only_enqueues_analytics_relevant_responses() {
         /*connection_id*/ 7,
         RequestId::Integer(6),
         ClientResponsePayload::ThreadArchive(ThreadArchiveResponse {}),
-        /*thread_initialization_profile*/ None,
     );
     assert!(matches!(receiver.try_recv(), Err(TryRecvError::Empty)));
 }

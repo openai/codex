@@ -36,6 +36,7 @@ pub use facts::InputError;
 pub use facts::InvocationType;
 pub use facts::SkillInvocation;
 pub use facts::SubAgentThreadStartedInput;
+pub use facts::ThreadInitializationFact;
 pub use facts::ThreadInitializationMode;
 pub use facts::ThreadInitializationProfile;
 pub use facts::TrackEventsContext;

@@ -36,8 +36,6 @@ use crate::realtime_conversation::RealtimeConversationManager;
 use crate::session_prefix::format_subagent_notification_message;
 use crate::skills::SkillRenderSideEffects;
 use crate::skills_load_input_from_config;
-use crate::thread_initialization_timing::ThreadInitializationPhase;
-use crate::thread_initialization_timing::ThreadInitializationTiming;
 use crate::turn_metadata::TurnMetadataState;
 use crate::turn_timing::now_unix_timestamp_ms;
 use async_channel::Receiver;
@@ -423,7 +421,6 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) thread_store: Arc<dyn ThreadStore>,
     pub(crate) attestation_provider: Option<Arc<dyn AttestationProvider>>,
     pub(crate) inherited_multi_agent_version: Option<MultiAgentVersion>,
-    pub(crate) thread_initialization_timing: ThreadInitializationTiming,
 }
 
 pub(crate) fn resolve_multi_agent_version(
@@ -504,7 +501,6 @@ impl Codex {
             thread_store,
             attestation_provider,
             inherited_multi_agent_version,
-            thread_initialization_timing,
         } = args;
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
@@ -650,14 +646,12 @@ impl Codex {
             parent_rollout_thread_trace,
             attestation_provider,
             multi_agent_version,
-            thread_initialization_timing.clone(),
         ))
         .await
         .map_err(|e| {
             error!("Failed to create session: {e:#}");
             map_session_init_error(&e, &config.codex_home)
         })?;
-        thread_initialization_timing.transition_to(ThreadInitializationPhase::ThreadRegistration);
         let thread_id = session.thread_id;
 
         // This task will run until Op::Shutdown is received.

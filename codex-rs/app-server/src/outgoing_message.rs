@@ -2,12 +2,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
-use std::time::Instant;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
 use codex_analytics::AnalyticsEventsClient;
-use codex_analytics::ThreadInitializationProfile;
 use codex_app_server_protocol::ClientResponsePayload;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::RequestId;
@@ -16,6 +14,7 @@ use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ServerRequestPayload;
 use codex_app_server_protocol::ServerResponse;
+use codex_core::ThreadInitializationTiming;
 use codex_otel::span_w3c_trace_context;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::W3cTraceContext;
@@ -54,7 +53,7 @@ pub(crate) struct RequestContext {
     request_id: ConnectionRequestId,
     span: Span,
     parent_trace: Option<W3cTraceContext>,
-    started_at: Instant,
+    thread_initialization_timing: ThreadInitializationTiming,
 }
 
 impl RequestContext {
@@ -62,13 +61,12 @@ impl RequestContext {
         request_id: ConnectionRequestId,
         span: Span,
         parent_trace: Option<W3cTraceContext>,
-        started_at: Instant,
     ) -> Self {
         Self {
             request_id,
             span,
             parent_trace,
-            started_at,
+            thread_initialization_timing: ThreadInitializationTiming::begin_request(),
         }
     }
 
@@ -80,18 +78,12 @@ impl RequestContext {
         self.span.clone()
     }
 
-    fn record_turn_id(&self, turn_id: &str) {
-        self.span.record("turn.id", turn_id);
+    pub(crate) fn thread_initialization_timing(&self) -> ThreadInitializationTiming {
+        self.thread_initialization_timing.clone()
     }
 
-    fn complete_thread_initialization_profile(
-        &self,
-        mut profile: ThreadInitializationProfile,
-    ) -> ThreadInitializationProfile {
-        profile.duration_ms = duration_to_u64_ms(self.started_at.elapsed());
-        profile.app_server_duration_ms =
-            profile.duration_ms.saturating_sub(profile.core_duration_ms);
-        profile
+    fn record_turn_id(&self, turn_id: &str) {
+        self.span.record("turn.id", turn_id);
     }
 }
 
@@ -519,27 +511,13 @@ impl OutgoingMessageSender {
     where
         T: Into<ClientResponsePayload>,
     {
-        self.send_response_as(request_id, response.into(), None)
-            .await;
-    }
-
-    pub(crate) async fn send_response_with_thread_initialization_profile<T>(
-        &self,
-        request_id: ConnectionRequestId,
-        response: T,
-        profile: ThreadInitializationProfile,
-    ) where
-        T: Into<ClientResponsePayload>,
-    {
-        self.send_response_as(request_id, response.into(), Some(profile))
-            .await;
+        self.send_response_as(request_id, response.into()).await;
     }
 
     pub(crate) async fn send_response_as(
         &self,
         request_id: ConnectionRequestId,
         response: ClientResponsePayload,
-        thread_initialization_profile: Option<ThreadInitializationProfile>,
     ) {
         let connection_id = request_id.connection_id;
         let request_id_for_analytics = request_id.request_id.clone();
@@ -548,17 +526,20 @@ impl OutgoingMessageSender {
             .into_jsonrpc_parts_and_payload(request_id.request_id.clone())
             .map(|(id, result, response)| {
                 if let Some(response) = response {
-                    let thread_initialization_profile =
-                        thread_initialization_profile.and_then(|profile| {
-                            request_context.as_ref().map(|request_context| {
-                                request_context.complete_thread_initialization_profile(profile)
-                            })
-                        });
+                    if let Some(thread_initialization) = request_context
+                        .as_ref()
+                        .and_then(|context| context.thread_initialization_timing.complete_request())
+                    {
+                        self.analytics_events_client.track_thread_initialization(
+                            connection_id.0,
+                            request_id_for_analytics.clone(),
+                            thread_initialization,
+                        );
+                    }
                     self.analytics_events_client.track_response(
                         connection_id.0,
                         request_id_for_analytics,
                         response,
-                        thread_initialization_profile,
                     );
                 }
                 (id, result)
@@ -726,10 +707,6 @@ fn now_unix_timestamp_ms() -> u64 {
         .as_millis()
         .try_into()
         .unwrap_or_default()
-}
-
-fn duration_to_u64_ms(duration: std::time::Duration) -> u64 {
-    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
 #[cfg(test)]
@@ -1104,7 +1081,6 @@ mod tests {
                 request_id.clone(),
                 tracing::info_span!("app_server.request", rpc.method = "thread/start"),
                 /*parent_trace*/ None,
-                Instant::now(),
             ))
             .await;
         assert_eq!(outgoing.request_context_count().await, 1);
@@ -1220,7 +1196,6 @@ mod tests {
                 closed_connection_request,
                 tracing::info_span!("app_server.request", rpc.method = "turn/interrupt"),
                 /*parent_trace*/ None,
-                Instant::now(),
             ))
             .await;
         outgoing
@@ -1228,7 +1203,6 @@ mod tests {
                 open_connection_request,
                 tracing::info_span!("app_server.request", rpc.method = "turn/start"),
                 /*parent_trace*/ None,
-                Instant::now(),
             ))
             .await;
         assert_eq!(outgoing.request_context_count().await, 2);

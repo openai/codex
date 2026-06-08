@@ -149,7 +149,6 @@ impl ConfigRequestProcessor {
             .send_response_as(
                 request_id,
                 ClientResponsePayload::ExperimentalFeatureEnablementSet(response),
-                None,
             )
             .await;
         Ok(None)

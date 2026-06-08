@@ -101,7 +101,6 @@ use wiremock::matchers::path;
 
 use super::analytics::assert_basic_thread_initialized_event;
 use super::analytics::assert_loaded_resume_thread_initialization_profile;
-use super::analytics::assert_thread_initialization_profile;
 use super::analytics::mount_analytics_capture;
 use super::analytics::thread_initialized_event;
 use super::analytics::wait_for_analytics_payload;
@@ -151,7 +150,8 @@ async fn wait_for_responses_request_count(
 async fn thread_resume_rejects_unmaterialized_thread() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path(), &server.uri())?;
+    create_config_toml_with_chatgpt_base_url(codex_home.path(), &server.uri(), &server.uri())?;
+    mount_analytics_capture(&server, codex_home.path()).await?;
 
     let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
@@ -471,8 +471,7 @@ async fn thread_resume_tracks_thread_initialized_analytics() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
 
     let codex_home = TempDir::new()?;
-    create_config_toml_with_chatgpt_base_url(codex_home.path(), &server.uri(), &server.uri())?;
-    mount_analytics_capture(&server, codex_home.path()).await?;
+    create_config_toml(codex_home.path(), &server.uri())?;
 
     let conversation_id = create_fake_rollout(
         codex_home.path(),
@@ -3408,13 +3407,11 @@ async fn thread_resume_can_load_source_by_external_path() -> Result<()> {
 async fn thread_resume_supports_history_and_overrides() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;
-    create_config_toml_with_chatgpt_base_url(codex_home.path(), &server.uri(), &server.uri())?;
-    mount_analytics_capture(&server, codex_home.path()).await?;
+    create_config_toml(codex_home.path(), &server.uri())?;
 
     let RestartedThreadFixture {
         mut mcp, thread_id, ..
     } = start_materialized_thread_and_restart(codex_home.path(), "seed history").await?;
-    wait_for_thread_initialized_events(&server, DEFAULT_READ_TIMEOUT, 1).await?;
 
     let history_text = "Hello from history";
     let history = vec![ResponseItem::Message {
@@ -3450,13 +3447,6 @@ async fn thread_resume_supports_history_and_overrides() -> Result<()> {
     assert_eq!(model_provider, "mock_provider");
     assert_eq!(resumed.preview, history_text);
     assert_eq!(resumed.status, ThreadStatus::Idle);
-
-    let events = wait_for_thread_initialized_events(&server, DEFAULT_READ_TIMEOUT, 2).await?;
-    let event = events
-        .last()
-        .expect("history resume should emit a thread initialized event");
-    assert_eq!(event["event_params"]["initialization_mode"], "resumed");
-    assert_thread_initialization_profile(event);
 
     Ok(())
 }

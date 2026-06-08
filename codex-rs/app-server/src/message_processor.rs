@@ -3,7 +3,6 @@ use std::future::Future;
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::sync::atomic::AtomicBool;
-use std::time::Instant;
 
 use crate::attestation::app_server_attestation_provider;
 use crate::config_manager::ConfigManager;
@@ -533,7 +532,6 @@ impl MessageProcessor {
         transport: &AppServerTransport,
         session: Arc<ConnectionSessionState>,
     ) {
-        let request_started_at = Instant::now();
         let request_method = request.method.as_str();
         tracing::trace!(
             ?connection_id,
@@ -550,12 +548,7 @@ impl MessageProcessor {
             traceparent: trace.traceparent.clone(),
             tracestate: trace.tracestate.clone(),
         });
-        let request_context = RequestContext::new(
-            request_id.clone(),
-            request_span,
-            request_trace,
-            request_started_at,
-        );
+        let request_context = RequestContext::new(request_id.clone(), request_span, request_trace);
         Self::run_request_with_context(
             Arc::clone(&self.outgoing),
             request_context.clone(),
@@ -602,19 +595,14 @@ impl MessageProcessor {
         session: Arc<ConnectionSessionState>,
         outbound_initialized: &AtomicBool,
     ) {
-        let request_started_at = Instant::now();
         let request_id = ConnectionRequestId {
             connection_id,
             request_id: request.id().clone(),
         };
         let request_span =
             crate::app_server_tracing::typed_request_span(&request, connection_id, &session);
-        let request_context = RequestContext::new(
-            request_id.clone(),
-            request_span,
-            /*parent_trace*/ None,
-            request_started_at,
-        );
+        let request_context =
+            RequestContext::new(request_id.clone(), request_span, /*parent_trace*/ None);
         tracing::trace!(
             ?connection_id,
             request_id = ?request_id.request_id,
@@ -667,7 +655,10 @@ impl MessageProcessor {
         outgoing
             .register_request_context(request_context.clone())
             .await;
-        request_fut.instrument(request_context.span()).await;
+        request_context
+            .thread_initialization_timing()
+            .scope(request_fut.instrument(request_context.span()))
+            .await;
     }
 
     pub(crate) fn thread_created_receiver(&self) -> broadcast::Receiver<ThreadId> {
@@ -1396,7 +1387,7 @@ impl MessageProcessor {
         match result {
             Ok(Some(response)) => {
                 self.outgoing
-                    .send_response_as(request_id.clone(), response, None)
+                    .send_response_as(request_id.clone(), response)
                     .await;
             }
             Ok(None) => {}

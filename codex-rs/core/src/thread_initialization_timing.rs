@@ -1,12 +1,16 @@
+use std::future::Future;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::MutexGuard;
+use std::sync::PoisonError;
 use std::time::Duration;
 use std::time::Instant;
 
+use codex_analytics::ThreadInitializationFact;
+use codex_analytics::ThreadInitializationMode;
 use codex_analytics::ThreadInitializationProfile;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[repr(usize)]
 pub(crate) enum ThreadInitializationPhase {
     ExistingThreadLookup,
     ConfigurationResolution,
@@ -18,7 +22,6 @@ pub(crate) enum ThreadInitializationPhase {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[repr(usize)]
 pub(crate) enum SessionDependencyBranch {
     ThreadPersistence,
     StateDbLoading,
@@ -26,23 +29,22 @@ pub(crate) enum SessionDependencyBranch {
     PluginAndSkillWarmup,
 }
 
-const PHASE_COUNT: usize = 7;
-const DEPENDENCY_BRANCH_COUNT: usize = 4;
-
-/// Monotonic timing state for a thread initialization operation.
-#[derive(Clone, Debug)]
-pub struct ThreadInitializationTiming {
-    state: Arc<Mutex<ThreadInitializationTimingState>>,
+tokio::task_local! {
+    static ACTIVE_THREAD_INITIALIZATION_TIMING: ThreadInitializationTiming;
 }
+
+/// Request-scoped monotonic timing for app-server thread initialization.
+#[derive(Clone, Debug)]
+pub struct ThreadInitializationTiming(Arc<Mutex<ThreadInitializationTimingState>>);
 
 #[derive(Debug)]
 struct ThreadInitializationTimingState {
-    started_at: Instant,
-    last_transition_at: Instant,
-    active_phase: ThreadInitializationPhase,
-    phase_durations: [Duration; PHASE_COUNT],
-    dependency_branch_durations: [Duration; DEPENDENCY_BRANCH_COUNT],
-    completed_profile: Option<ThreadInitializationProfile>,
+    request_started_at: Instant,
+    last_transition_at: Option<Instant>,
+    active_phase: Option<ThreadInitializationPhase>,
+    initialization_mode: Option<ThreadInitializationMode>,
+    profile: ThreadInitializationProfile,
+    core_complete: bool,
 }
 
 #[must_use]
@@ -53,87 +55,152 @@ pub(crate) struct SessionDependencyTimingGuard {
 }
 
 impl ThreadInitializationTiming {
-    /// Starts timing in the existing-thread lookup phase at the current monotonic instant.
-    pub fn start() -> Self {
-        Self::start_at(Instant::now())
+    pub fn begin_request() -> Self {
+        Self::new_at(Instant::now())
     }
 
-    pub(crate) fn start_configuration_resolution() -> Self {
-        let timing = Self::start();
-        timing.transition_to(ThreadInitializationPhase::ConfigurationResolution);
-        timing
+    pub async fn scope<F>(&self, future: F) -> F::Output
+    where
+        F: Future,
+    {
+        ACTIVE_THREAD_INITIALIZATION_TIMING
+            .scope(self.clone(), future)
+            .await
     }
 
-    /// Completes a lookup-only initialization, such as resuming an already loaded thread.
-    pub fn complete_existing_thread_lookup(&self) -> ThreadInitializationProfile {
-        self.complete_at(Instant::now())
+    pub fn start_loaded_resume() {
+        Self::start_current(
+            ThreadInitializationMode::Resumed,
+            ThreadInitializationPhase::ExistingThreadLookup,
+        );
     }
 
-    pub(crate) fn transition_to(&self, phase: ThreadInitializationPhase) {
-        self.transition_at(Instant::now(), phase);
+    pub fn start_cold_resume_configuration() {
+        Self::transition_to(ThreadInitializationPhase::ConfigurationResolution);
+    }
+
+    pub fn complete_core() {
+        Self::with_current(|timing| timing.complete_core_at(Instant::now()));
+    }
+
+    pub fn complete_request(&self) -> Option<ThreadInitializationFact> {
+        self.complete_request_at(Instant::now())
+    }
+
+    pub(crate) fn start_configuration_resolution(mode: ThreadInitializationMode) {
+        Self::start_current(mode, ThreadInitializationPhase::ConfigurationResolution);
+    }
+
+    pub(crate) fn start_existing_thread_lookup() {
+        Self::start_current(
+            ThreadInitializationMode::Resumed,
+            ThreadInitializationPhase::ExistingThreadLookup,
+        );
+    }
+
+    pub(crate) fn transition_to(phase: ThreadInitializationPhase) {
+        Self::with_current(|timing| timing.transition_at(Instant::now(), phase));
     }
 
     pub(crate) fn begin_session_dependency(
-        &self,
         branch: SessionDependencyBranch,
-    ) -> SessionDependencyTimingGuard {
-        SessionDependencyTimingGuard {
-            timing: self.clone(),
-            branch,
-            started_at: Instant::now(),
-        }
+    ) -> Option<SessionDependencyTimingGuard> {
+        ACTIVE_THREAD_INITIALIZATION_TIMING
+            .try_with(|timing| SessionDependencyTimingGuard {
+                timing: timing.clone(),
+                branch,
+                started_at: Instant::now(),
+            })
+            .ok()
     }
 
-    pub(crate) fn complete(&self) -> ThreadInitializationProfile {
-        self.complete_at(Instant::now())
+    fn start_current(mode: ThreadInitializationMode, phase: ThreadInitializationPhase) {
+        Self::with_current(|timing| timing.start_core_at(Instant::now(), mode, phase));
     }
 
-    fn start_at(started_at: Instant) -> Self {
-        Self {
-            state: Arc::new(Mutex::new(ThreadInitializationTimingState {
-                started_at,
-                last_transition_at: started_at,
-                active_phase: ThreadInitializationPhase::ExistingThreadLookup,
-                phase_durations: [Duration::ZERO; PHASE_COUNT],
-                dependency_branch_durations: [Duration::ZERO; DEPENDENCY_BRANCH_COUNT],
-                completed_profile: None,
-            })),
+    fn with_current(f: impl FnOnce(&Self)) {
+        let _ = ACTIVE_THREAD_INITIALIZATION_TIMING.try_with(f);
+    }
+
+    fn new_at(request_started_at: Instant) -> Self {
+        Self(Arc::new(Mutex::new(ThreadInitializationTimingState {
+            request_started_at,
+            last_transition_at: None,
+            active_phase: None,
+            initialization_mode: None,
+            profile: ThreadInitializationProfile::default(),
+            core_complete: false,
+        })))
+    }
+
+    fn start_core_at(
+        &self,
+        now: Instant,
+        mode: ThreadInitializationMode,
+        phase: ThreadInitializationPhase,
+    ) {
+        let mut state = self.state();
+        if state.last_transition_at.is_some() || state.core_complete {
+            return;
         }
+        state.last_transition_at = Some(now);
+        state.active_phase = Some(phase);
+        state.initialization_mode = Some(mode);
     }
 
     fn transition_at(&self, now: Instant, phase: ThreadInitializationPhase) {
         let mut state = self.state();
-        if state.completed_profile.is_some() {
+        if state.core_complete || state.last_transition_at.is_none() {
             return;
         }
         state.advance(now);
-        state.active_phase = phase;
+        state.active_phase = Some(phase);
     }
 
-    fn record_session_dependency(&self, branch: SessionDependencyBranch, duration: Duration) {
+    fn complete_core_at(&self, now: Instant) {
         let mut state = self.state();
-        if state.completed_profile.is_some() {
+        if state.core_complete || state.last_transition_at.is_none() {
             return;
         }
-        let branch_duration = &mut state.dependency_branch_durations[branch as usize];
-        *branch_duration = branch_duration.saturating_add(duration);
+        state.advance(now);
+        state.profile.core_duration_ms = core_duration_ms(&state.profile);
+        state.active_phase = None;
+        state.core_complete = true;
     }
 
-    fn complete_at(&self, now: Instant) -> ThreadInitializationProfile {
+    fn complete_request_at(&self, now: Instant) -> Option<ThreadInitializationFact> {
+        let state = self.state();
+        if !state.core_complete {
+            return None;
+        }
+        let mut profile = state.profile;
+        profile.duration_ms =
+            duration_to_u64_ms(now.saturating_duration_since(state.request_started_at));
+        profile.app_server_duration_ms =
+            profile.duration_ms.saturating_sub(profile.core_duration_ms);
+        Some(ThreadInitializationFact {
+            initialization_mode: state.initialization_mode?,
+            profile,
+        })
+    }
+
+    fn record_dependency(&self, branch: SessionDependencyBranch, duration: Duration) {
         let mut state = self.state();
-        state.complete(now)
+        if state.core_complete || state.last_transition_at.is_none() {
+            return;
+        }
+        let duration_ms = duration_to_u64_ms(duration);
+        *dependency_duration_mut(&mut state.profile, branch) = duration_ms;
     }
 
-    fn state(&self) -> std::sync::MutexGuard<'_, ThreadInitializationTimingState> {
-        self.state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    fn state(&self) -> MutexGuard<'_, ThreadInitializationTimingState> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
 
 impl Drop for SessionDependencyTimingGuard {
     fn drop(&mut self) {
-        self.timing.record_session_dependency(
+        self.timing.record_dependency(
             self.branch,
             Instant::now().saturating_duration_since(self.started_at),
         );
@@ -142,73 +209,57 @@ impl Drop for SessionDependencyTimingGuard {
 
 impl ThreadInitializationTimingState {
     fn advance(&mut self, now: Instant) {
-        let elapsed = now.saturating_duration_since(self.last_transition_at);
-        self.last_transition_at = now;
-        let phase_duration = &mut self.phase_durations[self.active_phase as usize];
-        *phase_duration = phase_duration.saturating_add(elapsed);
-    }
-
-    fn complete(&mut self, now: Instant) -> ThreadInitializationProfile {
-        if let Some(profile) = self.completed_profile.as_ref() {
-            return *profile;
-        }
-
-        self.advance(now);
-        let mut phase_durations_ms = self.phase_durations.map(duration_to_u64_ms);
-        let elapsed_ms = duration_to_u64_ms(now.saturating_duration_since(self.started_at));
-        let classified_ms = phase_durations_ms
-            .iter()
-            .copied()
-            .fold(0_u64, u64::saturating_add);
-        let active_phase_ms = &mut phase_durations_ms[self.active_phase as usize];
-        *active_phase_ms = active_phase_ms.saturating_add(elapsed_ms.saturating_sub(classified_ms));
-        let dependency_branch_durations_ms =
-            self.dependency_branch_durations.map(duration_to_u64_ms);
-        let profile = profile_from_durations(phase_durations_ms, dependency_branch_durations_ms);
-        self.completed_profile = Some(profile);
-        profile
+        let (Some(previous), Some(phase)) =
+            (self.last_transition_at.replace(now), self.active_phase)
+        else {
+            return;
+        };
+        let duration_ms = duration_to_u64_ms(now.saturating_duration_since(previous));
+        let phase_duration = phase_duration_mut(&mut self.profile, phase);
+        *phase_duration = phase_duration.saturating_add(duration_ms);
     }
 }
 
-fn profile_from_durations(
-    phase_durations_ms: [u64; PHASE_COUNT],
-    dependency_branch_durations_ms: [u64; DEPENDENCY_BRANCH_COUNT],
-) -> ThreadInitializationProfile {
-    let [
-        existing_thread_lookup_ms,
-        configuration_resolution_ms,
-        session_dependency_loading_ms,
-        session_construction_ms,
-        mcp_startup_ms,
-        session_activation_ms,
-        thread_registration_ms,
-    ] = phase_durations_ms;
-    let [
-        thread_persistence_ms,
-        state_db_loading_ms,
-        auth_and_mcp_discovery_ms,
-        plugin_and_skill_warmup_ms,
-    ] = dependency_branch_durations_ms;
-    let core_duration_ms = phase_durations_ms
-        .iter()
-        .copied()
-        .fold(0_u64, u64::saturating_add);
-    ThreadInitializationProfile {
-        duration_ms: core_duration_ms,
-        core_duration_ms,
-        existing_thread_lookup_ms,
-        configuration_resolution_ms,
-        session_dependency_loading_ms,
-        session_construction_ms,
-        mcp_startup_ms,
-        session_activation_ms,
-        thread_registration_ms,
-        thread_persistence_ms,
-        state_db_loading_ms,
-        auth_and_mcp_discovery_ms,
-        plugin_and_skill_warmup_ms,
-        ..Default::default()
+fn phase_duration_mut(
+    profile: &mut ThreadInitializationProfile,
+    phase: ThreadInitializationPhase,
+) -> &mut u64 {
+    match phase {
+        ThreadInitializationPhase::ExistingThreadLookup => &mut profile.existing_thread_lookup_ms,
+        ThreadInitializationPhase::ConfigurationResolution => {
+            &mut profile.configuration_resolution_ms
+        }
+        ThreadInitializationPhase::SessionDependencyLoading => {
+            &mut profile.session_dependency_loading_ms
+        }
+        ThreadInitializationPhase::SessionConstruction => &mut profile.session_construction_ms,
+        ThreadInitializationPhase::McpStartup => &mut profile.mcp_startup_ms,
+        ThreadInitializationPhase::SessionActivation => &mut profile.session_activation_ms,
+        ThreadInitializationPhase::ThreadRegistration => &mut profile.thread_registration_ms,
     }
+}
+
+fn dependency_duration_mut(
+    profile: &mut ThreadInitializationProfile,
+    branch: SessionDependencyBranch,
+) -> &mut u64 {
+    match branch {
+        SessionDependencyBranch::ThreadPersistence => &mut profile.thread_persistence_ms,
+        SessionDependencyBranch::StateDbLoading => &mut profile.state_db_loading_ms,
+        SessionDependencyBranch::AuthAndMcpDiscovery => &mut profile.auth_and_mcp_discovery_ms,
+        SessionDependencyBranch::PluginAndSkillWarmup => &mut profile.plugin_and_skill_warmup_ms,
+    }
+}
+
+fn core_duration_ms(profile: &ThreadInitializationProfile) -> u64 {
+    profile
+        .existing_thread_lookup_ms
+        .saturating_add(profile.configuration_resolution_ms)
+        .saturating_add(profile.session_dependency_loading_ms)
+        .saturating_add(profile.session_construction_ms)
+        .saturating_add(profile.mcp_startup_ms)
+        .saturating_add(profile.session_activation_ms)
+        .saturating_add(profile.thread_registration_ms)
 }
 
 fn duration_to_u64_ms(duration: Duration) -> u64 {

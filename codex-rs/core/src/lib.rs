@@ -108,7 +108,6 @@ mod thread_initialization_timing;
 mod thread_manager;
 pub(crate) mod web_search;
 pub(crate) mod windows_sandbox_read_grants;
-pub use codex_analytics::ThreadInitializationProfile;
 pub use thread_initialization_timing::ThreadInitializationTiming;
 pub use thread_manager::ForkSnapshot;
 pub use thread_manager::NewThread;
