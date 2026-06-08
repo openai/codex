@@ -237,6 +237,12 @@ impl CodexThread {
         initial_goal: Option<InitialGoal>,
     ) -> CodexResult<String> {
         self.codex
+            .session
+            .services
+            .agent_control
+            .ensure_execution_capacity_for_op(self.session_configured.thread_id, &op)
+            .await?;
+        self.codex
             .submit_user_input_with_client_user_message_id(
                 op,
                 trace,

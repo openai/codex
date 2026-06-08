@@ -75,13 +75,13 @@ ignore = [
     { id = "RUSTSEC-2024-0388", reason = "derivative is unmaintained; pulled in via starlark/starlark_syntax v0.14.2 used by execpolicy/cli/core; no fixed starlark release yet" },
     { id = "RUSTSEC-2025-0057", reason = "fxhash is unmaintained; pulled in via starlark_map under starlark v0.14.2 used by execpolicy/cli/core and bm25 used by core; remove when upstream dependencies drop fxhash" },
     { id = "RUSTSEC-2024-0436", reason = "paste is unmaintained; pulled in via ratatui/rmcp/starlark used by tui/execpolicy; no fixed release yet" },
-    { id = "RUSTSEC-2026-0173", reason = "proc-macro-error2 is unmaintained; pulled in via i18n-embed-fl v0.9.4 and age v0.11.2 used by codex-secrets; age v0.11.3 still depends on it and no fixed stable release exists" },
     { id = "RUSTSEC-2023-0089", reason = "atomic-polyfill is unmaintained; pulled in via postcard/heapless/pagable under starlark v0.14.2 used by execpolicy/cli/core; no fixed starlark release yet" },
     # TODO(fcoury): remove this exception when syntect drops yaml-rust and bincode, or updates to versions that have fixed the vulnerabilities.
     { id = "RUSTSEC-2024-0320", reason = "yaml-rust is unmaintained; pulled in via syntect v5.3.0 used by codex-tui for syntax highlighting; no fixed release yet" },
     { id = "RUSTSEC-2025-0141", reason = "bincode is unmaintained; pulled in via syntect v5.3.0 used by codex-tui for syntax highlighting; no fixed release yet" },
     { id = "RUSTSEC-2026-0118", reason = "hickory-proto v0.25.2 is pulled in via rama-dns/rama-tcp used by codex-network-proxy; DNSSEC features are not enabled; remove when rama updates to hickory 0.26.1 or hickory-net" },
     { id = "RUSTSEC-2026-0119", reason = "hickory-proto v0.25.2 is pulled in via rama-dns/rama-tcp used by codex-network-proxy; no fixed rama release is available yet; remove when rama updates to hickory 0.26.1 or hickory-net" },
+    { id = "RUSTSEC-2026-0173", reason = "proc-macro-error2 is unmaintained; pulled in via i18n-embed-fl/age used by codex-secrets local storage; remove when codex-secrets migrates off age or age drops i18n-embed-fl" },
 ]
 # If this is true, then cargo deny will use the git executable to fetch advisory database.
 # If this is false, then it uses a built-in git library.
