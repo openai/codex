@@ -2211,7 +2211,7 @@ impl ChatWidget {
             items.push(SelectionItem {
                 name: display_name,
                 toggle,
-                toggle_placeholder: (!plugin.installed).then_some("[-] "),
+                toggle_placeholder: (!can_toggle_plugin).then_some("[-] "),
                 description: Some(description),
                 selected_description: Some(selected_description),
                 search_value: Some(search_value),
