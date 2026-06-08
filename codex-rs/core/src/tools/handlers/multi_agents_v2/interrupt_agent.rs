@@ -1,5 +1,5 @@
 use super::*;
-use crate::tools::handlers::multi_agents_spec::create_close_agent_tool_v2;
+use crate::tools::handlers::multi_agents_spec::create_interrupt_agent_tool_v2;
 use crate::turn_timing::now_unix_timestamp_ms;
 use codex_protocol::error::CodexErr;
 use codex_tools::ToolSpec;
@@ -9,24 +9,26 @@ pub(crate) struct Handler;
 #[async_trait::async_trait]
 impl ToolExecutor<ToolInvocation> for Handler {
     fn tool_name(&self) -> ToolName {
-        ToolName::plain("close_agent")
+        ToolName::plain("interrupt_agent")
     }
 
     fn spec(&self) -> ToolSpec {
-        create_close_agent_tool_v2()
+        create_interrupt_agent_tool_v2()
     }
 
     async fn handle(
         &self,
         invocation: ToolInvocation,
     ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
-        handle_close_agent(invocation).await.map(boxed_tool_output)
+        handle_interrupt_agent(invocation)
+            .await
+            .map(boxed_tool_output)
     }
 }
 
-async fn handle_close_agent(
+async fn handle_interrupt_agent(
     invocation: ToolInvocation,
-) -> Result<CloseAgentResult, FunctionCallError> {
+) -> Result<InterruptAgentResult, FunctionCallError> {
     let ToolInvocation {
         session,
         turn,
@@ -35,11 +37,13 @@ async fn handle_close_agent(
         ..
     } = invocation;
     let arguments = function_arguments(payload)?;
-    let args: CloseAgentArgs = parse_arguments(&arguments)?;
+    let args: InterruptAgentArgs = parse_arguments(&arguments)?;
     let agent_id = resolve_agent_target(&session, &turn, &args.target).await?;
-    let receiver_agent = session.services.agent_control.get_agent_metadata(agent_id);
-    let known_agent = receiver_agent.is_some();
-    let receiver_agent = receiver_agent.unwrap_or_default();
+    let receiver_agent = session
+        .services
+        .agent_control
+        .ensure_agent_known(agent_id)
+        .map_err(|err| collab_agent_error(agent_id, err))?;
     if receiver_agent
         .agent_path
         .as_ref()
@@ -51,7 +55,7 @@ async fn handle_close_agent(
     }
     if agent_id == session.thread_id {
         return Err(FunctionCallError::RespondToModel(
-            "an agent cannot close itself; return your result and let the parent close you if needed"
+            "an agent cannot interrupt itself; return your result and let the parent interrupt you if needed"
                 .to_string(),
         ));
     }
@@ -67,43 +71,16 @@ async fn handle_close_agent(
             .into(),
         )
         .await;
-    let status = match session
+    let status = session.services.agent_control.get_status(agent_id).await;
+    let result = match session
         .services
         .agent_control
-        .subscribe_status(agent_id)
+        .interrupt_agent(agent_id)
         .await
     {
-        Ok(mut status_rx) => status_rx.borrow_and_update().clone(),
-        Err(CodexErr::ThreadNotFound(_)) if known_agent => {
-            session.services.agent_control.get_status(agent_id).await
-        }
-        Err(err) => {
-            let status = session.services.agent_control.get_status(agent_id).await;
-            session
-                .send_event(
-                    &turn,
-                    CollabCloseEndEvent {
-                        call_id: call_id.clone(),
-                        completed_at_ms: now_unix_timestamp_ms(),
-                        sender_thread_id: session.thread_id,
-                        receiver_thread_id: agent_id,
-                        receiver_agent_nickname: receiver_agent.agent_nickname.clone(),
-                        receiver_agent_role: receiver_agent.agent_role.clone(),
-                        status,
-                    }
-                    .into(),
-                )
-                .await;
-            return Err(collab_agent_error(agent_id, err));
-        }
+        Ok(_) | Err(CodexErr::ThreadNotFound(_)) | Err(CodexErr::InternalAgentDied) => Ok(()),
+        Err(err) => Err(collab_agent_error(agent_id, err)),
     };
-    let result = session
-        .services
-        .agent_control
-        .close_agent(agent_id)
-        .await
-        .map_err(|err| collab_agent_error(agent_id, err))
-        .map(|_| ());
     session
         .send_event(
             &turn,
@@ -121,7 +98,7 @@ async fn handle_close_agent(
         .await;
     result?;
 
-    Ok(CloseAgentResult {
+    Ok(InterruptAgentResult {
         previous_status: status,
     })
 }
@@ -134,18 +111,18 @@ impl CoreToolRuntime for Handler {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct CloseAgentArgs {
+struct InterruptAgentArgs {
     target: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-pub(crate) struct CloseAgentResult {
+pub(crate) struct InterruptAgentResult {
     pub(crate) previous_status: AgentStatus,
 }
 
-impl ToolOutput for CloseAgentResult {
+impl ToolOutput for InterruptAgentResult {
     fn log_preview(&self) -> String {
-        tool_output_json_text(self, "close_agent")
+        tool_output_json_text(self, "interrupt_agent")
     }
 
     fn success_for_logging(&self) -> bool {
@@ -153,10 +130,10 @@ impl ToolOutput for CloseAgentResult {
     }
 
     fn to_response_item(&self, call_id: &str, payload: &ToolPayload) -> ResponseInputItem {
-        tool_output_response_item(call_id, payload, self, Some(true), "close_agent")
+        tool_output_response_item(call_id, payload, self, Some(true), "interrupt_agent")
     }
 
     fn code_mode_result(&self, _payload: &ToolPayload) -> JsonValue {
-        tool_output_code_mode_result(self, "close_agent")
+        tool_output_code_mode_result(self, "interrupt_agent")
     }
 }
