@@ -731,11 +731,14 @@ mod tests {
     #[test]
     fn system_proxy_cache_key_preserves_url_specific_pac_decisions() {
         let request_url = "https://auth.openai.com/oauth/token?access_token=secret";
-        let cache_key = system_proxy_cache_key(request_url, false);
+        let cache_key = system_proxy_cache_key(request_url, /*include_auto_detect*/ false);
 
         assert_ne!(
             cache_key,
-            system_proxy_cache_key("https://auth.openai.com/oauth/revoke", false)
+            system_proxy_cache_key(
+                "https://auth.openai.com/oauth/revoke",
+                /*include_auto_detect*/ false,
+            )
         );
         #[cfg(target_os = "windows")]
         assert!(!cache_key.contains(request_url));
