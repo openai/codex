@@ -23,6 +23,15 @@ The helper reduces the JSONL sink into a DuckDB artifact containing the first se
 
 This pass also captures local-only Responses API attempt summaries needed to populate `viewer_responses_calls_v1`. It does not change the React/FastAPI session viewer, upload artifacts to blob store, synthesize `chat.Conversation` snapshots, or add DuckDB to the main `codex` binary.
 
+Next useful milestone:
+
+- add `context_window_id` to locally captured Responses API call records
+- reduce Responses API call chains within one Codex context window
+- synthesize local `chat.Conversation`-shaped snapshots from those reduced call chains
+- populate `viewer_context_windows_v1` with `is_synthetic = true`
+
+This local context-window materialization is intentionally synthetic. The eventual non-synthetic source remains the canonical Responses API `chat.Conversation` payload emitted by the server-side Responses request logging path.
+
 ## Motivation
 
 We want to iterate on the Unified Codex Session Viewer before the production Kafka/Flink/Databricks pipeline is available. The viewer ultimately needs Databricks-shaped tables derived from real Codex sessions, but hand-authored fixtures are too synthetic and waiting for the full pipeline would slow down the UI and data-model work.
@@ -31,7 +40,7 @@ This proposal adds a local-only analytics sink that mirrors the intended product
 
 We intentionally use `codex-analytics` as the entry point because it already owns the normalized Codex thread, turn, tool, compaction, steering, app, plugin, hook, and review events needed for the first viewer tables. We are not building on `codex-rollout-trace`, whose rollout-scoped semantic graph is useful for a different debugging problem but does not match the intended long-lived session/thread/turn warehouse model.
 
-This pass is intentionally narrow: generate believable local tables from Codex analytics events plus local Responses API attempt summaries. React integration, blob-backed sharing, production ingestion, and canonical `chat.Conversation` / context-window materialization are deferred.
+The first pass is intentionally narrow: generate believable local tables from Codex analytics events plus local Responses API attempt summaries. React integration, blob-backed sharing, production ingestion, and canonical `chat.Conversation` / context-window materialization are deferred. The follow-up described below adds only synthetic local context-window materialization; it does not make the local reducer canonical.
 
 ## Goals
 
@@ -49,6 +58,7 @@ Land the smallest useful vertical slice first:
 1. Add the reduced analytics JSONL sink in `codex-analytics`.
 2. Add the standalone `codex-analytics-materializer` helper binary that reads that JSONL file and writes DuckDB.
 3. Add local-only Responses API call capture and populate `viewer_responses_calls_v1`.
+4. Add synthetic local context-window materialization from reduced Responses API call chains.
 
 Keep these boundaries explicit:
 
@@ -63,8 +73,8 @@ Keep these boundaries explicit:
 - No new `codex-session-trace` crate.
 - No React or FastAPI session viewer changes.
 - No blob-store upload/download path.
-- No `chat.Conversation` synthesis.
-- No populated `viewer_context_windows_v1`.
+- No canonical server-side `chat.Conversation` ingestion in the local-only follow-up.
+- No claim that synthetic local `conversation_json` exactly matches Responses API server rendering.
 - No `codex debug process-local-analytics` wiring in the main `codex` binary.
 - No `--analytics-local-sink` CLI flag in v0; the env var is enough for the first slice.
 - No rollout-trace-style semantic graph, interaction edges, code cells, or terminal-session modeling.
@@ -133,6 +143,8 @@ Responses API call lifecycle
 codex-analytics-materializer helper binary
   -> codex-analytics-materializer reads JSONL
   -> reduce/group by session/thread/turn/call
+  -> reconstruct Responses API call chains inside each context window
+  -> synthesize local context-window conversation snapshots
   -> write materialized.duckdb
 ```
 
@@ -278,6 +290,7 @@ impl AnalyticsEventsClient {
         session_id: String,
         thread_id: String,
         turn_id: String,
+        context_window_id: String,
     ) -> LocalResponsesApiCallCapture;
 }
 
@@ -309,6 +322,7 @@ Started fact:
 - `session_id`
 - `thread_id`
 - `turn_id`
+- `context_window_id`
 - `transport`: `http` or `websocket`
 - `request_started_at_epoch_millis`
 - `request_json`
@@ -330,6 +344,7 @@ Local reducer output:
 ### Capture Sites
 
 - Build one `LocalResponsesApiCallCapture` at the existing sampling callsite next to `rollout_thread_trace.inference_trace_context(...)`, using `sess.services.analytics_events_client`, `sess.session_id()`, `sess.thread_id()`, and `turn_context.sub_id`.
+- Pass the same `context_window_id` Codex already sends to Responses API as `x-codex-window-id`; use the request-time window id, not a value recomputed after the call finishes.
 - Add one `&LocalResponsesApiCallCapture` parameter next to `&InferenceTraceContext` on `ModelClientSession::stream(...)`. This is the only new capture parameter the normal sampling path should need.
 - Pass `LocalResponsesApiCallCapture::disabled()` from the existing compaction `.stream(...)` callsites in v0.
 - Inject attempts at the same core hook points as rollout-trace `InferenceTraceAttempt`.
@@ -338,7 +353,11 @@ Local reducer output:
 - Terminal response: pass `LocalResponsesApiCallAttempt` into `map_response_events` next to `InferenceTraceAttempt`, then emit terminal facts next to `inference_trace_attempt.record_completed`, `record_failed`, and `record_cancelled`.
 - v0 records the same non-delta response summary rollout-trace already has: `response_id`, `upstream_request_id`, `token_usage`, and completed `output_items`.
 
-If it keeps `core/src/client.rs` smaller, add one private helper there that holds `InferenceTraceAttempt` plus `LocalResponsesApiCallAttempt` and fans out `record_completed`, `record_failed`, and `record_cancelled`. Do not add a new public combined observer abstraction in v0. Do not preserve exact raw `response.completed.response` JSON in this pass; that would require a broader codex-api shape change and is not needed until `chat.Conversation` / context-window work begins.
+If it keeps `core/src/client.rs` smaller, add one private helper there that holds `InferenceTraceAttempt` plus `LocalResponsesApiCallAttempt` and fans out `record_completed`, `record_failed`, and `record_cancelled`. Do not add a new public combined observer abstraction in v0.
+
+Do not add a general `logical_request_json` field for context-window work. For normal WebSocket incrementals, the materializer can reconstruct the full model-visible input from `previous_response_id`, the predecessor call's reduced `output_items`, and the current wire `input`, matching the Responses Lite replay model. Preserve the existing special case where a real request reuses an untraced startup prewarm response id: that request already records the logical full request because the predecessor is intentionally absent from local JSONL.
+
+Do not preserve exact raw `response.completed.response` JSON for synthetic local context windows. The local row represents a synthetic model-visible prompt snapshot derived from request input plus reduced prior outputs, not the canonical server response object. Revisit the broader `codex-api` shape change only if a later viewer requirement needs exact raw terminal Responses payloads.
 
 ## Reducer And DuckDB Materialization
 
@@ -532,6 +551,7 @@ thread_id
 turn_id
 responses_call_id
 call_ordinal
+context_window_id
 transport
 status
 request_started_at_epoch_millis
@@ -547,13 +567,14 @@ error_json
 Rules:
 
 - `call_ordinal` is per turn ordered by request start time, then `responses_call_id`.
+- `context_window_id` is the exact Codex request-time window id sent to Responses API as `x-codex-window-id`.
 - `status` is `completed`, `failed`, or `cancelled`.
 - `response_json` stores the v0 non-delta response summary, not the exact raw terminal Responses API object.
 - Large JSON stays inline for v0; list queries later should avoid selecting those columns.
 
 #### `viewer_context_windows_v1`
 
-Create the table but leave it empty.
+Populate this table in the synthetic local follow-up from reduced `responses_api_call` records with non-null `context_window_id`.
 
 Provisional columns:
 
@@ -575,7 +596,50 @@ conversation_source
 is_synthetic
 ```
 
-Do not populate it in this pass.
+Local row semantics:
+
+- One row represents one Codex context window, grouped by `(session_id, thread_id, context_window_id)`.
+- `conversation_json` is the last reconstructable model-visible prompt snapshot attempted in that window, not a post-response transcript.
+- `message_count` counts synthesized chat messages in `conversation_json`, not raw Responses item count.
+- `conversation_source` is `synthetic_local_responses_request`.
+- `is_synthetic` is `true`.
+- Canonical server-side Responses API `chat.Conversation` payloads should later replace or supersede these rows with `is_synthetic = false`.
+
+Responses call-chain reduction:
+
+1. Materialize `viewer_responses_calls_v1` first from reduced `responses_api_call` sink records.
+2. Partition calls by `(session_id, thread_id, context_window_id)`.
+3. Order calls by `request_started_at_epoch_millis`, then `responses_call_id`.
+4. For a call with no `previous_response_id`, treat `request_json.input` as a full prompt snapshot.
+5. For a call with `previous_response_id`, find the completed predecessor call with matching `response_id` in the same context window and reconstruct:
+
+   ```text
+   full_input(call) =
+     full_input(previous_call)
+     + previous_call.response_json.output_items
+     + call.request_json.input
+   ```
+
+6. Do not extend a replay chain through failed or cancelled calls that lack a completed `response_id`.
+7. Do not follow `previous_response_id` across context windows. Codex advances `context_window_id` only after compacted history replacement and resets the cached WebSocket session at that boundary.
+8. If a recorded incremental request references an unknown predecessor in the same context window, fail materialization clearly. The expected startup-prewarm exception is already captured as a full logical request with no local predecessor dependency.
+
+Synthetic conversation construction:
+
+- Keep this adapter in `codex-analytics-materializer`; do not add Python or Responses Lite as a build dependency.
+- Use Responses Lite as the behavioral reference for Codex-shaped public Responses items, and reuse existing local Rust normalization ideas where useful instead of introducing a second semantic graph.
+- Support the Codex-emitted subset needed for local sessions: `message`, `agent_message`, `reasoning`, `function_call`, `function_call_output`, `custom_tool_call`, `custom_tool_call_output`, `tool_search_call`, `tool_search_output`, `web_search_call`, `compaction`, `compaction_trigger`, and `context_compaction`.
+- Preserve top-level `instructions`, tool namespace developer content, message role, assistant phase/channel, tool recipient/name, reasoning summary, and compaction summary/channel as synthetic chat messages.
+- Keep unsupported item handling explicit. For a new Codex-emitted Responses item type, fail the context-window reduction with the item type and sink line instead of silently dropping model-visible context.
+- Serialize a `chat.Conversation`-shaped JSON object with stable synthetic ids derived from the local row identity. Do not claim byte-for-byte equivalence with server-side `Response.chat_conversation()`, which depends on hydrated Responses API `Item` objects, item processors, model config, and server-only visibility/rendering rules.
+
+Window metadata:
+
+- `context_window_ordinal` is per `(session_id, thread_id)` ordered by `opened_at_epoch_millis`, then `context_window_id`.
+- `first_turn_id` / `last_turn_id` and `first_responses_call_id` / `last_responses_call_id` come from the first and last ordered call in the window.
+- `opened_at_epoch_millis` is the first call's `request_started_at_epoch_millis`.
+- For a window followed by a later window in the same thread, set `closed_at_epoch_millis` to the later window's `opened_at_epoch_millis` and `close_reason` to `compaction`.
+- For the last observed window in a thread, leave `closed_at_epoch_millis` and `close_reason` null.
 
 ## Helper Binary Changes
 
@@ -621,6 +685,14 @@ Behavior:
 11. Emit one reduced `responses_api_call` JSONL sink record per completed local fact pair.
 12. Populate `viewer_responses_calls_v1` and Responses-derived turn aggregates from those reduced records.
 
+### Phase 4: Synthetic Local Context Windows
+
+13. Add `context_window_id` to local Responses API capture, reduced `responses_api_call` JSONL payloads, and `viewer_responses_calls_v1`.
+14. Extend the materializer Responses reducer to reconstruct full prompt input inside each context window from actual wire requests, `previous_response_id`, and completed predecessor `output_items`.
+15. Add the small synthetic Responses-item-to-`chat.Conversation` JSON adapter in `codex-analytics-materializer`.
+16. Populate `viewer_context_windows_v1` from the last reconstructable prompt snapshot in each context window.
+17. Validate with focused fixtures, then capture a basic traced Codex thread, run the materializer, and inspect the produced context-window row before moving on.
+
 ## Testing
 
 ### `codex-analytics`
@@ -639,6 +711,7 @@ Behavior:
 - Responses start/terminal local facts reduce into one `responses_api_call` JSONL record
 - unmatched Responses start fact does not emit a sink record in v0
 - disabled `LocalResponsesApiCallCapture` and attempt handles are no-ops
+- reduced Responses call payload preserves request-time `context_window_id`
 
 ### Responses Integration Follow-Up
 
@@ -648,6 +721,8 @@ Behavior:
 - WebSocket request mirrors rollout-trace warmup and untraced-warmup behavior
 - terminal completed response records response id, upstream request id, token usage, and output items
 - failed and cancelled requests record terminal facts with matching `responses_call_id`
+- normal WebSocket incrementals keep actual wire `previous_response_id` plus delta `input`
+- untraced startup-prewarm reuse keeps the existing logical-request capture fallback
 
 ### `codex-analytics-materializer`
 
@@ -657,7 +732,14 @@ Behavior:
 - `viewer_turns_v1` contains expected resolved turn row
 - `viewer_turn_events_v1` preserves per-turn line order
 - `viewer_responses_calls_v1` materializes reduced `responses_api_call` sink records
-- `viewer_context_windows_v1` exists and is empty
+- `viewer_responses_calls_v1` stores `context_window_id`
+- one full request creates one synthetic `viewer_context_windows_v1` row
+- WebSocket delta requests reconstruct a full prompt from `previous_response_id` plus predecessor output items
+- replay does not cross `context_window_id` boundaries
+- unknown incremental predecessor fails with a clear materializer error
+- compaction window advance yields a new context-window row and closes the prior row with `close_reason = 'compaction'`
+- `viewer_context_windows_v1.message_count` matches synthesized chat message count
+- `viewer_context_windows_v1.conversation_source` is `synthetic_local_responses_request` and `is_synthetic` is true
 - malformed JSONL reports line number
 - unsupported `schema_version` fails clearly
 
@@ -678,8 +760,8 @@ Behavior:
 
 ## Future Follow-Ups
 
-- Populate `viewer_context_windows_v1` from canonical Responses API `chat.Conversation` Kafka payloads.
-- Add synthetic local `chat.Conversation` generation only if needed before upstream Kafka support lands.
+- Populate `viewer_context_windows_v1` from canonical Responses API `chat.Conversation` Kafka payloads and prefer those rows over synthetic local rows.
+- Ensure the canonical Responses API Kafka path retains the Codex `x-codex-window-id` identity needed to join canonical conversation payloads to context windows.
 - Add session viewer local DuckDB drag-and-drop mode.
 - Add blob upload and blob-backed artifact loading if sharing local artifacts becomes useful.
 - Revisit a `codex debug process-local-analytics` wrapper only if there is a way to keep DuckDB out of the main `codex` binary build graph.
