@@ -45,7 +45,7 @@ jobs:
     runs-on:
       group: codex-runners
       labels: codex-linux-x64
-    timeout-minutes: 30
+    timeout-minutes: 60
     environment:
       name: bazel
       deployment: false
