@@ -333,7 +333,7 @@ async fn thread_resume_running_thread_uses_cached_instruction_sources() -> Resul
 }
 
 #[tokio::test]
-async fn thread_resume_cold_thread_reloads_instruction_sources() -> Result<()> {
+async fn thread_resume_cold_thread_restores_persisted_instruction_sources() -> Result<()> {
     let server = responses::start_mock_server().await;
     let response_mock = responses::mount_sse_sequence(
         &server,
@@ -420,8 +420,7 @@ async fn thread_resume_cold_thread_reloads_instruction_sources() -> Result<()> {
         instruction_sources,
         ..
     } = to_response::<ThreadResumeResponse>(resume_resp)?;
-    let new_global_agents = AbsolutePathBuf::try_from(std::fs::canonicalize(new_global_agents)?)?;
-    assert_eq!(instruction_sources, vec![new_global_agents]);
+    assert_eq!(instruction_sources, vec![old_global_agents]);
 
     let resumed_turn_id = second_mcp
         .send_turn_start_request(TurnStartParams {
