@@ -78,6 +78,8 @@ from .generated.v2_all import (
 )
 from .models import InitializeResponse, JsonObject, Notification
 
+_MAX_GOAL_OBJECTIVE_CHARS = 4_000
+
 
 def _normalize_goal_objective(objective: str) -> str:
     if not isinstance(objective, str):
@@ -85,6 +87,8 @@ def _normalize_goal_objective(objective: str) -> str:
     objective = objective.strip()
     if not objective:
         raise ValueError("goal objective must not be empty")
+    if len(objective) > _MAX_GOAL_OBJECTIVE_CHARS:
+        raise ValueError(f"goal objective must be at most {_MAX_GOAL_OBJECTIVE_CHARS} characters")
     return objective
 
 

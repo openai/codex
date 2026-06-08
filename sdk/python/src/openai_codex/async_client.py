@@ -53,6 +53,7 @@ class AsyncCodexClient:
     def __init__(self, config: CodexConfig | None = None) -> None:
         """Create the wrapped sync client that owns the transport process."""
         self._sync = CodexClient(config=config)
+        self._background_tasks: set[asyncio.Task[None]] = set()
 
     async def __aenter__(self) -> "AsyncCodexClient":
         """Start the Codex process when entering an async context."""
@@ -90,6 +91,9 @@ class AsyncCodexClient:
     async def close(self) -> None:
         """Close the wrapped sync client in a worker thread."""
         await self._call_sync(self._sync.close)
+        if self._background_tasks:
+            await asyncio.gather(*tuple(self._background_tasks), return_exceptions=True)
+            self._background_tasks.clear()
 
     async def initialize(self) -> InitializeResponse:
         """Initialize the Codex session."""
@@ -247,17 +251,23 @@ class AsyncCodexClient:
         try:
             return await asyncio.shield(operation)
         except asyncio.CancelledError:
-            try:
-                state, _ = await operation
-            except BaseException:
-                pass
-            else:
+
+            async def cleanup_cancelled_start() -> None:
+                try:
+                    state, _ = await operation
+                except BaseException:
+                    return
                 try:
                     await self.pause_goal(thread_id)
                 except Exception:
                     pass
-                state.finish()
-                self.unregister_goal_operation(state)
+                finally:
+                    state.finish()
+                    self.unregister_goal_operation(state)
+
+            cleanup = asyncio.create_task(cleanup_cancelled_start())
+            self._background_tasks.add(cleanup)
+            cleanup.add_done_callback(self._background_tasks.discard)
             raise
 
     async def turn_start(
