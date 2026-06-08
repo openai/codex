@@ -499,7 +499,6 @@ impl ModelClient {
             service_tier,
             prompt_cache_key,
             text,
-            client_metadata,
             ..
         } = request;
         let payload = ApiCompactionInput {
@@ -512,7 +511,6 @@ impl ModelClient {
             service_tier: service_tier.as_deref(),
             prompt_cache_key: prompt_cache_key.as_deref(),
             text,
-            client_metadata,
         };
 
         let mut extra_headers = ApiHeaderMap::new();
