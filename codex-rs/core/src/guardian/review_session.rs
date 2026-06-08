@@ -303,6 +303,32 @@ impl GuardianReviewSessionManager {
         }
     }
 
+    pub(crate) async fn interrupt_active_reviews(&self) {
+        let review_sessions = {
+            let state = self.state.lock().await;
+            state
+                .trunk
+                .iter()
+                .chain(&state.ephemeral_reviews)
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        let active_review_sessions = review_sessions
+            .into_iter()
+            .filter(|review_session| review_session.review_lock.try_acquire().is_err())
+            .collect::<Vec<_>>();
+        for review_session in &active_review_sessions {
+            let _ = review_session.codex.submit(Op::Interrupt).await;
+        }
+        for review_session in active_review_sessions {
+            let _ = tokio::time::timeout(
+                GUARDIAN_INTERRUPT_DRAIN_TIMEOUT,
+                review_session.review_lock.acquire(),
+            )
+            .await;
+        }
+    }
+
     #[expect(
         clippy::await_holding_invalid_type,
         reason = "review session selection and trunk spawning must stay serialized"
@@ -561,6 +587,17 @@ impl GuardianReviewSessionManager {
             }
             Err(outcome) => return (outcome, GuardianReviewAnalyticsResult::without_session()),
         };
+        let review_guard = match review_session.review_lock.acquire().await {
+            Ok(review_guard) => review_guard,
+            Err(err) => {
+                return (
+                    GuardianReviewSessionOutcome::SessionFailed(anyhow!(
+                        "guardian review lock closed: {err}"
+                    )),
+                    GuardianReviewAnalyticsResult::without_session(),
+                );
+            }
+        };
         self.register_active_ephemeral(Arc::clone(&review_session))
             .await;
         let mut cleanup =
@@ -573,6 +610,7 @@ impl GuardianReviewSessionManager {
             deadline,
         ))
         .await;
+        drop(review_guard);
         if let Some(review_session) = self.take_active_ephemeral(&review_session).await {
             cleanup.disarm();
             review_session.shutdown_in_background();
