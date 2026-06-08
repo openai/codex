@@ -4087,18 +4087,6 @@ name = "codex-utils-elapsed"
 version = "0.0.0"
 
 [[package]]
-name = "codex-utils-environment-id"
-version = "0.0.0"
-dependencies = [
- "pretty_assertions",
- "schemars 0.8.22",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "ts-rs",
-]
-
-[[package]]
 name = "codex-utils-fuzzy-match"
 version = "0.0.0"
 
@@ -4168,7 +4156,6 @@ name = "codex-utils-path-uri"
 version = "0.0.0"
 dependencies = [
  "codex-utils-absolute-path",
- "codex-utils-environment-id",
  "pretty_assertions",
  "schemars 0.8.22",
  "serde",

@@ -9,7 +9,6 @@ workspace = true
 
 [dependencies]
 codex-utils-absolute-path = { workspace = true }
-codex-utils-environment-id = { workspace = true }
 schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 thiserror = { workspace = true }

@@ -5,8 +5,6 @@
 mod environment_path;
 
 use codex_utils_absolute_path::AbsolutePathBuf;
-use codex_utils_environment_id::EnvironmentId;
-use codex_utils_environment_id::EnvironmentIdError;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Deserializer;
@@ -25,6 +23,7 @@ pub use environment_path::PathFlavor;
 
 pub const FILE_SCHEME: &str = "file";
 pub const CODEX_ENVIRONMENT_SCHEME: &str = "codex-env";
+const MAX_ENVIRONMENT_ID_LEN: usize = 64;
 
 /// An immutable URI that identifies a path on the current host or in a
 /// configured Codex environment.
@@ -42,14 +41,14 @@ pub const CODEX_ENVIRONMENT_SCHEME: &str = "codex-env";
 /// POSIX `file:` URI can also retain percent-encoded non-UTF-8 bytes for
 /// lossless native round trips.
 ///
-/// `codex-env:` URIs contain an [`EnvironmentId`] and a normalized
-/// [`EnvironmentPath`]. Like [VS Code resources], environment paths use `/`
-/// separators on every host, so basename, parent, join, and comparison are
-/// host-independent. Windows drive letters are lowercased, UNC paths retain a
-/// leading `//`, and repeated separators and dot segments are normalized.
-/// Original separator spelling, drive-letter case, filesystem aliases,
-/// symlinks, case sensitivity, and Unicode normalization are not preserved or
-/// resolved.
+/// `codex-env:` URIs contain an opaque environment identifier of at most 64
+/// UTF-8 bytes and a normalized [`EnvironmentPath`]. Like [VS Code resources],
+/// environment paths use `/` separators on every host, so basename, parent,
+/// join, and comparison are host-independent. Windows drive letters are
+/// lowercased, UNC paths retain a leading `//`, and repeated separators and dot
+/// segments are normalized. Original separator spelling, drive-letter case,
+/// filesystem aliases, symlinks, case sensitivity, and Unicode normalization
+/// are not preserved or resolved.
 ///
 /// Serde represents a `PathUri` as its canonical URI string. Deserialization
 /// also accepts an absolute native path for compatibility with fields that
@@ -74,7 +73,7 @@ enum ParsedPathUri {
         path: EnvironmentPath,
     },
     Environment {
-        environment_id: EnvironmentId,
+        environment_id: String,
         path: EnvironmentPath,
     },
 }
@@ -107,16 +106,17 @@ impl PathUri {
         Self::try_from(url)
     }
 
-    /// Constructs a `codex-env:` URI from validated environment components.
+    /// Constructs a `codex-env:` URI and validates the environment identifier.
     pub fn from_environment_path(
-        environment_id: &EnvironmentId,
+        environment_id: &str,
         path: &EnvironmentPath,
     ) -> Result<Self, PathUriParseError> {
+        validate_environment_id(environment_id)?;
         let url = environment_url(environment_id, path)?;
         Ok(Self {
             url,
             parsed: ParsedPathUri::Environment {
-                environment_id: environment_id.clone(),
+                environment_id: environment_id.to_string(),
                 path: path.clone(),
             },
         })
@@ -191,14 +191,16 @@ impl<'a> FileUriView<'a> {
 }
 
 /// Borrowed components of a validated `codex-env:` URI.
+///
+/// The environment identifier is an opaque string bounded to 64 UTF-8 bytes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct EnvironmentUriView<'a> {
-    environment_id: &'a EnvironmentId,
+    environment_id: &'a str,
     path: &'a EnvironmentPath,
 }
 
 impl<'a> EnvironmentUriView<'a> {
-    pub fn environment_id(self) -> &'a EnvironmentId {
+    pub fn environment_id(self) -> &'a str {
         self.environment_id
     }
 
@@ -339,9 +341,7 @@ fn parse_file_path(url: &Url) -> Result<EnvironmentPath, PathUriParseError> {
 
 /// Extracts and validates the environment id and canonical path from a parsed
 /// `codex-env:` URL.
-fn parse_environment_path(
-    url: &Url,
-) -> Result<(EnvironmentId, EnvironmentPath), PathUriParseError> {
+fn parse_environment_path(url: &Url) -> Result<(String, EnvironmentPath), PathUriParseError> {
     validate_common_known_uri(url)?;
     if url.host().is_some() {
         return Err(PathUriParseError::EnvironmentUriMustNotHaveAuthority);
@@ -362,7 +362,8 @@ fn parse_environment_path(
     }
     let environment_id = urlencoding::decode(environment_id)
         .map_err(|_| PathUriParseError::InvalidEnvironmentUriPath)?;
-    let environment_id = EnvironmentId::new(environment_id.into_owned())?;
+    let environment_id = environment_id.into_owned();
+    validate_environment_id(&environment_id)?;
     let path = format!("/{path}");
     let path =
         urlencoding::decode(&path).map_err(|_| PathUriParseError::InvalidEnvironmentUriPath)?;
@@ -390,16 +391,13 @@ fn canonical_file_url(mut url: Url) -> Result<Url, PathUriParseError> {
 }
 
 /// Encodes validated environment components into a canonical `codex-env:` URL.
-fn environment_url(
-    environment_id: &EnvironmentId,
-    path: &EnvironmentPath,
-) -> Result<Url, PathUriParseError> {
+fn environment_url(environment_id: &str, path: &EnvironmentPath) -> Result<Url, PathUriParseError> {
     let mut url = Url::parse(&format!("{CODEX_ENVIRONMENT_SCHEME}:///"))?;
     let Ok(mut segments) = url.path_segments_mut() else {
         unreachable!("codex-env URLs support hierarchical path segments");
     };
     segments.clear();
-    segments.push(environment_id.as_str());
+    segments.push(environment_id);
     append_path_segments(&mut segments, path);
     drop(segments);
     Ok(url)
@@ -520,7 +518,8 @@ fn parse_environment_uri(uri: &str) -> Result<PathUri, PathUriParseError> {
     }
     let environment_id = urlencoding::decode(environment_id)
         .map_err(|_| PathUriParseError::InvalidEnvironmentUriPath)?;
-    let environment_id = EnvironmentId::new(environment_id.into_owned())?;
+    let environment_id = environment_id.into_owned();
+    validate_environment_id(&environment_id)?;
     let path = format!("/{path}");
     let path =
         urlencoding::decode(&path).map_err(|_| PathUriParseError::InvalidEnvironmentUriPath)?;
@@ -561,6 +560,28 @@ fn looks_like_uri(value: &str) -> bool {
             .is_some_and(|separator| matches!(separator, b'/' | b'\\')))
 }
 
+/// Enforces the exec-server boundary for opaque environment identifiers.
+///
+/// Dot segments are excluded because URL parsers normalize them before this
+/// crate can recover the original first path segment.
+fn validate_environment_id(environment_id: &str) -> Result<(), PathUriParseError> {
+    if environment_id.is_empty() {
+        return Err(PathUriParseError::EmptyEnvironmentId);
+    }
+    if matches!(environment_id, "." | "..") {
+        return Err(PathUriParseError::EnvironmentIdDotSegment(
+            environment_id.to_string(),
+        ));
+    }
+    if environment_id.len() > MAX_ENVIRONMENT_ID_LEN {
+        return Err(PathUriParseError::EnvironmentIdTooLong {
+            length: environment_id.len(),
+            max_length: MAX_ENVIRONMENT_ID_LEN,
+        });
+    }
+    Ok(())
+}
+
 #[derive(Debug, Error)]
 pub enum PathUriParseError {
     #[error("invalid URI: {0}")]
@@ -581,8 +602,12 @@ pub enum PathUriParseError {
     QueryNotAllowed,
     #[error("fragments are not allowed in path URIs")]
     FragmentNotAllowed,
-    #[error(transparent)]
-    InvalidEnvironmentId(#[from] EnvironmentIdError),
+    #[error("environment id cannot be empty")]
+    EmptyEnvironmentId,
+    #[error("environment id `{0}` cannot be a URI path dot segment")]
+    EnvironmentIdDotSegment(String),
+    #[error("environment id is {length} bytes; maximum length is {max_length}")]
+    EnvironmentIdTooLong { length: usize, max_length: usize },
     #[error(transparent)]
     InvalidEnvironmentPath(#[from] EnvironmentPathError),
 }

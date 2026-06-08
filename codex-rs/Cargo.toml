@@ -83,7 +83,6 @@ members = [
     "tools",
     "v8-poc",
     "utils/absolute-path",
-    "utils/environment-id",
     "utils/path-uri",
     "utils/cargo-bin",
     "git-utils",
@@ -228,7 +227,6 @@ codex-utils-cache = { path = "utils/cache" }
 codex-utils-cargo-bin = { path = "utils/cargo-bin" }
 codex-utils-cli = { path = "utils/cli" }
 codex-utils-elapsed = { path = "utils/elapsed" }
-codex-utils-environment-id = { path = "utils/environment-id" }
 codex-utils-fuzzy-match = { path = "utils/fuzzy-match" }
 codex-utils-home-dir = { path = "utils/home-dir" }
 codex-utils-image = { path = "utils/image" }

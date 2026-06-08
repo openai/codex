@@ -152,10 +152,10 @@ fn file_uri_spelling_aliases_have_one_canonical_form() {
 
 #[test]
 fn environment_uri_round_trips_a_unix_path() {
-    let environment_id = EnvironmentId::new("dev_box-1").expect("valid environment id");
+    let environment_id = "dev_box-1";
     let path = EnvironmentPath::posix("/workspace/a path/file.rs").expect("valid POSIX path");
 
-    let uri = PathUri::from_environment_path(&environment_id, &path)
+    let uri = PathUri::from_environment_path(environment_id, &path)
         .expect("path should convert to an environment URI");
 
     assert_eq!(
@@ -165,7 +165,7 @@ fn environment_uri_round_trips_a_unix_path() {
     assert_eq!(
         uri.view(),
         PathUriView::Environment(EnvironmentUriView {
-            environment_id: &environment_id,
+            environment_id,
             path: &path,
         })
     );
@@ -173,11 +173,11 @@ fn environment_uri_round_trips_a_unix_path() {
 
 #[test]
 fn environment_uri_round_trips_a_windows_path_on_any_host() {
-    let environment_id = EnvironmentId::new("windows-dev").expect("valid environment id");
+    let environment_id = "windows-dev";
     let path = EnvironmentPath::windows(r"C:\Users\Alice Smith\src\..\main.rs")
         .expect("valid Windows path");
 
-    let uri = PathUri::from_environment_path(&environment_id, &path)
+    let uri = PathUri::from_environment_path(environment_id, &path)
         .expect("path should convert to an environment URI");
     let reparsed = PathUri::parse(&uri.to_string()).expect("URI should parse");
 
@@ -190,7 +190,7 @@ fn environment_uri_round_trips_a_windows_path_on_any_host() {
     assert_eq!(
         uri.view(),
         PathUriView::Environment(EnvironmentUriView {
-            environment_id: &environment_id,
+            environment_id,
             path: &path,
         })
     );
@@ -198,11 +198,11 @@ fn environment_uri_round_trips_a_windows_path_on_any_host() {
 
 #[test]
 fn environment_uri_round_trips_a_windows_unc_path_on_any_host() {
-    let environment_id = EnvironmentId::new("windows-dev").expect("valid environment id");
+    let environment_id = "windows-dev";
     let path =
         EnvironmentPath::windows(r"\\server\share\src\main.rs").expect("valid Windows UNC path");
 
-    let uri = PathUri::from_environment_path(&environment_id, &path)
+    let uri = PathUri::from_environment_path(environment_id, &path)
         .expect("path should convert to an environment URI");
     let reparsed = PathUri::parse(&uri.to_string()).expect("URI should parse");
 
@@ -307,7 +307,7 @@ fn environment_uri_dot_segments_cannot_change_the_environment_id() {
             panic!("expected environment view");
         };
 
-        assert_eq!(view.environment_id().as_str(), "devbox", "parsing {input}");
+        assert_eq!(view.environment_id(), "devbox", "parsing {input}");
         assert_eq!(view.path().as_str(), "/prod/secret", "parsing {input}");
     }
 }
@@ -353,7 +353,7 @@ fn environment_uri_accepts_the_root_path() {
     let PathUriView::Environment(view) = uri.view() else {
         panic!("expected environment view");
     };
-    assert_eq!(view.environment_id().as_str(), "devbox");
+    assert_eq!(view.environment_id(), "devbox");
     assert_eq!(view.path().as_str(), "/");
 }
 
@@ -431,18 +431,53 @@ fn environment_uri_round_trips_opaque_environment_ids() {
         "日本語/environment",
         "a?b#c%d",
     ] {
-        let environment_id = EnvironmentId::new(id).expect("valid opaque id");
-        let uri = PathUri::from_environment_path(&environment_id, &path)
+        let uri = PathUri::from_environment_path(id, &path)
             .expect("opaque environment id should serialize");
         let reparsed = PathUri::parse(&uri.to_string()).expect("environment URI should reparse");
         let PathUriView::Environment(view) = reparsed.view() else {
             panic!("expected environment view");
         };
 
-        assert_eq!(
-            view.environment_id(),
-            &environment_id,
-            "round-tripping {id}"
-        );
+        assert_eq!(view.environment_id(), id, "round-tripping {id}");
+    }
+}
+
+#[test]
+fn environment_uri_enforces_the_environment_id_boundary() {
+    let path = EnvironmentPath::posix("/workspace").expect("valid path");
+    let max_length_id = "x".repeat(MAX_ENVIRONMENT_ID_LEN);
+    let too_long_id = "x".repeat(MAX_ENVIRONMENT_ID_LEN + 1);
+
+    assert!(
+        PathUri::from_environment_path(&max_length_id, &path).is_ok(),
+        "the exec-server maximum should remain accepted"
+    );
+    let error = PathUri::from_environment_path(&too_long_id, &path)
+        .expect_err("an overlong environment id should be rejected");
+    assert!(matches!(
+        error,
+        PathUriParseError::EnvironmentIdTooLong {
+            length,
+            max_length,
+        } if length == MAX_ENVIRONMENT_ID_LEN + 1
+            && max_length == MAX_ENVIRONMENT_ID_LEN
+    ));
+    assert!(matches!(
+        PathUri::parse(&format!("codex-env:///{too_long_id}/workspace")),
+        Err(PathUriParseError::EnvironmentIdTooLong {
+            length,
+            max_length,
+        }) if length == MAX_ENVIRONMENT_ID_LEN + 1
+            && max_length == MAX_ENVIRONMENT_ID_LEN
+    ));
+    assert!(matches!(
+        PathUri::from_environment_path("", &path),
+        Err(PathUriParseError::EmptyEnvironmentId)
+    ));
+    for id in [".", ".."] {
+        assert!(matches!(
+            PathUri::from_environment_path(id, &path),
+            Err(PathUriParseError::EnvironmentIdDotSegment(value)) if value == id
+        ));
     }
 }
