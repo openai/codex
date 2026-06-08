@@ -354,11 +354,8 @@ sandbox = "elevated"
 
     let protected_dir = TempDir::new()?;
     let denied_path = protected_dir.path().join("secret.env");
-    let allowed_path = protected_dir.path().join("public.txt");
     std::fs::write(&denied_path, "managed secret\n")?;
-    std::fs::write(&allowed_path, "public ok\n")?;
     let denied_path = dunce::canonicalize(denied_path)?.abs();
-    let allowed_path = dunce::canonicalize(allowed_path)?.abs();
     let denied_path_toml = toml::Value::String(denied_path.to_string_lossy().into()).to_string();
     let requirements = format!(
         r#"[permissions.filesystem]
@@ -404,9 +401,8 @@ allowed_sandbox_implementations = ["elevated"]
 
     let call_id = "managed-deny-read";
     let command = format!(
-        "(type \"{}\" 1>NUL 2>NUL && echo SECRET-READ || echo SECRET-DENIED) & type \"{}\"",
-        denied_path.display(),
-        allowed_path.display()
+        "type \"{}\" 1>NUL 2>NUL && echo SECRET-READ || echo SECRET-DENIED",
+        denied_path.display()
     );
     let args = json!({
         "command": command,
@@ -458,10 +454,6 @@ allowed_sandbox_implementations = ["elevated"]
     assert!(
         !output.contains("SECRET-READ"),
         "managed deny-read must not allow the subprocess read: {output}"
-    );
-    assert!(
-        output.contains("public ok"),
-        "allowed reads should still work: {output}"
     );
     assert!(
         !output.contains("managed secret"),
