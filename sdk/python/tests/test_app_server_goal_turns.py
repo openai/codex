@@ -588,6 +588,7 @@ def test_failed_goal_starts_release_routing_without_model_requests(tmp_path) -> 
                 {"threadId": thread.id},
                 response_model=ThreadGoalGetResponse,
             ).goal
+            codex._client.thread_goal_clear(thread.id)
 
             ephemeral = codex.thread_start(ephemeral=True)
             with pytest.raises(InvalidRequestError) as ephemeral_error:
