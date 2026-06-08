@@ -359,6 +359,10 @@ impl Session {
         let mut active = self.active_turn.lock().await;
         let turn = active.get_or_insert_with(ActiveTurn::default);
         debug_assert!(turn.task.is_none());
+        let agent_execution_guard = self.services.agent_control.execution_guard(
+            turn_context.multi_agent_version,
+            &turn_context.session_source,
+        );
         let done_clone = Arc::clone(&done);
         let session_ctx = Arc::new(SessionTaskContext::new(
             Arc::clone(self),
@@ -430,6 +434,7 @@ impl Session {
             cancellation_token,
             turn_context: Arc::clone(&turn_context),
             turn_extension_data,
+            _agent_execution_guard: agent_execution_guard,
             _timer: timer,
         };
         turn.task = Some(running_task);
