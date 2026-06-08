@@ -5,7 +5,10 @@ use clap::Parser;
 use codex_core::config::Config;
 use codex_core::config::find_codex_home;
 use codex_core_plugins::PluginMarketplaceUpgradeOutcome;
+use codex_core_plugins::PluginsConfigInput;
 use codex_core_plugins::PluginsManager;
+use codex_core_plugins::installed_marketplaces::marketplace_install_root;
+use codex_core_plugins::installed_marketplaces::resolve_configured_marketplace_root;
 use codex_core_plugins::marketplace::marketplace_root_dir;
 use codex_core_plugins::marketplace_add::MarketplaceAddOutcome;
 use codex_core_plugins::marketplace_add::MarketplaceAddRequest;
@@ -15,9 +18,14 @@ use codex_core_plugins::marketplace_remove::MarketplaceRemoveRequest;
 use codex_core_plugins::marketplace_remove::remove_marketplace;
 use codex_utils_cli::CliConfigOverrides;
 use serde::Serialize;
+use std::collections::HashMap;
 use std::collections::HashSet;
+use std::path::Path;
+use std::path::PathBuf;
 
+use crate::plugin_cmd::JsonMarketplaceSource;
 use crate::plugin_cmd::configured_marketplace_snapshot_issues;
+use crate::plugin_cmd::configured_marketplace_sources;
 
 #[derive(Debug, Parser)]
 #[command(bin_name = "codex plugin marketplace")]
@@ -240,7 +248,10 @@ async fn run_list(overrides: Vec<(String, toml::Value)>, args: ListMarketplaceAr
     }
     let marketplaces = marketplace_listing.marketplaces;
     if args.json {
-        let output = JsonMarketplaceListOutput::from_marketplaces(marketplaces);
+        let marketplace_sources =
+            configured_marketplace_sources_by_root(config.codex_home.as_path(), &plugins_input);
+        let output =
+            JsonMarketplaceListOutput::from_marketplaces(marketplaces, &marketplace_sources);
         println!("{}", serde_json::to_string_pretty(&output)?);
         return Ok(());
     }
@@ -288,7 +299,10 @@ struct JsonMarketplaceListOutput {
 }
 
 impl JsonMarketplaceListOutput {
-    fn from_marketplaces(marketplaces: Vec<codex_core_plugins::marketplace::Marketplace>) -> Self {
+    fn from_marketplaces(
+        marketplaces: Vec<codex_core_plugins::marketplace::Marketplace>,
+        marketplace_sources: &HashMap<PathBuf, JsonMarketplaceSource>,
+    ) -> Self {
         let mut seen_roots = HashSet::new();
         let marketplaces = marketplaces
             .into_iter()
@@ -298,6 +312,7 @@ impl JsonMarketplaceListOutput {
                     return None;
                 }
                 Some(JsonMarketplaceListEntry {
+                    marketplace_source: marketplace_sources.get(root.as_path()).cloned(),
                     name: marketplace.name,
                     root: root.display().to_string(),
                 })
@@ -313,6 +328,38 @@ impl JsonMarketplaceListOutput {
 struct JsonMarketplaceListEntry {
     name: String,
     root: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    marketplace_source: Option<JsonMarketplaceSource>,
+}
+
+fn configured_marketplace_sources_by_root(
+    codex_home: &Path,
+    plugins_input: &PluginsConfigInput,
+) -> HashMap<PathBuf, JsonMarketplaceSource> {
+    let marketplace_sources = configured_marketplace_sources(plugins_input);
+    let Some(user_config) = plugins_input.config_layer_stack.effective_user_config() else {
+        return HashMap::new();
+    };
+    let Some(marketplaces) = user_config
+        .get("marketplaces")
+        .and_then(toml::Value::as_table)
+    else {
+        return HashMap::new();
+    };
+
+    let default_install_root = marketplace_install_root(codex_home);
+    marketplaces
+        .iter()
+        .filter_map(|(marketplace_name, marketplace)| {
+            let marketplace_source = marketplace_sources.get(marketplace_name)?;
+            let root = resolve_configured_marketplace_root(
+                marketplace_name,
+                marketplace,
+                &default_install_root,
+            )?;
+            Some((root, marketplace_source.clone()))
+        })
+        .collect()
 }
 
 async fn run_upgrade(
