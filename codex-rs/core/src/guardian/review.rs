@@ -358,6 +358,7 @@ async fn run_guardian_review(
         retry_reason.clone(),
         schema,
         external_cancel,
+        GUARDIAN_REVIEW_MAX_ATTEMPTS,
     ))
     .await;
 
@@ -675,28 +676,6 @@ pub(crate) fn spawn_approval_request_review(
 /// context. It may still reuse the parent's managed-network allowlist for
 /// read-only checks, but it intentionally runs without inherited exec-policy
 /// rules.
-#[cfg(test)]
-pub(super) async fn run_guardian_review_session(
-    session: Arc<Session>,
-    turn: Arc<TurnContext>,
-    request: GuardianApprovalRequest,
-    retry_reason: Option<String>,
-    schema: serde_json::Value,
-    external_cancel: Option<CancellationToken>,
-) -> (GuardianReviewOutcome, GuardianReviewAnalyticsResult) {
-    let (outcome, analytics_result, _) = run_guardian_review_session_before_deadline(
-        session,
-        turn,
-        request,
-        retry_reason,
-        schema,
-        external_cancel,
-        Instant::now() + GUARDIAN_REVIEW_TIMEOUT,
-    )
-    .await;
-    (outcome, analytics_result)
-}
-
 async fn run_guardian_review_session_before_deadline(
     session: Arc<Session>,
     turn: Arc<TurnContext>,
@@ -855,16 +834,18 @@ async fn run_guardian_review_session_before_deadline(
     (outcome, analytics_result, retry_cleanup)
 }
 
-async fn run_guardian_review_session_with_retry(
+pub(super) async fn run_guardian_review_session_with_retry(
     session: Arc<Session>,
     turn: Arc<TurnContext>,
     request: GuardianApprovalRequest,
     retry_reason: Option<String>,
     schema: serde_json::Value,
     external_cancel: Option<CancellationToken>,
+    max_attempts: u64,
 ) -> (GuardianReviewOutcome, GuardianReviewAnalyticsResult) {
+    assert!(max_attempts > 0, "guardian review must run at least once");
     let deadline = Instant::now() + GUARDIAN_REVIEW_TIMEOUT;
-    for attempt_count in 1..=GUARDIAN_REVIEW_MAX_ATTEMPTS {
+    for attempt_count in 1..=max_attempts {
         let (outcome, mut analytics_result, retry_cleanup) =
             run_guardian_review_session_before_deadline(
                 Arc::clone(&session),
@@ -877,7 +858,7 @@ async fn run_guardian_review_session_with_retry(
             )
             .await;
         analytics_result.attempt_count = attempt_count;
-        if !should_retry_guardian_review(&outcome, attempt_count) {
+        if !should_retry_guardian_review(&outcome, attempt_count, max_attempts) {
             return (outcome, analytics_result);
         }
         match retry_cleanup {
@@ -923,8 +904,12 @@ fn guardian_retry_delay(attempt_count: u64) -> Option<Duration> {
     (attempt_count < GUARDIAN_REVIEW_MAX_ATTEMPTS).then(|| backoff(attempt_count))
 }
 
-fn should_retry_guardian_review(outcome: &GuardianReviewOutcome, attempt_count: u64) -> bool {
-    attempt_count < GUARDIAN_REVIEW_MAX_ATTEMPTS
+fn should_retry_guardian_review(
+    outcome: &GuardianReviewOutcome,
+    attempt_count: u64,
+    max_attempts: u64,
+) -> bool {
+    attempt_count < max_attempts
         && matches!(
             outcome,
             GuardianReviewOutcome::Error(
@@ -1008,15 +993,19 @@ mod review_tests {
 
         for (outcome, expected) in outcomes {
             assert_eq!(
-                should_retry_guardian_review(&outcome, /*attempt_count*/ 1),
+                should_retry_guardian_review(
+                    &outcome, /*attempt_count*/ 1, /*max_attempts*/ 3,
+                ),
                 expected
             );
             assert_eq!(
-                should_retry_guardian_review(&outcome, /*attempt_count*/ 2),
+                should_retry_guardian_review(
+                    &outcome, /*attempt_count*/ 2, /*max_attempts*/ 3,
+                ),
                 expected
             );
             assert!(!should_retry_guardian_review(
-                &outcome, /*attempt_count*/ 3
+                &outcome, /*attempt_count*/ 3, /*max_attempts*/ 3,
             ));
         }
     }
