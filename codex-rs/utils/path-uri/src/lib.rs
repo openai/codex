@@ -56,7 +56,7 @@ impl PathUri {
     /// Converts an absolute path on the current host to a `file:` URI.
     pub fn from_file_path(path: &AbsolutePathBuf) -> Result<Self, PathUriParseError> {
         let url = Url::from_file_path(path.as_path())
-            .map_err(|()| PathUriParseError::PathCannotBeRepresentedAsFileUri)?;
+            .map_err(|()| PathUriParseError::InvalidFileUriPath)?;
         Self::try_from(url)
     }
 
@@ -299,8 +299,6 @@ pub enum PathUriParseError {
     InvalidUri(#[from] url::ParseError),
     #[error("unsupported path URI scheme `{0}`")]
     UnsupportedScheme(String),
-    #[error("path cannot be represented as a file URI")]
-    PathCannotBeRepresentedAsFileUri,
     #[error("file URI contains an invalid absolute path")]
     InvalidFileUriPath,
     #[error("credentials and ports are not allowed in path URIs")]
