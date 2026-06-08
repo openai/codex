@@ -511,6 +511,59 @@ async fn remote_compact_replaces_history_for_followups() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_compact_disables_parallel_tool_calls_in_locally_enabled_code_mode() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let harness = TestCodexHarness::with_builder(
+        test_codex()
+            .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+            .with_model_info_override("gpt-5.4", |model_info| {
+                model_info.supports_parallel_tool_calls = true;
+            })
+            .with_config(|config| {
+                let _ = config.features.enable(Feature::CodeMode);
+            }),
+    )
+    .await?;
+    let codex = harness.test().codex.clone();
+    let response_mock = responses::mount_sse_once(
+        harness.server(),
+        responses::sse(vec![
+            responses::ev_assistant_message("m1", "FIRST_REMOTE_REPLY"),
+            responses::ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let compact_mock =
+        responses::mount_compact_json_once(harness.server(), json!({ "output": [] })).await;
+
+    codex
+        .submit(Op::UserInput {
+            environments: None,
+            items: vec![UserInput::Text {
+                text: "hello remote compact".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+    wait_for_turn_complete(&codex).await;
+    codex.submit(Op::Compact).await?;
+    wait_for_turn_complete(&codex).await;
+
+    response_mock.single_request();
+    assert_eq!(
+        compact_mock.single_request().body_json()["parallel_tool_calls"],
+        false
+    );
+
+    Ok(())
+}
+
 async fn assert_remote_manual_compact_request_parity(
     auth: CodexAuth,
     configured_service_tier: Option<ServiceTier>,
@@ -792,8 +845,12 @@ async fn remote_compact_v2_reuses_compaction_trigger_for_followups() -> Result<(
     let harness = TestCodexHarness::with_builder(
         test_codex()
             .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+            .with_model_info_override("gpt-5.4", |model_info| {
+                model_info.supports_parallel_tool_calls = true;
+            })
             .with_config(|config| {
                 let _ = config.features.enable(Feature::RemoteCompactionV2);
+                let _ = config.features.enable(Feature::CodeMode);
             }),
     )
     .await?;
@@ -859,6 +916,7 @@ async fn remote_compact_v2_reuses_compaction_trigger_for_followups() -> Result<(
 
     let response_requests = responses_mock.requests();
     let compact_request = &response_requests[1];
+    assert_eq!(compact_request.body_json()["parallel_tool_calls"], false);
     assert!(
         compact_request
             .header("x-codex-beta-features")

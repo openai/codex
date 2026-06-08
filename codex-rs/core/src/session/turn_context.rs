@@ -169,6 +169,13 @@ impl TurnContext {
         ToolEnvironmentMode::from_count(self.environments.turn_environments.len())
     }
 
+    pub(crate) fn supports_parallel_tool_calls(&self) -> bool {
+        match self.tool_mode {
+            ToolMode::Direct => self.model_info.supports_parallel_tool_calls,
+            ToolMode::CodeMode | ToolMode::CodeModeOnly => false,
+        }
+    }
+
     pub(crate) async fn with_model(
         &self,
         model: String,

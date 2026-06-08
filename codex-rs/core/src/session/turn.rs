@@ -87,7 +87,6 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
-use codex_protocol::openai_models::ToolMode;
 use codex_protocol::protocol::AgentMessageContentDeltaEvent;
 use codex_protocol::protocol::AgentReasoningSectionBreakEvent;
 use codex_protocol::protocol::CodexErrorInfo;
@@ -949,15 +948,10 @@ pub(crate) fn build_prompt(
     turn_context: &TurnContext,
     base_instructions: BaseInstructions,
 ) -> Prompt {
-    let tool_mode_supports_parallel_calls = match turn_context.tool_mode {
-        ToolMode::Direct => true,
-        ToolMode::CodeMode | ToolMode::CodeModeOnly => false,
-    };
     Prompt {
         input,
         tools: router.model_visible_specs(),
-        parallel_tool_calls: turn_context.model_info.supports_parallel_tool_calls
-            && tool_mode_supports_parallel_calls,
+        parallel_tool_calls: turn_context.supports_parallel_tool_calls(),
         base_instructions,
         personality: turn_context.personality,
         output_schema: turn_context.final_output_json_schema.clone(),

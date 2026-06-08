@@ -236,7 +236,7 @@ async fn run_remote_compact_task_inner_impl(
     let prompt = Prompt {
         input,
         tools: tool_router.model_visible_specs(),
-        parallel_tool_calls: turn_context.model_info.supports_parallel_tool_calls,
+        parallel_tool_calls: turn_context.supports_parallel_tool_calls(),
         base_instructions,
         personality: turn_context.personality,
         output_schema: None,
