@@ -1017,8 +1017,8 @@ prefix_rule(pattern=["git"], decision="prompt")
             sandbox_permissions: SandboxPermissions::UseDefault,
             prefix_rule: None,
         },
-        ExecApprovalRequirement::Skip {
-            bypass_sandbox: false,
+        ExecApprovalRequirement::NeedsApproval {
+            reason: None,
             proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
                 disallowed_git_path,
                 "status".to_string(),
@@ -1131,6 +1131,26 @@ fn known_safe_on_request_still_prompts_for_restricted_sandbox_escalation() {
                 permission_profile: &PermissionProfile::workspace_write(),
                 windows_sandbox_level: WindowsSandboxLevel::RestrictedToken,
                 sandbox_permissions: SandboxPermissions::RequireEscalated,
+                used_complex_parsing: false,
+                command_origin: ExecPolicyCommandOrigin::Generic,
+            },
+        )
+    );
+}
+
+#[test]
+fn git_status_requires_approval_for_untrusted_projects() {
+    let command = vec!["git".to_string(), "status".to_string()];
+
+    assert_eq!(
+        Decision::Prompt,
+        render_decision_for_unmatched_command(
+            &command,
+            UnmatchedCommandContext {
+                approval_policy: AskForApproval::UnlessTrusted,
+                permission_profile: &PermissionProfile::workspace_write(),
+                windows_sandbox_level: WindowsSandboxLevel::Disabled,
+                sandbox_permissions: SandboxPermissions::UseDefault,
                 used_complex_parsing: false,
                 command_origin: ExecPolicyCommandOrigin::Generic,
             },
