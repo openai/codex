@@ -14,7 +14,6 @@ use crate::allow::AllowDenyPaths;
 use crate::allow::compute_allow_paths_for_permissions;
 use crate::helper_materialization::bundled_executable_path_for_exe;
 use crate::helper_materialization::helper_bin_dir;
-use crate::identity::sandbox_setup_is_complete;
 use crate::logging::current_log_file_path;
 use crate::logging::log_note;
 use crate::path_normalization::canonical_path_key;
@@ -694,17 +693,6 @@ fn report_helper_failure(
     }
 }
 
-fn verify_setup_completed(codex_home: &Path) -> Result<()> {
-    if sandbox_setup_is_complete(codex_home) {
-        Ok(())
-    } else {
-        Err(failure(
-            SetupErrorCode::OrchestratorHelperIncomplete,
-            "setup helper exited successfully before setup completed",
-        ))
-    }
-}
-
 fn run_setup_exe(
     payload: &ElevationPayload,
     needs_elevation: bool,
@@ -758,7 +746,6 @@ fn run_setup_exe(
                 status.code(),
             ));
         }
-        verify_setup_completed(codex_home)?;
         if let Err(err) = clear_setup_error_report(codex_home) {
             log_note(
                 &format!(
@@ -808,7 +795,6 @@ fn run_setup_exe(
             ));
         }
     }
-    verify_setup_completed(codex_home)?;
     if let Err(err) = clear_setup_error_report(codex_home) {
         log_note(
             &format!("setup orchestrator: failed to clear setup_error.json after success: {err}"),
@@ -1103,7 +1089,6 @@ mod tests {
     use super::offline_proxy_settings_from_env;
     use super::profile_read_roots;
     use super::proxy_ports_from_env;
-    use super::verify_setup_completed;
     use crate::helper_materialization::BIN_DIRNAME;
     use crate::helper_materialization::RESOURCES_DIRNAME;
     use crate::helper_materialization::helper_bin_dir;
@@ -1128,18 +1113,6 @@ mod tests {
             .iter()
             .map(|path| dunce::canonicalize(path).unwrap_or_else(|_| PathBuf::from(path)))
             .collect()
-    }
-
-    #[test]
-    fn setup_completion_requires_ready_artifacts() {
-        let codex_home = TempDir::new().expect("tempdir");
-        let err = verify_setup_completed(codex_home.path())
-            .expect_err("missing setup artifacts should fail");
-
-        assert_eq!(
-            extract_failure(&err).map(|failure| failure.code),
-            Some(SetupErrorCode::OrchestratorHelperIncomplete)
-        );
     }
 
     fn permissions_for(

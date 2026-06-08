@@ -31,8 +31,6 @@ pub enum SetupErrorCode {
     OrchestratorHelperExitNonzero,
     /// Helper exited non-zero and reading `setup_error.json` failed.
     OrchestratorHelperReportReadFailed,
-    /// Helper exited successfully before setup completed.
-    OrchestratorHelperIncomplete,
     // Helper (elevated process) failures.
     /// Helper failed while validating or decoding the request payload.
     HelperRequestArgsFailed,
@@ -50,7 +48,7 @@ pub enum SetupErrorCode {
     HelperDpapiProtectFailed,
     /// Helper failed to write the sandbox users secrets file.
     HelperUsersFileWriteFailed,
-    /// Helper failed to write or protect the setup marker file.
+    /// Helper failed to write the setup marker file.
     HelperSetupMarkerWriteFailed,
     /// Helper failed to resolve a SID or convert it to a PSID.
     HelperSidResolveFailed,
@@ -85,7 +83,6 @@ impl SetupErrorCode {
             Self::OrchestratorHelperLaunchCanceled => "orchestrator_helper_launch_canceled",
             Self::OrchestratorHelperExitNonzero => "orchestrator_helper_exit_nonzero",
             Self::OrchestratorHelperReportReadFailed => "orchestrator_helper_report_read_failed",
-            Self::OrchestratorHelperIncomplete => "orchestrator_helper_incomplete",
             Self::HelperRequestArgsFailed => "helper_request_args_failed",
             Self::HelperSandboxDirCreateFailed => "helper_sandbox_dir_create_failed",
             Self::HelperLogFailed => "helper_log_failed",
