@@ -70,6 +70,7 @@ use codex_core::ThreadManager;
 use codex_core::config::Config;
 use codex_exec_server::EnvironmentManager;
 use codex_feedback::CodexFeedback;
+use codex_goal_extension::GoalService;
 use codex_login::AuthManager;
 use codex_login::auth::ExternalAuth;
 use codex_login::auth::ExternalAuthRefreshContext;
@@ -305,6 +306,7 @@ impl MessageProcessor {
         // resumed, or forked threads to a different persistence backend/root.
         let thread_store = codex_core::thread_store_from_config(config.as_ref(), state_db.clone());
         let environment_manager_for_requests = Arc::clone(&environment_manager);
+        let goal_service = Arc::new(GoalService::new());
         let thread_manager = Arc::new_cyclic(|thread_manager| {
             ThreadManager::new(
                 config.as_ref(),
@@ -313,8 +315,11 @@ impl MessageProcessor {
                 environment_manager,
                 thread_extensions(
                     guardian_agent_spawner(thread_manager.clone()),
-                    app_server_extension_event_sink(outgoing.clone()),
+                    app_server_extension_event_sink(outgoing.clone(), thread_state_manager.clone()),
                     auth_manager.clone(),
+                    state_db.clone(),
+                    thread_manager.clone(),
+                    Arc::clone(&goal_service),
                 ),
                 Some(analytics_events_client.clone()),
                 Arc::clone(&thread_store),
@@ -416,6 +421,7 @@ impl MessageProcessor {
             Arc::clone(&config),
             thread_state_manager.clone(),
             state_db.clone(),
+            Arc::clone(&goal_service),
         );
         let thread_processor = ThreadRequestProcessor::new(
             auth_manager.clone(),
@@ -455,14 +461,13 @@ impl MessageProcessor {
                 .plugins_manager()
                 .maybe_start_plugin_startup_tasks_for_config(
                     &config.plugins_config_input(),
-                    auth_manager.clone(),
+                    auth_manager,
                     Some(on_effective_plugins_changed),
                 );
         }
         let config_processor = ConfigRequestProcessor::new(
             outgoing.clone(),
             config_manager.clone(),
-            auth_manager,
             thread_manager.clone(),
             analytics_events_client,
         );
@@ -919,7 +924,12 @@ impl MessageProcessor {
                 .map(|response| Some(response.into())),
             ClientRequest::RemoteControlPairingStart { params, .. } => self
                 .remote_control_processor
-                .pairing_start(params)
+                .pairing_start(params, app_server_client_name.as_deref())
+                .await
+                .map(|response| Some(response.into())),
+            ClientRequest::RemoteControlPairingStatus { params, .. } => self
+                .remote_control_processor
+                .pairing_status(params)
                 .await
                 .map(|response| Some(response.into())),
             ClientRequest::RemoteControlClientsList { params, .. } => self
@@ -1294,6 +1304,9 @@ impl MessageProcessor {
             }
             ClientRequest::GetAccountRateLimits { .. } => {
                 self.account_processor.get_account_rate_limits().await
+            }
+            ClientRequest::GetAccountTokenUsage { .. } => {
+                self.account_processor.get_account_token_usage().await
             }
             ClientRequest::SendAddCreditsNudgeEmail { params, .. } => {
                 self.account_processor

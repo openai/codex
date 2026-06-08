@@ -1,5 +1,6 @@
 use super::*;
 use crate::SkillLoadOutcome;
+use crate::agents_md::LoadedAgentsMd;
 use crate::config::GhostSnapshotConfig;
 use crate::environment_selection::ResolvedTurnEnvironments;
 use codex_core_skills::HostLoadedSkills;
@@ -90,7 +91,6 @@ pub struct TurnContext {
     pub(crate) shell_environment_policy: ShellEnvironmentPolicy,
     pub(crate) available_models: Vec<ModelPreset>,
     pub(crate) unified_exec_shell_mode: UnifiedExecShellMode,
-    pub(crate) goal_tools_supported: bool,
     pub features: ManagedFeatures,
     pub(crate) ghost_snapshot: GhostSnapshotConfig,
     pub(crate) final_output_json_schema: Option<Value>,
@@ -135,7 +135,8 @@ impl TurnContext {
     pub(crate) fn effective_reasoning_effort(&self) -> Option<ReasoningEffortConfig> {
         if self.model_info.supports_reasoning_summaries {
             self.reasoning_effort
-                .or(self.model_info.default_reasoning_level)
+                .clone()
+                .or_else(|| self.model_info.default_reasoning_level.clone())
         } else {
             None
         }
@@ -168,10 +169,6 @@ impl TurnContext {
         ToolEnvironmentMode::from_count(self.environments.turn_environments.len())
     }
 
-    pub(crate) fn goal_tools_enabled(&self) -> bool {
-        self.goal_tools_supported && self.features.get().enabled(Feature::Goals)
-    }
-
     pub(crate) async fn with_model(
         &self,
         model: String,
@@ -195,28 +192,29 @@ impl TurnContext {
         let supported_reasoning_levels = model_info
             .supported_reasoning_levels
             .iter()
-            .map(|preset| preset.effort)
+            .map(|preset| preset.effort.clone())
             .collect::<Vec<_>>();
-        let reasoning_effort = if let Some(current_reasoning_effort) = self.reasoning_effort {
+        let reasoning_effort = if let Some(current_reasoning_effort) = self.reasoning_effort.clone()
+        {
             if supported_reasoning_levels.contains(&current_reasoning_effort) {
                 Some(current_reasoning_effort)
             } else {
                 supported_reasoning_levels
                     .get(supported_reasoning_levels.len().saturating_sub(1) / 2)
-                    .copied()
-                    .or(model_info.default_reasoning_level)
+                    .cloned()
+                    .or_else(|| model_info.default_reasoning_level.clone())
             }
         } else {
             supported_reasoning_levels
                 .get(supported_reasoning_levels.len().saturating_sub(1) / 2)
-                .copied()
-                .or(model_info.default_reasoning_level)
+                .cloned()
+                .or_else(|| model_info.default_reasoning_level.clone())
         };
-        config.model_reasoning_effort = reasoning_effort;
+        config.model_reasoning_effort = reasoning_effort.clone();
 
         let collaboration_mode = self.collaboration_mode.with_updates(
             Some(model.clone()),
-            Some(reasoning_effort),
+            Some(reasoning_effort.clone()),
             /*developer_instructions*/ None,
         );
         let features = self.features.clone();
@@ -261,7 +259,6 @@ impl TurnContext {
             shell_environment_policy: self.shell_environment_policy.clone(),
             available_models,
             unified_exec_shell_mode: self.unified_exec_shell_mode.clone(),
-            goal_tools_supported: self.goal_tools_supported,
             features,
             ghost_snapshot: self.ghost_snapshot.clone(),
             final_output_json_schema: self.final_output_json_schema.clone(),
@@ -362,7 +359,7 @@ impl TurnContext {
             collaboration_mode: Some(self.collaboration_mode.clone()),
             multi_agent_version: Some(self.multi_agent_version),
             realtime_active: Some(self.realtime_active),
-            effort: self.reasoning_effort,
+            effort: self.reasoning_effort.clone(),
             summary: ReasoningSummaryConfig::Auto,
         }
     }
@@ -474,7 +471,6 @@ impl Session {
         cwd: AbsolutePathBuf,
         sub_id: String,
         skills_outcome: Arc<SkillLoadOutcome>,
-        goal_tools_supported: bool,
     ) -> TurnContext {
         let reasoning_effort = session_configuration.collaboration_mode.reasoning_effort();
         let reasoning_summary = session_configuration
@@ -551,7 +547,10 @@ impl Session {
             app_server_client_name: session_configuration.app_server_client_name.clone(),
             developer_instructions: session_configuration.developer_instructions.clone(),
             compact_prompt: session_configuration.compact_prompt.clone(),
-            user_instructions: session_configuration.user_instructions.clone(),
+            user_instructions: session_configuration
+                .user_instructions
+                .as_ref()
+                .map(LoadedAgentsMd::text),
             collaboration_mode: session_configuration.collaboration_mode.clone(),
             multi_agent_version,
             personality: session_configuration.personality,
@@ -562,7 +561,6 @@ impl Session {
             shell_environment_policy: per_turn_config.permissions.shell_environment_policy.clone(),
             available_models,
             unified_exec_shell_mode,
-            goal_tools_supported,
             features: per_turn_config.features.clone(),
             ghost_snapshot: per_turn_config.ghost_snapshot.clone(),
             final_output_json_schema: None,
@@ -775,7 +773,6 @@ impl Session {
                 .skills_for_config(&skills_input, fs)
                 .await,
         );
-        let goal_tools_supported = !per_turn_config.ephemeral && self.state_db().is_some();
         let mut turn_context: TurnContext = Self::make_turn_context(
             self.thread_id(),
             self.session_id(),
@@ -804,7 +801,6 @@ impl Session {
             cwd,
             sub_id,
             skills_outcome,
-            goal_tools_supported,
         );
         turn_context.realtime_active = self.conversation.running_state().await.is_some();
 

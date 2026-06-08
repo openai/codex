@@ -6,6 +6,7 @@ use codex_protocol::config_types::Settings;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
+use core_test_support::TempDirExt;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
@@ -67,7 +68,7 @@ async fn thread_settings_update_without_user_turn_does_not_record_environment_up
     core_test_support::submit_thread_settings(
         &test.codex,
         codex_protocol::protocol::ThreadSettingsOverrides {
-            cwd: Some(new_cwd.path().to_path_buf()),
+            cwd: Some(new_cwd.abs()),
             ..Default::default()
         },
     )

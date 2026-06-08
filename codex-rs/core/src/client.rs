@@ -44,6 +44,7 @@ use codex_api::RawMemory as ApiRawMemory;
 use codex_api::RealtimeCallClient as ApiRealtimeCallClient;
 use codex_api::RealtimeSessionConfig as ApiRealtimeSessionConfig;
 use codex_api::Reasoning;
+use codex_api::ReasoningContext;
 use codex_api::RequestTelemetry;
 use codex_api::ReqwestTransport;
 use codex_api::ResponseCreateWsRequest;
@@ -100,7 +101,6 @@ use tokio::sync::oneshot::error::TryRecvError;
 use tokio_tungstenite::tungstenite::Error;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_util::sync::CancellationToken;
-use tracing::debug;
 use tracing::instrument;
 use tracing::trace;
 use tracing::warn;
@@ -143,7 +143,11 @@ pub const X_RESPONSESAPI_INCLUDE_TIMING_METRICS_HEADER: &str =
     "x-responsesapi-include-timing-metrics";
 const X_CODEX_WS_STREAM_REQUEST_START_MS_CLIENT_METADATA_KEY: &str =
     "x-codex-ws-stream-request-start-ms";
+const WS_REQUEST_HEADER_RESPONSES_LITE_CLIENT_METADATA_KEY: &str =
+    "ws_request_header_x_openai_internal_codex_responses_lite";
 const RESPONSES_WEBSOCKETS_V2_BETA_HEADER_VALUE: &str = "responses_websockets=2026-02-06";
+const X_OPENAI_INTERNAL_CODEX_RESPONSES_LITE_HEADER: &str =
+    "x-openai-internal-codex-responses-lite";
 const RESPONSES_ENDPOINT: &str = "/responses";
 const RESPONSES_COMPACT_ENDPOINT: &str = "/responses/compact";
 // `/responses/compact` is unary, so the timeout covers the full response rather than one idle
@@ -526,6 +530,7 @@ impl ModelClient {
         if let Some(header_value) = self.generate_attestation_header_for().await {
             extra_headers.insert(X_OAI_ATTESTATION_HEADER, header_value);
         }
+        add_responses_lite_header(&mut extra_headers, model_info.use_responses_lite);
         let compact_request_timeout = client_setup
             .api_provider
             .stream_idle_timeout
@@ -610,6 +615,7 @@ impl ModelClient {
             reasoning: effort.map(|effort| Reasoning {
                 effort: Some(effort),
                 summary: None,
+                context: None,
             }),
         };
 
@@ -654,6 +660,7 @@ impl ModelClient {
     fn build_ws_client_metadata(
         &self,
         turn_metadata_header: Option<&str>,
+        use_responses_lite: bool,
     ) -> HashMap<String, String> {
         let mut client_metadata = HashMap::new();
         client_metadata.insert(
@@ -679,6 +686,12 @@ impl ModelClient {
             client_metadata.insert(
                 X_CODEX_TURN_METADATA_HEADER.to_string(),
                 turn_metadata.to_string(),
+            );
+        }
+        if use_responses_lite {
+            client_metadata.insert(
+                WS_REQUEST_HEADER_RESPONSES_LITE_CLIENT_METADATA_KEY.to_string(),
+                "true".to_string(),
             );
         }
         client_metadata
@@ -722,12 +735,17 @@ impl ModelClient {
     ) -> Option<Reasoning> {
         if model_info.supports_reasoning_summaries {
             Some(Reasoning {
-                effort: effort.or(model_info.default_reasoning_level),
+                effort: effort.or_else(|| model_info.default_reasoning_level.clone()),
                 summary: if summary == ReasoningSummaryConfig::None {
                     None
                 } else {
                     Some(summary)
                 },
+                // When Responses Lite is disabled, omit context so Responses uses the default,
+                // which is currently `current_turn`.
+                context: model_info
+                    .use_responses_lite
+                    .then_some(ReasoningContext::AllTurns),
             })
         } else {
             None
@@ -776,7 +794,7 @@ impl ModelClient {
             input,
             tools,
             tool_choice: "auto".to_string(),
-            parallel_tool_calls: prompt.parallel_tool_calls,
+            parallel_tool_calls: prompt.parallel_tool_calls && !model_info.use_responses_lite,
             reasoning,
             store: provider.is_azure_responses_endpoint(),
             stream: true,
@@ -967,18 +985,6 @@ impl ModelClientSession {
             .set_connection_reused(/*connection_reused*/ false);
     }
 
-    pub(crate) async fn send_response_processed(&self, response_id: &str) {
-        let Some(connection) = self.websocket_session.connection.as_ref() else {
-            return;
-        };
-        if let Err(err) = connection
-            .send_response_processed(response_id.to_string())
-            .await
-        {
-            debug!("failed to send response.processed websocket request: {err}");
-        }
-    }
-
     #[allow(clippy::too_many_arguments)]
     /// Builds shared Responses API transport options and request-body options.
     ///
@@ -988,6 +994,7 @@ impl ModelClientSession {
         &self,
         turn_metadata_header: Option<&str>,
         compression: Compression,
+        use_responses_lite: bool,
     ) -> ApiResponsesOptions {
         let turn_metadata_header = parse_turn_metadata_header(turn_metadata_header);
         let session_id = self.client.state.session_id.to_string();
@@ -1006,6 +1013,7 @@ impl ModelClientSession {
                 if let Some(header_value) = self.client.generate_attestation_header_for().await {
                     headers.insert(X_OAI_ATTESTATION_HEADER, header_value);
                 }
+                add_responses_lite_header(&mut headers, use_responses_lite);
                 headers
             },
             compression,
@@ -1273,14 +1281,18 @@ impl ModelClientSession {
             );
             let compression = self.responses_request_compression(client_setup.auth.as_ref());
             let mut options = self
-                .build_responses_options(turn_metadata_header, compression)
+                .build_responses_options(
+                    turn_metadata_header,
+                    compression,
+                    model_info.use_responses_lite,
+                )
                 .await;
 
             let request = self.client.build_responses_request(
                 &client_setup.api_provider,
                 prompt,
                 model_info,
-                effort,
+                effort.clone(),
                 summary,
                 service_tier.clone(),
             )?;
@@ -1383,19 +1395,26 @@ impl ModelClientSession {
             let compression = self.responses_request_compression(client_setup.auth.as_ref());
 
             let options = self
-                .build_responses_options(turn_metadata_header, compression)
+                .build_responses_options(
+                    turn_metadata_header,
+                    compression,
+                    model_info.use_responses_lite,
+                )
                 .await;
             let request = self.client.build_responses_request(
                 &client_setup.api_provider,
                 prompt,
                 model_info,
-                effort,
+                effort.clone(),
                 summary,
                 service_tier.clone(),
             )?;
             let mut ws_payload = ResponseCreateWsRequest {
                 client_metadata: response_create_client_metadata(
-                    Some(self.client.build_ws_client_metadata(turn_metadata_header)),
+                    Some(self.client.build_ws_client_metadata(
+                        turn_metadata_header,
+                        model_info.use_responses_lite,
+                    )),
                     request_trace.as_ref(),
                 ),
                 ..ResponseCreateWsRequest::from(&request)
@@ -1608,7 +1627,7 @@ impl ModelClientSession {
                             prompt,
                             model_info,
                             session_telemetry,
-                            effort,
+                            effort.clone(),
                             summary,
                             service_tier.clone(),
                             turn_metadata_header,
@@ -1672,9 +1691,7 @@ fn parse_turn_metadata_header(turn_metadata_header: Option<&str>) -> Option<Head
 /// Meant to be called just before sending the request over the socket, to capture realistic
 /// transport timing.
 fn stamp_ws_stream_request_start_ms(request: &mut ResponsesWsRequest) {
-    let ResponsesWsRequest::ResponseCreate(payload) = request else {
-        return;
-    };
+    let ResponsesWsRequest::ResponseCreate(payload) = request;
     payload
         .client_metadata
         .get_or_insert_with(HashMap::new)
@@ -1713,6 +1730,15 @@ fn build_responses_headers(
         headers.insert(X_CODEX_TURN_METADATA_HEADER, header_value.clone());
     }
     headers
+}
+
+fn add_responses_lite_header(headers: &mut ApiHeaderMap, use_responses_lite: bool) {
+    if use_responses_lite {
+        headers.insert(
+            X_OPENAI_INTERNAL_CODEX_RESPONSES_LITE_HEADER,
+            HeaderValue::from_static("true"),
+        );
+    }
 }
 
 fn subagent_header_value(session_source: &SessionSource) -> Option<String> {
@@ -1958,9 +1984,10 @@ impl AuthRequestTelemetryContext {
         Self {
             auth_mode: auth_mode.map(|mode| match mode {
                 AuthMode::ApiKey => "ApiKey",
-                AuthMode::Chatgpt | AuthMode::ChatgptAuthTokens | AuthMode::AgentIdentity => {
-                    "Chatgpt"
-                }
+                AuthMode::Chatgpt
+                | AuthMode::ChatgptAuthTokens
+                | AuthMode::AgentIdentity
+                | AuthMode::PersonalAccessToken => "Chatgpt",
             }),
             auth_header_attached: auth_telemetry.attached,
             auth_header_name: auth_telemetry.name,

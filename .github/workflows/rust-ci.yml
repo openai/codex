@@ -159,6 +159,9 @@ jobs:
     runs-on: ${{ matrix.runs_on || matrix.runner }}
     timeout-minutes: ${{ matrix.timeout_minutes }}
     needs: changed
+    environment:
+      name: bazel
+      deployment: false
     strategy:
       fail-fast: false
       matrix:

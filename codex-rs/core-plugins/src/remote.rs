@@ -64,6 +64,8 @@ pub const REMOTE_WORKSPACE_SHARED_WITH_ME_UNLISTED_MARKETPLACE_DISPLAY_NAME: &st
     "Shared with me (unlisted)";
 
 const OPENAI_CURATED_REMOTE_COLLECTION_KEY: &str = "vertical";
+const OAI_PRODUCT_SKU_HEADER: &str = "OAI-Product-Sku";
+const CODEX_PRODUCT_SKU: &str = "codex";
 const REMOTE_PLUGIN_CATALOG_TIMEOUT: Duration = Duration::from_secs(30);
 const REMOTE_PLUGIN_LIST_PAGE_LIMIT: u32 = 200;
 const MAX_REMOTE_DEFAULT_PROMPT_COUNT: usize = 3;
@@ -167,6 +169,27 @@ pub struct RemotePluginDetail {
     pub app_manifest: Option<JsonValue>,
     pub skills: Vec<RemotePluginSkill>,
     pub app_ids: Vec<String>,
+    pub app_templates: Vec<RemoteAppTemplate>,
+    pub mcp_servers: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemoteAppTemplate {
+    pub template_id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub canonical_connector_id: Option<String>,
+    pub logo_url: Option<String>,
+    pub logo_url_dark: Option<String>,
+    pub materialized_app_ids: Vec<String>,
+    pub reason: Option<RemoteAppTemplateUnavailableReason>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum RemoteAppTemplateUnavailableReason {
+    NotConfiguredForWorkspace,
+    NoActiveWorkspace,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -412,11 +435,38 @@ struct RemotePluginReleaseResponse {
     app_ids: Vec<String>,
     #[serde(default)]
     app_manifest: Option<JsonValue>,
+    #[serde(default, alias = "unavailable_app_templates")]
+    app_templates: Vec<RemoteAppTemplateResponse>,
     #[serde(default)]
     keywords: Vec<String>,
     interface: RemotePluginReleaseInterfaceResponse,
     #[serde(default)]
     skills: Vec<RemotePluginSkillResponse>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    mcp_servers: Vec<RemotePluginMcpServerResponse>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+struct RemotePluginMcpServerResponse {
+    key: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+struct RemoteAppTemplateResponse {
+    template_id: String,
+    name: String,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    canonical_connector_id: Option<String>,
+    #[serde(default)]
+    logo_url: Option<String>,
+    #[serde(default)]
+    logo_url_dark: Option<String>,
+    #[serde(default)]
+    materialized_app_ids: Vec<String>,
+    #[serde(default)]
+    reason: Option<RemoteAppTemplateUnavailableReason>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -948,6 +998,14 @@ async fn build_remote_plugin_detail(
             enabled: !disabled_skill_names.contains(&skill.name),
         })
         .collect();
+    let mut mcp_servers = plugin
+        .release
+        .mcp_servers
+        .iter()
+        .map(|server| server.key.clone())
+        .collect::<Vec<_>>();
+    mcp_servers.sort_unstable();
+    mcp_servers.dedup();
 
     Ok(RemotePluginDetail {
         marketplace_name,
@@ -959,6 +1017,22 @@ async fn build_remote_plugin_detail(
         app_manifest: plugin.release.app_manifest,
         skills,
         app_ids: plugin.release.app_ids,
+        app_templates: plugin
+            .release
+            .app_templates
+            .into_iter()
+            .map(|template| RemoteAppTemplate {
+                template_id: template.template_id,
+                name: template.name,
+                description: template.description,
+                canonical_connector_id: template.canonical_connector_id,
+                logo_url: template.logo_url,
+                logo_url_dark: template.logo_url_dark,
+                materialized_app_ids: template.materialized_app_ids,
+                reason: template.reason,
+            })
+            .collect(),
+        mcp_servers,
     })
 }
 
@@ -1519,7 +1593,8 @@ fn authenticated_request(
 ) -> Result<RequestBuilder, RemotePluginCatalogError> {
     Ok(request
         .timeout(REMOTE_PLUGIN_CATALOG_TIMEOUT)
-        .headers(codex_model_provider::auth_provider_from_auth(auth).to_auth_headers()))
+        .headers(codex_model_provider::auth_provider_from_auth(auth).to_auth_headers())
+        .header(OAI_PRODUCT_SKU_HEADER, CODEX_PRODUCT_SKU))
 }
 
 async fn send_and_decode<T: for<'de> Deserialize<'de>>(

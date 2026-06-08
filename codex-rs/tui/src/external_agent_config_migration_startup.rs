@@ -25,7 +25,7 @@ pub(crate) enum ExternalAgentConfigMigrationStartupOutcome {
     ExitRequested,
 }
 
-fn should_show_external_agent_config_migration_prompt(
+pub(crate) fn should_show_external_agent_config_migration_prompt(
     config: &Config,
     entered_trust_nux: bool,
 ) -> bool {

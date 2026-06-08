@@ -384,7 +384,7 @@ sqlx = { version = "0.9.0", default-features = false, features = [
     "time",
     "uuid",
 ] }
-starlark = "0.13.0"
+starlark = { version = "0.14.2", default-features = false }
 strum = "0.27.2"
 strum_macros = "0.28.0"
 supports-color = "3.0.2"
@@ -424,7 +424,7 @@ unicode-width = "0.2"
 url = "2"
 urlencoding = "2.1"
 uuid = "1"
-v8 = "=147.4.0"
+v8 = "=149.2.0"
 vt100 = "0.16.2"
 walkdir = "2.5.0"
 webbrowser = "1.0"
@@ -483,7 +483,6 @@ unwrap_used = "deny"
 [workspace.metadata.cargo-shear]
 ignored = [
     "codex-agent-graph-store",
-    "codex-goal-extension",
     "icu_provider",
     "openssl-sys",
     "codex-v8-poc",
@@ -501,7 +500,7 @@ debug = "none"
 strip = "symbols"
 
 [profile.release]
-lto = "fat"
+lto = "thin"
 split-debuginfo = "off"
 # Because we bundle some of these executables with the TypeScript CLI, we
 # remove everything to make the binary as small as possible.

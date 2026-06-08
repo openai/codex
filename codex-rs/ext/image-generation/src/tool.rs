@@ -222,6 +222,7 @@ fn recent_images(history: &[ResponseItem], count: usize) -> Vec<ImageUrl> {
                 custom_tool_call_ids.insert(call_id.as_str());
             }
             ResponseItem::Message { .. }
+            | ResponseItem::AgentMessage { .. }
             | ResponseItem::Reasoning { .. }
             | ResponseItem::LocalShellCall { .. }
             | ResponseItem::ToolSearchCall { .. }

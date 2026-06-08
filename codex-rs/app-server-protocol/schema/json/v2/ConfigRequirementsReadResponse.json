@@ -94,12 +94,12 @@
             "null"
           ]
         },
-        "allowedPermissions": {
-          "items": {
-            "type": "string"
+        "allowedPermissionProfiles": {
+          "additionalProperties": {
+            "type": "boolean"
           },
           "type": [
-            "array",
+            "object",
             "null"
           ]
         },
@@ -138,6 +138,12 @@
             {
               "type": "null"
             }
+          ]
+        },
+        "defaultPermissions": {
+          "type": [
+            "string",
+            "null"
           ]
         },
         "enforceResidency": {

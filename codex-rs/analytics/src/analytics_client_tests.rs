@@ -63,6 +63,8 @@ use crate::facts::SubAgentThreadStartedInput;
 use crate::facts::ThreadInitializationMode;
 use crate::facts::TrackEventsContext;
 use crate::facts::TurnCodexErrorFact;
+use crate::facts::TurnProfile;
+use crate::facts::TurnProfileFact;
 use crate::facts::TurnResolvedConfigFact;
 use crate::facts::TurnStatus;
 use crate::facts::TurnSteerRequestError;
@@ -396,6 +398,18 @@ fn sample_turn_resolved_config(thread_id: &str, turn_id: &str) -> TurnResolvedCo
     }
 }
 
+fn sample_turn_profile() -> TurnProfile {
+    TurnProfile {
+        before_first_sampling_ms: 100,
+        sampling_ms: 700,
+        between_sampling_overhead_ms: 50,
+        tool_blocking_ms: 250,
+        after_last_sampling_ms: 134,
+        sampling_request_count: 2,
+        sampling_retry_count: 1,
+    }
+}
+
 fn sample_turn_steer_request(
     thread_id: &str,
     expected_turn_id: &str,
@@ -649,6 +663,18 @@ async fn ingest_turn_prerequisites(
             )
             .await;
     }
+
+    reducer
+        .ingest(
+            AnalyticsFact::Custom(CustomAnalyticsFact::TurnProfile(Box::new(
+                TurnProfileFact {
+                    turn_id: "turn-2".to_string(),
+                    profile: sample_turn_profile(),
+                },
+            ))),
+            out,
+        )
+        .await;
 }
 
 async fn ingest_review_prerequisites(
@@ -1347,6 +1373,7 @@ fn thread_initialized_event_serializes_expected_shape() {
             initialization_mode: ThreadInitializationMode::New,
             subagent_source: None,
             parent_thread_id: None,
+            forked_from_thread_id: None,
             created_at: 1,
         },
     });
@@ -1379,6 +1406,7 @@ fn thread_initialized_event_serializes_expected_shape() {
                 "initialization_mode": "new",
                 "subagent_source": null,
                 "parent_thread_id": null,
+                "forked_from_thread_id": null,
                 "created_at": 1
             }
         })
@@ -2429,6 +2457,7 @@ fn subagent_thread_started_review_serializes_expected_shape() {
             session_id: "session-root".to_string(),
             thread_id: "thread-review".to_string(),
             parent_thread_id: None,
+            forked_from_thread_id: None,
             product_client_id: "codex-tui".to_string(),
             client_name: "codex-tui".to_string(),
             client_version: "1.0.0".to_string(),
@@ -2461,18 +2490,26 @@ fn subagent_thread_started_review_serializes_expected_shape() {
     assert_eq!(payload["event_params"]["initialization_mode"], "new");
     assert_eq!(payload["event_params"]["subagent_source"], "review");
     assert_eq!(payload["event_params"]["parent_thread_id"], json!(null));
+    assert_eq!(
+        payload["event_params"]["forked_from_thread_id"],
+        json!(null)
+    );
 }
 
 #[test]
-fn subagent_thread_started_thread_spawn_serializes_parent_thread_id() {
+fn subagent_thread_started_thread_spawn_serializes_thread_lineage() {
     let parent_thread_id =
         codex_protocol::ThreadId::from_string("11111111-1111-1111-1111-111111111111")
+            .expect("valid thread id");
+    let forked_from_thread_id =
+        codex_protocol::ThreadId::from_string("22222222-2222-4222-8222-222222222222")
             .expect("valid thread id");
     let event = TrackEventRequest::ThreadInitialized(subagent_thread_started_event_request(
         SubAgentThreadStartedInput {
             session_id: "session-root".to_string(),
             thread_id: "thread-spawn".to_string(),
             parent_thread_id: Some(parent_thread_id.to_string()),
+            forked_from_thread_id: Some(forked_from_thread_id.to_string()),
             product_client_id: "codex-tui".to_string(),
             client_name: "codex-tui".to_string(),
             client_version: "1.0.0".to_string(),
@@ -2497,6 +2534,10 @@ fn subagent_thread_started_thread_spawn_serializes_parent_thread_id() {
         payload["event_params"]["parent_thread_id"],
         "11111111-1111-1111-1111-111111111111"
     );
+    assert_eq!(
+        payload["event_params"]["forked_from_thread_id"],
+        "22222222-2222-4222-8222-222222222222"
+    );
     assert_eq!(payload["event_params"]["session_id"], "session-root");
 }
 
@@ -2507,6 +2548,7 @@ fn subagent_thread_started_memory_consolidation_serializes_expected_shape() {
             session_id: "session-root".to_string(),
             thread_id: "thread-memory".to_string(),
             parent_thread_id: None,
+            forked_from_thread_id: None,
             product_client_id: "codex-tui".to_string(),
             client_name: "codex-tui".to_string(),
             client_version: "1.0.0".to_string(),
@@ -2533,6 +2575,7 @@ fn subagent_thread_started_other_serializes_expected_shape() {
             session_id: "session-root".to_string(),
             thread_id: "thread-guardian".to_string(),
             parent_thread_id: None,
+            forked_from_thread_id: None,
             product_client_id: "codex-tui".to_string(),
             client_name: "codex-tui".to_string(),
             client_version: "1.0.0".to_string(),
@@ -2558,6 +2601,7 @@ fn subagent_thread_started_other_serializes_explicit_parent_thread_id() {
             session_id: "session-root".to_string(),
             thread_id: "thread-guardian".to_string(),
             parent_thread_id: Some(parent_thread_id.to_string()),
+            forked_from_thread_id: None,
             product_client_id: "codex-tui".to_string(),
             client_name: "codex-tui".to_string(),
             client_version: "1.0.0".to_string(),
@@ -2588,6 +2632,7 @@ async fn subagent_thread_started_publishes_without_initialize() {
                     session_id: "session-root".to_string(),
                     thread_id: "thread-review".to_string(),
                     parent_thread_id: None,
+                    forked_from_thread_id: None,
                     product_client_id: "codex-tui".to_string(),
                     client_name: "codex-tui".to_string(),
                     client_version: "1.0.0".to_string(),
@@ -2662,6 +2707,7 @@ async fn subagent_thread_started_inherits_parent_connection_for_new_thread() {
                     session_id: "session-root".to_string(),
                     thread_id: "thread-review".to_string(),
                     parent_thread_id: Some(parent_thread_id.to_string()),
+                    forked_from_thread_id: None,
                     product_client_id: "parent-client".to_string(),
                     client_name: "parent-client".to_string(),
                     client_version: "1.0.0".to_string(),
@@ -2732,6 +2778,7 @@ async fn subagent_tool_items_inherit_parent_connection_metadata() {
                     session_id: "session-root".to_string(),
                     thread_id: "thread-subagent".to_string(),
                     parent_thread_id: Some("thread-1".to_string()),
+                    forked_from_thread_id: None,
                     product_client_id: "codex-tui".to_string(),
                     client_name: "codex-tui".to_string(),
                     client_version: "1.0.0".to_string(),
@@ -3279,6 +3326,13 @@ fn turn_event_serializes_expected_shape() {
             output_tokens: None,
             reasoning_output_tokens: None,
             total_tokens: None,
+            before_first_sampling_ms: 100,
+            sampling_ms: 700,
+            between_sampling_overhead_ms: 50,
+            tool_blocking_ms: 250,
+            after_last_sampling_ms: 134,
+            sampling_request_count: 2,
+            sampling_retry_count: 1,
             duration_ms: Some(1234),
             started_at: Some(455),
             completed_at: Some(456),
@@ -3345,6 +3399,13 @@ fn turn_event_serializes_expected_shape() {
                 "output_tokens": null,
                 "reasoning_output_tokens": null,
                 "total_tokens": null,
+                "before_first_sampling_ms": 100,
+                "sampling_ms": 700,
+                "between_sampling_overhead_ms": 50,
+                "tool_blocking_ms": 250,
+                "after_last_sampling_ms": 134,
+                "sampling_request_count": 2,
+                "sampling_retry_count": 1,
                 "duration_ms": 1234,
                 "started_at": 455,
                 "completed_at": 456
