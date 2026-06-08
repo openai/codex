@@ -143,7 +143,7 @@ fn analytics_destination_uses_explicit_capture_file() {
 fn analytics_destination_uses_http_without_capture_file() {
     let destination = AnalyticsEventsDestination::from_base_url_and_capture_file(
         "https://chatgpt.com/backend-api/".to_string(),
-        None,
+        /*capture_file*/ None,
     );
 
     assert_eq!(
