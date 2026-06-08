@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::env;
 use std::ffi::OsString;
 
-const MCP_USER_AGENT: &str = "openai-mcp/1.0.0 (Chat)";
+const MCP_USER_AGENT: &str = concat!("openai-mcp/", env!("CARGO_PKG_VERSION"), " (Chat)");
 
 pub(crate) fn create_env_for_mcp_server(
     extra_env: Option<HashMap<OsString, OsString>>,
