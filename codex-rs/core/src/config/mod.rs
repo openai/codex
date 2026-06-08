@@ -449,7 +449,13 @@ impl Permissions {
     /// Legacy compatibility projection derived from the canonical profile.
     pub fn legacy_sandbox_policy(&self, cwd: &Path) -> SandboxPolicy {
         let permission_profile = self.materialized_permission_profile();
-        compatibility_sandbox_policy_for_permission_profile(&permission_profile, cwd)
+        let file_system_sandbox_policy = permission_profile.file_system_sandbox_policy();
+        compatibility_sandbox_policy_for_permission_profile(
+            &permission_profile,
+            &file_system_sandbox_policy,
+            permission_profile.network_sandbox_policy(),
+            cwd,
+        )
     }
 
     /// Check whether a legacy sandbox policy can be applied to this permission

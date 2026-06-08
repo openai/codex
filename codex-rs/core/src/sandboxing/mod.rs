@@ -22,8 +22,10 @@ use codex_protocol::models::PermissionProfile;
 pub use codex_protocol::models::SandboxPermissions;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_sandboxing::SandboxExecRequest;
 use codex_sandboxing::SandboxType;
+use codex_sandboxing::compatibility_sandbox_policy_for_permission_profile;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::HashMap;
 
@@ -98,6 +100,15 @@ impl ExecRequest {
             windows_sandbox_filesystem_overrides: None,
             arg0,
         }
+    }
+
+    pub(crate) fn compatibility_sandbox_policy(&self) -> SandboxPolicy {
+        compatibility_sandbox_policy_for_permission_profile(
+            &self.permission_profile,
+            &self.file_system_sandbox_policy,
+            self.network_sandbox_policy,
+            self.windows_sandbox_policy_cwd.as_path(),
+        )
     }
 
     pub(crate) fn from_sandbox_exec_request(

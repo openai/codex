@@ -125,8 +125,12 @@ impl TurnContext {
     }
 
     pub(crate) fn sandbox_policy(&self) -> SandboxPolicy {
+        let file_system_sandbox_policy = self.file_system_sandbox_policy();
+        let network_sandbox_policy = self.network_sandbox_policy();
         compatibility_sandbox_policy_for_permission_profile(
             &self.permission_profile,
+            &file_system_sandbox_policy,
+            network_sandbox_policy,
             #[allow(deprecated)]
             &self.cwd,
         )
