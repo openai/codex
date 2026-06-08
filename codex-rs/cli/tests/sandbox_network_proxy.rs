@@ -19,6 +19,7 @@ default_permissions = "network-test"
 
 [features]
 network_proxy = true
+use_legacy_landlock = true
 
 [permissions.network-test]
 extends = ":workspace"
@@ -26,12 +27,11 @@ extends = ":workspace"
 [permissions.network-test.network]
 enabled = true
 mode = "full"
-
-[permissions.network-test.network.domains]
-"example.com" = "allow"
 "#,
     )?;
 
+    // Bash opens `/dev/tcp/...` as a direct TCP connection. Invert the result so
+    // the sandboxed command succeeds only when that connection is blocked.
     let direct_connect_test =
         format!("if exec 3<>/dev/tcp/127.0.0.2/{port}; then exit 1; else exit 0; fi");
     let output = std::process::Command::new(codex_utils_cargo_bin::cargo_bin("codex")?)
