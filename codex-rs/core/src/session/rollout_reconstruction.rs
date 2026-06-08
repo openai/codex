@@ -254,16 +254,17 @@ impl Session {
                         history.replace(replacement_history.clone());
                     } else {
                         saw_legacy_compaction_without_replacement_history = true;
-                        // Legacy rollouts without `replacement_history` should rebuild the
-                        // historical TurnContext at the correct insertion point from persisted
-                        // `TurnContextItem`s. These are rare enough that we currently just clear
-                        // `reference_context_item`, reinject canonical context at the end of the
-                        // resumed conversation, and accept the temporary out-of-distribution
-                        // prompt shape.
+                        // Legacy rollouts without `replacement_history` rebuild fresh compacted
+                        // replacement messages from the historical user-message text and summary.
+                        // They should also rebuild the historical TurnContext at the correct
+                        // insertion point from persisted `TurnContextItem`s. These are rare enough
+                        // that we currently just clear `reference_context_item`, reinject canonical
+                        // context at the end of the resumed conversation, and accept the temporary
+                        // out-of-distribution prompt shape.
                         // TODO(ccunningham): if we drop support for None replacement_history compaction items,
                         // we can get rid of this second loop entirely and just build `history` directly in the first loop.
                         let user_messages = collect_user_messages(history.raw_items());
-                        let rebuilt = compact::rebuild_legacy_compacted_history(
+                        let rebuilt = compact::build_compacted_history(
                             Vec::new(),
                             &user_messages,
                             &compacted.message,

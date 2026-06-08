@@ -162,7 +162,6 @@ fn build_token_limited_compacted_history_truncates_overlong_user_messages() {
         std::slice::from_ref(&big),
         "SUMMARY",
         max_tokens,
-        super::CompactedHistoryMessageIds::New,
     );
     assert_eq!(history.len(), 2);
 
