@@ -13,10 +13,13 @@ use crate::hook_runtime::run_permission_request_hooks;
 use crate::sandboxing::ExecOptions;
 use crate::sandboxing::ExecRequest;
 use crate::sandboxing::SandboxPermissions;
+use crate::session::session::Session;
+use crate::session::turn_context::TurnContext;
 use crate::shell::ShellType;
 use crate::tools::runtimes::build_sandbox_command;
 use crate::tools::runtimes::exec_env_for_sandbox_permissions;
 use crate::tools::runtimes::prepend_zsh_fork_bin_to_path;
+use crate::tools::sandboxing::ExecApprovalRequirement;
 use crate::tools::sandboxing::PermissionRequestPayload;
 use crate::tools::sandboxing::SandboxAttempt;
 use crate::tools::sandboxing::ToolCtx;
@@ -97,6 +100,19 @@ fn approval_sandbox_permissions(
     } else {
         sandbox_permissions
     }
+}
+
+fn parent_approved_sandbox_override(
+    sandbox_permissions: SandboxPermissions,
+    additional_permissions_preapproved: bool,
+    exec_approval_requirement: &ExecApprovalRequirement,
+) -> bool {
+    sandbox_permissions.requests_sandbox_override()
+        && (additional_permissions_preapproved
+            || matches!(
+                exec_approval_requirement,
+                ExecApprovalRequirement::NeedsApproval { .. }
+            ))
 }
 
 pub(super) async fn try_run_zsh_fork(
@@ -226,6 +242,11 @@ pub(super) async fn try_run_zsh_fork(
         sandbox_permissions: req.sandbox_permissions,
         approval_sandbox_permissions,
         prompt_permissions: req.additional_permissions.clone(),
+        parent_sandbox_override_approved: parent_approved_sandbox_override(
+            req.sandbox_permissions,
+            req.additional_permissions_preapproved,
+            &req.exec_approval_requirement,
+        ),
         stopwatch: stopwatch.clone(),
     };
 
@@ -301,6 +322,11 @@ pub(crate) async fn prepare_unified_exec_zsh_fork(
             req.additional_permissions_preapproved,
         ),
         prompt_permissions: req.additional_permissions.clone(),
+        parent_sandbox_override_approved: parent_approved_sandbox_override(
+            req.sandbox_permissions,
+            req.additional_permissions_preapproved,
+            &req.exec_approval_requirement,
+        ),
         stopwatch: Stopwatch::unlimited(),
     };
 
@@ -332,6 +358,7 @@ struct CoreShellActionProvider {
     sandbox_permissions: SandboxPermissions,
     approval_sandbox_permissions: SandboxPermissions,
     prompt_permissions: Option<AdditionalPermissionProfile>,
+    parent_sandbox_override_approved: bool,
     stopwatch: Stopwatch,
 }
 
@@ -366,6 +393,23 @@ fn execve_prompt_is_rejected_by_policy(
         }
         _ => None,
     }
+}
+
+async fn execve_prompt_routes_to_guardian(session: &Arc<Session>, turn: &Arc<TurnContext>) -> bool {
+    routes_approval_to_guardian(turn) || session.strict_auto_review_enabled_for_turn().await
+}
+
+async fn permission_request_hook_decision(
+    session: &Arc<Session>,
+    turn: &Arc<TurnContext>,
+    run_id_suffix: &str,
+    command: &[String],
+) -> Option<PermissionRequestDecision> {
+    let permission_request = PermissionRequestPayload::bash(
+        codex_shell_command::parse_command::shlex_join(command),
+        /*description*/ None,
+    );
+    run_permission_request_hooks(session, turn, run_id_suffix, permission_request).await
 }
 
 impl CoreShellActionProvider {
@@ -422,20 +466,18 @@ impl CoreShellActionProvider {
         let call_id = self.call_id.clone();
         let approval_id = Some(Uuid::new_v4().to_string());
         let source = self.tool_name;
-        let guardian_review_id = routes_approval_to_guardian(&turn).then(new_guardian_review_id);
+        let guardian_review_id = execve_prompt_routes_to_guardian(&session, &turn)
+            .await
+            .then(new_guardian_review_id);
         Ok(stopwatch
             .pause_for(async move {
                 // 1) Run PermissionRequest hooks
-                let permission_request = PermissionRequestPayload::bash(
-                    codex_shell_command::parse_command::shlex_join(&command),
-                    /*description*/ None,
-                );
                 let effective_approval_id = approval_id.clone().unwrap_or_else(|| call_id.clone());
-                match run_permission_request_hooks(
+                match permission_request_hook_decision(
                     &session,
                     &turn,
                     &effective_approval_id,
-                    permission_request,
+                    &command,
                 )
                 .await
                 {
@@ -635,6 +677,39 @@ impl EscalationPolicy for CoreShellActionProvider {
             SandboxPermissions::RequireEscalated => unsandboxed_allowed,
             SandboxPermissions::WithAdditionalPermissions => true,
         };
+        // The parent shell/unified-exec approval already covered unmatched
+        // prompts caused by its sandbox override. Explicit exec-policy rules
+        // still keep their own decisions. Guardian-routed turns keep the
+        // prompt so Guardian can review each intercepted execve independently.
+        // PermissionRequest hooks also keep top priority: a hook denial must not
+        // be bypassed just because the parent process approval was granted.
+        let routes_execve_prompt_to_guardian =
+            execve_prompt_routes_to_guardian(&self.session, &self.turn).await;
+        let decision = if self.parent_sandbox_override_approved
+            && !routes_execve_prompt_to_guardian
+            && evaluation.decision == Decision::Prompt
+            && !decision_driven_by_policy
+        {
+            let command = join_program_and_argv(program, argv);
+            match self
+                .stopwatch
+                .pause_for(permission_request_hook_decision(
+                    &self.session,
+                    &self.turn,
+                    &self.call_id,
+                    &command,
+                ))
+                .await
+            {
+                Some(PermissionRequestDecision::Allow) | None => {}
+                Some(PermissionRequestDecision::Deny { message }) => {
+                    return Ok(EscalationDecision::deny(Some(message)));
+                }
+            }
+            Decision::Allow
+        } else {
+            evaluation.decision
+        };
 
         let decision_source = if decision_driven_by_policy {
             DecisionSource::PrefixRule
@@ -652,7 +727,7 @@ impl EscalationPolicy for CoreShellActionProvider {
             ),
         };
         self.process_decision(
-            evaluation.decision,
+            decision,
             needs_escalation,
             program,
             argv,

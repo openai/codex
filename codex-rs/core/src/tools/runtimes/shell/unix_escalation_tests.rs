@@ -9,8 +9,12 @@ use super::join_program_and_argv;
 use super::map_exec_result;
 use crate::config::Constrained;
 use crate::sandboxing::SandboxPermissions;
+use crate::session::session::Session;
 use crate::session::tests::make_session_and_context;
+use crate::session::turn_context::TurnContext;
+use crate::state::ActiveTurn;
 use anyhow::Context;
+use codex_config::types::ApprovalsReviewer;
 use codex_execpolicy::Decision;
 use codex_execpolicy::Evaluation;
 use codex_execpolicy::PolicyParser;
@@ -40,6 +44,7 @@ use codex_shell_escalation::ExecResult;
 use codex_shell_escalation::ResolvedPermissionProfile;
 use codex_shell_escalation::ShellCommandExecutor;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use core_test_support::hooks::trusted_config_layer_stack;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -92,6 +97,95 @@ fn denied_read_file_system_sandbox_policy() -> FileSystemSandboxPolicy {
 
 fn test_sandbox_cwd() -> AbsolutePathBuf {
     AbsolutePathBuf::try_from(host_absolute_path(&["workspace"])).unwrap()
+}
+
+async fn enable_strict_auto_review_for_session(session: &Session) {
+    let active_turn = ActiveTurn::default();
+    let turn_state = Arc::clone(&active_turn.turn_state);
+    *session.active_turn.lock().await = Some(active_turn);
+    turn_state.lock().await.enable_strict_auto_review();
+}
+
+fn install_execve_permission_request_hook(
+    session: &Session,
+    turn_context: &TurnContext,
+    hook_output: &Value,
+) -> anyhow::Result<PathBuf> {
+    std::fs::create_dir_all(&turn_context.config.codex_home)
+        .context("recreate codex home for hook fixtures")?;
+    let script_path = turn_context
+        .config
+        .codex_home
+        .join("permission_request_hook.sh");
+    let log_path = turn_context
+        .config
+        .codex_home
+        .join("permission_request_hook_log.jsonl");
+    let hook_output = hook_output.to_string();
+    std::fs::write(
+        &script_path,
+        format!(
+            "#!/bin/sh\ncat > {log_path}\nprintf '%s\\n' {hook_output}\n",
+            log_path = shlex::try_quote(log_path.to_string_lossy().as_ref())?,
+            hook_output = shlex::try_quote(&hook_output)?,
+        ),
+    )
+    .with_context(|| format!("write hook script to {}", script_path.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let mut permissions = std::fs::metadata(&script_path)
+            .with_context(|| format!("read hook script metadata from {}", script_path.display()))?
+            .permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&script_path, permissions)
+            .with_context(|| format!("set hook script permissions on {}", script_path.display()))?;
+    }
+    std::fs::write(
+        turn_context.config.codex_home.join("hooks.json"),
+        serde_json::json!({
+            "hooks": {
+                "PermissionRequest": [{
+                    "hooks": [{
+                        "type": "command",
+                        "command": script_path.display().to_string(),
+                    }]
+                }]
+            }
+        })
+        .to_string(),
+    )
+    .context("write hooks.json")?;
+    let hook_list = codex_hooks::list_hooks(HooksConfig {
+        feature_enabled: true,
+        config_layer_stack: Some(turn_context.config.config_layer_stack.clone()),
+        ..HooksConfig::default()
+    });
+    assert_eq!(hook_list.hooks.len(), 1);
+    let trusted_config_layer_stack = trusted_config_layer_stack(
+        &turn_context.config.config_layer_stack,
+        &turn_context.config.codex_home,
+        hook_list.hooks,
+    );
+
+    let mut hook_shell_argv = session
+        .user_shell()
+        .derive_exec_args("", /*use_login_shell*/ false);
+    let hook_shell_program = hook_shell_argv.remove(0);
+    let _ = hook_shell_argv.pop();
+    session
+        .services
+        .hooks
+        .store(Arc::new(Hooks::new(HooksConfig {
+            feature_enabled: true,
+            config_layer_stack: Some(trusted_config_layer_stack),
+            shell_program: Some(hook_shell_program),
+            shell_args: hook_shell_argv,
+            ..HooksConfig::default()
+        })));
+
+    Ok(log_path.to_path_buf())
 }
 
 #[test]
@@ -151,6 +245,42 @@ fn approval_sandbox_permissions_only_downgrades_preapproved_additional_permissio
         ),
         SandboxPermissions::RequireEscalated,
     );
+}
+
+#[test]
+fn parent_approved_sandbox_override_tracks_parent_approval_sources() {
+    assert!(super::parent_approved_sandbox_override(
+        SandboxPermissions::RequireEscalated,
+        /*additional_permissions_preapproved*/ false,
+        &crate::tools::sandboxing::ExecApprovalRequirement::NeedsApproval {
+            reason: None,
+            proposed_execpolicy_amendment: None,
+        },
+    ));
+    assert!(super::parent_approved_sandbox_override(
+        SandboxPermissions::WithAdditionalPermissions,
+        /*additional_permissions_preapproved*/ true,
+        &crate::tools::sandboxing::ExecApprovalRequirement::Skip {
+            bypass_sandbox: false,
+            proposed_execpolicy_amendment: None,
+        },
+    ));
+    assert!(!super::parent_approved_sandbox_override(
+        SandboxPermissions::UseDefault,
+        /*additional_permissions_preapproved*/ false,
+        &crate::tools::sandboxing::ExecApprovalRequirement::NeedsApproval {
+            reason: None,
+            proposed_execpolicy_amendment: None,
+        },
+    ));
+    assert!(!super::parent_approved_sandbox_override(
+        SandboxPermissions::RequireEscalated,
+        /*additional_permissions_preapproved*/ false,
+        &crate::tools::sandboxing::ExecApprovalRequirement::Skip {
+            bypass_sandbox: true,
+            proposed_execpolicy_amendment: None,
+        },
+    ));
 }
 
 #[test]
@@ -433,6 +563,7 @@ async fn preapproved_additional_permissions_escalate_intercepted_exec() -> anyho
         sandbox_permissions: SandboxPermissions::WithAdditionalPermissions,
         approval_sandbox_permissions: SandboxPermissions::UseDefault,
         prompt_permissions: Some(requested_permissions),
+        parent_sandbox_override_approved: true,
         stopwatch: codex_shell_escalation::Stopwatch::new(Duration::from_secs(1)),
     };
 
@@ -457,93 +588,215 @@ async fn preapproved_additional_permissions_escalate_intercepted_exec() -> anyho
     Ok(())
 }
 
+#[tokio::test]
+async fn parent_require_escalated_approval_escalates_intercepted_exec() -> anyhow::Result<()> {
+    let (session, turn_context) = make_session_and_context().await;
+    let workdir = test_sandbox_cwd();
+    let provider = CoreShellActionProvider {
+        policy: Arc::new(RwLock::new(codex_execpolicy::Policy::empty())),
+        session: Arc::new(session),
+        turn: Arc::new(turn_context),
+        call_id: "parent-require-escalated".to_string(),
+        tool_name: GuardianCommandSource::Shell,
+        approval_policy: AskForApproval::OnRequest,
+        permission_profile: PermissionProfile::workspace_write(),
+        file_system_sandbox_policy: read_only_file_system_sandbox_policy(),
+        sandbox_permissions: SandboxPermissions::RequireEscalated,
+        approval_sandbox_permissions: SandboxPermissions::RequireEscalated,
+        prompt_permissions: None,
+        parent_sandbox_override_approved: true,
+        stopwatch: codex_shell_escalation::Stopwatch::new(Duration::from_secs(1)),
+    };
+
+    let action = codex_shell_escalation::EscalationPolicy::determine_action(
+        &provider,
+        &AbsolutePathBuf::from_absolute_path("/usr/bin/curl")?,
+        &["curl".to_string(), "example.com".to_string()],
+        &workdir,
+    )
+    .await?;
+
+    assert_eq!(
+        action,
+        codex_shell_escalation::EscalationDecision::Escalate(EscalationExecution::Unsandboxed)
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn execve_prompt_routes_to_guardian_in_strict_auto_review() -> anyhow::Result<()> {
+    let (session, turn_context) = make_session_and_context().await;
+    let session = Arc::new(session);
+    let turn_context = Arc::new(turn_context);
+
+    assert!(!super::execve_prompt_routes_to_guardian(&session, &turn_context).await);
+
+    enable_strict_auto_review_for_session(&session).await;
+
+    assert!(super::execve_prompt_routes_to_guardian(&session, &turn_context).await);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn parent_approval_does_not_bypass_guardian_routed_exec_prompt() -> anyhow::Result<()> {
+    let (session, mut turn_context) = make_session_and_context().await;
+    let approval_policy = AskForApproval::Granular(GranularApprovalConfig {
+        sandbox_approval: false,
+        rules: true,
+        skill_approval: true,
+        request_permissions: true,
+        mcp_elicitations: true,
+    });
+    turn_context.approval_policy = Constrained::allow_any(approval_policy);
+    let mut config = (*turn_context.config).clone();
+    config.approvals_reviewer = ApprovalsReviewer::AutoReview;
+    turn_context.config = Arc::new(config);
+    let workdir = test_sandbox_cwd();
+    let provider = CoreShellActionProvider {
+        policy: Arc::new(RwLock::new(codex_execpolicy::Policy::empty())),
+        session: Arc::new(session),
+        turn: Arc::new(turn_context),
+        call_id: "parent-guardian-routed".to_string(),
+        tool_name: GuardianCommandSource::Shell,
+        approval_policy,
+        permission_profile: PermissionProfile::workspace_write(),
+        file_system_sandbox_policy: read_only_file_system_sandbox_policy(),
+        sandbox_permissions: SandboxPermissions::RequireEscalated,
+        approval_sandbox_permissions: SandboxPermissions::RequireEscalated,
+        prompt_permissions: None,
+        parent_sandbox_override_approved: true,
+        stopwatch: codex_shell_escalation::Stopwatch::new(Duration::from_secs(1)),
+    };
+
+    let action = codex_shell_escalation::EscalationPolicy::determine_action(
+        &provider,
+        &AbsolutePathBuf::from_absolute_path("/usr/bin/curl")?,
+        &["curl".to_string(), "example.com".to_string()],
+        &workdir,
+    )
+    .await?;
+
+    assert_eq!(
+        action,
+        codex_shell_escalation::EscalationDecision::Deny {
+            reason: Some("Execution forbidden by policy".to_string()),
+        }
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn parent_approval_does_not_bypass_strict_auto_review_exec_prompt() -> anyhow::Result<()> {
+    let (session, mut turn_context) = make_session_and_context().await;
+    enable_strict_auto_review_for_session(&session).await;
+    let approval_policy = AskForApproval::Granular(GranularApprovalConfig {
+        sandbox_approval: false,
+        rules: true,
+        skill_approval: true,
+        request_permissions: true,
+        mcp_elicitations: true,
+    });
+    turn_context.approval_policy = Constrained::allow_any(approval_policy);
+    let workdir = test_sandbox_cwd();
+    let provider = CoreShellActionProvider {
+        policy: Arc::new(RwLock::new(codex_execpolicy::Policy::empty())),
+        session: Arc::new(session),
+        turn: Arc::new(turn_context),
+        call_id: "parent-strict-auto-review".to_string(),
+        tool_name: GuardianCommandSource::Shell,
+        approval_policy,
+        permission_profile: PermissionProfile::workspace_write(),
+        file_system_sandbox_policy: read_only_file_system_sandbox_policy(),
+        sandbox_permissions: SandboxPermissions::RequireEscalated,
+        approval_sandbox_permissions: SandboxPermissions::RequireEscalated,
+        prompt_permissions: None,
+        parent_sandbox_override_approved: true,
+        stopwatch: codex_shell_escalation::Stopwatch::new(Duration::from_secs(1)),
+    };
+
+    let action = codex_shell_escalation::EscalationPolicy::determine_action(
+        &provider,
+        &AbsolutePathBuf::from_absolute_path("/usr/bin/curl")?,
+        &["curl".to_string(), "example.com".to_string()],
+        &workdir,
+    )
+    .await?;
+
+    assert_eq!(
+        action,
+        codex_shell_escalation::EscalationDecision::Deny {
+            reason: Some("Execution forbidden by policy".to_string()),
+        }
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn parent_approval_does_not_override_intercepted_exec_policy_prompt() -> anyhow::Result<()> {
+    let (session, turn_context) = make_session_and_context().await;
+    let mut parser = PolicyParser::new();
+    parser.parse(
+        "test.rules",
+        r#"prefix_rule(pattern = ["curl"], decision = "prompt")"#,
+    )?;
+    let workdir = test_sandbox_cwd();
+    let provider = CoreShellActionProvider {
+        policy: Arc::new(RwLock::new(parser.build())),
+        session: Arc::new(session),
+        turn: Arc::new(turn_context),
+        call_id: "parent-policy-prompt".to_string(),
+        tool_name: GuardianCommandSource::Shell,
+        approval_policy: AskForApproval::Granular(GranularApprovalConfig {
+            sandbox_approval: true,
+            rules: false,
+            skill_approval: true,
+            request_permissions: true,
+            mcp_elicitations: true,
+        }),
+        permission_profile: PermissionProfile::workspace_write(),
+        file_system_sandbox_policy: read_only_file_system_sandbox_policy(),
+        sandbox_permissions: SandboxPermissions::RequireEscalated,
+        approval_sandbox_permissions: SandboxPermissions::RequireEscalated,
+        prompt_permissions: None,
+        parent_sandbox_override_approved: true,
+        stopwatch: codex_shell_escalation::Stopwatch::new(Duration::from_secs(1)),
+    };
+
+    let action = codex_shell_escalation::EscalationPolicy::determine_action(
+        &provider,
+        &AbsolutePathBuf::from_absolute_path("/usr/bin/curl")?,
+        &["curl".to_string(), "example.com".to_string()],
+        &workdir,
+    )
+    .await?;
+
+    assert_eq!(
+        action,
+        codex_shell_escalation::EscalationDecision::Deny {
+            reason: Some("Execution forbidden by policy".to_string()),
+        }
+    );
+
+    Ok(())
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn execve_permission_request_hook_short_circuits_prompt() -> anyhow::Result<()> {
     let (session, mut turn_context) = make_session_and_context().await;
-    std::fs::create_dir_all(&turn_context.config.codex_home)
-        .context("recreate codex home for hook fixtures")?;
-    let script_path = turn_context
-        .config
-        .codex_home
-        .join("permission_request_hook.py");
-    let log_path = turn_context
-        .config
-        .codex_home
-        .join("permission_request_hook_log.jsonl");
-    std::fs::write(
-        &script_path,
-        format!(
-            "#!/bin/sh\ncat > {log_path}\nprintf '%s\\n' '{response}'\n",
-            log_path = shlex::try_quote(log_path.to_string_lossy().as_ref())?,
-            response = "{\"hookSpecificOutput\":{\"hookEventName\":\"PermissionRequest\",\"decision\":{\"behavior\":\"allow\"}}}",
-        ),
-    )
-    .with_context(|| format!("write hook script to {}", script_path.display()))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-
-        let mut permissions = std::fs::metadata(&script_path)
-            .with_context(|| format!("read hook script metadata from {}", script_path.display()))?
-            .permissions();
-        permissions.set_mode(0o755);
-        std::fs::set_permissions(&script_path, permissions)
-            .with_context(|| format!("set hook script permissions on {}", script_path.display()))?;
-    }
-    std::fs::write(
-        turn_context.config.codex_home.join("hooks.json"),
-        serde_json::json!({
-            "hooks": {
-                "PermissionRequest": [{
-                    "hooks": [{
-                        "type": "command",
-                        "command": script_path.display().to_string(),
-                    }]
-                }]
+    let log_path = install_execve_permission_request_hook(
+        &session,
+        &turn_context,
+        &serde_json::json!({
+            "hookSpecificOutput": {
+                "hookEventName": "PermissionRequest",
+                "decision": { "behavior": "allow" }
             }
-        })
-        .to_string(),
-    )
-    .context("write hooks.json")?;
-    let config_toml_path = turn_context
-        .config
-        .codex_home
-        .join(codex_config::CONFIG_TOML_FILE);
-    let hook_list = codex_hooks::list_hooks(HooksConfig {
-        feature_enabled: true,
-        config_layer_stack: Some(turn_context.config.config_layer_stack.clone()),
-        ..HooksConfig::default()
-    });
-    assert_eq!(hook_list.hooks.len(), 1);
-    let trusted_config_layer_stack = turn_context.config.config_layer_stack.with_user_config(
-        &config_toml_path,
-        serde_json::from_value(serde_json::json!({
-            "hooks": {
-                "state": {
-                    hook_list.hooks[0].key.clone(): {
-                        "trusted_hash": hook_list.hooks[0].current_hash.clone(),
-                    },
-                },
-            },
-        }))
-        .context("build trusted hook state")?,
-    );
-
-    let mut hook_shell_argv = session
-        .user_shell()
-        .derive_exec_args("", /*use_login_shell*/ false);
-    let hook_shell_program = hook_shell_argv.remove(0);
-    let _ = hook_shell_argv.pop();
-    session
-        .services
-        .hooks
-        .store(Arc::new(Hooks::new(HooksConfig {
-            feature_enabled: true,
-            config_layer_stack: Some(trusted_config_layer_stack),
-            shell_program: Some(hook_shell_program),
-            shell_args: hook_shell_argv,
-            ..HooksConfig::default()
-        })));
+        }),
+    )?;
 
     turn_context.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
     turn_context.permission_profile = PermissionProfile::from_runtime_permissions(
@@ -568,6 +821,7 @@ async fn execve_permission_request_hook_short_circuits_prompt() -> anyhow::Resul
         sandbox_permissions: SandboxPermissions::RequireEscalated,
         approval_sandbox_permissions: SandboxPermissions::RequireEscalated,
         prompt_permissions: None,
+        parent_sandbox_override_approved: false,
         stopwatch: codex_shell_escalation::Stopwatch::new(Duration::from_secs(1)),
     };
 
@@ -604,6 +858,85 @@ async fn execve_permission_request_hook_short_circuits_prompt() -> anyhow::Resul
     assert_eq!(
         hook_inputs[0]["tool_input"]["description"],
         serde_json::Value::Null
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn parent_approval_preserves_execve_permission_request_hook_denial() -> anyhow::Result<()> {
+    let (session, mut turn_context) = make_session_and_context().await;
+    let log_path = install_execve_permission_request_hook(
+        &session,
+        &turn_context,
+        &serde_json::json!({
+            "hookSpecificOutput": {
+                "hookEventName": "PermissionRequest",
+                "decision": {
+                    "behavior": "deny",
+                    "message": "blocked by hook"
+                }
+            }
+        }),
+    )?;
+
+    turn_context.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+    turn_context.permission_profile = PermissionProfile::from_runtime_permissions(
+        &read_only_file_system_sandbox_policy(),
+        NetworkSandboxPolicy::Restricted,
+    );
+    let workdir = AbsolutePathBuf::try_from(std::env::current_dir()?)?;
+    let target = std::env::temp_dir().join("execve-hook-denial.txt");
+    let target_str = target.display().to_string();
+    let command = vec!["touch".to_string(), target_str.clone()];
+    let expected_hook_command =
+        codex_shell_command::parse_command::shlex_join(&["/usr/bin/touch".to_string(), target_str]);
+    let provider = CoreShellActionProvider {
+        policy: Arc::new(RwLock::new(codex_execpolicy::Policy::empty())),
+        session: Arc::new(session),
+        turn: Arc::new(turn_context),
+        call_id: "execve-parent-hook-denial".to_string(),
+        tool_name: GuardianCommandSource::Shell,
+        approval_policy: AskForApproval::OnRequest,
+        permission_profile: PermissionProfile::read_only(),
+        file_system_sandbox_policy: read_only_file_system_sandbox_policy(),
+        sandbox_permissions: SandboxPermissions::RequireEscalated,
+        approval_sandbox_permissions: SandboxPermissions::RequireEscalated,
+        prompt_permissions: None,
+        parent_sandbox_override_approved: true,
+        stopwatch: codex_shell_escalation::Stopwatch::new(Duration::from_secs(1)),
+    };
+
+    let action = tokio::time::timeout(
+        Duration::from_secs(5),
+        codex_shell_escalation::EscalationPolicy::determine_action(
+            &provider,
+            &AbsolutePathBuf::from_absolute_path("/usr/bin/touch")
+                .context("build touch absolute path")?,
+            &command,
+            &workdir,
+        ),
+    )
+    .await
+    .context("timed out waiting for execve permission hook decision")??;
+
+    assert_eq!(
+        action,
+        codex_shell_escalation::EscalationDecision::Deny {
+            reason: Some("blocked by hook".to_string()),
+        }
+    );
+
+    let hook_inputs: Vec<Value> = std::fs::read_to_string(&log_path)
+        .with_context(|| format!("read hook log at {}", log_path.display()))?
+        .lines()
+        .map(serde_json::from_str)
+        .collect::<serde_json::Result<_>>()
+        .context("parse hook log")?;
+    assert_eq!(hook_inputs.len(), 1);
+    assert_eq!(
+        hook_inputs[0]["tool_input"]["command"],
+        expected_hook_command
     );
 
     Ok(())
@@ -778,6 +1111,7 @@ prefix_rule(pattern = ["{cat_path_literal}"], decision = "allow")
         sandbox_permissions: SandboxPermissions::UseDefault,
         approval_sandbox_permissions: SandboxPermissions::UseDefault,
         prompt_permissions: None,
+        parent_sandbox_override_approved: false,
         stopwatch: codex_shell_escalation::Stopwatch::new(Duration::from_secs(1)),
     };
 
@@ -820,6 +1154,7 @@ async fn denied_reads_keep_granular_sandbox_rejection_for_escalation() -> anyhow
         sandbox_permissions: SandboxPermissions::RequireEscalated,
         approval_sandbox_permissions: SandboxPermissions::RequireEscalated,
         prompt_permissions: None,
+        parent_sandbox_override_approved: false,
         stopwatch: codex_shell_escalation::Stopwatch::new(Duration::from_secs(1)),
     };
 
