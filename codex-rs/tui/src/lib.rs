@@ -1306,7 +1306,7 @@ pub async fn run_main(
         .with(otel_tracing_layer)
         .try_init();
 
-    run_ratatui_app(
+    let app_result = run_ratatui_app(
         cli,
         arg0_paths,
         loader_overrides,
@@ -1324,7 +1324,13 @@ pub async fn run_main(
         environment_manager,
     )
     .await
-    .map_err(|err| std::io::Error::other(err.to_string()))
+    .map_err(|err| std::io::Error::other(err.to_string()));
+
+    if let Some(otel) = otel {
+        otel.shutdown_in_background();
+    }
+
+    app_result
 }
 
 #[allow(clippy::too_many_arguments)]

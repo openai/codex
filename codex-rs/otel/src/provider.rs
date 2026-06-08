@@ -39,6 +39,7 @@ use opentelemetry_sdk::trace::span_processor_with_async_runtime::BatchSpanProces
 use opentelemetry_semantic_conventions as semconv;
 use std::collections::BTreeMap;
 use std::error::Error;
+use std::mem::ManuallyDrop;
 use std::time::Duration;
 use tracing::debug;
 use tracing_subscriber::Layer;
@@ -71,6 +72,35 @@ impl OtelProvider {
         }
         if let Some(logger) = &self.logger {
             let _ = logger.shutdown();
+        }
+    }
+
+    /// Starts provider shutdown on a detached thread.
+    ///
+    /// Process exit does not wait for detached threads, so callers should use
+    /// this only when avoiding shutdown latency is more important than
+    /// guaranteeing delivery of the final telemetry batch.
+    ///
+    /// If the shutdown thread cannot be started, the provider is intentionally
+    /// leaked so thread creation failure cannot restore foreground latency.
+    pub fn shutdown_in_background(self) {
+        self.shutdown_in_background_with(|shutdown| {
+            std::thread::Builder::new()
+                .name("otel-shutdown".to_string())
+                .spawn(shutdown)
+                .map(|_| ())
+        });
+    }
+
+    fn shutdown_in_background_with(
+        self,
+        spawn: impl FnOnce(Box<dyn FnOnce() + Send + 'static>) -> std::io::Result<()>,
+    ) {
+        let provider = ManuallyDrop::new(self);
+        if let Err(err) = spawn(Box::new(move || {
+            drop(ManuallyDrop::into_inner(provider));
+        })) {
+            tracing::warn!("failed to start OTEL shutdown thread: {err}");
         }
     }
 
@@ -461,6 +491,8 @@ mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
     use std::path::PathBuf;
+    use std::sync::Mutex;
+    use std::sync::mpsc;
 
     #[test]
     fn resource_attributes_include_host_name_when_present() {
@@ -523,6 +555,105 @@ mod tests {
         assert!(is_trace_safe_target("codex_otel.trace_safe.summary"));
         assert!(!is_trace_safe_target("codex_otel.log_only"));
         assert!(!is_trace_safe_target("codex_otel.network_proxy"));
+    }
+
+    #[derive(Debug)]
+    struct BlockingSpanProcessor {
+        flush_started: mpsc::Sender<()>,
+        flush_release: Mutex<mpsc::Receiver<()>>,
+        shutdown_finished: mpsc::Sender<()>,
+    }
+
+    impl SpanProcessor for BlockingSpanProcessor {
+        fn on_start(&self, _span: &mut Span, _cx: &Context) {}
+
+        fn on_end(&self, _span: SpanData) {}
+
+        fn force_flush(&self) -> OTelSdkResult {
+            let _ = self.flush_started.send(());
+            self.flush_release
+                .lock()
+                .expect("flush release receiver mutex poisoned")
+                .recv_timeout(Duration::from_secs(/*secs*/ 30))
+                .expect("flush release signal not received");
+            Ok(())
+        }
+
+        fn shutdown_with_timeout(&self, _timeout: Duration) -> OTelSdkResult {
+            let _ = self.shutdown_finished.send(());
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn shutdown_in_background_does_not_wait_for_flush() {
+        let (flush_started_tx, flush_started_rx) = mpsc::channel();
+        let (flush_release_tx, flush_release_rx) = mpsc::channel();
+        let (shutdown_finished_tx, shutdown_finished_rx) = mpsc::channel();
+        let tracer_provider = SdkTracerProvider::builder()
+            .with_span_processor(BlockingSpanProcessor {
+                flush_started: flush_started_tx,
+                flush_release: Mutex::new(flush_release_rx),
+                shutdown_finished: shutdown_finished_tx,
+            })
+            .build();
+        let provider = OtelProvider {
+            logger: None,
+            tracer_provider: Some(tracer_provider),
+            tracer: None,
+            metrics: None,
+        };
+        let (shutdown_returned_tx, shutdown_returned_rx) = mpsc::channel();
+        let caller = std::thread::spawn(move || {
+            provider.shutdown_in_background();
+            let _ = shutdown_returned_tx.send(());
+        });
+
+        let flush_started = flush_started_rx.recv_timeout(Duration::from_secs(/*secs*/ 5));
+        let shutdown_returned =
+            shutdown_returned_rx.recv_timeout(Duration::from_secs(/*secs*/ 5));
+        let flush_released = flush_release_tx.send(());
+        let shutdown_finished =
+            shutdown_finished_rx.recv_timeout(Duration::from_secs(/*secs*/ 5));
+        let caller_result = caller.join();
+
+        assert_eq!(flush_started, Ok(()));
+        assert_eq!(shutdown_returned, Ok(()));
+        assert_eq!(flush_released, Ok(()));
+        assert_eq!(shutdown_finished, Ok(()));
+        assert!(caller_result.is_ok(), "background shutdown caller panicked");
+    }
+
+    #[test]
+    fn shutdown_in_background_does_not_flush_when_thread_spawn_fails() {
+        let (flush_started_tx, flush_started_rx) = mpsc::channel();
+        let (flush_release_tx, flush_release_rx) = mpsc::channel();
+        let (shutdown_finished_tx, shutdown_finished_rx) = mpsc::channel();
+        let tracer_provider = SdkTracerProvider::builder()
+            .with_span_processor(BlockingSpanProcessor {
+                flush_started: flush_started_tx,
+                flush_release: Mutex::new(flush_release_rx),
+                shutdown_finished: shutdown_finished_tx,
+            })
+            .build();
+        let provider = OtelProvider {
+            logger: None,
+            tracer_provider: Some(tracer_provider),
+            tracer: None,
+            metrics: None,
+        };
+
+        provider.shutdown_in_background_with(|shutdown| {
+            drop(shutdown);
+            Err(std::io::Error::other("simulated thread spawn failure"))
+        });
+
+        assert_eq!(flush_started_rx.try_recv(), Err(mpsc::TryRecvError::Empty));
+        assert_eq!(
+            shutdown_finished_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        );
+        assert_eq!(flush_release_tx.send(()), Ok(()));
     }
 
     fn test_otel_settings() -> OtelSettings {
