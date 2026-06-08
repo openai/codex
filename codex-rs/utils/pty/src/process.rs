@@ -22,6 +22,15 @@ pub enum ProcessSignal {
     Interrupt,
 }
 
+pub(crate) fn unsupported_signal(signal: ProcessSignal) -> io::Error {
+    match signal {
+        ProcessSignal::Interrupt => io::Error::new(
+            io::ErrorKind::Unsupported,
+            "process interrupt is not supported by this process backend",
+        ),
+    }
+}
+
 pub(crate) trait ChildTerminator: Send + Sync {
     fn signal(&mut self, signal: ProcessSignal) -> io::Result<()>;
 
@@ -250,8 +259,8 @@ struct ClosureTerminator {
 }
 
 impl ChildTerminator for ClosureTerminator {
-    fn signal(&mut self, _signal: ProcessSignal) -> io::Result<()> {
-        Ok(())
+    fn signal(&mut self, signal: ProcessSignal) -> io::Result<()> {
+        Err(unsupported_signal(signal))
     }
 
     fn kill(&mut self) -> io::Result<()> {

@@ -2113,6 +2113,106 @@ async fn write_stdin_ctrl_c_interrupts_non_tty_session() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[cfg_attr(not(windows), ignore = "Windows-only unified exec interrupt test")]
+async fn write_stdin_ctrl_c_reports_unsupported_interrupt_to_model_on_windows() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+
+    let server = start_mock_server().await;
+
+    let mut builder = test_codex().with_config(|config| {
+        config
+            .features
+            .enable(Feature::UnifiedExec)
+            .expect("test config should allow feature update");
+    });
+    let test = builder.build_with_remote_env(&server).await?;
+
+    let start_call_id = "uexec-windows-interrupt-start";
+    let interrupt_call_id = "uexec-windows-interrupt";
+
+    let start_args = serde_json::json!({
+        "shell": "cmd",
+        "cmd": "echo READY && ping -n 30 127.0.0.1 >NUL",
+        "yield_time_ms": 250,
+        "tty": false,
+    });
+    let interrupt_args = serde_json::json!({
+        "chars": "\u{3}",
+        "session_id": 1000,
+        "yield_time_ms": 1000,
+    });
+
+    let responses = vec![
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call(
+                start_call_id,
+                "exec_command",
+                &serde_json::to_string(&start_args)?,
+            ),
+            ev_completed("resp-1"),
+        ]),
+        sse(vec![
+            ev_response_created("resp-2"),
+            ev_function_call(
+                interrupt_call_id,
+                "write_stdin",
+                &serde_json::to_string(&interrupt_args)?,
+            ),
+            ev_completed("resp-2"),
+        ]),
+        sse(vec![
+            ev_response_created("resp-3"),
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-3"),
+        ]),
+    ];
+    let request_log = mount_sse_sequence(&server, responses).await;
+
+    submit_unified_exec_turn(
+        &test,
+        "interrupt non-tty unified exec on Windows",
+        PermissionProfile::Disabled,
+    )
+    .await?;
+
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let start_output = request_log
+        .function_call_output_text(start_call_id)
+        .expect("missing start output for exec_command");
+    let start_output = parse_unified_exec_output(&start_output)?;
+    assert_eq!(
+        start_output.process_id.as_deref(),
+        Some("1000"),
+        "exec_command should leave a running non-TTY session"
+    );
+    assert!(
+        start_output.output.contains("READY"),
+        "start output should include command readiness marker, got {:?}",
+        start_output.output
+    );
+
+    let interrupt_output = request_log
+        .function_call_output_text(interrupt_call_id)
+        .expect("missing interrupt output for write_stdin");
+    assert!(
+        interrupt_output.contains("write_stdin failed"),
+        "model-visible write_stdin output should report failure, got {interrupt_output:?}"
+    );
+    assert!(
+        interrupt_output.contains("process interrupt is not supported by this process backend"),
+        "model-visible write_stdin output should explain unsupported interrupt, got {interrupt_output:?}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn unified_exec_emits_end_event_when_session_dies_via_stdin() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));

@@ -43,7 +43,7 @@ impl ChildTerminator for PipeChildTerminator {
 
                 #[cfg(not(unix))]
                 {
-                    Ok(())
+                    Err(crate::process::unsupported_signal(signal))
                 }
             }
         }

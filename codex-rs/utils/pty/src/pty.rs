@@ -63,7 +63,7 @@ impl ChildTerminator for PtyChildTerminator {
                     return crate::process_group::interrupt_process_group(process_group_id);
                 }
 
-                Ok(())
+                Err(crate::process::unsupported_signal(signal))
             }
         }
     }
