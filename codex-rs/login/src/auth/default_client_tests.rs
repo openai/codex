@@ -36,6 +36,7 @@ fn is_first_party_chat_originator_matches_known_values() {
 }
 
 #[tokio::test]
+#[serial(codex_auth_env)]
 async fn test_create_client_sets_default_headers() {
     skip_if_no_network!();
 
@@ -93,7 +94,7 @@ async fn test_create_client_sets_default_headers() {
 }
 
 #[test]
-#[serial(default_client_ca_env)]
+#[serial(codex_auth_env)]
 fn auth_route_client_without_proxy_config_preserves_default_client_fallback() {
     let temp_dir = tempdir().expect("tempdir");
     let missing_ca_path = temp_dir.path().join("missing-ca.pem");

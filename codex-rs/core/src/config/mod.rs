@@ -2483,9 +2483,7 @@ pub fn resolve_bootstrap_system_proxy_config(
     let features =
         ManagedFeatures::from_configured(configured_features, feature_requirements.cloned())?;
     Ok(resolved_system_proxy_config(
-        cfg,
-        &features,
-        /*mode_requirement*/ None,
+        cfg, &features, /*mode_requirement*/ None,
     ))
 }
 
