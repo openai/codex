@@ -136,9 +136,13 @@ impl PathUri {
 
     /// Converts this file URI to a path using the current host's path rules.
     ///
-    /// This fails when the URI cannot be represented as an absolute native
-    /// path on the current host. Callers should only use this method when the
-    /// URI is known to identify a path on that host.
+    /// Conversion should succeed when the URI was created from an
+    /// [`AbsolutePathBuf`] on the current host. It may fail when the URI came
+    /// from a different operating system and its `file:` URI form cannot be
+    /// represented using the current host's path rules, such as a UNC authority
+    /// on POSIX or a POSIX root on Windows. Because a `file:` URI does not record
+    /// its source operating system, callers should only use this method when the
+    /// URI is known to identify a path on the current host.
     pub fn to_native_path(&self) -> Result<AbsolutePathBuf, PathUriParseError> {
         let path = self
             .0
