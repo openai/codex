@@ -13,9 +13,11 @@ fn control_with_limit(max_threads: usize) -> AgentControl {
 
 #[test]
 fn execution_guards_count_active_v2_subagent_turns() {
-    let control = control_with_limit(1);
+    let control = control_with_limit(/*max_threads*/ 1);
     // Child role configs cannot replace the root-derived session limit.
-    control.agent_execution_limiter.initialize(2);
+    control
+        .agent_execution_limiter
+        .initialize(/*max_threads*/ 2);
     let source = SessionSource::SubAgent(SubAgentSource::Other("worker".to_string()));
 
     control
@@ -40,7 +42,7 @@ fn execution_guards_count_active_v2_subagent_turns() {
 
 #[test]
 fn execution_guards_ignore_root_and_v1_turns() {
-    let control = control_with_limit(0);
+    let control = control_with_limit(/*max_threads*/ 0);
 
     assert!(
         control
