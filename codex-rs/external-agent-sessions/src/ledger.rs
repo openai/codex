@@ -50,7 +50,8 @@ pub fn has_current_session_been_imported(
     load_import_ledger(codex_home)?.contains_current_source(source_path)
 }
 
-pub fn record_imported_session(
+#[cfg(test)]
+pub(crate) fn record_imported_session(
     codex_home: &Path,
     source_path: &Path,
     imported_thread_id: ThreadId,

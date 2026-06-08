@@ -20,7 +20,8 @@ use std::path::Path;
 
 const EXTERNAL_SESSION_IMPORTED_MARKER: &str = "<EXTERNAL SESSION IMPORTED>";
 
-pub fn load_session_for_import(path: &Path) -> io::Result<Option<ImportedExternalAgentSession>> {
+#[cfg(test)]
+fn load_session_for_import(path: &Path) -> io::Result<Option<ImportedExternalAgentSession>> {
     Ok(
         load_session_for_import_with_content_sha256(path)?
             .map(|(session, _content_sha256)| session),
