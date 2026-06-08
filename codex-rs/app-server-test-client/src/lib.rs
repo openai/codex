@@ -87,6 +87,8 @@ use url::Url;
 use uuid::Uuid;
 
 mod loopback_responses_server;
+mod plugin_analytics_capture;
+mod plugin_analytics_mutation_smoke;
 mod plugin_analytics_smoke;
 
 const NOTIFICATIONS_TO_OPT_OUT: &[&str] = &[
@@ -284,6 +286,32 @@ enum CliCommand {
         #[arg(long)]
         capture_file: Option<PathBuf>,
     },
+    /// Install and uninstall one remote plugin while validating analytics capture.
+    #[command(name = "plugin-analytics-mutation-smoke")]
+    PluginAnalyticsMutationSmoke {
+        /// Backend remote plugin id. The plugin must be initially uninstalled.
+        #[arg(long)]
+        remote_plugin_id: String,
+        /// Acknowledge that this command mutates the active account's plugin state.
+        #[arg(long)]
+        confirm_account_mutation: bool,
+        /// JSONL output path. Defaults to a PID-specific file under the system temp directory.
+        #[arg(long)]
+        capture_file: Option<PathBuf>,
+    },
+    /// Best-effort recovery command that uninstalls one remote plugin.
+    #[command(name = "plugin-remote-uninstall")]
+    PluginRemoteUninstall {
+        /// Backend remote plugin id to uninstall.
+        #[arg(long)]
+        remote_plugin_id: String,
+        /// Acknowledge that this command mutates the active account's plugin state.
+        #[arg(long)]
+        confirm_account_mutation: bool,
+        /// JSONL output path. Defaults to a PID-specific file under the system temp directory.
+        #[arg(long)]
+        capture_file: Option<PathBuf>,
+    },
 }
 
 pub async fn run() -> Result<()> {
@@ -445,6 +473,49 @@ pub async fn run() -> Result<()> {
             }
             let codex_bin = codex_bin.context("plugin-analytics-smoke requires --codex-bin")?;
             plugin_analytics_smoke::run(&codex_bin, &config_overrides, &plugin_id, capture_file)
+        }
+        CliCommand::PluginAnalyticsMutationSmoke {
+            remote_plugin_id,
+            confirm_account_mutation,
+            capture_file,
+        } => {
+            ensure_dynamic_tools_unused(&dynamic_tools, "plugin-analytics-mutation-smoke")?;
+            if url.is_some() {
+                bail!(
+                    "plugin-analytics-mutation-smoke requires --codex-bin and does not support --url"
+                );
+            }
+            let codex_bin =
+                codex_bin.context("plugin-analytics-mutation-smoke requires --codex-bin")?;
+            plugin_analytics_mutation_smoke::run(
+                &codex_bin,
+                &config_overrides,
+                &remote_plugin_id,
+                plugin_analytics_mutation_smoke::AccountMutationConfirmation::from_flag(
+                    confirm_account_mutation,
+                ),
+                capture_file,
+            )
+        }
+        CliCommand::PluginRemoteUninstall {
+            remote_plugin_id,
+            confirm_account_mutation,
+            capture_file,
+        } => {
+            ensure_dynamic_tools_unused(&dynamic_tools, "plugin-remote-uninstall")?;
+            if url.is_some() {
+                bail!("plugin-remote-uninstall requires --codex-bin and does not support --url");
+            }
+            let codex_bin = codex_bin.context("plugin-remote-uninstall requires --codex-bin")?;
+            plugin_analytics_mutation_smoke::run_cleanup(
+                &codex_bin,
+                &config_overrides,
+                &remote_plugin_id,
+                plugin_analytics_mutation_smoke::AccountMutationConfirmation::from_flag(
+                    confirm_account_mutation,
+                ),
+                capture_file,
+            )
         }
     }
 }

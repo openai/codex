@@ -79,6 +79,12 @@ impl AnalyticsEventsDestination {
     fn from_base_url_and_capture_file(base_url: String, capture_file: Option<PathBuf>) -> Self {
         #[cfg(debug_assertions)]
         if let Some(path) = capture_file {
+            if let Err(err) = crate::analytics_capture::initialize(&path) {
+                tracing::error!(
+                    path = %path.display(),
+                    "failed to initialize analytics event capture; network delivery remains disabled: {err}"
+                );
+            }
             tracing::warn!(
                 path = %path.display(),
                 "analytics event capture enabled; network delivery is disabled"

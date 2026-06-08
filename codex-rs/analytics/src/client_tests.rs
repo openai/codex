@@ -111,8 +111,25 @@ fn analytics_destination_uses_explicit_capture_file() {
 
     assert_eq!(
         destination,
-        AnalyticsEventsDestination::CaptureFile { path: capture_path }
+        AnalyticsEventsDestination::CaptureFile {
+            path: capture_path.clone()
+        }
     );
+    assert_eq!(
+        fs::read_to_string(&capture_path).expect("read capture file"),
+        ""
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let mode = fs::metadata(&capture_path)
+            .expect("read capture file metadata")
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
+    fs::remove_file(capture_path).expect("remove capture file");
 }
 
 #[test]
