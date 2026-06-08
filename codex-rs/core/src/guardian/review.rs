@@ -19,6 +19,7 @@ use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::WarningEvent;
 use std::sync::Arc;
 use tokio::sync::oneshot;
+use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
 use crate::session::session::Session;
@@ -57,6 +58,8 @@ const GUARDIAN_TIMEOUT_INSTRUCTIONS: &str = concat!(
     "Do not assume the action is unsafe based on the timeout alone. ",
     "You may retry once, or ask the user for guidance or explicit approval.",
 );
+
+const GUARDIAN_REVIEW_MAX_ATTEMPTS: u64 = 2;
 
 pub(crate) fn new_guardian_review_id() -> String {
     uuid::Uuid::new_v4().to_string()
@@ -335,7 +338,7 @@ async fn run_guardian_review(
 
     let schema = guardian_output_schema();
     let terminal_action = action_summary.clone();
-    let (outcome, analytics_result) = Box::pin(run_guardian_review_session(
+    let (outcome, analytics_result) = Box::pin(run_guardian_review_session_with_retry(
         session.clone(),
         turn.clone(),
         request,
@@ -657,6 +660,7 @@ pub(crate) fn spawn_approval_request_review(
 /// context. It may still reuse the parent's managed-network allowlist for
 /// read-only checks, but it intentionally runs without inherited exec-policy
 /// rules.
+#[cfg(test)]
 pub(super) async fn run_guardian_review_session(
     session: Arc<Session>,
     turn: Arc<TurnContext>,
@@ -664,6 +668,27 @@ pub(super) async fn run_guardian_review_session(
     retry_reason: Option<String>,
     schema: serde_json::Value,
     external_cancel: Option<CancellationToken>,
+) -> (GuardianReviewOutcome, GuardianReviewAnalyticsResult) {
+    run_guardian_review_session_before_deadline(
+        session,
+        turn,
+        request,
+        retry_reason,
+        schema,
+        external_cancel,
+        Instant::now() + GUARDIAN_REVIEW_TIMEOUT,
+    )
+    .await
+}
+
+async fn run_guardian_review_session_before_deadline(
+    session: Arc<Session>,
+    turn: Arc<TurnContext>,
+    request: GuardianApprovalRequest,
+    retry_reason: Option<String>,
+    schema: serde_json::Value,
+    external_cancel: Option<CancellationToken>,
+    deadline: Instant,
 ) -> (GuardianReviewOutcome, GuardianReviewAnalyticsResult) {
     let network_proxy = session.services.network_proxy.load_full();
     let live_network_config = match network_proxy.as_ref() {
@@ -753,6 +778,7 @@ pub(super) async fn run_guardian_review_session(
                 reasoning_summary: turn.reasoning_summary,
                 personality: turn.personality,
                 external_cancel,
+                deadline,
             }),
     )
     .await;
@@ -802,6 +828,48 @@ pub(super) async fn run_guardian_review_session(
     }
 }
 
+async fn run_guardian_review_session_with_retry(
+    session: Arc<Session>,
+    turn: Arc<TurnContext>,
+    request: GuardianApprovalRequest,
+    retry_reason: Option<String>,
+    schema: serde_json::Value,
+    external_cancel: Option<CancellationToken>,
+) -> (GuardianReviewOutcome, GuardianReviewAnalyticsResult) {
+    let deadline = Instant::now() + GUARDIAN_REVIEW_TIMEOUT;
+    for attempt_count in 1..=GUARDIAN_REVIEW_MAX_ATTEMPTS {
+        let (outcome, mut analytics_result) = run_guardian_review_session_before_deadline(
+            Arc::clone(&session),
+            Arc::clone(&turn),
+            request.clone(),
+            retry_reason.clone(),
+            schema.clone(),
+            external_cancel.clone(),
+            deadline,
+        )
+        .await;
+        analytics_result.attempt_count = attempt_count;
+        if !should_retry_guardian_review(&outcome, attempt_count) {
+            return (outcome, analytics_result);
+        }
+        session
+            .guardian_review_session
+            .reset_trunk_for_retry()
+            .await;
+    }
+    unreachable!("guardian review retry loop always returns")
+}
+
+fn should_retry_guardian_review(outcome: &GuardianReviewOutcome, attempt_count: u64) -> bool {
+    attempt_count < GUARDIAN_REVIEW_MAX_ATTEMPTS
+        && matches!(
+            outcome,
+            GuardianReviewOutcome::Error(
+                GuardianReviewError::Session { .. } | GuardianReviewError::Parse { .. }
+            )
+        )
+}
+
 #[cfg(test)]
 mod review_tests {
     use super::*;
@@ -825,5 +893,47 @@ mod review_tests {
             session_error.failure_reason(),
             GuardianReviewFailureReason::SessionError
         ));
+    }
+
+    #[test]
+    fn guardian_review_retry_only_retries_session_and_parse_errors_once() {
+        let assessment = GuardianAssessment {
+            risk_level: GuardianRiskLevel::High,
+            user_authorization: GuardianUserAuthorization::Unknown,
+            outcome: GuardianAssessmentOutcome::Deny,
+            rationale: "deny".to_string(),
+        };
+        let outcomes = [
+            (GuardianReviewOutcome::Completed(assessment), false),
+            (
+                GuardianReviewOutcome::Error(GuardianReviewError::prompt_build(anyhow::anyhow!(
+                    "prompt"
+                ))),
+                false,
+            ),
+            (
+                GuardianReviewOutcome::Error(GuardianReviewError::session(anyhow::anyhow!(
+                    "session"
+                ))),
+                true,
+            ),
+            (
+                GuardianReviewOutcome::Error(GuardianReviewError::parse(anyhow::anyhow!("parse"))),
+                true,
+            ),
+            (
+                GuardianReviewOutcome::Error(GuardianReviewError::Timeout),
+                false,
+            ),
+            (
+                GuardianReviewOutcome::Error(GuardianReviewError::Cancelled),
+                false,
+            ),
+        ];
+
+        for (outcome, expected) in outcomes {
+            assert_eq!(should_retry_guardian_review(&outcome, 1), expected);
+            assert!(!should_retry_guardian_review(&outcome, 2));
+        }
     }
 }

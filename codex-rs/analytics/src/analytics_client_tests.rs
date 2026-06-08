@@ -1936,6 +1936,7 @@ async fn guardian_review_event_ingests_custom_fact_with_optional_target_item() {
                     decision: GuardianReviewDecision::Denied,
                     terminal_status: GuardianReviewTerminalStatus::TimedOut,
                     failure_reason: Some(GuardianReviewFailureReason::Timeout),
+                    attempt_count: 1,
                     risk_level: None,
                     user_authorization: None,
                     outcome: None,
@@ -2007,6 +2008,7 @@ async fn guardian_review_event_ingests_custom_fact_with_optional_target_item() {
     );
     assert_eq!(payload[0]["event_params"]["terminal_status"], "timed_out");
     assert_eq!(payload[0]["event_params"]["failure_reason"], "timeout");
+    assert_eq!(payload[0]["event_params"]["attempt_count"], 1);
     assert_eq!(payload[0]["event_params"]["review_timeout_ms"], 90_000);
 }
 

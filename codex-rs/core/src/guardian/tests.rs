@@ -55,7 +55,7 @@ use core_test_support::context_snapshot::ContextSnapshotOptions;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_response_created;
-use core_test_support::responses::mount_response_once;
+use core_test_support::responses::mount_response_sequence;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
@@ -170,6 +170,51 @@ async fn guardian_test_session_and_turn(
     server: &wiremock::MockServer,
 ) -> (Arc<Session>, Arc<TurnContext>) {
     guardian_test_session_and_turn_with_base_url(server.uri().as_str()).await
+}
+
+async fn guardian_test_session_turn_and_rx(
+    server: &wiremock::MockServer,
+) -> (
+    Arc<Session>,
+    Arc<TurnContext>,
+    async_channel::Receiver<Event>,
+) {
+    let (mut session, mut turn, rx) =
+        crate::session::tests::make_session_and_context_with_rx().await;
+    Arc::get_mut(&mut session)
+        .expect("session should be uniquely owned")
+        .thread_id = fixed_guardian_parent_session_id();
+    let mut config = (*turn.config).clone();
+    config.model_provider.base_url = Some(format!("{}/v1", server.uri()));
+    config.user_instructions = None;
+    let config = Arc::new(config);
+    let models_manager = test_support::models_manager_with_provider(
+        config.codex_home.to_path_buf(),
+        Arc::clone(&session.services.auth_manager),
+        config.model_provider.clone(),
+    );
+    Arc::get_mut(&mut session)
+        .expect("session should be uniquely owned")
+        .services
+        .models_manager = models_manager;
+    let turn_mut = Arc::get_mut(&mut turn).expect("turn should be uniquely owned");
+    turn_mut.config = Arc::clone(&config);
+    turn_mut.provider =
+        create_model_provider(config.model_provider.clone(), turn_mut.auth_manager.clone());
+    turn_mut.user_instructions = None;
+
+    (session, turn, rx)
+}
+
+fn guardian_shell_request(id: &str) -> GuardianApprovalRequest {
+    GuardianApprovalRequest::Shell {
+        id: id.to_string(),
+        command: vec!["git".to_string(), "push".to_string()],
+        cwd: test_path_buf("/repo/codex-rs/core").abs(),
+        sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
+        additional_permissions: None,
+        justification: Some("Need to push the reviewed docs fix.".to_string()),
+    }
 }
 
 async fn guardian_test_session_and_turn_with_base_url(
@@ -1978,17 +2023,15 @@ async fn guardian_review_surfaces_responses_api_errors_in_rejection_reason() -> 
     let server = start_mock_server().await;
     let error_message =
         "Item 'rs_test' of type 'reasoning' was provided without its required following item.";
-    let _request_log = mount_response_once(
-        &server,
-        wiremock::ResponseTemplate::new(400).set_body_json(serde_json::json!({
-            "error": {
-                "message": error_message,
-                "type": "invalid_request_error",
-                "param": "input"
-            }
-        })),
-    )
-    .await;
+    let error_response = wiremock::ResponseTemplate::new(400).set_body_json(serde_json::json!({
+        "error": {
+            "message": error_message,
+            "type": "invalid_request_error",
+            "param": "input"
+        }
+    }));
+    let request_log =
+        mount_response_sequence(&server, vec![error_response.clone(), error_response]).await;
 
     let (mut session, mut turn, rx) =
         crate::session::tests::make_session_and_context_with_rx().await;
@@ -2030,6 +2073,7 @@ async fn guardian_review_surfaces_responses_api_errors_in_rejection_reason() -> 
     .await;
 
     assert_eq!(decision, ReviewDecision::Denied);
+    assert_eq!(request_log.requests().len(), 2);
 
     let mut warnings = Vec::new();
     let mut denial_rationales = Vec::new();
@@ -2077,6 +2121,184 @@ async fn guardian_review_surfaces_responses_api_errors_in_rejection_reason() -> 
         "rejection message should include guardian rationale: {rejection_message}"
     );
 
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn guardian_review_retries_session_failure_then_approves() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let approval = serde_json::json!({
+        "risk_level": "low",
+        "user_authorization": "high",
+        "outcome": "allow",
+        "rationale": "retry succeeded",
+    })
+    .to_string();
+    let request_log = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-session-failure"),
+                ev_completed("resp-session-failure"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-approved"),
+                ev_assistant_message("msg-approved", &approval),
+                ev_completed("resp-approved"),
+            ]),
+        ],
+    )
+    .await;
+    let (session, turn) = guardian_test_session_and_turn(&server).await;
+    seed_guardian_parent_history(&session, &turn).await;
+
+    let decision = review_approval_request(
+        &session,
+        &turn,
+        "review-session-retry".to_string(),
+        guardian_shell_request("shell-session-retry"),
+        /*retry_reason*/ None,
+    )
+    .await;
+
+    assert_eq!(decision, ReviewDecision::Approved);
+    assert_eq!(request_log.requests().len(), 2);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn guardian_review_retries_parse_failure_then_approves() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let approval = serde_json::json!({
+        "risk_level": "low",
+        "user_authorization": "high",
+        "outcome": "allow",
+        "rationale": "retry succeeded",
+    })
+    .to_string();
+    let request_log = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-parse-failure"),
+                ev_assistant_message("msg-parse-failure", "not valid guardian json"),
+                ev_completed("resp-parse-failure"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-approved"),
+                ev_assistant_message("msg-approved", &approval),
+                ev_completed("resp-approved"),
+            ]),
+        ],
+    )
+    .await;
+    let (session, turn) = guardian_test_session_and_turn(&server).await;
+    seed_guardian_parent_history(&session, &turn).await;
+
+    let decision = review_approval_request(
+        &session,
+        &turn,
+        "review-parse-retry".to_string(),
+        guardian_shell_request("shell-parse-retry"),
+        /*retry_reason*/ None,
+    )
+    .await;
+
+    assert_eq!(decision, ReviewDecision::Approved);
+    assert_eq!(request_log.requests().len(), 2);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn guardian_review_exhausts_two_failures_with_one_terminal_event() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let request_log = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-parse-failure-1"),
+                ev_assistant_message("msg-parse-failure-1", "invalid one"),
+                ev_completed("resp-parse-failure-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-parse-failure-2"),
+                ev_assistant_message("msg-parse-failure-2", "invalid two"),
+                ev_completed("resp-parse-failure-2"),
+            ]),
+        ],
+    )
+    .await;
+    let (session, turn, rx) = guardian_test_session_turn_and_rx(&server).await;
+    seed_guardian_parent_history(&session, &turn).await;
+
+    let decision = review_approval_request(
+        &session,
+        &turn,
+        "review-exhausted-retry".to_string(),
+        guardian_shell_request("shell-exhausted-retry"),
+        /*retry_reason*/ None,
+    )
+    .await;
+
+    assert_eq!(decision, ReviewDecision::Denied);
+    assert_eq!(request_log.requests().len(), 2);
+    let mut statuses = Vec::new();
+    while let Ok(event) = rx.try_recv() {
+        if let EventMsg::GuardianAssessment(event) = event.msg {
+            statuses.push(event.status);
+        }
+    }
+    assert_eq!(
+        statuses,
+        vec![
+            GuardianAssessmentStatus::InProgress,
+            GuardianAssessmentStatus::Denied,
+        ]
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn guardian_review_does_not_retry_valid_denial() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let denial = serde_json::json!({
+        "risk_level": "high",
+        "user_authorization": "unknown",
+        "outcome": "deny",
+        "rationale": "unsafe",
+    })
+    .to_string();
+    let request_log = mount_sse_sequence(
+        &server,
+        vec![sse(vec![
+            ev_response_created("resp-denied"),
+            ev_assistant_message("msg-denied", &denial),
+            ev_completed("resp-denied"),
+        ])],
+    )
+    .await;
+    let (session, turn) = guardian_test_session_and_turn(&server).await;
+    seed_guardian_parent_history(&session, &turn).await;
+
+    let decision = review_approval_request(
+        &session,
+        &turn,
+        "review-valid-denial".to_string(),
+        guardian_shell_request("shell-valid-denial"),
+        /*retry_reason*/ None,
+    )
+    .await;
+
+    assert_eq!(decision, ReviewDecision::Denied);
+    assert_eq!(request_log.requests().len(), 1);
     Ok(())
 }
 

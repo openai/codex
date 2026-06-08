@@ -46,7 +46,6 @@ use codex_features::Feature;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
-use super::GUARDIAN_REVIEW_TIMEOUT;
 use super::GUARDIAN_REVIEWER_NAME;
 use super::GuardianApprovalRequest;
 use super::prompt::GuardianPromptMode;
@@ -77,6 +76,7 @@ pub(crate) struct GuardianReviewSessionParams {
     pub(crate) reasoning_summary: ReasoningSummaryConfig,
     pub(crate) personality: Option<Personality>,
     pub(crate) external_cancel: Option<CancellationToken>,
+    pub(crate) deadline: tokio::time::Instant,
 }
 
 #[derive(Default)]
@@ -304,6 +304,12 @@ impl GuardianReviewSessionManager {
         }
     }
 
+    pub(super) async fn reset_trunk_for_retry(&self) {
+        if let Some(review_session) = self.state.lock().await.trunk.take() {
+            review_session.shutdown_in_background();
+        }
+    }
+
     #[expect(
         clippy::await_holding_invalid_type,
         reason = "review session selection and trunk spawning must stay serialized"
@@ -312,7 +318,7 @@ impl GuardianReviewSessionManager {
         &self,
         params: GuardianReviewSessionParams,
     ) -> (GuardianReviewSessionOutcome, GuardianReviewAnalyticsResult) {
-        let deadline = tokio::time::Instant::now() + GUARDIAN_REVIEW_TIMEOUT;
+        let deadline = params.deadline;
         let next_reuse_key = GuardianReviewSessionReuseKey::from_spawn_config(&params.spawn_config);
         let mut stale_trunk_to_shutdown = None;
         let mut spawned_trunk = false;
@@ -1140,6 +1146,7 @@ mod tests {
             reasoning_summary,
             personality,
             external_cancel: None,
+            deadline: tokio::time::Instant::now() + Duration::from_secs(30),
         }
     }
 
