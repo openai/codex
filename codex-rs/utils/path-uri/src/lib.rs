@@ -54,6 +54,12 @@ impl PathUri {
     }
 
     /// Converts an absolute path on the current host to a `file:` URI.
+    ///
+    /// On Unix, [`AbsolutePathBuf`]'s absolute-path invariant is sufficient for
+    /// `url` to represent the path. On Windows, conversion can still fail for
+    /// absolute paths whose prefix has no `file:` URI representation, including
+    /// `\\.\` device paths and generic `\\?\` verbatim namespaces. Those cases
+    /// return [`PathUriParseError::InvalidFileUriPath`].
     pub fn from_file_path(path: &AbsolutePathBuf) -> Result<Self, PathUriParseError> {
         let url = Url::from_file_path(path.as_path())
             .map_err(|()| PathUriParseError::InvalidFileUriPath)?;

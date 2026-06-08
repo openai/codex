@@ -41,6 +41,24 @@ fn file_uri_parses_a_windows_path_on_any_host() {
     );
 }
 
+#[cfg(windows)]
+#[test]
+fn file_uri_rejects_windows_prefixes_without_a_uri_representation() {
+    for native_path in [
+        r"\\.\COM1",
+        r"\\?\Volume{00000000-0000-0000-0000-000000000000}\file.rs",
+    ] {
+        let path = AbsolutePathBuf::from_absolute_path_checked(native_path)
+            .expect("Windows namespace path should be absolute");
+
+        assert_eq!(
+            PathUri::from_file_path(&path),
+            Err(PathUriParseError::InvalidFileUriPath),
+            "converting {native_path}"
+        );
+    }
+}
+
 #[test]
 fn file_uri_parses_a_posix_path_on_any_host() {
     let uri = PathUri::parse("file:///home/alice/src/main.rs")
