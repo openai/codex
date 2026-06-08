@@ -94,22 +94,6 @@ impl Session {
                 input,
             ));
         }
-        if self
-            .services
-            .agent_control
-            .ensure_execution_capacity(
-                turn_context.config.as_ref(),
-                turn_context.multi_agent_version,
-                &turn_context.session_source,
-            )
-            .is_err()
-        {
-            self.clear_reserved_idle_turn(&turn_state).await;
-            return Err(TryStartTurnIfIdleError::new(
-                TryStartTurnIfIdleRejectionReason::Busy,
-                input,
-            ));
-        }
         self.maybe_emit_unknown_model_warning_for_turn(turn_context.as_ref())
             .await;
         if self.input_queue.has_trigger_turn_mailbox_items().await {

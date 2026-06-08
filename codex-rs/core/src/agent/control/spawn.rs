@@ -208,7 +208,7 @@ impl AgentControl {
             )
             .await;
         if let Some(session_source) = session_source.as_ref() {
-            self.ensure_execution_capacity(&config, multi_agent_version, session_source)?;
+            self.ensure_execution_capacity(multi_agent_version, session_source)?;
         }
         let agent_max_threads = config.effective_agent_max_threads(multi_agent_version);
         let spawn_uses_v2_residency = multi_agent_version == MultiAgentVersion::V2

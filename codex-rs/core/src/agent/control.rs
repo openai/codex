@@ -110,8 +110,9 @@ impl AgentControl {
         }
     }
 
-    pub(crate) fn with_session_id(mut self, session_id: SessionId) -> Self {
+    pub(crate) fn with_session_id(mut self, session_id: SessionId, max_threads: usize) -> Self {
         self.session_id = session_id;
+        self.agent_execution_limiter.initialize(max_threads);
         self
     }
 

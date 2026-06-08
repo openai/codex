@@ -1,5 +1,4 @@
 use super::AgentControl;
-use crate::config::Config;
 use codex_protocol::ThreadId;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
@@ -7,12 +6,14 @@ use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SessionSource;
 use std::sync::Arc;
+use std::sync::OnceLock;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 
 #[derive(Default)]
 pub(super) struct AgentExecutionLimiter {
     active: AtomicUsize,
+    max_threads: OnceLock<usize>,
 }
 
 pub(crate) struct AgentExecutionGuard {
@@ -26,7 +27,7 @@ impl Drop for AgentExecutionGuard {
 }
 
 impl AgentControl {
-    pub(super) async fn ensure_execution_capacity_for_op(
+    pub(crate) async fn ensure_execution_capacity_for_op(
         &self,
         thread_id: ThreadId,
         op: &Op,
@@ -43,19 +44,19 @@ impl AgentControl {
         let multi_agent_version = thread
             .multi_agent_version()
             .unwrap_or_else(|| config.multi_agent_version_from_features());
-        self.ensure_execution_capacity(config.as_ref(), multi_agent_version, &thread.session_source)
+        self.ensure_execution_capacity(multi_agent_version, &thread.session_source)
     }
 
     pub(crate) fn ensure_execution_capacity(
         &self,
-        config: &Config,
         multi_agent_version: MultiAgentVersion,
         session_source: &SessionSource,
     ) -> CodexResult<()> {
-        let Some(max_threads) = execution_limit(config, multi_agent_version, session_source) else {
+        if !is_execution_limited(multi_agent_version, session_source) {
             return Ok(());
-        };
-        if self.agent_execution_limiter.has_capacity(max_threads) {
+        }
+        let max_threads = self.agent_execution_limiter.max_threads();
+        if self.agent_execution_limiter.has_capacity() {
             Ok(())
         } else {
             Err(CodexErr::AgentLimitReached { max_threads })
@@ -64,20 +65,25 @@ impl AgentControl {
 
     pub(crate) fn execution_guard(
         &self,
-        config: &Config,
         multi_agent_version: MultiAgentVersion,
         session_source: &SessionSource,
     ) -> Option<AgentExecutionGuard> {
-        if execution_limit(config, multi_agent_version, session_source).is_none() {
-            return None;
-        };
-        Some(Arc::clone(&self.agent_execution_limiter).guard())
+        is_execution_limited(multi_agent_version, session_source)
+            .then(|| Arc::clone(&self.agent_execution_limiter).guard())
     }
 }
 
 impl AgentExecutionLimiter {
-    fn has_capacity(&self, max_threads: usize) -> bool {
-        self.active.load(Ordering::Acquire) < max_threads
+    pub(super) fn initialize(&self, max_threads: usize) {
+        self.max_threads.get_or_init(|| max_threads);
+    }
+
+    fn max_threads(&self) -> usize {
+        self.max_threads.get().copied().unwrap_or(usize::MAX)
+    }
+
+    fn has_capacity(&self) -> bool {
+        self.active.load(Ordering::Acquire) < self.max_threads()
     }
 
     fn guard(self: Arc<Self>) -> AgentExecutionGuard {
@@ -91,21 +97,12 @@ fn op_starts_turn(op: &Op) -> bool {
         || matches!(op, Op::InterAgentCommunication { communication } if communication.trigger_turn)
 }
 
-fn execution_limit(
-    config: &Config,
+fn is_execution_limited(
     multi_agent_version: MultiAgentVersion,
     session_source: &SessionSource,
-) -> Option<usize> {
-    if multi_agent_version != MultiAgentVersion::V2
-        || !matches!(session_source, SessionSource::SubAgent(_))
-    {
-        return None;
-    }
-    Some(
-        config
-            .effective_agent_max_threads(MultiAgentVersion::V2)
-            .unwrap_or(usize::MAX),
-    )
+) -> bool {
+    multi_agent_version == MultiAgentVersion::V2
+        && matches!(session_source, SessionSource::SubAgent(_))
 }
 
 #[cfg(test)]
