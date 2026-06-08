@@ -561,7 +561,17 @@ async fn summarize_context_three_requests_and_instructions() {
             RolloutItem::TurnContext(_) => {
                 regular_turn_context_count += 1;
             }
-            RolloutItem::Compacted(ci) if ci.message == expected_summary_message => {
+            RolloutItem::Compacted(ci)
+                if ci.replacement_history.as_ref().is_some_and(|items| {
+                    items.iter().any(|item| match item {
+                        codex_protocol::models::ResponseItem::Message { content, .. } => {
+                            codex_core::compact::content_items_to_text(content)
+                                .is_some_and(|text| text == expected_summary_message)
+                        }
+                        _ => false,
+                    })
+                }) =>
+            {
                 saw_compacted_summary = true;
             }
             _ => {}
