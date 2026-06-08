@@ -7,7 +7,6 @@ use crate::ConfigContributor;
 use crate::ContextContributor;
 use crate::ExtensionData;
 use crate::ExtensionEventSink;
-use crate::InitialGoalContributor;
 use crate::NoopExtensionEventSink;
 use crate::ThreadLifecycleContributor;
 use crate::TokenUsageContributor;
@@ -20,7 +19,6 @@ use crate::TurnLifecycleContributor;
 /// Mutable registry used while hosts register typed runtime contributions.
 pub struct ExtensionRegistryBuilder<C: Sync> {
     event_sink: Arc<dyn ExtensionEventSink>,
-    initial_goal_contributor: Option<Arc<dyn InitialGoalContributor>>,
     thread_lifecycle_contributors: Vec<Arc<dyn ThreadLifecycleContributor<C>>>,
     turn_lifecycle_contributors: Vec<Arc<dyn TurnLifecycleContributor>>,
     config_contributors: Vec<Arc<dyn ConfigContributor<C>>>,
@@ -37,7 +35,6 @@ impl<C: Sync> Default for ExtensionRegistryBuilder<C> {
     fn default() -> Self {
         Self {
             event_sink: Arc::new(NoopExtensionEventSink),
-            initial_goal_contributor: None,
             thread_lifecycle_contributors: Vec::new(),
             turn_lifecycle_contributors: Vec::new(),
             config_contributors: Vec::new(),
@@ -84,11 +81,6 @@ impl<C: Sync> ExtensionRegistryBuilder<C> {
         self.thread_lifecycle_contributors.push(contributor);
     }
 
-    /// Registers the extension that owns persisted thread goals.
-    pub fn initial_goal_contributor(&mut self, contributor: Arc<dyn InitialGoalContributor>) {
-        self.initial_goal_contributor = Some(contributor);
-    }
-
     /// Registers one turn-lifecycle contributor.
     pub fn turn_lifecycle_contributor(&mut self, contributor: Arc<dyn TurnLifecycleContributor>) {
         self.turn_lifecycle_contributors.push(contributor);
@@ -133,7 +125,6 @@ impl<C: Sync> ExtensionRegistryBuilder<C> {
     pub fn build(self) -> ExtensionRegistry<C> {
         ExtensionRegistry {
             event_sink: self.event_sink,
-            initial_goal_contributor: self.initial_goal_contributor,
             thread_lifecycle_contributors: self.thread_lifecycle_contributors,
             turn_lifecycle_contributors: self.turn_lifecycle_contributors,
             config_contributors: self.config_contributors,
@@ -151,7 +142,6 @@ impl<C: Sync> ExtensionRegistryBuilder<C> {
 /// Immutable typed registry produced after extensions are installed.
 pub struct ExtensionRegistry<C: Sync> {
     event_sink: Arc<dyn ExtensionEventSink>,
-    initial_goal_contributor: Option<Arc<dyn InitialGoalContributor>>,
     thread_lifecycle_contributors: Vec<Arc<dyn ThreadLifecycleContributor<C>>>,
     turn_lifecycle_contributors: Vec<Arc<dyn TurnLifecycleContributor>>,
     config_contributors: Vec<Arc<dyn ConfigContributor<C>>>,
@@ -168,11 +158,6 @@ impl<C: Sync> ExtensionRegistry<C> {
     /// Returns the host event sink retained by this registry.
     pub fn event_sink(&self) -> Arc<dyn ExtensionEventSink> {
         Arc::clone(&self.event_sink)
-    }
-
-    /// Returns the extension that owns initial goal replacement, when installed.
-    pub fn initial_goal_contributor(&self) -> Option<&Arc<dyn InitialGoalContributor>> {
-        self.initial_goal_contributor.as_ref()
     }
 
     /// Returns the registered thread-lifecycle contributors.

@@ -132,15 +132,8 @@ pub struct Submission {
     pub op: Op,
     /// Client-provided id for the user message represented by `Op::UserInput`.
     pub client_user_message_id: Option<String>,
-    /// Goal to replace before processing this user-input submission.
-    pub initial_goal: Option<InitialGoal>,
     /// Optional W3C trace carrier propagated across async submission handoffs.
     pub trace: Option<W3cTraceContext>,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
-pub struct InitialGoal {
-    pub objective: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]

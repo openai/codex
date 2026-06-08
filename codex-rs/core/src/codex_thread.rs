@@ -22,7 +22,6 @@ use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AdditionalContextEntry;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::Event;
-use codex_protocol::protocol::InitialGoal;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SandboxPolicy;
@@ -234,7 +233,6 @@ impl CodexThread {
         op: Op,
         trace: Option<W3cTraceContext>,
         client_user_message_id: Option<String>,
-        initial_goal: Option<InitialGoal>,
     ) -> CodexResult<String> {
         self.codex
             .session
@@ -243,12 +241,7 @@ impl CodexThread {
             .ensure_execution_capacity_for_op(self.session_configured.thread_id, &op)
             .await?;
         self.codex
-            .submit_user_input_with_client_user_message_id(
-                op,
-                trace,
-                client_user_message_id,
-                initial_goal,
-            )
+            .submit_user_input_with_client_user_message_id(op, trace, client_user_message_id)
             .await
     }
 

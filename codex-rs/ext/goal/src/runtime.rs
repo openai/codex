@@ -211,38 +211,6 @@ impl GoalRuntimeHandle {
         Ok(())
     }
 
-    pub(crate) fn apply_initial_goal_set(
-        &self,
-        goal: &codex_state::ThreadGoal,
-        previous_goal: Option<&PreviousGoalSnapshot>,
-    ) {
-        if !self.is_enabled() {
-            return;
-        }
-
-        let replaced_existing_goal =
-            previous_goal.is_some_and(|previous_goal| previous_goal.goal_id != goal.goal_id);
-        if previous_goal.is_none() || replaced_existing_goal {
-            self.inner.metrics.record_created();
-        }
-        self.inner
-            .accounting_state
-            .mark_idle_goal_active(goal.goal_id.clone());
-    }
-
-    pub(crate) fn restore_goal_after_failed_mutation(
-        &self,
-        goal: Option<&codex_state::ThreadGoal>,
-    ) {
-        match goal {
-            Some(goal) if goal.status == codex_state::ThreadGoalStatus::Active => self
-                .inner
-                .accounting_state
-                .mark_idle_goal_active(goal.goal_id.clone()),
-            Some(_) | None => self.inner.accounting_state.clear_active_goal(),
-        }
-    }
-
     pub async fn apply_external_goal_clear(&self) -> Result<(), String> {
         if !self.is_enabled() {
             return Ok(());

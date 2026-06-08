@@ -394,47 +394,6 @@ impl TurnRequestProcessor {
             self.track_error_response(&request_id, error, /*error_type*/ None);
         })?;
 
-        let initial_goal = if params.goal {
-            if !self.config.features.enabled(Feature::Goals) {
-                return Err(invalid_request("goals feature is disabled"));
-            }
-            if thread.rollout_path().is_none() {
-                return Err(invalid_request(format!(
-                    "ephemeral thread does not support goals: {thread_id}"
-                )));
-            }
-            if matches!(thread.agent_status().await, AgentStatus::Running) {
-                return Err(invalid_request(
-                    "cannot start a goal while another turn is active",
-                ));
-            }
-            let goal_mode = params
-                .collaboration_mode
-                .as_ref()
-                .map(|mode| mode.mode)
-                .unwrap_or(thread.config_snapshot().await.collaboration_mode.mode);
-            if goal_mode == ModeKind::Plan {
-                return Err(invalid_request("goal turns do not support plan mode"));
-            }
-            let objective = params
-                .input
-                .iter()
-                .filter_map(|item| match item {
-                    V2UserInput::Text { text, .. } => Some(text.trim()),
-                    V2UserInput::Image { .. }
-                    | V2UserInput::LocalImage { .. }
-                    | V2UserInput::Skill { .. }
-                    | V2UserInput::Mention { .. } => None,
-                })
-                .filter(|text| !text.is_empty())
-                .collect::<Vec<_>>()
-                .join("\n\n");
-            validate_thread_goal_objective(&objective).map_err(invalid_request)?;
-            Some(InitialGoal { objective })
-        } else {
-            None
-        };
-
         let environment_selections = self.parse_environment_selections(params.environments)?;
 
         // Map v2 input items to core input items.
@@ -477,20 +436,15 @@ impl TurnRequestProcessor {
             additional_context,
             thread_settings,
         };
-        let trace = self.request_trace_context(&request_id).await;
         let turn_id = thread
             .submit_user_input_with_client_user_message_id(
                 turn_op,
-                trace,
+                self.request_trace_context(&request_id).await,
                 client_user_message_id,
-                initial_goal,
             )
             .await
             .map_err(|err| {
-                let error = match err {
-                    CodexErr::InvalidRequest(message) => invalid_request(message),
-                    err => internal_error(format!("failed to start turn: {err}")),
-                };
+                let error = internal_error(format!("failed to start turn: {err}"));
                 self.track_error_response(&request_id, &error, /*error_type*/ None);
                 error
             })?;

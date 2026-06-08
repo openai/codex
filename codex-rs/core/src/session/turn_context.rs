@@ -111,18 +111,6 @@ enum TurnMultiAgentRuntime {
     Preview,
 }
 
-pub(crate) struct PreparedTurn {
-    pub(super) session_configuration: SessionConfiguration,
-    turn_environments: ResolvedTurnEnvironments,
-    permission_profile_changed: bool,
-    previous_cwd: AbsolutePathBuf,
-    codex_home: AbsolutePathBuf,
-    session_source: SessionSource,
-    previous_config: Option<Config>,
-    new_config: Option<Config>,
-    final_output_json_schema: Option<Option<Value>>,
-}
-
 impl TurnContext {
     pub(crate) fn permission_profile(&self) -> PermissionProfile {
         self.permission_profile.clone()
@@ -594,8 +582,63 @@ impl Session {
         sub_id: String,
         updates: SessionSettingsUpdate,
     ) -> CodexResult<Arc<TurnContext>> {
-        let prepared_turn = match self.prepare_turn(updates).await {
-            Ok(prepared_turn) => prepared_turn,
+        let notify_config_contributors = !self.services.extensions.config_contributors().is_empty();
+        let update_result: CodexResult<_> = {
+            let mut state = self.state.lock().await;
+            match state.session_configuration.clone().apply(&updates) {
+                Ok(next) => {
+                    let mut effective_environments = updates
+                        .environments
+                        .clone()
+                        .unwrap_or_else(|| next.environments.clone());
+                    if updates.environments.is_none() {
+                        Self::overlay_runtime_cwd_on_primary_environment(
+                            &mut effective_environments,
+                            &next.cwd,
+                        );
+                    }
+                    let turn_environments =
+                        self.resolve_turn_environments(&effective_environments)?;
+                    let previous_cwd = state.session_configuration.cwd.clone();
+                    let previous_permission_profile =
+                        state.session_configuration.permission_profile();
+                    let next_permission_profile = next.permission_profile();
+                    let permission_profile_changed =
+                        previous_permission_profile != next_permission_profile;
+                    let codex_home = next.codex_home.clone();
+                    let session_source = next.session_source.clone();
+                    let previous_config = notify_config_contributors.then(|| {
+                        Self::build_effective_session_config(&state.session_configuration)
+                    });
+                    let new_config = notify_config_contributors
+                        .then(|| Self::build_effective_session_config(&next));
+                    state.session_configuration = next.clone();
+                    Ok((
+                        next,
+                        turn_environments,
+                        permission_profile_changed,
+                        previous_cwd,
+                        codex_home,
+                        session_source,
+                        previous_config,
+                        new_config,
+                    ))
+                }
+                Err(err) => Err(CodexErr::InvalidRequest(err.to_string())),
+            }
+        };
+
+        let (
+            session_configuration,
+            turn_environments,
+            permission_profile_changed,
+            previous_cwd,
+            codex_home,
+            session_source,
+            previous_config,
+            new_config,
+        ) = match update_result {
+            Ok(update) => update,
             Err(err) => {
                 let message = err.to_string();
                 self.send_event_raw(Event {
@@ -609,74 +652,6 @@ impl Session {
                 return Err(CodexErr::InvalidRequest(message));
             }
         };
-        Ok(self.commit_prepared_turn(sub_id, prepared_turn).await)
-    }
-
-    pub(crate) async fn prepare_turn(
-        &self,
-        updates: SessionSettingsUpdate,
-    ) -> CodexResult<PreparedTurn> {
-        let notify_config_contributors = !self.services.extensions.config_contributors().is_empty();
-        let state = self.state.lock().await;
-        let session_configuration = state
-            .session_configuration
-            .clone()
-            .apply(&updates)
-            .map_err(|err| CodexErr::InvalidRequest(err.to_string()))?;
-        let mut effective_environments = updates
-            .environments
-            .clone()
-            .unwrap_or_else(|| session_configuration.environments.clone());
-        if updates.environments.is_none() {
-            Self::overlay_runtime_cwd_on_primary_environment(
-                &mut effective_environments,
-                &session_configuration.cwd,
-            );
-        }
-        let turn_environments = self.resolve_turn_environments(&effective_environments)?;
-        let previous_cwd = state.session_configuration.cwd.clone();
-        let previous_permission_profile = state.session_configuration.permission_profile();
-        let next_permission_profile = session_configuration.permission_profile();
-        let permission_profile_changed = previous_permission_profile != next_permission_profile;
-        let codex_home = session_configuration.codex_home.clone();
-        let session_source = session_configuration.session_source.clone();
-        let previous_config = notify_config_contributors
-            .then(|| Self::build_effective_session_config(&state.session_configuration));
-        let new_config = notify_config_contributors
-            .then(|| Self::build_effective_session_config(&session_configuration));
-        Ok(PreparedTurn {
-            session_configuration,
-            turn_environments,
-            permission_profile_changed,
-            previous_cwd,
-            codex_home,
-            session_source,
-            previous_config,
-            new_config,
-            final_output_json_schema: updates.final_output_json_schema,
-        })
-    }
-
-    pub(crate) async fn commit_prepared_turn(
-        &self,
-        sub_id: String,
-        prepared_turn: PreparedTurn,
-    ) -> Arc<TurnContext> {
-        let PreparedTurn {
-            session_configuration,
-            turn_environments,
-            permission_profile_changed,
-            previous_cwd,
-            codex_home,
-            session_source,
-            previous_config,
-            new_config,
-            final_output_json_schema,
-        } = prepared_turn;
-        {
-            let mut state = self.state.lock().await;
-            state.session_configuration = session_configuration.clone();
-        }
 
         self.emit_config_changed_contributors(previous_config.as_ref(), new_config.as_ref());
         self.maybe_refresh_shell_snapshot_for_cwd(
@@ -691,13 +666,14 @@ impl Session {
                 .await;
         }
 
-        self.new_turn_from_configuration(
-            sub_id,
-            session_configuration,
-            final_output_json_schema,
-            turn_environments,
-        )
-        .await
+        Ok(self
+            .new_turn_from_configuration(
+                sub_id,
+                session_configuration,
+                updates.final_output_json_schema,
+                turn_environments,
+            )
+            .await)
     }
 
     fn resolve_turn_environments(

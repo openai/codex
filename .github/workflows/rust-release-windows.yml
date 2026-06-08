@@ -29,43 +29,43 @@ jobs:
             bundle: primary
             binaries: "codex codex-responses-api-proxy"
             runs_on:
-              group: codex-runners
-              labels: codex-windows-x64
+              group: ${{ github.event.repository.name }}-runners
+              labels: ${{ github.event.repository.name }}-windows-x64
           - runner: windows-arm64
             target: aarch64-pc-windows-msvc
             bundle: primary
             binaries: "codex codex-responses-api-proxy"
             runs_on:
-              group: codex-runners
-              labels: codex-windows-arm64
+              group: ${{ github.event.repository.name }}-runners
+              labels: ${{ github.event.repository.name }}-windows-arm64
           - runner: windows-x64
             target: x86_64-pc-windows-msvc
             bundle: helpers
             binaries: "codex-windows-sandbox-setup codex-command-runner"
             runs_on:
-              group: codex-runners
-              labels: codex-windows-x64
+              group: ${{ github.event.repository.name }}-runners
+              labels: ${{ github.event.repository.name }}-windows-x64
           - runner: windows-arm64
             target: aarch64-pc-windows-msvc
             bundle: helpers
             binaries: "codex-windows-sandbox-setup codex-command-runner"
             runs_on:
-              group: codex-runners
-              labels: codex-windows-arm64
+              group: ${{ github.event.repository.name }}-runners
+              labels: ${{ github.event.repository.name }}-windows-arm64
           - runner: windows-x64
             target: x86_64-pc-windows-msvc
             bundle: app-server
             binaries: "codex-app-server"
             runs_on:
-              group: codex-runners
-              labels: codex-windows-x64
+              group: ${{ github.event.repository.name }}-runners
+              labels: ${{ github.event.repository.name }}-windows-x64
           - runner: windows-arm64
             target: aarch64-pc-windows-msvc
             bundle: app-server
             binaries: "codex-app-server"
             runs_on:
-              group: codex-runners
-              labels: codex-windows-arm64
+              group: ${{ github.event.repository.name }}-runners
+              labels: ${{ github.event.repository.name }}-windows-arm64
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -112,10 +112,22 @@ jobs:
       - name: Stage Windows binaries
         shell: bash
         run: |
-          output_dir="target/${{ matrix.target }}/release/staged-${{ matrix.bundle }}"
+          release_dir="target/${{ matrix.target }}/release"
+          output_dir="$release_dir/staged-${{ matrix.bundle }}"
           mkdir -p "$output_dir"
           for binary in ${{ matrix.binaries }}; do
-            cp "target/${{ matrix.target }}/release/${binary}.exe" "$output_dir/${binary}.exe"
+            pdb_name="${binary//-/_}"
+            pdb_path="$release_dir/${pdb_name}.pdb"
+            if [[ ! -f "$pdb_path" ]]; then
+              pdb_path="$release_dir/${binary}.pdb"
+            fi
+            if [[ ! -f "$pdb_path" ]]; then
+              echo "PDB for $binary not found at $release_dir/${pdb_name}.pdb or $release_dir/${binary}.pdb" >&2
+              exit 1
+            fi
+
+            cp "$release_dir/${binary}.exe" "$output_dir/${binary}.exe"
+            cp "$pdb_path" "$output_dir/${binary}.pdb"
           done
 
       - name: Upload Windows binaries
@@ -150,13 +162,13 @@ jobs:
           - runner: windows-x64
             target: x86_64-pc-windows-msvc
             runs_on:
-              group: codex-runners
-              labels: codex-windows-x64
+              group: ${{ github.event.repository.name }}-runners
+              labels: ${{ github.event.repository.name }}-windows-x64
           - runner: windows-arm64
             target: aarch64-pc-windows-msvc
             runs_on:
-              group: codex-runners
-              labels: codex-windows-arm64
+              group: ${{ github.event.repository.name }}-runners
+              labels: ${{ github.event.repository.name }}-windows-arm64
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -200,6 +212,23 @@ jobs:
           endpoint: ${{ secrets.AZURE_ARTIFACT_SIGNING_ENDPOINT }}
           account-name: ${{ secrets.AZURE_ARTIFACT_SIGNING_ACCOUNT_NAME }}
           certificate-profile-name: ${{ secrets.AZURE_ARTIFACT_SIGNING_CERTIFICATE_PROFILE_NAME }}
+
+      - name: Build symbols archive
+        shell: bash
+        run: |
+          bash "${GITHUB_WORKSPACE}/.github/scripts/archive-release-symbols-and-strip-binaries.sh" \
+            --target "${{ matrix.target }}" \
+            --artifact-name "${{ matrix.target }}" \
+            --release-dir "target/${{ matrix.target }}/release" \
+            --archive-dir "symbols-dist/${{ matrix.target }}" \
+            --binaries "${WINDOWS_BINARIES}"
+
+      - name: Upload symbols archive
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: ${{ matrix.target }}-symbols
+          path: codex-rs/symbols-dist/${{ matrix.target }}/*
+          if-no-files-found: error
 
       - name: Stage artifacts
         shell: bash

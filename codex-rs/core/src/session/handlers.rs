@@ -4,7 +4,6 @@ use crate::realtime_conversation::handle_start as handle_realtime_conversation_s
 use crate::realtime_conversation::handle_text as handle_realtime_conversation_text;
 use async_channel::Receiver;
 use codex_otel::set_parent_from_w3c_trace_context;
-use codex_protocol::error::CodexErr;
 use codex_protocol::protocol::Submission;
 use tracing::Instrument;
 use tracing::debug_span;
@@ -15,7 +14,6 @@ use crate::session::TurnInput;
 use crate::session::session::Session;
 use crate::session::session::SessionSettingsUpdate;
 
-use super::initial_goal::InitialGoalStartError;
 use crate::config::Config;
 use crate::realtime_context::REALTIME_TURN_TOKEN_BUDGET;
 use crate::realtime_context::truncate_realtime_text_to_token_budget;
@@ -23,8 +21,6 @@ use crate::realtime_conversation::REALTIME_USER_TEXT_PREFIX;
 use crate::realtime_conversation::prefix_realtime_v2_text;
 use crate::review_prompts::resolve_review_request;
 use crate::session::spawn_review_thread;
-use crate::state::ActiveTurn;
-use crate::state::TurnState;
 use crate::tasks::CompactTask;
 use crate::tasks::UserShellCommandMode;
 use crate::tasks::UserShellCommandTask;
@@ -38,7 +34,6 @@ use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::GuardianAssessmentEvent;
 use codex_protocol::protocol::GuardianAssessmentStatus;
-use codex_protocol::protocol::InitialGoal;
 use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::protocol::McpServerRefreshConfig;
 use codex_protocol::protocol::Op;
@@ -66,7 +61,6 @@ use codex_rmcp_client::ElicitationAction;
 use codex_rmcp_client::ElicitationResponse;
 use serde_json::Value;
 use std::sync::Arc;
-use tokio::sync::Mutex;
 use tracing::debug;
 use tracing::info;
 use tracing::warn;
@@ -96,7 +90,6 @@ pub async fn user_input_or_turn(
     sub_id: String,
     op: Op,
     client_user_message_id: Option<String>,
-    initial_goal: Option<InitialGoal>,
 ) {
     user_input_or_turn_inner(
         sess,
@@ -104,26 +97,8 @@ pub async fn user_input_or_turn(
         op,
         /*mirror_user_text_to_realtime*/ Some(()),
         client_user_message_id,
-        initial_goal,
     )
     .await;
-}
-
-async fn clear_reserved_goal_turn(sess: &Session, turn_state: &Arc<Mutex<TurnState>>) {
-    let cleared = {
-        let mut active_turn = sess.active_turn.lock().await;
-        if active_turn.as_ref().is_some_and(|active_turn| {
-            active_turn.task.is_none() && Arc::ptr_eq(&active_turn.turn_state, turn_state)
-        }) {
-            *active_turn = None;
-            true
-        } else {
-            false
-        }
-    };
-    if cleared {
-        sess.emit_thread_idle_lifecycle_if_idle().await;
-    }
 }
 
 pub async fn update_thread_settings(
@@ -222,7 +197,6 @@ pub(super) async fn user_input_or_turn_inner(
     op: Op,
     mirror_user_text_to_realtime: Option<()>,
     client_user_message_id: Option<String>,
-    initial_goal: Option<InitialGoal>,
 ) {
     let Op::UserInput {
         items,
@@ -244,67 +218,9 @@ pub(super) async fn user_input_or_turn_inner(
     updates.final_output_json_schema = Some(final_output_json_schema);
     updates.environments = environments;
 
-    let mut reserved_goal_turn = None;
-    if initial_goal.is_some() {
-        let turn_state = {
-            let mut active_turn = sess.active_turn.lock().await;
-            if active_turn.is_some() {
-                None
-            } else {
-                let active_turn = active_turn.get_or_insert_with(ActiveTurn::default);
-                Some(Arc::clone(&active_turn.turn_state))
-            }
-        };
-        let Some(turn_state) = turn_state else {
-            sess.complete_initial_goal_start(
-                &sub_id,
-                Err(InitialGoalStartError::InvalidRequest(
-                    "cannot start a goal while another turn is active".to_string(),
-                )),
-            );
-            return;
-        };
-        reserved_goal_turn = Some(turn_state);
-    }
-
-    let current_context = if let Some(initial_goal) = initial_goal {
-        let prepared_turn = match sess.prepare_turn(updates).await {
-            Ok(prepared_turn) => prepared_turn,
-            Err(err) => {
-                if let Some(turn_state) = reserved_goal_turn.as_ref() {
-                    clear_reserved_goal_turn(sess, turn_state).await;
-                }
-                let err = match err {
-                    CodexErr::InvalidRequest(message) => {
-                        InitialGoalStartError::InvalidRequest(message)
-                    }
-                    err => InitialGoalStartError::Internal(err.to_string()),
-                };
-                sess.complete_initial_goal_start(&sub_id, Err(err));
-                return;
-            }
-        };
-        match sess
-            .prepare_initial_goal(&sub_id, &prepared_turn, &initial_goal)
-            .await
-        {
-            Ok(()) => {}
-            Err(err) => {
-                if let Some(turn_state) = reserved_goal_turn.as_ref() {
-                    clear_reserved_goal_turn(sess, turn_state).await;
-                }
-                sess.complete_initial_goal_start(&sub_id, Err(err));
-                return;
-            }
-        }
-
-        sess.commit_prepared_turn(sub_id.clone(), prepared_turn)
-            .await
-    } else {
-        match sess.new_turn_with_sub_id(sub_id.clone(), updates).await {
-            Ok(current_context) => current_context,
-            Err(_) => return,
-        }
+    let Ok(current_context) = sess.new_turn_with_sub_id(sub_id.clone(), updates).await else {
+        // new_turn_with_sub_id already emits the error event.
+        return;
     };
     if emit_thread_settings_applied {
         sess.send_event_raw(Event {
@@ -325,18 +241,6 @@ pub(super) async fn user_input_or_turn_inner(
         )
         .await
     {
-        Ok(_) if reserved_goal_turn.is_some() => {
-            if let Some(turn_state) = reserved_goal_turn.as_ref() {
-                clear_reserved_goal_turn(sess, turn_state).await;
-            }
-            sess.complete_initial_goal_start(
-                &sub_id,
-                Err(InitialGoalStartError::Internal(
-                    "goal turn reservation was replaced before startup".to_string(),
-                )),
-            );
-            return;
-        }
         Ok(_) => {
             current_context.session_telemetry.user_prompt(&items);
             Some(items)
@@ -369,35 +273,15 @@ pub(super) async fn user_input_or_turn_inner(
                     client_id: client_user_message_id,
                 });
             }
-            if reserved_goal_turn.is_some() {
-                sess.start_task(
-                    Arc::clone(&current_context),
-                    task_input,
-                    crate::tasks::RegularTask::new(),
-                )
-                .await;
-                sess.complete_initial_goal_start(&sub_id, Ok(()));
-            } else {
-                sess.spawn_task(
-                    Arc::clone(&current_context),
-                    task_input,
-                    crate::tasks::RegularTask::new(),
-                )
-                .await;
-            }
+            sess.spawn_task(
+                Arc::clone(&current_context),
+                task_input,
+                crate::tasks::RegularTask::new(),
+            )
+            .await;
             Some(accepted_items)
         }
         Err(err) => {
-            if let Some(turn_state) = reserved_goal_turn.as_ref() {
-                clear_reserved_goal_turn(sess, turn_state).await;
-                sess.complete_initial_goal_start(
-                    &sub_id,
-                    Err(InitialGoalStartError::Internal(
-                        err.to_error_event().message,
-                    )),
-                );
-                return;
-            }
             sess.send_event_raw(Event {
                 id: sub_id,
                 msg: EventMsg::Error(err.to_error_event()),
@@ -903,14 +787,8 @@ pub(super) async fn submission_loop(
                     false
                 }
                 Op::UserInput { .. } => {
-                    user_input_or_turn(
-                        &sess,
-                        sub.id.clone(),
-                        sub.op,
-                        sub.client_user_message_id,
-                        sub.initial_goal,
-                    )
-                    .await;
+                    user_input_or_turn(&sess, sub.id.clone(), sub.op, sub.client_user_message_id)
+                        .await;
                     false
                 }
                 Op::ThreadSettings { thread_settings } => {
