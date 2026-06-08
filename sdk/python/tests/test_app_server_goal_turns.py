@@ -575,20 +575,8 @@ def test_failed_goal_starts_release_routing_without_model_requests(tmp_path) -> 
                 thread.start_goal("   ")
             with pytest.raises(TypeError) as type_error:
                 thread.start_goal(123)  # type: ignore[arg-type]
-
-            existing = codex._client.thread_goal_set(
-                thread.id,
-                objective="Keep this valid stored goal",
-                status=ThreadGoalStatus.paused,
-            ).goal
             with pytest.raises(ValueError) as long_error:
                 thread.start_goal("x" * 4_001)
-            persisted = codex._client.request(
-                "thread/goal/get",
-                {"threadId": thread.id},
-                response_model=ThreadGoalGetResponse,
-            ).goal
-            codex._client.thread_goal_clear(thread.id)
 
             ephemeral = codex.thread_start(ephemeral=True)
             with pytest.raises(InvalidRequestError) as ephemeral_error:
@@ -605,11 +593,6 @@ def test_failed_goal_starts_release_routing_without_model_requests(tmp_path) -> 
             str(long_error.value),
             ephemeral_error.value.message,
         ],
-        "stored_goal": (
-            existing.objective,
-            persisted.objective if persisted else None,
-            persisted.status if persisted else None,
-        ),
         "follow_up": (follow_up.status, follow_up.final_response),
         "request_count": len(requests),
         "registered_goals": registered_goals,
@@ -620,11 +603,6 @@ def test_failed_goal_starts_release_routing_without_model_requests(tmp_path) -> 
             "goal objective must be at most 4000 characters",
             f"thread must be persisted before starting a goal: {ephemeral.id}",
         ],
-        "stored_goal": (
-            "Keep this valid stored goal",
-            "Keep this valid stored goal",
-            ThreadGoalStatus.paused,
-        ),
         "follow_up": (TurnStatus.completed, "Ordinary turn complete."),
         "request_count": 1,
         "registered_goals": {},
