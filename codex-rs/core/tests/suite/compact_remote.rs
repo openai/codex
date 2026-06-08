@@ -1,7 +1,6 @@
 #![allow(clippy::expect_used)]
 
 use std::fs;
-use std::path::PathBuf;
 
 use anyhow::Result;
 use codex_core::compact::SUMMARY_PREFIX;
@@ -24,6 +23,8 @@ use codex_protocol::protocol::RealtimeOutputModality;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
 use codex_protocol::user_input::UserInput;
+use core_test_support::PathBufExt;
+use core_test_support::apps_test_server::configure_search_capable_model;
 use core_test_support::context_snapshot;
 use core_test_support::context_snapshot::ContextSnapshotOptions;
 use core_test_support::context_snapshot::ContextSnapshotRenderMode;
@@ -35,6 +36,7 @@ use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodexBuilder;
 use core_test_support::test_codex::TestCodexHarness;
 use core_test_support::test_codex::test_codex;
+use core_test_support::test_path_buf;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
 use core_test_support::wait_for_event_with_timeout;
@@ -43,6 +45,9 @@ use serde_json::Value;
 use serde_json::json;
 use tokio::time::Duration;
 use wiremock::ResponseTemplate;
+
+const CONTEXT_WINDOW_TRUNCATED_OUTPUT_MESSAGE: &str =
+    "Output exceeded the available model context and was truncated";
 
 fn approx_token_count(text: &str) -> i64 {
     i64::try_from(text.len().saturating_add(3) / 4).unwrap_or(i64::MAX)
@@ -879,6 +884,10 @@ async fn remote_compact_v2_reuses_compaction_trigger_for_followups() -> Result<(
         compact_request.header("x-codex-window-id").as_deref()
     );
     assert_eq!(
+        compact_request.body_json()["client_metadata"]["x-codex-window-id"].as_str(),
+        compact_metadata["window_id"].as_str()
+    );
+    assert_eq!(
         compact_metadata["compaction"],
         json!({
             "trigger": "manual",
@@ -1449,22 +1458,146 @@ async fn remote_compact_trims_function_call_history_to_fit_context_window() -> R
         "expected compact request to keep the older function call/result pair"
     );
     assert!(
-        !compact_request.has_function_call(trimmed_call_id)
-            && compact_request
-                .function_call_output_text(trimmed_call_id)
-                .is_none(),
-        "expected compact request to drop the trailing function call/result pair past the boundary"
+        compact_request.has_function_call(trimmed_call_id),
+        "expected compact request to retain the trailing function call"
+    );
+    assert_eq!(
+        compact_request.function_call_output_text(trimmed_call_id),
+        Some(CONTEXT_WINDOW_TRUNCATED_OUTPUT_MESSAGE.to_string()),
+        "expected compact request to rewrite the trailing function call output past the boundary"
     );
 
     assert_eq!(
         compact_request.inputs_of_type("function_call").len(),
-        1,
-        "expected exactly one function call after trimming"
+        2,
+        "expected both function calls after rewriting the trailing output"
     );
     assert_eq!(
         compact_request.inputs_of_type("function_call_output").len(),
-        1,
-        "expected exactly one function call output after trimming"
+        2,
+        "expected both function call outputs after rewriting the trailing output"
+    );
+
+    Ok(())
+}
+
+#[cfg_attr(target_os = "windows", ignore)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_compact_rewrites_multiple_trailing_function_call_outputs() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let first_user_message = "turn with retained shell call";
+    let second_user_message = "turn with parallel shell calls";
+    let retained_call_id = "retained-call";
+    let first_trimmed_call_id = "first-trimmed-call";
+    let second_trimmed_call_id = "second-trimmed-call";
+    let retained_command = "echo retained-shell-output";
+    let first_trimmed_command = "yes x | head -n 3000";
+    let second_trimmed_command = "yes y | head -n 3000";
+
+    let harness = TestCodexHarness::with_builder(
+        test_codex()
+            .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+            .with_config(|config| {
+                config.model_context_window = Some(2_000);
+                config.model_auto_compact_token_limit = Some(200_000);
+            }),
+    )
+    .await?;
+    let codex = harness.test().codex.clone();
+
+    responses::mount_sse_sequence(
+        harness.server(),
+        vec![
+            sse(vec![
+                responses::ev_shell_command_call(retained_call_id, retained_command),
+                responses::ev_completed("retained-call-response"),
+            ]),
+            sse(vec![
+                responses::ev_assistant_message("retained-assistant", "retained complete"),
+                responses::ev_completed("retained-final-response"),
+            ]),
+            sse(vec![
+                responses::ev_shell_command_call(first_trimmed_call_id, first_trimmed_command),
+                responses::ev_shell_command_call(second_trimmed_call_id, second_trimmed_command),
+                responses::ev_completed("parallel-call-response"),
+            ]),
+        ],
+    )
+    .await;
+
+    codex
+        .submit(Op::UserInput {
+            environments: None,
+            items: vec![UserInput::Text {
+                text: first_user_message.into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    codex
+        .submit(Op::UserInput {
+            environments: None,
+            items: vec![UserInput::Text {
+                text: second_user_message.into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    let compact_mock = responses::mount_compact_user_history_with_summary_once(
+        harness.server(),
+        "REMOTE_COMPACT_SUMMARY",
+    )
+    .await;
+
+    codex.submit(Op::Compact).await?;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    let compact_request = compact_mock.single_request();
+    assert!(
+        compact_request.has_function_call(retained_call_id)
+            && compact_request
+                .function_call_output_text(retained_call_id)
+                .is_some(),
+        "expected compact request to keep the older function call/result pair"
+    );
+    assert!(
+        compact_request.has_function_call(first_trimmed_call_id)
+            && compact_request.has_function_call(second_trimmed_call_id),
+        "expected compact request to retain both trailing parallel function calls"
+    );
+    assert_eq!(
+        compact_request.function_call_output_text(first_trimmed_call_id),
+        Some(CONTEXT_WINDOW_TRUNCATED_OUTPUT_MESSAGE.to_string()),
+        "expected compact request to rewrite the first trailing function call output"
+    );
+    assert_eq!(
+        compact_request.function_call_output_text(second_trimmed_call_id),
+        Some(CONTEXT_WINDOW_TRUNCATED_OUTPUT_MESSAGE.to_string()),
+        "expected compact request to rewrite the second trailing function call output"
+    );
+
+    assert_eq!(
+        compact_request.inputs_of_type("function_call").len(),
+        3,
+        "expected all function calls after rewriting trailing outputs"
+    );
+    assert_eq!(
+        compact_request.inputs_of_type("function_call_output").len(),
+        3,
+        "expected all function call outputs after rewriting trailing outputs"
     );
 
     Ok(())
@@ -1600,22 +1733,126 @@ async fn auto_remote_compact_trims_function_call_history_to_fit_context_window()
         "expected compact request to keep the older function call/result pair"
     );
     assert!(
-        !compact_request.has_function_call(trimmed_call_id)
-            && compact_request
-                .function_call_output_text(trimmed_call_id)
-                .is_none(),
-        "expected compact request to drop the trailing function call/result pair past the boundary"
+        compact_request.has_function_call(trimmed_call_id),
+        "expected compact request to retain the trailing function call"
+    );
+    assert_eq!(
+        compact_request.function_call_output_text(trimmed_call_id),
+        Some(CONTEXT_WINDOW_TRUNCATED_OUTPUT_MESSAGE.to_string()),
+        "expected compact request to rewrite the trailing function call output past the boundary"
     );
 
     assert_eq!(
         compact_request.inputs_of_type("function_call").len(),
-        1,
-        "expected exactly one function call after trimming"
+        2,
+        "expected both function calls after rewriting the trailing output"
     );
     assert_eq!(
         compact_request.inputs_of_type("function_call_output").len(),
-        1,
-        "expected exactly one function call output after trimming"
+        2,
+        "expected both function call outputs after rewriting the trailing output"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_compact_trims_tool_search_output_to_empty_tools_array() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let search_call_id = "tool-search-1";
+    let tool_name = "oversized_dynamic_tool";
+    let tool_description = format!(
+        "Oversized deferred tool for remote compaction. {}",
+        "x".repeat(20_000)
+    );
+    let _responses_mock = mount_sse_once(
+        &server,
+        sse(vec![
+            responses::ev_response_created("resp-1"),
+            responses::ev_tool_search_call(
+                search_call_id,
+                &json!({
+                    "query": "oversized deferred tool",
+                    "limit": 8,
+                }),
+            ),
+            responses::ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+
+    let input_schema = json!({
+        "type": "object",
+        "properties": {
+            "mode": { "type": "string" },
+        },
+        "required": ["mode"],
+        "additionalProperties": false,
+    });
+    let dynamic_tool = DynamicToolSpec {
+        namespace: Some("codex_app".to_string()),
+        name: tool_name.to_string(),
+        description: tool_description,
+        input_schema,
+        defer_loading: true,
+    };
+
+    let mut builder = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(|config| {
+            configure_search_capable_model(config);
+            config.model_context_window = Some(2_000);
+        });
+    let mut test = builder.build(&server).await?;
+    let new_thread = test
+        .thread_manager
+        .start_thread_with_tools(test.config.clone(), vec![dynamic_tool])
+        .await?;
+    test.codex = new_thread.thread;
+    test.session_configured = new_thread.session_configured;
+    let codex = test.codex.clone();
+
+    codex
+        .submit(Op::UserInput {
+            environments: None,
+            items: vec![UserInput::Text {
+                text: "Find the oversized deferred tool".to_string(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            responsesapi_client_metadata: None,
+            additional_context: Default::default(),
+            thread_settings: Default::default(),
+        })
+        .await?;
+    wait_for_turn_complete(&codex).await;
+
+    let compact_mock =
+        responses::mount_compact_user_history_with_summary_once(&server, "REMOTE_COMPACT_SUMMARY")
+            .await;
+
+    codex.submit(Op::Compact).await?;
+    wait_for_turn_complete(&codex).await;
+
+    let compact_request = compact_mock.single_request();
+    let compact_tools = compact_request
+        .tool_search_output(search_call_id)
+        .get("tools")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    assert!(
+        compact_request
+            .inputs_of_type("tool_search_output")
+            .iter()
+            .any(|item| item.get("call_id").and_then(Value::as_str) == Some(search_call_id)),
+        "expected compact request to retain the tool_search_output item"
+    );
+    assert!(
+        compact_tools.is_empty(),
+        "expected compact request to rewrite trailing tool_search output to an empty tools array"
     );
 
     Ok(())
@@ -1936,8 +2173,13 @@ async fn remote_compact_trim_estimate_uses_session_base_instructions() -> Result
         "expected remote compact request to preserve older function call history"
     );
     assert!(
-        !override_compact_request.has_function_call(override_trailing_call_id),
-        "expected remote compact request to trim trailing function call history with override instructions"
+        override_compact_request.has_function_call(override_trailing_call_id),
+        "expected remote compact request to preserve trailing function call history with override instructions"
+    );
+    assert_eq!(
+        override_compact_request.function_call_output_text(override_trailing_call_id),
+        Some(CONTEXT_WINDOW_TRUNCATED_OUTPUT_MESSAGE.to_string()),
+        "expected remote compact request to rewrite trailing function call output with override instructions"
     );
 
     Ok(())
@@ -3076,7 +3318,7 @@ async fn snapshot_request_shape_remote_pre_turn_compaction_including_incoming_us
             core_test_support::submit_thread_settings(
                 &codex,
                 codex_protocol::protocol::ThreadSettingsOverrides {
-                    cwd: Some(PathBuf::from(PRETURN_CONTEXT_DIFF_CWD)),
+                    cwd: Some(test_path_buf(PRETURN_CONTEXT_DIFF_CWD).abs()),
                     ..Default::default()
                 },
             )

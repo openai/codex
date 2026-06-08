@@ -104,6 +104,23 @@ pub struct TurnTokenUsageFact {
     pub token_usage: TokenUsage,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct TurnProfile {
+    pub before_first_sampling_ms: u64,
+    pub sampling_ms: u64,
+    pub between_sampling_overhead_ms: u64,
+    pub tool_blocking_ms: u64,
+    pub after_last_sampling_ms: u64,
+    pub sampling_request_count: u32,
+    pub sampling_retry_count: u32,
+}
+
+#[derive(Clone)]
+pub struct TurnProfileFact {
+    pub turn_id: String,
+    pub profile: TurnProfile,
+}
+
 #[derive(Clone)]
 pub struct TurnCodexErrorFact {
     pub(crate) turn_id: String,
@@ -348,6 +365,7 @@ pub struct SubAgentThreadStartedInput {
     pub session_id: String,
     pub thread_id: String,
     pub parent_thread_id: Option<String>,
+    pub forked_from_thread_id: Option<String>,
     pub product_client_id: String,
     pub client_name: String,
     pub client_version: String,
@@ -416,6 +434,8 @@ pub struct CodexCompactionEvent {
     pub error: Option<String>,
     pub active_context_tokens_before: i64,
     pub active_context_tokens_after: i64,
+    pub retained_image_count: Option<usize>,
+    pub compaction_summary_tokens: Option<i64>,
     pub started_at: u64,
     pub completed_at: u64,
     pub duration_ms: Option<u64>,
@@ -475,6 +495,7 @@ pub(crate) enum CustomAnalyticsFact {
     GuardianReview(Box<GuardianReviewEventParams>),
     TurnResolvedConfig(Box<TurnResolvedConfigFact>),
     TurnTokenUsage(Box<TurnTokenUsageFact>),
+    TurnProfile(Box<TurnProfileFact>),
     TurnCodexError(Box<TurnCodexErrorFact>),
     SkillInvoked(SkillInvokedInput),
     AppMentioned(AppMentionedInput),

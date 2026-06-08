@@ -7,6 +7,7 @@
 use super::plugin_mentions::fetch_plugin_mentions;
 use super::*;
 use crate::app_event::ConnectorsSnapshot;
+use crate::config_update::format_config_error;
 use codex_app_server_protocol::AppsListParams;
 use codex_app_server_protocol::AppsListResponse;
 use codex_app_server_protocol::MarketplaceAddParams;
@@ -357,7 +358,12 @@ impl App {
             let result = write_hook_enabled(request_handle, key, enabled)
                 .await
                 .map(|_| ())
-                .map_err(|err| format!("Failed to update hook config: {err}"));
+                .map_err(|err| {
+                    format!(
+                        "Failed to update hook config: {}",
+                        format_config_error(&err)
+                    )
+                });
             app_event_tx.send(AppEvent::HookEnabledSet {
                 key: key_for_event,
                 enabled,
@@ -378,7 +384,7 @@ impl App {
             let result = write_hook_trust(request_handle, key, current_hash)
                 .await
                 .map(|_| ())
-                .map_err(|err| format!("Failed to trust hook: {err}"));
+                .map_err(|err| format!("Failed to trust hook: {}", format_config_error(&err)));
             app_event_tx.send(AppEvent::HookTrusted { result });
         });
     }
@@ -394,7 +400,7 @@ impl App {
             let result = write_hook_trusts(request_handle, updates)
                 .await
                 .map(|_| ())
-                .map_err(|err| format!("Failed to trust hooks: {err}"));
+                .map_err(|err| format!("Failed to trust hooks: {}", format_config_error(&err)));
             app_event_tx.send(AppEvent::HookTrusted { result });
         });
     }

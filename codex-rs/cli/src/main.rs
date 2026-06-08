@@ -324,7 +324,7 @@ struct ResumeCommand {
     remote: InteractiveRemoteOptions,
 
     #[clap(flatten)]
-    config_overrides: TuiCli,
+    config_overrides: SessionTuiCli,
 }
 
 #[derive(Debug, Parser)]
@@ -361,7 +361,7 @@ struct ForkCommand {
     session_id: Option<String>,
 
     /// Fork the most recent session without showing the picker.
-    #[arg(long = "last", default_value_t = false, conflicts_with = "session_id")]
+    #[arg(long = "last", default_value_t = false)]
     last: bool,
 
     /// Show all sessions (disables cwd filtering and shows CWD column).
@@ -372,7 +372,33 @@ struct ForkCommand {
     remote: InteractiveRemoteOptions,
 
     #[clap(flatten)]
-    config_overrides: TuiCli,
+    config_overrides: SessionTuiCli,
+}
+
+/// TUI arguments for session commands where a parsed prompt implies an explicit session id.
+///
+/// This keeps `--last PROMPT` valid while rejecting `--last SESSION_ID PROMPT`.
+#[derive(Debug)]
+struct SessionTuiCli(TuiCli);
+
+impl Args for SessionTuiCli {
+    fn augment_args(cmd: clap::Command) -> clap::Command {
+        TuiCli::augment_args(cmd).mut_arg("prompt", |arg| arg.conflicts_with("last"))
+    }
+
+    fn augment_args_for_update(cmd: clap::Command) -> clap::Command {
+        TuiCli::augment_args_for_update(cmd).mut_arg("prompt", |arg| arg.conflicts_with("last"))
+    }
+}
+
+impl clap::FromArgMatches for SessionTuiCli {
+    fn from_arg_matches(matches: &clap::ArgMatches) -> Result<Self, clap::Error> {
+        TuiCli::from_arg_matches(matches).map(Self)
+    }
+
+    fn update_from_arg_matches(&mut self, matches: &clap::ArgMatches) -> Result<(), clap::Error> {
+        self.0.update_from_arg_matches(matches)
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -1172,6 +1198,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             remote,
             config_overrides,
         })) => {
+            let SessionTuiCli(config_overrides) = config_overrides;
             interactive = finalize_resume_interactive(
                 interactive,
                 root_config_overrides.clone(),
@@ -1225,6 +1252,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             remote,
             config_overrides,
         })) => {
+            let SessionTuiCli(config_overrides) = config_overrides;
             interactive = finalize_fork_interactive(
                 interactive,
                 root_config_overrides.clone(),
@@ -2252,11 +2280,18 @@ fn finalize_resume_interactive(
     last: bool,
     show_all: bool,
     include_non_interactive: bool,
-    resume_cli: TuiCli,
+    mut resume_cli: TuiCli,
 ) -> TuiCli {
     // Start with the parsed interactive CLI so resume shares the same
     // configuration surface area as `codex` without additional flags.
-    let resume_session_id = session_id;
+    // Clap assigns the first positional to `session_id`. With `--last`, reinterpret it as the
+    // prompt when no second positional prompt was provided.
+    let resume_session_id = if last && resume_cli.prompt.is_none() {
+        resume_cli.prompt = session_id;
+        None
+    } else {
+        session_id
+    };
     interactive.resume_picker = resume_session_id.is_none() && !last;
     interactive.resume_last = last;
     interactive.resume_session_id = resume_session_id;
@@ -2279,11 +2314,18 @@ fn finalize_fork_interactive(
     session_id: Option<String>,
     last: bool,
     show_all: bool,
-    fork_cli: TuiCli,
+    mut fork_cli: TuiCli,
 ) -> TuiCli {
     // Start with the parsed interactive CLI so fork shares the same
     // configuration surface area as `codex` without additional flags.
-    let fork_session_id = session_id;
+    // Clap assigns the first positional to `session_id`. With `--last`, reinterpret it as the
+    // prompt when no second positional prompt was provided.
+    let fork_session_id = if last && fork_cli.prompt.is_none() {
+        fork_cli.prompt = session_id;
+        None
+    } else {
+        session_id
+    };
     interactive.fork_picker = fork_session_id.is_none() && !last;
     interactive.fork_last = last;
     interactive.fork_session_id = fork_session_id;
@@ -2448,6 +2490,7 @@ mod tests {
         else {
             unreachable!()
         };
+        let SessionTuiCli(resume_cli) = resume_cli;
 
         finalize_resume_interactive(
             interactive,
@@ -2480,6 +2523,7 @@ mod tests {
         else {
             unreachable!()
         };
+        let SessionTuiCli(fork_cli) = fork_cli;
 
         finalize_fork_interactive(interactive, root_overrides, session_id, last, all, fork_cli)
     }
@@ -3016,12 +3060,47 @@ mod tests {
     }
 
     #[test]
+    fn resume_last_accepts_prompt_positional() {
+        let interactive = finalize_resume_from_args(
+            ["codex", "resume", "--last", "/compact focus on auth"].as_ref(),
+        );
+
+        assert!(!interactive.resume_picker);
+        assert!(interactive.resume_last);
+        assert_eq!(interactive.resume_session_id, None);
+        assert_eq!(
+            interactive.prompt.as_deref(),
+            Some("/compact focus on auth")
+        );
+    }
+
+    #[test]
+    fn resume_last_rejects_explicit_session_and_prompt() {
+        let err =
+            MultitoolCli::try_parse_from(["codex", "resume", "--last", "1234", "continue here"])
+                .expect_err("--last with an explicit session and prompt should be rejected");
+
+        assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
+    }
+
+    #[test]
     fn resume_picker_logic_with_session_id() {
         let interactive = finalize_resume_from_args(["codex", "resume", "1234"].as_ref());
         assert!(!interactive.resume_picker);
         assert!(!interactive.resume_last);
         assert_eq!(interactive.resume_session_id.as_deref(), Some("1234"));
         assert!(!interactive.resume_show_all);
+    }
+
+    #[test]
+    fn resume_with_session_id_accepts_prompt_positional() {
+        let interactive =
+            finalize_resume_from_args(["codex", "resume", "1234", "continue here"].as_ref());
+
+        assert!(!interactive.resume_picker);
+        assert!(!interactive.resume_last);
+        assert_eq!(interactive.resume_session_id.as_deref(), Some("1234"));
+        assert_eq!(interactive.prompt.as_deref(), Some("continue here"));
     }
 
     #[test]
@@ -3144,12 +3223,46 @@ mod tests {
     }
 
     #[test]
+    fn fork_last_accepts_prompt_positional() {
+        let interactive =
+            finalize_fork_from_args(["codex", "fork", "--last", "/compact focus on auth"].as_ref());
+
+        assert!(!interactive.fork_picker);
+        assert!(interactive.fork_last);
+        assert_eq!(interactive.fork_session_id, None);
+        assert_eq!(
+            interactive.prompt.as_deref(),
+            Some("/compact focus on auth")
+        );
+    }
+
+    #[test]
+    fn fork_last_rejects_explicit_session_and_prompt() {
+        let err =
+            MultitoolCli::try_parse_from(["codex", "fork", "--last", "1234", "continue here"])
+                .expect_err("--last with an explicit session and prompt should be rejected");
+
+        assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
+    }
+
+    #[test]
     fn fork_picker_logic_with_session_id() {
         let interactive = finalize_fork_from_args(["codex", "fork", "1234"].as_ref());
         assert!(!interactive.fork_picker);
         assert!(!interactive.fork_last);
         assert_eq!(interactive.fork_session_id.as_deref(), Some("1234"));
         assert!(!interactive.fork_show_all);
+    }
+
+    #[test]
+    fn fork_with_session_id_accepts_prompt_positional() {
+        let interactive =
+            finalize_fork_from_args(["codex", "fork", "1234", "continue here"].as_ref());
+
+        assert!(!interactive.fork_picker);
+        assert!(!interactive.fork_last);
+        assert_eq!(interactive.fork_session_id.as_deref(), Some("1234"));
+        assert_eq!(interactive.prompt.as_deref(), Some("continue here"));
     }
 
     #[test]

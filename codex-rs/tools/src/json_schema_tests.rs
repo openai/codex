@@ -25,6 +25,20 @@ fn parse_tool_input_schema_coerces_boolean_schemas() {
 }
 
 #[test]
+fn json_schema_serializes_encrypted_marker() {
+    let schema = JsonSchema::string(Some("Secret value".to_string())).with_encrypted();
+
+    assert_eq!(
+        serde_json::to_value(schema).expect("serialize schema"),
+        serde_json::json!({
+            "type": "string",
+            "description": "Secret value",
+            "encrypted": true,
+        })
+    );
+}
+
+#[test]
 fn parse_tool_input_schema_infers_object_shape_and_defaults_properties() {
     // Example schema shape:
     // {

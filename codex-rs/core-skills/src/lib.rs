@@ -15,6 +15,7 @@ pub use invocation_utils::detect_implicit_skill_invocation_for_command;
 pub use manager::SkillsLoadInput;
 pub use manager::SkillsManager;
 pub use mention_counts::build_skill_name_counts;
+pub use model::HostLoadedSkills;
 pub use model::SkillError;
 pub use model::SkillLoadOutcome;
 pub use model::SkillMetadata;

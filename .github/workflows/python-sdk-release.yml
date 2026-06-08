@@ -4,29 +4,21 @@ on:
   push:
     tags:
       - "python-v*"
-  workflow_dispatch:
-    inputs:
-      runtime_version:
-        description: "Runtime version to publish before updating the SDK pin, for example 0.136.0 or 0.136.0a2."
-        required: true
-        type: string
 
 concurrency:
   group: ${{ github.workflow }}
   cancel-in-progress: false
 
 jobs:
-  # Publish the platform-specific Python runtime wheels before building the SDK
-  # package that pins them, or explicitly before updating the SDK runtime pin.
-  # PyPI project configuration must trust this workflow and job for publishing.
-  publish-python-runtime:
+  resolve-python-release:
     if: github.repository == 'openai/codex'
-    name: publish-python-runtime
+    name: resolve-python-release
     runs-on: ubuntu-latest
-    environment: pypi
     permissions:
       contents: read
-      id-token: write # Required for PyPI trusted publishing.
+    outputs:
+      runtime_version: ${{ steps.python_release.outputs.runtime_version }}
+      sdk_version: ${{ steps.python_release.outputs.sdk_version }}
 
     steps:
       - name: Checkout repository
@@ -34,11 +26,9 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Validate SDK tag and resolve Python runtime release
-        id: python_runtime
+      - name: Validate SDK tag and resolve pinned runtime
+        id: python_release
         shell: bash
-        env:
-          REQUESTED_RUNTIME_VERSION: ${{ inputs.runtime_version }}
         run: |
           set -euo pipefail
           python3 - <<'PY'
@@ -47,107 +37,60 @@ jobs:
           import tomllib
           from pathlib import Path
 
-          event_name = os.environ["GITHUB_EVENT_NAME"]
-          if event_name == "workflow_dispatch":
-              python_version = os.environ["REQUESTED_RUNTIME_VERSION"]
-          elif event_name == "push":
-              sdk_version = os.environ["GITHUB_REF_NAME"].removeprefix("python-v")
-              if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+b[0-9]+", sdk_version):
-                  raise SystemExit(
-                      "Python SDK release tags must identify a beta release, "
-                      "for example python-v0.1.0b1."
-                  )
-
-              pyproject = tomllib.loads(Path("sdk/python/pyproject.toml").read_text())
-              prefix = "openai-codex-cli-bin=="
-              versions = [
-                  dependency.removeprefix(prefix)
-                  for dependency in pyproject["project"]["dependencies"]
-                  if dependency.startswith(prefix)
-              ]
-              if len(versions) != 1:
-                  raise SystemExit(f"Expected exactly one pinned {prefix} dependency, found {versions}")
-              python_version = versions[0]
-          else:
-              raise SystemExit(f"Unsupported workflow event: {event_name}")
-
-          if match := re.fullmatch(r"([0-9]+\.[0-9]+\.[0-9]+)a([0-9]+)", python_version):
-              release_version = f"{match.group(1)}-alpha.{match.group(2)}"
-          elif re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", python_version):
-              release_version = python_version
-          else:
+          sdk_version = os.environ["GITHUB_REF_NAME"].removeprefix("python-v")
+          if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+b[0-9]+", sdk_version):
               raise SystemExit(
-                  "Python runtime version must be stable or a numbered alpha, "
-                  f"for example 0.136.0 or 0.136.0a2; found {python_version}"
+                  "Python SDK release tags must identify a beta release, "
+                  "for example python-v0.1.0b1."
+              )
+
+          pyproject = tomllib.loads(Path("sdk/python/pyproject.toml").read_text())
+          prefix = "openai-codex-cli-bin=="
+          runtime_versions = [
+              dependency.removeprefix(prefix)
+              for dependency in pyproject["project"]["dependencies"]
+              if dependency.startswith(prefix)
+          ]
+          if len(runtime_versions) != 1:
+              raise SystemExit(
+                  f"Expected exactly one pinned {prefix} dependency, found {runtime_versions}"
               )
 
           with Path(os.environ["GITHUB_OUTPUT"]).open("a") as output:
-              print(f"python_version={python_version}", file=output)
-              print(f"release_tag=rust-v{release_version}", file=output)
+              print(f"runtime_version={runtime_versions[0]}", file=output)
+              print(f"sdk_version={sdk_version}", file=output)
           PY
 
-      - name: Download Python runtime release artifacts
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PYTHON_RUNTIME_VERSION: ${{ steps.python_runtime.outputs.python_version }}
-          RELEASE_TAG: ${{ steps.python_runtime.outputs.release_tag }}
-        run: |
-          set -euo pipefail
-          mkdir -p dist/python-runtime dist/python-runtime-packages
-          gh release download "$RELEASE_TAG" \
-            --repo "${GITHUB_REPOSITORY}" \
-            --pattern "openai_codex_cli_bin-${PYTHON_RUNTIME_VERSION}-*.whl" \
-            --dir dist/python-runtime
-          gh release download "$RELEASE_TAG" \
-            --repo "${GITHUB_REPOSITORY}" \
-            --pattern "codex-package-*-unknown-linux-musl.tar.gz" \
-            --dir dist/python-runtime-packages
+  prepare-python-runtime:
+    name: prepare-python-runtime
+    needs: resolve-python-release
+    permissions:
+      contents: read
+    uses: ./.github/workflows/python-runtime-build.yml
+    with:
+      runtime_version: ${{ needs.resolve-python-release.outputs.runtime_version }}
 
-          shopt -s nullglob
-          wheels=(dist/python-runtime/*.whl)
-          if [[ "${#wheels[@]}" -ne 6 ]]; then
-            echo "Expected 6 Python runtime wheels for ${PYTHON_RUNTIME_VERSION}, found ${#wheels[@]}."
-            exit 1
-          fi
-          packages=(dist/python-runtime-packages/*.tar.gz)
-          if [[ "${#packages[@]}" -ne 2 ]]; then
-            echo "Expected 2 Linux package archives for ${PYTHON_RUNTIME_VERSION}, found ${#packages[@]}."
-            exit 1
-          fi
+  # Always publish the exact pinned runtime from this top-level workflow before
+  # building the SDK package. PyPI does not support reusable workflows as
+  # Trusted Publishers.
+  publish-python-runtime:
+    if: github.repository == 'openai/codex'
+    name: publish-python-runtime
+    needs:
+      - prepare-python-runtime
+      - resolve-python-release
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      contents: read
+      id-token: write # Required for PyPI trusted publishing.
 
-      - name: Build musllinux Python runtime wheels
-        env:
-          RELEASE_TAG: ${{ steps.python_runtime.outputs.release_tag }}
-        run: |
-          set -euo pipefail
-
-          python3 -m venv "${RUNNER_TEMP}/python-runtime-build-venv"
-          "${RUNNER_TEMP}/python-runtime-build-venv/bin/python" -m pip install build
-
-          while read -r target platform_tag; do
-            stage_dir="${RUNNER_TEMP}/openai-codex-cli-bin-${target}-${platform_tag}"
-            python3 sdk/python/scripts/update_sdk_artifacts.py \
-              stage-runtime \
-              "$stage_dir" \
-              "dist/python-runtime-packages/codex-package-${target}.tar.gz" \
-              --codex-version "$RELEASE_TAG" \
-              --platform-tag "$platform_tag"
-            "${RUNNER_TEMP}/python-runtime-build-venv/bin/python" -m build \
-              --wheel \
-              --outdir dist/python-runtime \
-              "$stage_dir"
-          done <<'EOF'
-          aarch64-unknown-linux-musl musllinux_1_1_aarch64
-          x86_64-unknown-linux-musl musllinux_1_1_x86_64
-          EOF
-
-          shopt -s nullglob
-          wheels=(dist/python-runtime/*.whl)
-          if [[ "${#wheels[@]}" -ne 8 ]]; then
-            echo "Expected 8 Python runtime wheels, found ${#wheels[@]}."
-            exit 1
-          fi
-          ls -lh dist/python-runtime
+    steps:
+      - name: Download Python runtime wheels
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: python-runtime-wheels
+          path: dist/python-runtime
 
       - name: Publish Python runtime wheels to PyPI
         uses: pypa/gh-action-pypi-publish@ed0c53931b1dc9bd32cbe73a98c7f6766f8a527e # v1.13.0
@@ -155,10 +98,66 @@ jobs:
           packages-dir: dist/python-runtime
           skip-existing: true
 
+      - name: Verify Python runtime wheels are available on PyPI
+        env:
+          PYTHON_RUNTIME_VERSION: ${{ needs.resolve-python-release.outputs.runtime_version }}
+        run: |
+          set -euo pipefail
+          for attempt in {1..30}; do
+            if python3 - <<'PY'
+          import json
+          import os
+          import urllib.error
+          import urllib.request
+
+          version = os.environ["PYTHON_RUNTIME_VERSION"]
+          tags = {
+              "macosx_10_9_x86_64",
+              "macosx_11_0_arm64",
+              "manylinux_2_17_aarch64",
+              "manylinux_2_17_x86_64",
+              "musllinux_1_1_aarch64",
+              "musllinux_1_1_x86_64",
+              "win_amd64",
+              "win_arm64",
+          }
+          expected = {
+              f"openai_codex_cli_bin-{version}-py3-none-{tag}.whl"
+              for tag in tags
+          }
+
+          try:
+              with urllib.request.urlopen(
+                  f"https://pypi.org/pypi/openai-codex-cli-bin/{version}/json",
+                  timeout=30,
+              ) as response:
+                  payload = json.load(response)
+          except urllib.error.URLError as error:
+              print(f"Could not read runtime {version} from PyPI: {error}.")
+              raise SystemExit(1) from error
+
+          actual = {file["filename"] for file in payload["urls"]}
+          if actual != expected:
+              print(f"Missing runtime wheels: {sorted(expected - actual)}")
+              print(f"Unexpected runtime files: {sorted(actual - expected)}")
+              raise SystemExit(1)
+          PY
+            then
+              exit 0
+            fi
+            echo "Runtime wheels are not available on PyPI yet; retrying (${attempt}/30)."
+            sleep 10
+          done
+
+          echo "Runtime wheels did not become available on PyPI."
+          exit 1
+
   build-python-sdk:
-    if: github.event_name == 'push' && github.repository == 'openai/codex'
+    if: github.repository == 'openai/codex'
     name: build-python-sdk
-    needs: publish-python-runtime
+    needs:
+      - publish-python-runtime
+      - resolve-python-release
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -169,19 +168,20 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Validate tag and build Python SDK package
+      - name: Build Python SDK package
         shell: bash
+        env:
+          SDK_VERSION: ${{ needs.resolve-python-release.outputs.sdk_version }}
         run: |
           set -euo pipefail
 
-          sdk_version="${GITHUB_REF_NAME#python-v}"
           # Build in a glibc Linux image so release type generation installs
           # the pinned manylinux runtime wheel.
           docker run --rm \
             --user "$(id -u):$(id -g)" \
             -e HOME=/tmp/codex-python-sdk-home \
             -e UV_LINK_MODE=copy \
-            -e SDK_VERSION="${sdk_version}" \
+            -e SDK_VERSION \
             -e SDK_STAGE_DIR="${RUNNER_TEMP}/openai-codex" \
             -e SDK_DIST_DIR="${GITHUB_WORKSPACE}/dist/python-sdk" \
             -v "${GITHUB_WORKSPACE}:${GITHUB_WORKSPACE}" \

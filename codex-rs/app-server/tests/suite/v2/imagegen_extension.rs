@@ -44,7 +44,7 @@ const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(60);
 const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[tokio::test]
-async fn standalone_image_generation_persists_image_and_returns_it_to_model() -> Result<()> {
+async fn standalone_image_generation_returns_saved_path_hint_to_model() -> Result<()> {
     let call_id = "image-run-1";
     let server = responses::start_mock_server().await;
     mount_image_response(&server).await;
@@ -124,7 +124,13 @@ async fn standalone_image_generation_persists_image_and_returns_it_to_model() ->
             "detail": "high",
         })
     );
-    assert_eq!(output["output"].as_array().map(Vec::len), Some(1));
+    let output_hint = output["output"][1]["text"]
+        .as_str()
+        .context("image output should include model-visible path hint")?;
+    assert!(
+        output_hint.contains(&saved_path.display().to_string()),
+        "output hint should identify the path core saved"
+    );
     assert!(
         !requests[1]
             .message_input_texts("developer")
@@ -136,7 +142,50 @@ async fn standalone_image_generation_persists_image_and_returns_it_to_model() ->
     Ok(())
 }
 
-#[cfg_attr(windows, ignore = "covered by Linux and macOS CI")]
+#[tokio::test]
+async fn standalone_image_generation_is_exposed_in_code_mode_only() -> Result<()> {
+    let server = responses::start_mock_server().await;
+    let response_mock = responses::mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_assistant_message("msg-1", "Done"),
+            responses::ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml(
+        codex_home.path(),
+        &server.uri(),
+        ImagegenTestMode::CodeModeOnly,
+    )?;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("access-chatgpt"),
+        AuthCredentialsStoreMode::File,
+    )?;
+
+    let mut mcp =
+        TestAppServer::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)]).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+    start_image_generation_turn(&mut mcp).await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    assert!(
+        response_mock
+            .single_request()
+            .body_contains_text("image_gen__imagegen")
+    );
+
+    Ok(())
+}
+
+#[cfg(not(windows))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn standalone_image_generation_is_callable_from_code_mode_only() -> Result<()> {
     let call_id = "code-mode-image-run-1";
@@ -156,7 +205,7 @@ const result = await tools.image_gen__imagegen({
   action: "generate",
   prompt: "paint a blue whale",
 });
-image(result);
+generatedImage(result);
 "#,
                 ),
                 responses::ev_completed("resp-1"),
@@ -203,7 +252,12 @@ image(result);
             "detail": "high",
         })
     );
-    assert_eq!(output["output"].as_array().map(Vec::len), Some(2));
+    assert!(
+        output["output"][2]["text"]
+            .as_str()
+            .is_some_and(|text| text.contains("Generated images are saved"))
+    );
+    assert_eq!(output["output"].as_array().map(Vec::len), Some(3));
 
     Ok(())
 }

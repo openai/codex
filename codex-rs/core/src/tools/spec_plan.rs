@@ -6,11 +6,9 @@ use crate::tools::context::ToolInvocation;
 use crate::tools::handlers::ApplyPatchHandler;
 use crate::tools::handlers::CodeModeExecuteHandler;
 use crate::tools::handlers::CodeModeWaitHandler;
-use crate::tools::handlers::CreateGoalHandler;
 use crate::tools::handlers::DynamicToolHandler;
 use crate::tools::handlers::ExecCommandHandler;
 use crate::tools::handlers::ExecCommandHandlerOptions;
-use crate::tools::handlers::GetGoalHandler;
 use crate::tools::handlers::ListAvailablePluginsToInstallHandler;
 use crate::tools::handlers::ListMcpResourceTemplatesHandler;
 use crate::tools::handlers::ListMcpResourcesHandler;
@@ -24,7 +22,6 @@ use crate::tools::handlers::ShellCommandHandler;
 use crate::tools::handlers::ShellCommandHandlerOptions;
 use crate::tools::handlers::TestSyncHandler;
 use crate::tools::handlers::ToolSearchHandler;
-use crate::tools::handlers::UpdateGoalHandler;
 use crate::tools::handlers::ViewImageHandler;
 use crate::tools::handlers::WriteStdinHandler;
 use crate::tools::handlers::agent_jobs::ReportAgentJobResultHandler;
@@ -40,8 +37,8 @@ use crate::tools::handlers::multi_agents_common::MAX_WAIT_TIMEOUT_MS;
 use crate::tools::handlers::multi_agents_common::MIN_WAIT_TIMEOUT_MS;
 use crate::tools::handlers::multi_agents_spec::SpawnAgentToolOptions;
 use crate::tools::handlers::multi_agents_spec::WaitAgentTimeoutOptions;
-use crate::tools::handlers::multi_agents_v2::CloseAgentHandler as CloseAgentHandlerV2;
 use crate::tools::handlers::multi_agents_v2::FollowupTaskHandler as FollowupTaskHandlerV2;
+use crate::tools::handlers::multi_agents_v2::InterruptAgentHandler;
 use crate::tools::handlers::multi_agents_v2::ListAgentsHandler as ListAgentsHandlerV2;
 use crate::tools::handlers::multi_agents_v2::SendMessageHandler as SendMessageHandlerV2;
 use crate::tools::handlers::multi_agents_v2::SpawnAgentHandler as SpawnAgentHandlerV2;
@@ -59,6 +56,7 @@ use crate::tools::router::ToolRouterParams;
 use codex_features::Feature;
 use codex_login::AuthManager;
 use codex_mcp::ToolInfo;
+use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::InputModality;
@@ -207,7 +205,12 @@ fn build_model_visible_specs_and_registry(
         if exposure.is_direct() && !is_hidden_by_code_mode_only(turn_context, &tool_name, exposure)
         {
             let spec = runtime.spec();
-            specs.push(spec_for_model_request(turn_context, exposure, spec));
+            specs.push(spec_for_model_request(
+                turn_context,
+                exposure,
+                &tool_name,
+                spec,
+            ));
         }
     }
     specs.extend(hosted_specs);
@@ -226,12 +229,14 @@ fn build_model_visible_specs_and_registry(
 fn spec_for_model_request(
     turn_context: &TurnContext,
     exposure: ToolExposure,
+    tool_name: &ToolName,
     spec: ToolSpec,
 ) -> ToolSpec {
     if matches!(
         turn_context.tool_mode,
         ToolMode::CodeMode | ToolMode::CodeModeOnly
     ) && exposure != ToolExposure::DirectModelOnly
+        && !is_excluded_from_code_mode(turn_context, tool_name)
         && codex_code_mode::is_code_mode_nested_tool(spec.name())
     {
         codex_tools::augment_tool_spec_for_code_mode(spec)
@@ -242,22 +247,31 @@ fn spec_for_model_request(
 
 fn hosted_model_tool_specs(context: &CoreToolPlanContext<'_>) -> Vec<ToolSpec> {
     let turn_context = context.turn_context;
+    // Responses Lite accepts schemas for client-executed tools, not hosted Responses tools.
+    if turn_context.model_info.use_responses_lite {
+        return Vec::new();
+    }
+
     let mut specs = Vec::new();
-    let provider_capabilities = turn_context.provider.capabilities();
-    let web_search_mode = (!standalone_web_run_available(context.extension_tool_executors)
-        && provider_capabilities.web_search)
+    let standalone_web_search_available = standalone_web_search_enabled(turn_context)
+        && context
+            .extension_tool_executors
+            .iter()
+            .any(|executor| executor.tool_name() == ToolName::namespaced("web", "run"));
+    // `Some(Cached/Live/Disabled)` are the options for mode when standalone search is unavailable
+    // and the provider supports hosted search. `None` prevents emitting a hosted search tool.
+    let web_search_mode = (!standalone_web_search_available
+        && turn_context.provider.capabilities().web_search)
         .then_some(turn_context.config.web_search_mode.value());
-    let web_search_config = if provider_capabilities.web_search {
-        turn_context.config.web_search_config.as_ref()
-    } else {
-        None
-    };
-    if let Some(web_search_tool) = create_web_search_tool(WebSearchToolOptions {
+    let web_search_config = web_search_mode
+        .as_ref()
+        .and(turn_context.config.web_search_config.as_ref());
+    if let Some(hosted_web_search_tool) = create_web_search_tool(WebSearchToolOptions {
         web_search_mode,
         web_search_config,
         web_search_tool_type: turn_context.model_info.web_search_tool_type,
     }) {
-        specs.push(web_search_tool);
+        specs.push(hosted_web_search_tool);
     }
     // TODO: Remove hosted image generation once the standalone extension is ready.
     if image_generation_tool_enabled(turn_context)
@@ -298,14 +312,6 @@ fn collab_tools_enabled(turn_context: &TurnContext) -> bool {
     }
 }
 
-fn goal_tools_enabled(turn_context: &TurnContext) -> bool {
-    turn_context.goal_tools_enabled()
-        && !matches!(
-            turn_context.session_source,
-            SessionSource::SubAgent(SubAgentSource::Review)
-        )
-}
-
 fn agent_jobs_tools_enabled(turn_context: &TurnContext) -> bool {
     turn_context.features.get().enabled(Feature::SpawnCsv) && collab_tools_enabled(turn_context)
 }
@@ -340,9 +346,15 @@ fn image_generation_runtime_enabled(turn_context: &TurnContext) -> bool {
 }
 
 fn standalone_image_generation_model_visible(turn_context: &TurnContext) -> bool {
-    image_generation_runtime_enabled(turn_context)
-        && turn_context.features.get().enabled(Feature::ImageGenExt)
-        && namespace_tools_enabled(turn_context)
+    if !image_generation_runtime_enabled(turn_context) || !namespace_tools_enabled(turn_context) {
+        return false;
+    }
+
+    if turn_context.model_info.use_responses_lite {
+        return true;
+    }
+
+    turn_context.features.get().enabled(Feature::ImageGenExt)
 }
 
 fn standalone_image_generation_available(
@@ -405,10 +417,19 @@ fn is_hidden_by_code_mode_only(
         ))
 }
 
+fn is_excluded_from_code_mode(turn_context: &TurnContext, tool_name: &ToolName) -> bool {
+    tool_name.namespace.as_ref().is_some_and(|namespace| {
+        turn_context
+            .config
+            .code_mode
+            .excluded_tool_namespaces
+            .contains(namespace)
+    })
+}
+
 fn build_code_mode_executors(
     turn_context: &TurnContext,
     executors: &[Arc<dyn CoreToolRuntime>],
-    deferred_tools_available: bool,
 ) -> Vec<Arc<dyn CoreToolRuntime>> {
     if !matches!(
         turn_context.tool_mode,
@@ -419,6 +440,8 @@ fn build_code_mode_executors(
 
     let mut code_mode_nested_tool_specs = Vec::new();
     let mut exec_prompt_tool_specs = Vec::new();
+    let mut deferred_tools_available = false;
+    let deferred_tools_guidance_enabled = search_tool_enabled(turn_context);
     for executor in executors {
         let exposure = executor.exposure();
         if exposure == ToolExposure::DirectModelOnly {
@@ -428,9 +451,19 @@ fn build_code_mode_executors(
         if exposure == ToolExposure::Hidden {
             continue;
         }
+
+        if is_excluded_from_code_mode(turn_context, &executor.tool_name()) {
+            continue;
+        }
+
         let spec = executor.spec();
 
-        if exposure != ToolExposure::Deferred {
+        if exposure == ToolExposure::Deferred {
+            // Only show deferred-tool guidance when supported and an included spec is usable by code mode.
+            deferred_tools_available |= deferred_tools_guidance_enabled
+                && !collect_code_mode_exec_prompt_tool_definitions(std::iter::once(&spec))
+                    .is_empty();
+        } else {
             exec_prompt_tool_specs.push(spec.clone());
         }
         code_mode_nested_tool_specs.push(spec);
@@ -530,20 +563,20 @@ fn add_tool_sources(context: &CoreToolPlanContext<'_>, planned_tools: &mut Plann
     add_core_utility_tools(context, planned_tools);
     add_collaboration_tools(context, planned_tools);
     add_mcp_runtime_tools(context, planned_tools);
-    add_dynamic_tools(context, planned_tools);
     add_extension_tools(context, planned_tools);
+    add_dynamic_tools(context, planned_tools);
     for spec in hosted_model_tool_specs(context) {
         planned_tools.add_hosted_spec(spec);
     }
 }
 
-fn standalone_web_run_available(
-    extension_tools: &[Arc<dyn ToolExecutor<ExtensionToolCall>>],
-) -> bool {
-    let web_run = ToolName::namespaced("web", "run");
-    extension_tools
-        .iter()
-        .any(|executor| executor.tool_name() == web_run)
+fn standalone_web_search_enabled(turn_context: &TurnContext) -> bool {
+    namespace_tools_enabled(turn_context)
+        && (turn_context.model_info.use_responses_lite
+            || turn_context
+                .features
+                .get()
+                .enabled(Feature::StandaloneWebSearch))
 }
 
 fn add_shell_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut PlannedTools) {
@@ -611,11 +644,6 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mut
     let environment_mode = turn_context.tool_environment_mode();
 
     planned_tools.add(PlanHandler);
-    if goal_tools_enabled(turn_context) {
-        planned_tools.add(GetGoalHandler);
-        planned_tools.add(CreateGoalHandler);
-        planned_tools.add(UpdateGoalHandler);
-    }
 
     if turn_context.config.experimental_request_user_input_enabled {
         planned_tools.add(RequestUserInputHandler {
@@ -714,7 +742,7 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mu
                 exposure,
             ));
             planned_tools.add_arc(override_tool_exposure(
-                multi_agent_v2_handler(CloseAgentHandlerV2, tool_namespace),
+                multi_agent_v2_handler(InterruptAgentHandler, tool_namespace),
                 exposure,
             ));
             planned_tools.add_arc(override_tool_exposure(
@@ -734,10 +762,7 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mu
                 SpawnAgentHandler::new(SpawnAgentToolOptions {
                     available_models: turn_context.available_models.clone(),
                     agent_type_description,
-                    hide_agent_type_model_reasoning: turn_context
-                        .config
-                        .multi_agent_v2
-                        .hide_spawn_agent_metadata,
+                    hide_agent_type_model_reasoning: false,
                     include_usage_hint: turn_context.config.multi_agent_v2.usage_hint_enabled,
                     usage_hint_text: turn_context.config.multi_agent_v2.usage_hint_text.clone(),
                     max_concurrent_threads_per_session: max_concurrent_threads_per_session(
@@ -839,16 +864,7 @@ fn prepend_code_mode_executors(
     planned_tools: &mut PlannedTools,
 ) {
     let turn_context = context.turn_context;
-    let deferred_tools_available = search_tool_enabled(turn_context)
-        && planned_tools
-            .runtimes()
-            .iter()
-            .any(|executor| executor.exposure() == ToolExposure::Deferred);
-    let code_mode_executors = build_code_mode_executors(
-        turn_context,
-        planned_tools.runtimes(),
-        deferred_tools_available,
-    );
+    let code_mode_executors = build_code_mode_executors(turn_context, planned_tools.runtimes());
     planned_tools.runtimes.splice(0..0, code_mode_executors);
 }
 
@@ -883,8 +899,16 @@ fn append_extension_tool_executors(
         reserved_tool_names.insert(ToolName::plain(TOOL_SEARCH_TOOL_NAME));
     }
 
+    let standalone_web_search_enabled = standalone_web_search_enabled(turn_context);
+    let web_search_mode_on = turn_context.config.web_search_mode.value() != WebSearchMode::Disabled;
+
     for executor in executors.iter().cloned() {
         let tool_name = executor.tool_name();
+        if tool_name == ToolName::namespaced("web", "run")
+            && (!standalone_web_search_enabled || !web_search_mode_on)
+        {
+            continue;
+        }
         if tool_name == ToolName::namespaced(IMAGE_GEN_NAMESPACE, IMAGEGEN_TOOL_NAME)
             && !standalone_image_generation_model_visible(turn_context)
         {

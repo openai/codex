@@ -602,6 +602,22 @@ class SystemConfigLayerSource(BaseModel):
     type: Annotated[Literal["system"], Field(title="SystemConfigLayerSourceType")]
 
 
+class EnterpriseManagedConfigLayerSource(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    id: Annotated[str, Field(description="Stable identifier for the delivered layer.")]
+    name: Annotated[
+        str,
+        Field(
+            description="Admin-facing name for the delivered layer. This is surfaced in diagnostics so users know which cloud layer needs administrator attention."
+        ),
+    ]
+    type: Annotated[
+        Literal["enterpriseManaged"], Field(title="EnterpriseManagedConfigLayerSourceType")
+    ]
+
+
 class UserConfigLayerSource(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -661,6 +677,7 @@ class ConfigLayerSource(
     RootModel[
         MdmConfigLayerSource
         | SystemConfigLayerSource
+        | EnterpriseManagedConfigLayerSource
         | UserConfigLayerSource
         | ProjectConfigLayerSource
         | SessionFlagsConfigLayerSource
@@ -674,6 +691,7 @@ class ConfigLayerSource(
     root: (
         MdmConfigLayerSource
         | SystemConfigLayerSource
+        | EnterpriseManagedConfigLayerSource
         | UserConfigLayerSource
         | ProjectConfigLayerSource
         | SessionFlagsConfigLayerSource
@@ -1513,6 +1531,7 @@ class HookSource(Enum):
     session_flags = "sessionFlags"
     plugin = "plugin"
     cloud_requirements = "cloudRequirements"
+    cloud_managed_config = "cloudManagedConfig"
     legacy_managed_config_file = "legacyManagedConfigFile"
     legacy_managed_config_mdm = "legacyManagedConfigMdm"
     unknown = "unknown"
@@ -3578,6 +3597,16 @@ class SortDirection(Enum):
     desc = "desc"
 
 
+class SpendControlLimitSnapshot(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    limit: str
+    remaining_percent: Annotated[int, Field(alias="remainingPercent")]
+    resets_at: Annotated[int, Field(alias="resetsAt")]
+    used: str
+
+
 class SubAgentSourceValue(Enum):
     review = "review"
     compact = "compact"
@@ -4657,6 +4686,7 @@ class AppConfig(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
+    approvals_reviewer: ApprovalsReviewer | None = None
     default_tools_approval_mode: AppToolApproval | None = None
     default_tools_enabled: bool | None = None
     destructive_enabled: bool | None = None
@@ -6118,6 +6148,9 @@ class RateLimitSnapshot(BaseModel):
         populate_by_name=True,
     )
     credits: CreditsSnapshot | None = None
+    individual_limit: Annotated[
+        SpendControlLimitSnapshot | None, Field(alias="individualLimit")
+    ] = None
     limit_id: Annotated[str | None, Field(alias="limitId")] = None
     limit_name: Annotated[str | None, Field(alias="limitName")] = None
     plan_type: Annotated[PlanType | None, Field(alias="planType")] = None
@@ -8011,6 +8044,13 @@ class Thread(BaseModel):
         ),
     ]
     name: Annotated[str | None, Field(description="Optional user-facing thread title.")] = None
+    parent_thread_id: Annotated[
+        str | None,
+        Field(
+            alias="parentThreadId",
+            description="The ID of the parent thread. This will only be set if this thread is a subagent.",
+        ),
+    ] = None
     path: Annotated[str | None, Field(description="[UNSTABLE] Path to the thread on disk.")] = None
     preview: Annotated[
         str, Field(description="Usually the first user message in the thread, if available.")

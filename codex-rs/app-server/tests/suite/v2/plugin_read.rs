@@ -17,6 +17,8 @@ use axum::http::Uri;
 use axum::http::header::AUTHORIZATION;
 use axum::routing::get;
 use codex_app_server_protocol::AppInfo;
+use codex_app_server_protocol::AppTemplateSummary;
+use codex_app_server_protocol::AppTemplateUnavailableReason;
 use codex_app_server_protocol::HookEventName;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
@@ -122,7 +124,7 @@ async fn plugin_read_rejects_multiple_read_sources() -> Result<()> {
 }
 
 #[tokio::test]
-async fn plugin_read_reads_remote_plugin_details_when_remote_plugin_is_disabled() -> Result<()> {
+async fn plugin_read_returns_remote_mcp_servers_when_uninstalled() -> Result<()> {
     let codex_home = TempDir::new()?;
     let server = MockServer::start().await;
     std::fs::write(
@@ -148,20 +150,31 @@ plugins = true
 
     let detail_body = r#"{
   "id": "plugins~Plugin_00000000000000000000000000000000",
-  "name": "linear",
+  "name": "example-plugin",
   "scope": "GLOBAL",
   "installation_policy": "AVAILABLE",
   "authentication_policy": "ON_USE",
   "release": {
-    "display_name": "Linear",
-    "description": "Track work in Linear",
+    "version": "1.2.1",
+    "display_name": "Example Plugin",
+    "description": "Example plugin",
     "app_ids": [],
     "keywords": [],
     "interface": {
-      "short_description": "Plan and track work",
-      "capabilities": []
+      "short_description": "Example plugin",
+      "capabilities": [],
+      "default_prompt": "Use the legacy example prompt",
+      "default_prompts": []
     },
-    "skills": []
+    "skills": [],
+    "mcp_servers": [
+      {
+        "key": "example-server",
+        "metadata": {
+          "command": "example-mcp"
+        }
+      }
+    ]
   }
 }"#;
     let installed_body = r#"{
@@ -209,14 +222,30 @@ plugins = true
     let response: PluginReadResponse = to_response(response)?;
 
     assert_eq!(response.plugin.marketplace_name, "openai-curated-remote");
-    assert_eq!(response.plugin.summary.id, "linear@openai-curated-remote");
+    assert_eq!(
+        response.plugin.summary.id,
+        "example-plugin@openai-curated-remote"
+    );
     assert_eq!(
         response.plugin.summary.remote_plugin_id.as_deref(),
         Some("plugins~Plugin_00000000000000000000000000000000")
     );
-    assert_eq!(response.plugin.summary.name, "linear");
+    assert_eq!(response.plugin.summary.name, "example-plugin");
     assert_eq!(response.plugin.summary.source, PluginSource::Remote);
     assert_eq!(response.plugin.summary.share_context, None);
+    assert_eq!(
+        response
+            .plugin
+            .summary
+            .interface
+            .as_ref()
+            .and_then(|interface| interface.default_prompt.clone()),
+        Some(vec!["Use the legacy example prompt".to_string()])
+    );
+    assert_eq!(
+        response.plugin.mcp_servers,
+        vec!["example-server".to_string()]
+    );
     Ok(())
 }
 
@@ -400,10 +429,34 @@ async fn plugin_read_reads_remote_plugin_details_when_remote_plugin_enabled() ->
     "display_name": "Linear",
     "description": "Track work in Linear",
     "app_ids": [],
+    "app_templates": [
+      {
+        "template_id": "templated_apps_GitHubEnterprise",
+        "name": "GitHub Enterprise",
+        "description": "Connect GitHub Enterprise",
+        "canonical_connector_id": "github_enterprise",
+        "logo_url": "https://example.com/ghe-light.png",
+        "logo_url_dark": "https://example.com/ghe-dark.png",
+        "materialized_app_ids": ["asdk_app_ghe"],
+        "reason": null
+      },
+      {
+        "template_id": "templated_apps_Databricks",
+        "name": "Databricks",
+        "description": null,
+        "canonical_connector_id": null,
+        "logo_url": null,
+        "logo_url_dark": null,
+        "materialized_app_ids": [],
+        "reason": "NOT_CONFIGURED_FOR_WORKSPACE"
+      }
+    ],
     "keywords": ["issue-tracking", "project management"],
     "interface": {
       "short_description": "Plan and track work",
       "capabilities": ["Read", "Write"],
+      "default_prompt": "Use the legacy Linear prompt",
+      "default_prompts": ["Create a Linear issue", "Review my Linear projects"],
       "logo_url": "https://example.com/linear.png",
       "screenshot_urls": ["https://example.com/linear-shot.png"]
     },
@@ -518,11 +571,48 @@ async fn plugin_read_reads_remote_plugin_details_when_remote_plugin_enabled() ->
             "project management".to_string()
         ]
     );
+    assert_eq!(
+        response
+            .plugin
+            .summary
+            .interface
+            .as_ref()
+            .and_then(|interface| interface.default_prompt.clone()),
+        Some(vec![
+            "Create a Linear issue".to_string(),
+            "Review my Linear projects".to_string(),
+        ])
+    );
     assert_eq!(response.plugin.skills.len(), 1);
     assert_eq!(response.plugin.skills[0].name, "plan-work");
     assert_eq!(response.plugin.skills[0].path, None);
     assert_eq!(response.plugin.skills[0].enabled, false);
     assert_eq!(response.plugin.apps.len(), 0);
+    assert_eq!(
+        response.plugin.app_templates,
+        vec![
+            AppTemplateSummary {
+                template_id: "templated_apps_GitHubEnterprise".to_string(),
+                name: "GitHub Enterprise".to_string(),
+                description: Some("Connect GitHub Enterprise".to_string()),
+                canonical_connector_id: Some("github_enterprise".to_string()),
+                logo_url: Some("https://example.com/ghe-light.png".to_string()),
+                logo_url_dark: Some("https://example.com/ghe-dark.png".to_string()),
+                materialized_app_ids: vec!["asdk_app_ghe".to_string()],
+                reason: None,
+            },
+            AppTemplateSummary {
+                template_id: "templated_apps_Databricks".to_string(),
+                name: "Databricks".to_string(),
+                description: None,
+                canonical_connector_id: None,
+                logo_url: None,
+                logo_url_dark: None,
+                materialized_app_ids: Vec::new(),
+                reason: Some(AppTemplateUnavailableReason::NotConfiguredForWorkspace),
+            },
+        ]
+    );
     Ok(())
 }
 

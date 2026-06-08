@@ -2405,11 +2405,53 @@ async fn model_reasoning_selection_popup_snapshot() {
     set_chatgpt_auth(&mut chat);
     chat.set_reasoning_effort(Some(ReasoningEffortConfig::High));
 
-    let preset = get_available_model(&chat, "gpt-5.4");
+    let mut preset = get_available_model(&chat, "gpt-5.4");
+    preset.supported_reasoning_efforts.insert(
+        2,
+        ReasoningEffortPreset {
+            effort: ReasoningEffortConfig::Custom("max".to_string()),
+            description: "Maximum available reasoning".to_string(),
+        },
+    );
     chat.open_reasoning_popup(preset);
 
     let popup = render_bottom_popup(&chat, /*width*/ 80);
     assert_chatwidget_snapshot!("model_reasoning_selection_popup", popup);
+}
+
+#[tokio::test]
+async fn model_reasoning_selection_popup_applies_custom_effort() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
+    let custom_effort = ReasoningEffortConfig::Custom("max".to_string());
+    chat.set_reasoning_effort(Some(ReasoningEffortConfig::XHigh));
+
+    let mut preset = get_available_model(&chat, "gpt-5.4");
+    preset
+        .supported_reasoning_efforts
+        .push(ReasoningEffortPreset {
+            effort: custom_effort.clone(),
+            description: "Maximum available reasoning".to_string(),
+        });
+    chat.open_reasoning_popup(preset);
+    while rx.try_recv().is_ok() {}
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let selected_effort_events = std::iter::from_fn(|| rx.try_recv().ok())
+        .filter_map(|event| match event {
+            AppEvent::UpdateReasoningEffort(effort) => Some((None, effort)),
+            AppEvent::PersistModelSelection { model, effort } => Some((Some(model), effort)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        selected_effort_events,
+        vec![
+            (None, Some(custom_effort.clone())),
+            (Some("gpt-5.4".to_string()), Some(custom_effort)),
+        ]
+    );
 }
 
 #[tokio::test]
@@ -2426,58 +2468,67 @@ async fn model_reasoning_selection_popup_extra_high_warning_snapshot() {
     assert_chatwidget_snapshot!("model_reasoning_selection_popup_extra_high_warning", popup);
 }
 
-#[tokio::test]
-async fn alt_period_raises_reasoning_effort() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
-    chat.thread_id = Some(ThreadId::new());
-    chat.set_reasoning_effort(Some(ReasoningEffortConfig::Medium));
+async fn assert_reasoning_shortcuts_update_effort(
+    key_events: [KeyEvent; 2],
+    expected_effort: ReasoningEffortConfig,
+    expect_model_update: bool,
+) {
+    for key_event in key_events {
+        let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
+        chat.thread_id = Some(ThreadId::new());
+        chat.set_reasoning_effort(Some(ReasoningEffortConfig::Medium));
 
-    chat.handle_key_event(KeyEvent::new(KeyCode::Char('.'), KeyModifiers::ALT));
+        chat.handle_key_event(key_event);
 
-    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
-    assert!(
-        events
-            .iter()
-            .any(|event| matches!(event, AppEvent::UpdateModel(model) if model == "gpt-5.4")),
-        "expected model update event; events: {events:?}"
-    );
-    assert!(
-        events.iter().any(|event| matches!(
-            event,
-            AppEvent::UpdateReasoningEffort(Some(ReasoningEffortConfig::High))
-        )),
-        "expected reasoning update event; events: {events:?}"
-    );
-    assert!(
-        events
-            .iter()
-            .all(|event| !matches!(event, AppEvent::PersistModelSelection { .. })),
-        "expected no model persistence event; events: {events:?}"
-    );
+        let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
+        if expect_model_update {
+            assert!(
+                events.iter().any(
+                    |event| matches!(event, AppEvent::UpdateModel(model) if model == "gpt-5.4")
+                ),
+                "expected model update event for {key_event:?}; events: {events:?}"
+            );
+        }
+        assert!(
+            events.iter().any(|event| matches!(
+                event,
+                AppEvent::UpdateReasoningEffort(Some(effort)) if effort == &expected_effort
+            )),
+            "expected reasoning update event for {key_event:?}; events: {events:?}"
+        );
+        assert!(
+            events
+                .iter()
+                .all(|event| !matches!(event, AppEvent::PersistModelSelection { .. })),
+            "expected no model persistence event for {key_event:?}; events: {events:?}"
+        );
+    }
 }
 
 #[tokio::test]
-async fn alt_comma_lowers_reasoning_effort() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.4")).await;
-    chat.thread_id = Some(ThreadId::new());
-    chat.set_reasoning_effort(Some(ReasoningEffortConfig::Medium));
+async fn reasoning_up_shortcuts_raise_reasoning_effort() {
+    assert_reasoning_shortcuts_update_effort(
+        [
+            KeyEvent::new(KeyCode::Char('.'), KeyModifiers::ALT),
+            KeyEvent::new(KeyCode::Up, KeyModifiers::SHIFT),
+        ],
+        ReasoningEffortConfig::High,
+        /*expect_model_update*/ true,
+    )
+    .await;
+}
 
-    chat.handle_key_event(KeyEvent::new(KeyCode::Char(','), KeyModifiers::ALT));
-
-    let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
-    assert!(
-        events.iter().any(|event| matches!(
-            event,
-            AppEvent::UpdateReasoningEffort(Some(ReasoningEffortConfig::Low))
-        )),
-        "expected reasoning update event; events: {events:?}"
-    );
-    assert!(
-        events
-            .iter()
-            .all(|event| !matches!(event, AppEvent::PersistModelSelection { .. })),
-        "expected no model persistence event; events: {events:?}"
-    );
+#[tokio::test]
+async fn reasoning_down_shortcuts_lower_reasoning_effort() {
+    assert_reasoning_shortcuts_update_effort(
+        [
+            KeyEvent::new(KeyCode::Char(','), KeyModifiers::ALT),
+            KeyEvent::new(KeyCode::Down, KeyModifiers::SHIFT),
+        ],
+        ReasoningEffortConfig::Low,
+        /*expect_model_update*/ false,
+    )
+    .await;
 }
 
 #[tokio::test]

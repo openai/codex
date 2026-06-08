@@ -4,6 +4,7 @@ The `image_gen.imagegen` tool enables image generation from descriptions and edi
 - The user wants to modify an attached or previously generated image with specific changes, including adding or removing elements, altering colors, improving quality/resolution, or transforming the style (e.g., cartoon, oil painting).
 
 Guidelines:
+- In code mode, pass the result to `generatedImage(result)`.
 - Set `action` to `generate` when the user asks for a brand new image.
 - Set `action` to `edit` when the user asks to modify an existing image from the conversation history.
 - Directly generate the image without reconfirmation or clarification.

@@ -606,7 +606,7 @@ impl App {
                             permissions_override,
                             config.permissions.user_visible_workspace_roots(),
                             model.to_string(),
-                            *effort,
+                            effort.clone(),
                             *summary,
                             service_tier.clone(),
                             collaboration_mode.clone(),
@@ -1261,6 +1261,7 @@ impl App {
         snapshot: ThreadEventSnapshot,
         resume_restored_queue: bool,
     ) {
+        self.refresh_mcp_startup_expected_servers_from_config();
         let should_buffer_replay = self.terminal_resize_reflow_enabled()
             && (!snapshot.turns.is_empty() || !snapshot.events.is_empty());
         if should_buffer_replay {
@@ -1342,6 +1343,7 @@ impl App {
     pub(super) fn handle_skills_list_response(&mut self, response: SkillsListResponse) {
         let cwd = self.chat_widget.config_ref().cwd.clone();
         let errors = errors_for_cwd(&cwd, &response);
+        let errors = self.skill_load_warnings.newly_active_errors(&errors);
         emit_skill_load_warnings(&self.app_event_tx, &errors);
         self.chat_widget.handle_skills_list_response(response);
     }

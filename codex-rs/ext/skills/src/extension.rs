@@ -1,7 +1,9 @@
 use std::sync::Arc;
 
 use codex_core::config::Config;
+use codex_core_skills::HostLoadedSkills;
 use codex_core_skills::SkillInstructions;
+use codex_core_skills::injection::InjectedHostSkillPrompts;
 use codex_core_skills::injection::SkillInjection;
 use codex_extension_api::ConfigContributor;
 use codex_extension_api::ContextualUserFragment;
@@ -20,6 +22,7 @@ use crate::catalog::SkillAuthority;
 use crate::catalog::SkillCatalogEntry;
 use crate::catalog::SkillReadResult;
 use crate::catalog::SkillSourceKind;
+use crate::provider::HostSkillProvider;
 use crate::provider::SkillListQuery;
 use crate::provider::SkillReadRequest;
 use crate::render::available_skills_fragment;
@@ -78,6 +81,7 @@ impl TurnInputContributor for SkillsExtension {
         };
 
         let config = thread_state.config();
+        let host_loaded_skills = turn_store.get::<HostLoadedSkills>();
         let query = SkillListQuery {
             turn_id: input.turn_id.clone(),
             executor_authorities: input
@@ -90,6 +94,7 @@ impl TurnInputContributor for SkillsExtension {
                     )
                 })
                 .collect(),
+            host: host_loaded_skills.clone(),
             include_host_skills: true,
             include_bundled_skills: config.bundled_skills_enabled,
             include_remote_skills: true,
@@ -109,8 +114,12 @@ impl TurnInputContributor for SkillsExtension {
 
         let mut warnings = catalog.warnings.clone();
         let mut main_prompts_injected = false;
+        let mut injected_host_skill_prompts = InjectedHostSkillPrompts::default();
         for entry in &selected_entries {
-            match self.read_main_prompt(entry).await {
+            match self
+                .read_main_prompt(entry, host_loaded_skills.clone())
+                .await
+            {
                 Ok(read_result) => {
                     let (contents, truncated) =
                         truncate_main_prompt_contents(read_result.contents.as_str());
@@ -129,6 +138,9 @@ impl TurnInputContributor for SkillsExtension {
                     };
                     fragments.push(Box::new(SkillInstructions::from(&injection)));
                     main_prompts_injected = true;
+                    if entry.authority.kind == SkillSourceKind::Host {
+                        injected_host_skill_prompts.insert_path(entry.main_prompt.0.clone());
+                    }
                 }
                 Err(message) => {
                     let warning = format!("Failed to load skill `{}`: {message}", entry.name);
@@ -144,18 +156,26 @@ impl TurnInputContributor for SkillsExtension {
             warnings,
             main_prompts_injected,
         });
+        if !injected_host_skill_prompts.is_empty() {
+            turn_store.insert(injected_host_skill_prompts);
+        }
 
         fragments
     }
 }
 
 impl SkillsExtension {
-    async fn read_main_prompt(&self, entry: &SkillCatalogEntry) -> Result<SkillReadResult, String> {
+    async fn read_main_prompt(
+        &self,
+        entry: &SkillCatalogEntry,
+        host_loaded_skills: Option<Arc<HostLoadedSkills>>,
+    ) -> Result<SkillReadResult, String> {
         self.providers
             .read(SkillReadRequest {
                 authority: entry.authority.clone(),
                 package: entry.id.clone(),
                 resource: entry.main_prompt.clone(),
+                host: host_loaded_skills,
             })
             .await
             .map_err(|err| err.message)
@@ -170,7 +190,10 @@ impl SkillsExtension {
 }
 
 pub fn install(registry: &mut ExtensionRegistryBuilder<Config>) {
-    install_with_providers(registry, SkillProviders::default());
+    install_with_providers(
+        registry,
+        SkillProviders::new().with_host_provider(Arc::new(HostSkillProvider::new())),
+    );
 }
 
 pub fn install_with_providers(

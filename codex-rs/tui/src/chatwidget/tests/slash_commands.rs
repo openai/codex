@@ -785,6 +785,21 @@ async fn goal_control_slash_commands_emit_goal_events() {
 }
 
 #[tokio::test]
+async fn goal_control_slash_command_without_thread_shows_full_usage() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::Goals, /*enabled*/ true);
+
+    submit_composer_text(&mut chat, "/goal pause");
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected goal usage message");
+    insta::assert_snapshot!(
+        lines_to_single_string(&cells[0]),
+        @"• Usage: /goal [<objective>|clear|edit|pause|resume] The session must start before you can change a goal."
+    );
+}
+
+#[tokio::test]
 async fn goal_edit_slash_command_opens_goal_editor() {
     for thread_id in [Some(ThreadId::new()), None] {
         let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
@@ -2050,6 +2065,36 @@ async fn slash_fork_requests_current_fork() {
     chat.dispatch_command(SlashCommand::Fork);
 
     assert_matches!(rx.try_recv(), Ok(AppEvent::ForkCurrentSession));
+}
+
+#[tokio::test]
+async fn slash_app_requests_desktop_handoff() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let thread_id = ThreadId::new();
+    chat.thread_id = Some(thread_id);
+
+    chat.dispatch_command(SlashCommand::App);
+
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::OpenDesktopThread {
+            thread_id: actual_thread_id,
+        }) if actual_thread_id == thread_id
+    );
+}
+
+#[tokio::test]
+async fn slash_app_without_thread_id_shows_starting_error() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.dispatch_command(SlashCommand::App);
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected app startup error");
+    assert_chatwidget_snapshot!(
+        "slash_app_without_thread_id_shows_starting_error",
+        lines_to_single_string(&cells[0])
+    );
 }
 
 #[tokio::test]

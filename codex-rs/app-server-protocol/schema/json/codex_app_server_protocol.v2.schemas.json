@@ -104,6 +104,62 @@
       "title": "AccountRateLimitsUpdatedNotification",
       "type": "object"
     },
+    "AccountTokenUsageDailyBucket": {
+      "properties": {
+        "startDate": {
+          "type": "string"
+        },
+        "tokens": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "startDate",
+        "tokens"
+      ],
+      "type": "object"
+    },
+    "AccountTokenUsageSummary": {
+      "properties": {
+        "currentStreakDays": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "lifetimeTokens": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "longestRunningTurnSec": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "longestStreakDays": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "peakDailyTokens": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
     "AccountUpdatedNotification": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
@@ -264,6 +320,30 @@
       ],
       "title": "AgentMessageDeltaNotification",
       "type": "object"
+    },
+    "AgentMessageInputContent": {
+      "oneOf": [
+        {
+          "properties": {
+            "encrypted_content": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "encrypted_content"
+              ],
+              "title": "EncryptedContentAgentMessageInputContentType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "encrypted_content",
+            "type"
+          ],
+          "title": "EncryptedContentAgentMessageInputContent",
+          "type": "object"
+        }
+      ]
     },
     "AgentPath": {
       "type": "string"
@@ -643,6 +723,69 @@
       ],
       "type": "object"
     },
+    "AppTemplateSummary": {
+      "properties": {
+        "canonicalConnectorId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "logoUrl": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "logoUrlDark": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "materializedAppIds": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "name": {
+          "type": "string"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AppTemplateUnavailableReason"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "templateId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "materializedAppIds",
+        "name",
+        "templateId"
+      ],
+      "type": "object"
+    },
+    "AppTemplateUnavailableReason": {
+      "enum": [
+        "NOT_CONFIGURED_FOR_WORKSPACE",
+        "NO_ACTIVE_WORKSPACE"
+      ],
+      "type": "string"
+    },
     "AppToolApproval": {
       "enum": [
         "auto",
@@ -854,6 +997,13 @@
           "description": "Programmatic Codex auth backed by a registered Agent Identity.",
           "enum": [
             "agentIdentity"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Programmatic Codex auth backed by a personal access token.",
+          "enum": [
+            "personalAccessToken"
           ],
           "type": "string"
         }
@@ -2599,6 +2749,29 @@
             },
             "method": {
               "enum": [
+                "account/usage/read"
+              ],
+              "title": "Account/usage/readRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "type": "null"
+            }
+          },
+          "required": [
+            "id",
+            "method"
+          ],
+          "title": "Account/usage/readRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
                 "account/sendAddCreditsNudgeEmail"
               ],
               "title": "Account/sendAddCreditsNudgeEmailRequestMethod",
@@ -4189,12 +4362,12 @@
             "null"
           ]
         },
-        "allowedPermissions": {
-          "items": {
-            "type": "string"
+        "allowedPermissionProfiles": {
+          "additionalProperties": {
+            "type": "boolean"
           },
           "type": [
-            "array",
+            "object",
             "null"
           ]
         },
@@ -4233,6 +4406,12 @@
             {
               "type": "null"
             }
+          ]
+        },
+        "defaultPermissions": {
+          "type": [
+            "string",
+            "null"
           ]
         },
         "enforceResidency": {
@@ -5990,6 +6169,28 @@
         "requiresOpenaiAuth"
       ],
       "title": "GetAccountResponse",
+      "type": "object"
+    },
+    "GetAccountTokenUsageResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "dailyUsageBuckets": {
+          "items": {
+            "$ref": "#/definitions/AccountTokenUsageDailyBucket"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "summary": {
+          "$ref": "#/definitions/AccountTokenUsageSummary"
+        }
+      },
+      "required": [
+        "summary"
+      ],
+      "title": "GetAccountTokenUsageResponse",
       "type": "object"
     },
     "GitInfo": {
@@ -7763,6 +7964,12 @@
         },
         "status": {
           "$ref": "#/definitions/McpServerStartupState"
+        },
+        "threadId": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
@@ -8690,6 +8897,12 @@
     },
     "PluginDetail": {
       "properties": {
+        "appTemplates": {
+          "items": {
+            "$ref": "#/definitions/AppTemplateSummary"
+          },
+          "type": "array"
+        },
         "apps": {
           "items": {
             "$ref": "#/definitions/AppSummary"
@@ -8738,6 +8951,7 @@
         }
       },
       "required": [
+        "appTemplates",
         "apps",
         "hooks",
         "marketplaceName",
@@ -10047,15 +10261,8 @@
       "type": "object"
     },
     "ReasoningEffort": {
-      "description": "See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#get-started-with-reasoning",
-      "enum": [
-        "none",
-        "minimal",
-        "low",
-        "medium",
-        "high",
-        "xhigh"
-      ],
+      "description": "A non-empty reasoning effort value advertised by the model.",
+      "minLength": 1,
       "type": "string"
     },
     "ReasoningEffortOption": {
@@ -10507,6 +10714,37 @@
             "type"
           ],
           "title": "MessageResponseItem",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "author": {
+              "type": "string"
+            },
+            "content": {
+              "items": {
+                "$ref": "#/definitions/AgentMessageInputContent"
+              },
+              "type": "array"
+            },
+            "recipient": {
+              "type": "string"
+            },
+            "type": {
+              "enum": [
+                "agent_message"
+              ],
+              "title": "AgentMessageResponseItemType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "author",
+            "content",
+            "recipient",
+            "type"
+          ],
+          "title": "AgentMessageResponseItem",
           "type": "object"
         },
         {
@@ -12300,6 +12538,26 @@
             "params"
           ],
           "title": "Model/verificationNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
+                "turn/moderationMetadata"
+              ],
+              "title": "Turn/moderationMetadataNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/TurnModerationMetadataNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Turn/moderationMetadataNotification",
           "type": "object"
         },
         {
@@ -16299,6 +16557,25 @@
           "type": "string"
         }
       ]
+    },
+    "TurnModerationMetadataNotification": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "metadata": true,
+        "threadId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "metadata",
+        "threadId",
+        "turnId"
+      ],
+      "title": "TurnModerationMetadataNotification",
+      "type": "object"
     },
     "TurnPlanStep": {
       "properties": {

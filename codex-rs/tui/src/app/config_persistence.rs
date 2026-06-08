@@ -482,9 +482,10 @@ impl App {
         {
             Ok(response) => response,
             Err(err) => {
-                tracing::error!(error = %err, "failed to persist feature flags");
+                let error = crate::config_update::format_config_error(&err);
+                tracing::error!(error = %error, "failed to persist feature flags");
                 self.chat_widget
-                    .add_error_message(format!("Failed to update experimental features: {err}"));
+                    .add_error_message(format!("Failed to update experimental features: {error}"));
                 return;
             }
         };
@@ -712,21 +713,17 @@ impl App {
             .add_info_message("Reset local memories.".to_string(), /*hint*/ None);
     }
 
-    pub(super) fn reasoning_label(reasoning_effort: Option<ReasoningEffortConfig>) -> &'static str {
+    pub(super) fn reasoning_label(reasoning_effort: Option<&ReasoningEffortConfig>) -> String {
         match reasoning_effort {
-            Some(ReasoningEffortConfig::Minimal) => "minimal",
-            Some(ReasoningEffortConfig::Low) => "low",
-            Some(ReasoningEffortConfig::Medium) => "medium",
-            Some(ReasoningEffortConfig::High) => "high",
-            Some(ReasoningEffortConfig::XHigh) => "xhigh",
-            None | Some(ReasoningEffortConfig::None) => "default",
+            None | Some(ReasoningEffortConfig::None) => "default".to_string(),
+            Some(reasoning_effort) => reasoning_effort.as_str().to_string(),
         }
     }
 
     pub(super) fn reasoning_label_for(
         model: &str,
-        reasoning_effort: Option<ReasoningEffortConfig>,
-    ) -> Option<&'static str> {
+        reasoning_effort: Option<&ReasoningEffortConfig>,
+    ) -> Option<String> {
         (!model.starts_with("codex-auto-")).then(|| Self::reasoning_label(reasoning_effort))
     }
 
@@ -737,7 +734,7 @@ impl App {
     pub(super) fn on_update_reasoning_effort(&mut self, effort: Option<ReasoningEffortConfig>) {
         // TODO(aibrahim): Remove this and don't use config as a state object.
         // Instead, explicitly pass the stored collaboration mode's effort into new sessions.
-        self.config.model_reasoning_effort = effort;
+        self.config.model_reasoning_effort = effort.clone();
         self.chat_widget.set_reasoning_effort(effort);
     }
 
