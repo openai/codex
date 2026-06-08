@@ -18,6 +18,7 @@ use codex_sandboxing::policy_transforms::merge_permission_profiles;
 use rmcp::model::RequestId;
 use tokio::sync::oneshot;
 
+use crate::agent::control::V2ExecutionSlot;
 use crate::session::TurnInputQueue;
 use crate::session::turn_context::TurnContext;
 use crate::tasks::AnySessionTask;
@@ -76,6 +77,7 @@ pub(crate) struct RunningTask {
     pub(crate) handle: AbortOnDropHandle<()>,
     pub(crate) turn_context: Arc<TurnContext>,
     pub(crate) turn_extension_data: Arc<ExtensionData>,
+    pub(crate) _v2_execution_slot: Option<V2ExecutionSlot>,
     // Timer recorded when the task drops to capture the full turn duration.
     pub(crate) _timer: Option<codex_otel::Timer>,
 }

@@ -273,13 +273,18 @@ pub(super) async fn user_input_or_turn_inner(
                     client_id: client_user_message_id,
                 });
             }
-            sess.spawn_task(
-                Arc::clone(&current_context),
-                task_input,
-                crate::tasks::RegularTask::new(),
-            )
-            .await;
-            Some(accepted_items)
+            if sess
+                .spawn_task(
+                    Arc::clone(&current_context),
+                    task_input,
+                    crate::tasks::RegularTask::new(),
+                )
+                .await
+            {
+                Some(accepted_items)
+            } else {
+                None
+            }
         }
         Err(err) => {
             sess.send_event_raw(Event {

@@ -118,14 +118,18 @@ impl Session {
             ));
         }
 
-        self.input_queue
-            .extend_pending_input_for_turn_state(
-                turn_state.as_ref(),
-                input.into_iter().map(TurnInput::ResponseItem).collect(),
-            )
-            .await;
-        self.start_task(turn_context, Vec::new(), RegularTask::new())
-            .await;
+        let task_input = input.iter().cloned().map(TurnInput::ResponseItem).collect();
+        if self
+            .start_task(turn_context, task_input, RegularTask::new())
+            .await
+            .is_err()
+        {
+            self.clear_reserved_idle_turn(&turn_state).await;
+            return Err(TryStartTurnIfIdleError::new(
+                TryStartTurnIfIdleRejectionReason::Busy,
+                input,
+            ));
+        }
         Ok(())
     }
 

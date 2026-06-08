@@ -212,6 +212,9 @@ impl AgentControl {
             && session_source
                 .as_ref()
                 .is_some_and(is_v2_resident_session_source);
+        if spawn_uses_v2_residency && let Some(session_source) = session_source.as_ref() {
+            self.ensure_v2_execution_capacity(&config, multi_agent_version, session_source)?;
+        }
         let residency_slot = if spawn_uses_v2_residency {
             Some(
                 self.reserve_v2_residency_slot(&state, &config, /*protected_thread_id*/ None)
