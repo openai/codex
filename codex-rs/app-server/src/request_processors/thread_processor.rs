@@ -327,8 +327,14 @@ pub(crate) struct ThreadRequestProcessor {
     pub(super) skills_watcher: Arc<SkillsWatcher>,
 }
 
+/// Outcome of trying to satisfy a resume request from an already loaded thread.
 enum RunningThreadResumeResult {
+    /// The request was delegated to the loaded thread.
     Handled,
+    /// No loaded thread handled the request.
+    ///
+    /// The optional stored thread contains the history-bearing probe that cold
+    /// resume can reuse instead of reading the rollout again.
     NotRunning(Option<Box<StoredThread>>),
 }
 
@@ -2717,7 +2723,6 @@ impl ThreadRequestProcessor {
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
     ) -> Result<RunningThreadResumeResult, JSONRPCErrorError> {
-        let mut stored_thread_from_probe = None;
         let running_thread = if params.history.is_some() {
             if let Ok(existing_thread_id) = ThreadId::from_string(&params.thread_id)
                 && self
@@ -2754,8 +2759,9 @@ impl ThreadRequestProcessor {
             match self.thread_manager.get_thread(existing_thread_id).await {
                 Ok(existing_thread) => Some((existing_thread_id, existing_thread, source_thread)),
                 Err(_) => {
-                    stored_thread_from_probe = Some(Box::new(source_thread));
-                    None
+                    return Ok(RunningThreadResumeResult::NotRunning(Some(Box::new(
+                        source_thread,
+                    ))));
                 }
             }
         };
@@ -2893,9 +2899,7 @@ impl ThreadRequestProcessor {
             }
             return Ok(RunningThreadResumeResult::Handled);
         }
-        Ok(RunningThreadResumeResult::NotRunning(
-            stored_thread_from_probe,
-        ))
+        Ok(RunningThreadResumeResult::NotRunning(None))
     }
 
     async fn resume_thread_from_history(
