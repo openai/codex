@@ -914,6 +914,11 @@ mod tests {
         let rendered = render_stack_to_text_with_sandbox_mode_filter(&stack, |mode| {
             sandbox_mode_is_allowed_by_permissions(&permissions, mode)
         });
+        #[cfg(not(windows))]
+        insta::assert_snapshot!(
+            "debug_config_effective_sandbox_modes_with_deny_read",
+            rendered.as_str()
+        );
         assert!(
             rendered.contains(
                 format!(
