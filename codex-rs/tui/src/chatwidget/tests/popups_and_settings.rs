@@ -290,7 +290,7 @@ async fn plugins_popup_truncates_long_descriptions_in_list_rows() {
         .expect("expected verbose plugin row in popup");
     insta::assert_snapshot!(
         verbose_row,
-        @"  [-] Verbose Plugin  Available · ChatGPT Marketplace · This descri…"
+        @"  [-] Verbose Plugin  Available · OpenAI Curated · This description…"
     );
     assert!(
         !popup
