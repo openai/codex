@@ -696,14 +696,7 @@ async fn assert_remote_manual_compact_request_parity(
     let expected_compact_object = expected_compact_body_without_input
         .as_object_mut()
         .expect("responses request body should be an object");
-    for field in [
-        "input",
-        "client_metadata",
-        "include",
-        "store",
-        "stream",
-        "tool_choice",
-    ] {
+    for field in ["input", "include", "store", "stream", "tool_choice"] {
         expected_compact_object.remove(field);
     }
     if expected_service_tier.is_none() {
@@ -734,6 +727,11 @@ async fn assert_remote_manual_compact_request_parity(
             "service_tier": expected_service_tier,
         }),
         "compact requests should carry the same shared request fields as /responses"
+    );
+    assert_eq!(
+        compact_body["client_metadata"]["x-codex-window-id"],
+        normal_body["client_metadata"]["x-codex-window-id"],
+        "legacy compact requests should preserve the current window ID in client metadata"
     );
 
     insta::assert_snapshot!(

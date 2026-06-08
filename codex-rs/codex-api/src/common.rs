@@ -38,6 +38,8 @@ pub struct CompactionInput<'a> {
     pub prompt_cache_key: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text: Option<TextControls>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_metadata: Option<HashMap<String, String>>,
 }
 
 /// Canonical input payload for the memory summarize endpoint.
