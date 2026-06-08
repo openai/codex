@@ -5,7 +5,8 @@ use crate::common::ResponsesWsRequest;
 use crate::error::ApiError;
 use crate::provider::Provider;
 use crate::rate_limits::parse_rate_limit_event;
-use crate::requests::attach_stateless_response_item_ids;
+use crate::requests::ResponseItemIdPolicy;
+use crate::requests::apply_response_item_id_policy;
 use crate::sse::ResponsesStreamEvent;
 use crate::sse::process_responses_event;
 use crate::telemetry::WebsocketTelemetry;
@@ -229,10 +230,13 @@ impl ResponsesWebsocketConnection {
         let mut request_body = serde_json::to_value(&request).map_err(|err| {
             ApiError::Stream(format!("failed to encode websocket request: {err}"))
         })?;
-        if include_item_ids_for_stateless_mode {
-            let ResponsesWsRequest::ResponseCreate(request) = &request;
-            attach_stateless_response_item_ids(&mut request_body, &request.input);
-        }
+        let ResponsesWsRequest::ResponseCreate(request) = &request;
+        let item_id_policy = if include_item_ids_for_stateless_mode {
+            ResponseItemIdPolicy::KeepAll
+        } else {
+            ResponseItemIdPolicy::OmitAll
+        };
+        apply_response_item_id_policy(&mut request_body, &request.input, item_id_policy);
 
         let current_span = Span::current();
         tokio::spawn(

@@ -754,8 +754,8 @@ pub enum MessagePhase {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ResponseItem {
     Message {
-        #[serde(default, skip_serializing)]
-        #[ts(skip)]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
         id: Option<String>,
         role: String,
         content: Vec<ContentItem>,
@@ -767,18 +767,15 @@ pub enum ResponseItem {
         phase: Option<MessagePhase>,
     },
     AgentMessage {
-        #[serde(default, skip_serializing)]
-        #[ts(skip)]
-        #[schemars(skip)]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
         id: Option<String>,
         author: String,
         recipient: String,
         content: Vec<AgentMessageInputContent>,
     },
     Reasoning {
-        #[serde(default, skip_serializing)]
-        #[ts(skip)]
-        #[schemars(skip)]
+        #[serde(default, skip_serializing_if = "String::is_empty")]
         id: String,
         summary: Vec<ReasoningItemReasoningSummary>,
         #[serde(default, skip_serializing_if = "should_serialize_reasoning_content")]
@@ -788,8 +785,8 @@ pub enum ResponseItem {
     },
     LocalShellCall {
         /// Legacy id field retained for compatibility with older payloads.
-        #[serde(default, skip_serializing)]
-        #[ts(skip)]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
         id: Option<String>,
         /// Set when using the Responses API.
         call_id: Option<String>,
@@ -797,8 +794,8 @@ pub enum ResponseItem {
         action: LocalShellAction,
     },
     FunctionCall {
-        #[serde(default, skip_serializing)]
-        #[ts(skip)]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
         id: Option<String>,
         name: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -811,8 +808,8 @@ pub enum ResponseItem {
         call_id: String,
     },
     ToolSearchCall {
-        #[serde(default, skip_serializing)]
-        #[ts(skip)]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
         id: Option<String>,
         call_id: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -828,9 +825,8 @@ pub enum ResponseItem {
     //   - an array of structured content items (`content_items`)
     // We keep this behavior centralized in `FunctionCallOutputPayload`.
     FunctionCallOutput {
-        #[serde(default, skip_serializing)]
-        #[ts(skip)]
-        #[schemars(skip)]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
         id: Option<String>,
         call_id: String,
         #[ts(as = "FunctionCallOutputBody")]
@@ -838,8 +834,8 @@ pub enum ResponseItem {
         output: FunctionCallOutputPayload,
     },
     CustomToolCall {
-        #[serde(default, skip_serializing)]
-        #[ts(skip)]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
         id: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
@@ -853,9 +849,8 @@ pub enum ResponseItem {
     // `function_call_output.output` so freeform tools can return either plain
     // text or structured content items.
     CustomToolCallOutput {
-        #[serde(default, skip_serializing)]
-        #[ts(skip)]
-        #[schemars(skip)]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
         id: Option<String>,
         call_id: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -866,9 +861,8 @@ pub enum ResponseItem {
         output: FunctionCallOutputPayload,
     },
     ToolSearchOutput {
-        #[serde(default, skip_serializing)]
-        #[ts(skip)]
-        #[schemars(skip)]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
         id: Option<String>,
         call_id: Option<String>,
         status: String,
@@ -885,8 +879,8 @@ pub enum ResponseItem {
     //   "action": {"type":"search","query":"weather: San Francisco, CA"}
     // }
     WebSearchCall {
-        #[serde(default, skip_serializing)]
-        #[ts(skip)]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
         id: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
@@ -905,6 +899,7 @@ pub enum ResponseItem {
     //   "result":"..."
     // }
     ImageGenerationCall {
+        #[serde(default, skip_serializing_if = "String::is_empty")]
         id: String,
         status: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -914,9 +909,8 @@ pub enum ResponseItem {
     },
     #[serde(alias = "compaction_summary")]
     Compaction {
-        #[serde(default, skip_serializing)]
-        #[ts(skip)]
-        #[schemars(skip)]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
         id: Option<String>,
         encrypted_content: String,
     },
@@ -1039,25 +1033,28 @@ impl ResponseItem {
         }
     }
 
-    pub fn attach_id_to_json(&self, value: &mut Value) {
-        let Some(id) = self.id().filter(|id| !id.is_empty()) else {
-            return;
-        };
-        let Some(obj) = value.as_object_mut() else {
-            return;
-        };
-        obj.insert("id".to_string(), Value::String(id.to_string()));
+    pub fn without_id(mut self) -> Self {
+        match &mut self {
+            Self::Message { id, .. }
+            | Self::AgentMessage { id, .. }
+            | Self::LocalShellCall { id, .. }
+            | Self::FunctionCall { id, .. }
+            | Self::ToolSearchCall { id, .. }
+            | Self::FunctionCallOutput { id, .. }
+            | Self::CustomToolCall { id, .. }
+            | Self::CustomToolCallOutput { id, .. }
+            | Self::ToolSearchOutput { id, .. }
+            | Self::WebSearchCall { id, .. }
+            | Self::Compaction { id, .. } => *id = None,
+            Self::Reasoning { id, .. } | Self::ImageGenerationCall { id, .. } => id.clear(),
+            Self::CompactionTrigger | Self::ContextCompaction { .. } | Self::Other => {}
+        }
+        self
     }
 
     /// Returns whether this item is an ordinary user-role message.
     pub fn is_user_message(&self) -> bool {
         matches!(self, Self::Message { role, .. } if role == "user")
-    }
-}
-
-pub(crate) fn attach_all_response_item_ids(values: &mut [Value], items: &[ResponseItem]) {
-    for (value, item) in values.iter_mut().zip(items) {
-        item.attach_id_to_json(value);
     }
 }
 
@@ -2732,7 +2729,6 @@ mod tests {
                     queries: Some(vec!["weather seattle".into(), "seattle weather now".into()]),
                 }),
                 Some("completed".into()),
-                true,
             ),
             (
                 r#"{
@@ -2748,7 +2744,6 @@ mod tests {
                     url: Some("https://example.com".into()),
                 }),
                 Some("open".into()),
-                true,
             ),
             (
                 r#"{
@@ -2766,7 +2761,6 @@ mod tests {
                     pattern: Some("installation".into()),
                 }),
                 Some("in_progress".into()),
-                true,
             ),
             (
                 r#"{
@@ -2777,12 +2771,10 @@ mod tests {
                 Some("ws_partial".into()),
                 None,
                 Some("in_progress".into()),
-                false,
             ),
         ];
 
-        for (json_literal, expected_id, expected_action, expected_status, expect_roundtrip) in cases
-        {
+        for (json_literal, expected_id, expected_action, expected_status) in cases {
             let parsed: ResponseItem = serde_json::from_str(json_literal)?;
             let expected = ResponseItem::WebSearchCall {
                 id: expected_id.clone(),
@@ -2792,10 +2784,7 @@ mod tests {
             assert_eq!(parsed, expected);
 
             let serialized = serde_json::to_value(&parsed)?;
-            let mut expected_serialized: serde_json::Value = serde_json::from_str(json_literal)?;
-            if !expect_roundtrip && let Some(obj) = expected_serialized.as_object_mut() {
-                obj.remove("id");
-            }
+            let expected_serialized: serde_json::Value = serde_json::from_str(json_literal)?;
             assert_eq!(serialized, expected_serialized);
         }
 

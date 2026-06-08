@@ -420,13 +420,14 @@ mod job {
 
     fn sanitize_response_item_for_memories(item: &ResponseItem) -> Option<ResponseItem> {
         let ResponseItem::Message {
-            id,
+            id: _,
             role,
             content,
             phase,
         } = item
         else {
-            return should_persist_response_item_for_memories(item).then(|| item.clone());
+            return should_persist_response_item_for_memories(item)
+                .then(|| item.clone().without_id());
         };
 
         if role == "developer" {
@@ -434,7 +435,7 @@ mod job {
         }
 
         if role != "user" {
-            return Some(item.clone());
+            return Some(item.clone().without_id());
         }
 
         let content = content
@@ -447,7 +448,7 @@ mod job {
         }
 
         Some(ResponseItem::Message {
-            id: id.clone(),
+            id: None,
             role: role.clone(),
             content,
             phase: phase.clone(),

@@ -8,59 +8,57 @@ pub enum Compression {
     Zstd,
 }
 
-/// Reattaches the item IDs historically sent with stored/stateful Responses requests.
-///
-/// `ResponseItem` IDs are skipped by serde so request modes can choose their attachment policy
-/// after serializing the common request body. Stateful requests use the legacy narrower policy:
-/// attach IDs for prompt items the stateful Responses path may treat as existing stored items,
-/// but do not opt every Codex-owned output item into the newer stateless stable-ID behavior.
-pub(crate) fn attach_stateful_response_item_ids(
-    payload_json: &mut Value,
-    original_items: &[ResponseItem],
-) {
-    let Some(input_value) = payload_json.get_mut("input") else {
-        return;
-    };
-    let Value::Array(items) = input_value else {
-        return;
-    };
-
-    for (value, item) in items.iter_mut().zip(original_items.iter()) {
-        if let ResponseItem::Reasoning { id, .. }
-        | ResponseItem::Message { id: Some(id), .. }
-        | ResponseItem::WebSearchCall { id: Some(id), .. }
-        | ResponseItem::FunctionCall { id: Some(id), .. }
-        | ResponseItem::ToolSearchCall { id: Some(id), .. }
-        | ResponseItem::LocalShellCall { id: Some(id), .. }
-        | ResponseItem::CustomToolCall { id: Some(id), .. } = item
-        {
-            if id.is_empty() {
-                continue;
-            }
-
-            if let Some(obj) = value.as_object_mut() {
-                obj.insert("id".to_string(), Value::String(id.clone()));
-            }
-        }
-    }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ResponseItemIdPolicy {
+    KeepAll,
+    KeepStatefulStoredOnly,
+    OmitAll,
 }
 
-/// Reattaches every non-empty stable item ID before sending a stateless Responses request.
+/// Applies the request-specific Responses API item ID policy after common serialization.
 ///
-/// Stateless requests resend the full prompt history by value, so the server only sees stable
-/// item identity when Codex explicitly puts each known ID back into the serialized `input` array.
-/// This includes Codex-generated IDs for new local prompt items and IDs preserved from server
-/// output, compaction, and rollout replay.
-pub(crate) fn attach_stateless_response_item_ids(
+/// `ResponseItem` normally serializes every known ID so rollout, app-server, and other internal
+/// JSON surfaces preserve item identity. For now, Responses API request modes are the exception
+/// to preserve historical behavior: stateless OpenAI requests keep every item ID, whereas
+/// stateful Responses API usage keep only the narrower legacy set (only item IDs returned by the
+/// server). We can simplify this in the future and always send all IDs once we validate that
+/// doing so is safe for stateful usage of Responses API (i.e. Azure).
+pub(crate) fn apply_response_item_id_policy(
     payload_json: &mut Value,
     original_items: &[ResponseItem],
+    policy: ResponseItemIdPolicy,
 ) {
     let Some(Value::Array(items)) = payload_json.get_mut("input") else {
         return;
     };
 
     for (value, item) in items.iter_mut().zip(original_items.iter()) {
-        item.attach_id_to_json(value);
+        if !should_keep_response_item_id(item, policy)
+            && let Some(obj) = value.as_object_mut()
+        {
+            obj.remove("id");
+        }
+    }
+}
+
+fn should_keep_response_item_id(item: &ResponseItem, policy: ResponseItemIdPolicy) -> bool {
+    if !item.id().is_some_and(|id| !id.is_empty()) {
+        return false;
+    }
+
+    match policy {
+        ResponseItemIdPolicy::KeepAll => true,
+        ResponseItemIdPolicy::KeepStatefulStoredOnly => matches!(
+            item,
+            ResponseItem::Reasoning { .. }
+                | ResponseItem::Message { .. }
+                | ResponseItem::WebSearchCall { .. }
+                | ResponseItem::FunctionCall { .. }
+                | ResponseItem::ToolSearchCall { .. }
+                | ResponseItem::LocalShellCall { .. }
+                | ResponseItem::CustomToolCall { .. }
+        ),
+        ResponseItemIdPolicy::OmitAll => false,
     }
 }
 
@@ -70,7 +68,7 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     #[test]
-    fn attaches_stateless_response_item_ids_to_input_json() {
+    fn keeps_all_response_item_ids_in_input_json() {
         let items = serde_json::from_str::<Vec<ResponseItem>>(
             r#"[
                 {"type":"message","id":"msg_1","role":"user","content":[]},
@@ -93,7 +91,7 @@ mod tests {
             "input": serde_json::to_value(&items).expect("serialize input"),
         });
 
-        attach_stateless_response_item_ids(&mut payload, &items);
+        apply_response_item_id_policy(&mut payload, &items, ResponseItemIdPolicy::KeepAll);
 
         let ids = payload["input"]
             .as_array()
@@ -111,9 +109,9 @@ mod tests {
     }
 
     #[test]
-    fn attach_stateless_response_item_ids_leaves_missing_ids_unchanged() {
+    fn omits_response_item_ids_without_request_opt_in() {
         let items = vec![ResponseItem::Message {
-            id: None,
+            id: Some("msg_1".to_string()),
             role: "user".to_string(),
             content: Vec::new(),
             phase: None,
@@ -122,7 +120,7 @@ mod tests {
             "input": serde_json::to_value(&items).expect("serialize input"),
         });
 
-        attach_stateless_response_item_ids(&mut payload, &items);
+        apply_response_item_id_policy(&mut payload, &items, ResponseItemIdPolicy::OmitAll);
 
         assert_eq!(payload["input"][0].get("id"), None);
     }

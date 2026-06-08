@@ -1682,9 +1682,7 @@ impl JsonlWriter {
             timestamp,
             item: rollout_item,
         };
-        let mut value = serde_json::to_value(line)?;
-        rollout_item.attach_response_item_ids_to_json(&mut value);
-        self.write_line(&value).await
+        self.write_line(&line).await
     }
     async fn write_line(&mut self, item: &impl serde::Serialize) -> std::io::Result<()> {
         let mut json = serde_json::to_string(item)?;

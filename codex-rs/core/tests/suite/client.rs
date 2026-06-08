@@ -297,8 +297,7 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
         }],
         phase: None,
     };
-    let mut prior_user_json = serde_json::to_value(&prior_user).unwrap();
-    prior_user.attach_id_to_json(&mut prior_user_json);
+    let prior_user_json = serde_json::to_value(&prior_user).unwrap();
     writeln!(
         f,
         "{}",
@@ -319,8 +318,7 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
         }],
         phase: None,
     };
-    let mut prior_system_json = serde_json::to_value(&prior_system).unwrap();
-    prior_system.attach_id_to_json(&mut prior_system_json);
+    let prior_system_json = serde_json::to_value(&prior_system).unwrap();
     writeln!(
         f,
         "{}",
@@ -341,8 +339,7 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
         }],
         phase: Some(MessagePhase::Commentary),
     };
-    let mut prior_item_json = serde_json::to_value(&prior_item).unwrap();
-    prior_item.attach_id_to_json(&mut prior_item_json);
+    let prior_item_json = serde_json::to_value(&prior_item).unwrap();
     writeln!(
         f,
         "{}",

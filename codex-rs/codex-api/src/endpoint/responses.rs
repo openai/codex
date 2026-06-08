@@ -5,8 +5,8 @@ use crate::endpoint::session::EndpointSession;
 use crate::error::ApiError;
 use crate::provider::Provider;
 use crate::requests::Compression;
-use crate::requests::attach_stateful_response_item_ids;
-use crate::requests::attach_stateless_response_item_ids;
+use crate::requests::ResponseItemIdPolicy;
+use crate::requests::apply_response_item_id_policy;
 use crate::requests::headers::build_session_headers;
 use crate::requests::headers::insert_header;
 use crate::requests::headers::subagent_header;
@@ -87,11 +87,14 @@ impl<T: HttpTransport> ResponsesClient<T> {
         let mut body = serde_json::to_value(&request)
             .map_err(|e| ApiError::Stream(format!("failed to encode responses request: {e}")))?;
         let is_azure_responses_endpoint = self.session.provider().is_azure_responses_endpoint();
-        if is_azure_responses_endpoint && request.store {
-            attach_stateful_response_item_ids(&mut body, &request.input);
+        let item_id_policy = if is_azure_responses_endpoint && request.store {
+            ResponseItemIdPolicy::KeepStatefulStoredOnly
         } else if !is_azure_responses_endpoint && include_item_ids_for_stateless_mode {
-            attach_stateless_response_item_ids(&mut body, &request.input);
-        }
+            ResponseItemIdPolicy::KeepAll
+        } else {
+            ResponseItemIdPolicy::OmitAll
+        };
+        apply_response_item_id_policy(&mut body, &request.input, item_id_policy);
 
         let mut headers = extra_headers;
         if let Some(ref thread_id) = thread_id {
