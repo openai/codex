@@ -345,7 +345,9 @@ async fn windows_elevated_enforces_managed_deny_read_for_shell_subprocess() -> a
     let _codex_home_guard = EnvVarGuard::set("CODEX_HOME", codex_home.path().as_os_str());
     std::fs::write(
         codex_home.path().join(CONFIG_TOML_FILE),
-        r#"[windows]
+        r#"sandbox_mode = "workspace-write"
+
+[windows]
 sandbox = "elevated"
 "#,
     )?;
