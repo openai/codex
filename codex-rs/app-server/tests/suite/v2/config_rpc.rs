@@ -1,10 +1,11 @@
 use anyhow::Result;
-use app_test_support::McpProcess;
+use app_test_support::TestAppServer;
 use app_test_support::test_path_buf_with_windows;
 use app_test_support::test_tmp_path_buf;
 use app_test_support::to_response;
 use codex_app_server_protocol::AppConfig;
 use codex_app_server_protocol::AppToolApproval;
+use codex_app_server_protocol::ApprovalsReviewer;
 use codex_app_server_protocol::AppsConfig;
 use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::ConfigBatchWriteParams;
@@ -58,7 +59,7 @@ sandbox_mode = "workspace-write"
     let codex_home_path = codex_home.path().canonicalize()?;
     let user_file = AbsolutePathBuf::try_from(codex_home_path.join("config.toml"))?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -108,7 +109,7 @@ allowed_domains = ["example.com"]
     let codex_home_path = codex_home.path().canonicalize()?;
     let user_file = AbsolutePathBuf::try_from(codex_home_path.join("config.toml"))?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -179,7 +180,7 @@ forced_chatgpt_workspace_id = "{WORKSPACE_ID}"
         ),
     )?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -218,7 +219,7 @@ forced_chatgpt_workspace_id = ["{WORKSPACE_ID_A}", "{WORKSPACE_ID_B}"]
         ),
     )?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -260,7 +261,7 @@ location = { country = "US", city = "New York", timezone = "America/New_York" }
 "#,
     )?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -304,7 +305,7 @@ web_search = true
 "#,
     )?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -333,6 +334,7 @@ async fn config_read_includes_apps() -> Result<()> {
         r#"
 [apps.app1]
 enabled = false
+approvals_reviewer = "user"
 destructive_enabled = false
 default_tools_approval_mode = "prompt"
 "#,
@@ -340,7 +342,7 @@ default_tools_approval_mode = "prompt"
     let codex_home_path = codex_home.path().canonicalize()?;
     let user_file = AbsolutePathBuf::try_from(codex_home_path.join("config.toml"))?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -368,6 +370,7 @@ default_tools_approval_mode = "prompt"
                 "app1".to_string(),
                 AppConfig {
                     enabled: false,
+                    approvals_reviewer: Some(ApprovalsReviewer::User),
                     destructive_enabled: Some(false),
                     open_world_enabled: None,
                     default_tools_approval_mode: Some(AppToolApproval::Prompt),
@@ -379,6 +382,16 @@ default_tools_approval_mode = "prompt"
     );
     assert_eq!(
         origins.get("apps.app1.enabled").expect("origin").name,
+        ConfigLayerSource::User {
+            file: user_file.clone(),
+            profile: None,
+        }
+    );
+    assert_eq!(
+        origins
+            .get("apps.app1.approvals_reviewer")
+            .expect("origin")
+            .name,
         ConfigLayerSource::User {
             file: user_file.clone(),
             profile: None,
@@ -427,7 +440,7 @@ width = 320
 "#,
     )?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -474,7 +487,7 @@ model_reasoning_effort = "high"
     set_project_trust_level(codex_home.path(), workspace.path(), TrustLevel::Trusted)?;
     let project_config = AbsolutePathBuf::try_from(project_config_dir)?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -544,7 +557,7 @@ writable_roots = [{}]
 
     let managed_path_str = managed_path.display().to_string();
 
-    let mut mcp = McpProcess::new_with_env(
+    let mut mcp = TestAppServer::new_with_env(
         codex_home.path(),
         &[(
             "CODEX_APP_SERVER_MANAGED_CONFIG_PATH",
@@ -640,7 +653,7 @@ model = "gpt-old"
 "#,
     )?;
 
-    let mut mcp = McpProcess::new(&codex_home).await?;
+    let mut mcp = TestAppServer::new(&codex_home).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let read_id = mcp
@@ -701,7 +714,7 @@ async fn config_value_write_updates_desktop_settings() -> Result<()> {
     let codex_home = temp_dir.path().canonicalize()?;
     write_config(&temp_dir, "")?;
 
-    let mut mcp = McpProcess::new(&codex_home).await?;
+    let mut mcp = TestAppServer::new(&codex_home).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let write_id = mcp
@@ -750,7 +763,7 @@ model = "gpt-old"
 "#,
     )?;
 
-    let mut mcp = McpProcess::new(&codex_home).await?;
+    let mut mcp = TestAppServer::new(&codex_home).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let write_id = mcp
@@ -798,7 +811,7 @@ model = "gpt-old"
 "#,
     )?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let write_id = mcp
@@ -833,7 +846,7 @@ async fn config_batch_write_applies_multiple_edits() -> Result<()> {
     let codex_home = tmp_dir.path().canonicalize()?;
     write_config(&tmp_dir, "")?;
 
-    let mut mcp = McpProcess::new(&codex_home).await?;
+    let mut mcp = TestAppServer::new(&codex_home).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let writable_root = test_tmp_path_buf();
@@ -905,7 +918,7 @@ model = "gpt-5.3-spark"
 "#,
     )?;
 
-    let mut mcp = McpProcess::new(&codex_home).await?;
+    let mut mcp = TestAppServer::new(&codex_home).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let batch_id = mcp
@@ -961,7 +974,7 @@ async fn config_batch_write_updates_multiple_desktop_settings() -> Result<()> {
     let codex_home = tmp_dir.path().canonicalize()?;
     write_config(&tmp_dir, "")?;
 
-    let mut mcp = McpProcess::new(&codex_home).await?;
+    let mut mcp = TestAppServer::new(&codex_home).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let batch_id = mcp

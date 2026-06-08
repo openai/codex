@@ -22,23 +22,38 @@ use codex_protocol::protocol::CollabCloseBeginEvent;
 use codex_protocol::protocol::CollabCloseEndEvent;
 use codex_protocol::protocol::CollabWaitingBeginEvent;
 use codex_protocol::protocol::CollabWaitingEndEvent;
+use codex_protocol::protocol::InterAgentCommunication;
 use codex_protocol::user_input::UserInput;
 use codex_tools::ToolName;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
 
-pub(crate) use assign_task::Handler as AssignTaskHandler;
-pub(crate) use close_agent::Handler as CloseAgentHandler;
+pub(crate) use followup_task::Handler as FollowupTaskHandler;
+pub(crate) use interrupt_agent::Handler as InterruptAgentHandler;
 pub(crate) use list_agents::Handler as ListAgentsHandler;
 pub(crate) use send_message::Handler as SendMessageHandler;
 pub(crate) use spawn::Handler as SpawnAgentHandler;
 pub(crate) use wait::Handler as WaitAgentHandler;
 
-mod assign_task;
-mod close_agent;
+mod followup_task;
+mod interrupt_agent;
 mod list_agents;
 mod message_tool;
 mod send_message;
 mod spawn;
 pub(crate) mod wait;
+
+pub(super) fn communication_from_tool_message(
+    author: AgentPath,
+    recipient: AgentPath,
+    message: String,
+) -> InterAgentCommunication {
+    InterAgentCommunication::new_encrypted(
+        author,
+        recipient,
+        Vec::new(),
+        message,
+        /*trigger_turn*/ true,
+    )
+}

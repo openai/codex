@@ -10,6 +10,7 @@
 use codex_app_server_client::AppServerRequestHandle;
 use codex_app_server_protocol::AccountLoginCompletedNotification;
 use codex_app_server_protocol::AccountUpdatedNotification;
+#[cfg(test)]
 use codex_app_server_protocol::AuthMode as AppServerAuthMode;
 use codex_app_server_protocol::CancelLoginAccountParams;
 use codex_app_server_protocol::ClientRequest;
@@ -845,8 +846,7 @@ impl AuthModeWidget {
     fn handle_existing_chatgpt_login(&mut self) -> bool {
         if matches!(
             self.login_status,
-            LoginStatus::AuthMode(AppServerAuthMode::Chatgpt)
-                | LoginStatus::AuthMode(AppServerAuthMode::ChatgptAuthTokens)
+            LoginStatus::AuthMode(auth_mode) if auth_mode.has_chatgpt_account()
         ) {
             *self.sign_in_state.write().unwrap() = SignInState::ChatGptSuccess;
             self.request_frame.schedule_frame();
@@ -1012,7 +1012,7 @@ mod tests {
     use codex_app_server_client::InProcessAppServerClient;
     use codex_app_server_client::InProcessClientStartArgs;
     use codex_arg0::Arg0DispatchPaths;
-    use codex_cloud_requirements::cloud_requirements_loader_for_storage;
+    use codex_cloud_config::cloud_config_bundle_loader_for_storage;
     use codex_config::types::AuthCredentialsStoreMode;
 
     use pretty_assertions::assert_eq;
@@ -1033,7 +1033,7 @@ mod tests {
             cli_overrides: Vec::new(),
             loader_overrides: Default::default(),
             strict_config: false,
-            cloud_requirements: cloud_requirements_loader_for_storage(
+            cloud_config_bundle: cloud_config_bundle_loader_for_storage(
                 codex_home_path.clone(),
                 /*enable_codex_api_key_env*/ false,
                 AuthCredentialsStoreMode::File,
@@ -1106,17 +1106,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn existing_chatgpt_auth_tokens_login_counts_as_signed_in() {
-        let (mut widget, _tmp) = widget_forced_chatgpt().await;
-        widget.login_status = LoginStatus::AuthMode(AppServerAuthMode::ChatgptAuthTokens);
+    async fn existing_non_oauth_chatgpt_login_counts_as_signed_in() {
+        for auth_mode in [
+            AppServerAuthMode::ChatgptAuthTokens,
+            AppServerAuthMode::PersonalAccessToken,
+        ] {
+            let (mut widget, _tmp) = widget_forced_chatgpt().await;
+            widget.login_status = LoginStatus::AuthMode(auth_mode);
 
-        let handled = widget.handle_existing_chatgpt_login();
+            let handled = widget.handle_existing_chatgpt_login();
 
-        assert_eq!(handled, true);
-        assert!(matches!(
-            &*widget.sign_in_state.read().unwrap(),
-            SignInState::ChatGptSuccess
-        ));
+            assert_eq!(handled, true);
+            assert!(matches!(
+                &*widget.sign_in_state.read().unwrap(),
+                SignInState::ChatGptSuccess
+            ));
+        }
     }
 
     #[tokio::test]

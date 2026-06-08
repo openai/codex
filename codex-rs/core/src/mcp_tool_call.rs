@@ -13,7 +13,7 @@ use crate::guardian::guardian_rejection_message;
 use crate::guardian::guardian_timeout_message;
 use crate::guardian::new_guardian_review_id;
 use crate::guardian::review_approval_request;
-use crate::guardian::routes_approval_to_guardian;
+use crate::guardian::routes_approval_to_guardian_with_reviewer;
 use crate::hook_runtime::run_permission_request_hooks;
 use crate::mcp_openai_file::rewrite_mcp_tool_arguments_for_openai_files;
 use crate::mcp_tool_approval_templates::RenderedMcpToolApprovalParam;
@@ -32,6 +32,7 @@ use codex_app_server_protocol::McpElicitationSchema;
 use codex_app_server_protocol::McpServerElicitationRequest;
 use codex_app_server_protocol::McpServerElicitationRequestParams;
 use codex_config::types::AppToolApproval;
+use codex_config::types::ApprovalsReviewer;
 use codex_features::Feature;
 use codex_hooks::PermissionRequestDecision;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
@@ -467,8 +468,8 @@ fn mcp_tool_call_span(
         mcp.connector.name = fields.connector_name.unwrap_or(""),
         tool.name = fields.tool_name,
         tool.call_id = fields.call_id,
-        conversation.id = %session.conversation_id,
-        session.id = %session.conversation_id,
+        conversation.id = %session.thread_id,
+        session.id = %session.thread_id,
         turn.id = turn_context.sub_id.as_str(),
         server.address = Empty,
         server.port = Empty,
@@ -553,8 +554,7 @@ async fn execute_mcp_tool_call(
     metadata: Option<&McpToolApprovalMetadata>,
     request_meta: Option<JsonValue>,
 ) -> Result<CallToolResult, String> {
-    let request_meta =
-        with_mcp_tool_call_thread_id_meta(request_meta, &sess.conversation_id.to_string());
+    let request_meta = with_mcp_tool_call_thread_id_meta(request_meta, &sess.thread_id.to_string());
     let request_meta = augment_mcp_tool_request_meta_with_sandbox_state(
         sess,
         turn_context,
@@ -644,7 +644,7 @@ async fn maybe_request_codex_apps_auth_elicitation(
 
     let request_id = rmcp::model::RequestId::String(plan.elicitation.elicitation_id.clone().into());
     let params = McpServerElicitationRequestParams {
-        thread_id: sess.conversation_id.to_string(),
+        thread_id: sess.thread_id.to_string(),
         turn_id: Some(turn_context.sub_id.clone()),
         server_name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
         request: McpServerElicitationRequest::Url {
@@ -765,7 +765,7 @@ async fn maybe_mark_thread_memory_mode_polluted(
     }
     state_db::mark_thread_memory_mode_polluted(
         sess.services.state_db.as_deref(),
-        sess.conversation_id,
+        sess.thread_id,
         "mcp_tool_call",
     )
     .await;
@@ -944,7 +944,7 @@ async fn maybe_track_codex_app_used(
 
     let tracking = build_track_events_context(
         turn_context.model_info.slug.clone(),
-        sess.conversation_id.to_string(),
+        sess.thread_id.to_string(),
         turn_context.sub_id.clone(),
     );
     sess.services.analytics_events_client.track_app_used(
@@ -1162,11 +1162,11 @@ async fn maybe_request_mcp_tool_approval(
     metadata: Option<&McpToolApprovalMetadata>,
     approval_mode: AppToolApproval,
 ) -> Option<McpToolApprovalDecision> {
+    let approvals_reviewer = mcp_approvals_reviewer(turn_context, &invocation.server, metadata);
     if mcp_permission_prompt_is_auto_approved(
         turn_context.approval_policy.value(),
         &turn_context.permission_profile(),
         McpPermissionPromptAutoApproveContext {
-            approvals_reviewer: Some(turn_context.config.approvals_reviewer),
             tool_approval_mode: Some(approval_mode),
         },
     ) {
@@ -1218,7 +1218,7 @@ async fn maybe_request_mcp_tool_approval(
         .features
         .enabled(Feature::ToolCallMcpElicitation);
 
-    if routes_approval_to_guardian(turn_context) {
+    if routes_approval_to_guardian_with_reviewer(turn_context, approvals_reviewer) {
         let review_id = new_guardian_review_id();
         let decision = review_approval_request(
             sess,
@@ -1326,6 +1326,18 @@ async fn maybe_request_mcp_tool_approval(
     )
     .await;
     Some(decision)
+}
+
+pub(crate) fn mcp_approvals_reviewer(
+    turn_context: &TurnContext,
+    server_name: &str,
+    metadata: Option<&McpToolApprovalMetadata>,
+) -> ApprovalsReviewer {
+    connectors::mcp_approvals_reviewer(
+        turn_context.config.as_ref(),
+        server_name,
+        metadata.and_then(|metadata| metadata.connector_id.as_deref()),
+    )
 }
 
 fn session_mcp_tool_approval_key(
@@ -1602,7 +1614,7 @@ fn build_mcp_tool_approval_elicitation_request(
         .unwrap_or_else(|| request.question.question.clone());
 
     McpServerElicitationRequestParams {
-        thread_id: sess.conversation_id.to_string(),
+        thread_id: sess.thread_id.to_string(),
         turn_id: Some(turn_context.sub_id.clone()),
         server_name: request.server.to_string(),
         request: McpServerElicitationRequest::Form {

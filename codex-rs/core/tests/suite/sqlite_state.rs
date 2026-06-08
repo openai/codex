@@ -1,8 +1,12 @@
 use anyhow::Result;
 use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerTransportConfig;
+use codex_core::config::Config;
+use codex_extension_api::ExtensionRegistryBuilder;
 use codex_features::Feature;
+use codex_login::CodexAuth;
 use codex_protocol::ThreadId;
+use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
@@ -15,6 +19,7 @@ use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::UserMessageEvent;
 use codex_protocol::user_input::UserInput;
+use codex_web_search_extension::install as install_web_search_extension;
 use core_test_support::responses;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
@@ -25,6 +30,7 @@ use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::stdio_server_bin;
+use core_test_support::test_codex::local_selections;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
@@ -34,9 +40,14 @@ use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::collections::HashMap;
 use std::fs;
+use std::sync::Arc;
 use tokio::time::Duration;
 use tracing_subscriber::prelude::*;
 use uuid::Uuid;
+use wiremock::Mock;
+use wiremock::ResponseTemplate;
+use wiremock::matchers::method;
+use wiremock::matchers::path;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn new_thread_is_recorded_in_state_db() -> Result<()> {
@@ -127,11 +138,7 @@ async fn resume_restores_dynamic_tools_from_rollout_with_sqlite_enabled() -> Res
     let base_test = builder.build(&server).await?;
     let started = base_test
         .thread_manager
-        .start_thread_with_tools(
-            base_test.config.clone(),
-            vec![dynamic_tool.clone()],
-            /*persist_extended_history*/ false,
-        )
+        .start_thread_with_tools(base_test.config.clone(), vec![dynamic_tool.clone()])
         .await?;
     let rollout_path = started
         .session_configured
@@ -142,7 +149,6 @@ async fn resume_restores_dynamic_tools_from_rollout_with_sqlite_enabled() -> Res
     started
         .thread
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "persist this thread".to_string(),
                 text_elements: Vec::new(),
@@ -226,6 +232,7 @@ async fn backfill_scans_existing_rollouts() -> Result<()> {
                     base_instructions: None,
                     dynamic_tools: None,
                     memory_mode: None,
+                    multi_agent_version: None,
                 },
                 git: None,
             };
@@ -388,6 +395,84 @@ async fn web_search_marks_thread_memory_mode_polluted_when_configured() -> Resul
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn standalone_web_search_marks_thread_memory_mode_polluted_when_configured() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/alpha/search"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "output": "Search result",
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    mount_sse_sequence(
+        &server,
+        vec![
+            responses::sse(vec![
+                ev_response_created("resp-1"),
+                responses::ev_function_call_with_namespace(
+                    "web-run-1",
+                    "web",
+                    "run",
+                    &json!({
+                        "search_query": [{"q": "standalone web search"}],
+                    })
+                    .to_string(),
+                ),
+                ev_completed("resp-1"),
+            ]),
+            responses::sse(vec![
+                responses::ev_assistant_message("msg-1", "done"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let auth = CodexAuth::from_api_key("dummy");
+    let auth_manager = codex_core::test_support::auth_manager_from_auth(auth.clone());
+    let mut extension_builder = ExtensionRegistryBuilder::<Config>::new();
+    install_web_search_extension(&mut extension_builder, auth_manager);
+    let mut builder = test_codex()
+        .with_auth(auth)
+        .with_extensions(Arc::new(extension_builder.build()))
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::Sqlite)
+                .expect("test config should allow feature update");
+            config
+                .features
+                .enable(Feature::StandaloneWebSearch)
+                .expect("standalone web search should be enabled");
+            config.memories.disable_on_external_context = true;
+            config
+                .web_search_mode
+                .set(WebSearchMode::Live)
+                .expect("web search mode should be accepted");
+        });
+    let test = builder.build(&server).await?;
+    let db = test.codex.state_db().expect("state db enabled");
+    let thread_id = test.session_configured.thread_id;
+
+    test.submit_turn("search the web").await?;
+
+    let mut memory_mode = None;
+    for _ in 0..100 {
+        memory_mode = db.get_thread_memory_mode(thread_id).await?;
+        if memory_mode.as_deref() == Some("polluted") {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+
+    assert_eq!(memory_mode.as_deref(), Some("polluted"));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn mcp_call_marks_thread_memory_mode_polluted_when_configured() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -465,7 +550,7 @@ async fn mcp_call_marks_thread_memory_mode_polluted_when_configured() -> Result<
     wait_for_mcp_server(&test.codex, server_name).await?;
     let db = test.codex.state_db().expect("state db enabled");
     let thread_id = test.session_configured.thread_id;
-    let cwd = test.cwd_path().to_path_buf();
+    let cwd = test.config.cwd.clone();
     let (sandbox_policy, permission_profile) =
         turn_permission_fields(PermissionProfile::read_only(), cwd.as_path());
 
@@ -475,12 +560,11 @@ async fn mcp_call_marks_thread_memory_mode_polluted_when_configured() -> Result<
                 text: "call the rmcp echo tool".to_string(),
                 text_elements: Vec::new(),
             }],
-            environments: None,
             final_output_json_schema: None,
             responsesapi_client_metadata: None,
             additional_context: Default::default(),
             thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-                cwd: Some(cwd),
+                environments: Some(local_selections(cwd)),
                 approval_policy: Some(AskForApproval::Never),
                 sandbox_policy: Some(sandbox_policy),
                 permission_profile,

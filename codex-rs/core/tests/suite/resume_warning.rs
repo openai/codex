@@ -39,8 +39,9 @@ fn resume_history(
         model: previous_model.to_string(),
         personality: None,
         collaboration_mode: None,
+        multi_agent_version: None,
         realtime_active: None,
-        effort: config.model_reasoning_effort,
+        effort: config.model_reasoning_effort.clone(),
         summary: config
             .model_reasoning_summary
             .unwrap_or(ReasoningSummary::Auto),
@@ -107,7 +108,6 @@ async fn emits_warning_when_resumed_model_differs() {
             config.clone(),
             initial_history,
             auth_manager,
-            /*persist_extended_history*/ false,
             /*parent_trace*/ None,
         )
         .await

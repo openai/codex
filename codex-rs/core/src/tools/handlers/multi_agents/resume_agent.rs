@@ -17,6 +17,13 @@ impl ToolExecutor<ToolInvocation> for Handler {
         create_resume_agent_tool()
     }
 
+    fn search_info(&self) -> Option<ToolSearchInfo> {
+        multi_agent_tool_search_info(
+            "resume_agent resume reopen closed agent subagent thread id target",
+            self.spec(),
+        )
+    }
+
     async fn handle(
         &self,
         invocation: ToolInvocation,
@@ -59,7 +66,7 @@ async fn handle_resume_agent(
             CollabResumeBeginEvent {
                 call_id: call_id.clone(),
                 started_at_ms: now_unix_timestamp_ms(),
-                sender_thread_id: session.conversation_id,
+                sender_thread_id: session.thread_id,
                 receiver_thread_id,
                 receiver_agent_nickname: receiver_agent.agent_nickname.clone(),
                 receiver_agent_role: receiver_agent.agent_role.clone(),
@@ -115,7 +122,7 @@ async fn handle_resume_agent(
             CollabResumeEndEvent {
                 call_id,
                 completed_at_ms: now_unix_timestamp_ms(),
-                sender_thread_id: session.conversation_id,
+                sender_thread_id: session.thread_id(),
                 receiver_thread_id,
                 receiver_agent_nickname: receiver_agent.agent_nickname,
                 receiver_agent_role: receiver_agent.agent_role,
@@ -135,13 +142,6 @@ async fn handle_resume_agent(
 }
 
 impl CoreToolRuntime for Handler {
-    fn search_info(&self) -> Option<ToolSearchInfo> {
-        multi_agent_tool_search_info(
-            "resume_agent resume reopen closed agent subagent thread id target",
-            self.spec(),
-        )
-    }
-
     fn matches_kind(&self, payload: &ToolPayload) -> bool {
         matches!(payload, ToolPayload::Function { .. })
     }
@@ -181,12 +181,12 @@ async fn try_resume_closed_agent(
     receiver_thread_id: ThreadId,
     child_depth: i32,
 ) -> Result<(), FunctionCallError> {
-    let config = build_agent_resume_config(turn.as_ref(), child_depth)?;
+    let config = build_agent_resume_config(turn.as_ref())?;
     Box::pin(session.services.agent_control.resume_agent_from_rollout(
         config,
         receiver_thread_id,
         thread_spawn_source(
-            session.conversation_id,
+            session.thread_id(),
             &turn.session_source,
             child_depth,
             /*agent_role*/ None,

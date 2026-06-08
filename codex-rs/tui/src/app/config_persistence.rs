@@ -14,19 +14,32 @@ pub(super) struct WindowsSetupPermissions {
     pub(super) workspace_roots: Vec<AbsolutePathBuf>,
 }
 
+async fn build_config_on_runtime_worker(
+    builder: ConfigBuilder,
+    error_context: String,
+) -> Result<Config> {
+    match tokio::spawn(async move { builder.build().await }).await {
+        Ok(build_result) => build_result.wrap_err(error_context),
+        Err(err) if err.is_panic() => std::panic::resume_unwind(err.into_panic()),
+        Err(err) => Err(err).wrap_err_with(|| format!("{error_context} task failed")),
+    }
+}
+
 impl App {
     pub(super) async fn rebuild_config_for_cwd(&self, cwd: PathBuf) -> Result<Config> {
         let mut overrides = self.harness_overrides.clone();
         overrides.cwd = Some(cwd.clone());
         let cwd_display = cwd.display().to_string();
-        ConfigBuilder::default()
+        let builder = ConfigBuilder::default()
             .codex_home(self.config.codex_home.to_path_buf())
             .cli_overrides(self.cli_kv_overrides.clone())
             .harness_overrides(overrides)
-            .loader_overrides(self.loader_overrides.clone())
-            .build()
-            .await
-            .wrap_err_with(|| format!("Failed to rebuild config for cwd {cwd_display}"))
+            .loader_overrides(self.loader_overrides.clone());
+        build_config_on_runtime_worker(
+            builder,
+            format!("Failed to rebuild config for cwd {cwd_display}"),
+        )
+        .await
     }
 
     pub(super) async fn rebuild_config_for_permission_profile(
@@ -38,16 +51,16 @@ impl App {
         overrides.sandbox_mode = None;
         overrides.permission_profile = None;
         overrides.default_permissions = Some(profile_id.to_string());
-        ConfigBuilder::default()
+        let builder = ConfigBuilder::default()
             .codex_home(self.config.codex_home.to_path_buf())
             .cli_overrides(self.cli_kv_overrides.clone())
             .harness_overrides(overrides)
-            .loader_overrides(self.loader_overrides.clone())
-            .build()
-            .await
-            .wrap_err_with(|| {
-                format!("Failed to rebuild config for permission profile {profile_id}")
-            })
+            .loader_overrides(self.loader_overrides.clone());
+        build_config_on_runtime_worker(
+            builder,
+            format!("Failed to rebuild config for permission profile {profile_id}"),
+        )
+        .await
     }
 
     #[cfg(target_os = "windows")]
@@ -469,9 +482,10 @@ impl App {
         {
             Ok(response) => response,
             Err(err) => {
-                tracing::error!(error = %err, "failed to persist feature flags");
+                let error = crate::config_update::format_config_error(&err);
+                tracing::error!(error = %error, "failed to persist feature flags");
                 self.chat_widget
-                    .add_error_message(format!("Failed to update experimental features: {err}"));
+                    .add_error_message(format!("Failed to update experimental features: {error}"));
                 return;
             }
         };
@@ -699,21 +713,17 @@ impl App {
             .add_info_message("Reset local memories.".to_string(), /*hint*/ None);
     }
 
-    pub(super) fn reasoning_label(reasoning_effort: Option<ReasoningEffortConfig>) -> &'static str {
+    pub(super) fn reasoning_label(reasoning_effort: Option<&ReasoningEffortConfig>) -> String {
         match reasoning_effort {
-            Some(ReasoningEffortConfig::Minimal) => "minimal",
-            Some(ReasoningEffortConfig::Low) => "low",
-            Some(ReasoningEffortConfig::Medium) => "medium",
-            Some(ReasoningEffortConfig::High) => "high",
-            Some(ReasoningEffortConfig::XHigh) => "xhigh",
-            None | Some(ReasoningEffortConfig::None) => "default",
+            None | Some(ReasoningEffortConfig::None) => "default".to_string(),
+            Some(reasoning_effort) => reasoning_effort.as_str().to_string(),
         }
     }
 
     pub(super) fn reasoning_label_for(
         model: &str,
-        reasoning_effort: Option<ReasoningEffortConfig>,
-    ) -> Option<&'static str> {
+        reasoning_effort: Option<&ReasoningEffortConfig>,
+    ) -> Option<String> {
         (!model.starts_with("codex-auto-")).then(|| Self::reasoning_label(reasoning_effort))
     }
 
@@ -724,7 +734,7 @@ impl App {
     pub(super) fn on_update_reasoning_effort(&mut self, effort: Option<ReasoningEffortConfig>) {
         // TODO(aibrahim): Remove this and don't use config as a state object.
         // Instead, explicitly pass the stored collaboration mode's effort into new sessions.
-        self.config.model_reasoning_effort = effort;
+        self.config.model_reasoning_effort = effort.clone();
         self.chat_widget.set_reasoning_effort(effort);
     }
 

@@ -8,12 +8,33 @@ use codex_file_system::FileSystemSandboxContext;
 use codex_file_system::ReadDirectoryEntry;
 use codex_file_system::RemoveOptions;
 use pretty_assertions::assert_eq;
+use std::path::Path;
 use tempfile::tempdir;
 
 struct TestFileSystem;
 
 #[async_trait]
 impl ExecutorFileSystem for TestFileSystem {
+    async fn canonicalize(
+        &self,
+        path: &AbsolutePathBuf,
+        _sandbox: Option<&FileSystemSandboxContext>,
+    ) -> FileSystemResult<AbsolutePathBuf> {
+        path.canonicalize()
+    }
+
+    async fn join(
+        &self,
+        base_path: &AbsolutePathBuf,
+        path: &Path,
+    ) -> FileSystemResult<AbsolutePathBuf> {
+        Ok(base_path.join(path))
+    }
+
+    async fn parent(&self, path: &AbsolutePathBuf) -> FileSystemResult<Option<AbsolutePathBuf>> {
+        Ok(path.parent())
+    }
+
     async fn read_file(
         &self,
         path: &AbsolutePathBuf,
@@ -107,7 +128,6 @@ model = "gpt-work"
         /*cwd*/ None,
         &[],
         overrides,
-        CloudRequirementsLoader::default(),
         &crate::NoopThreadConfigLoader,
     )
     .await
@@ -166,7 +186,6 @@ model = "gpt-main"
         /*cwd*/ None,
         &[],
         overrides,
-        CloudRequirementsLoader::default(),
         &crate::NoopThreadConfigLoader,
     )
     .await
@@ -223,7 +242,6 @@ model = "gpt-dev"
         /*cwd*/ None,
         &[],
         overrides,
-        CloudRequirementsLoader::default(),
         &crate::NoopThreadConfigLoader,
     )
     .await

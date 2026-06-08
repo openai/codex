@@ -75,6 +75,7 @@ use codex_app_server_protocol::TurnDiffUpdatedNotification;
 use codex_app_server_protocol::TurnError;
 use codex_app_server_protocol::TurnInterruptResponse;
 use codex_app_server_protocol::TurnItemsView;
+use codex_app_server_protocol::TurnModerationMetadataNotification;
 use codex_app_server_protocol::TurnPlanStep;
 use codex_app_server_protocol::TurnPlanUpdatedNotification;
 use codex_app_server_protocol::TurnStartedNotification;
@@ -211,6 +212,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 }
             };
             let notification = McpServerStatusUpdatedNotification {
+                thread_id: Some(conversation_id.to_string()),
                 name: update.server,
                 status,
                 error,
@@ -335,6 +337,16 @@ pub(crate) async fn apply_bespoke_event_handling(
             };
             outgoing
                 .send_server_notification(ServerNotification::ModelVerification(notification))
+                .await;
+        }
+        EventMsg::TurnModerationMetadata(event) => {
+            let notification = TurnModerationMetadataNotification {
+                thread_id: conversation_id.to_string(),
+                turn_id: event_turn_id.clone(),
+                metadata: event.metadata,
+            };
+            outgoing
+                .send_server_notification(ServerNotification::TurnModerationMetadata(notification))
                 .await;
         }
         EventMsg::RealtimeConversationStarted(event) => {
@@ -755,12 +767,13 @@ pub(crate) async fn apply_bespoke_event_handling(
             let requested_permissions = request.permissions.clone();
             let request_cwd = match request.cwd.clone() {
                 Some(cwd) => cwd,
-                None => conversation.config_snapshot().await.cwd,
+                None => conversation.config_snapshot().await.cwd().clone(),
             };
             let params = PermissionsRequestApprovalParams {
                 thread_id: conversation_id.to_string(),
                 turn_id: request.turn_id.clone(),
                 item_id: request.call_id.clone(),
+                environment_id: request.environment_id.clone(),
                 started_at_ms: request.started_at_ms,
                 cwd: request_cwd.clone(),
                 reason: request.reason,
@@ -1148,7 +1161,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                         return;
                     }
                 };
-                let fallback_cwd = conversation.config_snapshot().await.cwd;
+                let fallback_cwd = conversation.config_snapshot().await.cwd().clone();
                 let stored_thread = match conversation
                     .read_thread(
                         /*include_archived*/ true, /*include_history*/ true,
@@ -3546,6 +3559,7 @@ mod tests {
                 unlimited: false,
                 balance: Some("5".to_string()),
             }),
+            individual_limit: None,
             plan_type: None,
             rate_limit_reached_type: None,
         };

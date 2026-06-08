@@ -639,6 +639,124 @@ Research with Codex carefully."""
 }
 
 #[tokio::test]
+async fn import_repo_mcp_preserves_existing_same_named_server() {
+    let root = TempDir::new().expect("create tempdir");
+    let repo_root = root.path().join("repo");
+    fs::create_dir_all(repo_root.join(".git")).expect("create git dir");
+    fs::write(
+        repo_root.join(".mcp.json"),
+        r#"{
+          "mcpServers": {
+            "mixedTransport": {
+              "command": "mcp-remote-proxy",
+              "args": [
+                "https://example.com/mixed-transport",
+                "--transport",
+                "http"
+              ],
+              "url": "https://example.com/mixed-transport"
+            }
+          }
+        }"#,
+    )
+    .expect("write mcp");
+    fs::create_dir_all(repo_root.join(".codex")).expect("create codex dir");
+    let existing_config = r#"[mcp_servers.mixedTransport]
+url = "https://example.com/mixed-transport"
+"#;
+    fs::write(
+        repo_root.join(".codex").join("config.toml"),
+        existing_config,
+    )
+    .expect("write config");
+
+    let service = service_for_paths(
+        root.path().join(EXTERNAL_AGENT_DIR),
+        root.path().join(".codex"),
+    );
+    assert_eq!(
+        service
+            .detect(ExternalAgentConfigDetectOptions {
+                include_home: false,
+                cwds: Some(vec![repo_root.clone()]),
+            })
+            .await
+            .expect("detect"),
+        Vec::<ExternalAgentConfigMigrationItem>::new()
+    );
+
+    service
+        .import(vec![ExternalAgentConfigMigrationItem {
+            item_type: ExternalAgentConfigMigrationItemType::McpServerConfig,
+            description: String::new(),
+            cwd: Some(repo_root.clone()),
+            details: None,
+        }])
+        .await
+        .expect("import");
+
+    assert_eq!(
+        fs::read_to_string(repo_root.join(".codex").join("config.toml")).expect("read config"),
+        existing_config
+    );
+}
+
+#[tokio::test]
+async fn detect_repo_mcp_lists_only_missing_servers() {
+    let root = TempDir::new().expect("create tempdir");
+    let repo_root = root.path().join("repo");
+    fs::create_dir_all(repo_root.join(".git")).expect("create git dir");
+    fs::write(
+        repo_root.join(".mcp.json"),
+        r#"{
+          "mcpServers": {
+            "docs": {"command": "docs-server"},
+            "mixedTransport": {"command": "mcp-remote-proxy"}
+          }
+        }"#,
+    )
+    .expect("write mcp");
+    fs::create_dir_all(repo_root.join(".codex")).expect("create codex dir");
+    fs::write(
+        repo_root.join(".codex").join("config.toml"),
+        r#"[mcp_servers.mixedTransport]
+url = "https://example.com/mixed-transport"
+"#,
+    )
+    .expect("write config");
+
+    let items = service_for_paths(
+        root.path().join(EXTERNAL_AGENT_DIR),
+        root.path().join(".codex"),
+    )
+    .detect(ExternalAgentConfigDetectOptions {
+        include_home: false,
+        cwds: Some(vec![repo_root.clone()]),
+    })
+    .await
+    .expect("detect");
+
+    assert_eq!(
+        items,
+        vec![ExternalAgentConfigMigrationItem {
+            item_type: ExternalAgentConfigMigrationItemType::McpServerConfig,
+            description: format!(
+                "Migrate MCP servers from {} into {}",
+                repo_root.display(),
+                repo_root.join(".codex").join("config.toml").display()
+            ),
+            cwd: Some(repo_root),
+            details: Some(MigrationDetails {
+                mcp_servers: vec![NamedMigration {
+                    name: "docs".to_string(),
+                }],
+                ..Default::default()
+            }),
+        }]
+    );
+}
+
+#[tokio::test]
 async fn import_home_migrates_supported_config_fields_skills_and_agents_md() {
     let (_root, external_agent_home, codex_home) = fixture_paths();
     let agents_skills = codex_home

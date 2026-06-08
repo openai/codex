@@ -1,4 +1,5 @@
 use crate::agents_md::AgentsMdManager;
+pub use crate::agents_md::LoadedAgentsMd;
 use crate::config::edit::ConfigEdit;
 use crate::config::edit::ConfigEditsBuilder;
 use crate::path_utils::normalize_for_native_workdir;
@@ -7,7 +8,7 @@ use crate::unified_exec::MIN_EMPTY_YIELD_TIME_MS;
 use crate::windows_sandbox::WindowsSandboxLevelExt;
 use crate::windows_sandbox::resolve_windows_sandbox_mode;
 use crate::windows_sandbox::resolve_windows_sandbox_private_desktop;
-use codex_config::CloudRequirementsLoader;
+use codex_config::CloudConfigBundleLoader;
 use codex_config::ConfigLayerSource;
 use codex_config::ConfigLayerStack;
 use codex_config::ConfigLayerStackOrdering;
@@ -58,6 +59,7 @@ use codex_core_plugins::PluginsConfigInput;
 use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::LOCAL_FS;
 use codex_features::AppsMcpPathOverrideConfigToml;
+use codex_features::CodeModeConfigToml;
 use codex_features::Feature;
 use codex_features::FeatureConfigSource;
 use codex_features::FeatureOverrides;
@@ -99,6 +101,7 @@ use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::AbsolutePathBufGuard;
@@ -116,6 +119,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use crate::config::permissions::BUILT_IN_READ_ONLY_PROFILE;
 use crate::config::permissions::BUILT_IN_WORKSPACE_PROFILE;
 use crate::config::permissions::apply_network_proxy_feature_config;
 use crate::config::permissions::builtin_permission_profile;
@@ -195,9 +199,10 @@ At the start of your turn, you are the active agent.
 You can spawn sub-agents to handle subtasks, and those sub-agents can spawn their own sub-agents.
 All agents in the team, including the agents that you can assign tasks to, are equally intelligent and capable, and have access to the same set of tools.
 
-You can use `spawn_agent` to create a new agent, `assign_task` to give an existing agent a new task and trigger a turn, and `send_message` to pass a message to a running agent without triggering a turn.
+You can use `spawn_agent` to create a new agent, `followup_task` to give an existing agent a new task and trigger a turn, and `send_message` to pass a message to a running agent without triggering a turn.
 Child agents can also spawn their own sub-agents.
 You can decide how much context you want to propagate to your sub-agents with the `fork_turns` parameter.
+Default to doing the work yourself. Spawn sub-agents only for concrete, bounded subtasks that can run independently alongside useful local work and are likely to materially shorten completion time. Do not delegate simple tasks, small edits, routine searches, or work you can complete quickly yourself.
 
 You will receive messages in the analysis channel in the form:
 ```
@@ -212,8 +217,9 @@ const DEFAULT_MULTI_AGENT_V2_SUBAGENT_USAGE_HINT_TEXT: &str = r#"You are an agen
 
 You can spawn sub-agents to handle subtasks, and those sub-agents can spawn their own sub-agents. All agents in the team, including the agents that you can assign tasks to, are equally intelligent and capable, and have access to the same set of tools.
 
-You can use `spawn_agent` to create a new agent, `assign_task` to give an existing agent a new task and trigger a turn, and `send_message` to pass a message to a running agent.
+You can use `spawn_agent` to create a new agent, `followup_task` to give an existing agent a new task and trigger a turn, and `send_message` to pass a message to a running agent.
 Child agents can also spawn their own sub-agents.
+Default to doing the work yourself. Spawn sub-agents only for concrete, bounded subtasks that can run independently alongside useful local work and are likely to materially shorten completion time. Do not delegate simple tasks, small edits, routine searches, or work you can complete quickly yourself.
 
 When you provide a response in the final channel, that content is immediately delivered back to your parent agent.
 
@@ -443,13 +449,7 @@ impl Permissions {
     /// Legacy compatibility projection derived from the canonical profile.
     pub fn legacy_sandbox_policy(&self, cwd: &Path) -> SandboxPolicy {
         let permission_profile = self.materialized_permission_profile();
-        let file_system_sandbox_policy = permission_profile.file_system_sandbox_policy();
-        compatibility_sandbox_policy_for_permission_profile(
-            &permission_profile,
-            &file_system_sandbox_policy,
-            permission_profile.network_sandbox_policy(),
-            cwd,
-        )
+        compatibility_sandbox_policy_for_permission_profile(&permission_profile, cwd)
     }
 
     /// Check whether a legacy sandbox policy can be applied to this permission
@@ -647,7 +647,7 @@ pub struct Config {
     pub show_raw_agent_reasoning: bool,
 
     /// User-provided instructions from AGENTS.md.
-    pub user_instructions: Option<String>,
+    pub user_instructions: Option<LoadedAgentsMd>,
 
     /// Base instructions override.
     pub base_instructions: Option<String>,
@@ -823,7 +823,7 @@ pub struct Config {
     /// Token budget applied when storing tool/function outputs in the context manager.
     pub tool_output_token_limit: Option<usize>,
 
-    /// Maximum number of agent threads that can be open concurrently.
+    /// User-configured maximum number of agent threads that can be open concurrently.
     pub agent_max_threads: Option<usize>,
     /// Maximum runtime in seconds for agent job workers before they are failed.
     pub agent_job_max_runtime_seconds: Option<u64>,
@@ -980,6 +980,9 @@ pub struct Config {
     /// Whether to register the experimental request_user_input tool.
     pub experimental_request_user_input_enabled: bool,
 
+    /// Configuration for the experimental code-mode tool surface.
+    pub code_mode: CodeModeConfig,
+
     /// If set to `true`, used only the experimental unified exec tool.
     pub use_experimental_unified_exec_tool: bool,
 
@@ -1032,6 +1035,11 @@ pub struct Config {
     pub otel: codex_config::types::OtelConfig,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct CodeModeConfig {
+    pub excluded_tool_namespaces: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct MultiAgentV2Config {
     pub max_concurrent_threads_per_session: usize,
@@ -1064,7 +1072,7 @@ impl Default for MultiAgentV2Config {
                 DEFAULT_MULTI_AGENT_V2_SUBAGENT_USAGE_HINT_TEXT.to_string(),
             ),
             tool_namespace: None,
-            hide_spawn_agent_metadata: false,
+            hide_spawn_agent_metadata: true,
             non_code_mode_only: true,
         }
     }
@@ -1111,7 +1119,7 @@ pub struct ConfigBuilder {
     harness_overrides: Option<ConfigOverrides>,
     loader_overrides: Option<LoaderOverrides>,
     strict_config: bool,
-    cloud_requirements: CloudRequirementsLoader,
+    cloud_config_bundle: CloudConfigBundleLoader,
     thread_config_loader: Option<Arc<dyn ThreadConfigLoader>>,
     fallback_cwd: Option<PathBuf>,
 }
@@ -1142,8 +1150,8 @@ impl ConfigBuilder {
         self
     }
 
-    pub fn cloud_requirements(mut self, cloud_requirements: CloudRequirementsLoader) -> Self {
-        self.cloud_requirements = cloud_requirements;
+    pub fn cloud_config_bundle(mut self, cloud_config_bundle: CloudConfigBundleLoader) -> Self {
+        self.cloud_config_bundle = cloud_config_bundle;
         self
     }
 
@@ -1172,7 +1180,7 @@ impl ConfigBuilder {
             harness_overrides,
             loader_overrides,
             strict_config,
-            cloud_requirements,
+            cloud_config_bundle,
             thread_config_loader,
             fallback_cwd,
         } = self;
@@ -1197,8 +1205,8 @@ impl ConfigBuilder {
             ConfigLoadOptions {
                 loader_overrides,
                 strict_config,
+                cloud_config_bundle,
             },
-            cloud_requirements,
             thread_config_loader
                 .as_deref()
                 .unwrap_or(&codex_config::NoopThreadConfigLoader),
@@ -1281,6 +1289,43 @@ impl ConfigBuilder {
 }
 
 impl Config {
+    pub(crate) fn multi_agent_version_from_features(&self) -> MultiAgentVersion {
+        if self.features.enabled(Feature::MultiAgentV2) {
+            MultiAgentVersion::V2
+        } else if self.features.enabled(Feature::Collab) {
+            MultiAgentVersion::V1
+        } else {
+            MultiAgentVersion::Disabled
+        }
+    }
+
+    pub(crate) fn validate_multi_agent_v2_config(&self) -> std::io::Result<()> {
+        if self.features.enabled(Feature::MultiAgentV2) && self.agent_max_threads.is_some() {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "agents.max_threads cannot be set when features.multi_agent_v2 is enabled",
+            ))
+        } else {
+            Ok(())
+        }
+    }
+
+    pub(crate) fn effective_agent_max_threads(
+        &self,
+        multi_agent_version: MultiAgentVersion,
+    ) -> Option<usize> {
+        match multi_agent_version {
+            MultiAgentVersion::V2 => Some(
+                self.multi_agent_v2
+                    .max_concurrent_threads_per_session
+                    .saturating_sub(1),
+            ),
+            MultiAgentVersion::Disabled | MultiAgentVersion::V1 => {
+                self.agent_max_threads.or(DEFAULT_AGENT_MAX_THREADS)
+            }
+        }
+    }
+
     pub fn legacy_sandbox_policy(&self) -> SandboxPolicy {
         self.permissions.legacy_sandbox_policy(self.cwd.as_path())
     }
@@ -1588,7 +1633,6 @@ pub async fn load_config_as_toml_with_cli_and_load_options(
         cwd.cloned(),
         &cli_overrides,
         options,
-        CloudRequirementsLoader::default(),
         &codex_config::NoopThreadConfigLoader,
     )
     .await?;
@@ -1799,7 +1843,6 @@ pub async fn load_global_mcp_servers(
         cwd,
         &cli_overrides,
         LoaderOverrides::default(),
-        CloudRequirementsLoader::default(),
         &codex_config::NoopThreadConfigLoader,
     )
     .await?;
@@ -2203,9 +2246,9 @@ pub struct ConfigOverrides {
     pub bypass_hook_trust: Option<bool>,
     /// Additional directories that should be treated as writable roots for this session.
     pub additional_writable_roots: Vec<PathBuf>,
-    /// Explicit runtime workspace roots for this session. When set, this is
-    /// the full runtime root list rather than an additive override.
-    pub workspace_roots: Option<Vec<PathBuf>>,
+    /// Explicit absolute runtime workspace roots for this session. When set,
+    /// this is the full runtime root list rather than an additive override.
+    pub workspace_roots: Option<Vec<AbsolutePathBuf>>,
 }
 
 fn dedupe_absolute_paths(paths: &mut Vec<AbsolutePathBuf>) {
@@ -2256,6 +2299,17 @@ fn resolve_experimental_request_user_input_enabled(config_toml: &ConfigToml) -> 
         .as_ref()
         .and_then(|tools| tools.experimental_request_user_input.as_ref())
         .is_none_or(|config| config.enabled)
+}
+
+fn resolve_code_mode_config(config_toml: &ConfigToml) -> CodeModeConfig {
+    let base = code_mode_toml_config(config_toml.features.as_ref());
+
+    CodeModeConfig {
+        excluded_tool_namespaces: base
+            .and_then(|config| config.excluded_tool_namespaces.as_ref())
+            .cloned()
+            .unwrap_or_default(),
+    }
 }
 
 fn resolve_multi_agent_v2_config(config_toml: &ConfigToml) -> MultiAgentV2Config {
@@ -2337,6 +2391,13 @@ fn resolve_optional_prompt_text(
         Some(Some(value)) if value.is_empty() => None,
         Some(Some(value)) => Some(value.clone()),
         Some(None) | None => default,
+    }
+}
+
+fn code_mode_toml_config(features: Option<&FeaturesToml>) -> Option<&CodeModeConfigToml> {
+    match features?.code_mode.as_ref()? {
+        FeatureToml::Enabled(_) => None,
+        FeatureToml::Config(config) => Some(config),
     }
 }
 
@@ -2546,8 +2607,7 @@ impl Config {
             Some(&codex_home),
             &mut startup_warnings,
         )
-        .await
-        .map(|loaded| loaded.contents);
+        .await;
 
         // Destructure ConfigOverrides fully to ensure all overrides are applied.
         let ConfigOverrides {
@@ -2762,12 +2822,7 @@ impl Config {
             || !requested_additional_writable_roots.is_empty()
             || legacy_workspace_roots_explicit;
         let mut workspace_roots = match workspace_roots_override {
-            Some(workspace_roots) => workspace_roots
-                .into_iter()
-                .map(|path| {
-                    AbsolutePathBuf::resolve_path_against_base(path, resolved_cwd.as_path())
-                })
-                .collect(),
+            Some(workspace_roots) => workspace_roots,
             None => {
                 let mut workspace_roots = vec![resolved_cwd.clone()];
                 workspace_roots.extend(requested_additional_writable_roots.clone());
@@ -2903,7 +2958,6 @@ impl Config {
             let mut permission_profile = cfg
                 .derive_permission_profile(
                     sandbox_mode,
-                    /*profile_sandbox_mode*/ None,
                     windows_sandbox_level,
                     Some(&active_project),
                     Some(&constrained_permission_profile),
@@ -2982,6 +3036,7 @@ impl Config {
         let web_search_config = resolve_web_search_config(&cfg);
         let experimental_request_user_input_enabled =
             resolve_experimental_request_user_input_enabled(&cfg);
+        let code_mode = resolve_code_mode_config(&cfg);
         let multi_agent_v2 = resolve_multi_agent_v2_config(&cfg);
         let apps_mcp_path_override = if features.enabled(Feature::AppsMcpPathOverride) {
             let base = apps_mcp_path_override_toml_config(cfg.features.as_ref());
@@ -3063,29 +3118,13 @@ impl Config {
             ));
         }
         validate_multi_agent_v2_tool_namespace(multi_agent_v2.tool_namespace.as_deref())?;
-        let agent_max_threads_from_config = cfg.agents.as_ref().and_then(|agents| agents.max_threads);
-        let agent_max_threads = if features.enabled(Feature::MultiAgentV2) {
-            if agent_max_threads_from_config.is_some() {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    "agents.max_threads cannot be set when multi_agent_v2 is enabled",
-                ));
-            }
-            Some(
-                multi_agent_v2
-                    .max_concurrent_threads_per_session
-                    .saturating_sub(1),
-            )
-        } else {
-            let agent_max_threads = agent_max_threads_from_config.or(DEFAULT_AGENT_MAX_THREADS);
-            if agent_max_threads == Some(0) {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    "agents.max_threads must be at least 1",
-                ));
-            }
-            agent_max_threads
-        };
+        let agent_max_threads = cfg.agents.as_ref().and_then(|agents| agents.max_threads);
+        if agent_max_threads == Some(0) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "agents.max_threads must be at least 1",
+            ));
+        }
         let agent_max_depth = cfg
             .agents
             .as_ref()
@@ -3539,6 +3578,7 @@ impl Config {
             web_search_mode: constrained_web_search_mode.value,
             web_search_config,
             experimental_request_user_input_enabled,
+            code_mode,
             use_experimental_unified_exec_tool,
             background_terminal_max_timeout,
             ghost_snapshot,
@@ -3796,7 +3836,9 @@ fn resolve_effective_permission_selection<'a>(
     Ok(EffectivePermissionSelection {
         profiles,
         selected_profile_id,
-        requirements_force_profile_selection: requirements_toml.allowed_permissions.is_some(),
+        requirements_force_profile_selection: requirements_toml
+            .allowed_permission_profiles
+            .is_some(),
     })
 }
 
@@ -3806,28 +3848,36 @@ fn resolve_default_permissions<'a>(
     requirements_toml: &'a ConfigRequirementsToml,
     startup_warnings: &mut Vec<String>,
 ) -> std::io::Result<Option<&'a str>> {
-    let allowed_permissions = requirements_toml.allowed_permissions.as_ref();
-    let mut default_permissions = default_permissions_override.or(configured_default_permissions);
-    if let (Some(selected_permissions), Some(allowed_permissions)) =
-        (default_permissions, allowed_permissions)
-        && !is_builtin_permission_profile_name(selected_permissions)
-        && !allowed_permissions
-            .iter()
-            .any(|allowed_permission| allowed_permission == selected_permissions)
-    {
-        let Some(fallback_permissions) = allowed_permissions.first().map(String::as_str) else {
-            return Err(std::io::Error::new(
-                ErrorKind::InvalidInput,
-                "requirements.toml allowed_permissions must include at least one profile",
-            ));
-        };
-        startup_warnings.push(format!(
-            "Configured value for `permission_profile` is disallowed by requirements; falling back from `{selected_permissions}` to required value `{fallback_permissions}`."
+    let selected_permissions = default_permissions_override.or(configured_default_permissions);
+    let Some(allowed_permission_profiles) = requirements_toml.allowed_permission_profiles.as_ref()
+    else {
+        return Ok(selected_permissions);
+    };
+    let Some(fallback_permissions) = requirements_toml
+        .default_permissions
+        .as_deref()
+        .or_else(|| implicit_default_permissions(allowed_permission_profiles))
+    else {
+        return Err(std::io::Error::new(
+            ErrorKind::InvalidInput,
+            "requirements.toml default_permissions must be set unless allowed_permission_profiles allows both `:workspace` and `:read-only`",
         ));
-        default_permissions = Some(fallback_permissions);
-    }
+    };
 
-    Ok(default_permissions)
+    match selected_permissions {
+        None => Ok(Some(fallback_permissions)),
+        Some(selected_permissions)
+            if is_permission_allowed(allowed_permission_profiles, selected_permissions) =>
+        {
+            Ok(Some(selected_permissions))
+        }
+        Some(selected_permissions) => {
+            startup_warnings.push(format!(
+                "Configured value for `permission_profile` is disallowed by requirements; falling back from `{selected_permissions}` to required value `{fallback_permissions}`."
+            ));
+            Ok(Some(fallback_permissions))
+        }
+    }
 }
 
 fn validate_required_permission_profile_catalog(
@@ -3841,28 +3891,65 @@ fn validate_required_permission_profile_catalog(
                 .is_some_and(|permissions| permissions.entries.contains_key(profile_id))
     };
 
-    let Some(allowed_permissions) = requirements_toml.allowed_permissions.as_ref() else {
+    let Some(allowed_permission_profiles) = requirements_toml.allowed_permission_profiles.as_ref()
+    else {
+        if requirements_toml.default_permissions.is_some() {
+            return Err(std::io::Error::new(
+                ErrorKind::InvalidInput,
+                "requirements.toml default_permissions requires allowed_permission_profiles",
+            ));
+        }
         return Ok(());
     };
-    if allowed_permissions.is_empty() {
-        return Err(std::io::Error::new(
-            ErrorKind::InvalidInput,
-            "requirements.toml allowed_permissions must include at least one profile",
-        ));
-    }
-
-    for profile_id in allowed_permissions {
+    for profile_id in allowed_permission_profiles.keys() {
         if !is_known_profile(profile_id) {
             return Err(std::io::Error::new(
                 ErrorKind::InvalidInput,
                 format!(
-                    "requirements.toml allowed_permissions refers to undefined profile `{profile_id}`"
+                    "requirements.toml allowed_permission_profiles refers to undefined profile `{profile_id}`"
                 ),
             ));
         }
     }
 
+    let Some(default_permissions) = requirements_toml
+        .default_permissions
+        .as_deref()
+        .or_else(|| implicit_default_permissions(allowed_permission_profiles))
+    else {
+        return Err(std::io::Error::new(
+            ErrorKind::InvalidInput,
+            "requirements.toml default_permissions must be set unless allowed_permission_profiles allows both `:workspace` and `:read-only`",
+        ));
+    };
+    if !is_permission_allowed(allowed_permission_profiles, default_permissions) {
+        return Err(std::io::Error::new(
+            ErrorKind::InvalidInput,
+            format!(
+                "requirements.toml default_permissions `{default_permissions}` must be allowed by allowed_permission_profiles"
+            ),
+        ));
+    }
+
     Ok(())
+}
+
+fn implicit_default_permissions(
+    allowed_permission_profiles: &BTreeMap<String, bool>,
+) -> Option<&'static str> {
+    (is_permission_allowed(allowed_permission_profiles, BUILT_IN_WORKSPACE_PROFILE)
+        && is_permission_allowed(allowed_permission_profiles, BUILT_IN_READ_ONLY_PROFILE))
+    .then_some(BUILT_IN_WORKSPACE_PROFILE)
+}
+
+fn is_permission_allowed(
+    allowed_permission_profiles: &BTreeMap<String, bool>,
+    profile_id: &str,
+) -> bool {
+    allowed_permission_profiles
+        .get(profile_id)
+        .copied()
+        .unwrap_or(false)
 }
 
 fn normalize_guardian_policy_config(value: Option<&str>) -> Option<String> {

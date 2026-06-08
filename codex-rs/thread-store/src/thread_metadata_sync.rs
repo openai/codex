@@ -232,7 +232,7 @@ impl ThreadMetadataSync {
                         update.cwd = Some(turn_ctx.cwd.clone());
                     }
                     update.model = Some(turn_ctx.model.clone());
-                    update.reasoning_effort = turn_ctx.effort;
+                    update.reasoning_effort = turn_ctx.effort.clone();
                     update.approval_mode = Some(turn_ctx.approval_policy);
                     update.permission_profile = Some(turn_ctx.permission_profile());
                 }
@@ -382,7 +382,6 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use super::*;
-    use crate::ThreadEventPersistenceMode;
     use crate::ThreadPersistenceMetadata;
 
     #[test]
@@ -529,7 +528,6 @@ mod tests {
                 model_provider: "test-provider".to_string(),
                 memory_mode: ThreadMemoryMode::Enabled,
             },
-            event_persistence_mode: ThreadEventPersistenceMode::Limited,
         }
     }
 

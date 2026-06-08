@@ -4,6 +4,7 @@ use super::SandboxTransformRequest;
 use super::SandboxType;
 use super::SandboxablePreference;
 use super::get_platform_sandbox;
+use super::with_managed_mitm_ca_readable_root;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::models::FileSystemPermissions;
@@ -242,6 +243,48 @@ fn transform_additional_permissions_preserves_denied_entries() {
     );
 }
 
+#[test]
+fn managed_mitm_ca_bundle_becomes_readable_for_restricted_sandbox() {
+    let cwd = TempDir::new().expect("create cwd");
+    let cwd =
+        AbsolutePathBuf::from_absolute_path(canonicalize(cwd.path()).expect("canonicalize cwd"))
+            .expect("absolute cwd");
+    let managed_bundle_dir = TempDir::new().expect("create managed bundle dir");
+    let managed_bundle_path =
+        AbsolutePathBuf::from_absolute_path(managed_bundle_dir.path().join("ca-bundle.pem"))
+            .expect("absolute managed bundle path");
+    let permission_profile = PermissionProfile::from_runtime_permissions(
+        &FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+            path: FileSystemPath::Path { path: cwd.clone() },
+            access: FileSystemAccessMode::Read,
+        }]),
+        NetworkSandboxPolicy::Restricted,
+    );
+
+    let permission_profile = with_managed_mitm_ca_readable_root(
+        permission_profile,
+        Some(&managed_bundle_path),
+        cwd.as_path(),
+    );
+    let (file_system_sandbox_policy, _) = permission_profile.to_runtime_permissions();
+
+    assert_eq!(
+        file_system_sandbox_policy,
+        FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path { path: cwd },
+                access: FileSystemAccessMode::Read,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path {
+                    path: managed_bundle_path,
+                },
+                access: FileSystemAccessMode::Read,
+            },
+        ])
+    );
+}
+
 #[cfg(target_os = "linux")]
 fn transform_linux_seccomp_request(
     codex_linux_sandbox_exe: &std::path::Path,
@@ -294,6 +337,15 @@ fn wsl1_rejects_linux_bubblewrap_path() {
         super::ensure_linux_bubblewrap_is_supported(
             &FileSystemSandboxPolicy::unrestricted(),
             /*use_legacy_landlock*/ false,
+            /*allow_network_for_proxy*/ true,
+            /*is_wsl1*/ true,
+        ),
+        Err(super::SandboxTransformError::Wsl1UnsupportedForBubblewrap)
+    ));
+    assert!(matches!(
+        super::ensure_linux_bubblewrap_is_supported(
+            &FileSystemSandboxPolicy::unrestricted(),
+            /*use_legacy_landlock*/ true,
             /*allow_network_for_proxy*/ true,
             /*is_wsl1*/ true,
         ),

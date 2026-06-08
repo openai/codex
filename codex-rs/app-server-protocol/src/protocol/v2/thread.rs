@@ -107,11 +107,10 @@ pub struct ThreadStartParams {
     pub service_tier: Option<Option<String>>,
     #[ts(optional = nullable)]
     pub cwd: Option<String>,
-    /// Replace the thread's runtime workspace roots. Relative paths are
-    /// resolved against the effective cwd for the thread.
+    /// Replace the thread's runtime workspace roots. Paths must be absolute.
     #[experimental("thread/start.runtimeWorkspaceRoots")]
     #[ts(optional = nullable)]
-    pub runtime_workspace_roots: Option<Vec<PathBuf>>,
+    pub runtime_workspace_roots: Option<Vec<AbsolutePathBuf>>,
     #[experimental(nested)]
     #[ts(optional = nullable)]
     pub approval_policy: Option<AskForApproval>,
@@ -164,12 +163,6 @@ pub struct ThreadStartParams {
     #[experimental("thread/start.experimentalRawEvents")]
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub experimental_raw_events: bool,
-    /// Deprecated and ignored by app-server. Kept only so older clients can
-    /// continue sending the field while rollout persistence always uses the
-    /// limited history policy.
-    #[experimental("thread/start.persistFullHistory")]
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub persist_extended_history: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS)]
@@ -364,11 +357,10 @@ pub struct ThreadResumeParams {
     pub service_tier: Option<Option<String>>,
     #[ts(optional = nullable)]
     pub cwd: Option<String>,
-    /// Replace the thread's runtime workspace roots. Relative paths are
-    /// resolved against the effective cwd for the thread.
+    /// Replace the thread's runtime workspace roots. Paths must be absolute.
     #[experimental("thread/resume.runtimeWorkspaceRoots")]
     #[ts(optional = nullable)]
-    pub runtime_workspace_roots: Option<Vec<PathBuf>>,
+    pub runtime_workspace_roots: Option<Vec<AbsolutePathBuf>>,
     #[experimental(nested)]
     #[ts(optional = nullable)]
     pub approval_policy: Option<AskForApproval>,
@@ -402,12 +394,6 @@ pub struct ThreadResumeParams {
     #[experimental("thread/resume.initialTurnsPage")]
     #[ts(optional = nullable)]
     pub initial_turns_page: Option<ThreadResumeInitialTurnsPageParams>,
-    /// Deprecated and ignored by app-server. Kept only so older clients can
-    /// continue sending the field while rollout persistence always uses the
-    /// limited history policy.
-    #[experimental("thread/resume.persistFullHistory")]
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub persist_extended_history: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, ExperimentalApi)]
@@ -521,11 +507,10 @@ pub struct ThreadForkParams {
     pub service_tier: Option<Option<String>>,
     #[ts(optional = nullable)]
     pub cwd: Option<String>,
-    /// Replace the thread's runtime workspace roots. Relative paths are
-    /// resolved against the effective cwd for the thread.
+    /// Replace the thread's runtime workspace roots. Paths must be absolute.
     #[experimental("thread/fork.runtimeWorkspaceRoots")]
     #[ts(optional = nullable)]
-    pub runtime_workspace_roots: Option<Vec<PathBuf>>,
+    pub runtime_workspace_roots: Option<Vec<AbsolutePathBuf>>,
     #[experimental(nested)]
     #[ts(optional = nullable)]
     pub approval_policy: Option<AskForApproval>,
@@ -557,12 +542,6 @@ pub struct ThreadForkParams {
     #[experimental("thread/fork.excludeTurns")]
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub exclude_turns: bool,
-    /// Deprecated and ignored by app-server. Kept only so older clients can
-    /// continue sending the field while rollout persistence always uses the
-    /// limited history policy.
-    #[experimental("thread/fork.persistFullHistory")]
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub persist_extended_history: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, ExperimentalApi)]

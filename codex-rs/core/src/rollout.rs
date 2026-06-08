@@ -1,7 +1,6 @@
 use crate::config::Config;
 pub use codex_rollout::ARCHIVED_SESSIONS_SUBDIR;
 pub use codex_rollout::Cursor;
-pub use codex_rollout::EventPersistenceMode;
 pub use codex_rollout::INTERACTIVE_SESSION_SOURCES;
 pub use codex_rollout::RolloutRecorder;
 pub use codex_rollout::RolloutRecorderParams;

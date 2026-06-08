@@ -200,6 +200,7 @@ pub struct AppToolsConfig {
 pub struct AppConfig {
     #[serde(default = "default_enabled")]
     pub enabled: bool,
+    pub approvals_reviewer: Option<ApprovalsReviewer>,
     pub destructive_enabled: Option<bool>,
     pub open_world_enabled: Option<bool>,
     pub default_tools_approval_mode: Option<AppToolApproval>,
@@ -374,7 +375,8 @@ pub struct ConfigRequirements {
     pub allowed_approvals_reviewers: Option<Vec<ApprovalsReviewer>>,
     pub allowed_sandbox_modes: Option<Vec<SandboxMode>>,
     pub allowed_windows_sandbox_implementations: Option<Vec<WindowsSandboxSetupMode>>,
-    pub allowed_permissions: Option<Vec<String>>,
+    pub allowed_permission_profiles: Option<BTreeMap<String, bool>>,
+    pub default_permissions: Option<String>,
     pub allowed_web_search_modes: Option<Vec<WebSearchMode>>,
     pub allow_managed_hooks_only: Option<bool>,
     pub allow_appshots: Option<bool>,

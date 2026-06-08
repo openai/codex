@@ -11,6 +11,9 @@ use codex_protocol::ThreadId;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::SessionMeta;
+use codex_protocol::protocol::SessionMetaLine;
+use codex_protocol::protocol::ThreadMemoryMode;
 
 use crate::AppendThreadItemsParams;
 use crate::ArchiveThreadParams;
@@ -164,7 +167,32 @@ impl ThreadStore for InMemoryThreadStore {
     async fn create_thread(&self, params: CreateThreadParams) -> ThreadStoreResult<()> {
         let mut state = self.state.lock().await;
         state.calls.create_thread += 1;
-        state.histories.entry(params.thread_id).or_default();
+        let session_meta = SessionMeta {
+            id: params.thread_id,
+            forked_from_id: params.forked_from_id,
+            parent_thread_id: params.parent_thread_id,
+            cwd: params.metadata.cwd.clone().unwrap_or_default(),
+            agent_nickname: params.source.get_nickname(),
+            agent_role: params.source.get_agent_role(),
+            agent_path: params.source.get_agent_path().map(Into::into),
+            source: params.source.clone(),
+            thread_source: params.thread_source,
+            model_provider: Some(params.metadata.model_provider.clone()),
+            base_instructions: Some(params.base_instructions.clone()),
+            dynamic_tools: (!params.dynamic_tools.is_empty()).then(|| params.dynamic_tools.clone()),
+            memory_mode: matches!(params.metadata.memory_mode, ThreadMemoryMode::Disabled)
+                .then_some("disabled".to_string()),
+            multi_agent_version: params.multi_agent_version,
+            ..SessionMeta::default()
+        };
+        state
+            .histories
+            .entry(params.thread_id)
+            .or_default()
+            .push(RolloutItem::SessionMeta(SessionMetaLine {
+                meta: session_meta,
+                git: None,
+            }));
         state.created_threads.insert(params.thread_id, params);
         Ok(())
     }
@@ -172,7 +200,11 @@ impl ThreadStore for InMemoryThreadStore {
     async fn resume_thread(&self, params: ResumeThreadParams) -> ThreadStoreResult<()> {
         let mut state = self.state.lock().await;
         state.calls.resume_thread += 1;
-        state.histories.entry(params.thread_id).or_default();
+        if let Some(history) = params.history {
+            state.histories.insert(params.thread_id, history);
+        } else {
+            state.histories.entry(params.thread_id).or_default();
+        }
         if let Some(rollout_path) = params.rollout_path {
             state.rollout_paths.insert(rollout_path, params.thread_id);
         }
@@ -337,7 +369,7 @@ fn stored_thread_from_state(
             .and_then(|metadata| metadata.model_provider.clone())
             .unwrap_or_else(|| "test".to_string()),
         model: metadata.and_then(|metadata| metadata.model.clone()),
-        reasoning_effort: metadata.and_then(|metadata| metadata.reasoning_effort),
+        reasoning_effort: metadata.and_then(|metadata| metadata.reasoning_effort.clone()),
         created_at: metadata
             .and_then(|metadata| metadata.created_at)
             .unwrap_or_else(Utc::now),

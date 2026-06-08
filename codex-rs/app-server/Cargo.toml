@@ -32,7 +32,7 @@ axum = { workspace = true, default-features = false, features = [
 ] }
 codex-analytics = { workspace = true }
 codex-arg0 = { workspace = true }
-codex-cloud-requirements = { workspace = true }
+codex-cloud-config = { workspace = true }
 codex-config = { workspace = true }
 codex-core = { workspace = true }
 codex-core-plugins = { workspace = true }
@@ -41,6 +41,7 @@ codex-extension-api = { workspace = true }
 codex-external-agent-migration = { workspace = true }
 codex-external-agent-sessions = { workspace = true }
 codex-features = { workspace = true }
+codex-goal-extension = { workspace = true }
 codex-guardian = { workspace = true }
 codex-git-utils = { workspace = true }
 codex-file-watcher = { workspace = true }

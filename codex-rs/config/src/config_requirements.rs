@@ -29,7 +29,6 @@ pub enum RequirementSource {
         domain: String,
         key: String,
     },
-    CloudRequirements,
     /// Multiple requirements layers contributed to the final value. Sources are
     /// stored highest-priority first, matching the order surfaced in errors.
     Composite {
@@ -86,9 +85,6 @@ impl fmt::Display for RequirementSource {
             RequirementSource::Unknown => write!(f, "<unspecified>"),
             RequirementSource::MdmManagedPreferences { domain, key } => {
                 write!(f, "MDM {domain}:{key}")
-            }
-            RequirementSource::CloudRequirements => {
-                write!(f, "cloud requirements")
             }
             RequirementSource::Composite { sources } => {
                 write!(f, "requirements layers: ")?;
@@ -826,7 +822,8 @@ pub struct ConfigRequirementsToml {
     pub allowed_approval_policies: Option<Vec<AskForApproval>>,
     pub allowed_approvals_reviewers: Option<Vec<ApprovalsReviewer>>,
     pub allowed_sandbox_modes: Option<Vec<SandboxModeRequirement>>,
-    pub allowed_permissions: Option<Vec<String>>,
+    pub allowed_permission_profiles: Option<BTreeMap<String, bool>>,
+    pub default_permissions: Option<String>,
     pub remote_sandbox_config: Option<Vec<RemoteSandboxConfigToml>>,
     pub allowed_web_search_modes: Option<Vec<WebSearchModeRequirement>>,
     pub allow_managed_hooks_only: Option<bool>,
@@ -880,7 +877,8 @@ pub struct ConfigRequirementsWithSources {
     pub allowed_approval_policies: Option<Sourced<Vec<AskForApproval>>>,
     pub allowed_approvals_reviewers: Option<Sourced<Vec<ApprovalsReviewer>>>,
     pub allowed_sandbox_modes: Option<Sourced<Vec<SandboxModeRequirement>>>,
-    pub allowed_permissions: Option<Sourced<Vec<String>>>,
+    pub allowed_permission_profiles: Option<Sourced<BTreeMap<String, bool>>>,
+    pub default_permissions: Option<Sourced<String>>,
     pub allowed_web_search_modes: Option<Sourced<Vec<WebSearchModeRequirement>>>,
     pub allow_managed_hooks_only: Option<Sourced<bool>>,
     pub allow_appshots: Option<Sourced<bool>>,
@@ -920,7 +918,8 @@ impl ConfigRequirementsWithSources {
             allowed_approval_policies: _,
             allowed_approvals_reviewers: _,
             allowed_sandbox_modes: _,
-            allowed_permissions: _,
+            allowed_permission_profiles: _,
+            default_permissions: _,
             remote_sandbox_config: _,
             allowed_web_search_modes: _,
             allow_managed_hooks_only: _,
@@ -955,7 +954,8 @@ impl ConfigRequirementsWithSources {
                 allowed_approval_policies,
                 allowed_approvals_reviewers,
                 allowed_sandbox_modes,
-                allowed_permissions,
+                allowed_permission_profiles,
+                default_permissions,
                 allowed_web_search_modes,
                 allow_managed_hooks_only,
                 allow_appshots,
@@ -987,7 +987,8 @@ impl ConfigRequirementsWithSources {
             allowed_approval_policies,
             allowed_approvals_reviewers,
             allowed_sandbox_modes,
-            allowed_permissions,
+            allowed_permission_profiles,
+            default_permissions,
             allowed_web_search_modes,
             allow_managed_hooks_only,
             allow_appshots,
@@ -1008,7 +1009,8 @@ impl ConfigRequirementsWithSources {
             allowed_approval_policies: allowed_approval_policies.map(|sourced| sourced.value),
             allowed_approvals_reviewers: allowed_approvals_reviewers.map(|sourced| sourced.value),
             allowed_sandbox_modes: allowed_sandbox_modes.map(|sourced| sourced.value),
-            allowed_permissions: allowed_permissions.map(|sourced| sourced.value),
+            allowed_permission_profiles: allowed_permission_profiles.map(|sourced| sourced.value),
+            default_permissions: default_permissions.map(|sourced| sourced.value),
             remote_sandbox_config: None,
             allowed_web_search_modes: allowed_web_search_modes.map(|sourced| sourced.value),
             allow_managed_hooks_only: allow_managed_hooks_only.map(|sourced| sourced.value),
@@ -1096,7 +1098,8 @@ impl ConfigRequirementsToml {
         self.allowed_approval_policies.is_none()
             && self.allowed_approvals_reviewers.is_none()
             && self.allowed_sandbox_modes.is_none()
-            && self.allowed_permissions.is_none()
+            && self.allowed_permission_profiles.is_none()
+            && self.default_permissions.is_none()
             && self.remote_sandbox_config.is_none()
             && self.allowed_web_search_modes.is_none()
             && self.allow_managed_hooks_only.is_none()
@@ -1148,7 +1151,8 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             allowed_approval_policies,
             allowed_approvals_reviewers,
             allowed_sandbox_modes,
-            allowed_permissions: _,
+            allowed_permission_profiles: _,
+            default_permissions: _,
             allowed_web_search_modes,
             allow_managed_hooks_only,
             allow_appshots,
@@ -1510,28 +1514,13 @@ mod tests {
         );
     }
 
-    #[test]
-    fn composite_requirement_source_display_lists_sources_in_priority_order() {
-        let source = RequirementSource::composite([
-            RequirementSource::MdmManagedPreferences {
-                domain: "com.openai.codex".to_string(),
-                key: "requirements_toml_base64".to_string(),
-            },
-            RequirementSource::LegacyManagedConfigTomlFromMdm,
-        ]);
-
-        assert_eq!(
-            source.to_string(),
-            "requirements layers: MDM com.openai.codex:requirements_toml_base64, MDM managed_config.toml (legacy)"
-        );
-    }
-
     fn with_unknown_source(toml: ConfigRequirementsToml) -> ConfigRequirementsWithSources {
         let ConfigRequirementsToml {
             allowed_approval_policies,
             allowed_approvals_reviewers,
             allowed_sandbox_modes,
-            allowed_permissions,
+            allowed_permission_profiles,
+            default_permissions,
             remote_sandbox_config: _,
             allowed_web_search_modes,
             allow_managed_hooks_only,
@@ -1556,7 +1545,9 @@ mod tests {
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
             allowed_sandbox_modes: allowed_sandbox_modes
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
-            allowed_permissions: allowed_permissions
+            allowed_permission_profiles: allowed_permission_profiles
+                .map(|value| Sourced::new(value, RequirementSource::Unknown)),
+            default_permissions: default_permissions
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
             allowed_web_search_modes: allowed_web_search_modes
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
@@ -1612,7 +1603,11 @@ mod tests {
     fn deserialize_managed_permission_profiles() -> Result<()> {
         let requirements: ConfigRequirementsToml = from_str(
             r#"
-                allowed_permissions = ["managed-standard", "managed-build"]
+                default_permissions = "managed-standard"
+
+                [allowed_permission_profiles]
+                managed-standard = true
+                managed-build = true
 
                 [permissions.managed-standard]
                 extends = ":workspace"
@@ -1623,11 +1618,15 @@ mod tests {
         )?;
 
         assert_eq!(
-            requirements.allowed_permissions,
-            Some(vec![
-                "managed-standard".to_string(),
-                "managed-build".to_string(),
-            ])
+            requirements.allowed_permission_profiles,
+            Some(BTreeMap::from([
+                ("managed-build".to_string(), true),
+                ("managed-standard".to_string(), true),
+            ]))
+        );
+        assert_eq!(
+            requirements.default_permissions,
+            Some("managed-standard".to_string())
         );
         let permissions = requirements
             .permissions
@@ -1740,7 +1739,8 @@ mod tests {
             allowed_approval_policies: Some(allowed_approval_policies.clone()),
             allowed_approvals_reviewers: Some(allowed_approvals_reviewers.clone()),
             allowed_sandbox_modes: Some(allowed_sandbox_modes.clone()),
-            allowed_permissions: Some(vec!["managed".to_string()]),
+            allowed_permission_profiles: Some(BTreeMap::from([("managed".to_string(), true)])),
+            default_permissions: Some("managed".to_string()),
             remote_sandbox_config: None,
             allowed_web_search_modes: Some(allowed_web_search_modes.clone()),
             allow_managed_hooks_only: Some(true),
@@ -1773,10 +1773,11 @@ mod tests {
                     source.clone(),
                 )),
                 allowed_sandbox_modes: Some(Sourced::new(allowed_sandbox_modes, source.clone(),)),
-                allowed_permissions: Some(Sourced::new(
-                    vec!["managed".to_string()],
+                allowed_permission_profiles: Some(Sourced::new(
+                    BTreeMap::from([("managed".to_string(), true)]),
                     source.clone(),
                 )),
+                default_permissions: Some(Sourced::new("managed".to_string(), source.clone(),)),
                 allowed_web_search_modes: Some(Sourced::new(
                     allowed_web_search_modes,
                     enforce_source.clone(),
@@ -1829,7 +1830,8 @@ mod tests {
                 )),
                 allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
-                allowed_permissions: None,
+                allowed_permission_profiles: None,
+                default_permissions: None,
                 allowed_web_search_modes: None,
                 allow_managed_hooks_only: None,
                 allow_appshots: None,
@@ -1881,7 +1883,8 @@ mod tests {
                 )),
                 allowed_approvals_reviewers: None,
                 allowed_sandbox_modes: None,
-                allowed_permissions: None,
+                allowed_permission_profiles: None,
+                default_permissions: None,
                 allowed_web_search_modes: None,
                 allow_managed_hooks_only: None,
                 allow_appshots: None,
@@ -1906,7 +1909,7 @@ mod tests {
     fn merge_unset_fields_ignores_blank_guardian_override() {
         let mut target = ConfigRequirementsWithSources::default();
         target.merge_unset_fields(
-            RequirementSource::CloudRequirements,
+            RequirementSource::LegacyManagedConfigTomlFromMdm,
             ConfigRequirementsToml {
                 guardian_policy_config: Some("   \n\t".to_string()),
                 ..Default::default()
@@ -2252,8 +2255,11 @@ allowed_approvals_reviewers = ["user"]
 
     #[test]
     fn merge_unset_fields_merges_apps_across_sources_with_enabled_evaluation() {
-        let higher_source = RequirementSource::CloudRequirements;
-        let lower_source = RequirementSource::LegacyManagedConfigTomlFromMdm;
+        let higher_source = RequirementSource::LegacyManagedConfigTomlFromMdm;
+        let lower_source = RequirementSource::MdmManagedPreferences {
+            domain: "com.openai.codex".to_string(),
+            key: "requirements_toml_base64".to_string(),
+        };
         let mut target = ConfigRequirementsWithSources::default();
 
         target.merge_unset_fields(
@@ -2294,7 +2300,7 @@ allowed_approvals_reviewers = ["user"]
         let mut target = ConfigRequirementsWithSources::default();
 
         target.merge_unset_fields(
-            RequirementSource::CloudRequirements,
+            RequirementSource::LegacyManagedConfigTomlFromMdm,
             ConfigRequirementsToml {
                 apps: Some(apps_requirements(&[])),
                 ..Default::default()
@@ -2415,7 +2421,7 @@ allowed_approvals_reviewers = ["user"]
             "#,
         )?;
 
-        let source_location = RequirementSource::CloudRequirements;
+        let source_location = RequirementSource::LegacyManagedConfigTomlFromMdm;
         let mut target = ConfigRequirementsWithSources::default();
         target.merge_unset_fields(source_location.clone(), source);
         let requirements = ConfigRequirements::try_from(target)?;
@@ -2725,7 +2731,7 @@ allowed_approvals_reviewers = ["user"]
 
     #[test]
     fn remote_sandbox_config_first_match_overrides_top_level() -> Result<()> {
-        let source = RequirementSource::CloudRequirements;
+        let source = RequirementSource::LegacyManagedConfigTomlFromMdm;
         let mut requirements_toml: ConfigRequirementsToml = from_str(
             r#"
                 allowed_sandbox_modes = ["read-only"]
@@ -2816,7 +2822,7 @@ allowed_approvals_reviewers = ["user"]
 
     #[test]
     fn remote_sandbox_config_does_not_override_higher_precedence_sandbox_modes() -> Result<()> {
-        let high_source = RequirementSource::CloudRequirements;
+        let high_source = RequirementSource::LegacyManagedConfigTomlFromMdm;
         let mut high_precedence: ConfigRequirementsToml = from_str(
             r#"
                 allowed_sandbox_modes = ["read-only"]
@@ -3003,7 +3009,7 @@ statusMessage = "checking"
     fn merge_unset_fields_does_not_overwrite_existing_hooks() -> Result<()> {
         let mut target = ConfigRequirementsWithSources::default();
         target.merge_unset_fields(
-            RequirementSource::CloudRequirements,
+            RequirementSource::LegacyManagedConfigTomlFromMdm,
             from_str::<ConfigRequirementsToml>(
                 r#"
 [hooks]
@@ -3047,7 +3053,7 @@ command = "python3 /system/hooks/pre.py"
         );
         assert_eq!(
             target.hooks.as_ref().map(|hooks| hooks.source.clone()),
-            Some(RequirementSource::CloudRequirements)
+            Some(RequirementSource::LegacyManagedConfigTomlFromMdm)
         );
         Ok(())
     }
@@ -3111,7 +3117,7 @@ command = "python3 /enterprise/hooks/pre.py"
             "/tmp/blocked.sock" = "deny"
         "#;
 
-        let source = RequirementSource::CloudRequirements;
+        let source = RequirementSource::LegacyManagedConfigTomlFromMdm;
         let mut requirements_with_sources = ConfigRequirementsWithSources::default();
         requirements_with_sources.merge_unset_fields(source.clone(), from_str(toml_str)?);
 
@@ -3184,7 +3190,7 @@ command = "python3 /enterprise/hooks/pre.py"
             allow_local_binding = false
         "#;
 
-        let source = RequirementSource::CloudRequirements;
+        let source = RequirementSource::LegacyManagedConfigTomlFromMdm;
         let mut requirements_with_sources = ConfigRequirementsWithSources::default();
         requirements_with_sources.merge_unset_fields(source.clone(), from_str(toml_str)?);
 

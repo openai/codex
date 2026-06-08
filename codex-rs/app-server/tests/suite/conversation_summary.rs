@@ -1,5 +1,5 @@
 use anyhow::Result;
-use app_test_support::McpProcess;
+use app_test_support::TestAppServer;
 use app_test_support::create_fake_rollout;
 use app_test_support::rollout_path;
 use app_test_support::to_response;
@@ -15,7 +15,7 @@ use codex_app_server_protocol::InitializeParams;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_arg0::Arg0DispatchPaths;
-use codex_config::CloudRequirementsLoader;
+use codex_config::CloudConfigBundleLoader;
 use codex_config::LoaderOverrides;
 use codex_core::config::ConfigBuilder;
 use codex_exec_server::EnvironmentManager;
@@ -26,7 +26,6 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::ThreadMemoryMode;
 use codex_thread_store::CreateThreadParams;
 use codex_thread_store::InMemoryThreadStore;
-use codex_thread_store::ThreadEventPersistenceMode;
 use codex_thread_store::ThreadPersistenceMetadata;
 use codex_thread_store::ThreadStore;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -93,7 +92,7 @@ async fn get_conversation_summary_by_thread_id_reads_rollout() -> Result<()> {
         ))?,
     );
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp
@@ -129,12 +128,12 @@ async fn get_conversation_summary_by_thread_id_reads_pathless_store_thread() -> 
             thread_source: None,
             base_instructions: BaseInstructions::default(),
             dynamic_tools: Vec::new(),
+            multi_agent_version: None,
             metadata: ThreadPersistenceMetadata {
                 cwd: None,
                 model_provider: "test-provider".to_string(),
                 memory_mode: ThreadMemoryMode::Disabled,
             },
-            event_persistence_mode: ThreadEventPersistenceMode::default(),
         })
         .await?;
 
@@ -151,7 +150,7 @@ async fn get_conversation_summary_by_thread_id_reads_pathless_store_thread() -> 
         cli_overrides: Vec::new(),
         loader_overrides,
         strict_config: false,
-        cloud_requirements: CloudRequirementsLoader::default(),
+        cloud_config_bundle: CloudConfigBundleLoader::default(),
         thread_config_loader: Arc::new(codex_config::NoopThreadConfigLoader),
         feedback: CodexFeedback::new(),
         log_db: None,
@@ -212,7 +211,7 @@ async fn get_conversation_summary_by_relative_rollout_path_resolves_from_codex_h
     let relative_path = rollout_path.strip_prefix(codex_home.path())?.to_path_buf();
     let expected = expected_summary(thread_id, normalized_canonical_path(rollout_path)?);
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let request_id = mcp

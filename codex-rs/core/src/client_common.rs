@@ -3,6 +3,7 @@ use codex_config::types::Personality;
 use codex_protocol::error::Result;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::InterAgentCommunication;
 use codex_tools::ToolSpec;
 use futures::Stream;
 use serde_json::Value;
@@ -11,14 +12,6 @@ use std::task::Context;
 use std::task::Poll;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
-
-/// Review thread system prompt. Edit `core/src/review_prompt.md` to customize.
-pub const REVIEW_PROMPT: &str = include_str!("../review_prompt.md");
-
-// Centralized templates for review-related user messages
-pub const REVIEW_EXIT_SUCCESS_TMPL: &str = include_str!("../templates/review/exit_success.xml");
-pub const REVIEW_EXIT_INTERRUPTED_TMPL: &str =
-    include_str!("../templates/review/exit_interrupted.xml");
 
 /// API request payload for a single model turn
 #[derive(Debug, Clone)]
@@ -61,7 +54,22 @@ impl Default for Prompt {
 
 impl Prompt {
     pub(crate) fn get_formatted_input(&self) -> Vec<ResponseItem> {
-        self.input.clone()
+        self.input
+            .iter()
+            .cloned()
+            .map(|item| {
+                let ResponseItem::Message { role, content, .. } = &item else {
+                    return item;
+                };
+                if role != "assistant" {
+                    return item;
+                }
+                InterAgentCommunication::from_message_content(content)
+                    .filter(|communication| communication.encrypted_content.is_some())
+                    .map(|communication| communication.to_model_input_item())
+                    .unwrap_or(item)
+            })
+            .collect()
     }
 }
 

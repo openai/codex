@@ -1,6 +1,4 @@
-use super::merge_requirements_with_remote_sandbox_config;
-use crate::config_requirements::ConfigRequirementsToml;
-use crate::config_requirements::ConfigRequirementsWithSources;
+use crate::RequirementsLayerEntry;
 use crate::config_requirements::RequirementSource;
 use crate::config_toml::ConfigToml;
 use crate::diagnostics::ConfigDiagnosticSource;
@@ -75,35 +73,27 @@ fn load_managed_admin_config(
         .transpose()
 }
 
-pub(crate) async fn load_managed_admin_requirements_toml(
-    target: &mut ConfigRequirementsWithSources,
+pub(crate) async fn load_managed_admin_requirements_layer(
     override_base64: Option<&str>,
-) -> io::Result<()> {
+) -> io::Result<Option<RequirementsLayerEntry>> {
     if let Some(encoded) = override_base64 {
         let trimmed = encoded.trim();
         if trimmed.is_empty() {
-            return Ok(());
+            return Ok(None);
         }
 
-        merge_requirements_with_remote_sandbox_config(
-            target,
-            managed_preferences_requirements_source(),
-            parse_managed_requirements_base64(trimmed)?,
-        );
-        return Ok(());
+        return parse_managed_requirements_base64(trimmed).map(|contents| {
+            Some(RequirementsLayerEntry::from_toml(
+                managed_preferences_requirements_source(),
+                contents,
+            ))
+        });
     }
 
     match task::spawn_blocking(load_managed_admin_requirements).await {
-        Ok(result) => {
-            if let Some(requirements) = result? {
-                merge_requirements_with_remote_sandbox_config(
-                    target,
-                    managed_preferences_requirements_source(),
-                    requirements,
-                );
-            }
-            Ok(())
-        }
+        Ok(result) => Ok(result?.map(|contents| {
+            RequirementsLayerEntry::from_toml(managed_preferences_requirements_source(), contents)
+        })),
         Err(join_err) => {
             if join_err.is_cancelled() {
                 tracing::error!("Managed requirements load task was cancelled");
@@ -115,7 +105,7 @@ pub(crate) async fn load_managed_admin_requirements_toml(
     }
 }
 
-fn load_managed_admin_requirements() -> io::Result<Option<ConfigRequirementsToml>> {
+fn load_managed_admin_requirements() -> io::Result<Option<String>> {
     load_managed_preference(MANAGED_PREFERENCES_REQUIREMENTS_KEY)?
         .as_deref()
         .map(str::trim)
@@ -217,13 +207,8 @@ fn validate_managed_config_toml_strictly_if_requested(
     }
 }
 
-fn parse_managed_requirements_base64(encoded: &str) -> io::Result<ConfigRequirementsToml> {
-    toml::from_str::<ConfigRequirementsToml>(&decode_managed_preferences_base64(encoded)?).map_err(
-        |err| {
-            tracing::error!("Failed to parse managed requirements TOML: {err}");
-            io::Error::new(io::ErrorKind::InvalidData, err)
-        },
-    )
+fn parse_managed_requirements_base64(encoded: &str) -> io::Result<String> {
+    decode_managed_preferences_base64(encoded)
 }
 
 fn decode_managed_preferences_base64(encoded: &str) -> io::Result<String> {

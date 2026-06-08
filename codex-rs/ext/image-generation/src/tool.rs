@@ -3,6 +3,9 @@ use codex_api::ImageEditRequest;
 use codex_api::ImageGenerationRequest;
 use codex_api::ImageQuality;
 use codex_api::ImageUrl;
+use codex_core::context::extension_image_generation_output_hint;
+use codex_core::image_generation_artifact_path;
+use codex_extension_api::ExtensionTurnItem;
 use codex_extension_api::FunctionCallError;
 use codex_extension_api::ToolCall;
 use codex_extension_api::ToolExecutor;
@@ -11,6 +14,7 @@ use codex_extension_api::ToolOutput;
 use codex_extension_api::ToolPayload;
 use codex_extension_api::ToolSpec;
 use codex_extension_api::parse_tool_input_schema;
+use codex_protocol::items::ImageGenerationItem;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::DEFAULT_IMAGE_DETAIL;
 use codex_protocol::models::FunctionCallOutputBody;
@@ -23,6 +27,7 @@ use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::ResponsesApiTool;
 use codex_tools::ToolExposure;
 use codex_tools::default_namespace_description;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use schemars::JsonSchema;
 use schemars::r#gen::SchemaSettings;
 use serde::Deserialize;
@@ -40,12 +45,22 @@ const IMAGEGEN_DESCRIPTION: &str = include_str!("../imagegen_description.md");
 #[derive(Clone)]
 pub(crate) struct ImageGenerationTool {
     backend: CodexImagesBackend,
+    codex_home: AbsolutePathBuf,
+    thread_id: String,
 }
 
 impl ImageGenerationTool {
     /// Creates an image-generation tool backed by an image API executor.
-    pub(crate) fn new(backend: CodexImagesBackend) -> Self {
-        Self { backend }
+    pub(crate) fn new(
+        backend: CodexImagesBackend,
+        codex_home: AbsolutePathBuf,
+        thread_id: String,
+    ) -> Self {
+        Self {
+            backend,
+            codex_home,
+            thread_id,
+        }
     }
 }
 
@@ -75,15 +90,24 @@ impl ToolExecutor<ToolCall> for ImageGenerationTool {
         imagegen_tool_spec()
     }
 
-    /// Keeps this model-facing tool out of the nested code-mode tool surface.
+    /// Exposes image generation directly and through the nested code-mode tool surface.
     fn exposure(&self) -> ToolExposure {
-        ToolExposure::DirectModelOnly
+        ToolExposure::Direct
     }
 
     /// Executes the selected image operation and returns the completed image result.
     async fn handle(&self, call: ToolCall) -> Result<Box<dyn ToolOutput>, FunctionCallError> {
         let args = parse_args(&call)?;
         let request = request_for_action(&args, call.conversation_history.items())?;
+        call.turn_item_emitter
+            .emit_started(ExtensionTurnItem::ImageGeneration(ImageGenerationItem {
+                id: call.call_id.clone(),
+                status: "in_progress".to_string(),
+                revised_prompt: None,
+                result: String::new(),
+                saved_path: None,
+            }))
+            .await;
         let response = match request {
             ImageRequest::Generate(request) => self.backend.generate(request).await,
             ImageRequest::Edit(request) => self.backend.edit(request).await,
@@ -96,10 +120,22 @@ impl ToolExecutor<ToolCall> for ImageGenerationTool {
                 "image generation returned no image data".to_string(),
             ));
         };
-        let output_hint = call
-            .turn_item_emitter
-            .image_generation_completed(call.call_id.clone(), args.prompt, result.clone())
+        call.turn_item_emitter
+            .emit_completed(ExtensionTurnItem::ImageGeneration(ImageGenerationItem {
+                id: call.call_id.clone(),
+                status: "completed".to_string(),
+                revised_prompt: Some(args.prompt),
+                result: result.clone(),
+                saved_path: None,
+            }))
             .await;
+        let output_path =
+            image_generation_artifact_path(&self.codex_home, &self.thread_id, &call.call_id);
+        let output_dir = output_path
+            .parent()
+            .unwrap_or_else(|| self.codex_home.clone());
+        let output_hint =
+            extension_image_generation_output_hint(output_dir.display(), output_path.display());
         Ok(Box::new(GeneratedImageOutput {
             result,
             output_hint,
@@ -206,6 +242,7 @@ fn edit_images(history: &[ResponseItem]) -> Vec<ImageUrl> {
                 ));
             }
             ResponseItem::Message { .. }
+            | ResponseItem::AgentMessage { .. }
             | ResponseItem::Reasoning { .. }
             | ResponseItem::LocalShellCall { .. }
             | ResponseItem::FunctionCall { .. }
@@ -296,6 +333,21 @@ impl ToolOutput for GeneratedImageOutput {
     /// Reports a completed images request as successful tool execution.
     fn success_for_logging(&self) -> bool {
         true
+    }
+
+    /// Returns the object consumed by the code-mode `generatedImage()` helper.
+    fn code_mode_result(&self, _payload: &ToolPayload) -> Value {
+        let mut result = Map::from_iter([(
+            "image_url".to_string(),
+            Value::String(format!("data:image/png;base64,{}", self.result)),
+        )]);
+        if let Some(output_hint) = &self.output_hint {
+            result.insert(
+                "output_hint".to_string(),
+                Value::String(output_hint.clone()),
+            );
+        }
+        Value::Object(result)
     }
 
     /// Returns generated bytes and persisted-artifact context for model follow-up.

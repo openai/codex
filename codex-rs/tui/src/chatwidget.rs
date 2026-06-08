@@ -864,6 +864,7 @@ fn request_permissions_from_params(
     RequestPermissionsEvent {
         turn_id: params.turn_id,
         call_id: params.item_id,
+        environment_id: params.environment_id,
         started_at_ms: params.started_at_ms,
         reason: params.reason,
         permissions: params.permissions.into(),

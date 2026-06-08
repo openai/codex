@@ -70,6 +70,10 @@ use crate::facts::PluginUsedInput;
 use crate::facts::SkillInvokedInput;
 use crate::facts::SubAgentThreadStartedInput;
 use crate::facts::ThreadInitializationMode;
+use crate::facts::TurnCodexError;
+use crate::facts::TurnCodexErrorFact;
+use crate::facts::TurnProfile;
+use crate::facts::TurnProfileFact;
 use crate::facts::TurnResolvedConfigFact;
 use crate::facts::TurnStatus;
 use crate::facts::TurnSteerRejectionReason;
@@ -314,6 +318,7 @@ struct CompletedTurnState {
     duration_ms: Option<u64>,
 }
 
+#[derive(Default)]
 struct TurnState {
     connection_id: Option<u64>,
     thread_id: Option<String>,
@@ -321,7 +326,9 @@ struct TurnState {
     resolved_config: Option<TurnResolvedConfigFact>,
     started_at: Option<u64>,
     token_usage: Option<TokenUsage>,
+    profile: Option<TurnProfile>,
     completed: Option<CompletedTurnState>,
+    codex_error: Option<TurnCodexError>,
     latest_diff: Option<String>,
     steer_count: usize,
     tool_counts: TurnToolCounts,
@@ -461,6 +468,12 @@ impl AnalyticsReducer {
                 CustomAnalyticsFact::TurnTokenUsage(input) => {
                     self.ingest_turn_token_usage(*input, out).await;
                 }
+                CustomAnalyticsFact::TurnProfile(input) => {
+                    self.ingest_turn_profile(*input, out).await;
+                }
+                CustomAnalyticsFact::TurnCodexError(input) => {
+                    self.ingest_turn_codex_error(*input);
+                }
                 CustomAnalyticsFact::SkillInvoked(input) => {
                     self.ingest_skill_invoked(input, out).await;
                 }
@@ -598,18 +611,7 @@ impl AnalyticsReducer {
         let turn_id = input.turn_id.clone();
         let thread_id = input.thread_id.clone();
         let num_input_images = input.num_input_images;
-        let turn_state = self.turns.entry(turn_id.clone()).or_insert(TurnState {
-            connection_id: None,
-            thread_id: None,
-            num_input_images: None,
-            resolved_config: None,
-            started_at: None,
-            token_usage: None,
-            completed: None,
-            latest_diff: None,
-            steer_count: 0,
-            tool_counts: TurnToolCounts::default(),
-        });
+        let turn_state = self.turns.entry(turn_id.clone()).or_default();
         turn_state.thread_id = Some(thread_id);
         turn_state.num_input_images = Some(num_input_images);
         turn_state.resolved_config = Some(input);
@@ -622,21 +624,32 @@ impl AnalyticsReducer {
         out: &mut Vec<TrackEventRequest>,
     ) {
         let turn_id = input.turn_id.clone();
-        let turn_state = self.turns.entry(turn_id.clone()).or_insert(TurnState {
-            connection_id: None,
-            thread_id: None,
-            num_input_images: None,
-            resolved_config: None,
-            started_at: None,
-            token_usage: None,
-            completed: None,
-            latest_diff: None,
-            steer_count: 0,
-            tool_counts: TurnToolCounts::default(),
-        });
+        let turn_state = self.turns.entry(turn_id.clone()).or_default();
         turn_state.thread_id = Some(input.thread_id);
         turn_state.token_usage = Some(input.token_usage);
         self.maybe_emit_turn_event(&turn_id, out).await;
+    }
+
+    async fn ingest_turn_profile(
+        &mut self,
+        input: TurnProfileFact,
+        out: &mut Vec<TrackEventRequest>,
+    ) {
+        let TurnProfileFact { turn_id, profile } = input;
+        let turn_state = self.turns.entry(turn_id.clone()).or_default();
+        turn_state.profile = Some(profile);
+        self.maybe_emit_turn_event(&turn_id, out).await;
+    }
+
+    fn ingest_turn_codex_error(&mut self, input: TurnCodexErrorFact) {
+        let TurnCodexErrorFact {
+            turn_id,
+            thread_id,
+            error,
+        } = input;
+        let turn_state = self.turns.entry(turn_id).or_default();
+        turn_state.thread_id.get_or_insert(thread_id);
+        turn_state.codex_error = Some(error);
     }
 
     async fn ingest_skill_invoked(
@@ -787,18 +800,7 @@ impl AnalyticsReducer {
                 else {
                     return;
                 };
-                let turn_state = self.turns.entry(turn_id.clone()).or_insert(TurnState {
-                    connection_id: None,
-                    thread_id: None,
-                    num_input_images: None,
-                    resolved_config: None,
-                    started_at: None,
-                    token_usage: None,
-                    completed: None,
-                    latest_diff: None,
-                    steer_count: 0,
-                    tool_counts: TurnToolCounts::default(),
-                });
+                let turn_state = self.turns.entry(turn_id.clone()).or_default();
                 turn_state.connection_id = Some(connection_id);
                 turn_state.thread_id = Some(pending_request.thread_id);
                 turn_state.num_input_images = Some(pending_request.num_input_images);
@@ -1146,58 +1148,19 @@ impl AnalyticsReducer {
                 self.ingest_guardian_review_completed(notification, out);
             }
             ServerNotification::TurnStarted(notification) => {
-                let turn_state = self.turns.entry(notification.turn.id).or_insert(TurnState {
-                    connection_id: None,
-                    thread_id: None,
-                    num_input_images: None,
-                    resolved_config: None,
-                    started_at: None,
-                    token_usage: None,
-                    completed: None,
-                    latest_diff: None,
-                    steer_count: 0,
-                    tool_counts: TurnToolCounts::default(),
-                });
+                let turn_state = self.turns.entry(notification.turn.id).or_default();
                 turn_state.started_at = notification
                     .turn
                     .started_at
                     .and_then(|started_at| u64::try_from(started_at).ok());
             }
             ServerNotification::TurnDiffUpdated(notification) => {
-                let turn_state =
-                    self.turns
-                        .entry(notification.turn_id.clone())
-                        .or_insert(TurnState {
-                            connection_id: None,
-                            thread_id: None,
-                            num_input_images: None,
-                            resolved_config: None,
-                            started_at: None,
-                            token_usage: None,
-                            completed: None,
-                            latest_diff: None,
-                            steer_count: 0,
-                            tool_counts: TurnToolCounts::default(),
-                        });
+                let turn_state = self.turns.entry(notification.turn_id.clone()).or_default();
                 turn_state.thread_id = Some(notification.thread_id);
                 turn_state.latest_diff = Some(notification.diff);
             }
             ServerNotification::TurnCompleted(notification) => {
-                let turn_state =
-                    self.turns
-                        .entry(notification.turn.id.clone())
-                        .or_insert(TurnState {
-                            connection_id: None,
-                            thread_id: None,
-                            num_input_images: None,
-                            resolved_config: None,
-                            started_at: None,
-                            token_usage: None,
-                            completed: None,
-                            latest_diff: None,
-                            steer_count: 0,
-                            tool_counts: TurnToolCounts::default(),
-                        });
+                let turn_state = self.turns.entry(notification.turn.id.clone()).or_default();
                 turn_state.completed = Some(CompletedTurnState {
                     status: analytics_turn_status(notification.turn.status),
                     turn_error: notification
@@ -1233,6 +1196,7 @@ impl AnalyticsReducer {
         let session_id = thread.session_id;
         let thread_id = thread.id;
         let parent_thread_id = thread.parent_thread_id;
+        let forked_from_thread_id = thread.forked_from_id;
         let Some(connection_state) = self.connections.get(&connection_id) else {
             return;
         };
@@ -1264,6 +1228,7 @@ impl AnalyticsReducer {
                     initialization_mode,
                     subagent_source: thread_metadata.subagent_source.clone(),
                     parent_thread_id: thread_metadata.parent_thread_id,
+                    forked_from_thread_id,
                     created_at: u64::try_from(thread.created_at).unwrap_or_default(),
                 },
             },
@@ -1474,6 +1439,7 @@ impl AnalyticsReducer {
         if turn_state.thread_id.is_none()
             || turn_state.num_input_images.is_none()
             || turn_state.resolved_config.is_none()
+            || turn_state.profile.is_none()
             || turn_state.completed.is_none()
         {
             return;
@@ -2420,12 +2386,20 @@ fn codex_turn_event_params(
     turn_state: &TurnState,
     thread_metadata: &ThreadMetadataState,
 ) -> CodexTurnEventParams {
-    let (Some(thread_id), Some(num_input_images), Some(resolved_config), Some(completed)) = (
+    let (
+        Some(thread_id),
+        Some(num_input_images),
+        Some(resolved_config),
+        Some(profile),
+        Some(completed),
+    ) = (
         turn_state.thread_id.clone(),
         turn_state.num_input_images,
         turn_state.resolved_config.clone(),
+        turn_state.profile.clone(),
         turn_state.completed.clone(),
-    ) else {
+    )
+    else {
         unreachable!("turn event params require a fully populated turn state");
     };
     let started_at = turn_state.started_at;
@@ -2448,9 +2422,20 @@ fn codex_turn_event_params(
         sandbox_network_access,
         collaboration_mode,
         personality,
+        workspace_kind,
         is_first_turn,
     } = resolved_config;
+    let TurnProfile {
+        before_first_sampling_ms,
+        sampling_ms,
+        between_sampling_overhead_ms,
+        tool_blocking_ms,
+        after_last_sampling_ms,
+        sampling_request_count,
+        sampling_retry_count,
+    } = profile;
     let token_usage = turn_state.token_usage.clone();
+    let codex_error = turn_state.codex_error.as_ref();
     CodexTurnEventParams {
         thread_id,
         session_id: thread_metadata.session_id.clone(),
@@ -2479,10 +2464,14 @@ fn codex_turn_event_params(
         sandbox_network_access,
         collaboration_mode: Some(collaboration_mode_mode(collaboration_mode)),
         personality: personality_mode(personality),
+        workspace_kind,
         num_input_images,
         is_first_turn,
         status: completed.status,
         turn_error: completed.turn_error,
+        codex_error_kind: codex_error.map(|error| error.kind),
+        codex_error_subreason: codex_error.and_then(|error| error.subreason.clone()),
+        codex_error_http_status_code: codex_error.and_then(|error| error.http_status_code),
         steer_count: Some(turn_state.steer_count),
         total_tool_call_count: Some(turn_state.tool_counts.total),
         shell_command_count: Some(turn_state.tool_counts.shell_command),
@@ -2507,6 +2496,13 @@ fn codex_turn_event_params(
         total_tokens: token_usage
             .as_ref()
             .map(|token_usage| token_usage.total_tokens),
+        before_first_sampling_ms,
+        sampling_ms,
+        between_sampling_overhead_ms,
+        tool_blocking_ms,
+        after_last_sampling_ms,
+        sampling_request_count,
+        sampling_retry_count,
         duration_ms: completed.duration_ms,
         started_at,
         completed_at: Some(completed.completed_at),

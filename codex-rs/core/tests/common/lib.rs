@@ -8,10 +8,9 @@ use ctor::ctor;
 use std::sync::OnceLock;
 use tempfile::TempDir;
 
-use codex_config::CloudRequirementsLoader;
-use codex_config::ConfigRequirementsToml;
+use codex_config::CloudConfigBundleLoader;
 use codex_config::LoaderOverrides;
-use codex_config::NetworkRequirementsToml;
+use codex_config::test_support::CloudConfigBundleFixture;
 use codex_core::CodexThread;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
@@ -20,6 +19,7 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 pub use codex_utils_absolute_path::test_support::PathBufExt;
 pub use codex_utils_absolute_path::test_support::PathExt;
 use regex_lite::Regex;
+use std::path::Path;
 use std::path::PathBuf;
 
 pub mod apps_test_server;
@@ -111,6 +111,20 @@ pub fn test_absolute_path(unix_path: &str) -> AbsolutePathBuf {
     test_absolute_path_with_windows(unix_path, /*windows_path*/ None)
 }
 
+#[cfg(unix)]
+#[allow(clippy::expect_used)]
+pub fn create_directory_symlink(source: &Path, link: &Path) {
+    std::os::unix::fs::symlink(source, link).expect("create directory symlink");
+}
+
+#[cfg(windows)]
+#[allow(clippy::expect_used)]
+pub fn create_directory_symlink(source: &Path, link: &Path) {
+    // Running this test locally may require Windows Developer Mode or an elevated process.
+    std::os::windows::fs::symlink_dir(source, link)
+        .expect("create directory symlink; enable Developer Mode or run the test elevated");
+}
+
 pub trait TempDirExt {
     fn abs(&self) -> AbsolutePathBuf;
 }
@@ -169,40 +183,37 @@ pub fn fetch_dotslash_file(
 /// temporary directory. Using a per-test directory keeps tests hermetic and
 /// avoids clobbering a developer’s real `~/.codex`.
 pub async fn load_default_config_for_test(codex_home: &TempDir) -> Config {
-    load_default_config_for_test_with_cloud_requirements(
+    load_default_config_for_test_with_cloud_config_bundle(
         codex_home,
-        CloudRequirementsLoader::default(),
+        CloudConfigBundleLoader::default(),
     )
     .await
 }
 
-/// Returns a default `Config` with test-provided cloud requirements applied
+/// Returns a default `Config` with test-provided cloud bundle requirements applied.
 /// during config construction.
-pub async fn load_default_config_for_test_with_cloud_requirements(
+pub async fn load_default_config_for_test_with_cloud_config_bundle(
     codex_home: &TempDir,
-    cloud_requirements: CloudRequirementsLoader,
+    cloud_config_bundle: CloudConfigBundleLoader,
 ) -> Config {
     ConfigBuilder::default()
         .loader_overrides(LoaderOverrides::without_managed_config_for_tests())
         .codex_home(codex_home.path().to_path_buf())
         .harness_overrides(default_test_overrides())
-        .cloud_requirements(cloud_requirements)
+        .cloud_config_bundle(cloud_config_bundle)
         .build()
         .await
         .expect("defaults for test should always succeed")
 }
 
-pub fn managed_network_requirements_loader() -> CloudRequirementsLoader {
-    CloudRequirementsLoader::new(async {
-        Ok(Some(ConfigRequirementsToml {
-            network: Some(NetworkRequirementsToml {
-                enabled: Some(true),
-                allow_local_binding: Some(true),
-                ..Default::default()
-            }),
-            ..Default::default()
-        }))
-    })
+pub fn managed_network_requirements_loader() -> CloudConfigBundleLoader {
+    CloudConfigBundleFixture::loader_with_enterprise_requirement(
+        r#"
+[experimental_network]
+enabled = true
+allow_local_binding = true
+"#,
+    )
 }
 
 #[cfg(target_os = "linux")]

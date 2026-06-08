@@ -44,8 +44,8 @@ use tracing::error;
 
 use codex_model_provider_info::ModelProviderInfo;
 
-pub const SUMMARIZATION_PROMPT: &str = include_str!("../templates/compact/prompt.md");
-pub const SUMMARY_PREFIX: &str = include_str!("../templates/compact/summary_prefix.md");
+pub use codex_prompts::SUMMARIZATION_PROMPT;
+pub use codex_prompts::SUMMARY_PREFIX;
 const COMPACT_USER_MESSAGE_MAX_TOKENS: usize = 20_000;
 
 /// Controls whether compaction replacement history must include initial context.
@@ -146,7 +146,12 @@ async fn run_compact_task_inner(
         PreCompactHookOutcome::Stopped { reason } => {
             let error = reason.unwrap_or_else(|| "PreCompact hook stopped execution".to_string());
             attempt
-                .track(sess.as_ref(), CompactionStatus::Interrupted, Some(error))
+                .track(
+                    sess.as_ref(),
+                    CompactionStatus::Interrupted,
+                    Some(error),
+                    CompactionAnalyticsDetails::default(),
+                )
                 .await;
             return Err(CodexErr::TurnAborted);
         }
@@ -164,11 +169,25 @@ async fn run_compact_task_inner(
     if result.is_ok() {
         let post_compact_outcome = run_post_compact_hooks(&sess, &turn_context, trigger).await;
         if let PostCompactHookOutcome::Stopped = post_compact_outcome {
-            attempt.track(sess.as_ref(), status, error).await;
+            attempt
+                .track(
+                    sess.as_ref(),
+                    status,
+                    error,
+                    CompactionAnalyticsDetails::default(),
+                )
+                .await;
             return Err(CodexErr::TurnAborted);
         }
     }
-    attempt.track(sess.as_ref(), status, error).await;
+    attempt
+        .track(
+            sess.as_ref(),
+            status,
+            error,
+            CompactionAnalyticsDetails::default(),
+        )
+        .await;
     result.map(|_| ())
 }
 
@@ -240,6 +259,7 @@ async fn run_compact_task_inner_impl(
                     continue;
                 }
                 sess.set_total_tokens_full(turn_context.as_ref()).await;
+                sess.track_turn_codex_error(turn_context.as_ref(), &e);
                 let event = EventMsg::Error(e.to_error_event(/*message_prefix*/ None));
                 sess.send_event(&turn_context, event).await;
                 return Err(e);
@@ -257,6 +277,7 @@ async fn run_compact_task_inner_impl(
                     tokio::time::sleep(delay).await;
                     continue;
                 } else {
+                    sess.track_turn_codex_error(turn_context.as_ref(), &e);
                     let event = EventMsg::Error(e.to_error_event(/*message_prefix*/ None));
                     sess.send_event(&turn_context, event).await;
                     return Err(e);
@@ -314,6 +335,13 @@ pub(crate) struct CompactionAnalyticsAttempt {
     start_instant: Instant,
 }
 
+#[derive(Clone, Copy, Default)]
+pub(crate) struct CompactionAnalyticsDetails {
+    pub(crate) active_context_tokens_before: Option<i64>,
+    pub(crate) retained_image_count: Option<usize>,
+    pub(crate) compaction_summary_tokens: Option<i64>,
+}
+
 impl CompactionAnalyticsAttempt {
     pub(crate) async fn begin(
         sess: &Session,
@@ -325,7 +353,7 @@ impl CompactionAnalyticsAttempt {
     ) -> Self {
         let active_context_tokens_before = sess.get_total_token_usage().await;
         Self {
-            thread_id: sess.conversation_id.to_string(),
+            thread_id: sess.thread_id.to_string(),
             turn_id: turn_context.sub_id.clone(),
             trigger,
             reason,
@@ -342,7 +370,15 @@ impl CompactionAnalyticsAttempt {
         sess: &Session,
         status: CompactionStatus,
         error: Option<String>,
+        details: CompactionAnalyticsDetails,
     ) {
+        let CompactionAnalyticsDetails {
+            active_context_tokens_before,
+            retained_image_count,
+            compaction_summary_tokens,
+        } = details;
+        let active_context_tokens_before =
+            active_context_tokens_before.unwrap_or(self.active_context_tokens_before);
         let active_context_tokens_after = sess.get_total_token_usage().await;
         sess.services
             .analytics_events_client
@@ -356,8 +392,10 @@ impl CompactionAnalyticsAttempt {
                 strategy: CompactionStrategy::Memento,
                 status,
                 error,
-                active_context_tokens_before: self.active_context_tokens_before,
+                active_context_tokens_before,
                 active_context_tokens_after,
+                retained_image_count,
+                compaction_summary_tokens,
                 started_at: self.started_at,
                 completed_at: now_unix_seconds(),
                 duration_ms: Some(
@@ -549,7 +587,7 @@ async fn drain_to_completed(
             prompt,
             &turn_context.model_info,
             &turn_context.session_telemetry,
-            turn_context.reasoning_effort,
+            turn_context.reasoning_effort.clone(),
             turn_context.reasoning_summary,
             turn_context.config.service_tier.clone(),
             turn_metadata_header,

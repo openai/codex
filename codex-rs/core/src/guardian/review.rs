@@ -145,10 +145,18 @@ fn guardian_risk_level_str(level: GuardianRiskLevel) -> &'static str {
 /// reviewer instead of surfacing them to the user. ARC may still block actions
 /// earlier in the flow.
 pub(crate) fn routes_approval_to_guardian(turn: &TurnContext) -> bool {
+    routes_approval_to_guardian_with_reviewer(turn, turn.config.approvals_reviewer)
+}
+
+/// Whether an approval with its own reviewer selection should be routed through guardian.
+pub(crate) fn routes_approval_to_guardian_with_reviewer(
+    turn: &TurnContext,
+    approvals_reviewer: ApprovalsReviewer,
+) -> bool {
     matches!(
         turn.approval_policy.value(),
         AskForApproval::OnRequest | AskForApproval::Granular(_)
-    ) && turn.config.approvals_reviewer == ApprovalsReviewer::AutoReview
+    ) && approvals_reviewer == ApprovalsReviewer::AutoReview
 }
 
 pub(crate) fn is_guardian_reviewer_source(
@@ -257,7 +265,7 @@ async fn run_guardian_review(
     let action_summary = guardian_assessment_action(&request);
     let reviewed_action = guardian_reviewed_action(&request);
     let review_tracking = GuardianReviewTrackContext::new(
-        session.conversation_id.to_string(),
+        session.thread_id.to_string(),
         assessment_turn_id.clone(),
         review_id.clone(),
         target_item_id.clone(),
@@ -682,19 +690,21 @@ pub(super) async fn run_guardian_review_session(
             fallback
         }
     };
-    let preferred_model_id = turn.provider.approval_review_preferred_model();
-    let preferred_model = available_models
+    let model_override = turn.model_info.auto_review_model_override.as_deref();
+    let review_model_id =
+        model_override.unwrap_or_else(|| turn.provider.approval_review_preferred_model());
+    let review_model = available_models
         .iter()
-        .find(|preset| preset.model == preferred_model_id);
-    let (guardian_model, guardian_reasoning_effort) = if let Some(preset) = preferred_model {
+        .find(|preset| preset.model == review_model_id);
+    let (guardian_model, guardian_reasoning_effort) = if let Some(preset) = review_model {
         let reasoning_effort = preferred_reasoning_effort(
             preset
                 .supported_reasoning_efforts
                 .iter()
                 .any(|effort| effort.effort == codex_protocol::openai_models::ReasoningEffort::Low),
-            Some(preset.default_reasoning_effort),
+            Some(preset.default_reasoning_effort.clone()),
         );
-        (preferred_model_id.to_string(), reasoning_effort)
+        (review_model_id.to_string(), reasoning_effort)
     } else {
         let reasoning_effort = preferred_reasoning_effort(
             turn.model_info
@@ -702,15 +712,21 @@ pub(super) async fn run_guardian_review_session(
                 .iter()
                 .any(|preset| preset.effort == codex_protocol::openai_models::ReasoningEffort::Low),
             turn.reasoning_effort
-                .or(turn.model_info.default_reasoning_level),
+                .clone()
+                .or_else(|| turn.model_info.default_reasoning_level.clone()),
         );
-        (turn.model_info.slug.clone(), reasoning_effort)
+        (
+            model_override
+                .unwrap_or(turn.model_info.slug.as_str())
+                .to_string(),
+            reasoning_effort,
+        )
     };
     let guardian_config = build_guardian_review_session_config(
         turn.config.as_ref(),
         live_network_config.clone(),
         guardian_model.as_str(),
-        guardian_reasoning_effort,
+        guardian_reasoning_effort.clone(),
     );
     let guardian_config = match guardian_config {
         Ok(config) => config,

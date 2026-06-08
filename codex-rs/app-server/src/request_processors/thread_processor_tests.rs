@@ -54,7 +54,7 @@ mod thread_processor_behavior_tests {
     use codex_app_server_protocol::ServerRequestPayload;
     use codex_app_server_protocol::ThreadItem;
     use codex_app_server_protocol::ToolRequestUserInputParams;
-    use codex_config::CloudRequirementsLoader;
+    use codex_config::CloudConfigBundleLoader;
     use codex_config::LoaderOverrides;
     use codex_config::SessionThreadConfig;
     use codex_config::StaticThreadConfigLoader;
@@ -77,6 +77,7 @@ mod thread_processor_behavior_tests {
     use codex_protocol::protocol::AskForApproval;
     use codex_protocol::protocol::SessionSource;
     use codex_protocol::protocol::SubAgentSource;
+    use codex_protocol::protocol::TurnEnvironmentSelections;
     use codex_state::ThreadMetadataBuilder;
     use codex_thread_store::StoredThread;
     use codex_utils_absolute_path::test_support::PathBufExt;
@@ -508,9 +509,9 @@ mod thread_processor_behavior_tests {
     }
 
     #[test]
-    fn config_load_error_marks_cloud_requirements_failures_for_relogin() {
-        let err = std::io::Error::other(CloudRequirementsLoadError::new(
-            CloudRequirementsLoadErrorCode::Auth,
+    fn config_load_error_marks_cloud_config_bundle_failures_for_relogin() {
+        let err = std::io::Error::other(CloudConfigBundleLoadError::new(
+            CloudConfigBundleLoadErrorCode::Auth,
             Some(401),
             "Your authentication session could not be refreshed automatically. Please log out and sign in again.",
         ));
@@ -520,7 +521,7 @@ mod thread_processor_behavior_tests {
         assert_eq!(
             error.data,
             Some(json!({
-                "reason": "cloudRequirements",
+                "reason": "cloudConfigBundle",
                 "errorCode": "Auth",
                 "action": "relogin",
                 "statusCode": 401,
@@ -535,7 +536,7 @@ mod thread_processor_behavior_tests {
     }
 
     #[test]
-    fn config_load_error_leaves_non_cloud_requirements_failures_unmarked() {
+    fn config_load_error_leaves_non_cloud_config_bundle_failures_unmarked() {
         let err = std::io::Error::other("required MCP servers failed to initialize");
 
         let error = config_load_error(&err);
@@ -549,11 +550,11 @@ mod thread_processor_behavior_tests {
     }
 
     #[test]
-    fn config_load_error_marks_non_auth_cloud_requirements_failures_without_relogin() {
-        let err = std::io::Error::other(CloudRequirementsLoadError::new(
-            CloudRequirementsLoadErrorCode::RequestFailed,
+    fn config_load_error_marks_non_auth_cloud_config_bundle_failures_without_relogin() {
+        let err = std::io::Error::other(CloudConfigBundleLoadError::new(
+            CloudConfigBundleLoadErrorCode::RequestFailed,
             /*status_code*/ None,
-            "Failed to load cloud requirements (workspace-managed policies).",
+            "Failed to load cloud config bundle (workspace-managed policies).",
         ));
 
         let error = config_load_error(&err);
@@ -561,9 +562,29 @@ mod thread_processor_behavior_tests {
         assert_eq!(
             error.data,
             Some(json!({
-                "reason": "cloudRequirements",
+                "reason": "cloudConfigBundle",
                 "errorCode": "RequestFailed",
-                "detail": "Failed to load cloud requirements (workspace-managed policies).",
+                "detail": "Failed to load cloud config bundle (workspace-managed policies).",
+            }))
+        );
+    }
+
+    #[test]
+    fn config_load_error_marks_invalid_cloud_config_bundle_failures_without_relogin() {
+        let err = std::io::Error::other(CloudConfigBundleLoadError::new(
+            CloudConfigBundleLoadErrorCode::InvalidBundle,
+            /*status_code*/ None,
+            "invalid cloud config bundle: invalid cloud config fragment Base policy (cfg_123)",
+        ));
+
+        let error = config_load_error(&err);
+
+        assert_eq!(
+            error.data,
+            Some(json!({
+                "reason": "cloudConfigBundle",
+                "errorCode": "InvalidBundle",
+                "detail": "invalid cloud config bundle: invalid cloud config fragment Base policy (cfg_123)",
             }))
         );
     }
@@ -595,7 +616,7 @@ mod thread_processor_behavior_tests {
             Vec::new(),
             LoaderOverrides::default(),
             /*strict_config*/ false,
-            CloudRequirementsLoader::default(),
+            CloudConfigBundleLoader::default(),
             Arg0DispatchPaths::default(),
             Arc::new(StaticThreadConfigLoader::new(vec![
                 ThreadConfigSource::Session(SessionThreadConfig {
@@ -656,7 +677,6 @@ mod thread_processor_behavior_tests {
             personality: None,
             exclude_turns: false,
             initial_turns_page: None,
-            persist_extended_history: false,
         };
         let config_snapshot = ThreadConfigSnapshot {
             model: "gpt-5".to_string(),
@@ -666,7 +686,7 @@ mod thread_processor_behavior_tests {
             approvals_reviewer: codex_protocol::config_types::ApprovalsReviewer::User,
             permission_profile: codex_protocol::models::PermissionProfile::Disabled,
             active_permission_profile: None,
-            cwd,
+            environments: TurnEnvironmentSelections::new(cwd, Vec::new()),
             workspace_roots: Vec::new(),
             profile_workspace_roots: Vec::new(),
             ephemeral: false,
@@ -682,6 +702,7 @@ mod thread_processor_behavior_tests {
                 },
             },
             session_source: SessionSource::Cli,
+            forked_from_thread_id: None,
             parent_thread_id: None,
             thread_source: None,
         };

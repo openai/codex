@@ -18,6 +18,8 @@ use crate::facts::SkillInvocation;
 use crate::facts::SkillInvokedInput;
 use crate::facts::SubAgentThreadStartedInput;
 use crate::facts::TrackEventsContext;
+use crate::facts::TurnCodexErrorFact;
+use crate::facts::TurnProfileFact;
 use crate::facts::TurnResolvedConfigFact;
 use crate::facts::TurnTokenUsageFact;
 use crate::reducer::AnalyticsReducer;
@@ -252,6 +254,18 @@ impl AnalyticsEventsClient {
 
     pub fn track_turn_token_usage(&self, fact: TurnTokenUsageFact) {
         self.record_fact(AnalyticsFact::Custom(CustomAnalyticsFact::TurnTokenUsage(
+            Box::new(fact),
+        )));
+    }
+
+    pub fn track_turn_profile(&self, fact: TurnProfileFact) {
+        self.record_fact(AnalyticsFact::Custom(CustomAnalyticsFact::TurnProfile(
+            Box::new(fact),
+        )));
+    }
+
+    pub fn track_turn_codex_error(&self, fact: TurnCodexErrorFact) {
+        self.record_fact(AnalyticsFact::Custom(CustomAnalyticsFact::TurnCodexError(
             Box::new(fact),
         )));
     }

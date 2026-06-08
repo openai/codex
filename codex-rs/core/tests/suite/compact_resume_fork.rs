@@ -34,6 +34,7 @@ use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_once_match;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
+use core_test_support::test_codex::local_selections;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
@@ -551,7 +552,7 @@ async fn snapshot_rollback_followup_turn_trims_context_updates() -> Result<()> {
     core_test_support::submit_thread_settings(
         &conversation,
         codex_protocol::protocol::ThreadSettingsOverrides {
-            cwd: Some(override_cwd.to_path_buf()),
+            environments: Some(local_selections(override_cwd.clone())),
             collaboration_mode: Some(CollaborationMode {
                 mode: ModeKind::Default,
                 settings: Settings {
@@ -774,7 +775,6 @@ async fn start_test_conversation(
 async fn user_turn(conversation: &Arc<CodexThread>, text: &str) {
     conversation
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: text.into(),
                 text_elements: Vec::new(),
@@ -850,7 +850,6 @@ async fn fork_thread(
         config.clone(),
         path,
         /*thread_source*/ None,
-        /*persist_extended_history*/ false,
         /*parent_trace*/ None,
     ))
     .await

@@ -56,3 +56,9 @@ pub use self::rate_limit_window_snapshot::RateLimitWindowSnapshot;
 
 pub(crate) mod credit_status_details;
 pub use self::credit_status_details::CreditStatusDetails;
+
+pub(crate) mod spend_control_limit_details;
+pub use self::spend_control_limit_details::SpendControlLimitDetails;
+
+pub(crate) mod spend_control_status_details;
+pub use self::spend_control_status_details::SpendControlStatusDetails;

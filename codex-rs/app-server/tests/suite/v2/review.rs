@@ -1,5 +1,5 @@
 use anyhow::Result;
-use app_test_support::McpProcess;
+use app_test_support::TestAppServer;
 use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_responses_server_repeating_assistant;
 use app_test_support::create_mock_responses_server_sequence;
@@ -59,7 +59,7 @@ async fn review_start_runs_review_turn_and_emits_code_review_item() -> Result<()
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let thread_id = start_default_thread(&mut mcp).await?;
@@ -173,7 +173,7 @@ async fn review_start_exec_approval_item_id_matches_command_execution_item() -> 
     let codex_home = TempDir::new()?;
     create_config_toml_with_approval_policy(codex_home.path(), &server.uri(), "untrusted")?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let thread_id = start_default_thread(&mut mcp).await?;
@@ -256,7 +256,7 @@ async fn review_start_rejects_empty_base_branch() -> Result<()> {
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
     let thread_id = start_default_thread(&mut mcp).await?;
 
@@ -299,7 +299,7 @@ async fn review_start_with_detached_delivery_returns_new_thread_id() -> Result<(
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
     let thread_id = start_default_thread(&mut mcp).await?;
@@ -377,7 +377,7 @@ async fn review_start_rejects_empty_commit_sha() -> Result<()> {
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
     let thread_id = start_default_thread(&mut mcp).await?;
 
@@ -412,7 +412,7 @@ async fn review_start_rejects_empty_custom_instructions() -> Result<()> {
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri())?;
 
-    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    let mut mcp = TestAppServer::new(codex_home.path()).await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
     let thread_id = start_default_thread(&mut mcp).await?;
 
@@ -443,7 +443,7 @@ async fn review_start_rejects_empty_custom_instructions() -> Result<()> {
     Ok(())
 }
 
-async fn start_default_thread(mcp: &mut McpProcess) -> Result<String> {
+async fn start_default_thread(mcp: &mut TestAppServer) -> Result<String> {
     let thread_req = mcp
         .send_thread_start_request(ThreadStartParams {
             model: Some("mock-model".to_string()),
@@ -464,7 +464,7 @@ async fn start_default_thread(mcp: &mut McpProcess) -> Result<String> {
     Ok(thread.id)
 }
 
-async fn materialize_thread_rollout(mcp: &mut McpProcess, thread_id: &str) -> Result<()> {
+async fn materialize_thread_rollout(mcp: &mut TestAppServer, thread_id: &str) -> Result<()> {
     let turn_req = mcp
         .send_turn_start_request(TurnStartParams {
             thread_id: thread_id.to_string(),

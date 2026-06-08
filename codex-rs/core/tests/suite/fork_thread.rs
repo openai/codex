@@ -50,7 +50,6 @@ async fn fork_thread_twice_drops_to_first_message() {
     for text in ["first", "second", "third"] {
         codex
             .submit(Op::UserInput {
-                environments: None,
                 items: vec![UserInput::Text {
                     text: text.to_string(),
                     text_elements: Vec::new(),
@@ -104,7 +103,6 @@ async fn fork_thread_twice_drops_to_first_message() {
             config_for_fork.clone(),
             base_path.clone(),
             /*thread_source*/ None,
-            /*persist_extended_history*/ false,
             /*parent_trace*/ None,
         )
         .await
@@ -129,7 +127,6 @@ async fn fork_thread_twice_drops_to_first_message() {
             config_for_fork.clone(),
             fork1_path.clone(),
             /*thread_source*/ None,
-            /*persist_extended_history*/ false,
             /*parent_trace*/ None,
         )
         .await
@@ -175,7 +172,6 @@ async fn fork_thread_from_history_does_not_require_source_rollout_path() {
 
     codex
         .submit(Op::UserInput {
-            environments: None,
             items: vec![UserInput::Text {
                 text: "fork me from stored history".to_string(),
                 text_elements: Vec::new(),
@@ -204,7 +200,6 @@ async fn fork_thread_from_history_does_not_require_source_rollout_path() {
                 rollout_path: None,
             }),
             /*thread_source*/ None,
-            /*persist_extended_history*/ false,
             /*parent_trace*/ None,
         )
         .await

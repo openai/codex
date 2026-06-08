@@ -17,10 +17,6 @@ codex_rust_crate(
         # that relies on env!("CARGO_MANIFEST_DIR").
         "CARGO_MANIFEST_DIR": "codex-rs/core",
     },
-    integration_compile_data_extra = [
-        "//codex-rs/apply-patch:apply_patch_tool_instructions.md",
-        "templates/realtime/backend_prompt.md",
-    ],
     integration_test_timeout = "long",
     test_data_extra = [
         "config.schema.json",

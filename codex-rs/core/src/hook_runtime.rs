@@ -451,7 +451,7 @@ pub(crate) async fn run_legacy_after_agent_hook(
             triggered_at: chrono::Utc::now(),
             hook_event: codex_hooks::HookEvent::AfterAgent {
                 event: codex_hooks::HookEventAfterAgent {
-                    thread_id: sess.conversation_id,
+                    thread_id: sess.thread_id,
                     turn_id: turn_context.sub_id.clone(),
                     input_messages,
                     last_assistant_message,
@@ -655,7 +655,7 @@ fn track_hook_completed_analytics(
     completed: &HookCompletedEvent,
 ) {
     let (tracking, hook) =
-        hook_run_analytics_payload(sess.conversation_id.to_string(), turn_context, completed);
+        hook_run_analytics_payload(sess.thread_id.to_string(), turn_context, completed);
     sess.services
         .analytics_events_client
         .track_hook_run(tracking, hook);

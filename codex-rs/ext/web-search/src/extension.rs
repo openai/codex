@@ -13,7 +13,6 @@ use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::ThreadLifecycleContributor;
 use codex_extension_api::ThreadStartInput;
 use codex_extension_api::ToolContributor;
-use codex_features::Feature;
 use codex_login::AuthManager;
 use codex_model_provider::create_model_provider;
 use codex_model_provider_info::ModelProviderInfo;
@@ -29,7 +28,7 @@ struct WebSearchExtension {
 
 #[derive(Clone)]
 struct WebSearchExtensionConfig {
-    enabled: bool,
+    available: bool,
     provider: ModelProviderInfo,
     settings: SearchSettings,
 }
@@ -38,8 +37,8 @@ impl From<&Config> for WebSearchExtensionConfig {
     fn from(config: &Config) -> Self {
         let web_search_mode = config.web_search_mode.value();
         Self {
-            enabled: config.features.enabled(Feature::StandaloneWebSearch)
-                && config.model_provider.is_openai()
+            // Core selects this executor per turn using the feature flag or model metadata.
+            available: config.model_provider.is_openai()
                 && web_search_mode != WebSearchMode::Disabled,
             provider: config.model_provider.clone(),
             settings: search_settings(config, web_search_mode),
@@ -111,7 +110,7 @@ impl ToolContributor for WebSearchExtension {
         let Some(config) = thread_store.get::<WebSearchExtensionConfig>() else {
             return Vec::new();
         };
-        if !config.enabled {
+        if !config.available {
             return Vec::new();
         }
 
@@ -160,7 +159,7 @@ mod tests {
         let session_store = ExtensionData::new("session");
         let thread_store = ExtensionData::new("11111111-1111-4111-8111-111111111111");
         thread_store.insert(WebSearchExtensionConfig {
-            enabled: true,
+            available: true,
             provider: ModelProviderInfo::create_openai_provider(/*base_url*/ None),
             settings: Default::default(),
         });
@@ -169,12 +168,12 @@ mod tests {
             .tool_contributors()
             .iter()
             .flat_map(|contributor| contributor.tools(&session_store, &thread_store))
-            .map(|tool| tool.tool_name())
+            .map(|tool| (tool.tool_name(), tool.supports_parallel_tool_calls()))
             .collect::<Vec<_>>();
 
         assert_eq!(
             tool_names,
-            vec![ToolName::namespaced(WEB_NAMESPACE, RUN_TOOL_NAME)]
+            vec![(ToolName::namespaced(WEB_NAMESPACE, RUN_TOOL_NAME), true)]
         );
     }
 }

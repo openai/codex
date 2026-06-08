@@ -6,6 +6,13 @@ fn windows_shell_guidance_description() -> String {
     format!("\n\n{}", windows_shell_guidance())
 }
 
+fn has_parameter(tool: &ToolSpec, parameter_name: &str) -> bool {
+    serde_json::to_value(tool)
+        .expect("tool spec should serialize")
+        .pointer(&format!("/parameters/properties/{parameter_name}"))
+        .is_some()
+}
+
 #[test]
 fn exec_command_tool_matches_expected_spec() {
     let tool = create_exec_command_tool(CommandToolOptions {
@@ -89,6 +96,21 @@ fn exec_command_tool_matches_expected_spec() {
 }
 
 #[test]
+fn exec_command_tool_can_hide_shell_parameter() {
+    let tool = create_exec_command_tool_with_environment_id(
+        CommandToolOptions {
+            allow_login_shell: true,
+            exec_permission_approvals_enabled: false,
+        },
+        /*include_environment_id*/ false,
+        /*include_shell_parameter*/ false,
+    );
+
+    assert!(!has_parameter(&tool, "shell"));
+    assert!(has_parameter(&tool, "cmd"));
+}
+
+#[test]
 fn write_stdin_tool_matches_expected_spec() {
     let tool = create_write_stdin_tool();
 
@@ -148,6 +170,13 @@ fn request_permissions_tool_includes_full_permission_schema() {
             "reason".to_string(),
             JsonSchema::string(Some(
                 "Optional short explanation for why additional permissions are needed.".to_string(),
+            )),
+        ),
+        (
+            "environment_id".to_string(),
+            JsonSchema::string(Some(
+                "Environment id from <environment_context>. Omit to use the primary environment."
+                    .to_string(),
             )),
         ),
         ("permissions".to_string(), permission_profile_schema()),

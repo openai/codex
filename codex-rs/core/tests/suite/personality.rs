@@ -26,6 +26,7 @@ use core_test_support::responses::sse_completed;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
+use core_test_support::test_codex::local_selections;
 use core_test_support::test_codex::test_codex;
 use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
@@ -65,12 +66,11 @@ fn read_only_text_turn_with_personality(
             text: text.into(),
             text_elements: Vec::new(),
         }],
-        environments: None,
         final_output_json_schema: None,
         responsesapi_client_metadata: None,
         additional_context: Default::default(),
         thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-            cwd: Some(test.cwd_path().to_path_buf()),
+            environments: Some(local_selections(test.config.cwd.clone())),
             approval_policy: Some(approval_policy),
             sandbox_policy: Some(sandbox_policy),
             permission_profile,
@@ -79,7 +79,7 @@ fn read_only_text_turn_with_personality(
                 mode: codex_protocol::config_types::ModeKind::Default,
                 settings: codex_protocol::config_types::Settings {
                     model,
-                    reasoning_effort: test.config.model_reasoning_effort,
+                    reasoning_effort: test.config.model_reasoning_effort.clone(),
                     developer_instructions: None,
                 },
             }),
@@ -592,7 +592,10 @@ async fn remote_model_friendly_personality_instructions_with_feature() -> anyhow
         input_modalities: default_input_modalities(),
         used_fallback_model_metadata: false,
         supports_search_tool: false,
+        use_responses_lite: false,
+        auto_review_model_override: None,
         tool_mode: None,
+        multi_agent_version: None,
     };
 
     let _models_mock = mount_models_once(
@@ -703,7 +706,10 @@ async fn user_turn_personality_remote_model_template_includes_update_message() -
         input_modalities: default_input_modalities(),
         used_fallback_model_metadata: false,
         supports_search_tool: false,
+        use_responses_lite: false,
+        auto_review_model_override: None,
         tool_mode: None,
+        multi_agent_version: None,
     };
 
     let _models_mock = mount_models_once(

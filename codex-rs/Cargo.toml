@@ -21,7 +21,7 @@ members = [
     "install-context",
     "codex-backend-openapi-models",
     "code-mode",
-    "cloud-requirements",
+    "cloud-config",
     "cloud-tasks",
     "cloud-tasks-client",
     "cloud-tasks-mock-client",
@@ -29,6 +29,7 @@ members = [
     "collaboration-mode-templates",
     "connectors",
     "config",
+    "context-fragments",
     "shell-command",
     "shell-escalation",
     "skills",
@@ -48,6 +49,7 @@ members = [
     "ext/guardian",
     "ext/image-generation",
     "ext/memories",
+    "ext/skills",
     "ext/web-search",
     "external-agent-migration",
     "external-agent-sessions",
@@ -68,6 +70,7 @@ members = [
     "process-hardening",
     "protocol",
     "realtime-webrtc",
+    "prompts",
     "rollout",
     "rollout-trace",
     "rmcp-client",
@@ -148,12 +151,13 @@ codex-chatgpt = { path = "chatgpt" }
 codex-cli = { path = "cli" }
 codex-client = { path = "codex-client" }
 codex-collaboration-mode-templates = { path = "collaboration-mode-templates" }
-codex-cloud-requirements = { path = "cloud-requirements" }
+codex-cloud-config = { path = "cloud-config" }
 codex-cloud-tasks-client = { path = "cloud-tasks-client" }
 codex-cloud-tasks-mock-client = { path = "cloud-tasks-mock-client" }
 codex-code-mode = { path = "code-mode" }
 codex-config = { path = "config" }
 codex-connectors = { path = "connectors" }
+codex-context-fragments = { path = "context-fragments" }
 codex-core = { path = "core" }
 codex-core-api = { path = "core-api" }
 codex-core-plugins = { path = "core-plugins" }
@@ -197,6 +201,7 @@ codex-model-provider = { path = "model-provider" }
 codex-process-hardening = { path = "process-hardening" }
 codex-protocol = { path = "protocol" }
 codex-realtime-webrtc = { path = "realtime-webrtc" }
+codex-prompts = { path = "prompts" }
 codex-responses-api-proxy = { path = "responses-api-proxy" }
 codex-response-debug-context = { path = "response-debug-context" }
 codex-rmcp-client = { path = "rmcp-client" }
@@ -313,6 +318,7 @@ libc = "0.2.182"
 log = "0.4"
 lru = "0.16.3"
 maplit = "1.0.2"
+memchr = "2.7.6"
 mime_guess = "2.0.5"
 multimap = "0.10.0"
 notify = "8.2.0"
@@ -378,7 +384,7 @@ sqlx = { version = "0.9.0", default-features = false, features = [
     "time",
     "uuid",
 ] }
-starlark = "0.13.0"
+starlark = { version = "0.14.2", default-features = false }
 strum = "0.27.2"
 strum_macros = "0.28.0"
 supports-color = "3.0.2"
@@ -418,7 +424,7 @@ unicode-width = "0.2"
 url = "2"
 urlencoding = "2.1"
 uuid = "1"
-v8 = "=147.4.0"
+v8 = "=149.2.0"
 vt100 = "0.16.2"
 walkdir = "2.5.0"
 webbrowser = "1.0"
@@ -477,7 +483,6 @@ unwrap_used = "deny"
 [workspace.metadata.cargo-shear]
 ignored = [
     "codex-agent-graph-store",
-    "codex-goal-extension",
     "icu_provider",
     "openssl-sys",
     "codex-v8-poc",
@@ -495,11 +500,12 @@ debug = "none"
 strip = "symbols"
 
 [profile.release]
-lto = "fat"
+lto = "thin"
+debug = "line-tables-only"
 split-debuginfo = "off"
-# Because we bundle some of these executables with the TypeScript CLI, we
-# remove everything to make the binary as small as possible.
-strip = "symbols"
+# Keep release binaries symbolicateable until packaging has archived the
+# sidecar symbols and stripped the binaries.
+strip = false
 
 # See https://github.com/openai/codex/issues/1411 for details.
 codegen-units = 1

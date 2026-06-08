@@ -132,6 +132,7 @@ fn reference_context_item() -> TurnContextItem {
         model: "gpt-test".to_string(),
         personality: None,
         collaboration_mode: None,
+        multi_agent_version: None,
         realtime_active: Some(false),
         effort: None,
         summary: codex_protocol::config_types::ReasoningSummary::Auto,
@@ -648,28 +649,6 @@ fn remove_first_item_removes_matching_call_for_output() {
     let mut h = create_history_with_items(items);
     h.remove_first_item();
     assert_eq!(h.raw_items(), vec![]);
-}
-
-#[test]
-fn remove_last_item_removes_matching_call_for_output() {
-    let items = vec![
-        user_msg("before tool call"),
-        ResponseItem::FunctionCall {
-            id: None,
-            name: "do_it".to_string(),
-            namespace: None,
-            arguments: "{}".to_string(),
-            call_id: "call-delete-last".to_string(),
-        },
-        ResponseItem::FunctionCallOutput {
-            call_id: "call-delete-last".to_string(),
-            output: FunctionCallOutputPayload::from_text("ok".to_string()),
-        },
-    ];
-    let mut h = create_history_with_items(items);
-
-    assert!(h.remove_last_item());
-    assert_eq!(h.raw_items(), vec![user_msg("before tool call")]);
 }
 
 #[test]

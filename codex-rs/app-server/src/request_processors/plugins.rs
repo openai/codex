@@ -6,6 +6,9 @@ use codex_app_server_protocol::PluginInstallPolicy;
 use codex_app_server_protocol::PluginSharePrincipalRole;
 use codex_app_server_protocol::PluginShareTargetRole;
 use codex_config::types::McpServerConfig;
+use codex_core_plugins::OPENAI_CURATED_MARKETPLACE_NAME;
+use codex_core_plugins::remote::REMOTE_GLOBAL_MARKETPLACE_NAME;
+use codex_core_plugins::remote::RemoteAppTemplateUnavailableReason;
 use codex_core_plugins::remote::RemotePluginScope;
 use codex_core_plugins::remote::is_valid_remote_plugin_id;
 use codex_core_plugins::remote::validate_remote_plugin_id;
@@ -154,6 +157,52 @@ fn remote_installed_plugin_visible_scopes(config: &Config) -> Vec<RemotePluginSc
         scopes.push(RemotePluginScope::Workspace);
     }
     scopes
+}
+
+fn filter_openai_curated_installed_conflicts(
+    marketplaces: &mut Vec<PluginMarketplaceEntry>,
+    prefer_remote_curated_conflicts: bool,
+) {
+    let local_installed_plugin_names = marketplaces
+        .iter()
+        .find(|marketplace| marketplace.name == OPENAI_CURATED_MARKETPLACE_NAME)
+        .map(|marketplace| installed_plugin_names(&marketplace.plugins))
+        .unwrap_or_default();
+    let remote_installed_plugin_names = marketplaces
+        .iter()
+        .find(|marketplace| marketplace.name == REMOTE_GLOBAL_MARKETPLACE_NAME)
+        .map(|marketplace| installed_plugin_names(&marketplace.plugins))
+        .unwrap_or_default();
+    let conflicting_plugin_names = local_installed_plugin_names
+        .intersection(&remote_installed_plugin_names)
+        .cloned()
+        .collect::<HashSet<_>>();
+    if conflicting_plugin_names.is_empty() {
+        return;
+    }
+
+    let marketplace_to_filter = if prefer_remote_curated_conflicts {
+        OPENAI_CURATED_MARKETPLACE_NAME
+    } else {
+        REMOTE_GLOBAL_MARKETPLACE_NAME
+    };
+    for marketplace in marketplaces.iter_mut() {
+        if marketplace.name != marketplace_to_filter {
+            continue;
+        }
+        marketplace
+            .plugins
+            .retain(|plugin| !plugin.installed || !conflicting_plugin_names.contains(&plugin.name));
+    }
+    marketplaces.retain(|marketplace| !marketplace.plugins.is_empty());
+}
+
+fn installed_plugin_names(plugins: &[PluginSummary]) -> HashSet<String> {
+    plugins
+        .iter()
+        .filter(|plugin| plugin.installed)
+        .map(|plugin| plugin.name.clone())
+        .collect()
 }
 
 fn remote_plugin_share_discoverability(
@@ -614,6 +663,7 @@ impl PluginRequestProcessor {
                 &remote_plugin_service_config,
                 auth.as_ref(),
                 &remote_sources,
+                /*global_catalog_cache_path*/ Some(config.codex_home.as_path()),
             )
             .await
             {
@@ -739,6 +789,10 @@ impl PluginRequestProcessor {
                 auth.as_ref(),
             )
             .await,
+        );
+        filter_openai_curated_installed_conflicts(
+            &mut data,
+            config.features.enabled(Feature::RemotePlugin),
         );
 
         Ok(PluginInstalledResponse {
@@ -1009,6 +1063,7 @@ impl PluginRequestProcessor {
                         })
                         .collect(),
                     apps: app_summaries,
+                    app_templates: Vec::new(),
                     mcp_servers: outcome.plugin.mcp_server_names,
                 }
             }
@@ -1954,6 +2009,28 @@ fn remote_plugin_detail_to_info(
     detail: RemoteCatalogPluginDetail,
     apps: Vec<AppSummary>,
 ) -> PluginDetail {
+    let app_templates = detail
+        .app_templates
+        .into_iter()
+        .map(|template| AppTemplateSummary {
+            template_id: template.template_id,
+            name: template.name,
+            description: template.description,
+            canonical_connector_id: template.canonical_connector_id,
+            logo_url: template.logo_url,
+            logo_url_dark: template.logo_url_dark,
+            materialized_app_ids: template.materialized_app_ids,
+            reason: template.reason.map(|reason| match reason {
+                RemoteAppTemplateUnavailableReason::NotConfiguredForWorkspace => {
+                    AppTemplateUnavailableReason::NotConfiguredForWorkspace
+                }
+                RemoteAppTemplateUnavailableReason::NoActiveWorkspace => {
+                    AppTemplateUnavailableReason::NoActiveWorkspace
+                }
+            }),
+        })
+        .collect();
+
     PluginDetail {
         marketplace_name: detail.marketplace_name,
         marketplace_path: None,
@@ -1973,7 +2050,8 @@ fn remote_plugin_detail_to_info(
             .collect(),
         hooks: Vec::new(),
         apps,
-        mcp_servers: Vec::new(),
+        app_templates,
+        mcp_servers: detail.mcp_servers,
     }
 }
 

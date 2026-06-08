@@ -1,12 +1,11 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
 use codex_async_utils::CancelErr;
 use codex_async_utils::OrCancelExt;
 use codex_network_proxy::PROXY_ACTIVE_ENV_KEY;
-use codex_network_proxy::PROXY_ENV_KEYS;
-#[cfg(target_os = "macos")]
-use codex_network_proxy::PROXY_GIT_SSH_COMMAND_ENV_KEY;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use tokio_util::sync::CancellationToken;
 use tracing::error;
 use uuid::Uuid;
@@ -18,9 +17,14 @@ use crate::exec_env::create_env;
 use crate::sandboxing::ExecRequest;
 use crate::session::TurnInput;
 use crate::session::turn_context::TurnContext;
+use crate::shell::Shell;
 use crate::state::TaskKind;
 use crate::tools::format_exec_output_str;
+use crate::tools::runtimes::RuntimePathPrepends;
+#[cfg(unix)]
+use crate::tools::runtimes::apply_package_path_prepend;
 use crate::tools::runtimes::maybe_wrap_shell_lc_with_snapshot;
+use crate::tools::runtimes::strip_managed_proxy_env;
 use crate::turn_timing::now_unix_timestamp_ms;
 use crate::user_shell_command::user_shell_command_record_item;
 use codex_protocol::exec_output::ExecToolCallOutput;
@@ -128,29 +132,18 @@ pub(crate) async fn execute_user_shell_command(
     let display_command = session_shell.derive_exec_args(&command, use_login_shell);
     let mut exec_env_map = create_env(
         &turn_context.shell_environment_policy,
-        Some(session.conversation_id),
+        Some(session.thread_id),
     );
     if exec_env_map.contains_key(PROXY_ACTIVE_ENV_KEY) {
-        for key in PROXY_ENV_KEYS {
-            exec_env_map.remove(*key);
-        }
-        #[cfg(target_os = "macos")]
-        if exec_env_map
-            .get(PROXY_GIT_SSH_COMMAND_ENV_KEY)
-            .is_some_and(|value| {
-                value.starts_with(codex_network_proxy::CODEX_PROXY_GIT_SSH_COMMAND_MARKER)
-            })
-        {
-            exec_env_map.remove(PROXY_GIT_SSH_COMMAND_ENV_KEY);
-        }
+        strip_managed_proxy_env(&mut exec_env_map);
     }
-    let exec_command = maybe_wrap_shell_lc_with_snapshot(
+    let exec_command = prepare_user_shell_exec_command(
         &display_command,
         session_shell.as_ref(),
         #[allow(deprecated)]
         &turn_context.cwd,
         &turn_context.shell_environment_policy.r#set,
-        &exec_env_map,
+        &mut exec_env_map,
     );
 
     let call_id = Uuid::new_v4().to_string();
@@ -341,6 +334,68 @@ pub(crate) async fn execute_user_shell_command(
     }
 }
 
+fn prepare_user_shell_exec_command(
+    display_command: &[String],
+    session_shell: &Shell,
+    cwd: &AbsolutePathBuf,
+    shell_environment_set: &HashMap<String, String>,
+    exec_env_map: &mut HashMap<String, String>,
+) -> Vec<String> {
+    #[cfg(unix)]
+    {
+        prepare_user_shell_exec_command_with_path_prepend(
+            display_command,
+            session_shell,
+            cwd,
+            shell_environment_set,
+            exec_env_map,
+            apply_package_path_prepend,
+        )
+    }
+
+    #[cfg(not(unix))]
+    {
+        maybe_wrap_shell_lc_with_snapshot(
+            display_command,
+            session_shell,
+            cwd,
+            shell_environment_set,
+            exec_env_map,
+            // On non-Unix targets, arg0 has already prepended the package path
+            // to the process PATH before create_env() builds exec_env_map.
+            // RuntimePathPrepends is only needed for Unix shell snapshot replay.
+            &RuntimePathPrepends::default(),
+        )
+    }
+}
+
+/// Prepares a user-shell command after adding runtime-owned PATH entries.
+///
+/// The callback mutates the live exec environment for commands that are not
+/// wrapped with a shell snapshot and records only the runtime-owned entries so
+/// snapshot wrapping can reapply them after restoring the user's snapshot PATH.
+#[cfg(unix)]
+fn prepare_user_shell_exec_command_with_path_prepend(
+    display_command: &[String],
+    session_shell: &Shell,
+    cwd: &AbsolutePathBuf,
+    shell_environment_set: &HashMap<String, String>,
+    exec_env_map: &mut HashMap<String, String>,
+    prepend_runtime_path: impl FnOnce(&mut HashMap<String, String>, &mut RuntimePathPrepends),
+) -> Vec<String> {
+    let explicit_env_overrides = shell_environment_set.clone();
+    let mut runtime_path_prepends = RuntimePathPrepends::default();
+    prepend_runtime_path(exec_env_map, &mut runtime_path_prepends);
+    maybe_wrap_shell_lc_with_snapshot(
+        display_command,
+        session_shell,
+        cwd,
+        &explicit_env_overrides,
+        exec_env_map,
+        &runtime_path_prepends,
+    )
+}
+
 async fn persist_user_shell_output(
     session: &Session,
     turn_context: &TurnContext,
@@ -364,3 +419,7 @@ async fn persist_user_shell_output(
         .inject_no_new_turn(vec![output_item], Some(turn_context))
         .await;
 }
+
+#[cfg(all(test, unix))]
+#[path = "user_shell_tests.rs"]
+mod tests;

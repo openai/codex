@@ -75,7 +75,7 @@ fn apply_turn_context(metadata: &mut ThreadMetadata, turn_ctx: &TurnContextItem)
         metadata.cwd = turn_ctx.cwd.clone();
     }
     metadata.model = Some(turn_ctx.model.clone());
-    metadata.reasoning_effort = turn_ctx.effort;
+    metadata.reasoning_effort = turn_ctx.effort.clone();
     metadata.sandbox_policy =
         serde_json::to_string(&turn_ctx.permission_profile()).unwrap_or_default();
     metadata.approval_mode = enum_to_string(&turn_ctx.approval_policy);
@@ -336,6 +336,7 @@ mod tests {
                     base_instructions: None,
                     dynamic_tools: None,
                     memory_mode: None,
+                    multi_agent_version: None,
                 },
                 git: None,
             }),
@@ -357,6 +358,7 @@ mod tests {
                 model: "gpt-5".to_string(),
                 personality: None,
                 collaboration_mode: None,
+                multi_agent_version: None,
                 realtime_active: None,
                 effort: None,
                 summary: codex_protocol::config_types::ReasoningSummary::Auto,
@@ -394,6 +396,7 @@ mod tests {
                 model: "gpt-5".to_string(),
                 personality: None,
                 collaboration_mode: None,
+                multi_agent_version: None,
                 realtime_active: None,
                 effort: None,
                 summary: codex_protocol::config_types::ReasoningSummary::Auto,
@@ -428,6 +431,7 @@ mod tests {
                 model: "gpt-5".to_string(),
                 personality: None,
                 collaboration_mode: None,
+                multi_agent_version: None,
                 realtime_active: None,
                 effort: Some(ReasoningEffort::High),
                 summary: codex_protocol::config_types::ReasoningSummary::Auto,
@@ -458,6 +462,7 @@ mod tests {
                 model: "gpt-5".to_string(),
                 personality: None,
                 collaboration_mode: None,
+                multi_agent_version: None,
                 realtime_active: None,
                 effort: Some(ReasoningEffort::High),
                 summary: codex_protocol::config_types::ReasoningSummary::Auto,
@@ -494,6 +499,7 @@ mod tests {
                     base_instructions: None,
                     dynamic_tools: None,
                     memory_mode: None,
+                    multi_agent_version: None,
                 },
                 git: None,
             }),

@@ -17,6 +17,7 @@ const SPAWN_AGENT_MODEL_OVERRIDE_DESCRIPTION: &str =
 const SPAWN_AGENT_SERVICE_TIER_OVERRIDE_DESCRIPTION: &str =
     "Service tier override for the new agent. Omit unless explicitly requested.";
 const MAX_MODEL_OVERRIDES_IN_SPAWN_AGENT_DESCRIPTION: usize = 5;
+const MAX_REASONING_EFFORT_CHARS_IN_SPAWN_AGENT_DESCRIPTION: usize = 64;
 
 #[derive(Debug, Clone, Default)]
 pub struct SpawnAgentToolOptions {
@@ -48,6 +49,8 @@ impl Default for WaitAgentTimeoutOptions {
 pub fn create_spawn_agent_tool_v1(options: SpawnAgentToolOptions) -> ToolSpec {
     let available_models_description = (!options.hide_agent_type_model_reasoning)
         .then(|| spawn_agent_models_description(&options.available_models));
+    let inherited_model_guidance =
+        (!options.hide_agent_type_model_reasoning).then_some(SPAWN_AGENT_INHERITED_MODEL_GUIDANCE);
     let return_value_description =
         "Returns the spawned agent id plus the user-facing nickname when available.";
     let mut properties = spawn_agent_common_properties_v1(&options.agent_type_description);
@@ -62,6 +65,7 @@ pub fn create_spawn_agent_tool_v1(options: SpawnAgentToolOptions) -> ToolSpec {
             name: "spawn_agent".to_string(),
             description: spawn_agent_tool_description(
                 available_models_description.as_deref(),
+                inherited_model_guidance,
                 return_value_description,
                 options.include_usage_hint,
                 options.usage_hint_text,
@@ -77,6 +81,8 @@ pub fn create_spawn_agent_tool_v1(options: SpawnAgentToolOptions) -> ToolSpec {
 pub fn create_spawn_agent_tool_v2(options: SpawnAgentToolOptions) -> ToolSpec {
     let available_models_description = (!options.hide_agent_type_model_reasoning)
         .then(|| spawn_agent_models_description(&options.available_models));
+    let inherited_model_guidance =
+        (!options.hide_agent_type_model_reasoning).then_some(SPAWN_AGENT_INHERITED_MODEL_GUIDANCE);
     let mut properties = spawn_agent_common_properties_v2(&options.agent_type_description);
     if options.hide_agent_type_model_reasoning {
         hide_spawn_agent_metadata_options(&mut properties);
@@ -93,6 +99,7 @@ pub fn create_spawn_agent_tool_v2(options: SpawnAgentToolOptions) -> ToolSpec {
         name: "spawn_agent".to_string(),
         description: spawn_agent_tool_description_v2(
             available_models_description.as_deref(),
+            inherited_model_guidance,
             options.include_usage_hint,
             options.usage_hint_text,
             options.max_concurrent_threads_per_session,
@@ -160,7 +167,8 @@ pub fn create_send_message_tool() -> ToolSpec {
             "message".to_string(),
             JsonSchema::string(Some(
                 "Message text to queue on the target agent.".to_string(),
-            )),
+            ))
+            .with_encrypted(),
         ),
     ]);
 
@@ -179,25 +187,27 @@ pub fn create_send_message_tool() -> ToolSpec {
     })
 }
 
-pub fn create_assign_task_tool() -> ToolSpec {
+pub fn create_followup_task_tool() -> ToolSpec {
     let properties = BTreeMap::from([
         (
             "target".to_string(),
             JsonSchema::string(Some(
-                "Agent id or canonical task name to message (from spawn_agent).".to_string(),
+                "Agent id or canonical task name to send a follow-up task to (from spawn_agent)."
+                    .to_string(),
             )),
         ),
         (
             "message".to_string(),
             JsonSchema::string(Some(
                 "Message text to send to the target agent.".to_string(),
-            )),
+            ))
+            .with_encrypted(),
         ),
     ]);
 
     ToolSpec::Function(ResponsesApiTool {
-        name: "assign_task".to_string(),
-        description: "Send a message to an existing non-root target agent and trigger a turn in that target. If the target is currently mid-turn, the message is queued and will be used to start the target's next turn, after the current turn completes."
+        name: "followup_task".to_string(),
+        description: "Send a follow-up task to an existing non-root target agent and trigger a turn if it is idle. If the target is already running, deliver the task promptly at message boundaries while sampling, or after the pending tool call completes."
             .to_string(),
         strict: false,
         defer_loading: None,
@@ -288,30 +298,34 @@ pub fn create_close_agent_tool_v1() -> ToolSpec {
         description: MULTI_AGENT_V1_NAMESPACE_DESCRIPTION.to_string(),
         tools: vec![ResponsesApiNamespaceTool::Function(ResponsesApiTool {
             name: "close_agent".to_string(),
-            description: "Close an agent and any open descendants when they are no longer needed, and return the target agent's previous status before shutdown was requested. Don't keep agents open for too long if they are not needed anymore.".to_string(),
+            description: "Close an agent and any open descendants when they are no longer needed, and return the target agent's previous status before shutdown was requested. Completed agents remain open and count toward the concurrency limit until closed. Don't keep agents open for too long if they are not needed anymore.".to_string(),
             strict: false,
             defer_loading: None,
             parameters: JsonSchema::object(properties, Some(vec!["target".to_string()]), Some(false.into())),
-            output_schema: Some(close_agent_output_schema()),
+            output_schema: Some(agent_previous_status_output_schema(
+                "The agent status observed before shutdown was requested.",
+            )),
         })],
     })
 }
 
-pub fn create_close_agent_tool_v2() -> ToolSpec {
+pub fn create_interrupt_agent_tool_v2() -> ToolSpec {
     let properties = BTreeMap::from([(
         "target".to_string(),
         JsonSchema::string(Some(
-            "Agent id or canonical task name to close (from spawn_agent).".to_string(),
+            "Agent id or canonical task name to interrupt (from spawn_agent).".to_string(),
         )),
     )]);
 
     ToolSpec::Function(ResponsesApiTool {
-        name: "close_agent".to_string(),
-        description: "Close an agent and any open descendants when they are no longer needed, and return the target agent's previous status before shutdown was requested. Don't keep agents open for too long if they are not needed anymore.".to_string(),
+        name: "interrupt_agent".to_string(),
+        description: "Interrupt an agent's current turn, if any, and return its previous status. The agent remains available for messages and follow-up tasks.".to_string(),
         strict: false,
         defer_loading: None,
         parameters: JsonSchema::object(properties, Some(vec!["target".to_string()]), Some(false.into())),
-        output_schema: Some(close_agent_output_schema()),
+        output_schema: Some(agent_previous_status_output_schema(
+            "The agent status observed before the interrupt request was handled.",
+        )),
     })
 }
 
@@ -491,12 +505,12 @@ fn wait_output_schema_v2() -> Value {
     })
 }
 
-fn close_agent_output_schema() -> Value {
+fn agent_previous_status_output_schema(previous_status_description: &str) -> Value {
     json!({
         "type": "object",
         "properties": {
             "previous_status": {
-                "description": "The agent status observed before shutdown was requested.",
+                "description": previous_status_description,
                 "allOf": [agent_status_output_schema()]
             }
         },
@@ -587,7 +601,10 @@ fn spawn_agent_common_properties_v2(agent_type_description: &str) -> BTreeMap<St
     BTreeMap::from([
         (
             "message".to_string(),
-            JsonSchema::string(Some("Initial plain-text task for the new agent.".to_string())),
+            JsonSchema::string(Some(
+                "Initial plain-text task for the new agent.".to_string(),
+            ))
+            .with_encrypted(),
         ),
         (
             "agent_type".to_string(),
@@ -631,16 +648,18 @@ fn hide_spawn_agent_metadata_options(properties: &mut BTreeMap<String, JsonSchem
 
 fn spawn_agent_tool_description(
     available_models_description: Option<&str>,
+    inherited_model_guidance: Option<&str>,
     return_value_description: &str,
     include_usage_hint: bool,
     usage_hint_text: Option<String>,
 ) -> String {
     let agent_role_guidance = available_models_description.unwrap_or_default();
+    let inherited_model_guidance = inherited_model_guidance.unwrap_or_default();
 
     let tool_description = format!(
         r#"
         {agent_role_guidance}
-        Spawn a sub-agent for a well-scoped task. {return_value_description} {SPAWN_AGENT_INHERITED_MODEL_GUIDANCE}"#
+        Spawn a sub-agent for a well-scoped task. {return_value_description} {inherited_model_guidance}"#
     );
 
     if !include_usage_hint {
@@ -700,11 +719,13 @@ Requests for depth, thoroughness, research, investigation, or detailed codebase 
 
 fn spawn_agent_tool_description_v2(
     available_models_description: Option<&str>,
+    inherited_model_guidance: Option<&str>,
     include_usage_hint: bool,
     usage_hint_text: Option<String>,
     max_concurrent_threads_per_session: Option<usize>,
 ) -> String {
     let agent_role_guidance = available_models_description.unwrap_or_default();
+    let inherited_model_guidance = inherited_model_guidance.unwrap_or_default();
     let concurrency_guidance = max_concurrent_threads_per_session
         .map(|limit| {
             format!(
@@ -719,7 +740,8 @@ fn spawn_agent_tool_description_v2(
         Spawns an agent to work on the specified task. If your current task is `/root/task1` and you spawn_agent with task_name "task_3" the agent will have canonical task name `/root/task1/task_3`.
 You are then able to refer to this agent as `task_3` or `/root/task1/task_3` interchangeably. However an agent `/root/task2/task_3` would only be able to communicate with this agent via its canonical name `/root/task1/task_3`.
 The spawned agent will have the same tools as you and the ability to spawn its own subagents.
-{SPAWN_AGENT_INHERITED_MODEL_GUIDANCE}
+{inherited_model_guidance}
+Only call this tool for a concrete, bounded subtask that can run independently alongside useful local work; otherwise continue locally.
 It will be able to send you and other running agents messages, and its final answer will be provided to you when it finishes.
 The new agent's canonical task name will be provided to it along with the message.
 {concurrency_guidance}"#
@@ -751,13 +773,20 @@ fn spawn_agent_models_description(models: &[ModelPreset]) -> String {
     let model_descriptions = visible_models
         .into_iter()
         .map(|model| {
-            let default_reasoning_effort = model.default_reasoning_effort;
+            let default_reasoning_effort = &model.default_reasoning_effort;
             let efforts = model
                 .supported_reasoning_efforts
                 .iter()
                 .map(|preset| {
-                    let effort = preset.effort;
-                    if effort == default_reasoning_effort {
+                    let effort = preset.effort.as_str();
+                    let effort = match effort
+                        .char_indices()
+                        .nth(MAX_REASONING_EFFORT_CHARS_IN_SPAWN_AGENT_DESCRIPTION)
+                    {
+                        Some((index, _)) => &effort[..index],
+                        None => effort,
+                    };
+                    if &preset.effort == default_reasoning_effort {
                         format!("{effort} (default)")
                     } else {
                         effort.to_string()

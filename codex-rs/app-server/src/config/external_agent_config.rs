@@ -316,9 +316,8 @@ impl ExternalAgentConfigService {
             Some(self.external_agent_home.as_path()),
             mcp_settings.as_ref(),
         )?;
-        let mcp_server_names = migrated_mcp_server_names(&migrated_mcp);
+        let mut mcp_server_names = migrated_mcp_server_names(&migrated_mcp);
         if !is_empty_toml_table(&migrated_mcp) {
-            let mut should_include = true;
             if target_config.exists() {
                 let existing_raw = fs::read_to_string(&target_config)?;
                 let mut existing = if existing_raw.trim().is_empty() {
@@ -328,10 +327,10 @@ impl ExternalAgentConfigService {
                         invalid_data_error(format!("invalid existing config.toml: {err}"))
                     })?
                 };
-                should_include = merge_missing_toml_values(&mut existing, &migrated_mcp)?;
+                mcp_server_names = merge_missing_mcp_servers(&mut existing, &migrated_mcp)?;
             }
 
-            if should_include {
+            if !mcp_server_names.is_empty() {
                 items.push(ExternalAgentConfigMigrationItem {
                     item_type: ExternalAgentConfigMigrationItemType::McpServerConfig,
                     description: format!(
@@ -341,7 +340,7 @@ impl ExternalAgentConfigService {
                     ),
                     cwd: cwd.clone(),
                     details: Some(MigrationDetails {
-                        mcp_servers: named_migrations(mcp_server_names.clone()),
+                        mcp_servers: named_migrations(mcp_server_names),
                         ..Default::default()
                     }),
                 });
@@ -863,7 +862,7 @@ impl ExternalAgentConfigService {
             toml::from_str::<TomlValue>(&existing_raw)
                 .map_err(|err| invalid_data_error(format!("invalid existing config.toml: {err}")))?
         };
-        if merge_missing_toml_values(&mut existing, &migrated)? {
+        if !merge_missing_mcp_servers(&mut existing, &migrated)?.is_empty() {
             write_toml_file(&target_config, &existing)?;
         }
         Ok(())
@@ -1536,6 +1535,43 @@ fn merge_missing_toml_values(existing: &mut TomlValue, incoming: &TomlValue) -> 
             "expected TOML table while merging migrated config values",
         )),
     }
+}
+
+fn merge_missing_mcp_servers(
+    existing: &mut TomlValue,
+    incoming: &TomlValue,
+) -> io::Result<Vec<String>> {
+    let existing_root = existing
+        .as_table_mut()
+        .ok_or_else(|| invalid_data_error("expected existing config to be a TOML table"))?;
+    let incoming_root = incoming
+        .as_table()
+        .ok_or_else(|| invalid_data_error("expected migrated MCP config to be a TOML table"))?;
+    let Some(incoming_servers) = incoming_root.get("mcp_servers") else {
+        return Ok(Vec::new());
+    };
+    let incoming_servers = incoming_servers
+        .as_table()
+        .ok_or_else(|| invalid_data_error("expected migrated MCP servers to be a TOML table"))?;
+    let Some(existing_servers) = existing_root.get_mut("mcp_servers") else {
+        existing_root.insert(
+            "mcp_servers".to_string(),
+            TomlValue::Table(incoming_servers.clone()),
+        );
+        return Ok(incoming_servers.keys().cloned().collect());
+    };
+    let Some(existing_servers) = existing_servers.as_table_mut() else {
+        return Ok(Vec::new());
+    };
+
+    let mut merged_server_names = Vec::new();
+    for (server_name, incoming_server) in incoming_servers {
+        if !existing_servers.contains_key(server_name) {
+            existing_servers.insert(server_name.clone(), incoming_server.clone());
+            merged_server_names.push(server_name.clone());
+        }
+    }
+    Ok(merged_server_names)
 }
 
 fn write_toml_file(path: &Path, value: &TomlValue) -> io::Result<()> {
