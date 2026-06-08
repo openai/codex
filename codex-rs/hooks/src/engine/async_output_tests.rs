@@ -1,28 +1,41 @@
+#[cfg(not(target_os = "windows"))]
 use std::fs;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
+#[cfg(not(target_os = "windows"))]
 use std::time::Duration;
 
+#[cfg(not(target_os = "windows"))]
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::HookEventName;
+#[cfg(not(target_os = "windows"))]
 use codex_protocol::protocol::HookSource;
+#[cfg(not(target_os = "windows"))]
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_output_truncation::approx_token_count;
 use pretty_assertions::assert_eq;
+#[cfg(not(target_os = "windows"))]
 use tempfile::tempdir;
+#[cfg(not(target_os = "windows"))]
 use tokio::time::sleep;
+#[cfg(not(target_os = "windows"))]
 use tokio::time::timeout;
 
 use super::ASYNC_HOOK_COMPLETION_TOKEN_LIMIT;
 use super::ASYNC_HOOK_FLUSH_TOKEN_LIMIT;
 use super::AsyncHookOutputQueue;
 use super::deliverable_output;
+#[cfg(not(target_os = "windows"))]
 use crate::engine::CommandShell;
+#[cfg(not(target_os = "windows"))]
 use crate::engine::ConfiguredHandler;
 use crate::engine::command_runner::CommandRunResult;
+#[cfg(not(target_os = "windows"))]
 use crate::events::permission_request;
+#[cfg(not(target_os = "windows"))]
 use crate::events::post_tool_use;
+#[cfg(not(target_os = "windows"))]
 use crate::events::pre_tool_use;
 
 #[test]
