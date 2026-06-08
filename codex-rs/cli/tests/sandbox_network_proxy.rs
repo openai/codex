@@ -30,10 +30,7 @@ mode = "full"
 "#,
     )?;
 
-    // Bash opens `/dev/tcp/...` as a direct TCP connection. Invert the result so
-    // the sandboxed command succeeds only when that connection is blocked.
-    let direct_connect_test =
-        format!("if exec 3<>/dev/tcp/127.0.0.2/{port}; then exit 1; else exit 0; fi");
+    let url = format!("http://127.0.0.2:{port}/");
     let output = std::process::Command::new(codex_utils_cargo_bin::cargo_bin("codex")?)
         .env("CODEX_HOME", codex_home.path())
         .args([
@@ -41,9 +38,16 @@ mode = "full"
             "--permissions-profile",
             "network-test",
             "--",
-            "bash",
-            "-c",
-            direct_connect_test.as_str(),
+            "curl",
+            "--noproxy",
+            "*",
+            "--silent",
+            "--show-error",
+            "--connect-timeout",
+            "1",
+            "--max-time",
+            "2",
+            url.as_str(),
         ])
         .output()?;
 
@@ -53,8 +57,9 @@ mode = "full"
         return Ok(());
     }
 
-    assert!(
-        output.status.success(),
+    assert_eq!(
+        output.status.code(),
+        Some(7),
         "expected direct loopback access to be blocked; status={:?}; stdout={}; stderr={}",
         output.status.code(),
         String::from_utf8_lossy(&output.stdout),

@@ -51,10 +51,7 @@ fn proxy_flag_takes_precedence_over_legacy_landlock() {
         args.contains(&"--allow-network-for-proxy".to_string()),
         true
     );
-    assert_eq!(
-        args.contains(&"--use-legacy-landlock".to_string()),
-        false
-    );
+    assert_eq!(args.contains(&"--use-legacy-landlock".to_string()), false);
 }
 
 #[test]
