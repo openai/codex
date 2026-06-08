@@ -86,10 +86,13 @@ impl PathUri {
         }
 
         let mut url = self.0.clone();
-        url.path_segments_mut()
-            .expect("validated file URLs support hierarchical path segments")
-            .pop_if_empty()
-            .pop();
+        {
+            let mut segments = match url.path_segments_mut() {
+                Ok(segments) => segments,
+                Err(()) => unreachable!("validated file URLs support hierarchical path segments"),
+            };
+            segments.pop_if_empty().pop();
+        }
         Some(Self(url))
     }
 
