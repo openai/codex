@@ -35,7 +35,7 @@ impl App {
             .cli_overrides(self.cli_kv_overrides.clone())
             .harness_overrides(overrides)
             .loader_overrides(self.loader_overrides.clone())
-            .cloud_requirements(self.cloud_requirements.clone());
+            .cloud_config_bundle(self.cloud_config_bundle.clone());
         build_config_on_runtime_worker(
             builder,
             format!("Failed to rebuild config for cwd {cwd_display}"),
@@ -57,7 +57,7 @@ impl App {
             .cli_overrides(self.cli_kv_overrides.clone())
             .harness_overrides(overrides)
             .loader_overrides(self.loader_overrides.clone())
-            .cloud_requirements(self.cloud_requirements.clone());
+            .cloud_config_bundle(self.cloud_config_bundle.clone());
         build_config_on_runtime_worker(
             builder,
             format!("Failed to rebuild config for permission profile {profile_id}"),
@@ -1133,21 +1133,19 @@ mod tests {
         let mut app = make_test_app().await;
         let codex_home = tempdir()?;
         let required_policy = codex_protocol::protocol::AskForApproval::Never;
-        let cloud_requirements = CloudRequirementsLoader::new(async move {
-            Ok(Some(codex_config::ConfigRequirementsToml {
-                allowed_approval_policies: Some(vec![required_policy]),
-                ..Default::default()
-            }))
-        });
+        let cloud_config_bundle =
+            codex_config::test_support::CloudConfigBundleFixture::loader_with_enterprise_requirement(
+                r#"allowed_approval_policies = ["never"]"#,
+            );
 
         let config = ConfigBuilder::default()
             .codex_home(codex_home.path().to_path_buf())
             .loader_overrides(LoaderOverrides::without_managed_config_for_tests())
-            .cloud_requirements(cloud_requirements.clone())
+            .cloud_config_bundle(cloud_config_bundle.clone())
             .build()
             .await?;
         app.config = config;
-        app.cloud_requirements = cloud_requirements;
+        app.cloud_config_bundle = cloud_config_bundle;
         let app_id = "unit_test_cloud_requirements_reload_marker";
         std::fs::write(
             codex_home.path().join("config.toml"),

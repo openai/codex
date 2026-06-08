@@ -9,7 +9,7 @@ use crate::legacy_core::config::edit::ConfigEditsBuilder;
 use crate::tui;
 use codex_app_server_protocol::ExternalAgentConfigDetectParams;
 use codex_app_server_protocol::ExternalAgentConfigMigrationItem;
-use codex_config::CloudRequirementsLoader;
+use codex_config::CloudConfigBundleLoader;
 use codex_features::Feature;
 use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
@@ -249,7 +249,7 @@ pub(crate) async fn handle_external_agent_config_migration_prompt_if_needed(
     config: &mut Config,
     cli_kv_overrides: &[(String, TomlValue)],
     harness_overrides: &ConfigOverrides,
-    cloud_requirements: &CloudRequirementsLoader,
+    cloud_config_bundle: &CloudConfigBundleLoader,
     entered_trust_nux: bool,
 ) -> Result<ExternalAgentConfigMigrationStartupOutcome> {
     if !should_show_external_agent_config_migration_prompt(config, entered_trust_nux) {
@@ -323,7 +323,7 @@ pub(crate) async fn handle_external_agent_config_migration_prompt_if_needed(
                             .codex_home(config.codex_home.to_path_buf())
                             .cli_overrides(cli_kv_overrides.to_vec())
                             .harness_overrides(harness_overrides.clone())
-                            .cloud_requirements(cloud_requirements.clone())
+                            .cloud_config_bundle(cloud_config_bundle.clone())
                             .build()
                             .await
                             .wrap_err("Failed to reload config after external agent migration")?;
