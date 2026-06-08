@@ -43,6 +43,7 @@ use crate::facts::AppInvocation;
 use crate::facts::AppMentionedInput;
 use crate::facts::AppUsedInput;
 use crate::facts::CodexCompactionEvent;
+use crate::facts::CodexGoalEvent;
 use crate::facts::CompactionImplementation;
 use crate::facts::CompactionPhase;
 use crate::facts::CompactionReason;
@@ -50,6 +51,7 @@ use crate::facts::CompactionStatus;
 use crate::facts::CompactionStrategy;
 use crate::facts::CompactionTrigger;
 use crate::facts::CustomAnalyticsFact;
+use crate::facts::GoalEventKind;
 use crate::facts::HookRunFact;
 use crate::facts::HookRunInput;
 use crate::facts::InputError;
@@ -1873,6 +1875,77 @@ async fn compaction_event_ingests_custom_fact() {
     assert_eq!(payload[0]["event_params"]["phase"], "standalone_turn");
     assert_eq!(payload[0]["event_params"]["strategy"], "memento");
     assert_eq!(payload[0]["event_params"]["status"], "failed");
+}
+
+#[tokio::test]
+async fn goal_event_ingests_accounted_usage_with_turn_attribution() {
+    let mut reducer = AnalyticsReducer::default();
+    let mut events = Vec::new();
+
+    ingest_initialize(&mut reducer, &mut events).await;
+    reducer
+        .ingest(
+            AnalyticsFact::ClientResponse {
+                connection_id: 7,
+                request_id: RequestId::Integer(2),
+                response: Box::new(sample_thread_resume_response(
+                    "thread-1", /*ephemeral*/ false, "gpt-5",
+                )),
+            },
+            &mut events,
+        )
+        .await;
+    events.clear();
+
+    reducer
+        .ingest(
+            AnalyticsFact::Custom(CustomAnalyticsFact::Goal(Box::new(CodexGoalEvent {
+                thread_id: "thread-1".to_string(),
+                turn_id: Some("turn-goal".to_string()),
+                goal_id: "goal-opaque-1".to_string(),
+                event_kind: GoalEventKind::UsageAccounted,
+                goal_status: codex_state::ThreadGoalStatus::Active,
+                has_token_budget: false,
+                cumulative_tokens_accounted: Some(25),
+                cumulative_time_accounted_seconds: Some(4),
+            }))),
+            &mut events,
+        )
+        .await;
+
+    assert_eq!(
+        serde_json::to_value(&events).expect("serialize events"),
+        json!([{
+            "event_type": "codex_goal_event",
+            "event_params": {
+                "thread_id": "thread-1",
+                "session_id": "session-thread-1",
+                "turn_id": "turn-goal",
+                "app_server_client": {
+                    "product_client_id": "codex-tui",
+                    "client_name": "codex-tui",
+                    "client_version": "1.0.0",
+                    "rpc_transport": "stdio",
+                    "experimental_api_enabled": null
+                },
+                "runtime": {
+                    "codex_rs_version": "0.1.0",
+                    "runtime_os": "macos",
+                    "runtime_os_version": "15.3.1",
+                    "runtime_arch": "aarch64"
+                },
+                "thread_source": "user",
+                "subagent_source": null,
+                "parent_thread_id": null,
+                "goal_id": "goal-opaque-1",
+                "event_kind": "usage_accounted",
+                "goal_status": "active",
+                "has_token_budget": false,
+                "cumulative_tokens_accounted": 25,
+                "cumulative_time_accounted_seconds": 4
+            }
+        }])
+    );
 }
 
 #[tokio::test]

@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::sync::Weak;
 
 use async_trait::async_trait;
+use codex_analytics::AnalyticsEventsClient;
 use codex_core::ThreadManager;
 use codex_extension_api::ConfigContributor;
 use codex_extension_api::ExtensionData;
@@ -33,12 +34,13 @@ use codex_protocol::protocol::TokenUsageInfo;
 
 use crate::accounting::BudgetLimitedGoalDisposition;
 use crate::accounting::GoalAccountingState;
+use crate::analytics::GoalAnalytics;
 use crate::api::GoalService;
 use crate::events::GoalEventEmitter;
 use crate::metrics::GoalMetrics;
 use crate::runtime::ActiveGoalStopReason;
-use crate::runtime::GoalRuntimeConfig;
 use crate::runtime::GoalRuntimeHandle;
+use crate::runtime::GoalRuntimeInit;
 use crate::spec::UPDATE_GOAL_TOOL_NAME;
 use crate::steering::budget_limit_steering_item;
 use crate::tool::GoalToolExecutor;
@@ -57,6 +59,7 @@ impl GoalExtensionConfig {
 #[derive(Clone)]
 pub struct GoalExtension<C> {
     state_dbs: Arc<codex_state::StateRuntime>,
+    analytics: GoalAnalytics,
     event_emitter: GoalEventEmitter,
     metrics: GoalMetrics,
     thread_manager: Weak<ThreadManager>,
@@ -73,6 +76,7 @@ impl<C> std::fmt::Debug for GoalExtension<C> {
 impl<C> GoalExtension<C> {
     pub(crate) fn new_with_host_capabilities(
         state_dbs: Arc<codex_state::StateRuntime>,
+        analytics_events_client: AnalyticsEventsClient,
         event_sink: Arc<dyn ExtensionEventSink>,
         metrics_client: Option<MetricsClient>,
         thread_manager: Weak<ThreadManager>,
@@ -81,6 +85,7 @@ impl<C> GoalExtension<C> {
     ) -> Self {
         Self {
             state_dbs,
+            analytics: GoalAnalytics::new(analytics_events_client),
             event_emitter: GoalEventEmitter::new(event_sink),
             metrics: GoalMetrics::new(metrics_client),
             thread_manager,
@@ -114,12 +119,13 @@ where
         let runtime = input.thread_store.get_or_init::<GoalRuntimeHandle>(|| {
             GoalRuntimeHandle::new(
                 thread_id,
-                Arc::clone(&self.state_dbs),
-                self.event_emitter.clone(),
-                self.metrics.clone(),
-                self.thread_manager.clone(),
-                accounting_state,
-                GoalRuntimeConfig {
+                GoalRuntimeInit {
+                    state_dbs: Arc::clone(&self.state_dbs),
+                    analytics: self.analytics.clone(),
+                    event_emitter: self.event_emitter.clone(),
+                    metrics: self.metrics.clone(),
+                    thread_manager: self.thread_manager.clone(),
+                    accounting_state,
                     enabled,
                     tools_available_for_thread,
                 },
@@ -403,6 +409,7 @@ where
                 runtime.thread_id(),
                 Arc::clone(&self.state_dbs),
                 runtime.accounting_state(),
+                self.analytics.clone(),
                 self.event_emitter.clone(),
                 self.metrics.clone(),
             )),
@@ -410,6 +417,7 @@ where
                 runtime.thread_id(),
                 Arc::clone(&self.state_dbs),
                 runtime.accounting_state(),
+                self.analytics.clone(),
                 self.event_emitter.clone(),
                 self.metrics.clone(),
             )),
@@ -417,6 +425,7 @@ where
                 runtime.thread_id(),
                 Arc::clone(&self.state_dbs),
                 runtime.accounting_state(),
+                self.analytics.clone(),
                 self.event_emitter.clone(),
                 self.metrics.clone(),
             )),
@@ -427,6 +436,7 @@ where
 pub fn install_with_backend<C>(
     registry: &mut ExtensionRegistryBuilder<C>,
     state_dbs: Arc<codex_state::StateRuntime>,
+    analytics_events_client: AnalyticsEventsClient,
     metrics_client: Option<MetricsClient>,
     thread_manager: Weak<ThreadManager>,
     goal_service: Arc<GoalService>,
@@ -436,6 +446,7 @@ pub fn install_with_backend<C>(
 {
     let extension = Arc::new(GoalExtension::new_with_host_capabilities(
         state_dbs,
+        analytics_events_client,
         registry.event_sink(),
         metrics_client,
         thread_manager,
