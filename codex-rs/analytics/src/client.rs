@@ -18,7 +18,6 @@ use crate::facts::SkillInvocation;
 use crate::facts::SkillInvokedInput;
 use crate::facts::SubAgentThreadStartedInput;
 use crate::facts::ThreadInitializationFact;
-use crate::facts::ThreadInitializationInput;
 use crate::facts::TrackEventsContext;
 use crate::facts::TurnCodexErrorFact;
 use crate::facts::TurnProfileFact;
@@ -319,6 +318,7 @@ impl AnalyticsEventsClient {
         connection_id: u64,
         request_id: RequestId,
         response: ClientResponsePayload,
+        thread_initialization: Option<ThreadInitializationFact>,
     ) {
         if !matches!(
             response,
@@ -334,22 +334,8 @@ impl AnalyticsEventsClient {
             connection_id,
             request_id,
             response: Box::new(response),
+            thread_initialization,
         });
-    }
-
-    pub fn track_thread_initialization(
-        &self,
-        connection_id: u64,
-        request_id: RequestId,
-        fact: ThreadInitializationFact,
-    ) {
-        self.record_fact(AnalyticsFact::Custom(
-            CustomAnalyticsFact::ThreadInitialization(Box::new(ThreadInitializationInput {
-                connection_id,
-                request_id,
-                fact,
-            })),
-        ));
     }
 
     pub fn track_error_response(

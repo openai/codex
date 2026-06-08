@@ -252,7 +252,9 @@ fn track_response_only_enqueues_analytics_relevant_responses() {
         (RequestId::Integer(4), sample_turn_start_response()),
         (RequestId::Integer(5), sample_turn_steer_response()),
     ] {
-        client.track_response(/*connection_id*/ 7, request_id, response);
+        client.track_response(
+            /*connection_id*/ 7, request_id, response, /*thread_initialization*/ None,
+        );
         assert!(matches!(
             receiver.try_recv(),
             Ok(AnalyticsFact::ClientResponse { .. })
@@ -263,6 +265,7 @@ fn track_response_only_enqueues_analytics_relevant_responses() {
         /*connection_id*/ 7,
         RequestId::Integer(6),
         ClientResponsePayload::ThreadArchive(ThreadArchiveResponse {}),
+        /*thread_initialization*/ None,
     );
     assert!(matches!(receiver.try_recv(), Err(TryRecvError::Empty)));
 }

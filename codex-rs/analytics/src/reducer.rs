@@ -70,7 +70,6 @@ use crate::facts::PluginUsedInput;
 use crate::facts::SkillInvokedInput;
 use crate::facts::SubAgentThreadStartedInput;
 use crate::facts::ThreadInitializationFact;
-use crate::facts::ThreadInitializationInput;
 use crate::facts::ThreadInitializationMode;
 use crate::facts::ThreadInitializationProfile;
 use crate::facts::TurnCodexError;
@@ -136,7 +135,6 @@ use std::path::PathBuf;
 #[derive(Default)]
 pub(crate) struct AnalyticsReducer {
     requests: HashMap<(u64, RequestId), RequestState>,
-    thread_initializations: HashMap<(u64, RequestId), ThreadInitializationFact>,
     turns: HashMap<String, TurnState>,
     connections: HashMap<u64, ConnectionState>,
     threads: HashMap<String, ThreadAnalyticsState>,
@@ -410,9 +408,11 @@ impl AnalyticsReducer {
                 connection_id,
                 request_id,
                 response,
+                thread_initialization,
             } => {
                 if let Some(response) = response.into_client_response(request_id) {
-                    self.ingest_response(connection_id, response, out).await;
+                    self.ingest_response(connection_id, response, thread_initialization, out)
+                        .await;
                 }
             }
             AnalyticsFact::ErrorResponse {
@@ -474,9 +474,6 @@ impl AnalyticsReducer {
                 }
                 CustomAnalyticsFact::TurnProfile(input) => {
                     self.ingest_turn_profile(*input, out).await;
-                }
-                CustomAnalyticsFact::ThreadInitialization(input) => {
-                    self.ingest_thread_initialization(*input);
                 }
                 CustomAnalyticsFact::TurnCodexError(input) => {
                     self.ingest_turn_codex_error(*input);
@@ -767,58 +764,39 @@ impl AnalyticsReducer {
         &mut self,
         connection_id: u64,
         response: ClientResponse,
+        thread_initialization: Option<ThreadInitializationFact>,
         out: &mut Vec<TrackEventRequest>,
     ) {
         match response {
-            ClientResponse::ThreadStart {
-                request_id,
-                response,
-            } => {
-                let initialization = self
-                    .thread_initializations
-                    .remove(&(connection_id, request_id));
+            ClientResponse::ThreadStart { response, .. } => {
                 self.emit_thread_initialized(
                     connection_id,
                     response.thread,
                     response.model,
-                    initialization
+                    thread_initialization
                         .map(|initialization| initialization.initialization_mode)
                         .unwrap_or(ThreadInitializationMode::New),
-                    initialization.map(|initialization| initialization.profile),
+                    thread_initialization.map(|initialization| initialization.profile),
                     out,
                 );
             }
-            ClientResponse::ThreadResume {
-                request_id,
-                response,
-            } => {
-                let profile = self
-                    .thread_initializations
-                    .remove(&(connection_id, request_id))
-                    .map(|initialization| initialization.profile);
+            ClientResponse::ThreadResume { response, .. } => {
                 self.emit_thread_initialized(
                     connection_id,
                     response.thread,
                     response.model,
                     ThreadInitializationMode::Resumed,
-                    profile,
+                    thread_initialization.map(|initialization| initialization.profile),
                     out,
                 );
             }
-            ClientResponse::ThreadFork {
-                request_id,
-                response,
-            } => {
-                let profile = self
-                    .thread_initializations
-                    .remove(&(connection_id, request_id))
-                    .map(|initialization| initialization.profile);
+            ClientResponse::ThreadFork { response, .. } => {
                 self.emit_thread_initialized(
                     connection_id,
                     response.thread,
                     response.model,
                     ThreadInitializationMode::Forked,
-                    profile,
+                    thread_initialization.map(|initialization| initialization.profile),
                     out,
                 );
             }
@@ -846,11 +824,6 @@ impl AnalyticsReducer {
             }
             _ => {}
         }
-    }
-
-    fn ingest_thread_initialization(&mut self, input: ThreadInitializationInput) {
-        self.thread_initializations
-            .insert((input.connection_id, input.request_id), input.fact);
     }
 
     fn ingest_server_request(&mut self, _connection_id: u64, request: ServerRequest) {

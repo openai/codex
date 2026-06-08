@@ -123,13 +123,6 @@ pub struct ThreadInitializationFact {
 }
 
 #[derive(Clone)]
-pub(crate) struct ThreadInitializationInput {
-    pub connection_id: u64,
-    pub request_id: RequestId,
-    pub fact: ThreadInitializationFact,
-}
-
-#[derive(Clone)]
 pub struct TurnTokenUsageFact {
     pub turn_id: String,
     pub thread_id: String,
@@ -489,6 +482,7 @@ pub(crate) enum AnalyticsFact {
         connection_id: u64,
         request_id: RequestId,
         response: Box<ClientResponsePayload>,
+        thread_initialization: Option<ThreadInitializationFact>,
     },
     ErrorResponse {
         connection_id: u64,
@@ -526,7 +520,6 @@ pub(crate) enum CustomAnalyticsFact {
     TurnResolvedConfig(Box<TurnResolvedConfigFact>),
     TurnTokenUsage(Box<TurnTokenUsageFact>),
     TurnProfile(Box<TurnProfileFact>),
-    ThreadInitialization(Box<ThreadInitializationInput>),
     TurnCodexError(Box<TurnCodexErrorFact>),
     SkillInvoked(SkillInvokedInput),
     AppMentioned(AppMentionedInput),

@@ -526,20 +526,14 @@ impl OutgoingMessageSender {
             .into_jsonrpc_parts_and_payload(request_id.request_id.clone())
             .map(|(id, result, response)| {
                 if let Some(response) = response {
-                    if let Some(thread_initialization) = request_context
-                        .as_ref()
-                        .and_then(|context| context.thread_initialization_timing.complete_request())
-                    {
-                        self.analytics_events_client.track_thread_initialization(
-                            connection_id.0,
-                            request_id_for_analytics.clone(),
-                            thread_initialization,
-                        );
-                    }
+                    let thread_initialization = request_context.as_ref().and_then(|context| {
+                        context.thread_initialization_timing.complete_request()
+                    });
                     self.analytics_events_client.track_response(
                         connection_id.0,
                         request_id_for_analytics,
                         response,
+                        thread_initialization,
                     );
                 }
                 (id, result)

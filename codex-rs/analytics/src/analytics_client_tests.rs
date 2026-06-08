@@ -530,6 +530,7 @@ async fn ingest_rejected_turn_steer(
                 response: Box::new(sample_thread_resume_response(
                     "thread-2", /*ephemeral*/ false, "gpt-5",
                 )),
+                thread_initialization: None,
             },
             out,
         )
@@ -603,6 +604,7 @@ async fn ingest_turn_prerequisites(
                     response: Box::new(sample_thread_start_response(
                         "thread-2", /*ephemeral*/ false, "gpt-5",
                     )),
+                    thread_initialization: None,
                 },
                 out,
             )
@@ -626,6 +628,7 @@ async fn ingest_turn_prerequisites(
                 connection_id: 7,
                 request_id: RequestId::Integer(3),
                 response: Box::new(sample_turn_start_response("turn-2")),
+                thread_initialization: None,
             },
             out,
         )
@@ -692,6 +695,7 @@ async fn ingest_review_prerequisites(
                 response: Box::new(sample_thread_start_response(
                     "thread-1", /*ephemeral*/ false, "gpt-5",
                 )),
+                thread_initialization: None,
             },
             events,
         )
@@ -1604,6 +1608,7 @@ async fn initialize_caches_client_and_thread_lifecycle_publishes_once_initialize
                     /*ephemeral*/ false,
                     "gpt-5",
                 )),
+                thread_initialization: None,
             },
             &mut events,
         )
@@ -1648,6 +1653,7 @@ async fn initialize_caches_client_and_thread_lifecycle_publishes_once_initialize
                 response: Box::new(sample_thread_resume_response(
                     "thread-1", /*ephemeral*/ true, "gpt-5",
                 )),
+                thread_initialization: None,
             },
             &mut events,
         )
@@ -1718,6 +1724,7 @@ async fn unrelated_client_requests_are_ignored_by_reducer() {
                 connection_id: 7,
                 request_id: RequestId::Integer(3),
                 response: Box::new(sample_turn_start_response("turn-2")),
+                thread_initialization: None,
             },
             &mut events,
         )
@@ -1743,6 +1750,7 @@ async fn unrelated_client_responses_are_ignored_by_reducer() {
                 response: Box::new(ClientResponsePayload::ThreadArchive(
                     ThreadArchiveResponse {},
                 )),
+                thread_initialization: None,
             },
             &mut events,
         )
@@ -1801,6 +1809,7 @@ async fn compaction_event_ingests_custom_fact() {
                     Some(AppServerThreadSource::Subagent),
                     Some(parent_thread_id.to_string()),
                 )),
+                thread_initialization: None,
             },
             &mut events,
         )
@@ -1908,6 +1917,7 @@ async fn guardian_review_event_ingests_custom_fact_with_optional_target_item() {
                     /*ephemeral*/ false,
                     "gpt-5",
                 )),
+                thread_initialization: None,
             },
             &mut events,
         )
@@ -2409,6 +2419,7 @@ async fn item_review_summaries_do_not_cross_threads_with_reused_item_ids() {
                 response: Box::new(sample_thread_start_response(
                     "thread-2", /*ephemeral*/ false, "gpt-5",
                 )),
+                thread_initialization: None,
             },
             &mut events,
         )
@@ -2696,6 +2707,7 @@ async fn subagent_thread_started_inherits_parent_connection_for_new_thread() {
                     /*ephemeral*/ false,
                     "gpt-5",
                 )),
+                thread_initialization: None,
             },
             &mut events,
         )
@@ -3450,6 +3462,7 @@ async fn accepted_turn_steer_emits_expected_event() {
                 connection_id: 7,
                 request_id: RequestId::Integer(4),
                 response: Box::new(sample_turn_steer_response("turn-2")),
+                thread_initialization: None,
             },
             &mut out,
         )
@@ -3621,6 +3634,7 @@ async fn turn_start_error_response_discards_pending_start_request() {
                 connection_id: 7,
                 request_id: RequestId::Integer(3),
                 response: Box::new(sample_turn_start_response("turn-2")),
+                thread_initialization: None,
             },
             &mut out,
         )
@@ -3920,6 +3934,7 @@ async fn accepted_steers_increment_turn_steer_count() {
                 connection_id: 7,
                 request_id: RequestId::Integer(4),
                 response: Box::new(sample_turn_steer_response("turn-2")),
+                thread_initialization: None,
             },
             &mut out,
         )
@@ -3967,6 +3982,7 @@ async fn accepted_steers_increment_turn_steer_count() {
                 connection_id: 7,
                 request_id: RequestId::Integer(6),
                 response: Box::new(sample_turn_steer_response("turn-2")),
+                thread_initialization: None,
             },
             &mut out,
         )
