@@ -15834,9 +15834,12 @@
       "type": "string"
     },
     "ThreadSource": {
+      "description": "Optional caller-supplied classification of who or what owns a thread's execution.",
       "enum": [
         "user",
         "subagent",
+        "system",
+        "automation",
         "memory_consolidation"
       ],
       "type": "string"

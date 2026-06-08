@@ -61,12 +61,20 @@ impl From<SessionSource> for CoreSessionSource {
     }
 }
 
+/// Optional caller-supplied classification of who or what owns a thread's execution.
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(rename_all = "snake_case", export_to = "v2/")]
 pub enum ThreadSource {
+    // Primary work attributed to an active user workflow.
     User,
+    // Work delegated by an agent into a child or worker thread.
     Subagent,
+    // Product-owned helper, safety, repair, or auxiliary work.
+    System,
+    // Top-level work started by a schedule or autonomous trigger.
+    Automation,
+    // Internal memory-consolidation work.
     MemoryConsolidation,
 }
 
@@ -75,6 +83,8 @@ impl From<CoreThreadSource> for ThreadSource {
         match value {
             CoreThreadSource::User => ThreadSource::User,
             CoreThreadSource::Subagent => ThreadSource::Subagent,
+            CoreThreadSource::System => ThreadSource::System,
+            CoreThreadSource::Automation => ThreadSource::Automation,
             CoreThreadSource::MemoryConsolidation => ThreadSource::MemoryConsolidation,
         }
     }
@@ -85,6 +95,8 @@ impl From<ThreadSource> for CoreThreadSource {
         match value {
             ThreadSource::User => CoreThreadSource::User,
             ThreadSource::Subagent => CoreThreadSource::Subagent,
+            ThreadSource::System => CoreThreadSource::System,
+            ThreadSource::Automation => CoreThreadSource::Automation,
             ThreadSource::MemoryConsolidation => CoreThreadSource::MemoryConsolidation,
         }
     }

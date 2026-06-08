@@ -2495,12 +2495,20 @@ pub enum SessionSource {
     Unknown,
 }
 
+/// Optional caller-supplied classification of who or what owns a thread's execution.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(rename_all = "snake_case")]
 pub enum ThreadSource {
+    // Primary work attributed to an active user workflow.
     User,
+    // Work delegated by an agent into a child or worker thread.
     Subagent,
+    // Product-owned helper, safety, repair, or auxiliary work.
+    System,
+    // Top-level work started by a schedule or autonomous trigger.
+    Automation,
+    // Internal memory-consolidation work.
     MemoryConsolidation,
 }
 
@@ -2509,6 +2517,8 @@ impl ThreadSource {
         match self {
             ThreadSource::User => "user",
             ThreadSource::Subagent => "subagent",
+            ThreadSource::System => "system",
+            ThreadSource::Automation => "automation",
             ThreadSource::MemoryConsolidation => "memory_consolidation",
         }
     }
@@ -2527,6 +2537,8 @@ impl FromStr for ThreadSource {
         match value {
             "user" => Ok(ThreadSource::User),
             "subagent" => Ok(ThreadSource::Subagent),
+            "system" => Ok(ThreadSource::System),
+            "automation" => Ok(ThreadSource::Automation),
             "memory_consolidation" => Ok(ThreadSource::MemoryConsolidation),
             other => Err(format!("unknown thread source: {other}")),
         }
