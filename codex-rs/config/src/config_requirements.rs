@@ -2013,8 +2013,12 @@ mod tests {
             "#,
         )?;
 
+        let high_source = RequirementSource::EnterpriseManaged {
+            id: "ent-1".to_string(),
+            name: "Enterprise".to_string(),
+        };
         let mut target = ConfigRequirementsWithSources::default();
-        target.merge_unset_fields(RequirementSource::CloudRequirements, high_precedence);
+        target.merge_unset_fields(high_source.clone(), high_precedence);
         target.merge_unset_fields(RequirementSource::Unknown, low_precedence);
         let merged_toml = target.clone().into_toml();
         let requirements = ConfigRequirements::try_from(target)?;
@@ -2031,7 +2035,7 @@ mod tests {
                 FilesystemConstraints {
                     deny_read: vec![AbsolutePathBuf::from_absolute_path(deny_read)?.into()],
                 },
-                RequirementSource::CloudRequirements,
+                high_source,
             ))
         );
         assert_eq!(
@@ -3422,9 +3426,13 @@ command = "python3 /enterprise/hooks/pre.py"
 
     #[test]
     fn permissions_network_and_experimental_network_cannot_be_combined() -> Result<()> {
+        let source = RequirementSource::EnterpriseManaged {
+            id: "ent-1".to_string(),
+            name: "Enterprise".to_string(),
+        };
         let mut requirements_with_sources = ConfigRequirementsWithSources::default();
         requirements_with_sources.merge_unset_fields(
-            RequirementSource::CloudRequirements,
+            source.clone(),
             from_str(
                 r#"
                     [permissions.network]
@@ -3439,14 +3447,17 @@ command = "python3 /enterprise/hooks/pre.py"
         let err = ConfigRequirements::try_from(requirements_with_sources)
             .expect_err("duplicate managed network surfaces should be rejected");
 
-        assert!(matches!(
-            err,
+        match err {
             ConstraintError::InvalidValue {
-                field_name: "permissions.network",
-                requirement_source: RequirementSource::CloudRequirements,
+                field_name,
+                requirement_source,
                 ..
+            } => {
+                assert_eq!(field_name, "permissions.network");
+                assert_eq!(requirement_source, source);
             }
-        ));
+            err => panic!("unexpected error: {err:#}"),
+        }
         Ok(())
     }
 
