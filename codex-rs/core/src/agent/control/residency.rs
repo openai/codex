@@ -136,9 +136,9 @@ impl V2Residency {
                 continue;
             }
             candidate_thread.ensure_rollout_materialized().await;
-            if let Err(err) = candidate_thread.flush_rollout().await {
+            if let Err(err) = candidate_thread.shutdown_and_wait().await {
                 warn!(
-                    "failed to flush v2 resident thread before unloading {candidate_thread_id}: {err}"
+                    "failed to shut down v2 resident thread before unloading {candidate_thread_id}: {err}"
                 );
                 self.touch(candidate_thread_id);
                 continue;
@@ -225,7 +225,7 @@ pub(super) fn is_v2_resident_session_source(session_source: &SessionSource) -> b
 async fn is_unloadable(thread: &CodexThread) -> bool {
     matches!(
         thread.agent_status().await,
-        AgentStatus::Completed(_) | AgentStatus::Errored(_)
+        AgentStatus::Completed(_) | AgentStatus::Errored(_) | AgentStatus::Interrupted
     ) && thread.codex.session.active_turn.lock().await.is_none()
         && !thread
             .codex
