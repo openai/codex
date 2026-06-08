@@ -729,6 +729,8 @@ async fn start_uninitialized(args: InProcessStartArgs) -> IoResult<InProcessClie
 #[cfg(test)]
 mod tests {
     use super::*;
+    use app_test_support::ChatGptAuthFixture;
+    use app_test_support::write_chatgpt_auth;
     use codex_app_server_protocol::ClientInfo;
     use codex_app_server_protocol::ConfigRequirementsReadResponse;
     use codex_app_server_protocol::ExternalAgentConfigImportCompletedNotification;
@@ -739,10 +741,36 @@ mod tests {
     use codex_app_server_protocol::TurnCompletedNotification;
     use codex_app_server_protocol::TurnItemsView;
     use codex_app_server_protocol::TurnStatus;
+    use codex_config::types::AuthCredentialsStoreMode;
     use codex_core::config::ConfigBuilder;
     use pretty_assertions::assert_eq;
     use std::path::Path;
+    use std::sync::Arc;
+    use std::time::Duration;
     use tempfile::TempDir;
+    use tokio::sync::Notify;
+    use tokio::time::timeout;
+    use wiremock::Mock;
+    use wiremock::Request;
+    use wiremock::Respond;
+    use wiremock::ResponseTemplate;
+    use wiremock::matchers::header;
+    use wiremock::matchers::method;
+    use wiremock::matchers::path;
+
+    #[derive(Clone)]
+    struct DelayedInstalledPluginsResponse {
+        request_received: Arc<Notify>,
+    }
+
+    impl Respond for DelayedInstalledPluginsResponse {
+        fn respond(&self, _request: &Request) -> ResponseTemplate {
+            self.request_received.notify_one();
+            ResponseTemplate::new(/*status*/ 200)
+                .set_delay(Duration::from_secs(/*secs*/ 60))
+                .set_body_string(r#"{"plugins":[],"pagination":{"next_page_token":null}}"#)
+        }
+    }
 
     async fn build_test_config(codex_home: &Path) -> Config {
         match ConfigBuilder::default()
@@ -766,6 +794,15 @@ mod tests {
     ) -> InProcessClientHandle {
         let codex_home = TempDir::new().expect("temp dir");
         let config = Arc::new(build_test_config(codex_home.path()).await);
+        start_test_client_with_config(codex_home, config, session_source, channel_capacity).await
+    }
+
+    async fn start_test_client_with_config(
+        codex_home: TempDir,
+        config: Arc<Config>,
+        session_source: SessionSource,
+        channel_capacity: usize,
+    ) -> InProcessClientHandle {
         let state_db = codex_rollout::state_db::try_init(config.as_ref())
             .await
             .expect("state db should initialize for in-process test");
@@ -850,6 +887,61 @@ mod tests {
                 .await
                 .expect("in-process runtime should shutdown cleanly");
         }
+    }
+
+    #[tokio::test]
+    async fn in_process_shutdown_does_not_wait_for_remote_plugin_refresh() {
+        let codex_home = TempDir::new().expect("temp dir");
+        let server = wiremock::MockServer::start().await;
+        std::fs::write(
+            codex_home.path().join("config.toml"),
+            "[features]\nplugins = true\n",
+        )
+        .expect("config should be written");
+        write_chatgpt_auth(
+            codex_home.path(),
+            ChatGptAuthFixture::new("chatgpt-token")
+                .account_id("account-123")
+                .chatgpt_account_id("account-123"),
+            AuthCredentialsStoreMode::File,
+        )
+        .expect("auth should be written");
+
+        let request_received = Arc::new(Notify::new());
+        Mock::given(method("GET"))
+            .and(path("/backend-api/ps/plugins/installed"))
+            .and(header("authorization", "Bearer chatgpt-token"))
+            .and(header("chatgpt-account-id", "account-123"))
+            .respond_with(DelayedInstalledPluginsResponse {
+                request_received: Arc::clone(&request_received),
+            })
+            .mount(&server)
+            .await;
+
+        let mut config = Config::load_default_with_cli_overrides_for_codex_home(
+            codex_home.path().to_path_buf(),
+            Vec::new(),
+        )
+        .await
+        .expect("plugin config should load");
+        config.chatgpt_base_url = format!("{}/backend-api/", server.uri());
+        let config = Arc::new(config);
+        assert!(config.plugins_config_input().plugins_enabled);
+        let client = start_test_client_with_config(
+            codex_home,
+            config,
+            SessionSource::Cli,
+            DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
+        )
+        .await;
+        timeout(Duration::from_secs(/*secs*/ 5), request_received.notified())
+            .await
+            .expect("remote installed-plugin refresh should start");
+
+        timeout(Duration::from_secs(/*secs*/ 2), client.shutdown())
+            .await
+            .expect("shutdown should not wait for remote plugin refresh")
+            .expect("in-process runtime should shutdown cleanly");
     }
 
     #[tokio::test]

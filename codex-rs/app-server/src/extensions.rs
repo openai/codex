@@ -240,7 +240,7 @@ mod tests {
 
     #[test]
     fn app_server_event_sink_does_not_retain_outgoing_sender() {
-        let (outgoing_tx, mut outgoing_rx) = mpsc::channel(4);
+        let (outgoing_tx, mut outgoing_rx) = mpsc::channel(/*buffer*/ 4);
         let outgoing = Arc::new(OutgoingMessageSender::new(
             outgoing_tx,
             AnalyticsEventsClient::disabled(),

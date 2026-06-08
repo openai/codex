@@ -155,7 +155,7 @@ mod tests {
 
     #[tokio::test]
     async fn retained_thread_manager_does_not_retain_app_server_sender() -> anyhow::Result<()> {
-        let (outgoing_tx, mut outgoing_rx) = mpsc::channel(4);
+        let (outgoing_tx, mut outgoing_rx) = mpsc::channel(/*buffer*/ 4);
         let outgoing = Arc::new(OutgoingMessageSender::new(
             outgoing_tx,
             AnalyticsEventsClient::disabled(),
@@ -171,12 +171,12 @@ mod tests {
         drop(outgoing);
 
         assert!(matches!(
-            timeout(Duration::from_millis(100), outgoing_rx.recv()).await,
+            timeout(Duration::from_millis(/*millis*/ 100), outgoing_rx.recv()).await,
             Ok(None)
         ));
 
         detached_refresh_thread_manager
-            .shutdown_all_threads_bounded(Duration::from_secs(10))
+            .shutdown_all_threads_bounded(Duration::from_secs(/*secs*/ 10))
             .await;
         Ok(())
     }
