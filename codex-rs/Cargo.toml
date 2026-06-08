@@ -501,10 +501,11 @@ strip = "symbols"
 
 [profile.release]
 lto = "thin"
+debug = "line-tables-only"
 split-debuginfo = "off"
-# Because we bundle some of these executables with the TypeScript CLI, we
-# remove everything to make the binary as small as possible.
-strip = "symbols"
+# Keep release binaries symbolicateable until packaging has archived the
+# sidecar symbols and stripped the binaries.
+strip = false
 
 # See https://github.com/openai/codex/issues/1411 for details.
 codegen-units = 1

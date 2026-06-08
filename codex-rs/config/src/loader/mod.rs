@@ -1467,7 +1467,7 @@ foo = "xyzzy"
             TomlValue::Table(toml::map::Map::from_iter([(
                 "allowed_approvals_reviewers".to_string(),
                 TomlValue::Array(vec![
-                    TomlValue::String("guardian_subagent".to_string()),
+                    TomlValue::String("auto_review".to_string()),
                     TomlValue::String("user".to_string()),
                 ]),
             )]))
