@@ -370,6 +370,10 @@ async fn turn_start_goal_replaces_existing_goal_and_continues() -> Result<()> {
     let thread_req = mcp
         .send_thread_start_request(ThreadStartParams {
             model: Some("mock-model".to_string()),
+            config: Some(HashMap::from([(
+                "model_supports_reasoning_summaries".to_string(),
+                json!(true),
+            )])),
             ..Default::default()
         })
         .await?;
@@ -551,9 +555,20 @@ async fn turn_start_goal_replaces_existing_goal_and_continues() -> Result<()> {
     let requests = response_mock.requests();
     let initial_request = requests.first().expect("initial model request");
     let initial_body = initial_request.body_json();
+    let initial_user_texts = initial_request.message_input_texts("user");
+    let original_input_texts = initial_user_texts
+        .iter()
+        .filter(|text| !text.starts_with("<environment_context>"))
+        .cloned()
+        .collect::<Vec<_>>();
+    let environment_context_has_cwd = initial_user_texts.iter().any(|text| {
+        text.starts_with("<environment_context>")
+            && text.contains(goal_cwd.to_string_lossy().as_ref())
+    });
     assert_eq!(
         (
-            initial_request.message_input_texts("user"),
+            original_input_texts,
+            environment_context_has_cwd,
             initial_body.get("model"),
             initial_body.pointer("/reasoning/effort"),
             initial_body.pointer("/reasoning/summary"),
@@ -570,6 +585,7 @@ async fn turn_start_goal_replaces_existing_goal_and_continues() -> Result<()> {
                 "  Improve benchmark coverage  ".to_string(),
                 "Document the results".to_string(),
             ],
+            true,
             Some(&json!("mock-model")),
             Some(&json!("high")),
             Some(&json!("detailed")),
