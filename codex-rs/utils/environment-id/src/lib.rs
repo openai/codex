@@ -14,9 +14,6 @@ use std::str::FromStr;
 use thiserror::Error;
 use ts_rs::TS;
 
-/// Maximum UTF-8 byte length accepted for an environment identifier.
-pub const MAX_ENVIRONMENT_ID_LEN: usize = 64;
-
 /// An opaque identifier for a configured execution environment.
 ///
 /// The URI path dot segments `.` and `..` are excluded so every valid
@@ -29,6 +26,9 @@ pub const MAX_ENVIRONMENT_ID_LEN: usize = 64;
 pub struct EnvironmentId(String);
 
 impl EnvironmentId {
+    /// Maximum UTF-8 byte length accepted for an environment identifier.
+    pub const MAX_LEN: usize = 64;
+
     pub fn new(id: impl Into<String>) -> Result<Self, EnvironmentIdError> {
         let id = id.into();
         validate_environment_id(&id)?;
@@ -78,10 +78,10 @@ fn validate_environment_id(id: &str) -> Result<(), EnvironmentIdError> {
     if matches!(id, "." | "..") {
         return Err(EnvironmentIdError::DotSegment(id.to_string()));
     }
-    if id.len() > MAX_ENVIRONMENT_ID_LEN {
+    if id.len() > EnvironmentId::MAX_LEN {
         return Err(EnvironmentIdError::TooLong {
             length: id.len(),
-            max_length: MAX_ENVIRONMENT_ID_LEN,
+            max_length: EnvironmentId::MAX_LEN,
         });
     }
     Ok(())

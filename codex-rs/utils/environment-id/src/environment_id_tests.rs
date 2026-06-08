@@ -14,8 +14,8 @@ fn accepts_opaque_values_up_to_the_shared_limit() {
         assert_eq!(EnvironmentId::new(id), Ok(EnvironmentId(id.to_string())));
     }
     assert_eq!(
-        EnvironmentId::new("x".repeat(MAX_ENVIRONMENT_ID_LEN)),
-        Ok(EnvironmentId("x".repeat(MAX_ENVIRONMENT_ID_LEN)))
+        EnvironmentId::new("x".repeat(EnvironmentId::MAX_LEN)),
+        Ok(EnvironmentId("x".repeat(EnvironmentId::MAX_LEN)))
     );
 }
 
@@ -29,10 +29,10 @@ fn rejects_values_that_cannot_cross_codex_boundaries() {
         );
     }
     assert_eq!(
-        EnvironmentId::new("x".repeat(MAX_ENVIRONMENT_ID_LEN + 1)),
+        EnvironmentId::new("x".repeat(EnvironmentId::MAX_LEN + 1)),
         Err(EnvironmentIdError::TooLong {
-            length: MAX_ENVIRONMENT_ID_LEN + 1,
-            max_length: MAX_ENVIRONMENT_ID_LEN,
+            length: EnvironmentId::MAX_LEN + 1,
+            max_length: EnvironmentId::MAX_LEN,
         })
     );
 }
