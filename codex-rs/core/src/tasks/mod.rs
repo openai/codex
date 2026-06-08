@@ -334,7 +334,7 @@ impl Session {
         input: Vec<TurnInput>,
         task: T,
     ) -> CodexResult<()> {
-        let v2_execution_slot = self.services.agent_control.reserve_v2_execution_slot(
+        let agent_execution_permit = self.services.agent_control.reserve_v2_execution_slot(
             turn_context.config.as_ref(),
             turn_context.multi_agent_version,
             &turn_context.session_source,
@@ -458,7 +458,7 @@ impl Session {
             cancellation_token,
             turn_context: Arc::clone(&turn_context),
             turn_extension_data,
-            _v2_execution_slot: v2_execution_slot,
+            _agent_execution_permit: agent_execution_permit,
             _timer: timer,
         };
         turn.task = Some(running_task);

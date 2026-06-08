@@ -6,6 +6,7 @@ use codex_protocol::error::Result as CodexResult;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SessionSource;
+use futures::future::BoxFuture;
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
@@ -15,11 +16,11 @@ pub(super) struct V2ExecutionSlots {
     active: AtomicUsize,
 }
 
-pub(crate) struct V2ExecutionSlot {
+pub(crate) struct AgentExecutionPermit {
     slots: Arc<V2ExecutionSlots>,
 }
 
-impl Drop for V2ExecutionSlot {
+impl Drop for AgentExecutionPermit {
     fn drop(&mut self) {
         self.slots.active.fetch_sub(1, Ordering::AcqRel);
     }
@@ -55,7 +56,7 @@ impl AgentControl {
         config: &Config,
         multi_agent_version: MultiAgentVersion,
         session_source: &SessionSource,
-    ) -> CodexResult<Option<V2ExecutionSlot>> {
+    ) -> CodexResult<Option<AgentExecutionPermit>> {
         if !uses_v2_execution_slot(multi_agent_version, session_source) {
             return Ok(None);
         }
@@ -86,47 +87,51 @@ impl AgentControl {
         }
     }
 
-    pub(crate) async fn maybe_start_v2_pending_work(&self) {
-        let Ok(state) = self.upgrade() else {
-            return;
-        };
-        for metadata in self.state.live_agents() {
-            let Some(thread_id) = metadata.agent_id else {
-                continue;
+    pub(crate) fn maybe_start_v2_pending_work(&self) -> BoxFuture<'_, ()> {
+        // Erase this future's concrete type to break the recursive Send proof through
+        // task completion -> pending work -> task start -> task completion.
+        Box::pin(async move {
+            let Ok(state) = self.upgrade() else {
+                return;
             };
-            let Ok(thread) = state.get_thread(thread_id).await else {
-                continue;
-            };
-            let multi_agent_version = match thread.multi_agent_version() {
-                Some(multi_agent_version) => multi_agent_version,
-                None => {
-                    let config = thread.codex.session.get_config().await;
-                    config.multi_agent_version_from_features()
+            for metadata in self.state.live_agents() {
+                let Some(thread_id) = metadata.agent_id else {
+                    continue;
+                };
+                let Ok(thread) = state.get_thread(thread_id).await else {
+                    continue;
+                };
+                let multi_agent_version = match thread.multi_agent_version() {
+                    Some(multi_agent_version) => multi_agent_version,
+                    None => {
+                        let config = thread.codex.session.get_config().await;
+                        config.multi_agent_version_from_features()
+                    }
+                };
+                if !uses_v2_execution_slot(multi_agent_version, &thread.session_source) {
+                    continue;
                 }
-            };
-            if !uses_v2_execution_slot(multi_agent_version, &thread.session_source) {
-                continue;
+                if !thread
+                    .codex
+                    .session
+                    .input_queue
+                    .has_trigger_turn_mailbox_items()
+                    .await
+                {
+                    continue;
+                }
+                thread
+                    .codex
+                    .session
+                    .maybe_start_turn_for_pending_work()
+                    .await;
             }
-            if !thread
-                .codex
-                .session
-                .input_queue
-                .has_trigger_turn_mailbox_items()
-                .await
-            {
-                continue;
-            }
-            thread
-                .codex
-                .session
-                .maybe_start_turn_for_pending_work()
-                .await;
-        }
+        })
     }
 }
 
 impl V2ExecutionSlots {
-    fn reserve(self: Arc<Self>, max_threads: usize) -> CodexResult<V2ExecutionSlot> {
+    fn reserve(self: Arc<Self>, max_threads: usize) -> CodexResult<AgentExecutionPermit> {
         let mut current = self.active.load(Ordering::Acquire);
         loop {
             if current >= max_threads {
@@ -138,7 +143,7 @@ impl V2ExecutionSlots {
                 Ordering::AcqRel,
                 Ordering::Acquire,
             ) {
-                Ok(_) => return Ok(V2ExecutionSlot { slots: self }),
+                Ok(_) => return Ok(AgentExecutionPermit { slots: self }),
                 Err(updated) => current = updated,
             }
         }

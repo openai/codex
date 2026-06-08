@@ -42,7 +42,7 @@ use std::sync::Weak;
 use tokio::sync::watch;
 use tracing::warn;
 
-pub(crate) use self::execution::V2ExecutionSlot;
+pub(crate) use self::execution::AgentExecutionPermit;
 use self::execution::V2ExecutionSlots;
 use self::residency::V2Residency;
 
