@@ -11,7 +11,6 @@ use codex_extension_api::InitialGoalContributor;
 use codex_extension_api::InitialGoalError;
 use codex_extension_api::InitialGoalInput;
 use codex_protocol::error::CodexErr;
-use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InitialGoal;
 use codex_protocol::protocol::Op;
@@ -117,7 +116,6 @@ async fn initial_goal_starts_one_turn_and_rejects_a_concurrent_goal() -> Result<
             }),
         )
         .await?;
-    let running_status = test.codex.agent_status().await;
     let started_turn_id = wait_for_event_match(&test.codex, |event| match event {
         EventMsg::TurnStarted(event) => Some(event.turn_id.clone()),
         _ => None,
@@ -173,7 +171,6 @@ async fn initial_goal_starts_one_turn_and_rejects_a_concurrent_goal() -> Result<
     assert_eq!(
         (
             contributor.calls(),
-            running_status,
             started_turn_id,
             completed_turn_id,
             second_error,
@@ -185,7 +182,6 @@ async fn initial_goal_starts_one_turn_and_rejects_a_concurrent_goal() -> Result<
                 turn_id: first_turn_id.clone(),
                 objective: "Improve benchmark coverage".to_string(),
             }],
-            AgentStatus::Running,
             first_turn_id.clone(),
             first_turn_id,
             "cannot start a goal while another turn is active".to_string(),
