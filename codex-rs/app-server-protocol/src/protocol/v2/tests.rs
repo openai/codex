@@ -58,6 +58,21 @@ fn test_absolute_path() -> AbsolutePathBuf {
 }
 
 #[test]
+fn thread_source_feature_round_trips_with_an_app_owned_label() {
+    let source = ThreadSource::Feature("automation".to_string());
+    let value = serde_json::to_value(&source).expect("serialize thread source");
+
+    assert_eq!(value, json!({ "feature": "automation" }));
+    assert_eq!(
+        serde_json::from_value::<ThreadSource>(value).expect("deserialize thread source"),
+        source
+    );
+
+    let core_source: codex_protocol::protocol::ThreadSource = source.clone().into();
+    assert_eq!(ThreadSource::from(core_source), source);
+}
+
+#[test]
 fn approvals_reviewer_serializes_auto_review_and_accepts_legacy_guardian_subagent() {
     assert_eq!(
         serde_json::to_string(&ApprovalsReviewer::User).expect("serialize reviewer"),

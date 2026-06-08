@@ -1645,12 +1645,29 @@
       ]
     },
     "ThreadSource": {
-      "enum": [
-        "user",
-        "subagent",
-        "memory_consolidation"
-      ],
-      "type": "string"
+      "oneOf": [
+        {
+          "enum": [
+            "user",
+            "subagent",
+            "memory_consolidation"
+          ],
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "feature": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "feature"
+          ],
+          "title": "FeatureThreadSource",
+          "type": "object"
+        }
+      ]
     },
     "ThreadStatus": {
       "oneOf": [

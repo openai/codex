@@ -176,7 +176,7 @@ impl ThreadStore for InMemoryThreadStore {
             agent_role: params.source.get_agent_role(),
             agent_path: params.source.get_agent_path().map(Into::into),
             source: params.source.clone(),
-            thread_source: params.thread_source,
+            thread_source: params.thread_source.clone(),
             model_provider: Some(params.metadata.model_provider.clone()),
             base_instructions: Some(params.base_instructions.clone()),
             dynamic_tools: (!params.dynamic_tools.is_empty()).then(|| params.dynamic_tools.clone()),
@@ -388,8 +388,8 @@ fn stored_thread_from_state(
             .and_then(|metadata| metadata.source.clone())
             .unwrap_or_else(|| created.source.clone()),
         thread_source: metadata
-            .and_then(|metadata| metadata.thread_source)
-            .unwrap_or(created.thread_source),
+            .and_then(|metadata| metadata.thread_source.clone())
+            .unwrap_or_else(|| created.thread_source.clone()),
         agent_nickname: metadata.and_then(|metadata| metadata.agent_nickname.clone().flatten()),
         agent_role: metadata.and_then(|metadata| metadata.agent_role.clone().flatten()),
         agent_path: metadata.and_then(|metadata| metadata.agent_path.clone().flatten()),

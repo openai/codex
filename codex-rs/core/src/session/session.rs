@@ -192,7 +192,7 @@ impl SessionConfiguration {
             session_source: self.session_source.clone(),
             forked_from_thread_id: self.forked_from_thread_id,
             parent_thread_id: self.parent_thread_id,
-            thread_source: self.thread_source,
+            thread_source: self.thread_source.clone(),
         }
     }
 
@@ -547,7 +547,7 @@ impl Session {
                                 forked_from_id,
                                 parent_thread_id,
                                 source: session_source,
-                                thread_source: session_configuration.thread_source,
+                                thread_source: session_configuration.thread_source.clone(),
                                 base_instructions: BaseInstructions {
                                     text: session_configuration.base_instructions.clone(),
                                 },
@@ -1085,7 +1085,7 @@ impl Session {
                     thread_id,
                     forked_from_id,
                     parent_thread_id,
-                    thread_source: session_configuration.thread_source,
+                    thread_source: session_configuration.thread_source.clone(),
                     thread_name: session_configuration.thread_name.clone(),
                     model: session_configuration.collaboration_mode.model().to_string(),
                     model_provider_id: config.model_provider_id.clone(),

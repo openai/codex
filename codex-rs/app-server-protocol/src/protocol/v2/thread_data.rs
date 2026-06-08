@@ -61,12 +61,13 @@ impl From<SessionSource> for CoreSessionSource {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(rename_all = "snake_case", export_to = "v2/")]
 pub enum ThreadSource {
     User,
     Subagent,
+    Feature(String),
     MemoryConsolidation,
 }
 
@@ -75,6 +76,7 @@ impl From<CoreThreadSource> for ThreadSource {
         match value {
             CoreThreadSource::User => ThreadSource::User,
             CoreThreadSource::Subagent => ThreadSource::Subagent,
+            CoreThreadSource::Feature(feature) => ThreadSource::Feature(feature),
             CoreThreadSource::MemoryConsolidation => ThreadSource::MemoryConsolidation,
         }
     }
@@ -85,6 +87,7 @@ impl From<ThreadSource> for CoreThreadSource {
         match value {
             ThreadSource::User => CoreThreadSource::User,
             ThreadSource::Subagent => CoreThreadSource::Subagent,
+            ThreadSource::Feature(feature) => CoreThreadSource::Feature(feature),
             ThreadSource::MemoryConsolidation => CoreThreadSource::MemoryConsolidation,
         }
     }
