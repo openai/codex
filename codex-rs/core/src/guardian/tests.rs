@@ -59,6 +59,7 @@ use core_test_support::responses::mount_response_sequence;
 use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
+use core_test_support::responses::sse_failed;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::streaming_sse::StreamingSseChunk;
@@ -2023,15 +2024,19 @@ async fn guardian_review_surfaces_responses_api_errors_in_rejection_reason() -> 
     let server = start_mock_server().await;
     let error_message =
         "Item 'rs_test' of type 'reasoning' was provided without its required following item.";
-    let error_response = wiremock::ResponseTemplate::new(400).set_body_json(serde_json::json!({
-        "error": {
-            "message": error_message,
-            "type": "invalid_request_error",
-            "param": "input"
-        }
-    }));
-    let request_log =
-        mount_response_sequence(&server, vec![error_response.clone(), error_response]).await;
+    let request_log = mount_response_sequence(
+        &server,
+        vec![
+            wiremock::ResponseTemplate::new(400).set_body_json(serde_json::json!({
+                "error": {
+                    "message": error_message,
+                    "type": "invalid_request_error",
+                    "param": "input"
+                }
+            })),
+        ],
+    )
+    .await;
 
     let (mut session, mut turn, rx) =
         crate::session::tests::make_session_and_context_with_rx().await;
@@ -2073,7 +2078,7 @@ async fn guardian_review_surfaces_responses_api_errors_in_rejection_reason() -> 
     .await;
 
     assert_eq!(decision, ReviewDecision::Denied);
-    assert_eq!(request_log.requests().len(), 2);
+    assert_eq!(request_log.requests().len(), 1);
 
     let mut warnings = Vec::new();
     let mut denial_rationales = Vec::new();
@@ -2125,7 +2130,7 @@ async fn guardian_review_surfaces_responses_api_errors_in_rejection_reason() -> 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn guardian_review_retries_session_failure_then_approves() -> anyhow::Result<()> {
+async fn guardian_review_retries_transient_session_failure_then_approves() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -2139,10 +2144,11 @@ async fn guardian_review_retries_session_failure_then_approves() -> anyhow::Resu
     let request_log = mount_sse_sequence(
         &server,
         vec![
-            sse(vec![
-                ev_response_created("resp-session-failure"),
-                ev_completed("resp-session-failure"),
-            ]),
+            sse_failed(
+                "resp-session-failure",
+                "server_is_overloaded",
+                "temporary reviewer overload",
+            ),
             sse(vec![
                 ev_response_created("resp-approved"),
                 ev_assistant_message("msg-approved", &approval),
@@ -2165,6 +2171,36 @@ async fn guardian_review_retries_session_failure_then_approves() -> anyhow::Resu
 
     assert_eq!(decision, ReviewDecision::Approved);
     assert_eq!(request_log.requests().len(), 2);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn guardian_review_does_not_retry_missing_assessment_payload() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let request_log = mount_sse_sequence(
+        &server,
+        vec![sse(vec![
+            ev_response_created("resp-missing-assessment"),
+            ev_completed("resp-missing-assessment"),
+        ])],
+    )
+    .await;
+    let (session, turn) = guardian_test_session_and_turn(&server).await;
+    seed_guardian_parent_history(&session, &turn).await;
+
+    let decision = review_approval_request(
+        &session,
+        &turn,
+        "review-missing-assessment".to_string(),
+        guardian_shell_request("shell-missing-assessment"),
+        /*retry_reason*/ None,
+    )
+    .await;
+
+    assert_eq!(decision, ReviewDecision::Denied);
+    assert_eq!(request_log.requests().len(), 1);
     Ok(())
 }
 

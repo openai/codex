@@ -15,6 +15,8 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::CodexErrorInfo;
+use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InitialHistory;
@@ -59,6 +61,7 @@ const GUARDIAN_INTERRUPT_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
 pub(crate) enum GuardianReviewSessionOutcome {
     Completed(anyhow::Result<Option<String>>),
     PromptBuildFailed(anyhow::Error),
+    TransientSessionFailed(anyhow::Error),
     SessionFailed(anyhow::Error),
     TimedOut,
     Aborted,
@@ -823,7 +826,7 @@ async fn wait_for_guardian_review(
 ) -> (GuardianReviewSessionOutcome, bool, bool) {
     let timeout = tokio::time::sleep_until(deadline);
     tokio::pin!(timeout);
-    let mut last_error_message: Option<String> = None;
+    let mut last_error: Option<ErrorEvent> = None;
 
     loop {
         tokio::select! {
@@ -860,10 +863,17 @@ async fn wait_for_guardian_review(
                                 .time_to_first_token_ms
                                 .and_then(|ms| u64::try_from(ms).ok());
                             if turn_complete.last_agent_message.is_none()
-                                && let Some(error_message) = last_error_message
+                                && let Some(error) = last_error
                             {
+                                let is_transient = is_transient_guardian_session_error(&error);
+                                let message = error.message;
+                                let outcome = if is_transient {
+                                    GuardianReviewSessionOutcome::TransientSessionFailed(anyhow!(message))
+                                } else {
+                                    GuardianReviewSessionOutcome::Completed(Err(anyhow!(message)))
+                                };
                                 return (
-                                    GuardianReviewSessionOutcome::Completed(Err(anyhow!(error_message))),
+                                    outcome,
                                     true,
                                     true,
                                 );
@@ -875,7 +885,7 @@ async fn wait_for_guardian_review(
                             );
                         }
                         EventMsg::Error(error) => {
-                            last_error_message = Some(error.message);
+                            last_error = Some(error);
                         }
                         EventMsg::TurnAborted(_) => {
                             return (GuardianReviewSessionOutcome::Aborted, true, false);
@@ -893,6 +903,19 @@ async fn wait_for_guardian_review(
             }
         }
     }
+}
+
+fn is_transient_guardian_session_error(error: &ErrorEvent) -> bool {
+    matches!(
+        error.codex_error_info,
+        Some(
+            CodexErrorInfo::ServerOverloaded
+                | CodexErrorInfo::HttpConnectionFailed { .. }
+                | CodexErrorInfo::ResponseStreamConnectionFailed { .. }
+                | CodexErrorInfo::InternalServerError
+                | CodexErrorInfo::ResponseStreamDisconnected { .. }
+        )
+    )
 }
 
 fn event_matches_turn(event: &Event, expected_turn_id: &str) -> bool {
@@ -1542,6 +1565,47 @@ mod tests {
         assert_eq!(analytics_result.time_to_first_token_ms, Some(42));
         assert!(keep_review_session);
         assert!(capture_token_usage);
+    }
+
+    #[test]
+    fn guardian_session_error_classification_is_conservative() {
+        let transient_errors = [
+            CodexErrorInfo::ServerOverloaded,
+            CodexErrorInfo::HttpConnectionFailed {
+                http_status_code: None,
+            },
+            CodexErrorInfo::ResponseStreamConnectionFailed {
+                http_status_code: Some(503),
+            },
+            CodexErrorInfo::InternalServerError,
+            CodexErrorInfo::ResponseStreamDisconnected {
+                http_status_code: None,
+            },
+        ];
+        for codex_error_info in transient_errors {
+            assert!(is_transient_guardian_session_error(&ErrorEvent {
+                message: "temporary failure".to_string(),
+                codex_error_info: Some(codex_error_info),
+            }));
+        }
+
+        let non_transient_errors = [
+            None,
+            Some(CodexErrorInfo::BadRequest),
+            Some(CodexErrorInfo::Unauthorized),
+            Some(CodexErrorInfo::UsageLimitExceeded),
+            Some(CodexErrorInfo::CyberPolicy),
+            Some(CodexErrorInfo::ResponseTooManyFailedAttempts {
+                http_status_code: Some(503),
+            }),
+            Some(CodexErrorInfo::Other),
+        ];
+        for codex_error_info in non_transient_errors {
+            assert!(!is_transient_guardian_session_error(&ErrorEvent {
+                message: "non-transient failure".to_string(),
+                codex_error_info,
+            }));
+        }
     }
 
     #[tokio::test]
