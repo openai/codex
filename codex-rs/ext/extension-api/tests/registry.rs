@@ -23,6 +23,7 @@ use codex_extension_api::TurnInputContributor;
 use codex_extension_api::TurnItemContributor;
 use codex_extension_api::TurnLifecycleContributor;
 use codex_extension_api::empty_extension_registry;
+use codex_protocol::items::HookPromptItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
@@ -153,14 +154,43 @@ impl ContextContributor for NamedContextContributor {
     }
 }
 
+struct RecordingTurnItemContributor {
+    name: &'static str,
+    calls: Arc<Mutex<Vec<&'static str>>>,
+}
+
+#[async_trait::async_trait]
+impl TurnItemContributor for RecordingTurnItemContributor {
+    async fn contribute(
+        &self,
+        _thread_store: &ExtensionData,
+        _turn_store: &ExtensionData,
+        _item: &mut TurnItem,
+    ) -> Result<(), String> {
+        self.calls
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(self.name);
+        Ok(())
+    }
+}
+
 #[tokio::test]
 async fn contributors_preserve_registration_order() {
+    let turn_item_calls = Arc::new(Mutex::new(Vec::new()));
     let mut builder = ExtensionRegistryBuilder::<()>::new();
     builder.prompt_contributor(Arc::new(NamedContextContributor("first")));
     builder.prompt_contributor(Arc::new(NamedContextContributor("second")));
+    for name in ["first", "second"] {
+        builder.turn_item_contributor(Arc::new(RecordingTurnItemContributor {
+            name,
+            calls: Arc::clone(&turn_item_calls),
+        }));
+    }
     let registry = builder.build();
     let session_store = ExtensionData::new("session");
     let thread_store = ExtensionData::new("thread");
+    let turn_store = ExtensionData::new("turn");
 
     let mut texts = Vec::new();
     for contributor in registry.context_contributors() {
@@ -172,8 +202,25 @@ async fn contributors_preserve_registration_order() {
                 .map(|fragment| fragment.text().to_string()),
         );
     }
+    let mut item = TurnItem::HookPrompt(HookPromptItem {
+        id: "item".to_string(),
+        fragments: Vec::new(),
+    });
+    for contributor in registry.turn_item_contributors() {
+        contributor
+            .contribute(&thread_store, &turn_store, &mut item)
+            .await
+            .expect("turn item contribution should succeed");
+    }
 
     assert_eq!(texts, vec!["first".to_string(), "second".to_string()]);
+    assert_eq!(
+        turn_item_calls
+            .lock()
+            .expect("turn item calls lock")
+            .as_slice(),
+        ["first", "second"]
+    );
 }
 
 #[derive(Debug, PartialEq, Eq)]

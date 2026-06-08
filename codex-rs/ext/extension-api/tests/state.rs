@@ -1,6 +1,5 @@
 use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
-use std::sync::Barrier;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 
@@ -36,17 +35,20 @@ fn get_or_init_initializes_once_and_returns_shared_value() {
     struct SharedValue(usize);
 
     let data = Arc::new(ExtensionData::new("session"));
-    let barrier = Arc::new(Barrier::new(8));
+    let callers_started = Arc::new(AtomicUsize::new(0));
     let initialization_count = Arc::new(AtomicUsize::new(0));
 
     let handles: [_; 8] = std::array::from_fn(|_| {
         let data = Arc::clone(&data);
-        let barrier = Arc::clone(&barrier);
+        let callers_started = Arc::clone(&callers_started);
         let initialization_count = Arc::clone(&initialization_count);
         std::thread::spawn(move || {
-            barrier.wait();
+            callers_started.fetch_add(1, Ordering::SeqCst);
             data.get_or_init(|| {
                 initialization_count.fetch_add(1, Ordering::SeqCst);
+                while callers_started.load(Ordering::SeqCst) < 8 {
+                    std::thread::yield_now();
+                }
                 SharedValue(7)
             })
         })
