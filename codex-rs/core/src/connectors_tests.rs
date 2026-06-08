@@ -185,9 +185,7 @@ async fn refresh_accessible_connectors_cache_from_mcp_tools_writes_latest_instal
         .collect(),
     };
     let legacy_cache_key = accessible_connectors_cache_key(
-        &config,
-        /*auth*/ None,
-        /*mcp_client_capabilities*/ None,
+        &config, /*auth*/ None, /*mcp_client_capabilities*/ None,
     );
     let explicit_empty_cache_key =
         accessible_connectors_cache_key(&config, /*auth*/ None, Some(explicit_empty.clone()));
