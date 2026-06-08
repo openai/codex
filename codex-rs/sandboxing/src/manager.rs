@@ -338,8 +338,8 @@ fn ensure_linux_bubblewrap_is_supported(
     allow_network_for_proxy: bool,
     is_wsl1: bool,
 ) -> Result<(), SandboxTransformError> {
-    let requires_bubblewrap = !use_legacy_landlock
-        && (!file_system_sandbox_policy.has_full_disk_write_access() || allow_network_for_proxy);
+    let requires_bubblewrap = allow_network_for_proxy
+        || (!use_legacy_landlock && !file_system_sandbox_policy.has_full_disk_write_access());
     if is_wsl1 && requires_bubblewrap {
         return Err(SandboxTransformError::Wsl1UnsupportedForBubblewrap);
     }
