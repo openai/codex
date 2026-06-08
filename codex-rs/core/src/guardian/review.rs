@@ -27,6 +27,7 @@ use tokio_util::sync::CancellationToken;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::turn_timing::now_unix_timestamp_ms;
+use crate::util::backoff;
 
 use super::AUTO_REVIEW_DENIAL_WINDOW_SIZE;
 use super::GUARDIAN_REVIEW_TIMEOUT;
@@ -62,8 +63,6 @@ const GUARDIAN_TIMEOUT_INSTRUCTIONS: &str = concat!(
 );
 
 const GUARDIAN_REVIEW_MAX_ATTEMPTS: u64 = 3;
-const GUARDIAN_REVIEW_FIRST_RETRY_DELAY: Duration = Duration::from_millis(/*millis*/ 200);
-const GUARDIAN_REVIEW_SECOND_RETRY_DELAY: Duration = Duration::from_millis(/*millis*/ 500);
 
 pub(crate) fn new_guardian_review_id() -> String {
     uuid::Uuid::new_v4().to_string()
@@ -906,11 +905,7 @@ async fn wait_before_guardian_retry(
 }
 
 fn guardian_retry_delay(attempt_count: u64) -> Option<Duration> {
-    Some(match attempt_count {
-        1 => GUARDIAN_REVIEW_FIRST_RETRY_DELAY,
-        2 => GUARDIAN_REVIEW_SECOND_RETRY_DELAY,
-        _ => return None,
-    })
+    (attempt_count < GUARDIAN_REVIEW_MAX_ATTEMPTS).then(|| backoff(attempt_count))
 }
 
 fn should_retry_guardian_review(outcome: &GuardianReviewOutcome, attempt_count: u64) -> bool {
@@ -1012,14 +1007,19 @@ mod review_tests {
     }
 
     #[test]
-    fn guardian_review_retry_delays_are_bounded() {
-        assert_eq!(
-            guardian_retry_delay(/*attempt_count*/ 1),
-            Some(GUARDIAN_REVIEW_FIRST_RETRY_DELAY)
+    fn guardian_review_retry_delays_are_jittered_within_bounds() {
+        let first_delay =
+            guardian_retry_delay(/*attempt_count*/ 1).expect("first retry should have a delay");
+        let second_delay =
+            guardian_retry_delay(/*attempt_count*/ 2).expect("second retry should have a delay");
+
+        assert!(
+            (Duration::from_millis(/*millis*/ 175)..=Duration::from_millis(/*millis*/ 225))
+                .contains(&first_delay)
         );
-        assert_eq!(
-            guardian_retry_delay(/*attempt_count*/ 2),
-            Some(GUARDIAN_REVIEW_SECOND_RETRY_DELAY)
+        assert!(
+            (Duration::from_millis(/*millis*/ 350)..=Duration::from_millis(/*millis*/ 450))
+                .contains(&second_delay)
         );
         assert_eq!(guardian_retry_delay(/*attempt_count*/ 3), None);
     }
