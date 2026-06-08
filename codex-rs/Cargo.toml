@@ -247,7 +247,6 @@ core_test_support = { path = "core/tests/common" }
 mcp_test_support = { path = "mcp-server/tests/common" }
 
 # External
-age = "0.11.1"
 allocative = "0.3.3"
 ansi-to-tui = "7.0.0"
 anyhow = "1"
@@ -268,6 +267,7 @@ base64 = "0.22.1"
 bm25 = "2.3.2"
 bytes = "1.10.1"
 chardetng = "0.1.17"
+chacha20poly1305 = "0.10.1"
 chrono = "0.4.43"
 clap = "4"
 clap_complete = "4"

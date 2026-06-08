@@ -4,27 +4,25 @@ use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
-use std::sync::atomic::compiler_fence;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
-use age::decrypt;
-use age::encrypt;
-use age::scrypt::Identity as ScryptIdentity;
-use age::scrypt::Recipient as ScryptRecipient;
-use age::secrecy::ExposeSecret;
-use age::secrecy::SecretString;
 use anyhow::Context;
 use anyhow::Result;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use chacha20poly1305::XChaCha20Poly1305;
+use chacha20poly1305::XNonce;
+use chacha20poly1305::aead::Aead;
+use chacha20poly1305::aead::KeyInit;
+use chacha20poly1305::aead::Payload;
 use codex_keyring_store::KeyringStore;
 use rand::TryRngCore;
 use rand::rngs::OsRng;
 use serde::Deserialize;
 use serde::Serialize;
 use tracing::warn;
+use zeroize::Zeroizing;
 
 use super::SecretListEntry;
 use super::SecretName;
@@ -34,7 +32,12 @@ use super::compute_keyring_account;
 use super::keyring_service;
 
 const SECRETS_VERSION: u8 = 1;
-const LOCAL_SECRETS_FILENAME: &str = "local.age";
+const LOCAL_SECRETS_FILENAME: &str = "local.secrets";
+const LEGACY_LOCAL_SECRETS_FILENAME: &str = "local.age";
+const LOCAL_SECRETS_MAGIC: &[u8] = b"codex-local-secrets-v2\n";
+const LOCAL_SECRETS_AAD: &[u8] = b"codex-local-secrets-v2";
+const LOCAL_SECRETS_KEY_BYTES: usize = 32;
+const LOCAL_SECRETS_NONCE_BYTES: usize = 24;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 struct SecretsFile {
@@ -115,16 +118,26 @@ impl LocalSecretsBackend {
         self.secrets_dir().join(LOCAL_SECRETS_FILENAME)
     }
 
+    fn legacy_secrets_path(&self) -> PathBuf {
+        self.secrets_dir().join(LEGACY_LOCAL_SECRETS_FILENAME)
+    }
+
     fn load_file(&self) -> Result<SecretsFile> {
         let path = self.secrets_path();
         if !path.exists() {
+            let legacy_path = self.legacy_secrets_path();
+            anyhow::ensure!(
+                !legacy_path.exists(),
+                "found legacy age-encrypted secrets file at {}; this version cannot read it",
+                legacy_path.display()
+            );
             return Ok(SecretsFile::new_empty());
         }
 
         let ciphertext = fs::read(&path)
             .with_context(|| format!("failed to read secrets file at {}", path.display()))?;
-        let passphrase = self.load_or_create_passphrase()?;
-        let plaintext = decrypt_with_passphrase(&ciphertext, &passphrase)?;
+        let key = self.load_or_create_key()?;
+        let plaintext = decrypt_with_key(&ciphertext, &key)?;
         let mut parsed: SecretsFile = serde_json::from_slice(&plaintext).with_context(|| {
             format!(
                 "failed to deserialize decrypted secrets file at {}",
@@ -148,15 +161,16 @@ impl LocalSecretsBackend {
         fs::create_dir_all(&dir)
             .with_context(|| format!("failed to create secrets dir {}", dir.display()))?;
 
-        let passphrase = self.load_or_create_passphrase()?;
-        let plaintext = serde_json::to_vec(file).context("failed to serialize secrets file")?;
-        let ciphertext = encrypt_with_passphrase(&plaintext, &passphrase)?;
+        let key = self.load_or_create_key()?;
+        let plaintext =
+            Zeroizing::new(serde_json::to_vec(file).context("failed to serialize secrets file")?);
+        let ciphertext = encrypt_with_key(&plaintext, &key)?;
         let path = self.secrets_path();
         write_file_atomically(&path, &ciphertext)?;
         Ok(())
     }
 
-    fn load_or_create_passphrase(&self) -> Result<SecretString> {
+    fn load_or_create_key(&self) -> Result<Zeroizing<[u8; LOCAL_SECRETS_KEY_BYTES]>> {
         let account = compute_keyring_account(&self.codex_home);
         let loaded = self
             .keyring_store
@@ -164,14 +178,17 @@ impl LocalSecretsBackend {
             .map_err(|err| anyhow::anyhow!(err.message()))
             .with_context(|| format!("failed to load secrets key from keyring for {account}"))?;
         match loaded {
-            Some(existing) => Ok(SecretString::from(existing)),
+            Some(existing) => decode_key(&existing).with_context(|| {
+                format!("failed to decode secrets key from keyring for {account}")
+            }),
             None => {
                 // Generate a high-entropy key and persist it in the OS keyring.
                 // This keeps secrets out of plaintext config while remaining
                 // fully local/offline for the MVP.
-                let generated = generate_passphrase()?;
+                let generated = generate_key()?;
+                let encoded = Zeroizing::new(BASE64_STANDARD.encode(generated.as_slice()));
                 self.keyring_store
-                    .save(keyring_service(), &account, generated.expose_secret())
+                    .save(keyring_service(), &account, encoded.as_str())
                     .map_err(|err| anyhow::anyhow!(err.message()))
                     .context("failed to persist secrets key in keyring")?;
                 Ok(generated)
@@ -270,34 +287,84 @@ fn write_file_atomically(path: &Path, contents: &[u8]) -> Result<()> {
     }
 }
 
-fn generate_passphrase() -> Result<SecretString> {
-    let mut bytes = [0_u8; 32];
+fn generate_key() -> Result<Zeroizing<[u8; LOCAL_SECRETS_KEY_BYTES]>> {
+    let mut bytes = Zeroizing::new([0_u8; LOCAL_SECRETS_KEY_BYTES]);
     let mut rng = OsRng;
-    rng.try_fill_bytes(&mut bytes)
+    rng.try_fill_bytes(&mut *bytes)
         .context("failed to generate random secrets key")?;
-    // Base64 keeps the keyring payload ASCII-safe without reducing entropy.
-    let encoded = BASE64_STANDARD.encode(bytes);
-    wipe_bytes(&mut bytes);
-    Ok(SecretString::from(encoded))
+    Ok(bytes)
 }
 
-fn wipe_bytes(bytes: &mut [u8]) {
-    for byte in bytes {
-        // Volatile writes make it much harder for the compiler to elide the wipe.
-        // SAFETY: `byte` is a valid mutable reference into `bytes`.
-        unsafe { std::ptr::write_volatile(byte, 0) };
-    }
-    compiler_fence(Ordering::SeqCst);
+fn decode_key(encoded: &str) -> Result<Zeroizing<[u8; LOCAL_SECRETS_KEY_BYTES]>> {
+    let decoded = Zeroizing::new(
+        BASE64_STANDARD
+            .decode(encoded)
+            .context("secrets key is not valid base64")?,
+    );
+    anyhow::ensure!(
+        decoded.len() == LOCAL_SECRETS_KEY_BYTES,
+        "secrets key must be {LOCAL_SECRETS_KEY_BYTES} bytes"
+    );
+    let mut key = Zeroizing::new([0_u8; LOCAL_SECRETS_KEY_BYTES]);
+    key.copy_from_slice(decoded.as_slice());
+    Ok(key)
 }
 
-fn encrypt_with_passphrase(plaintext: &[u8], passphrase: &SecretString) -> Result<Vec<u8>> {
-    let recipient = ScryptRecipient::new(passphrase.clone());
-    encrypt(&recipient, plaintext).context("failed to encrypt secrets file")
+fn encrypt_with_key(plaintext: &[u8], key: &[u8; LOCAL_SECRETS_KEY_BYTES]) -> Result<Vec<u8>> {
+    let mut nonce_bytes = [0_u8; LOCAL_SECRETS_NONCE_BYTES];
+    let mut rng = OsRng;
+    rng.try_fill_bytes(&mut nonce_bytes)
+        .context("failed to generate secrets file nonce")?;
+    let nonce = XNonce::from_slice(&nonce_bytes);
+    let cipher = XChaCha20Poly1305::new_from_slice(key)
+        .map_err(|_| anyhow::anyhow!("invalid secrets key length"))?;
+    let encrypted = cipher
+        .encrypt(
+            nonce,
+            Payload {
+                msg: plaintext,
+                aad: LOCAL_SECRETS_AAD,
+            },
+        )
+        .map_err(|_| anyhow::anyhow!("failed to encrypt secrets file"))?;
+
+    let mut envelope =
+        Vec::with_capacity(LOCAL_SECRETS_MAGIC.len() + nonce_bytes.len() + encrypted.len());
+    envelope.extend_from_slice(LOCAL_SECRETS_MAGIC);
+    envelope.extend_from_slice(&nonce_bytes);
+    envelope.extend_from_slice(&encrypted);
+    Ok(envelope)
 }
 
-fn decrypt_with_passphrase(ciphertext: &[u8], passphrase: &SecretString) -> Result<Vec<u8>> {
-    let identity = ScryptIdentity::new(passphrase.clone());
-    decrypt(&identity, ciphertext).context("failed to decrypt secrets file")
+fn decrypt_with_key(
+    envelope: &[u8],
+    key: &[u8; LOCAL_SECRETS_KEY_BYTES],
+) -> Result<Zeroizing<Vec<u8>>> {
+    anyhow::ensure!(
+        envelope.starts_with(LOCAL_SECRETS_MAGIC),
+        "unsupported local secrets file format"
+    );
+    let encrypted_offset = LOCAL_SECRETS_MAGIC.len() + LOCAL_SECRETS_NONCE_BYTES;
+    anyhow::ensure!(
+        envelope.len() >= encrypted_offset,
+        "local secrets file is truncated"
+    );
+    let nonce = XNonce::from_slice(
+        &envelope[LOCAL_SECRETS_MAGIC.len()..LOCAL_SECRETS_MAGIC.len() + LOCAL_SECRETS_NONCE_BYTES],
+    );
+    let encrypted = &envelope[encrypted_offset..];
+    let cipher = XChaCha20Poly1305::new_from_slice(key)
+        .map_err(|_| anyhow::anyhow!("invalid secrets key length"))?;
+    let plaintext = cipher
+        .decrypt(
+            nonce,
+            Payload {
+                msg: encrypted,
+                aad: LOCAL_SECRETS_AAD,
+            },
+        )
+        .map_err(|_| anyhow::anyhow!("failed to decrypt secrets file"))?;
+    Ok(Zeroizing::new(plaintext))
 }
 
 fn parse_canonical_key(canonical_key: &str) -> Option<SecretListEntry> {
@@ -353,6 +420,71 @@ mod tests {
             .expect_err("must reject newer schema version");
         assert!(
             error.to_string().contains("newer than supported version"),
+            "unexpected error: {error:#}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn save_file_writes_versioned_encrypted_envelope() -> Result<()> {
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        let keyring = Arc::new(MockKeyringStore::default());
+        let backend = LocalSecretsBackend::new(codex_home.path().to_path_buf(), keyring);
+        let file = SecretsFile {
+            version: SECRETS_VERSION,
+            secrets: BTreeMap::from([(
+                "global/GITHUB_TOKEN".to_string(),
+                "secret-value".to_string(),
+            )]),
+        };
+
+        backend.save_file(&file)?;
+
+        let ciphertext = fs::read(backend.secrets_path())?;
+        assert!(ciphertext.starts_with(LOCAL_SECRETS_MAGIC));
+        assert!(
+            !String::from_utf8_lossy(&ciphertext).contains("secret-value"),
+            "secrets file must not store plaintext secret values"
+        );
+        assert_eq!(backend.load_file()?, file);
+        Ok(())
+    }
+
+    #[test]
+    fn load_file_rejects_unknown_envelope_format() -> Result<()> {
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        let keyring = Arc::new(MockKeyringStore::default());
+        let backend = LocalSecretsBackend::new(codex_home.path().to_path_buf(), keyring);
+        fs::create_dir_all(backend.secrets_dir())?;
+        fs::write(backend.secrets_path(), b"age-encryption.org/v1")?;
+
+        let error = backend
+            .load_file()
+            .expect_err("unknown envelope format should be rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("unsupported local secrets file format"),
+            "unexpected error: {error:#}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn load_file_rejects_legacy_age_file() -> Result<()> {
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        let keyring = Arc::new(MockKeyringStore::default());
+        let backend = LocalSecretsBackend::new(codex_home.path().to_path_buf(), keyring);
+        fs::create_dir_all(backend.secrets_dir())?;
+        fs::write(backend.legacy_secrets_path(), b"age-encryption.org/v1")?;
+
+        let error = backend
+            .load_file()
+            .expect_err("legacy age format should be rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("found legacy age-encrypted secrets file"),
             "unexpected error: {error:#}"
         );
         Ok(())
