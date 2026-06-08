@@ -3318,7 +3318,6 @@ fn turn_event_serializes_expected_shape() {
             status: Some(TurnStatus::Completed),
             turn_error: None,
             codex_error_kind: None,
-            codex_error_subreason: None,
             codex_error_http_status_code: None,
             steer_count: Some(0),
             total_tool_call_count: None,
@@ -3391,7 +3390,6 @@ fn turn_event_serializes_expected_shape() {
                 "status": "completed",
                 "turn_error": null,
                 "codex_error_kind": null,
-                "codex_error_subreason": null,
                 "codex_error_http_status_code": null,
                 "steer_count": 0,
                 "total_tool_call_count": null,
@@ -4097,10 +4095,6 @@ async fn turn_lifecycle_emits_failed_turn_event() {
     assert_eq!(
         payload["event_params"]["codex_error_kind"],
         json!("invalid_request")
-    );
-    assert_eq!(
-        payload["event_params"]["codex_error_subreason"],
-        json!("unknown turn environment id `env-2`")
     );
     assert_eq!(
         payload["event_params"]["codex_error_http_status_code"],
