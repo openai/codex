@@ -764,8 +764,38 @@ pub async fn resolve_root_git_project_for_trust(
     }
 
     let git_dir_path = AbsolutePathBuf::resolve_path_against_base(git_dir_rel, repo_root.as_path());
+    if !fs
+        .get_metadata(&git_dir_path, /*sandbox*/ None)
+        .await
+        .ok()?
+        .is_directory
+    {
+        return None;
+    }
+
     let worktrees_dir = git_dir_path.parent()?;
     if worktrees_dir.as_path().file_name() != Some(OsStr::new("worktrees")) {
+        return None;
+    }
+
+    // A linked worktree is valid only when its gitdir points back to this checkout's .git file.
+    let git_dir_backref = fs
+        .read_file_text(&git_dir_path.join("gitdir"), /*sandbox*/ None)
+        .await
+        .ok()?;
+    let git_dir_backref = git_dir_backref.trim();
+    if git_dir_backref.is_empty() {
+        return None;
+    }
+
+    let git_dir_backref_path =
+        AbsolutePathBuf::resolve_path_against_base(git_dir_backref, git_dir_path.as_path());
+    if fs
+        .canonicalize(&git_dir_backref_path, /*sandbox*/ None)
+        .await
+        .ok()?
+        != fs.canonicalize(&dot_git, /*sandbox*/ None).await.ok()?
+    {
         return None;
     }
 
