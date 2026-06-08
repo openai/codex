@@ -1,3 +1,5 @@
+//! Global instruction contributor backed by files in the Codex home directory.
+
 use std::io;
 
 use codex_extension_api::GlobalInstruction;
