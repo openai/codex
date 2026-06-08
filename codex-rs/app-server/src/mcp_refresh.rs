@@ -97,9 +97,13 @@ async fn queue_refresh(
 mod tests {
     use super::*;
     use crate::extensions::ThreadExtensionDependencies;
+    use crate::extensions::app_server_extension_event_sink;
     use crate::extensions::guardian_agent_spawner;
     use crate::extensions::thread_extensions;
+    use crate::outgoing_message::OutgoingMessageSender;
+    use crate::thread_state::ThreadStateManager;
     use async_trait::async_trait;
+    use codex_analytics::AnalyticsEventsClient;
     use codex_arg0::Arg0DispatchPaths;
     use codex_config::CloudConfigBundleLoader;
     use codex_config::LoaderOverrides;
@@ -112,6 +116,7 @@ mod tests {
     use codex_core::init_state_db;
     use codex_core::thread_store_from_config;
     use codex_exec_server::EnvironmentManager;
+    use codex_extension_api::ExtensionEventSink;
     use codex_extension_api::NoopExtensionEventSink;
     use codex_login::AuthManager;
     use codex_login::CodexAuth;
@@ -120,7 +125,10 @@ mod tests {
     use pretty_assertions::assert_eq;
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering;
+    use std::time::Duration;
     use tempfile::TempDir;
+    use tokio::sync::mpsc;
+    use tokio::time::timeout;
 
     #[tokio::test]
     async fn strict_refresh_reports_thread_planning_failures() -> anyhow::Result<()> {
@@ -145,7 +153,46 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn retained_thread_manager_does_not_retain_app_server_sender() -> anyhow::Result<()> {
+        let (outgoing_tx, mut outgoing_rx) = mpsc::channel(4);
+        let outgoing = Arc::new(OutgoingMessageSender::new(
+            outgoing_tx,
+            AnalyticsEventsClient::disabled(),
+        ));
+        let event_sink =
+            app_server_extension_event_sink(Arc::clone(&outgoing), ThreadStateManager::new());
+        let (_temp_dir, thread_manager, _config_manager, _loader) =
+            refresh_test_state_with_event_sink(event_sink).await?;
+
+        // Plugin refresh tasks can outlive MessageProcessor while retaining ThreadManager.
+        let detached_refresh_thread_manager = Arc::clone(&thread_manager);
+        drop(thread_manager);
+        drop(outgoing);
+
+        assert!(matches!(
+            timeout(Duration::from_millis(100), outgoing_rx.recv()).await,
+            Ok(None)
+        ));
+
+        detached_refresh_thread_manager
+            .shutdown_all_threads_bounded(Duration::from_secs(10))
+            .await;
+        Ok(())
+    }
+
     async fn refresh_test_state() -> anyhow::Result<(
+        TempDir,
+        Arc<ThreadManager>,
+        ConfigManager,
+        Arc<CountingThreadConfigLoader>,
+    )> {
+        refresh_test_state_with_event_sink(Arc::new(NoopExtensionEventSink)).await
+    }
+
+    async fn refresh_test_state_with_event_sink(
+        event_sink: Arc<dyn ExtensionEventSink>,
+    ) -> anyhow::Result<(
         TempDir,
         Arc<ThreadManager>,
         ConfigManager,
@@ -195,7 +242,7 @@ mod tests {
                 thread_extensions(
                     guardian_agent_spawner(thread_manager.clone()),
                     ThreadExtensionDependencies {
-                        event_sink: Arc::new(NoopExtensionEventSink),
+                        event_sink,
                         auth_manager: auth_manager.clone(),
                         state_db: Some(state_db.clone()),
                         analytics_events_client: codex_analytics::AnalyticsEventsClient::disabled(),
