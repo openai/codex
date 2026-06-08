@@ -83,6 +83,7 @@ members = [
     "tools",
     "v8-poc",
     "utils/absolute-path",
+    "utils/path-uri",
     "utils/cargo-bin",
     "git-utils",
     "utils/cache",
