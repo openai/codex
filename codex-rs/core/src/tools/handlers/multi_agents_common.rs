@@ -194,6 +194,20 @@ pub(crate) fn parse_collab_input(
     }
 }
 
+pub(crate) async fn direct_parent_turn_id_for_receiver(
+    session: &Session,
+    turn: &TurnContext,
+    receiver_thread_id: ThreadId,
+) -> Option<String> {
+    session
+        .services
+        .agent_control
+        .get_agent_config_snapshot(receiver_thread_id)
+        .await
+        .filter(|snapshot| snapshot.parent_thread_id == Some(session.thread_id))
+        .map(|_| turn.sub_id.clone())
+}
+
 /// Builds the base config snapshot for a newly spawned sub-agent.
 ///
 /// The returned config starts from the parent's effective config and then refreshes the

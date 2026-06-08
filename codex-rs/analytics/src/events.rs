@@ -854,6 +854,7 @@ pub(crate) struct CodexTurnEventParams {
     pub(crate) initialization_mode: ThreadInitializationMode,
     pub(crate) subagent_source: Option<String>,
     pub(crate) parent_thread_id: Option<String>,
+    pub(crate) parent_turn_id: Option<String>,
     pub(crate) model: Option<String>,
     pub(crate) model_provider: String,
     pub(crate) sandbox_policy: Option<&'static str>,

@@ -154,6 +154,8 @@ pub struct Submission {
     pub op: Op,
     /// Client-provided id for the user message represented by `Op::UserInput`.
     pub client_user_message_id: Option<String>,
+    /// Direct parent-thread turn that triggered this child turn, when known.
+    pub parent_turn_id: Option<String>,
     /// Optional W3C trace carrier propagated across async submission handoffs.
     pub trace: Option<W3cTraceContext>,
 }
@@ -687,6 +689,11 @@ pub struct InterAgentCommunication {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub metadata: Option<ResponseItemMetadata>,
+    /// Runtime-only direct parent turn lineage for analytics turn construction.
+    #[serde(skip)]
+    #[schemars(skip)]
+    #[ts(skip)]
+    pub parent_turn_id: Option<String>,
     pub trigger_turn: bool,
 }
 
@@ -705,6 +712,7 @@ impl InterAgentCommunication {
             content,
             encrypted_content: None,
             metadata: None,
+            parent_turn_id: None,
             trigger_turn,
         }
     }
@@ -723,8 +731,14 @@ impl InterAgentCommunication {
             content: String::new(),
             encrypted_content: Some(encrypted_content),
             metadata: None,
+            parent_turn_id: None,
             trigger_turn,
         }
+    }
+
+    pub fn with_parent_turn_id(mut self, parent_turn_id: Option<String>) -> Self {
+        self.parent_turn_id = parent_turn_id;
+        self
     }
 
     pub fn to_response_input_item(&self) -> ResponseInputItem {
@@ -4256,11 +4270,13 @@ mod tests {
             content: "review the diff".to_string(),
             encrypted_content: None,
             metadata: None,
+            parent_turn_id: Some("parent-turn-1".to_string()),
             trigger_turn: true,
         };
 
+        let response_input_item = communication.to_response_input_item();
         assert_eq!(
-            communication.to_response_input_item(),
+            response_input_item,
             ResponseInputItem::Message {
                 role: "assistant".to_string(),
                 content: vec![ContentItem::OutputText {
@@ -4269,6 +4285,13 @@ mod tests {
                 phase: Some(MessagePhase::Commentary),
             }
         );
+        let ResponseInputItem::Message { content, .. } = response_input_item else {
+            panic!("inter-agent communication should serialize as a message");
+        };
+        let [ContentItem::OutputText { text }] = content.as_slice() else {
+            panic!("inter-agent communication should serialize one text item");
+        };
+        assert!(!text.contains("parent_turn_id"));
     }
 
     #[test]

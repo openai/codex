@@ -66,6 +66,8 @@ impl Handler {
                 .await
                 .map_err(|err| collab_agent_error(receiver_thread_id, err))?;
         }
+        let parent_turn_id =
+            direct_parent_turn_id_for_receiver(&session, turn.as_ref(), receiver_thread_id).await;
         session
             .send_event(
                 &turn,
@@ -81,7 +83,7 @@ impl Handler {
             .await;
         let agent_control = session.services.agent_control.clone();
         let result = agent_control
-            .send_input(receiver_thread_id, input_items)
+            .send_input_with_parent_turn_id(receiver_thread_id, input_items, parent_turn_id)
             .await
             .map_err(|err| collab_agent_error(receiver_thread_id, err));
         let status = session

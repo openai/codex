@@ -44,6 +44,7 @@ pub(super) fn communication_from_tool_message(
     author: AgentPath,
     recipient: AgentPath,
     message: String,
+    parent_turn_id: Option<String>,
 ) -> InterAgentCommunication {
     InterAgentCommunication::new_encrypted(
         author,
@@ -52,4 +53,5 @@ pub(super) fn communication_from_tool_message(
         message,
         /*trigger_turn*/ true,
     )
+    .with_parent_turn_id(parent_turn_id)
 }

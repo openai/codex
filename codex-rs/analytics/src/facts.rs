@@ -66,6 +66,7 @@ pub enum TurnSubmissionType {
 pub struct TurnResolvedConfigFact {
     pub turn_id: String,
     pub thread_id: String,
+    pub parent_turn_id: Option<String>,
     pub num_input_images: usize,
     pub submission_type: Option<TurnSubmissionType>,
     pub ephemeral: bool,

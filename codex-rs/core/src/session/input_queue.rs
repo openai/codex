@@ -92,6 +92,15 @@ impl InputQueue {
             .any(|mail| mail.trigger_turn)
     }
 
+    pub(crate) async fn next_trigger_turn_parent_turn_id(&self) -> Option<String> {
+        self.mailbox_pending_mails
+            .lock()
+            .await
+            .iter()
+            .find(|mail| mail.trigger_turn)
+            .and_then(|mail| mail.parent_turn_id.clone())
+    }
+
     pub(crate) async fn drain_mailbox_input_items(&self) -> Vec<TurnInput> {
         self.mailbox_pending_mails
             .lock()
@@ -416,5 +425,35 @@ mod tests {
             ))
             .await;
         assert!(input_queue.has_trigger_turn_mailbox_items().await);
+    }
+
+    #[tokio::test]
+    async fn input_queue_tracks_next_trigger_turn_parent_turn_id() {
+        let input_queue = InputQueue::new();
+
+        input_queue
+            .enqueue_mailbox_communication(make_mail(
+                AgentPath::root(),
+                AgentPath::try_from("/root/worker").expect("agent path"),
+                "queued",
+                /*trigger_turn*/ false,
+            ))
+            .await;
+        input_queue
+            .enqueue_mailbox_communication(
+                make_mail(
+                    AgentPath::root(),
+                    AgentPath::try_from("/root/worker").expect("agent path"),
+                    "wake",
+                    /*trigger_turn*/ true,
+                )
+                .with_parent_turn_id(Some("parent-turn-1".to_string())),
+            )
+            .await;
+
+        assert_eq!(
+            input_queue.next_trigger_turn_parent_turn_id().await,
+            Some("parent-turn-1".to_string())
+        );
     }
 }

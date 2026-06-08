@@ -2467,6 +2467,7 @@ fn codex_turn_event_params(
     let TurnResolvedConfigFact {
         turn_id: _resolved_turn_id,
         thread_id: _resolved_thread_id,
+        parent_turn_id,
         num_input_images: _resolved_num_input_images,
         submission_type,
         ephemeral,
@@ -2509,6 +2510,7 @@ fn codex_turn_event_params(
         initialization_mode: thread_metadata.initialization_mode,
         subagent_source: thread_metadata.subagent_source.clone(),
         parent_thread_id: thread_metadata.parent_thread_id.clone(),
+        parent_turn_id,
         model: Some(model),
         model_provider,
         sandbox_policy: Some(sandbox_policy_mode(

@@ -353,8 +353,13 @@ impl AgentControl {
         )
         .await;
 
-        self.send_input_after_capacity_check(new_thread.thread_id, &state, initial_operation)
-            .await?;
+        self.send_input_after_capacity_check(
+            new_thread.thread_id,
+            &state,
+            initial_operation,
+            options.parent_turn_id,
+        )
+        .await?;
         if multi_agent_version != MultiAgentVersion::V2 {
             let child_reference = agent_metadata
                 .agent_path

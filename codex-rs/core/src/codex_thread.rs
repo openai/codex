@@ -189,6 +189,16 @@ impl CodexThread {
         self.codex.submit(op).await
     }
 
+    pub(crate) async fn submit_with_parent_turn_id(
+        &self,
+        op: Op,
+        parent_turn_id: Option<String>,
+    ) -> CodexResult<String> {
+        self.codex
+            .submit_with_parent_turn_id(op, parent_turn_id)
+            .await
+    }
+
     /// Returns the session telemetry handle for thread-scoped production instrumentation.
     pub fn session_telemetry(&self) -> SessionTelemetry {
         self.codex.session.services.session_telemetry.clone()

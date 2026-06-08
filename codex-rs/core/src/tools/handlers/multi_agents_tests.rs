@@ -307,6 +307,64 @@ async fn spawn_agent_uses_explorer_role_and_preserves_approval_policy() {
 }
 
 #[tokio::test]
+async fn spawn_agent_options_forward_parent_turn_id() {
+    let (mut session, turn) = make_session_and_context().await;
+    let parent_turn_id = turn.sub_id.clone();
+    let manager = thread_manager();
+    let root = manager
+        .start_thread((*turn.config).clone())
+        .await
+        .expect("root thread should start");
+    session.services.agent_control = manager.agent_control();
+    let child = session
+        .services
+        .agent_control
+        .spawn_agent_with_metadata(
+            (*turn.config).clone(),
+            Op::ThreadSettings {
+                thread_settings: Default::default(),
+            },
+            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id: root.thread_id,
+                depth: 1,
+                agent_path: Some(AgentPath::try_from("/root/worker").expect("agent path")),
+                agent_nickname: None,
+                agent_role: None,
+            })),
+            crate::agent::control::SpawnAgentOptions {
+                parent_thread_id: Some(root.thread_id),
+                parent_turn_id: Some(parent_turn_id.clone()),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("child thread should spawn");
+    let child_thread = manager
+        .get_thread(child.thread_id)
+        .await
+        .expect("child thread should exist");
+    assert_eq!(
+        manager
+            .captured_ops_with_parent_turn_ids()
+            .into_iter()
+            .find_map(|(thread_id, op, captured_parent_turn_id)| {
+                (thread_id == child.thread_id && matches!(op, Op::ThreadSettings { .. }))
+                    .then_some(captured_parent_turn_id)
+            }),
+        Some(Some(parent_turn_id))
+    );
+
+    child_thread
+        .submit(Op::Shutdown {})
+        .await
+        .expect("shutdown should submit");
+    root.thread
+        .submit(Op::Shutdown {})
+        .await
+        .expect("shutdown should submit");
+}
+
+#[tokio::test]
 async fn spawn_agent_fork_context_rejects_agent_type_override() {
     let (mut session, mut turn) = make_session_and_context().await;
     let role_name = install_role_with_model_override(&mut turn).await;
@@ -1983,6 +2041,7 @@ async fn multi_agent_v2_followup_task_completion_notifies_parent_on_every_turn()
     session.thread_id = root.thread_id;
     let session = Arc::new(session);
     let turn = Arc::new(turn);
+    let parent_turn_id = turn.sub_id.clone();
 
     SpawnAgentHandlerV2::default()
         .handle(invocation(
@@ -2036,6 +2095,16 @@ async fn multi_agent_v2_followup_task_completion_notifies_parent_on_every_turn()
         ))
         .await
         .expect("followup_task should succeed");
+    assert!(manager.captured_ops().iter().any(|(id, op)| {
+        *id == agent_id
+            && matches!(
+                op,
+                Op::InterAgentCommunication { communication }
+                    if communication.parent_turn_id.as_deref() == Some(parent_turn_id.as_str())
+                        && communication.encrypted_content.as_deref() == Some("continue")
+                        && communication.trigger_turn
+            )
+    }));
 
     assert!(manager.captured_ops().iter().any(|(id, op)| {
         *id == agent_id
@@ -2729,6 +2798,63 @@ async fn send_input_accepts_structured_items() {
 
     let _ = thread
         .thread
+        .submit(Op::Shutdown {})
+        .await
+        .expect("shutdown should submit");
+}
+
+#[tokio::test]
+async fn direct_parent_turn_id_for_receiver_identifies_direct_child() {
+    let (mut session, turn) = make_session_and_context().await;
+    let parent_turn_id = turn.sub_id.clone();
+    let manager = thread_manager();
+    let root = manager
+        .start_thread((*turn.config).clone())
+        .await
+        .expect("root thread should start");
+    session.services.agent_control = manager.agent_control();
+    session.thread_id = root.thread_id;
+    let child = session
+        .services
+        .agent_control
+        .spawn_agent_with_metadata(
+            (*turn.config).clone(),
+            Op::ThreadSettings {
+                thread_settings: Default::default(),
+            },
+            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                parent_thread_id: root.thread_id,
+                depth: 1,
+                agent_path: Some(AgentPath::try_from("/root/worker").expect("agent path")),
+                agent_nickname: None,
+                agent_role: None,
+            })),
+            crate::agent::control::SpawnAgentOptions {
+                parent_thread_id: Some(root.thread_id),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("child thread should spawn");
+    let child_thread = manager
+        .get_thread(child.thread_id)
+        .await
+        .expect("child thread should exist");
+
+    assert_eq!(
+        direct_parent_turn_id_for_receiver(&session, &turn, child.thread_id).await,
+        Some(parent_turn_id)
+    );
+    assert_eq!(
+        direct_parent_turn_id_for_receiver(&session, &turn, root.thread_id).await,
+        None
+    );
+
+    child_thread
+        .submit(Op::Shutdown {})
+        .await
+        .expect("shutdown should submit");
+    root.thread
         .submit(Op::Shutdown {})
         .await
         .expect("shutdown should submit");

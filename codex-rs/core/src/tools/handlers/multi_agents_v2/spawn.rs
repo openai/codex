@@ -118,8 +118,12 @@ async fn handle_spawn_agent(
                         .session_source
                         .get_agent_path()
                         .unwrap_or_else(AgentPath::root);
-                    let mut communication =
-                        communication_from_tool_message(author, new_agent_path.clone(), message);
+                    let mut communication = communication_from_tool_message(
+                        author,
+                        new_agent_path.clone(),
+                        message,
+                        Some(turn.sub_id.clone()),
+                    );
                     communication
                         .metadata
                         .get_or_insert_with(ResponseItemMetadata::default)
@@ -133,6 +137,7 @@ async fn handle_spawn_agent(
                 fork_parent_spawn_call_id: fork_mode.as_ref().map(|_| call_id.clone()),
                 fork_mode,
                 parent_thread_id: Some(session.thread_id),
+                parent_turn_id: Some(turn.sub_id.clone()),
                 environments: Some(turn.environments.to_selections()),
             },
         ),

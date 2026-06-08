@@ -88,7 +88,7 @@ const THREAD_CREATED_CHANNEL_CAPACITY: usize = 1024;
 /// must not be toggled.
 static FORCE_TEST_THREAD_MANAGER_BEHAVIOR: AtomicBool = AtomicBool::new(false);
 
-type CapturedOps = Vec<(ThreadId, Op)>;
+type CapturedOps = Vec<(ThreadId, Op, Option<String>)>;
 type SharedCapturedOps = Arc<std::sync::Mutex<CapturedOps>>;
 
 pub(crate) fn set_thread_manager_test_mode_for_tests(enabled: bool) {
@@ -979,6 +979,21 @@ impl ThreadManager {
         self.state
             .ops_log
             .as_ref()
+            .and_then(|ops_log| {
+                ops_log.lock().ok().map(|log| {
+                    log.iter()
+                        .map(|(thread_id, op, _parent_turn_id)| (*thread_id, op.clone()))
+                        .collect()
+                })
+            })
+            .unwrap_or_default()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn captured_ops_with_parent_turn_ids(&self) -> Vec<(ThreadId, Op, Option<String>)> {
+        self.state
+            .ops_log
+            .as_ref()
             .and_then(|ops_log| ops_log.lock().ok().map(|log| log.clone()))
             .unwrap_or_default()
     }
@@ -1057,13 +1072,22 @@ impl ThreadManagerState {
 
     /// Send an operation to a thread by ID.
     pub(crate) async fn send_op(&self, thread_id: ThreadId, op: Op) -> CodexResult<String> {
+        self.send_op_with_parent_turn_id(thread_id, op, None).await
+    }
+
+    pub(crate) async fn send_op_with_parent_turn_id(
+        &self,
+        thread_id: ThreadId,
+        op: Op,
+        parent_turn_id: Option<String>,
+    ) -> CodexResult<String> {
         let thread = self.get_thread(thread_id).await?;
         if let Some(ops_log) = &self.ops_log
             && let Ok(mut log) = ops_log.lock()
         {
-            log.push((thread_id, op.clone()));
+            log.push((thread_id, op.clone(), parent_turn_id.clone()));
         }
-        thread.submit(op).await
+        thread.submit_with_parent_turn_id(op, parent_turn_id).await
     }
 
     /// Remove a thread from the manager by ID, returning it when present.

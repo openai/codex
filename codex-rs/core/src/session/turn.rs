@@ -697,6 +697,7 @@ async fn track_turn_resolved_config_analytics(
         .track_turn_resolved_config(TurnResolvedConfigFact {
             turn_id: turn_context.sub_id.clone(),
             thread_id: sess.thread_id.to_string(),
+            parent_turn_id: turn_context.parent_turn_id.clone(),
             num_input_images: input
                 .iter()
                 .filter_map(|item| match item {

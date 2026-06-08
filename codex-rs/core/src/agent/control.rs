@@ -65,6 +65,7 @@ pub(crate) struct SpawnAgentOptions {
     pub(crate) fork_parent_spawn_call_id: Option<String>,
     pub(crate) fork_mode: Option<SpawnAgentForkMode>,
     pub(crate) parent_thread_id: Option<ThreadId>,
+    pub(crate) parent_turn_id: Option<String>,
     pub(crate) environments: Option<Vec<TurnEnvironmentSelection>>,
 }
 
@@ -122,15 +123,26 @@ impl AgentControl {
     }
 
     /// Send rich user input items to an existing agent thread.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) async fn send_input(
         &self,
         agent_id: ThreadId,
         initial_operation: Op,
     ) -> CodexResult<String> {
+        self.send_input_with_parent_turn_id(agent_id, initial_operation, None)
+            .await
+    }
+
+    pub(crate) async fn send_input_with_parent_turn_id(
+        &self,
+        agent_id: ThreadId,
+        initial_operation: Op,
+        parent_turn_id: Option<String>,
+    ) -> CodexResult<String> {
         let state = self.upgrade()?;
         self.ensure_execution_capacity_for_op(agent_id, &initial_operation)
             .await?;
-        self.send_input_after_capacity_check(agent_id, &state, initial_operation)
+        self.send_input_after_capacity_check(agent_id, &state, initial_operation, parent_turn_id)
             .await
     }
 
@@ -139,6 +151,7 @@ impl AgentControl {
         agent_id: ThreadId,
         state: &Arc<ThreadManagerState>,
         initial_operation: Op,
+        parent_turn_id: Option<String>,
     ) -> CodexResult<String> {
         let last_task_message = match &initial_operation {
             Op::InterAgentCommunication { communication } => {
@@ -150,7 +163,9 @@ impl AgentControl {
             .handle_thread_request_result(
                 agent_id,
                 state,
-                state.send_op(agent_id, initial_operation).await,
+                state
+                    .send_op_with_parent_turn_id(agent_id, initial_operation, parent_turn_id)
+                    .await,
             )
             .await;
         if result.is_ok() {
