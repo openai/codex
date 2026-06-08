@@ -269,10 +269,40 @@ def save_internal_cargo_lockfile(change: PublicChange) -> Path | None:
 
 
 def public_change_touched_path(public_change_rev: str, path: Path) -> bool:
-    changed_paths = output(
-        ["git", "diff-tree", "--no-commit-id", "--name-only", "-r", public_change_rev]
-    ).splitlines()
-    return path.as_posix() in changed_paths
+    return path in public_change_touched_paths(public_change_rev)
+
+
+def public_change_touched_paths(public_change_rev: str) -> list[Path]:
+    return [
+        Path(changed_path)
+        for changed_path in output(
+            [
+                "git",
+                "diff-tree",
+                "--no-commit-id",
+                "--name-only",
+                "-r",
+                public_change_rev,
+            ]
+        ).splitlines()
+    ]
+
+
+def public_change_touched_workflows(public_change_rev: str) -> list[Path]:
+    return [
+        path
+        for path in public_change_touched_paths(public_change_rev)
+        if path.as_posix().startswith(".github/workflows/")
+    ]
+
+
+def workflow_changes_command(public_change_rev: str) -> str:
+    return shlex.join(
+        [
+            ".github/internal/copy_public_workflow_changes.py",
+            public_change_rev,
+        ]
+    )
 
 
 def migrate_change(
@@ -414,7 +444,7 @@ def find_open_pr() -> str | None:
 
 def merge_pr(pr_number: str, change: PublicChange, body_file: Path) -> None:
     sync_head = output(["git", "rev-parse", f"origin/{SYNC_BRANCH}"])
-    run(
+    merge = run(
         [
             "gh",
             "pr",
@@ -425,8 +455,26 @@ def merge_pr(pr_number: str, change: PublicChange, body_file: Path) -> None:
             "--delete-branch",
             "--match-head-commit",
             sync_head,
-        ]
+        ],
+        check=False,
     )
+    if merge.returncode != 0:
+        workflow_paths = public_change_touched_workflows(change.rev)
+        if workflow_paths:
+            formatted_paths = "\n".join(
+                f"  - {path.as_posix()}" for path in workflow_paths
+            )
+            raise RuntimeError(
+                f"Failed to merge sync PR #{pr_number} for {change.rev}. The merge "
+                "may have failed because the public change touched "
+                f".github/workflows:\n{formatted_paths}\n\n"
+                "To copy the public workflow changes into this checkout as unstaged "
+                "changes, run:\n"
+                f"  {workflow_changes_command(change.rev)}"
+            )
+
+        raise RuntimeError(f"Failed to merge sync PR #{pr_number} for {change.rev}.")
+
     print(f"Merged sync PR #{pr_number} for {change.rev}.")
 
 
