@@ -15,6 +15,7 @@ INTERNAL_REPO_URL = "https://github.com/openai/codex-internal"
 SYNC_BRANCH = os.environ.get("SYNC_BRANCH", "copybara/public-to-internal")
 TRAILER = "Codex-Public-RevId"
 CARGO_LOCKFILE = Path("codex-rs/Cargo.lock")
+EMPTY_IMPORT_MARKER_FILE = Path(".github/internal/last_empty_public_import.txt")
 
 
 @dataclass(frozen=True)
@@ -475,6 +476,8 @@ def create_empty_import_marker_commit(change: PublicChange, message_file: Path) 
         f"{TRAILER} marker commit."
     )
     run(["git", "checkout", "--detach", "origin/main"])
+    EMPTY_IMPORT_MARKER_FILE.write_text(f"{change.rev}\n", encoding="utf-8")
+    run(["git", "add", EMPTY_IMPORT_MARKER_FILE.as_posix()])
     run(
         [
             "git",
