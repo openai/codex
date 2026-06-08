@@ -118,11 +118,28 @@ toolchain(
     toolchain_type = "@bazel_tools//tools/test:default_test_toolchain_type",
 )
 
+toolchain(
+    name = "windows_arm64_gnullvm_tests_on_linux_host_toolchain",
+    exec_compatible_with = [
+        "@platforms//cpu:x86_64",
+        "@platforms//os:linux",
+    ],
+    target_compatible_with = [
+        "@llvm//constraints/windows_abi:gnullvm",
+        "@platforms//cpu:aarch64",
+        "@platforms//os:windows",
+        "@rules_rs//rs/experimental/platforms/constraints:windows_gnullvm",
+    ],
+    toolchain = "@bazel_tools//tools/test:empty_toolchain",
+    toolchain_type = "@bazel_tools//tools/test:default_test_toolchain_type",
+)
+
 windows_platform_declarations_test(
     name = "windows_platform_declarations_test",
     data = [
         "BUILD.bazel",
         "MODULE.bazel",
+        "//patches:llvm_windows_arm64_powl.patch",
         "//patches:llvm_windows_gnullvm_abi.patch",
     ],
     script = "windows_platform_test.sh",

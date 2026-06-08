@@ -578,6 +578,19 @@ jobs:
             -- \
             @crates//:openssl-sys
 
+          # Link source-built V8 under Windows ARM64 so MinGW runtime gaps fail
+          # here instead of in the full release bundle.
+          ./.github/scripts/run-bazel-ci.sh \
+            --print-failed-action-summary \
+            -- \
+            build \
+            --platforms=//:release_windows_arm64 \
+            --extra_toolchains=//:windows_arm64_gnullvm_tests_on_linux_host_toolchain \
+            --build_metadata=COMMIT_SHA=${GITHUB_SHA} \
+            --build_metadata=TAG_job=verify-release-v8-windows-arm64 \
+            -- \
+            //codex-rs/v8-poc:v8-poc-unit-tests
+
           # Keep the documented `just build-for-release` target's remaining
           # platform transitions covered by analysis.
           ./.github/scripts/run-bazel-ci.sh \
